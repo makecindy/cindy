@@ -1354,7 +1354,7 @@ export class InputHandoffSession {
     const ordinary = (step: ExtractedStep) => {
       const hidden = new Set(step.hiddenRefs ?? []);
       return [...step.bindings.values()]
-        .filter((binding) => binding.kind === 'text' && !hidden.has(binding.ref))
+        .filter((binding): binding is ControlBinding & { kind: 'text' } => binding.kind === 'text' && !hidden.has(binding.ref))
         .map((binding) => binding.identity)
         .sort();
     };
