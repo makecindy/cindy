@@ -948,6 +948,8 @@ function wsUrl(): string {
 export interface DeviceLinkServiceOptions {
   taskActivity?: {
     getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[];
+    /** Same candidates as this computer's island counts; feeds the phone Live Activity. */
+    getLocalTaskOverview(): AgentIslandSessionSnapshot[];
     getNotificationRequestIds?(sessionId: string): string[];
     subscribeTaskOverview(listener: () => void): () => void;
   };
@@ -1009,7 +1011,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Capture both the endpoint and credential: a later account/realm switch
     // must never re-label an old host snapshot with the new account's token.
     const baseUrl = officialDeviceLinkApiBase();
-    const body = projectHostTaskActivity(island.getLocalTaskActivitySnapshots());
+    const body = projectHostTaskActivity(island.getLocalTaskOverview());
     const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
     if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
     try {

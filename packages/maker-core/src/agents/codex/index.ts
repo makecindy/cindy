@@ -5434,7 +5434,7 @@ assertRouteCurrent();
         ...(reviewMode
           ? {
               hostPurpose: 'review' as const,
-              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+              ...(opts.fastMode && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
                 ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
                 : {}),
             }
@@ -10934,7 +10934,7 @@ assertRouteCurrent();
       publishedLiveRate = Boolean(usage.tokenSpeed?.streaming && usage.tokenSpeed.rate > 0);
       eventQueue.push({
         type: 'status',
-        data: { status: text, ...usage, isRunning: true },
+        data: { status: text, ...usage, isRunning: true, ...(manualCompact ? { manualCompact: true } : {}) },
         source: 'codex',
       });
     }
@@ -15817,7 +15817,11 @@ assertRouteCurrent();
           };
         });
         const operation = manualCompact;
-        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true, manualCompact: true },
+          source: 'codex',
+        });
         void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
           if (manualCompact !== operation) return; // A native terminal may precede the ACK.
           // Admission may have timed out after the server accepted it. Unsubscribe

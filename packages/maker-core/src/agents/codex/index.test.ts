@@ -37363,11 +37363,22 @@ describe('Codex native manual compaction', () => {
     await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
     // Desktop ignores background running frames. Stop must be available even
     // before the daemon produces its first turn/item notification.
-    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
+    const startingStatus = events.find(e => e.type === 'status' && e.data.isRunning === true);
+    expect(startingStatus?.turnScope).not.toBe('background');
+    expect(startingStatus?.data).toMatchObject({ manualCompact: true });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
     await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
     await expect(handle.compactSession!()).rejects.toThrow('active');
-    started(); boundary();
+    started();
+    host.getThreadHandlers()!.itemStarted!({
+      threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' },
+    });
+    boundary();
+    await waitForExpectation(() => {
+      const statuses = events.filter(e => e.type === 'status' && e.data.isRunning === true);
+      expect(statuses.length).toBeGreaterThan(1);
+      expect(statuses.every(e => e.data.manualCompact === true)).toBe(true);
+    });
     expect(resolved).toBe(false);
     completed();
     await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
