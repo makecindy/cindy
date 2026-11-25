@@ -118,6 +118,7 @@ async function freshLifecycle() {
 type ProcessEventName =
   | 'SIGINT'
   | 'SIGTERM'
+  | 'SIGBREAK'
   | 'exit'
   | 'uncaughtException'
   | 'unhandledRejection';
