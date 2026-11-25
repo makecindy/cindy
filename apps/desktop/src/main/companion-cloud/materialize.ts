@@ -6,6 +6,8 @@
  * run, upload or mirror) until everything is restored; a partial restore throws and the
  * automatic take-over retries it.
  */
+import type { BotModelRoute } from '../../shared/botModelChain.js';
+import { BotModelUnavailable } from '../../shared/botModelUnavailable.js';
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
 import { correctedProfile, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
@@ -59,7 +61,7 @@ export interface CompanionMaterializeHost {
    * this computer lacks them, a model chain that is not usable here falls back to the default.
    * Returns what could not be kept, for the one-line notice.
    */
-  applyCapabilities?: (botId: string, value: CompanionCapabilitiesValue, fence: CompanionWriteFence) => Promise<CompanionArrivalNotice[]>;
+  applyCapabilities?: (botId: string, value: CompanionCapabilitiesValue, fence: CompanionWriteFence, recoveryRoute?: BotModelRoute) => Promise<CompanionArrivalNotice[]>;
   writeSystemPrompt: (botId: string, text: string, fence: CompanionWriteFence) => Promise<void>;
   /** Copy the companion's Home (identity, prompt, user file, memories, skills) aside; returns where. */
   backupHome?: (botId: string, fence: CompanionWriteFence) => Promise<string | null>;
@@ -165,6 +167,7 @@ export async function assertCompanionIdentity(
 }
 
 export async function materializeCompanion(input: {
+  recoveryRoute?: BotModelRoute;
   api: CompanionApi;
   store?: CompanionStore;
   state: CompanionCloudState;
@@ -265,7 +268,7 @@ export async function materializeCompanion(input: {
   let failures = 0;
   const apply = async (kind: string, run: () => Promise<void>) => {
     try { await run(); } catch (error) {
-      if (errorCode(error) === 'OWNER_CHANGED') throw error;
+      if (errorCode(error) === 'OWNER_CHANGED' || error instanceof BotModelUnavailable) throw error;
       failures += 1;
       log?.warn('Companion content could not be restored', { actorId: actor.id, kind, code: errorCode(error) });
     }
@@ -339,12 +342,20 @@ export async function materializeCompanion(input: {
   if (!local && !notices.includes('permissions')) notices.push('permissions');
   const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
   const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
-  if (capabilitiesRow && capabilities && host.applyCapabilities) {
+  const capabilityHash = valueHash(capabilitiesRow?.value ?? null);
+  const alreadyApplied = known?.actorId === actor.id && known.recoveryCapabilitiesHash === capabilityHash;
+  if (!input.recoveryRoute && alreadyApplied && capabilitiesRow) {
+    applied.set(COMPANION_CAPABILITIES_KEY, { hash: capabilityHash, revision: capabilitiesRow.revision });
+  } else if ((input.recoveryRoute || (!alreadyApplied && capabilities)) && host.applyCapabilities) {
     await apply('capabilities', async () => {
-      for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
+      const restored = await step(() => input.recoveryRoute
+        ? host.applyCapabilities!(botId, capabilities ?? {}, fence, input.recoveryRoute)
+        : host.applyCapabilities!(botId, capabilities!, fence));
+      for (const notice of restored) {
         if (!notices.includes(notice)) notices.push(notice);
       }
-      applied.set(COMPANION_CAPABILITIES_KEY, { hash: valueHash(capabilitiesRow.value), revision: capabilitiesRow.revision });
+      if (input.recoveryRoute) state.update(botId, actor.id, entry => { entry.recoveryCapabilitiesHash = capabilityHash; });
+      if (capabilitiesRow) applied.set(COMPANION_CAPABILITIES_KEY, { hash: valueHash(capabilitiesRow.value), revision: capabilitiesRow.revision });
     });
   }
 
@@ -443,6 +454,7 @@ export async function materializeCompanion(input: {
   fence.assertCurrent();
   state.update(botId, actor.id, entry => {
     delete entry.demoted;
+    delete entry.recoveryCapabilitiesHash;
     // The next take-over (after this copy hands the companion away again) backs it up anew.
     delete entry.backedUp;
 

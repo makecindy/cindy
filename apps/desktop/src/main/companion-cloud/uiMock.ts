@@ -14,7 +14,7 @@ import { createCompanionCloudHost } from './host.js';
 import { startCompanionCloud, type CompanionRuntimeActor } from './runtime.js';
 import type { CompanionApi } from './types.js';
 import type { CompanionRow } from './store.js';
-import type { CompanionCloudSnapshot, CompanionProfileRepairRequest } from '../../shared/companionCloud.js';
+import type { CompanionCloudSnapshot, CompanionProfileRepairRequest, CompanionRecoveryModel } from '../../shared/companionCloud.js';
 
 const BOT_ID = 'ui-mock-profile-recovery';
 const SELF = 'ui-mock-desk';
@@ -28,7 +28,7 @@ function enabled() {
 }
 
 /** Only the Chat Server transport is synthetic; profile validation, backup and restoration are real. */
-function createFixture(file: string, soul: string, failHistoryOnce: boolean, currentHome: boolean) {
+function createFixture(file: string, soul: string, failHistoryOnce: boolean, currentHome: boolean, needsModel: boolean) {
   const log = createLogger('companion-ui-mock');
   const actors: CompanionRuntimeActor[] = [{ id: ACTOR, kind: 'bot', externalId: BOT_ID, name: '资料恢复验收', homeDeviceId: SELF }];
   const rows = new Map<string, CompanionRow>([[PROFILE, { key: PROFILE, revision: 1,
@@ -69,6 +69,11 @@ function createFixture(file: string, soul: string, failHistoryOnce: boolean, cur
       // A synthetic existing task, like the ordinary --mock tasks: no model/account connection.
       // The normal canonical reader and the real restore/history writers still run below.
       if (!enabled() || botId !== BOT_ID) throw new Error('OWNER_CHANGED');
+      if (needsModel) {
+        const result = await ensureBotCanonicalSession(botId);
+        if (!result.ok) throw new Error(result.errorCode);
+        return result.sessionId;
+      }
       const db = getDbClient().drizzle;
       const [link] = await db.select({ id: botSessionLinks.id }).from(botSessionLinks)
         .where(and(eq(botSessionLinks.botId, botId), eq(botSessionLinks.role, 'canonical'))).limit(1);
@@ -111,11 +116,11 @@ function createFixture(file: string, soul: string, failHistoryOnce: boolean, cur
     snapshot: (): CompanionCloudSnapshot => ({ enabled: true, selfDeviceId: SELF, humanActorId: 'ui-mock-human',
       demotedBotIds: runtime.state.isDemoted(BOT_ID) ? [BOT_ID] : [], actors: [{ id: ACTOR, externalId: BOT_ID, name: '资料恢复验收',
         avatar: null, homeDeviceId: SELF, homeDevice: { deviceId: SELF, name: 'Mock desktop', isSelf: true, online: true },
-        ...(runtime.state.isDemoted(BOT_ID) || (currentHome && String((rows.get(PROFILE)?.value as { soul?: unknown })?.soul ?? '').trim().length > 12000)
+        ...((!needsModel && runtime.state.isDemoted(BOT_ID)) || (currentHome && String((rows.get(PROFILE)?.value as { soul?: unknown })?.soul ?? '').trim().length > 12000)
           ? { profileFailure: runtime.profileFailure(BOT_ID) ?? { field: 'identitySource' as const, maxLength: 12000 } } : {}) }] }),
-    async takeOver() {
+    async takeOver(model?: CompanionRecoveryModel) {
       await prepareCurrentHome();
-      const result = await runtime.takeOver(BOT_ID);
+      const result = await runtime.takeOver(BOT_ID, undefined, model);
       if (result.ok) await runtime.syncNow();
       return result;
     },
@@ -138,13 +143,15 @@ export function companionProfileUiMock() {
   let source: unknown;
   let failHistoryOnce = false;
   let currentHome = false;
+  let needsModel = false;
   try {
     const config = JSON.parse(fs.readFileSync(file, 'utf8'));
     source = config.soul;
     failHistoryOnce = config.failHistoryOnce === true;
     currentHome = config.currentHome === true;
+    needsModel = config.needsModel === true;
   } catch { return undefined; }
   if (typeof source !== 'string') return undefined;
-  fixture = createFixture(file, source, failHistoryOnce, currentHome);
+  fixture = createFixture(file, source, failHistoryOnce, currentHome, needsModel);
   return fixture;
 }

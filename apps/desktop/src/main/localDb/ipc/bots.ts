@@ -41,6 +41,7 @@ import {
 } from '../schema';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { BotModelUnavailable } from '../../../shared/botModelUnavailable.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { collectPresentBotRemoteResourceSources } from './botRemoteResourceAbsence.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
@@ -2241,7 +2242,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
     if (!primary || !await validateTaskModel(primary)) {
-      throwIpcError('INVALID_PARAMS', 'Model route unavailable');
+      throw new BotModelUnavailable('INVALID_PARAMS');
     }
     owner.assertCurrent();
   }
@@ -2762,7 +2763,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
     const primaryRoute = await readEffectiveBotPrimaryRoute(config);
-    if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    if (!primaryRoute) throw new BotModelUnavailable();
     const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
     const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,
       body: { title: profile.displayName, ...workspace, ...botSessionRouteFields(config, primaryRoute) },

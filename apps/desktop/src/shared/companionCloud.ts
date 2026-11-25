@@ -63,9 +63,15 @@ export type CompanionCloudFailureCode =
   /** The chosen computer still rejects imported skills above its 64 KiB body limit. */
   | 'SKILL_TARGET_OUTDATED';
 
+export interface CompanionRecoveryModel {
+  token: string;
+  route: import('./botModelChain').BotModelRoute;
+}
+
 export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      modelRecoveryToken?: string;
       oversizedSkill?: CompanionOversizedSkill;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;

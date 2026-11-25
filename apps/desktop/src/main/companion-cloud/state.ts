@@ -46,6 +46,8 @@ const bot = z.object({
   pendingRebuild: z.boolean().optional(),
   /** The never-synced local copy was backed up before a take-over; retries do not back it up again. */
   backedUp: z.boolean().optional(),
+  /** Cloud capability snapshot already applied with an explicit local model during this restore. */
+  recoveryCapabilitiesHash: z.string().optional(),
   /** Owner-approved correction for an unfinished restore; local/account scoped, never sent on the wire. */
   profileCorrection: z.object({
     homeDeviceId: z.string(), version: z.string(),

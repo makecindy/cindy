@@ -2,6 +2,8 @@
  * 已降级的本机副本（docs/product-rules/cloud-companions.md §3.1）：伙伴在主力电脑上运行，这里的
  * 主任务只读；横幅提供「打开主力电脑上的伙伴」与「在这台电脑继续」。
  */
+import { BotModelChainEditor } from './BotModelChainEditor';
+import type { BotModelRoute } from '../../../shared/botModelChain';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -18,6 +20,7 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
   const conflict = useCompanionCindyConflictAction();
+  const [modelDraft, setModelDraft] = useState<{ token: string; routes: BotModelRoute[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actor = cloud.actors.find((candidate) => candidate.externalId === botId);
@@ -32,10 +35,17 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
     conflict.clear();
     const owner = getDataOwnerGeneration();
     try {
-      const result = await api.takeOverCompanion(botId);
+      const result = modelDraft && modelDraft.routes[0]
+        ? await api.takeOverCompanion(botId, { token: modelDraft.token, route: modelDraft.routes[0] })
+        : await api.takeOverCompanion(botId);
       if (!isDataOwnerGenerationCurrent(owner)) return;
       refreshCompanionCloud();
       if (result.ok) { await ensureBotProfilesLoaded(true).catch(() => undefined); return; }
+      if (result.modelRecoveryToken) {
+        setModelDraft({ token: result.modelRecoveryToken, routes: [] });
+        return;
+      }
+      setModelDraft(null);
       conflict.report(result);
       if (result.code === 'HOME_CONFLICT') toast.info(t('bots.cloud.takeOverConflict', { name, device }));
       else setError(t(result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline' : result.code === 'NOT_ENABLED'
@@ -57,9 +67,14 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
       <div className={`min-w-0 flex-1${conflict.action ? ' basis-full' : ''}`}>
         <p className="text-14 font-medium text-[var(--text-primary)]">{t('bots.cloud.shadowTitle', { device })}</p>
         <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
-          {busy ? t('bots.cloud.takingOver', { name }) : error ?? t('bots.cloud.shadowHint')}
+          {busy ? t('bots.cloud.takingOver', { name }) : error ?? t(modelDraft ? 'bots.guided.modelRequired' : 'bots.cloud.shadowHint')}
         </p>
       </div>
+      {modelDraft && <div className="basis-full">
+        <BotModelChainEditor value={modelDraft.routes} disabled={busy} allowFallbacks={false}
+          onChange={routes => setModelDraft({ ...modelDraft, routes })}
+          onNavigateToProviders={() => navigate('/settings?tab=providers')} />
+      </div>}
       <CompanionCindyConflictAction action={conflict.action} />
       {home ? (
         <Button variant="secondary" size="md" type="button" disabled={busy}
@@ -67,7 +82,10 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
           {t('bots.cloud.openOnHome', { device })}
         </Button>
       ) : null}
-      <Button variant="primary" size="md" type="button" loading={busy} disabled={busy} onClick={() => void takeOver()}>
+      {modelDraft && <Button variant="secondary" size="md" disabled={busy} onClick={() => setModelDraft(null)}>
+        {t('bots.cancel')}
+      </Button>}
+      <Button variant="primary" size="md" type="button" loading={busy} disabled={busy || (!!modelDraft && !modelDraft.routes.length)} onClick={() => void takeOver()}>
         {t('bots.cloud.continueHere')}
       </Button>
     </section>

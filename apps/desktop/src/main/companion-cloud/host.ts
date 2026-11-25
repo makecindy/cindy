@@ -18,6 +18,7 @@ import { botProfileVersions, botProfiles, botSessionLinks, messages, sessions } 
 import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { taskImageRoots } from '../cindy-media/taskImageDelivery.js';
+import { BotModelUnavailable } from '../../shared/botModelUnavailable.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
@@ -269,14 +270,17 @@ function createMaterializer(input: {
         }
       }
     },
-    applyCapabilities: async (botId, value, fence) => {
+    applyCapabilities: async (botId, value, fence, recoveryRoute) => {
       // Only the same provider + model that this computer can use is kept (no credential travels);
       // otherwise the companion follows this computer's default model.
       const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
         .filter((route): route is BotModelRoute => route !== null);
-      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      const routes = recoveryRoute ? [recoveryRoute] : value.modelChain;
+      const chain = routes ? await usable(routes) : [];
+      if (recoveryRoute && !chain.length) throw new BotModelUnavailable();
       fence.assertCurrent();
-      const patch = companionCapabilitiesPatch(value, { chain });
+      const patch = recoveryRoute && !Object.keys(value).length ? {} : companionCapabilitiesPatch(value, { chain });
+      if (recoveryRoute) Object.assign(patch, chain[0], { modelChain: chain, modelChainOverride: chain });
       if (Object.keys(patch).length || value.gender) {
         await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
       }

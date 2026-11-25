@@ -7014,8 +7014,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCompanionCloudState: (): Promise<import('../shared/companionCloud').CompanionCloudSnapshot> =>
       ipcRenderer.invoke('maker:companion-cloud:state'),
     onCompanionCloudChanged: fanOutCompanionCloudChanged,
-    takeOverCompanion: (botId: string): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
-      ipcRenderer.invoke('maker:companion-cloud:take-over', botId),
+    takeOverCompanion: (botId: string, model?: import('../shared/companionCloud').CompanionRecoveryModel): Promise<import('../shared/companionCloud').CompanionCloudActionResult> =>
+      ipcRenderer.invoke('maker:companion-cloud:take-over', botId, model),
     repairCompanionProfile: (botId: string, request: import('../shared/companionCloud').CompanionProfileRepairRequest): Promise<import('../shared/companionCloud').CompanionProfileRepairResult> =>
       ipcRenderer.invoke('maker:companion-cloud:repair-profile', botId, request),
     switchCompanionHome: (

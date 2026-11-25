@@ -14229,13 +14229,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return value;
   };
   const companionNotEnabled: CompanionCloudActionResult = { ok: false, code: 'NOT_ENABLED' };
-  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown, model?: import('../../shared/companionCloud.js').CompanionRecoveryModel) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);
     const mock = companionProfileUiMock();
-    if (mock?.botId === id) return mock.takeOver();
+    if (mock?.botId === id) return mock.takeOver(model);
     currentCompanionHomes();
-    return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
+    return activeCompanionCloud()?.takeOver(id, undefined, model) ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
     assertTrustedAppRendererEvent(event);

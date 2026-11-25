@@ -22,6 +22,10 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
 vi.mock('../BotSessionContentHeader', () => ({ BotSessionContentHeaderRegistration: () => null }));
+vi.mock('../BotModelChainEditor', () => ({
+  BotModelChainEditor: ({ onChange }: { onChange: (routes: unknown[]) => void }) =>
+    <button onClick={() => onChange([{ harness: 'codex', model: 'chosen', providerId: 'local' }])}>Choose local model</button>,
+}));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span /> }));
 vi.mock('../BotGroupMessageAttachments', () => ({
   BotGroupMessageAttachments: ({ attachments }: { attachments: Array<{ name: string; state?: string; url?: string | null }> }) =>
@@ -589,6 +593,26 @@ describe('companionCloudStore', () => {
 });
 
 describe('CompanionShadowBanner', () => {
+  // #12822, integration: cancel is read-only; confirming retries the original companion with the selected route.
+  it('requires a fresh explicit selection before resuming a missing-model takeover', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'FAILED', modelRecoveryToken: 'original' });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    const proceed = screen.getByText('bots.cloud.continueHere');
+    fireEvent.click(proceed);
+    fireEvent.click(await screen.findByText('bots.cancel'));
+    expect(maker.takeOverCompanion).toHaveBeenCalledTimes(1);
+    fireEvent.click(proceed);
+    const select = await screen.findByText('Choose local model');
+    expect((proceed.closest('button') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(select);
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: true });
+    fireEvent.click(proceed);
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', {
+      token: 'original', route: { harness: 'codex', model: 'chosen', providerId: 'local' },
+    }));
+  });
+
   it('explains the local Cindy conflict on the shadowed copy', async () => {
     const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
     resetCompanionCloudStoreForTests(snapshot('laptop'));

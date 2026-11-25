@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BotModelUnavailable } from '../../../shared/botModelUnavailable.js';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
@@ -71,6 +72,26 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.paused ? { paused: options.paused } : {}) });
   return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
+
+// #12822, integration: an explicit same-home recovery must bind the chosen model to the failed restore.
+it('resumes only the original demoted companion after the owner chooses a model', async () => {
+  const t = setup({ home: 'desk' });
+  const route = { harness: 'codex' as const, model: 'chosen', providerId: 'local', effort: '', fastMode: false };
+  const apply = vi.fn(async () => []);
+  t.local.host.applyCapabilities = apply;
+  t.local.host.ensureCanonicalSession.mockRejectedValueOnce(new BotModelUnavailable());
+  const first = await t.runtime.takeOver('bot_mia');
+  expect(first).toMatchObject({ ok: false, modelRecoveryToken: expect.any(String) });
+  if (first.ok || !first.modelRecoveryToken) throw new Error('Missing model recovery');
+  expect(t.state.isDemoted('bot_mia')).toBe(true);
+  const model = { route, token: first.modelRecoveryToken };
+  expect(await t.runtime.takeOver('bot_mia', undefined, { ...model, token: 'stale' })).toMatchObject({ ok: false });
+  expect(apply).not.toHaveBeenCalled();
+  expect(await t.runtime.takeOver('bot_mia', undefined, model)).toEqual({ ok: true });
+  expect(apply).toHaveBeenCalledWith('bot_mia', {}, expect.anything(), expect.objectContaining({ model: 'chosen' }));
+  expect(t.state.isDemoted('bot_mia')).toBe(false);
+  expect(await t.runtime.takeOver('bot_mia', undefined, model)).toMatchObject({ ok: false });
+});
 
 it('retries the same pending mirror batch after the account cooldown without advancing the cursor early', async () => {
   vi.useFakeTimers();
