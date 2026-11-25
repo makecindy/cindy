@@ -29,6 +29,7 @@ export interface DbClient {
   tx<R = unknown>(name: string, args: unknown, transferList?: unknown[]): Promise<R>;
   drizzle: BetterSQLite3Database<typeof schema>;
   readonly vecAvailable: boolean;
+  observeCorruption?(error: Error): void;
   /** Present after this instance has observed reliable SQLite corruption. */
   readonly corruptionError?: Error | null;
   dispose(): Promise<void>;
@@ -97,7 +98,13 @@ export async function createDbClient(opts: CreateDbClientOptions = {}): Promise<
       withTransport('exec', () => transport.send('exec', { sql, params: params ?? [] })),
     tx: (name: string, args: unknown, transferList?: unknown[]) =>
       withTransport('tx', () => transport.send('tx', { name, args }, transferList)),
-    drizzle: createDrizzleProxy(() => transport) as BetterSQLite3Database<typeof schema>,
+    drizzle: createDrizzleProxy({
+      send: <R>(op: string, args?: unknown) => withTransport(op, () => transport.send<R>(op, args)),
+    }) as BetterSQLite3Database<typeof schema>,
+    observeCorruption: (error: Error) => {
+      transport.observeCorruption?.(error);
+      boundary.observeError(error);
+    },
     get corruptionError() { return boundary.failure; },
     get vecAvailable() {
       return (transport as DbTransport & { isVecAvailable?: boolean }).isVecAvailable ?? false;

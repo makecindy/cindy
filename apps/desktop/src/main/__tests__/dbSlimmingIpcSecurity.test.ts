@@ -11,6 +11,7 @@ describe('database slimming IPC security wiring', () => {
     );
     const channels = [
       'scan',
+      'cancel-scan',
       'choose-backup-directory',
       'schedule',
       'last-result',

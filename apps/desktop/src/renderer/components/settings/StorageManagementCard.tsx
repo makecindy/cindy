@@ -695,8 +695,10 @@ function DatabaseSlimmingSection({
     useState<DbSlimmingBackupDirectorySelection>({ selected: false });
   const [phase, setPhase] = useState<DbSlimmingPhase>({ kind: 'idle' });
   const [scanLoading, setScanLoading] = useState(false);
+  const [scanStopping, setScanStopping] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [executionLocked, setExecutionLocked] = useState(false);
+  const scanDismissed = useRef(false);
   const busyRef = useRef(false);
   const activeTasksConfirmationPendingRef = useRef(false);
   const interactionLockReleaseRef = useRef<(() => void) | null>(null);
@@ -876,16 +878,19 @@ function DatabaseSlimmingSection({
     acquireInteractionLock();
     setReportOpen(false);
     setScanLoading(true);
+    scanDismissed.current = false;
     let completed = false;
     try {
       const scan = await window.electronAPI.localDb.maintenance.scan({
         archiveAgeMonths: archiveAge,
         includeActiveTasks,
       });
+      if (scanDismissed.current) return;
       setPhase({ kind: 'scanned', scan });
       setReportOpen(true);
       completed = true;
     } catch (error) {
+      if (scanDismissed.current) return;
       toast.error(
         t(
           mapIpcErrorToI18nKey(error, {
@@ -897,6 +902,7 @@ function DatabaseSlimmingSection({
       busyRef.current = false;
       if (!completed) releaseInteractionLock();
       setScanLoading(false);
+      setScanStopping(false);
     }
   };
 
@@ -965,7 +971,7 @@ function DatabaseSlimmingSection({
           size="md"
           className="gap-1.5"
           onClick={handleScan}
-          loading={scanLoading}
+          loading={scanLoading || scanStopping}
         >
           {t('settings.about.storage.dbSlimmingScanButton')}
         </Button>
@@ -1088,6 +1094,13 @@ function DatabaseSlimmingSection({
       )}
 
       <DatabaseCleanupDialog
+        onCancelScan={() => {
+          scanDismissed.current = true;
+          releaseInteractionLock();
+          setScanStopping(true);
+          setScanLoading(false);
+          void window.electronAPI.localDb.maintenance.cancelScan().catch(() => {});
+        }}
         scanLoading={scanLoading}
         reportOpen={reportOpen}
         executionLocked={executionLocked}
@@ -1118,6 +1131,7 @@ function DatabaseSlimmingSection({
 }
 
 interface DatabaseCleanupDialogProps {
+  onCancelScan: () => void;
   scanLoading: boolean;
   reportOpen: boolean;
   executionLocked: boolean;
@@ -1129,6 +1143,7 @@ interface DatabaseCleanupDialogProps {
 }
 
 function DatabaseCleanupDialog({
+  onCancelScan,
   scanLoading,
   reportOpen,
   executionLocked,
@@ -1184,14 +1199,21 @@ function DatabaseCleanupDialog({
             }}
           >
             {busy ? (
-              <AlertDialog.Title className="flex flex-1 items-center justify-center gap-3 text-14 font-medium text-[var(--confirm-title)]">
-                <Spinner size={18} />
-                <span role="status" aria-live="assertive">
-                  {mode === 'scanning'
-                    ? t('settings.about.storage.dbSlimmingScanLoading')
-                    : t('settings.about.storage.dbSlimmingExecutionLoading')}
-                </span>
-              </AlertDialog.Title>
+              <>
+                <AlertDialog.Title className="flex flex-1 items-center justify-center gap-3 text-14 font-medium text-[var(--confirm-title)]">
+                  <Spinner size={18} />
+                  <span role="status" aria-live="assertive">
+                    {mode === 'scanning'
+                      ? t('settings.about.storage.dbSlimmingScanLoading')
+                      : t('settings.about.storage.dbSlimmingExecutionLoading')}
+                  </span>
+                </AlertDialog.Title>
+                {mode === 'scanning' && (
+                  <Button data-settings-search-action="Cancel the running database preview scan" variant="secondary" onClick={onCancelScan}>
+                    {t('settings.about.storage.cancelButton')}
+                  </Button>
+                )}
+              </>
             ) : (
               scanned && (
                 <>

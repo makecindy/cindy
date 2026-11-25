@@ -169,6 +169,34 @@ describe('WorkerThreadTransport', () => {
     });
   });
 
+  // #11628 db tier: a sibling reader can quarantine the database while both
+  // the main transport and the worker still have requests awaiting execution.
+  it('rejects unstarted writes when another connection reports corruption', async () => {
+    const transport = new WorkerThreadTransport({
+      useInlineWorker: true,
+      maxInFlightRpcs: 1,
+    });
+    try {
+      const completed = transport.send('queryOne', { sql: 'SELECT 1 AS n' });
+      await expect(completed).resolves.toEqual({ n: 1 });
+      const posted = transport.send('exec', { sql: 'CREATE TABLE t (id INTEGER)' });
+      const queued = transport.send('exec', { sql: 'INSERT INTO t VALUES (1)' });
+      const queuedRejection = expect(queued).rejects.toMatchObject({ code: DB_TRANSPORT_NOT_SENT });
+      transport.observeCorruption(Object.assign(new Error('damaged page'), { code: 'SQLITE_CORRUPT' }));
+      await queuedRejection;
+      // The posted RPC may already have started, so use its real result as a
+      // barrier before checking the admission error for a new request.
+      await posted.catch((error) => {
+        expect(error).toMatchObject({ code: DB_TRANSPORT_NOT_SENT });
+      });
+      await expect(transport.send('queryOne', { sql: 'SELECT 1' })).rejects.toMatchObject({
+        code: DB_TRANSPORT_NOT_SENT,
+      });
+    } finally {
+      await transport.close();
+    }
+  });
+
   it('transfers ArrayBuffer ownership through postMessage transferList', async () => {
     const transport = new WorkerThreadTransport({ useInlineWorker: true });
     try {

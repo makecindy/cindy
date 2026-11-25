@@ -71,6 +71,7 @@ function storageApi() {
 
 function maintenanceApi() {
   return {
+    cancelScan: vi.fn(async () => {}),
     getLastResult: vi.fn(async () => null),
     scan: vi.fn(async (input: {
       archiveAgeMonths: '7-days' | 1 | 3 | 6;
@@ -688,10 +689,10 @@ describe('StorageManagementCard fixed cache directories', () => {
 });
 
 describe('StorageManagementCard database cleanup', () => {
-  it('maps serialized IPC scan failures to localized messages', async () => {
+  it.each(['PRECONDITION_FAILED', 'DB_SCAN_TIMEOUT'])('maps serialized IPC scan failure %s to a localized message', async (code) => {
     vi.mocked(window.electronAPI.localDb.maintenance.scan).mockRejectedValueOnce(
       new Error(
-        'Error invoking remote method: Error: [PRECONDITION_FAILED] active database owner changed',
+        `Error invoking remote method: Error: [${code}] private scan error details`,
       ),
     );
     render(<StorageManagementCard />);
@@ -701,10 +702,10 @@ describe('StorageManagementCard database cleanup', () => {
     );
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('ipcError.PRECONDITION_FAILED');
+      expect(toast.error).toHaveBeenCalledWith(`ipcError.${code}`);
     });
     expect(toast.error).not.toHaveBeenCalledWith(
-      expect.stringContaining('active database owner changed'),
+      expect.stringContaining('private scan error details'),
     );
   });
 
@@ -845,6 +846,27 @@ describe('StorageManagementCard database cleanup', () => {
     expect(
       await screen.findByText('settings.about.storage.dbSlimmingReportTasksWithActive'),
     ).toBeTruthy();
+  });
+
+  // #11628 unit: releasing the modal must also discard a late scan result.
+  it('unlocks the window on cancel and keeps a late result out of view', async () => {
+    const api = window.electronAPI.localDb.maintenance;
+    const result = await maintenanceApi().scan({ archiveAgeMonths: 1 });
+    let finish!: () => void;
+    vi.mocked(api.scan).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve(result);
+    }));
+    render(<StorageManagementCard />);
+    const scanButton = screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }) as HTMLButtonElement;
+    fireEvent.click(scanButton);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.about.storage.cancelButton' }));
+    expect(api.cancelScan).toHaveBeenCalledOnce();
+    expect(document.body.dataset.appInteractionLocked).not.toBe('1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(scanButton.disabled).toBe(true);
+    await act(async () => finish());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(scanButton.disabled).toBe(false);
   });
 
   it('locks the full window while a database scan is running, then shows results in a dialog', async () => {

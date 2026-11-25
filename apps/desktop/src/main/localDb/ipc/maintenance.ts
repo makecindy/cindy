@@ -14,7 +14,7 @@ import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
 } from '../../../shared/localDbMaintenance';
 import { throwIpcError } from '../../utils/ipcValidate';
-import type { DbClient } from '../client/DbClient';
+import { scanDbSlimmingPreview } from '../dbSlimmingScan';
 import {
   dbSlimmingTemporaryBytesRequired,
   dbVolumeFreeBytes,
@@ -49,18 +49,12 @@ interface DirectoryGrant {
   expiresAt: number;
 }
 
-interface ScanAggregateRow {
-  activeTaskCount: number | null;
-  deletedTaskCount: number | null;
-  archivedTaskCount: number | null;
-  messageCount: number;
-  estimatedMessageBytes: number | null;
-}
 
 export interface LocalDbMaintenanceIpcDeps {
   captureOwner(): OwnerSnapshot | null;
   isOwnerCurrent(snapshot: OwnerSnapshot): boolean;
-  getDbClient(): DbClient;
+  getClient?(): Pick<import('../client/DbClient').DbClient, 'corruptionError' | 'observeCorruption'> | null;
+  scanDatabase?: typeof scanDbSlimmingPreview;
   getDbClientOwnerId(): string | null;
   getCurrentDbPath(): string | null;
   getUserDataDir(): string;
@@ -74,6 +68,7 @@ export interface LocalDbMaintenanceIpcDeps {
 
 /** Main-owned grants keep Renderer-supplied ids from becoming path or time authorization. */
 export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcDeps) {
+  let pending: { owner: OwnerSnapshot; controller: AbortController } | null = null;
   const scanGrants = new Map<string, ScanGrant>();
   const directoryGrants = new Map<string, DirectoryGrant>();
   const resultCache = new Map<string, DbSlimmingResultRecord>();
@@ -114,71 +109,71 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
   };
 
   return {
+    cancelScan(): void {
+      if (pending && deps.isOwnerCurrent(pending.owner)) pending.controller.abort();
+    },
     async scan(input: DbSlimmingScanInput): Promise<DbSlimmingScanResult> {
       const archiveAgeMonths = validateArchiveAge(input?.archiveAgeMonths);
       const includeActiveTasks = validateIncludeActiveTasks(input?.includeActiveTasks);
       const owner = captureReadyOwner();
       const scannedAt = Date.now();
       const archivedBeforeMs = archiveCutoffForAge(scannedAt, archiveAgeMonths);
-      const row = await deps.getDbClient().queryOne<ScanAggregateRow>(
-        `WITH target_sessions AS (
-           SELECT id, status
-             FROM sessions
-            WHERE ((status = 'deleted' AND updated_at <= ?)
-               OR (status = 'archived' AND updated_at <= ?)
-               OR (? = 1 AND status = 'active' AND updated_at <= ?))
-              AND EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)
-         )
-         SELECT
-           (SELECT COUNT(*) FROM target_sessions WHERE status = 'active') AS activeTaskCount,
-           (SELECT COUNT(*) FROM target_sessions WHERE status = 'deleted') AS deletedTaskCount,
-           (SELECT COUNT(*) FROM target_sessions WHERE status = 'archived') AS archivedTaskCount,
-           (SELECT COUNT(*)
-              FROM messages message
-              JOIN target_sessions target ON target.id = message.session_id) AS messageCount,
-           (SELECT COALESCE(SUM(
-                     length(CAST(message.id AS BLOB)) +
-                     length(CAST(message.client_id AS BLOB)) +
-                     length(CAST(message.role AS BLOB)) +
-                     length(CAST(message.content AS BLOB)) +
-                     COALESCE(length(CAST(message.tool_use_id AS BLOB)), 0) +
-                     COALESCE(length(CAST(message.agent_meta AS BLOB)), 0) +
-                     COALESCE(length(CAST(message.agent_kind AS BLOB)), 0)
-                   ), 0)
-              FROM messages message
-              JOIN target_sessions target ON target.id = message.session_id) AS estimatedMessageBytes`,
-        [archivedBeforeMs, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
-      );
-      assertOwnerCurrent(owner);
+      if (pending) {
+        throwIpcError('PRECONDITION_FAILED', 'database scan is already running');
+      }
       const dbFilePath = deps.getCurrentDbPath();
       if (!dbFilePath || !fs.existsSync(dbFilePath)) {
         throwIpcError('PRECONDITION_FAILED', 'database path is unavailable');
       }
-      const databaseBytes = estimateDbFilesBytes(dbFilePath);
-      const scanId = randomUUID();
-      const result: DbSlimmingScanResult = {
-        scanId,
-        archiveAgeMonths,
-        includeActiveTasks,
-        scannedAt,
-        archivedBeforeMs,
-        activeTaskCount: row?.activeTaskCount ?? 0,
-        deletedTaskCount: row?.deletedTaskCount ?? 0,
-        archivedTaskCount: row?.archivedTaskCount ?? 0,
-        messageCount: row?.messageCount ?? 0,
-        estimatedMessageBytes: row?.estimatedMessageBytes ?? 0,
-        databaseBytes,
-        temporaryBytesRequired: dbSlimmingTemporaryBytesRequired(databaseBytes),
-        databaseVolumeFreeBytes: dbVolumeFreeBytes(dbFilePath),
-      };
-      pruneExpiredGrants();
-      scanGrants.set(scanId, {
-        ...result,
-        ownerId: owner.ownerId,
-        scopeKey: owner.scopeKey,
-        expiresAt: Date.now() + GRANT_TTL_MS,
-      });
-      return result;
+      const client = deps.getClient?.();
+      if (client?.corruptionError) throw client.corruptionError;
+      const controller = new AbortController();
+      pending = { owner, controller };
+      const current = () => deps.isOwnerCurrent(owner) && deps.getDbClientOwnerId() === owner.ownerId &&
+        deps.getCurrentDbPath() === dbFilePath && deps.getClient?.() === client;
+      try {
+        const row = await (deps.scanDatabase ?? scanDbSlimmingPreview)({
+          dbFilePath,
+          archivedBeforeMs,
+          includeActiveTasks,
+          onDatabaseError: (error) => {
+            if (current()) client?.observeCorruption?.(error);
+          },
+          signal: controller.signal,
+          isOwnerCurrent: () => current() && !client?.corruptionError,
+        });
+        assertOwnerCurrent(owner);
+        if (!current() || client?.corruptionError || controller.signal.aborted) {
+          throwIpcError('PRECONDITION_FAILED', 'database path changed during scan');
+        }
+        const databaseBytes = estimateDbFilesBytes(dbFilePath);
+        const scanId = randomUUID();
+        const result: DbSlimmingScanResult = {
+          scanId,
+          archiveAgeMonths,
+          includeActiveTasks,
+          scannedAt,
+          archivedBeforeMs,
+          activeTaskCount: row?.activeTaskCount ?? 0,
+          deletedTaskCount: row?.deletedTaskCount ?? 0,
+          archivedTaskCount: row?.archivedTaskCount ?? 0,
+          messageCount: row?.messageCount ?? 0,
+          estimatedMessageBytes: row?.estimatedMessageBytes ?? 0,
+          databaseBytes,
+          temporaryBytesRequired: dbSlimmingTemporaryBytesRequired(databaseBytes),
+          databaseVolumeFreeBytes: dbVolumeFreeBytes(dbFilePath),
+        };
+        pruneExpiredGrants();
+        scanGrants.set(scanId, {
+          ...result,
+          ownerId: owner.ownerId,
+          scopeKey: owner.scopeKey,
+          expiresAt: Date.now() + GRANT_TTL_MS,
+        });
+        return result;
+      } finally {
+        pending = null;
+      }
     },
 
     async chooseBackupDirectory(): Promise<DbSlimmingBackupDirectorySelection> {
@@ -267,6 +262,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           );
         }
         assertOwnerCurrent(owner);
+        if (deps.getClient?.()?.corruptionError) throwIpcError('PRECONDITION_FAILED', 'database unavailable');
         const liveScan = scanGrants.get(scan.scanId);
         if (
           liveScan !== scan ||

@@ -1391,6 +1391,7 @@
     "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Inténtalo de nuevo en breve.",
     "INVALID_PARAMS": "Entrada no válida. Revísala e inténtalo de nuevo.",
     "PRECONDITION_FAILED": "Esta acción no está disponible en el estado actual. Inténtalo de nuevo.",
+    "DB_SCAN_TIMEOUT": "El análisis de la base de datos agotó el tiempo de espera. No se modificaron los datos.",
     "PROVIDER_GROUP_CHANGED": "El grupo de proveedores cambió en otro lugar, por lo que esta acción no se aplicó. Revisa la configuración más reciente y vuelve a intentarlo.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo no cambiado: Cindy no puede verificar cuánto contexto usa esta tarea. Mantén el modelo actual o inicia una nueva tarea.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo no cambiado: Cindy no puede verificar la ventana de contexto del modelo actual. Si es un modelo personalizado, revisa su configuración de ventana. Si no se puede cambiar, mantén el modelo actual o inicia una nueva tarea.",

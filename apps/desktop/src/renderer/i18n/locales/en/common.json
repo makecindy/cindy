@@ -1373,6 +1373,7 @@
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
     "PRECONDITION_FAILED": "This action isn’t available in the current state.",
+    "DB_SCAN_TIMEOUT": "The database scan timed out. No data was changed.",
     "PROVIDER_GROUP_CHANGED": "The provider group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",

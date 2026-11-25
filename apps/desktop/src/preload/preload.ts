@@ -6336,6 +6336,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
       ): Promise<import('../shared/localDbMaintenance').DbSlimmingScanResult> =>
         ipcRenderer.invoke('local-db:maintenance:scan', input),
+      cancelScan: (): Promise<void> => ipcRenderer.invoke('local-db:maintenance:cancel-scan'),
       chooseBackupDirectory: (): Promise<
         import('../shared/localDbMaintenance').DbSlimmingBackupDirectorySelection
       > => ipcRenderer.invoke('local-db:maintenance:choose-backup-directory'),
