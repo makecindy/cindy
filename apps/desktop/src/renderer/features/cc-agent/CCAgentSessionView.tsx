@@ -903,7 +903,10 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
   return (
     <SessionRouteOriginGate sessionId={props.sessionIdProp ?? sessionId}
       ownsWindowRoute={!props.navigationMode || props.navigationMode === 'route-owner'}>
-      <CindyMakeSessionGate sessionId={props.sessionIdProp ?? sessionId}>
+      <CindyMakeSessionGate
+        sessionId={props.sessionIdProp ?? sessionId}
+        allowOptimisticSession={Boolean(props.awaitingSessionCreation || props.creationFailed)}
+      >
         <CCAgentSessionContent {...props} />
       </CindyMakeSessionGate>
     </SessionRouteOriginGate>
@@ -1002,7 +1005,6 @@ function CCAgentSessionContent({
       deviceLinkDeviceId?: string | null,
     ) => void;
   } | null>();
-  const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
   const rightSidebarSide = outletContext?.rightSidebarSide ?? 'right';
   const setRightSidebarAvailable = outletContext?.setRightSidebarAvailable;
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
@@ -5278,6 +5280,18 @@ function CCAgentSessionContent({
     onPendingSendStateChange,
     session,
   ]);
+
+  useEffect(() => () => {
+    const queued = deferredCreationSendRef.current;
+    if (!queued || deferredCreationSendDispatchingRef.current || !composerDraftKey) return;
+    restoreRemoteOptimisticDraft(composerDraftKey, {
+      clientId: queued.optimisticMessage.clientId,
+      text: plainTextToTiptapDoc(queued.message),
+      builtInSkillIntent: queued.opts?.builtInSkillIntent,
+      attachments: queued.files ?? [],
+      browserComments: [],
+    });
+  }, [composerDraftKey]);
 
   const voiceSurfaceAvailable = Boolean(botChatIdentity && !botChatIdentity.deviceId && sessionId
     && !remoteDeviceId && !session?.remoteHostId && !readOnly && ownsRoute && viewVisible);

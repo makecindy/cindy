@@ -8,9 +8,10 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 
 /** Resolve old links before mounting a chat composer or file browser. */
-export function CindyMakeSessionGate({ sessionId, children }: {
+export function CindyMakeSessionGate({ sessionId, children, allowOptimisticSession = false }: {
   sessionId?: string;
   children: ReactNode;
+  allowOptimisticSession?: boolean;
 }) {
   const remoteSource = useSyncExternalStore(remoteProjectsStore.subscribe, () => {
     const source = remoteProjectsStore.getMergedRemoteSessions().find(session => session.id === sessionId)?.source;
@@ -37,7 +38,7 @@ export function CindyMakeSessionGate({ sessionId, children }: {
   const [failure, setFailure] = useState<{ id: string; reason: ReturnType<typeof sessionEntryFailure> } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
-    if (CINDY_MAKE_ENABLED || !sessionId || knownSource !== undefined) return;
+    if (CINDY_MAKE_ENABLED || allowOptimisticSession || !sessionId || knownSource !== undefined) return;
     let cancelled = false;
     const owner = getDataOwnerGeneration();
     setFailure(null);
@@ -52,13 +53,13 @@ export function CindyMakeSessionGate({ sessionId, children }: {
       if (!cancelled && isDataOwnerGenerationCurrent(owner)) setFailure({ id: sessionId, reason: sessionEntryFailure(error) });
     });
     return () => { cancelled = true; };
-  }, [sessionId, knownSource, retry]);
+  }, [allowOptimisticSession, sessionId, knownSource, retry]);
 
   const source = knownSource !== undefined ? knownSource : (loaded && loaded.id === sessionId ? loaded.source : undefined);
   if (!CINDY_MAKE_ENABLED && isCindyMakeSource(source)) {
     return <Navigate to="/cc-agent" replace />;
   }
-  if (!CINDY_MAKE_ENABLED && sessionId && source === undefined) {
+  if (!CINDY_MAKE_ENABLED && !allowOptimisticSession && sessionId && source === undefined) {
     return failure?.id === sessionId
       ? <SessionEntryError reason={failure.reason} onRetry={() => setRetry(value => value + 1)} />
       : null;
