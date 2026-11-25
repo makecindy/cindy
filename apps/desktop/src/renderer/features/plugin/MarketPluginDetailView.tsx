@@ -15,7 +15,7 @@ import { PluginSharedUsage } from './PluginSharedUsage';
 import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
-import { pluginPresentationAuthor, pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import { pluginPresentationAuthor, pluginPresentationOrigin, publicPublisherFilter } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import { PluginInstallRing } from './PluginInstallRing';
 import { usePluginInstallProgress } from './lib/pluginInstallProgress';
@@ -112,6 +112,7 @@ export function MarketPluginDetailView({
               iconDataUrl={marketIcon.iconDataUrl}
               iconId={detail.ghostId}
               iconName={detail.name}
+              officialCatalog={publicPublisherFilter(detail) === 'official'}
               onIconLoad={marketIcon.onIconLoad}
               onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"

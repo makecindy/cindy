@@ -2969,7 +2969,9 @@ export class AgentInputCoordinator {
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
-    if (state.activeTurn) state.activeTurn.latestSteeringClientId = item.clientId;
+    const steerOwnerTurn = state.activeTurn;
+    const priorSteeringClientId = steerOwnerTurn?.latestSteeringClientId;
+    if (steerOwnerTurn) steerOwnerTurn.latestSteeringClientId = item.clientId;
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     const steerRuntime = this.deps.getTurnSessionIdentity?.(sessionId);
@@ -3074,6 +3076,10 @@ export class AgentInputCoordinator {
     }
 
     let authorizationFailed = false;
+    // A queued row's delivery guard is judged by the provider right before it sees the
+    // message. Its rejection can reach this coordinator wrapped, so the host code is not
+    // readable from the error text any more; record the proven revocation where it happens.
+    let revokedQueuedSteerCode: string | undefined;
     // A tool promoting an existing row needs its own current authority as well
     // as the row's original delivery guard. UI-only calls have no action scope.
     const beforeMutation = combineInputGuards(
@@ -3121,9 +3127,17 @@ export class AgentInputCoordinator {
         item.persistedContent,
         referenceContexts,
       );
+      const deliveryGuard = taskActionInputGuard(sessionId, item);
       const appMessageGuard = combineInputGuards(
         queuedAppMessageGuard(item),
-        taskActionInputGuard(sessionId, item),
+        steersStoredQueueItem && deliveryGuard ? async () => {
+          try {
+            await deliveryGuard();
+          } catch (error) {
+            revokedQueuedSteerCode ??= taskActionRevocationCode(error);
+            throw error;
+          }
+        } : deliveryGuard,
         beforeMutation ? assertSteerAuthority : undefined,
       );
       const workerInputs = this.deps.workerInputs;
@@ -3225,6 +3239,46 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         finishSteerRequest(false);
         throw err;
+      }
+
+      // A queued row whose grant is gone never reached the provider. The unit that was
+      // refused is that one message, so settle it as its own non-delivery: the row must not
+      // stay queued as if it were still pending, and the receiving task's running turn keeps
+      // its own state instead of being reported as a failed reply (「回复未完成」). A check
+      // that merely failed is not a revocation and keeps the ordinary retryable path below.
+      const queuedSteerRevocation = revokedQueuedSteerCode ?? taskActionRevocationCode(err);
+      // Only the request that still owns this steer may settle the row. Stop/close clears the
+      // marker and has already released the row (or kept it for the user), and an edit keeps the
+      // clientId with new text; a late revocation must not delete that content or settle twice.
+      const ownedQueuedRow = markerStillPresent && steersStoredQueueItem
+        ? latest.pendingQueue.find((row) => row.clientId === item.clientId)
+        : undefined;
+      if (queuedSteerRevocation && ownedQueuedRow && ownedQueuedRow.text === item.text) {
+        if (markerStillPresent) this.clearDirectSteeringItem(latest, item.clientId);
+        if (latest.activeTurn && latest.activeTurn === steerOwnerTurn
+          && latest.activeTurn.latestSteeringClientId === item.clientId) {
+          if (priorSteeringClientId === undefined) delete latest.activeTurn.latestSteeringClientId;
+          else latest.activeTurn.latestSteeringClientId = priorSteeringClientId;
+        }
+        latest.pendingQueue = latest.pendingQueue.filter((row) => row.clientId !== item.clientId);
+        this.removePendingCompactWaitClientId(latest, item.clientId);
+        latest.queueEditLocks = latest.queueEditLocks.filter((id) => id !== item.clientId);
+        if (latest.pendingQueue.length === 0) latest.queuePaused = false;
+        observation.policyBlocked = true;
+        log.info('discarding revoked queued steer before delivery', {
+          sessionId, clientId: item.clientId, reason: queuedSteerRevocation, errorCode: queuedSteerRevocation,
+        });
+        this.notifyRejectedUserTurn(sessionId, item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.emit(sessionId);
+        this.scheduleDrain(sessionId, 'queued-steer-revoked');
+        // 与丢弃路径同构:本轮可能已因队列非空推迟了收口(Agent Island),队空后必须补报,
+        // 否则空的 drain 会直接返回、被推迟的完成再无回放。
+        this.deps.onQueueEmptied?.(sessionId);
+        // 这条消息确实没有送达:返回 false(而不是 screening 拦截那种“已处置”的 true),否则
+        // Device Link 的 INPUT_STEER 会把 true 当接受并提交自动标题,用一段从未投递的正文
+        // 给任务改名。队列行已删除,renderer 按权威 projection 收敛,不存在重复派发。
+        return finishSteerRequest(false);
       }
 
       if (isStaleTurnError(err)) {

@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "‘{{device}}’의 {{provider}}을(를) 지금 사용할 수 없습니다.",
     "remoteCopyUnavailableOnTaskComputer": "작업이 있는 컴퓨터의 {{provider}}을(를) 지금 사용할 수 없습니다.",
+    "accountCount_one": "계정 {{count}}개",
     "accountCount_other": "계정 {{count}}개",
     "accountFallback": "계정 {{index}}",
     "favoriteConfiguration": "이 설정을 즐겨찾기에 추가",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "모델 그룹",
+    "sourceCount_one": "소스 {{count}}개",
     "sourceCount_other": "소스 {{count}}개",
     "strategy": {
       "expiring": "곧 만료되는 것 먼저",

@@ -122,6 +122,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
+  buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
@@ -2122,7 +2123,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2133,6 +2134,11 @@ export class AgentIslandService {
 
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
+  }
+
+  /** This computer's share of the island counts; the phone island adds these per computer. */
+  getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
