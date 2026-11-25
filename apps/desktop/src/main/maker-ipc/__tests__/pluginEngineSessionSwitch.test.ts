@@ -114,6 +114,27 @@ describe('switching a task onto a plugin engine', () => {
     }));
   });
 
+  // #12397: at the production pre-send entry, a stale builtin route must
+  // reject the send and retain the choice. The success case above cannot
+  // detect fallback to the old plugin. Unit input: disable the selected
+  // provider after staging a switch from a completed automation's plugin.
+  it('blocks a manual automation send when the selected builtin route becomes unavailable', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', providerId: 'xd',
+      localWindowRequest: true,
+    });
+    const routeError = new Error('Selected provider is disabled');
+    vi.mocked(deps.assertModelRouteUsable!).mockRejectedValueOnce(routeError);
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toBe(routeError);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'claude-code', providerId: 'xd' });
+  });
+
   it('lets a newly bound automation send without consuming a pending manual plugin choice', async () => {
     const canSwitchCompletedAutomationSession = vi.fn(async () => true);
     const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {

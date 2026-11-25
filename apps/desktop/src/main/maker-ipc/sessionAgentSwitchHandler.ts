@@ -1942,12 +1942,13 @@ export function applyPendingAgentSwitchIfIdle(
       // 墓碑写失败同理: 跨引擎的 fail-continue 也必须挡住 —— 发送继续 + 进程退出会把
       // 同值重选的唯一证据一起丢掉(PR #5155 review P2)。
       // 换电脑同理:用户选的是另一台电脑(或改回本机)，不能悄悄留在原来那台继续发。
-      // 切到插件引擎同理：插件停用或不可用时提示用户，不悄悄留在原引擎继续发。
+      // 插件目标和自动化手动切换同理：目标不可用时提示用户，不在原引擎继续发。
       if (
         err instanceof UserRouteSelectionMarkerError ||
         intent.sameAgentSelection ||
         intent.runtimeSource === 'agent' ||
         intent.targetAgentDeviceId !== undefined ||
+        intent.localAutomationSwitch ||
         intent.targetAgentKind === 'acp'
       ) {
         throw err;
