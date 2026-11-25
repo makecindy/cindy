@@ -28,6 +28,7 @@ import {
   MAX_FRAME_BYTES,
   REMOTE_AGENT_CHANNEL,
   isProviderAccessDeniedError,
+  DeviceLinkError,
   parseProviderSharePeer,
   providerShareGuestPeer,
   providerShareFavoriteSource,
@@ -97,6 +98,7 @@ import { captureProviderManagementScope } from '../provider-group/managementScop
 import { readProviderManagementShares } from '../provider-group/managementClient.js';
 import type { ProviderShareManagementCommand } from '../../shared/providerManagement.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import {
   abortProviderShareReshareRuns,
   getControllerDisplayName,
@@ -1107,6 +1109,19 @@ async function createLink(
   return { link, expiresAt, ...(created.linkId ? { linkId: created.linkId } : {}) };
 }
 
+/** Fixed public categories for both local transport errors and remote refusal envelopes. */
+function insightsFailureCode(error: { code: unknown; message?: string }): IpcErrorCode {
+  const code = typeof error.code === 'string' ? error.code : '';
+  return code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
+    : code === 'BACKPRESSURE' ? 'DEVICE_LINK_BUSY'
+    : code === 'DEVICE_UNRESPONSIVE' ? 'DEVICE_LINK_DEVICE_UNRESPONSIVE'
+    : code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
+    : code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
+    : ['NOT_CONNECTED', 'LINK_NOT_OPEN', 'PEER_RESET'].includes(code) ? 'DEVICE_LINK_NOT_CONNECTED'
+    : isProviderAccessDeniedError(error) || code === 'REMOTE_DISABLED' ? 'PERMISSION_DENIED'
+    : 'DEVICE_LINK_UNAVAILABLE';
+}
+
 async function execute(command: ProviderShareCommand, assertCurrent: () => void = () => undefined): Promise<unknown> {
   assertCurrent();
   switch (command.action) {
@@ -1246,14 +1261,20 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
           throwIpcError('PERMISSION_DENIED', 'Provider share changed');
         }
       };
-      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare });
+      const response = await shareInvoke(`share:${command.shareId}`, PROVIDER_SHARE_INSIGHTS_CHANNEL, [{ version: 1, includeUsage: command.includeUsage }], { preSend: assertShare })
+        .catch(error => {
+          assertShare();
+          if (error instanceof DeviceLinkError
+            || (error instanceof Error && 'code' in error && error.code === 'DEVICE_UNRESPONSIVE')) {
+            throwIpcError(insightsFailureCode(error), 'Provider share insights are not available');
+          }
+          throw error;
+        });
       assertShare();
       if (!response.ok) {
-        throwIpcError(response.error.code === 'CHANNEL_NOT_ALLOWED' ? 'UNSUPPORTED_CAPABILITY'
-          : response.error.code === 'DEVICE_OFFLINE' ? 'DEVICE_LINK_DEVICE_OFFLINE'
-          : response.error.code === 'INVOKE_TIMEOUT' ? 'DEVICE_LINK_TIMEOUT'
-          : response.error.code === 'NOT_CONNECTED' || response.error.code === 'LINK_NOT_OPEN' ? 'DEVICE_LINK_NOT_CONNECTED'
-          : 'PERMISSION_DENIED', 'Provider share insights are not available');
+        // Congestion and a missing reply are not evidence of revoked permission.
+        // Keep fixed public messages; the upstream diagnostic may contain identity.
+        throwIpcError(insightsFailureCode(response.error), 'Provider share insights are not available');
       }
       const result = parseProviderShareInsights(response.result);
       if (!result || (command.includeUsage && result.status.usage === 'not-requested') || (!command.includeUsage && (result.usage !== null || !['disabled', 'not-requested'].includes(result.status.usage)))) {

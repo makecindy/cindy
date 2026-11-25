@@ -157,7 +157,7 @@ async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind 
     .where(eq(sessions.id, sessionId))
     .limit(1);
   if (!row || row.status === 'deleted') return null;
-  // Plugin-engine tasks are named by the auxiliary model only (never another engine's one-shot).
+  // Plugin-engine tasks use the auxiliary title model without an engine one-shot.
   if (row.agentKind === 'acp') return 'plugin-engine';
   return dbToMakerAgentKind(row.agentKind);
 }
