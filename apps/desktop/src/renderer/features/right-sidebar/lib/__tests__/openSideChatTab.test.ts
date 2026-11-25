@@ -201,7 +201,7 @@ describe('side chat task entry', () => {
     let finishBinding!: () => void;
     mocks.create.mockReturnValueOnce(new Promise(resolve => { finishFork = resolve; }));
     if (phase === 'bind') {
-      mocks.patchTab.mockReturnValueOnce(new Promise(resolve => { finishBinding = resolve; }));
+      mocks.patchTab.mockReturnValueOnce(new Promise<void>(resolve => { finishBinding = resolve; }));
     }
     expect(await openSideChatTab('parent')).toBe(true);
     const child = { id: 'orphan-child' };

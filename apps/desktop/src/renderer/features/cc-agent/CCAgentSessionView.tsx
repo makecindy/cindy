@@ -6420,6 +6420,7 @@ function CCAgentSessionContent({
       </>}
       key={sessionId}
       sessionId={sessionId}
+      quoteDraftKey={draftKeyProp ? composerDraftKey : undefined}
       sessionTitle={session?.title ?? null}
       // 透传 agentKind 让 UserMessage 能按 capabilities.fork / rewind 决定
       // 消息下方 Fork / Rewind icon 的显示 (Codex rewind=false → 隐藏)。
