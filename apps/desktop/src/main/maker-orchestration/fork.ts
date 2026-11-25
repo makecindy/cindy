@@ -186,11 +186,7 @@ function buildCodexForkRecoveryMarker(opts: {
   return {
     id: createId(),
     clientId: createId(),
-    sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows.map((row) => ({
-      client_id: row.clientId, role: row.role, content: row.content,
-      tool_use_id: row.toolUseId, agent_meta: row.agentMeta, agent_kind: row.agentKind,
-      created_at: row.createdAt,
-    }))),
+    sourceMessagesDigest: computeForkSourceMessagesDigest(opts.rows),
     // 导入历史可能有晚于墙钟的合成时间；恢复边界必须排在复制内容之后。
     createdAt: opts.rows.reduce((latest, row) => Math.max(latest, row.createdAt), opts.now),
     content: JSON.stringify({
@@ -948,10 +944,7 @@ export async function forkSessionAtMessage(
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
-  const sourceMessagesDigest = computeForkSourceMessagesDigest(sourceMessages.map(row => ({
-    client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
-    agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
-  })));
+  const sourceMessagesDigest = computeForkSourceMessagesDigest(sourceMessages);
 
   // 3. 计算 agent 侧截断信息。
   //

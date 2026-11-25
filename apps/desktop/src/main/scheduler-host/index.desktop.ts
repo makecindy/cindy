@@ -104,7 +104,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
       readAutoReviewHistory: async (sessionId) => {
         await drainPersistQueue();
-        return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
+        return listMessagesForAgentHandoff(sessionId, 400, undefined, 'authorization');
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
       resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {

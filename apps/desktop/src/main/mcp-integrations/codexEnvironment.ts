@@ -41,6 +41,8 @@ export interface CodexExtraSpawnConfig {
     sessionInstanceId: string,
     session?: { vendorOptions?: Record<string, unknown> },
   ) => Record<string, unknown>;
+  /** Release transports bound to this app-server when its host is retired. */
+  onHostRetired?: () => void;
 }
 
 export interface GetCodexExtraSpawnConfigOptions {
@@ -396,6 +398,7 @@ async function doStart(
       })
     : null;
   const bridgeServerNames = Object.keys(serverFactories);
+  const hostSessionInstances = new Set<string>();
   activeBridge = bridge;
   activeBridgeServerNames = bridge ? bridgeServerNames : null;
 
@@ -448,7 +451,9 @@ async function doStart(
           buildSessionMcpConfig: (
             sessionInstanceId: string,
             session?: { vendorOptions?: Record<string, unknown> },
-          ) => ({
+          ) => {
+            hostSessionInstances.add(sessionInstanceId);
+            return ({
             ...Object.fromEntries(
               bridgeServerNames.map((name) => [
                 `mcp_servers.${name}.url`,
@@ -474,7 +479,14 @@ async function doStart(
               && !hasImChannelVendorOptions(session?.vendorOptions, 'telegram')
               ? { [`mcp_servers.${TELEGRAM_BOT_MCP_SERVER_NAME}.enabled`]: false }
               : {}),
-          }),
+            });
+          },
+          onHostRetired: () => {
+            for (const sessionInstanceId of hostSessionInstances) {
+              bridge.closeSessionInstance(sessionInstanceId);
+            }
+            hostSessionInstances.clear();
+          },
         }
       : {}),
   };

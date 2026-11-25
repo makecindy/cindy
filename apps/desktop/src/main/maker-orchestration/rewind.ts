@@ -814,7 +814,7 @@ async function buildNativeContextReset(
   ctx: Pick<RewindContext, 'targetClientId' | 'agentKind'>,
 ): Promise<NonNullable<RewindCommitArgs['nativeContextReset']>> {
   // The rewind target may be earlier than the last page of durable history.
-  const history = await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay');
+  const history = await listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay');
   const targetIndex = history.findIndex((message) => message.clientId === ctx.targetClientId);
   const kept = targetIndex >= 0 ? history.slice(0, targetIndex) : [];
   const label = ctx.agentKind === 'codex' ? 'Codex' : ctx.agentKind === 'pi' ? 'Pi' : 'Claude Code';

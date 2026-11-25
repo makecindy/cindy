@@ -9250,7 +9250,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
                 return row;
               },
-              listMessages: id => listMessagesForAgentHandoff(id, null, undefined, 'replay'),
+              // Recovery only needs a bounded tail. The complete transcript
+              // remains in SQLite and is available through history tools.
+              listMessages: id => listMessagesForAgentHandoff(id, 2000, undefined, 'replay'),
               resolveHandoffWindow: resolveDesktopHandoffWindow,
               commit: commitContextRebuild,
               setPending: (id, handoff, generation) => agentHandoffPending.set(id, handoff, generation),
@@ -9337,7 +9339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             const relocationDeps = unsentClientId ? {
               ...agentSwitchDeps,
               listMessagesForHandoff: async (id: string) =>
-                (await listMessagesForAgentHandoff(id, null, undefined, 'replay'))
+                (await listMessagesForAgentHandoff(id, 2000, undefined, 'replay'))
                   .filter(message => message.clientId !== unsentClientId),
               insertBoundaryMessage: createAgentSwitchBoundaryInsert((id, body) =>
                 createDbMessage(id, { ...body, createdAt: boundaryCreatedAt }, {
@@ -9641,7 +9643,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           (row.sdkSessionId !== null && row.sdkSessionId !== session.sdkSessionId)
         )
           return;
-        const history = await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay');
+        const history = await listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay');
         assertLocalAppOwner();
         const generation = agentHandoffPending.readGeneration(sessionId);
         const label = session.agentKind;
@@ -11577,7 +11579,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
     listMessagesForHandoff: (sessionId, after) =>
-      listMessagesForAgentHandoff(sessionId, null, after, 'replay'),
+      listMessagesForAgentHandoff(sessionId, 2000, after, 'replay'),
     findParkedEngineSession: (sessionId, targetDbKind, fromAgentDeviceId) =>
       findParkedEngineSession(sessionId, targetDbKind, fromAgentDeviceId),
     applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
@@ -11816,7 +11818,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return window;
     },
     getMessage: getMessageDeletionTarget,
-    listMessagesForContext: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
+    listMessagesForContext: (sessionId) => listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay'),
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     hasBackgroundActivity: getClaudeSessionBackgroundActivity,
     closeSession: (sessionId) => maker.closeSession(sessionId),
@@ -18358,7 +18360,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const readAutoReviewHistory = async (sessionId: string) => {
     await drainPersistQueue();
-    return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
+    return listMessagesForAgentHandoff(sessionId, 400, undefined, 'authorization');
   };
   const loadPluginTargetReview = createPluginTargetReviewLoader({
     owner: getCurrentDbClientSnapshot,
@@ -18981,7 +18983,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId, undefined, 'required');
     },
     listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
-    listReplayMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
+    // Handoff generation must never materialize an unbounded transcript in the
+    // main process. Keep the durable history intact and carry the latest tail.
+    listReplayMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 2000, undefined, 'replay'),
     // 伙伴自有会话(当前 + 恢复前旧对话整体优先,后台任务补足),写进回忆指引限定 history 工具范围。
     listCompanionSessionIds: (sessionId) => listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT),
     findLatestUser: findLatestUserMessageForRebuild,
