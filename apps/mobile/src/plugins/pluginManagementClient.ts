@@ -79,7 +79,8 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
   return {
     deviceId: options.deviceId,
     isCurrent,
-    async capabilities(): Promise<PluginManagementCapabilities> {
+    /** `ticket`: an optional per-request check, re-run right before the request leaves and when its reply lands. */
+    async capabilities(ticket?: () => boolean): Promise<PluginManagementCapabilities> {
       try {
         return await call(REMOTE_RESOURCE_MANIFEST_CHANNEL, { client: descriptor }, (value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
@@ -90,14 +91,14 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
           const actions = plugins?.actions ?? [];
           return { snapshot: actions.some((a) => a.id === 'management:snapshot' && !a.disabled),
             uiConsent: actions.some((a) => a.id === 'management:ui-consent' && !a.disabled) };
-        });
+        }, false, ticket);
       } catch (error) {
         if (isRemoteResourcesUnsupported(error)) return { snapshot: false, uiConsent: false };
         throw error;
       }
     },
-    async capability(): Promise<'supported' | 'unsupported'> {
-      return (await this.capabilities()).snapshot ? 'supported' : 'unsupported';
+    async capability(ticket?: () => boolean): Promise<'supported' | 'unsupported'> {
+      return (await this.capabilities(ticket)).snapshot ? 'supported' : 'unsupported';
     },
     uiConsent: () => action('ui-consent', {}, parsePluginUiConsent),
     /** `installed` (Host ≥ 0.1.130) returns the same shape with only the installed-maintenance market projection. */
@@ -107,29 +108,29 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       return snapshot;
     }),
     /** Paged market discovery (Host ≥ 0.1.130). Only an explicit INVALID_PARAMS marks an older Host. */
-    async catalogPaging(): Promise<boolean> {
+    async catalogPaging(ticket?: () => boolean): Promise<boolean> {
       try {
         return await action('snapshot', { read: 'capabilities' }, (value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_RESPONSE');
           return (value as { catalogPaging?: unknown }).catalogPaging === true;
-        });
+        }, undefined, false, ticket);
       } catch (error) {
         if (error instanceof PluginManagementRequestError && error.message === 'INVALID_PARAMS') return false;
         throw error;
       }
     },
-    catalog(query: PluginMarketQuery): Promise<PluginMarketPage> {
+    catalog(query: PluginMarketQuery, ticket?: () => boolean): Promise<PluginMarketPage> {
       let input: Record<string, unknown>;
       try { input = pluginMarketQueryInput(query); } catch { return Promise.reject(new PluginManagementRequestError('INVALID_INPUT')); }
-      return action('snapshot', { read: 'catalog', query: input }, parsePluginMarketPage);
+      return action('snapshot', { read: 'catalog', query: input }, parsePluginMarketPage, undefined, false, ticket);
     },
-    async detail(pluginId: string) {
+    async detail(pluginId: string, ticket?: () => boolean) {
       if (!validId(pluginId, 1024)) return localError('INVALID_INPUT');
       return action('market-detail', { pluginId }, (v) => {
         const detail = parsePluginManagementDetail(v);
         if (detail.pluginId !== pluginId) throw new Error('INVALID_RESPONSE');
         return detail;
-      });
+      }, undefined, false, ticket);
     },
     begin(request: PluginManagementBegin, guard?: () => boolean) {
       if (!validId(request.operationId)) return localError('INVALID_INPUT');

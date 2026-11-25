@@ -75,6 +75,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (receiver) return snapshot.ghosts.some(matchesReceiver);
     return !installDetail || !snapshot.ghosts.some((g) => marketItemMatchesPlugin(installDetail!, g));
   }
+  /** Sequence of the snapshot currently in state (readSnapshot, refresh or display read). */
+  let publishedSnapshotSequence = 0;
   async function readSnapshot(token: number) {
     const sequence = ++snapshotSequence;
     const factsToken = ++factsSequence;
@@ -82,7 +84,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (current(token) && factsToken === factsSequence) facts = snapshot;
     // Both display reads and full snapshots share this sequence. A current full
     // read replaces the older hint; a later lightweight read can replace it again.
-    if (current(token) && sequence === snapshotSequence) publish({ snapshot, uiConsent: null });
+    if (current(token) && sequence === snapshotSequence) { publishedSnapshotSequence = sequence; publish({ snapshot, uiConsent: null }); }
     return snapshot;
   }
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number) {
@@ -137,7 +139,10 @@ export function createPluginManagementController(client: PluginManagementClient,
         pendingDisplay = reading;
         try {
           const display = await reading.promise;
-          if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
+          if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) {
+            publishedSnapshotSequence = snapshotToken;
+            publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
+          }
         } finally { if (pendingDisplay === reading) pendingDisplay = undefined; }
         return;
       }
@@ -149,7 +154,10 @@ export function createPluginManagementController(client: PluginManagementClient,
         const factsToken = ++factsSequence;
         const snapshot = await client.snapshot(options.snapshotRead);
         if (current(token) && factsToken === factsSequence) facts = snapshot;
-        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ snapshot });
+        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) {
+          publishedSnapshotSequence = snapshotToken;
+          publish({ snapshot });
+        }
       }
     } catch (error) {
       if (current(token) && sequence === refreshSequence) publish({ errorCode: pluginManagementErrorCode(error) });
@@ -206,7 +214,9 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (!id || ['succeeded', 'cancelled', 'failed'].includes(state.outcome)) { await refresh(); return; }
     const token = epoch;
     stopPolling();
-    publish({ busy: true });
+    // A new verification round starts now: facts from an earlier round must not settle anything while its
+    // operation query is still in flight.
+    publish({ busy: true, missingReceiptFacts: null });
     try { await acceptReceipt(await client.operation(id), token); }
     catch (error) {
       if (!current(token)) return;
@@ -215,9 +225,16 @@ export function createPluginManagementController(client: PluginManagementClient,
       const gone = code === 'NOT_FOUND';
       // While the facts after a missing receipt are read, stay busy: the snapshot already in state predates them.
       publish({ busy: gone, outcome: 'unknown', errorCode: code, missingReceiptFacts: null });
+      const notFoundSequence = snapshotSequence;
+      const ours = snapshotSequence + 1; // readSnapshot takes the next sequence synchronously
       let fresh: PluginManagementSnapshot | null = null;
       try { fresh = await readSnapshot(token); } catch { /* Keep the original unknown-result reason. */ }
-      if (gone && current(token)) publish({ busy: false, missingReceiptFacts: fresh });
+      if (gone && current(token)) {
+        // A read started after ours (e.g. a plugin-change refresh) replaces it. Use the newest facts that were
+        // read after NOT_FOUND and are in state; if that newer read has not landed yet, stay unconfirmed.
+        const facts = ours === snapshotSequence ? fresh : publishedSnapshotSequence > notFoundSequence ? state.snapshot : null;
+        publish({ busy: false, missingReceiptFacts: facts });
+      }
     }
   }
   async function answer(confirmed: boolean) {

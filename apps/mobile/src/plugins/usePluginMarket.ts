@@ -179,13 +179,20 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const latest = () => mounted.current && probeGeneration.current === generation && liveScope.current === probeScope;
     setProbe({ scope: probeScope, status: "loading" });
     try {
-      const status = (await client.capability()) === "unsupported" ? "outdated"
-        : (await client.catalogPaging()) ? "supported" : "outdated";
+      const status = (await client.capability(latest)) === "unsupported" ? "outdated"
+        : (await client.catalogPaging(latest)) ? "supported" : "outdated";
       if (latest()) setProbe({ scope: probeScope, status });
     } catch {
       if (latest()) setProbe({ scope: probeScope, status: "failed" });
     }
   }, [client, scope]);
+  // Leaving the market cancels an in-flight probe (its sends are fenced anyway); forget its "loading" so coming
+  // back to the same computer probes again. A finished result (supported, outdated, failed) is kept.
+  useEffect(() => {
+    if (active) return;
+    probeGeneration.current += 1;
+    setProbe((current) => current?.status === "loading" ? undefined : current);
+  }, [active]);
   useEffect(() => {
     if (active && probe?.scope !== scope) void readProbe();
   }, [active, scope, probe?.scope, readProbe]);
@@ -234,7 +241,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     map.delete(key); map.set(key, value);
     while (map.size > CACHED_LISTS) map.delete(map.keys().next().value!);
   };
-  const readPage = useCallback(async (list: CatalogList, cursor: string | null, publisher: PluginMarketFilter, token = list.token) => {
+  const readPage = useCallback(async (list: CatalogList, cursor: string | null, publisher: PluginMarketFilter, token = list.token, chained = false) => {
     if (!client) return;
     const readScope = scope;
     const current = () => mounted.current && liveScope.current === readScope && lists.current.get(list.key) === list
@@ -247,8 +254,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       else if (list.status === "loading") { list.status = list.items.length ? "ready" : "failed"; list.at = 0; }
     };
     try {
+      // This request's ticket, re-checked when it leaves the queue and when it lands: a next page still has to
+      // serve the list and typed search on screen (and, when chained, the source filter it was judged by).
+      const ticket = () => current() && (!cursor || followUpAllowed(list, debouncedQuery, chained ? publisher : undefined));
       const page = await client.catalog({ query: debouncedQuery, scope: request.scope, cursor, limit: request.limit,
-        excludeInstalled: true, counts: false });
+        excludeInstalled: true, counts: false }, ticket);
       if (!current()) { abandon(); return; }
       // A first-page read replaces the list; only later pages are de-duplicated against it.
       const known = new Set(cursor ? list.items.map((item) => item.pluginId) : []);
@@ -269,7 +279,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         && chain.current < MAX_EMPTY_CHAIN && followUpAllowed(list, debouncedQuery, publisher)) {
         chain.current += 1;
         list.loadingMore = true;
-        await readPage(list, page.nextCursor, publisher, token);
+        await readPage(list, page.nextCursor, publisher, token, true);
       } else chain.current = 0;
     } catch (error) {
       if (!current()) { abandon(); return; }
@@ -303,7 +313,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const readScope = scope;
     try {
       // The same light count read as the computer: scope all, one item, counts only.
-      const page = await client.catalog({ query: debouncedQuery, scope: "all", limit: 1, excludeInstalled: true, counts: true });
+      const page = await client.catalog({ query: debouncedQuery, scope: "all", limit: 1, excludeInstalled: true, counts: true },
+        () => counts.current.get(countsKey) === entry && liveScope.current === readScope);
       if (counts.current.get(countsKey) !== entry) return;
       if (liveScope.current !== readScope) { entry.at = 0; return; }
       entry.counts = page.counts; entry.customSourceNames = page.customSourceNames;
@@ -365,7 +376,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       return;
     }
     try {
-      const value = await client.detail(item.pluginId);
+      const value = await client.detail(item.pluginId, () => generation === detailRead.current);
       if (generation === detailRead.current) setDetail({ item: value, target: host, detail: value, loading: false, failed: false });
     } catch {
       if (generation === detailRead.current) setDetail({ item, target: host, loading: false, failed: true });
@@ -530,6 +541,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const checkResult = useCallback(async () => {
     const attempt = installRef.current, controller = management.controller;
     if (!attempt || !controller) return;
+    // A new verification round: an earlier round's market detail must not land while this round's query runs
+    // (the controller also clears its earlier facts before sending the query).
+    verification.current += 1;
+    settledFacts.current = undefined;
     await controller.reconcile();
     const state = controller.getState();
     if (installRef.current?.id !== attempt.id || state.outcome !== "unknown" || !state.missingReceiptFacts) return;

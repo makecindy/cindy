@@ -2353,6 +2353,38 @@ describe("market read fences and lost-receipt facts", () => {
     expect(sent.filter((request) => request.input?.query?.cursor)).toEqual([]);
   });
 
+  // Maintainer review 03:54 #3: a probe cancelled by leaving the market must not leave the market stuck at "failed".
+  it("probes again when coming back after leaving the market while the probe was queued", async () => {
+    const gate = deferred();
+    let firstManifest = true;
+    queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([marketItem("demo", "Demo")]),
+      (request) => {
+        if (request === "manifest" && firstManifest) { firstManifest = false; return gate.promise; }
+        return undefined;
+      });
+    await openMarket();
+    await act(async () => fixture.props.get("directory").onSegmentChange("installed"));
+    await act(async () => { gate.release(); });
+    await settle(10);
+    await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ status: "ready", items: [expect.objectContaining({ name: "Demo" })] });
+  });
+  // Maintainer review 03:54 #3: a next page queued by scrolling is checked again when it actually leaves.
+  it("drops a queued next page when a new search is typed before it is sent", async () => {
+    const gate = deferred();
+    const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+      : { ...marketPage([marketItem("demo", "Demo")]), nextCursor: "cursor-1", counts: null },
+    (request) => request !== "manifest" && request.input?.query?.cursor ? gate.promise : undefined);
+    await openMarket();
+    await act(async () => shownMarket().loadMore());
+    await settle();
+    await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text: "rota" } }));
+    await act(async () => { gate.release(); });
+    await settle(10);
+    expect(sent.filter((request) => request.input?.query?.cursor)).toEqual([]);
+  });
+
   // Maintainer review 03:10 #1: a snapshot read before NOT_FOUND must not settle the result, and a market
   // detail from an earlier verification must not open an instance.
   const item = marketItem("demo", "Demo");
@@ -2405,6 +2437,84 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+  });
+  // Maintainer review 03:54 #1: tapping "Check result" again starts a new round before its operation query returns.
+  it("does not let the first round's detail settle while the second round's operation query is in flight", async () => {
+    let verifying = false, round = 0;
+    const firstDetail = deferred(), secondQuery = deferred();
+    queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          return managementSnapshot(verifying);
+        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:begin": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (request === "manifest") return undefined;
+      if (verifying && request.actionId === "management:market-detail" && round === 1) return firstDetail.promise;
+      if (request.actionId === "management:operation" && ++round === 2) return secondQuery.promise;
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(14);
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(6);
+    // The first round's detail would say "installed"; the second round's query has not returned yet.
+    await act(async () => { firstDetail.release(); });
+    await settle(10);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    await act(async () => { secondQuery.release(); });
+    await settle(14);
+    // The second round reads its own facts and settles: the plugin is installed from this release.
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
+  });
+  // Maintainer review 03:54 #2: the snapshot read after NOT_FOUND (A) is replaced by a later plugin-change read (B).
+  it("settles from the newer snapshot when the read after NOT_FOUND is replaced and returns last", async () => {
+    let instancePresent = false;
+    const readA = deferred();
+    let holdNext = false;
+    queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          // A answers with the state at the time it was sent (before the instance appeared).
+          return managementSnapshot(instancePresent && !(request as any).sentBeforeInstance);
+        case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (holdNext && request !== "manifest" && request.actionId === "management:snapshot" && request.input?.read === "installed") {
+        holdNext = false;
+        (request as any).sentBeforeInstance = true;
+        return readA.promise;
+      }
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    holdNext = true;
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(6);
+    // B: a plugin-change refresh starts after A and returns first, showing the plugin installed.
+    instancePresent = true;
+    await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
+    await settle(6);
+    await act(async () => { readA.release(); });
+    await settle(14);
+    expect(shownMarket().rowState(item)).not.toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
   });
   it("ignores a market detail from an earlier verification that arrives late", async () => {
     let verifying = false;
