@@ -340,7 +340,7 @@
     "tabOwned": "Shared by Me",
     "startIntro": "Invite a collaborator to read everything in this task and work with the same Agent.",
     "runsOnThisDevice": "Runs on this device",
-    "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host.",
+    "inviteNotice": "Anyone holding the invitation link can join after signing in, with the same Agent access as the host. Guests can review current changes across the entire Git repository, even when sharing a subfolder.",
     "offlineAutoClose": "Sharing ends automatically if the host computer stays offline.",
     "inviteBoxHint": "Send the link to your collaborator. They can open it to join, or paste it into Join Shared Task in Cindy.",
     "invitationMessage": "You’re invited to join “{{title}}”\n{{link}}\nOpen the link to join. If Cindy doesn’t open, choose Join Shared Task in Cindy and paste this link.",
@@ -10687,8 +10687,6 @@
       "remoteUnavailableDescription": "Terminal is currently available only for sessions running on this device."
     },
     "review": {
-      "guestTaskTitle": "Task changes · Read only",
-      "guestTaskScope": "Shows completed file edits recorded in the shared conversation. Changes without a recorded edit are omitted.",
       "turn": {
         "title": "Changes from this message",
         "localOnly": "Exact message changes are not available for remote sessions yet.",

@@ -340,7 +340,7 @@
     "tabOwned": "吾所發起",
     "startIntro": "邀同僚盡覽此差事，與同一 Agent 並肩協作。",
     "runsOnThisDevice": "行於此機",
-    "inviteNotice": "持邀請連結者登門即可入，所得 Agent 使用權柄與東道同。",
+    "inviteNotice": "持邀請連結者登門即可入，所得 Agent 使用權柄與東道同。 雖僅共享子目錄，客亦可閱全 Git 倉之現改。",
     "offlineAutoClose": "東道之機久離線，共享將自終。",
     "inviteBoxHint": "遣連結予同僚，彼點之即可入；亦可於 Cindy 中點「入共事」貼此連結。",
     "invitationMessage": "邀君入「{{title}}」\n{{link}}\n點連結即入；若 Cindy 未啟，可於 Cindy 中點「入共事」並貼此連結。",
@@ -10643,8 +10643,6 @@
       "remoteUnavailableDescription": "終端今僅適於此裝置上所行之本機差事。"
     },
     "review": {
-      "guestTaskTitle": "本務所改 · 唯讀",
-      "guestTaskScope": "惟列共享對話所記且已畢之文件改動。",
       "turn": {
         "title": "此訊之變更",
         "localOnly": "此訊之精確變更，遠端差事暫不支援。",

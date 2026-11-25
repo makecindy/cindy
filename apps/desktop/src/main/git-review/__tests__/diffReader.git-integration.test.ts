@@ -11,6 +11,8 @@ import { runGit } from '../gitRunner';
 import { readStatus } from '../statusReader';
 import { mapWithConcurrency, readCappedFileDiff, readDiffs, readDiffSummaryEntries, readFileDiff } from '../diffReader';
 import type { ReviewScope } from '../types';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { resolveReviewScope, withSessionReviewRowSnapshot, withSessionReviewWorkspace } from '../scopeResolver';
 
 let repoPath: string;
 
@@ -69,6 +71,31 @@ afterAll(async () => {
 });
 
 describe('git-review diffReader', () => {
+  it('returns the same staged and unstaged sibling edits for the guest and owner of a shared subdirectory', async () => {
+    const workdir = path.join(repoPath, 'shared');
+    await fs.mkdir(workdir);
+    const row = { id: 's1', workingDir: workdir, remoteHostId: null, worktreePath: null };
+    const read = () => withSessionReviewRowSnapshot(row, async () => {
+      const resolved = await resolveReviewScope('s1');
+      expect(resolved.repoRoot).toBe(path.resolve(repoPath));
+      return readDiffs(resolved, await readStatus(resolved));
+    });
+    const guest = () => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'guest', channel: 'git-review:remote-op',
+      sharedTask: { author: { sessionId: 's1', sharedTaskId: 'share', accountId: 'guest', memberId: 'member',
+        displayName: 'Guest' }, isCurrent: () => true, authorize: () => true },
+    }, read);
+    const file = path.join(repoPath, 'seed.txt');
+    await fs.writeFile(file, 'stage\n');
+    await runGit(['add', 'seed.txt'], { cwd: repoPath });
+    await fs.writeFile(file, 'terminal\n');
+    const owner = await withSessionReviewWorkspace('s1', workdir, read);
+    expect(owner.staged[0]?.rawPatch).toContain('+stage');
+    expect(owner.unstaged[0]?.rawPatch).toContain('+terminal');
+    expect(await guest()).toEqual(owner);
+    await runGit(['restore', '--source=HEAD', '--staged', '--worktree', '--', 'seed.txt'], { cwd: repoPath });
+    expect(await guest()).toMatchObject({ staged: [], unstaged: [] });
+  });
   it('reads untracked files through --no-index /dev/null', async () => {
     await fs.writeFile(path.join(repoPath, 'new file.txt'), 'hello\nworld\n');
     const status = await readStatus(scope());

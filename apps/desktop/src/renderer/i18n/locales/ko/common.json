@@ -340,7 +340,7 @@
     "tabOwned": "내가 공유한 항목",
     "startIntro": "동료를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
     "runsOnThisDevice": "이 컴퓨터에서 실행 중",
-    "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
+    "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다. 하위 폴더만 공유해도 게스트는 Git 저장소 전체의 현재 변경 사항을 볼 수 있습니다.",
     "offlineAutoClose": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다.",
     "inviteBoxHint": "동료에게 링크를 보내면 클릭하여 참여할 수 있습니다. Cindy의 ‘공유 세션 참여’에 링크를 붙여 넣어 참여할 수도 있습니다.",
     "invitationMessage": "“{{title}}”에 초대합니다\n{{link}}\n링크를 열어 참여하세요. Cindy가 열리지 않으면 Cindy에서 ‘공유 세션 참여’를 선택하고 이 링크를 붙여 넣으세요.",
@@ -10643,8 +10643,6 @@
       "remoteUnavailableDescription": "터미널은 현재 이 기기에서 로컬로 실행되는 세션에서만 사용할 수 있습니다."
     },
     "review": {
-      "guestTaskTitle": "이 작업의 변경 사항 · 읽기 전용",
-      "guestTaskScope": "공유 대화에 기록된 완료된 파일 편집만 표시합니다.",
       "turn": {
         "title": "이 메시지의 변경 사항",
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 세션에서 사용할 수 없습니다.",

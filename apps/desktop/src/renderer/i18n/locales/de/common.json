@@ -340,7 +340,7 @@
     "tabOwned": "Von mir geteilt",
     "startIntro": "Lade jemanden ein, alles in dieser Aufgabe zu lesen und mit demselben Agent zu arbeiten.",
     "runsOnThisDevice": "Läuft auf diesem Gerät",
-    "inviteNotice": "Alle, die den Einladungslink haben, können nach der Anmeldung beitreten und erhalten denselben Agent-Zugriff wie der Host.",
+    "inviteNotice": "Alle, die den Einladungslink haben, können nach der Anmeldung beitreten und erhalten denselben Agent-Zugriff wie der Host. Gäste können die aktuellen Änderungen im gesamten Git-Repository einsehen, auch wenn nur ein Unterordner geteilt wird.",
     "offlineAutoClose": "Die Freigabe endet automatisch, wenn der Host-Computer offline bleibt.",
     "inviteBoxHint": "Sende den Link an dein Teammitglied. Es kann ihn zum Beitreten öffnen oder in Cindy unter „Geteilter Aufgabe beitreten“ einfügen.",
     "invitationMessage": "Du bist eingeladen, „{{title}}“ beizutreten\n{{link}}\nÖffne den Link, um beizutreten. Falls Cindy nicht geöffnet wird, wähle in Cindy „Geteilter Aufgabe beitreten“ und füge diesen Link ein.",
@@ -10687,8 +10687,6 @@
       "remoteUnavailableDescription": "Das Terminal ist derzeit nur für Sitzungen auf diesem Gerät verfügbar."
     },
     "review": {
-      "guestTaskTitle": "Aufgabenänderungen · Schreibgeschützt",
-      "guestTaskScope": "Zeigt abgeschlossene Dateibearbeitungen aus der geteilten Unterhaltung. Änderungen ohne aufgezeichnete Bearbeitung werden ausgelassen.",
       "turn": {
         "title": "Änderungen aus dieser Nachricht",
         "localOnly": "Exakte Änderungen pro Nachricht sind für Remote-Sitzungen noch nicht verfügbar.",

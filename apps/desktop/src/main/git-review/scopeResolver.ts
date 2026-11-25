@@ -12,6 +12,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 
 import { resolveSessionGitDirLive } from '../git-context/sessionDirResolver.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
@@ -172,6 +173,10 @@ export async function resolveReviewScope(
     });
   }
 
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  if (sharedTask && (sharedTask.author.sessionId !== sessionId || !row.workingDir)) {
+    throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
+  }
   if (row.remoteHostId) {
     const resolutionChain = [{ source: 'remote', path: row.workingDir, ok: Boolean(row.workingDir) }];
     if (!row.workingDir) {
@@ -207,6 +212,9 @@ export async function resolveReviewScope(
           : 'No git repository found in the SSH workspace',
         resolutionChain: [{ ...resolutionChain[0], ok: false, reason: unavailable ? 'git-unavailable' : 'non-git' }],
       });
+    }
+    if (sharedTask && !containsWorkspace(path.posix, probe.repoRoot, workdir)) {
+      throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
     }
     const head = await readRemoteHeadState(probe.repoRoot, deps.git);
     return {
@@ -293,6 +301,14 @@ export async function resolveReviewScope(
   }
 
   const repoRoot = probe.repoRoot;
+  if (sharedTask) {
+    const anchor = fallbackWorktreePath ?? row.workingDir!;
+    const anchorRoot = path.resolve(anchor) === path.resolve(resolved.workdir)
+      ? repoRoot : (await readRepoRoot(anchor, deps.git)).repoRoot;
+    if (!anchorRoot || path.relative(anchorRoot, repoRoot) !== '' || !containsWorkspace(path, repoRoot, anchor)) {
+      throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
+    }
+  }
   const headOid = await readHeadOid(repoRoot, deps.git);
   const isDetached = resolved.head?.kind === 'detached';
   return {
@@ -311,4 +327,9 @@ export async function resolveReviewScope(
     disabledMessage: null,
     resolutionChain,
   };
+}
+
+function containsWorkspace(paths: typeof path.posix, root: string, workdir: string): boolean {
+  const relative = paths.relative(root, workdir);
+  return !paths.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + paths.sep);
 }
