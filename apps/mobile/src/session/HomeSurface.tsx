@@ -3550,6 +3550,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         testID="devices.list"
         renderSectionHeader={({ section }) => {
           if (section.key.startsWith('device:')) {
+            if (!section.title) return null;
             const closed = collapsedProjectKeys.includes(section.key);
             const Chevron = closed ? ChevronRight : ChevronDown;
             return <Pressable accessibilityRole="button" accessibilityState={{ expanded: !closed }}

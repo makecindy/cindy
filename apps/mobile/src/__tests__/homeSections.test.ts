@@ -110,6 +110,28 @@ describe('buildHomeSections', () => {
     expect(sections.find((s) => s.key === 'pinned')).toBeUndefined();
   });
 
+  it('只有一个设备时不渲染设备分区标题', () => {
+    const home = presentation({
+      deviceFilters: [{ deviceId: 'a', id: 'a', label: '电脑 A' }],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } }],
+    });
+    const [section] = buildHomeSections(home, false, false, { groupDevice: true });
+    expect(section).toMatchObject({ key: 'device:a', title: null });
+  });
+
+  it('选中一个设备时不渲染设备分区标题', () => {
+    const home = presentation({
+      selectedDeviceId: 'a',
+      deviceFilters: [
+        { deviceId: 'a', id: 'a', label: '电脑 A' },
+        { deviceId: 'b', id: 'b', label: '电脑 B' },
+      ],
+      chats: [{ ...listItem('c1', '2026-06-01T00:00:00Z'), session: { id: 'c1', deviceLinkDeviceId: 'a' } }],
+    });
+    const [section] = buildHomeSections(home, false, false, { groupDevice: true });
+    expect(section).toMatchObject({ key: 'device:a', title: null });
+  });
+
   it('分组模式把项目与普通对话放在同一分区,不渲染项目 / 对话汇总表头', () => {
     const home = presentation({
       chats: [listItem('c1', '2026-06-01T00:00:00Z')],
