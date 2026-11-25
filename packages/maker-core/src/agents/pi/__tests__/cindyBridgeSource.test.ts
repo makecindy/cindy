@@ -3272,16 +3272,14 @@ it('keeps both name layers when the flattened inner tool has a name parameter of
   await expect(gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { name: 'memory_write', args: { type: 'project' } },
   })).rejects.toThrow(/Keep exactly one level/);
-  // 顶层填的是入口工具名(call_tool): 不经过撞名裁决(selector === 入口工具名), 照旧剥一层放行。
-  await gateway.executeCall({
+  // 顶层填的是入口工具名(call_tool): 容器里的 name('memory_write')是内层工具自己的参数,
+  // 不是重复信封 —— 判不出来就拒收(两种读法发出去的层数不同, 不猜)。与撞名同一处理
+  // (Codex P1 on #10908 第 16 轮)。
+  await expect(gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool', name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
-  });
-  const calls = requests
-    .filter(request => (request.params as { name?: unknown } | undefined)?.name === 'call_tool')
-    .map(request => request.params);
-  expect(calls.slice(2)).toEqual([
-    { name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } } },
-  ]);
+  })).rejects.toThrow(/Keep exactly one level/);
+  // 两种「判不了」的形状各发过一次代拉(失败不缓存, 同一 server 各只发一次)。
+  expect(requests.filter(r => (r.params as { name?: unknown } | undefined)?.name === 'list_tools').length).toBeGreaterThanOrEqual(1);
 });
 
 // 评审 P1(服务端正则卡死 Pi 进程): patternProperties 的模式来自服务端、键来自模型, 两头都不受
@@ -5707,4 +5705,310 @@ it('evaluates pattern properties against keys in Unicode mode', async () => {
     name: 'tag',
     arguments: { file_id: 'doc-1', '😀': 'one code point' },
   });
+});
+
+// 评审 P1(属性级 $dynamicRef 看不到类型): properties.name 的字符串类型写在 $dynamicRef
+// 指向的 $dynamicAnchor 里, 根层能看到声明但属性级的类型证据看不到 —— 旧 propertyAdmitsType
+// 只认 $ref, 遇到 $dynamicRef 既不跟也不记 exhausted, surface 看起来完整普通, 平铺调用按
+// 外层 schema 判 → 信封判成普通工具, 内层参数被丢。属性级 $dynamicRef 与根层同一处理
+// (Codex P1 on #10908 第 16 轮, 3747 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:$dynamicRef 只盖了根层, 属性级($ref 指向 $defs 里的字符串类型)漏了。
+// - 最小失败输入:properties.name = {$dynamicRef:'#/$defs/str'}($defs.str = {type:'string'})。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('follows local $dynamicRef when probing a property type', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // name 的 string 类型藏在 $dynamicRef 指向的 $defs 里: 属性级 $dynamicRef 看不到类型,
+    // 属性判据 exhausted → surface 按不完整处理, 与信封兼容的平铺调用拒收并指路。
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { $dynamicRef: '#/$defs/str' },
+        args: { type: 'object' },
+      },
+      required: ['name'],
+      $defs: { str: { type: 'string' } },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // $dynamicRef 指向的 type:'string' 能看到 → 照常认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(条件分支的 required 证据不传播): 信封把 required:['name'] 写在 if/then/else
+// 的两个分支里 —— 同一次调用只落进一条, 但两条都声明了 name 必填, 沿这条路径 name
+// 就必填。旧 walk 把 if/then/else 各自另起一组、接在出发点后面, 但没把它们记成
+// 出发点的「alternatives」—— settleEnvelope 的 every 看不到分支组, root 的 name 仍被
+// 判成可选, 信封被降级成普通工具, 平铺调用按外层 schema 丢参数。条件分支与
+// anyOf/oneOf 同一处理: 每条分支另起一组并记进 alternatives(Codex P1 on #10908 第 16 轮,
+// 3663 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:条件分支只盖了「单条件分支」, 没盖「then/else 都必填 name」的互斥对。
+// - 最小失败输入:{properties:{name,args}, if:{required:['name']}, else:{required:['name']}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('propagates required evidence across conditional alternatives', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // required 在 then/else 两个分支里都声明: 沿任意一条路径 name 都必填 → 是信封。
+    // 'if' 只是条件(它本身不约束实例), 不参与「每条路径都必填」的判定。
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' } },
+      if: { required: ['args'] },
+      then: { required: ['name'] },
+      else: { required: ['name'] },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 条件分支的两条路径都必填 name → 认出信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(共享分支的子结构被缓存吞掉): 两条 anyOf 分支都 $ref 到同一个 $defs, 那个 $defs
+// 内部又有一个 anyOf(分支各自声明 required:['name'])。第一次 walk 把 $defs 里的 anyOf 记进
+// closure(只存合取信号); 第二次 walk 直接复用 closure, $defs 内部的 anyOf 分支结构没挂到
+// 第二条分支路径的组上 —— 第二条路径看不到「沿它必填 name」, every 判成可选, 信封被降级
+// 成普通工具(Codex P1 on #10908 第 16 轮, 3539 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:$ref 复用只盖了「静态 $ref」, 没盖「$ref 里还有分支结构」的共享引用。
+// - 最小失败输入:$defs.env = {anyOf:[{properties:{name,args},required:['name']}, {type:'object'}]},
+//   anyOf:[{$ref:'#/$defs/env'}, {$ref:'#/$defs/env'}]。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('replays branch-sensitive evidence for shared referenced schemas', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // 两条分支都引用同一个 $defs; $defs 内部有 anyOf(分支各自声明 required:['name'])。
+    // 第一次 walk 把内部的 anyOf 记进第一条路径的组; 第二次复用 closure 时, 第二条路径
+    // 也要能看到「沿这条路径必填 name」。
+    inputSchema: {
+      type: 'object',
+      $defs: {
+        env: {
+          anyOf: [
+            { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+            { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+          ],
+        },
+      },
+      anyOf: [{ $ref: '#/$defs/env' }, { $ref: '#/$defs/env' }],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 两条分支路径都指向同一个含分支的 $defs: 每条路径都能看到「沿它必填 name」→ 认出
+  // 信封、重建平铺调用并转发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(零属性纯动态 schema 被当成「没有 args」): 内层工具在本地表里的 schema 是
+// {type:'object', additionalProperties:true} —— 声明面没 properties, 但额外字段不限, 收得下
+// 自己的 args 字段。旧 schemaDeclaresArgs 在「没声明 properties」处提前 return null,
+// additionalAllowed 判定够不着 → 撞名裁决把「没声明 args」当成「没有 args」的证据,
+// 剥掉内层工具的参数层(Codex P1 on #10908 第 16 轮, 4397 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(两层都在)。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:动态放开只盖了「有 properties + additionalProperties」, 没盖「零 properties」。
+// - 最小失败输入:内层工具 schema = {type:'object', additionalProperties:true} + 撞名调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('treats a zero-property dynamic schema as declaring args', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 内层工具零属性纯动态 schema: 收得下自己的 args 字段, 撞名时不剥它的参数层。
+    { name: 'run', inputSchema: { type: 'object', additionalProperties: true } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 撞名的内层工具(run)收得下自己的 args 字段(零属性纯动态 schema): 不剥层, 两层都在。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { name: 'run', args: { cwd: '/work' } } },
+  });
+});
+
+// 评审 P1(selector === entry name 无条件剥层): 第三方 registry 的 entry 工具(如 call_tool)
+// 内层也叫 call_tool, 顶层 selector 与 entry name 相同时, args 容器里又是个 {name, args}
+// 形状 —— 它可能是「同一个选择器写了两遍」(剥一层), 也可能是「entry 内层就是另一个同名
+// 工具」(保留两层)。以前 selector===tool.name 无条件按「重复信封」剥一层, 内层工具的
+// name/args 参数被剥掉、发错层(Codex P1 on #10908 第 16 轮, 4292 行)。现在按同一判据:
+// 只有 params.name === selector 且内层确实没有 args 才剥; 内层工具本地查不到、判不了时
+// 代拉一次内层列表再判。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数(两层都在)。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:撞名只盖了「顶层选择器与容器 name 同名」, 没盖「选择器与 entry 名同名」。
+// - 最小失败输入:entry=call_tool + selector=call_tool + 内层工具 call_tool 声明 name+args。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('keeps a selector that matches the entry name when the inner tool declares args', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // registry 的内层列表: 内层 call_tool 自己声明 name + args 参数。
+    if ((params as { name?: unknown } | undefined)?.name === 'list_tools') {
+      return { structuredContent: { tools: [{ name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name', 'args'] } }] } };
+    }
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_registry', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_registry', tool: 'call_tool' });
+  // 顶层选择器就是入口工具自己, 容器里的 name 是内层同名工具自己的参数(不是重复信封):
+  // 入口内层那个 call_tool 声明了 name + args → 两层都留, 不剥。
+  await gateway.executeCall({
+    server: 'cindy_registry', tool: 'call_tool', name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  // 代拉过一次内层列表 + 转发一次 = 2 个请求。
+  expect(requests).toHaveLength(2);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } } },
+  });
+});
+
+// 评审 P1(嵌套信封旁的兄弟键丢): {args:{name:'schedule_list', args:{}}, status:'active'} ——
+// 已经是嵌套信封但顶层散落着内层参数, 没有顶层选择器 → flattenedEnvelope 与
+// flattenedEnvelopeNoContainer 都是 false, status 仍按外层信封 schema 判 → unmapped 丢掉,
+// 发出的 {name:'schedule_list', args:{}} 让内层工具按缺省过滤执行。兄弟键收进嵌套的
+// args 层, 与「半平铺信封兄弟键」同一处理(Codex P1 on #10908 第 16 轮, 4346 行)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数与回执。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P1。
+// - 覆盖缺口:兄弟键收进内层 args 只盖了「半平铺信封」, 没盖「已是嵌套信封 + 顶层兄弟键」。
+// - 最小失败输入:{args:{name:'schedule_list',args:{}}, status:'active'}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('folds siblings into a nested envelope that is already complete', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_scheduler', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_scheduler', tool: 'call_tool' });
+  // args 容器里已有 {name,args} 两层, 顶层 status 是内层工具参数 —— 收进嵌套 args 层。
+  const result = await gateway.executeCall({
+    server: 'cindy_scheduler', tool: 'call_tool',
+    args: { name: 'schedule_list', args: {} }, status: 'active',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'schedule_list', args: { status: 'active' } },
+  });
+  // 归一化确实动过手: 回执里点名收进内层 args 的键。
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Cindy moved these top-level parameters into the inner args');
+});
+
+// 评审 P2(恒假分支不占预算): anyOf/oneOf 的 false 分支被跳过(零信号但不占位), 旧实现
+// 不消耗节点预算 —— 服务端给一个上千个 false 的巨型数组, 每次 surface 重建都要同步扫完
+// 整个数组, 512 节点上限形同虚设。恒假分支照占预算(Codex P2 on #10908 第 16 轮, 3654 行)。
+//
+// - 生产入口与可观察结果:全是 false 的巨型 anyOf 数组下 executeCall 即时返回; 一个真
+//   信封混在 false 分支里时照常认出并重建平铺调用。
+// - Bug 依据:codex 对 #10908 第 16 轮的 P2。
+// - 覆盖缺口:anyOf 只盖了「恒假分支跳过」, 没盖「预算仍记账」。
+// - 最小失败输入:anyOf = [false × 2000, {envelope}] + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('counts impossible alternatives against the schema walk budget', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'TAGGED' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    // 2000 个 false 分支 + 一个真信封分支: 恒假分支照占预算, 走到真信封前就截断 → 与信封
+    // 兼容的平铺调用按截断政策拒收, 不整段扫完数组。
+    inputSchema: {
+      type: 'object',
+      anyOf: [
+        ...Array.from({ length: 2000 }, () => false),
+        { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] },
+      ],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  const started = performance.now();
+  // 预算在 false 分支上耗尽 → 表面截断 → 与信封兼容的平铺调用拒收并指路, 不整段扫完。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full/);
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(requests).toHaveLength(0);
 });
