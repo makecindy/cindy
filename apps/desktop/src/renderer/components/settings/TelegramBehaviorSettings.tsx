@@ -6,9 +6,12 @@ import { Button } from '@/components/ui/button';
  * 改动即写 main 侧 store(transport 每次使用现读), 无需重启 bot。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
+import { useSettingsTarget, type SettingsTargetApi } from './settingsTarget';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { imBotSettings } from './ImBotSection.settings-search';
 import { cn } from '@/lib/utils';
@@ -113,6 +116,7 @@ export function TelegramBehaviorSettings({
   bindingId?: string;
 }) {
   const { t } = useTranslation();
+  const { api } = useSettingsTarget();
   const [behavior, setBehavior] = useState<Behavior | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -154,7 +158,7 @@ export function TelegramBehaviorSettings({
     setError(null);
     const unsubscribe =
       source === 'official'
-        ? window.electronAPI.hookControl.onTelegramBehaviorChanged((value) => {
+        ? api.hookControl.onTelegramBehaviorChanged((value) => {
             if (cancelled || value.bindingId !== bindingId) return;
             if (!loadSettled) {
               pushedDuringLoad = value;
@@ -169,10 +173,10 @@ export function TelegramBehaviorSettings({
         : undefined;
     const load =
       source === 'official'
-        ? window.electronAPI.hookControl
+        ? api.hookControl
             .getTelegramBehavior(bindingId as string)
             .then((value) => value.behavior)
-        : window.electronAPI.telegramBot.getBehavior();
+        : api.telegramBot.getBehavior();
     void load
       .then((value) => {
         loadSettled = true;
@@ -191,7 +195,7 @@ export function TelegramBehaviorSettings({
       cancelled = true;
       unsubscribe?.();
     };
-  }, [bindingId, reloadToken, source]);
+  }, [api, bindingId, reloadToken, source]);
 
   if (!behavior) {
     return error === 'load' ? (
@@ -217,10 +221,10 @@ export function TelegramBehaviorSettings({
       try {
         const saved =
           writeSource === 'official'
-            ? await window.electronAPI.hookControl
+            ? await api.hookControl
                 .setTelegramBehavior(writeBindingId as string, partial)
                 .then((value) => value.behavior)
-            : await window.electronAPI.telegramBot.setBehavior(partial);
+            : await api.telegramBot.setBehavior(partial);
         if (activeBindingKey.current !== writeBindingKey) return;
         confirmedRef.current = saved;
         if (mounted.current && revision === latestRevision.current) {
@@ -239,10 +243,10 @@ export function TelegramBehaviorSettings({
           try {
             authoritative =
               writeSource === 'official'
-                ? await window.electronAPI.hookControl
+                ? await api.hookControl
                     .getTelegramBehavior(writeBindingId as string)
                     .then((value) => value.behavior)
-                : await window.electronAPI.telegramBot.getBehavior();
+                : await api.telegramBot.getBehavior();
             confirmedRef.current = authoritative;
           } catch {
             // Keep the last confirmed snapshot; the inline retry remains available.
@@ -265,17 +269,41 @@ export function TelegramBehaviorSettings({
   };
 
   return (
+    <TelegramBehaviorSettingsView
+      source={source}
+      behavior={behavior}
+      patch={patch}
+      notice={
+        error !== null && (
+          <SettingsRequestError
+            message={t(`${root}.behavior.error.${error}`)}
+            retryLabel={t(`${root}.behavior.error.retry`)}
+            onRetry={() => setReloadToken((value) => value + 1)}
+          />
+        )
+      }
+    />
+  );
+}
+export function TelegramBehaviorSettingsView({
+  source = 'personal',
+  behavior,
+  patch,
+  notice,
+}: {
+  source?: SettingsSource;
+  behavior: Behavior;
+  patch(change: Partial<Behavior>): void;
+  notice?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const root = i18nRoot(source);
+  return (
     <div className="flex flex-col gap-4">
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.behavior.title`)}
       </div>
-      {error !== null && (
-        <SettingsRequestError
-          message={t(`${root}.behavior.error.${error}`)}
-          retryLabel={t(`${root}.behavior.error.retry`)}
-          onRetry={() => setReloadToken((value) => value + 1)}
-        />
-      )}
+      {notice}
       <SegmentedRow
         source={source}
         label={t(`${root}.behavior.emojiLabel`)}
@@ -308,8 +336,27 @@ export function TelegramBehaviorSettings({
 }
 
 /** 「人格」节: bot 名字 + soul 文本(soul.md 语义), 可一键同步名字到 Telegram 资料页。 */
+/** Keep debounced and close-time saves on the same failure path. */
+async function persistTelegramPersona(
+  api: SettingsTargetApi,
+  next: { botName: string; soul: string },
+  t: (key: string) => string,
+): Promise<boolean> {
+  try {
+    await api.telegramBot.setPersona(next);
+    return true;
+  } catch (error) {
+    toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+    return false;
+  }
+}
+
 export function TelegramPersonaSettings() {
   const { t } = useTranslation();
+  const { api } = useSettingsTarget();
+  // The close-time save runs in an unmount cleanup; read the current translator there.
+  const translate = useRef(t);
+  translate.current = t;
   const [persona, setPersona] = useState<{ botName: string; soul: string } | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'failed'>('idle');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -318,7 +365,7 @@ export function TelegramPersonaSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.telegramBot
+    void api.telegramBot
       .getPersona()
       .then((value) => {
         if (!cancelled) setPersona(value);
@@ -330,10 +377,10 @@ export function TelegramPersonaSettings() {
       if (pendingSave.current) {
         const flush = pendingSave.current;
         pendingSave.current = null;
-        void window.electronAPI.telegramBot.setPersona(flush);
+        void persistTelegramPersona(api, flush, translate.current);
       }
     };
-  }, []);
+  }, [api]);
 
   if (!persona) return null;
 
@@ -344,7 +391,13 @@ export function TelegramPersonaSettings() {
     // 600ms 去抖自动保存 — 无显式保存按钮(设置卡即改即存的通用手感)。
     saveTimer.current = setTimeout(() => {
       pendingSave.current = null;
-      void window.electronAPI.telegramBot.setPersona({ botName: next.botName, soul: next.soul });
+      void persistTelegramPersona(api, next, t).then(async saved => {
+        if (saved) return;
+        try {
+          const stored = await api.telegramBot.getPersona();
+          setPersona(current => current === next ? stored : current);
+        } catch { /* The save error was shown and newer edits stay in the editor. */ }
+      });
     }, 600);
   };
 
@@ -353,7 +406,7 @@ export function TelegramPersonaSettings() {
     // 本次调用带的就是最新值, 去抖窗口的待存内容随之落盘。
     pendingSave.current = null;
     setSyncState('syncing');
-    const synced = await window.electronAPI.telegramBot
+    const synced = await api.telegramBot
       .setPersona({ botName: persona.botName, soul: persona.soul, syncProfile: true })
       .then((result) => result.profileSynced === true)
       .catch(() => false);
@@ -440,6 +493,7 @@ export function TelegramGroupActivationSettings({
   bindingId?: string;
 }) {
   const { t } = useTranslation();
+  const { api } = useSettingsTarget();
   const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -451,7 +505,6 @@ export function TelegramGroupActivationSettings({
   const latestRevision = useRef(0);
   const mounted = useRef(true);
   const root = i18nRoot(source);
-  const groupSetting = source === 'official' ? imBotSettings.cindyTelegram : imBotSettings.telegram;
   const bindingKey = `${source}:${bindingId ?? ''}`;
   const activeBindingKey = useRef(bindingKey);
 
@@ -482,7 +535,7 @@ export function TelegramGroupActivationSettings({
     setError(null);
     const unsubscribe =
       source === 'official'
-        ? window.electronAPI.hookControl.onTelegramBehaviorChanged((behavior) => {
+        ? api.hookControl.onTelegramBehaviorChanged((behavior) => {
             if (cancelled || behavior.bindingId !== bindingId) return;
             if (!loadSettled) {
               pushedDuringLoad = behavior;
@@ -501,8 +554,8 @@ export function TelegramGroupActivationSettings({
         : undefined;
     const load =
       source === 'official'
-        ? window.electronAPI.hookControl.listTelegramGroups(bindingId as string)
-        : window.electronAPI.telegramBot.listGroups();
+        ? api.hookControl.listTelegramGroups(bindingId as string)
+        : api.telegramBot.listGroups();
     void load
       .then((result) => {
         loadSettled = true;
@@ -523,7 +576,7 @@ export function TelegramGroupActivationSettings({
       cancelled = true;
       unsubscribe?.();
     };
-  }, [bindingId, reloadToken, source]);
+  }, [api, bindingId, reloadToken, source]);
 
   if (!groups) {
     return error === 'load' ? (
@@ -550,7 +603,7 @@ export function TelegramGroupActivationSettings({
     saveQueue.current = saveQueue.current.then(async () => {
       try {
         if (writeSource === 'official') {
-          const result = await window.electronAPI.hookControl.setTelegramGroupActivation(
+          const result = await api.hookControl.setTelegramGroupActivation(
             writeBindingId as string,
             chatId,
             mode,
@@ -566,7 +619,7 @@ export function TelegramGroupActivationSettings({
             setGroups(authoritative);
           }
         } else {
-          await window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
+          await api.telegramBot.setGroupActivation({ chatId, mode });
           if (activeBindingKey.current !== writeBindingKey) return;
           confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
             group.chatId === chatId ? { ...group, activation: mode } : group,
@@ -584,8 +637,8 @@ export function TelegramGroupActivationSettings({
           try {
             authoritative = (
               writeSource === 'official'
-                ? await window.electronAPI.hookControl.listTelegramGroups(writeBindingId as string)
-                : await window.electronAPI.telegramBot.listGroups()
+                ? await api.hookControl.listTelegramGroups(writeBindingId as string)
+                : await api.telegramBot.listGroups()
             ).groups;
             confirmedRef.current = authoritative;
           } catch {
@@ -609,6 +662,39 @@ export function TelegramGroupActivationSettings({
   };
 
   return (
+    <TelegramGroupActivationSettingsView
+      source={source}
+      groups={groups}
+      setMode={setMode}
+      notice={
+        error !== null && (
+          <SettingsRequestError
+            message={t(`${root}.groups.error.${error}`)}
+            retryLabel={t(`${root}.groups.error.retry`)}
+            onRetry={() => setReloadToken((value) => value + 1)}
+          />
+        )
+      }
+    />
+  );
+}
+export function TelegramGroupActivationSettingsView({
+  source = 'personal',
+  groups,
+  setMode,
+  notice,
+  contactsHint,
+}: {
+  source?: SettingsSource;
+  groups: readonly TelegramHookKnownGroup[];
+  setMode(id: string, mode: TelegramHookGroupActivationMode): void;
+  notice?: ReactNode;
+  contactsHint?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const root = i18nRoot(source);
+  const groupSetting = source === 'official' ? imBotSettings.cindyTelegram : imBotSettings.telegram;
+  return (
     <div className="flex flex-col gap-3">
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.groups.title`)}
@@ -616,13 +702,8 @@ export function TelegramGroupActivationSettings({
       <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.hint`)}
       </div>
-      {error !== null && (
-        <SettingsRequestError
-          message={t(`${root}.groups.error.${error}`)}
-          retryLabel={t(`${root}.groups.error.retry`)}
-          onRetry={() => setReloadToken((value) => value + 1)}
-        />
-      )}
+      {notice}
+      {contactsHint}
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
           {t(`${root}.groups.empty`)}

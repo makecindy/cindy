@@ -32,6 +32,7 @@ import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js'
 import fs from 'node:fs';
 
 import { createBetterSqliteDatabase } from './betterSqliteFactory';
+import { isSqliteCorruption } from './client/sqliteCorruption.js';
 import { ensureCjkFtsTempTriggersInstalled } from './registerCjkSeg';
 import {
   getDrizzleDir,
@@ -499,7 +500,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 
   // 启动 optimize: 0x10002 mask 会强制对从未 ANALYZE 过的表跑一次,
   // 之后挂 24h 周期任务按需更新统计。详见 runOptimize 注释。
-  runOptimize(0x10002);
+  const corruption = runOptimize(0x10002);
+  if (corruption) {
+    markRuntimeDbCorrupt(userId, corruption);
+    closeDb({ skipOptimize: true, preserveSchemaMigrationLease: !readerLeaseAcquiredThisCall });
+    throw corruption;
+  }
   startOptimizeSchedule();
 
   log.info(JSON.stringify({ event: 'localDb.ensureReady.ok', userId, dbPath: filePath }));
@@ -545,9 +551,9 @@ function openWithPragmas(filePath: string): Database.Database {
  * 跑一次 PRAGMA optimize, 让 query planner 拿到新鲜的索引选择性统计。
  * - mask=0x10002: 启动时强制对从未 ANALYZE 过的表跑一次 (SQLite 官方推荐启动 mask)
  * - mask 缺省:    按需 analyze, 没变化时近乎 no-op
- * 失败仅记日志, 不影响业务。
+ * 启动方用 SQLite 损坏错误隔离当前文件；周期和关闭时的优化仍是尽力执行。
  */
-function runOptimize(mask?: number): void {
+function runOptimize(mask?: number): Error | undefined {
   if (!_db || (_currentDbPath && runtimeCorruptFiles.has(_currentDbPath))) return;
   const t0 = performance.now();
   try {
@@ -561,6 +567,9 @@ function runOptimize(mask?: number): void {
     );
   } catch (err) {
     log.error('PRAGMA optimize failed', err);
+    if (isSqliteCorruption(err)) {
+      return err instanceof Error ? err : Object.assign(new Error('SQLite corruption during optimize'), err);
+    }
   }
 }
 

@@ -31,6 +31,12 @@ const REDIAL_TAKEOVER_MS = 10_000;
 const REDIAL_FIRST_MS = 1_000;
 const REDIAL_MAX_MS = 30_000;
 /**
+ * A relay connection that lasted this long starts the reconnect backoff over (0.5 s); one that ends sooner keeps doubling it
+ * up to 15 s. Before 2026-11-25 every accepted connection started it over, so a relay connection ended right after it opened
+ * (a frame this side refuses, a relay that drops it at once) would come back every half second for as long as that lasts.
+ */
+const RELAY_STABLE_MS = 10_000;
+/**
  * The side that does not dial from the directory (the higher id) dials after all when the other side's dial has not
  * arrived this long after it was due, doubling like the redial. The other side dials within a moment of seeing this device
  * online, unless it still holds its end of a connection this device no longer has: this device was killed or restarted
@@ -756,6 +762,21 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     // A newer attempt (another network change) takes over from this one, failures included.
     void attempt.catch(() => { if (generation === this.generation && !this.uplink) this.scheduleReconnect(); });
   }
+  /**
+   * The host holds no relay connection for this socket and has seen no attempt to make one for a long time (the Desktop's
+   * watchdog, AGENT_NET_RELAY_STUCK_MS): whatever this socket still takes for its relay connection is dropped, an attempt
+   * that never settled no longer counts, and a new one is scheduled. Peer connections stay. 2026-11-25: an uplink ended
+   * without its close arriving here; this socket kept it as its relay connection and never reconnected until a restart.
+   */
+  restartRelay(): void {
+    if (this.closed) return;
+    const old = this.uplink;
+    if (old) { this.uplink = null; old.close(); if (this.ready) this.acknowledgeHello(); }
+    if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
+    this.generation++;
+    this.resendWhenRelayBack = true;
+    this.scheduleReconnect();
+  }
   /** See Transport.relayRoute (the worker reports it to the Desktop with each status snapshot). */
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /** Whether the relay WebSocket is currently up; false while offline or after an upgrade rejection fell back to cached directory. */
@@ -800,7 +821,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
     this.openingRelay = null;
-    this.uplink = uplink; this.retryMs = 500;
+    this.uplink = uplink;
     this.replacedReconnectUntil = 0;
     const connectedAt = Date.now();
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
@@ -811,9 +832,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
       this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
     });
-    uplink.once('close', (code: number) => {
+    uplink.once('close', (code: number, reason?: string) => {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
+      if (Date.now() - connectedAt >= RELAY_STABLE_MS) this.retryMs = 500;
+      this.options.onRelayClosed?.(code, reason);
       if ([4410, 4401, 4403].includes(code)) { this.closeOnIdentityRefusal('AGENT_NET_CLOSED_' + code); return; }
       if (code === 4409) {
         this.options.onRelayReplaced?.();
