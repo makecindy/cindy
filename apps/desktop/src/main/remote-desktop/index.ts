@@ -83,6 +83,14 @@ import {
   linuxMonitor,
 } from './linuxDesktop';
 import { readLinuxCursorSupport, readLinuxX11CaptureSupport } from './linuxCapture';
+import {
+  gnomeDesktopReady,
+  gnomeDisplay,
+  gnomeMonitor,
+  gnomeMonitors,
+  isGnomeWaylandSession,
+  readGnomeDesktopSupport,
+} from './gnomeDesktop';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
 import {
@@ -223,7 +231,10 @@ const x11CursorCapture = async (displayId?: string) =>
   isX11Desktop() &&
   (await readLinuxX11CaptureSupport()) &&
   (displayId === undefined || x11CaptureDisplay(displayId) !== null);
-const portalWayland = () => wayland() && !nativeWayland();
+/** GNOME Shell's own screen-cast/remote-desktop APIs replace the portal picker
+ * once their probe succeeds (gnomeDesktop.ts). */
+const gnomeWayland = () => wayland() && !nativeWayland() && gnomeDesktopReady();
+const portalWayland = () => wayland() && !nativeWayland() && !gnomeWayland();
 // #9712: diagnostics only. The logged facts are fixed labels and wayland-N socket names.
 const displayBackendLog = createLogger('remote-desktop:display-backend');
 let xwaylandChecked = false;
@@ -265,6 +276,7 @@ async function linuxInputSupported(): Promise<boolean> {
   // The managed cloud X11 desktop keeps its guarded X11 input adapter.
   if (!wayland() && getInstanceConfig()) return readLinuxInputSupport();
   // Portal-selected Wayland surfaces must remain view-only.
+  if (gnomeWayland()) return readLinuxDesktopInputSupport(true);
   return (nativeWayland() || isX11Desktop()) && (await readLinuxDesktopInputSupport());
 }
 // While the phone shows picture-in-picture the input helper is stopped on purpose;
@@ -554,12 +566,16 @@ async function offer(
     let source: DesktopCapturerSource | null = null;
     const hyprland = nativeWayland();
     if (hyprland && lease.display.id !== WAYLAND_DISPLAY_ID) await linuxMonitor(lease.display.id);
+    // GNOME records the selected monitor itself; never enumerate (and so never
+    // open) the portal picker for it.
+    const gnome = gnomeWayland();
+    if (gnome) await gnomeMonitor(lease.display.id);
     // Only a cursor-overlay viewer moves X11 off Chromium's capture; older
     // viewers keep the embedded pointer and their existing timing.
     const x11Native =
       !hyprland && !handoff && cursorOverlay === true && (await x11CursorCapture(lease.display.id));
-    let nativeAvailable = process.platform === 'darwin' || hyprland || x11Native;
-    if (!hyprland && !handoff) {
+    let nativeAvailable = process.platform === 'darwin' || hyprland || gnome || x11Native;
+    if (!hyprland && !gnome && !handoff) {
       nativeAvailable ||=
         process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
       try {
@@ -604,6 +620,7 @@ async function offer(
         (process.platform === 'darwin' ||
           (process.platform === 'win32' && nativeAvailable) ||
           x11Native ||
+          gnome ||
           (hyprland && (await readLinuxCursorSupport()))));
     if (!current() || host !== currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -623,7 +640,7 @@ async function offer(
         op: 'offer',
         sourceId: source?.id,
         nativeCapture: nativeAvailable,
-        continuousNativeCapture: hyprland,
+        continuousNativeCapture: hyprland || gnome,
         nativeAudio: hyprland && settings?.audio === true,
         cursorOverlay: nativeOverlay,
         lease: lease.lease,
@@ -951,6 +968,12 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       enabled && nativeWayland() && supportsLinuxDisplay()
         ? (await linuxMonitors()).map(linuxDisplay)
         : null;
+    if (enabled && isGnomeWaylandSession()) await readGnomeDesktopSupport();
+    // Hyprland-only extras (window actions, workspaces, modes) stay keyed to linuxDisplays.
+    const gnomeDisplays =
+      enabled && gnomeWayland()
+        ? (await gnomeMonitors().catch(() => [])).map(gnomeDisplay)
+        : null;
     return {
       version: 1,
       windowActions: Boolean(linuxDisplays),
@@ -960,6 +983,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
         Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())) ||
+        Boolean(enabled && gnomeWayland()) ||
         Boolean(enabled && (await x11CursorCapture())),
       lockOnExit:
         process.platform === 'darwin' ||
@@ -998,7 +1022,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       liveDisplaySwitch:
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
-        Boolean(enabled && nativeWayland()),
+        Boolean(enabled && (nativeWayland() || gnomeWayland())),
       displayModes: process.platform === 'darwin' || Boolean(linuxDisplays?.length),
       enabled,
       canControl:
@@ -1009,6 +1033,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       ...(enabled ? { permissions: await permissions.read() } : {}),
       displays:
         linuxDisplays ??
+        gnomeDisplays ??
         (enabled && wayland()
           ? // PipeWire exposes the user's selection, not a mapping to Electron's
             // physical display IDs. Never label an arbitrary selected screen as monitor 1.
@@ -1041,6 +1066,13 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       if (!lease || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
       if (preparingOffer) return null;
       const frame = await hyprlandCapture.frame(displayId, cursorOverlay);
+      if (!remoteDesktop.hasLease(lease)) return null;
+      return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
+    }
+    if (gnomeWayland()) {
+      if (!lease || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
+      if (preparingOffer) return null;
+      const frame = await nativeCapture.frame(displayId, cursorOverlay === true, nativeSettings);
       if (!remoteDesktop.hasLease(lease)) return null;
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
     }
@@ -1145,6 +1177,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   editableAt: process.platform === 'darwin' ? isEditableDesktopPoint : undefined,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
+    if (gnomeWayland())
+      return (await gnomeMonitors()).some((m) => gnomeDisplay(m).id === displayId);
     if (nativeWayland()) {
       const monitors = await linuxMonitors();
       return displayId === WAYLAND_DISPLAY_ID
@@ -1292,6 +1326,25 @@ export function registerRemoteDesktopIpc(
       // and restart root capture so its next frame uses the new rectangle.
       void remoteDesktop.releaseControl();
       nativeCapture.stop();
+      return;
+    }
+    if (gnomeWayland()) {
+      const generation = offerGeneration,
+        id = remoteDesktop.displayId;
+      // The input stream and capture size are bound at start; rebuild both.
+      void remoteDesktop.releaseControl();
+      nativeCapture.stop();
+      void gnomeMonitor(id)
+        .then((monitor) => {
+          if (generation !== offerGeneration || remoteDesktop.changingDisplay) return;
+          const display = gnomeDisplay(monitor);
+          if (!remoteDesktop.displayGeometryMatches(id, display.width, display.height))
+            remoteDesktop.stop(undefined, undefined, 'display-changed');
+        })
+        .catch(() => {
+          if (generation === offerGeneration && !remoteDesktop.changingDisplay)
+            remoteDesktop.stop(undefined, undefined, 'display-failed');
+        });
       return;
     }
     if (!nativeWayland()) return;

@@ -3,9 +3,14 @@ import { PassThrough } from 'node:stream';
 import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { screen } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn() }));
+const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn(), gnomeMonitor: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('../linuxCapture', () => ({ resolveLinuxCaptureBinary: h.binary }));
+vi.mock('../gnomeDesktop', async (load) => ({
+  ...(await load<typeof import('../gnomeDesktop')>()),
+  resolveGnomeCaptureBinary: async () => '/gnome-capture',
+  gnomeMonitor: h.gnomeMonitor,
+}));
 vi.mock('../windowsHost', () => ({ openWindowsDesktopConnection: vi.fn() }));
 import { NativeDesktopCapture } from '../nativeCapture';
 const owners: NativeDesktopCapture[] = [];
@@ -126,7 +131,17 @@ it('captures an X11 monitor by its root pixel rectangle and refuses mixed scalin
     );
     const frame = {
       jpeg: 'anBlZw==',
-      cursor: { visible: true, x: 0.5, y: 0.5, width: 12, height: 12, hotX: 2, hotY: 1, png: 'iVBORw0KGgoA', shape: 'text' },
+      cursor: {
+        visible: true,
+        x: 0.5,
+        y: 0.5,
+        width: 12,
+        height: 12,
+        hotX: 2,
+        hotY: 1,
+        png: 'iVBORw0KGgoA',
+        shape: 'text',
+      },
     };
     child.stdout.write(JSON.stringify(frame) + '\n');
     await expect(pending).resolves.toEqual(frame);
@@ -137,4 +152,26 @@ it('captures an X11 monitor by its root pixel rectangle and refuses mixed scalin
   } finally {
     displays.mockRestore();
   }
+});
+// GNOME Wayland: the separate Mutter helper records one connector, and cursor
+// sizes use that monitor's stream scale. An unknown monitor spawns nothing.
+it('records a GNOME monitor through its own helper with the monitor scale', async () => {
+  h.gnomeMonitor.mockImplementation(async (id: string) => {
+    if (id !== 'gnome:eDP-1') throw new Error('DESKTOP_DISPLAY_MISSING');
+    return { id: 'eDP-1', name: '', x: 0, y: 0, width: 1280, height: 800, scale: 2, primary: true };
+  });
+  const { child, owner } = setup();
+  await expect(owner.frame('gnome:HDMI-1', true)).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+  expect(h.spawn).not.toHaveBeenCalled();
+  const pending = owner.frame('gnome:eDP-1', true);
+  await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+  expect(h.spawn).toHaveBeenCalledWith(
+    '/gnome-capture',
+    ['cursor-overlay', '2', '80', 'gnome:eDP-1'],
+    { stdio: 'pipe' },
+  );
+  expect(h.binary).not.toHaveBeenCalled();
+  const frame = { jpeg: 'anBlZw==', cursor: null };
+  child.stdout.write(JSON.stringify(frame) + '\n');
+  await expect(pending).resolves.toEqual(frame);
 });

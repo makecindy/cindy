@@ -26,6 +26,7 @@ test('native capture bounds buffers and scales padded rows without distortion', 
 #define main capture_entry
 #include ${JSON.stringify(path.join(source, 'main.c'))}
 #undef main
+#include ${JSON.stringify(path.join(source, 'cursor_shape.h'))}
 #include <assert.h>
 int main(void) {
   uint32_t invalid[][4] = {
@@ -103,15 +104,15 @@ int main(void) {
 }
 `,
     );
-    const flags = run('pkg-config', [
-      '--cflags',
-      '--libs',
-      'wayland-client',
-      'libpng',
-      'x11',
-      'xext',
-      'xfixes',
-    ]).split(/\s+/);
+    const flags = run('pkg-config', ['--cflags', '--libs', 'wayland-client', 'libpng']).split(
+      /\s+/,
+    );
+    // Compile the optional X11 backend under the sanitizers too, as build.mjs does.
+    const x11 = spawnSync('pkg-config', ['--cflags', '--libs', 'x11', 'xfixes', 'xext'], {
+      encoding: 'utf8',
+    });
+    const x11Defines = x11.status === 0 ? ['-DCINDY_X11', '-DCINDY_XSHM'] : [];
+    const x11Flags = x11.status === 0 ? x11.stdout.trim().split(/\s+/).filter(Boolean) : [];
     run('cc', [
       '-std=c11',
       '-Wall',
@@ -119,6 +120,7 @@ int main(void) {
       '-Werror',
       '-O2',
       '-fsanitize=address,undefined',
+      ...x11Defines,
       testSource,
       ...[
         'wlr-screencopy-unstable-v1',
@@ -129,6 +131,7 @@ int main(void) {
       '-I',
       output,
       ...flags,
+      ...x11Flags,
       '-lm',
       '-ldl',
       '-o',

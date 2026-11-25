@@ -19,6 +19,7 @@ import { resolveLinuxCaptureBinary } from './linuxCapture';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import { linuxMonitor } from './linuxDesktop';
 import { isX11Desktop, x11InputGeometry } from './linuxInput';
+import { GNOME_DISPLAY, gnomeMonitor, resolveGnomeCaptureBinary } from './gnomeDesktop';
 
 const log = createLogger('remote-desktop:native-capture');
 const exec = promisify(execFile);
@@ -282,9 +283,12 @@ export class NativeDesktopCapture {
     const linux = process.platform === 'linux';
     // X11 displays keep Electron's numeric IDs; the helper reads root pixels.
     const x11 = linux && isX11Desktop() && /^[0-9]{1,20}$/.test(display);
+    // GNOME monitors are recorded by their Mutter connector (gnomeDesktop.ts).
+    const gnome = linux && GNOME_DISPLAY.test(display);
     if (
       linux
         ? !x11 &&
+          !gnome &&
           display !== WAYLAND_DISPLAY_ID &&
           !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
         : process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(display)
@@ -301,19 +305,32 @@ export class NativeDesktopCapture {
       if (!this.child) {
         const x11Display = x11 ? x11CaptureDisplay(display) : null;
         if (x11 && !x11Display) return null;
+        const gnomeOutput = gnome ? await gnomeMonitor(display) : null;
         const output =
-          linux && !x11 && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
-        const executable = await binary();
+          linux && !x11 && !gnome && display !== WAYLAND_DISPLAY_ID
+            ? await linuxMonitor(display)
+            : null;
+        const executable = gnome ? await resolveGnomeCaptureBinary() : await binary();
         if (generation !== this.generation) return null;
         const quality = profile.jpegQuality;
         const args = linux
           ? [
               overlay ? 'cursor-overlay' : 'video',
               String(
-                x11Display?.scale ?? output?.scale ?? screen.getAllDisplays()[0]?.scaleFactor ?? 1,
+                x11Display?.scale ??
+                  gnomeOutput?.scale ??
+                  output?.scale ??
+                  screen.getAllDisplays()[0]?.scaleFactor ??
+                  1,
               ),
               String(Math.round(quality * 100)),
-              ...(x11Display ? [x11Display.output] : output ? [output.name] : []),
+              ...(x11Display
+                ? [x11Display.output]
+                : gnomeOutput
+                  ? [display]
+                  : output
+                    ? [output.name]
+                    : []),
             ]
           : overlay
             ? [

@@ -54,6 +54,8 @@ export function resolveLinuxCaptureBinary(): Promise<string> {
       'main.c',
       'cursor.h',
       'cursor_shape.h',
+      'encode.h',
+      'gnome.c',
       'jpeg.h',
       'x11.h',
       'build.mjs',

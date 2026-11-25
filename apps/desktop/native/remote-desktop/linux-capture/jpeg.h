@@ -3,6 +3,8 @@
  * libjpeg. TurboJPEG stays the fast path wherever it is installed (Arch, the
  * managed cloud image); gdk-pixbuf keeps the helper usable everywhere else.
  * Neither backend writes files or keeps frames beyond the call. */
+#ifndef CINDY_CAPTURE_JPEG_H
+#define CINDY_CAPTURE_JPEG_H
 #include <dlfcn.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -147,3 +149,4 @@ static void jpeg_release(unsigned char *jpeg) {
   else if (jb.g_free)
     jb.g_free(jpeg);
 }
+#endif

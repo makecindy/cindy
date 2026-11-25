@@ -1085,6 +1085,12 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         path.join(temporary, 'cindy-linux-desktop-capture'),
         path.join(destDir, 'cindy-linux-desktop-capture'),
       );
+      // Optional GNOME (Mutter/PipeWire) capture: builders without its headers
+      // skip it, and must not ship an earlier checkout's binary instead.
+      const gnomeCapture = path.join(destDir, 'cindy-linux-gnome-capture');
+      fs.rmSync(gnomeCapture, { force: true });
+      if (fs.existsSync(path.join(temporary, 'cindy-linux-gnome-capture')))
+        fs.copyFileSync(path.join(temporary, 'cindy-linux-gnome-capture'), gnomeCapture);
       const clipboard = spawnSync(
         process.execPath,
         [

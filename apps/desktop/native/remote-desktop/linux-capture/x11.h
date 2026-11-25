@@ -3,12 +3,15 @@
  * cursor-theme name separately. Uses the logged-in desktop's authenticated X
  * connection: no listening socket, xhost change, root access or input. */
 #include "cursor_shape.h"
+#include "encode.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
-#include <X11/extensions/XShm.h>
 #include <X11/extensions/Xfixes.h>
+#ifdef CINDY_XSHM
+#include <X11/extensions/XShm.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#endif
 
 struct x11_capture {
   Display *display;
@@ -17,7 +20,9 @@ struct x11_capture {
   int depth, bgrx, x, y, width, height, error, shm_attached;
   /* The persistent SHM image, or the latest XGetImage result. */
   XImage *image;
+#ifdef CINDY_XSHM
   XShmSegmentInfo shm;
+#endif
   double scale;
   unsigned long cursor_serial;
   int cursor_ready, cursor_opaque, cursor_x, cursor_y, cursor_width,
@@ -43,12 +48,14 @@ static int x11_session_allowed(void) {
 static void x11_release_image(void) {
   if (!xc.image)
     return;
+#ifdef CINDY_XSHM
   if (xc.shm_attached) {
     XShmDetach(xc.display, &xc.shm);
     xc.image->data = NULL;
     shmdt(xc.shm.shmaddr);
     xc.shm_attached = 0;
   }
+#endif
   XDestroyImage(xc.image);
   xc.image = NULL;
 }
@@ -79,8 +86,10 @@ static int x11_geometry(const char *text, int root_width, int root_height) {
   return 0;
 }
 /* Shared memory avoids copying every frame through the X socket. A server in
- * another IPC namespace rejects the attach; ordinary GetImage still works. */
+ * another IPC namespace rejects the attach; ordinary GetImage still works, and
+ * is the only path when built without libXext headers. */
 static void x11_attach_shm(void) {
+#ifdef CINDY_XSHM
   if (!XShmQueryExtension(xc.display))
     return;
   XImage *image = XShmCreateImage(xc.display, xc.visual, (unsigned)xc.depth,
@@ -116,6 +125,7 @@ static void x11_attach_shm(void) {
   }
   xc.image = image;
   xc.shm_attached = 1;
+#endif
 }
 /* NULL geometry only probes the display, visual and XFIXES version. */
 static int x11_open(const char *geometry) {
@@ -154,11 +164,14 @@ static int x11_open(const char *geometry) {
 }
 static int x11_frame(void) {
   xc.error = 0;
+#ifdef CINDY_XSHM
   if (xc.shm_attached) {
     if (!XShmGetImage(xc.display, xc.root, xc.image, xc.x, xc.y, AllPlanes) ||
         xc.error)
       return -1;
-  } else {
+  } else
+#endif
+  {
     if (xc.image)
       XDestroyImage(xc.image);
     /* A shrunken root (resolution change) fails here; the parent then
@@ -177,13 +190,8 @@ static int x11_frame(void) {
 /* XFIXES pixels are premultiplied ARGB in the low 32 bits of each long. */
 static char *x11_cursor_png(const unsigned long *pixels, int width, int height,
                             int *opaque) {
-  png_image image = {.version = PNG_IMAGE_VERSION,
-                     .width = (png_uint_32)width,
-                     .height = (png_uint_32)height,
-                     .format = PNG_FORMAT_RGBA};
   size_t count = (size_t)width * (size_t)height;
   unsigned char *rgba = malloc(count * 4);
-  char *result = NULL;
   if (!rgba)
     return NULL;
   *opaque = 0;
@@ -191,22 +199,12 @@ static char *x11_cursor_png(const unsigned long *pixels, int width, int height,
     uint32_t p = (uint32_t)pixels[i], a = p >> 24;
     if (a)
       *opaque = 1;
+    rgba[i * 4] = cindy_unpremultiply((p >> 16) & 255, a);
+    rgba[i * 4 + 1] = cindy_unpremultiply((p >> 8) & 255, a);
+    rgba[i * 4 + 2] = cindy_unpremultiply(p & 255, a);
     rgba[i * 4 + 3] = (unsigned char)a;
-    for (unsigned k = 0; k < 3; k++) {
-      unsigned v = (p >> (16 - 8 * k)) & 255;
-      rgba[i * 4 + k] =
-          (unsigned char)(a ? fmin(255, (v * 255 + a / 2) / a) : 0);
-    }
   }
-  png_alloc_size_t size = 0;
-  if (png_image_write_to_memory(&image, NULL, &size, 0, rgba, 0, NULL) &&
-      size <= 49152) {
-    unsigned char *png = malloc(size);
-    if (png && png_image_write_to_memory(&image, png, &size, 0, rgba, 0, NULL))
-      result = base64(png, size);
-    free(png);
-  }
-  png_image_free(&image);
+  char *result = cindy_png_base64(rgba, width, height);
   free(rgba);
   return result;
 }
