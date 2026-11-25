@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { i18n } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -38,7 +39,7 @@ export function getSwallowActivationClickEnabled(): boolean {
 
 export function useSwallowActivationClickSettings(): {
   enabled: boolean;
-  setEnabled: (next: boolean) => void;
+  setEnabled: (next: boolean) => Promise<boolean>;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getSwallowActivationClickEnabled);
 
@@ -46,19 +47,19 @@ export function useSwallowActivationClickSettings(): {
   const setEnabled = useCallback((next: boolean) => {
     const sequence = ++request.current;
     const apply = () => {
-      if (sequence !== request.current) return;
+      if (sequence !== request.current) return false;
       setEnabledState(next);
       try { localStorage.setItem(STORAGE_KEY, String(next)); } catch { /* State still reflects Main's confirmed value. */ }
+      return true;
     };
     const saved = window.electronAPI?.windowBehavior?.setSwallowActivationClick?.(next);
-    if (!saved) {
-      apply();
-      return;
-    }
-    void saved.then(apply, error => {
+    if (!saved) return Promise.resolve(apply());
+    // The cloud caller reads the hook snapshot as soon as this promise settles.
+    return saved.then(() => flushSync(apply), error => {
       if (sequence === request.current) {
         toast.error(i18n.t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
       }
+      return false;
     });
   }, []);
 
