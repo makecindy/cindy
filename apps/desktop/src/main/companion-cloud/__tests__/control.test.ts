@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPANION_CLOUD_VERSION, DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
+import { COMPANION_CLOUD_CAPS_CHANNEL, COMPANION_CLOUD_VERSION, DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, type DeviceLinkErrorCode, type Envelope, type InvokeResultPayload, type WsLike } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
-import { askCompanionHome, companionHomeProbe, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionHomeProbeOutcome, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import { askCompanionHome, companionHomeProbe, startCompanionCloud, type CompanionCloudHost, type CompanionDeviceDirectory, type CompanionHomeAnswer, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
 import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
@@ -24,11 +24,16 @@ afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
 type HomeLink = NonNullable<CompanionCloudHost['homeLink']>;
 type TestHomeLink = Omit<HomeLink, 'homeStatus'> & Partial<Pick<HomeLink, 'homeStatus'>>;
-/** A test home answers what its `version` says (0: an explicit refusal) unless the test scripts `homeStatus`. */
+/**
+ * A test home replies through the real probe adapter what its `version` says (0: its own «control off»
+ * reply) unless the test scripts `homeStatus`. A refusal cannot be built any other way (type-checked).
+ */
 const homeLinkOf = (link: TestHomeLink): HomeLink => ({
   homeStatus: async (deviceId): Promise<CompanionHomeAnswer> => {
     const version = await link.version(deviceId);
-    return version >= 1 ? { kind: 'answered', version } : { kind: 'refused' };
+    return askCompanionHome(companionHomeProbe(async (): Promise<InvokeResultPayload> => version >= 1
+      ? { ok: true, result: { companionCloud: version } }
+      : { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } }));
   },
   ...link,
 });
@@ -1319,16 +1324,16 @@ describe('switch home from any computer', () => {
     expect(homeLink.handOver).not.toHaveBeenCalled();
   });
 
-  // A probe step as the transport reports it; an Error is a probe that rejected outright.
-  type ProbeStep = CompanionHomeProbeOutcome | Error;
-  const answer = (version: number): ProbeStep => ({ kind: 'answer', version });
-  const refused = (code: string, message?: string): ProbeStep => ({ kind: 'refused', code, ...(message ? { message } : {}) });
+  // One probe call as device-link really ends it: resolved with the home's reply to this request, or
+  // thrown (by this computer, a middle layer or the transport). It runs through the real probe adapter.
+  type ProbeStep = InvokeResultPayload | Error;
+  const answer = (version: number): ProbeStep => ({ ok: true, result: { companionCloud: version } });
+  const refused = (code: string, message = ''): ProbeStep => ({ ok: false, error: { code: code as DeviceLinkErrorCode, message } });
   const OLDER_CINDY = "channel 'maker:companion-cloud:caps' not allowed remotely";
-  const thrown = (code?: string): ProbeStep => (code ? { kind: 'thrown', code } : { kind: 'thrown' });
-  const scripted = (steps: readonly ProbeStep[], asked: number[] = []) => async (timeoutMs: number) => {
+  const thrown = (code?: DeviceLinkErrorCode): ProbeStep => (code ? new DeviceLinkError(code, 'thrown before any reply') : new Error('caps probe timed out'));
+  const scripted = (steps: readonly ProbeStep[], asked: number[] = []) => (timeoutMs: number) => {
     const step = steps[asked.push(timeoutMs) - 1]!;
-    if (step instanceof Error) throw step;
-    return step;
+    return companionHomeProbe(async () => { if (step instanceof Error) throw step; return step; })(timeoutMs);
   };
 
   // Allow-list (#11999 review): only a version the home declared, or one of its known explicit refusals,
@@ -1336,23 +1341,27 @@ describe('switch home from any computer', () => {
   it.each([
     ['answers on the longer retry', [thrown(), answer(4)], 4, [8_000, 15_000]],
     ['link still connecting, then answers', [thrown('NOT_CONNECTED'), answer(2)], 2, [8_000, 15_000]],
-    ['an older Cindy without the channel', [refused('CHANNEL_NOT_ALLOWED', OLDER_CINDY)], 0, [8_000]],
+    ['an older Cindy without the channel', [refused('CHANNEL_NOT_ALLOWED', OLDER_CINDY)], 'older-cindy', [8_000]],
     // The same code from the routing layer, or without the dispatcher's own answer, proves nothing (zqchris, 11-25).
     ['refused by the routing layer with the same code', [refused('CHANNEL_NOT_ALLOWED', 'Encrypted transport required'), refused('CHANNEL_NOT_ALLOWED')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
-    ['answering that same-account control is off', [refused('REMOTE_DISABLED')], 0, [8_000]],
-    ['published as control off through the relay', [thrown('REMOTE_DISABLED')], 0, [8_000]],
+    ['answering that same-account control is off', [refused('REMOTE_DISABLED', 'remote control disabled')], 'control-off', [8_000]],
+    ['answering that access to it was revoked', [refused('ACCESS_REVOKED', 'access revoked by target device')], 'access-revoked', [8_000]],
+    // Thrown without the home's reply to this request — this computer's cached control-off state, the relay,
+    // a closed link — never counts as its refusal (#11999 review, zqchris 11-25 17:36Z).
+    ['control off only as this computer or the relay last knew it', [thrown('REMOTE_DISABLED'), thrown('REMOTE_DISABLED')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['access revoked only as a closed link or session said', [thrown('ACCESS_REVOKED'), answer(4)], 4, [8_000, 15_000]],
     // Also the local offline gate and Agent-Net cancelling queued calls on a dropped session (Greptile P1).
     ['reported offline while listed online', [thrown('DEVICE_OFFLINE'), answer(4)], 4, [8_000, 15_000]],
     ["blocked by this computer's own transport policy", [thrown('CHANNEL_NOT_ALLOWED'), thrown('CHANNEL_NOT_ALLOWED')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
     ['failing with an error that has no code', [new Error('socket hang up'), new Error('socket hang up')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
-    ['answering an unknown or new code', [refused('SOME_NEW_CODE'), thrown('ANOTHER_NEW_CODE')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['answering an unknown or new code', [refused('SOME_NEW_CODE'), thrown('ANOTHER_NEW_CODE' as DeviceLinkErrorCode)], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
     ['answering without a version', [answer(0), answer(0)], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
-    ['still silent after the longer wait', [thrown(), thrown('DEVICE_UNRESPONSIVE')], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
+    ['still silent after the longer wait', [thrown(), thrown('DEVICE_UNRESPONSIVE' as DeviceLinkErrorCode)], 'HOME_UNRESPONSIVE', [8_000, 15_000]],
   ] as const)('reads the home version when it is %s', async (_, steps, expected, waits) => {
     const asked: number[] = [];
     const result = await askCompanionHome(scripted(steps, asked));
     expect(result).toEqual(expected === 'HOME_UNRESPONSIVE' ? { kind: 'unconfirmed' }
-      : expected === 0 ? { kind: 'refused' } : { kind: 'answered', version: expected });
+      : typeof expected === 'string' ? { from: 'peer', kind: 'refused', refusal: expected } : { kind: 'answered', version: expected });
     expect(asked).toEqual(waits);
   });
 
@@ -1361,8 +1370,9 @@ describe('switch home from any computer', () => {
   it.each([
     ['an error without a code', [new Error('socket hang up'), new Error('socket hang up')]],
     ['an unknown code in the message', [new Error('[SOME_NEW_CODE] x'), new Error('[SOME_NEW_CODE] x')]],
+    ['control off as this computer last cached it', [thrown('REMOTE_DISABLED'), thrown('REMOTE_DISABLED')]],
     ['an unknown code from the home', [refused('SOME_NEW_CODE'), refused('SOME_NEW_CODE')]],
-    ['a new code thrown locally', [thrown('ANOTHER_NEW_CODE'), thrown('ANOTHER_NEW_CODE')]],
+    ['a new code thrown locally', [thrown('ANOTHER_NEW_CODE' as DeviceLinkErrorCode), thrown('ANOTHER_NEW_CODE' as DeviceLinkErrorCode)]],
     ['a timeout', [thrown(), thrown()]],
     ["this computer's own transport policy", [thrown('CHANNEL_NOT_ALLOWED'), thrown('CHANNEL_NOT_ALLOWED')]],
     ['an answer without a version', [answer(0), answer(0)]],
@@ -1482,6 +1492,12 @@ describe('switch home from any computer', () => {
       async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: OLDER_CINDY } })],
     ['answering that same-account control is off', 'refused',
       async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } })],
+    ['answering that access to it was revoked', 'refused',
+      async (): Promise<InvokeResultPayload> => ({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'Remote control is no longer allowed' } })],
+    ['control off only in this computer\'s cache (thrown before sending)', 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => { throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target'); }],
+    ['access revoked only by a link closed earlier (thrown)', 'unconfirmed',
+      async (): Promise<InvokeResultPayload> => { throw new DeviceLinkError('ACCESS_REVOKED', 'access revoked by target device'); }],
     ['answering its version', 'answered',
       async (): Promise<InvokeResultPayload> => ({ ok: true, result: { companionCloud: COMPANION_CLOUD_VERSION } })],
   ] as const)('reads the real probe answer when the home is %s', async (_, expected, invoke) => {
@@ -1500,6 +1516,101 @@ describe('switch home from any computer', () => {
       expect(homeLink.handOver).toHaveBeenCalledWith('laptop', 'bot_mia', 'desk', undefined);
       expect(patch).toBeUndefined();
     }
+  });
+
+  // Source of an answer (#11999 review, zqchris 11-25 17:36Z): only the home's reply to this very request
+  // may decide. Every code device-link can throw is thrown without such a reply — before the request is
+  // written (cached control-off, local policy, link not ready, breaker, offline gate, admission), by a
+  // middle layer (relay-error, Agent-Net transport) or after it without an answer (timeout, closed link):
+  // through the real probe adapter none of them moves the home without the owner's force. A new code
+  // added to DeviceLinkErrorCode must be listed here (type-checked).
+  const THROWN_BY = {
+    DEVICE_OFFLINE: 'relay-error / offline gate / Agent-Net session cancel',
+    REMOTE_DISABLED: 'cached control-off (DeviceLinkClient, Agent-Net) / relay-error',
+    VERSION_MISMATCH: 'relay-error', PAYLOAD_TOO_LARGE: 'relay-error / Agent-Net send', RATE_LIMITED: 'relay-error',
+    BAD_REQUEST: 'relay-error', INTERNAL: 'relay-error',
+    CHANNEL_NOT_ALLOWED: 'local transport policy (untrusted transport mode)',
+    ACCESS_REVOKED: 'closed link (revoked) / Agent-Net UNAUTHORIZED / local share scope',
+    INVOKE_TIMEOUT: 'no reply after the write', PEER_RESET: 'transport reset after the write',
+    LINK_NOT_OPEN: 'no link or session / closed while waiting', NOT_CONNECTED: 'relay not connected / waiting for it',
+    BACKPRESSURE: 'admission expired before any socket write',
+    MEDIA_FETCH_FAILED: 'never for this channel', VOICE_TRANSCRIBE_FAILED: 'never for this channel',
+    VOICE_CREDENTIAL_SYNC_FAILED: 'never for this channel', VOICE_CREDENTIAL_SYNC_REMOVED: 'never for this channel',
+    VOICE_DICTIONARY_LEARNING_FAILED: 'never for this channel', VOICE_DICTIONARY_GET_FAILED: 'never for this channel',
+  } satisfies Record<DeviceLinkErrorCode, string>;
+  // Desktop's breaker code, not (yet) in the shared union.
+  const thrownBy: Record<string, string> = { ...THROWN_BY, DEVICE_UNRESPONSIVE: 'local breaker (desktop)' };
+  const thrownWithoutReply: Array<[string, () => Error]> = [
+    ...Object.keys(thrownBy).map((code): [string, () => Error] =>
+      [`${code} (${thrownBy[code]})`, () => Object.assign(new DeviceLinkError(code as DeviceLinkErrorCode, 'thrown'), { inFlight: code === 'INVOKE_TIMEOUT' })]),
+    ...['[DEVICE_LINK_STANDBY] owned by another instance', '[DEVICE_LINK_CONTROL_DISABLED] device control is disabled locally',
+      '[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized', 'FILE_PEER_CANCELLED']
+      .map((message): [string, () => Error] => [message, () => new Error(message)]),
+  ];
+  it.each(thrownWithoutReply)('never takes the home over when the probe throws %s', async (_, error) => {
+    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => { throw error(); });
+    const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(companionHomeProbe(invoke))) };
+    const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop', homeName: 'laptop' });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(homeLink.handOver).not.toHaveBeenCalled();
+  });
+
+  // Replies that resolve but come from a gate in front of the home's dispatcher (its routing layer), or
+  // that this computer builds for another channel: their content is not on the allow-list.
+  it.each([
+    ['the routing layer requiring encrypted transport', { code: 'CHANNEL_NOT_ALLOWED', message: 'Encrypted transport required' }],
+    ['the routing layer shedding load', { code: 'BACKPRESSURE', message: 'Too many pending requests' }],
+    ['a reply built locally for another channel', { code: 'IPC_ERROR', message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' }],
+  ] as const)('never takes the home over on a reply from %s', async (_, error) => {
+    const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(companionHomeProbe(async () => ({ ok: false, error })))) };
+    const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [device('laptop'), hereRow] }) });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toMatchObject({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+  });
+
+  // The maintainer's scenario (zqchris 11-25 17:36Z), on the real DeviceLinkClient: A once published its
+  // same-account control as off, then turned it back on while this computer missed the update. The
+  // client's cached state throws REMOTE_DISABLED before anything is written; at confirm time the
+  // directory is partial. Before, that cached error read as A's refusal and A was taken over without
+  // its hand-over sync. Now: unconfirmed, nothing sent to A, nothing written.
+  it('does not take A over on a control-off state only this computer still caches', async () => {
+    class Socket implements WsLike {
+      sent: Envelope[] = [];
+      bufferedAmount = 0;
+      private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+      send(data: string): void { this.sent.push(JSON.parse(data) as Envelope); }
+      close(code?: number): void { this.emit('close', code ?? 1000); }
+      terminate(): void {}
+      on(event: string, cb: (...args: never[]) => void): void { this.handlers.set(event, [...(this.handlers.get(event) ?? []), cb as (...args: unknown[]) => void]); }
+      emit(event: string, ...args: unknown[]): void { for (const cb of this.handlers.get(event) ?? []) cb(...args); }
+      push(env: Envelope): void { this.emit('message', { toString: () => JSON.stringify(env) }); }
+    }
+    const sockets: Socket[] = [];
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://test/api/device-link/ws', getToken: async () => 'jwt-token',
+      getHello: () => ({ deviceName: 'Desk', platform: 'darwin', appVersion: '1.0.0', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => { const socket = new Socket(); sockets.push(socket); return socket; },
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 50 },
+    });
+    try {
+      client.start();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const socket = sockets.at(-1)!;
+      socket.emit('open');
+      socket.push({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'desk', userId: 'u1' } });
+      // A's old «control off», as this computer last heard it; A has since turned it back on.
+      socket.push({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId: 'laptop', online: true, busy: false, remoteControlEnabled: false } });
+      const invokes = () => socket.sent.filter(env => env.kind === 'invoke').length;
+      const homeLink = { ...link(2), homeStatus: vi.fn(() => askCompanionHome(companionHomeProbe(() =>
+        client.invoke('laptop', { channel: COMPANION_CLOUD_CAPS_CHANNEL, args: [] })))) };
+      const t = setup({ home: 'laptop', homeLink, directory: async () => ({ devices: [hereRow], partial: true }) });
+      expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop', homeName: '' });
+      expect(invokes()).toBe(0);
+      expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+      expect(homeLink.handOver).not.toHaveBeenCalled();
+    } finally { client.stop(); }
   });
 
   // The explicit states still take it over without a force: a complete, fresh directory row saying

@@ -244,13 +244,6 @@ export function hasProfileSnapshot(rows: unknown): boolean {
 }
 
 /**
- * One cloud-companion caps probe of a companion's home, as the transport reported it:
- * - `answer`: the home answered with its declared version;
- * - `refused`: the home itself answered with an error code (its own dispatch);
- * - `thrown`: the call failed before or without the home's answer (local, relay or transport),
- *   with the device-link code when there was one. A probe that rejects counts the same as `thrown`.
- */
-/**
  * `takeOver` options inside the main process: `expectedHomeDeviceId` binds a take-over from
  * `switchHome` to the home its decision was made for (and, for a force, the home the owner confirmed):
  * a different current home is refused and the final write compares against it. `null` means the
@@ -258,48 +251,73 @@ export function hasProfileSnapshot(rows: unknown): boolean {
  */
 export type CompanionTakeOverInternalOptions = CompanionTakeOverOptions & { expectedHomeDeviceId?: string | null };
 
-export type CompanionHomeProbeOutcome =
-  | { kind: 'answer'; version: number }
-  | { kind: 'refused'; code: string; message?: string }
-  | { kind: 'thrown'; code?: string };
+/**
+ * Evidence that a value is the home's own reply to this very probe: the device-link call resolved with
+ * the invoke-result paired to the request it wrote. Only `companionHomeProbe` attaches it (the symbol is
+ * not exported), so a refusal cannot be built from anything else (cloud-companions.md §3.1).
+ */
+declare const homeReplyEvidence: unique symbol;
+interface HomeReply { readonly from: 'peer'; readonly [homeReplyEvidence]: true }
 
 /**
- * The only failures that let a home be taken over without the owner forcing it
- * (allow-list, cloud-companions.md §3.1), as the home's own dispatcher answers them: its same-account
- * control off, or this computer's access revoked. An older Cindy without the channel is recognised by
- * the exact answer its dispatcher gives for this channel (below), not by the code alone.
+ * One cloud-companion caps probe of a companion's home, by who answered it:
+ * - `from: 'peer'`: the call resolved with the home's reply to this request — its declared version
+ *   (`answer`), or an error code and message (`refused`, still to be checked against the allow-list);
+ * - `from: 'local'`: everything else. Every device-link failure is thrown, never resolved: this
+ *   computer's cached state and policies, a link not ready, the breaker, the relay's answers, a closed
+ *   link, a timeout or cancel (#11999 review, zqchris 11-25). Its code is kept for diagnostics only and
+ *   never decides anything. A probe that rejects counts the same.
  */
-const HOME_EXPLICIT_REFUSALS = new Set(['REMOTE_DISABLED', 'ACCESS_REVOKED']);
+export type CompanionHomeProbeOutcome =
+  | (HomeReply & { kind: 'answer'; version: number })
+  | (HomeReply & { kind: 'refused'; code: string; message?: string })
+  | { from: 'local'; kind: 'failed'; code?: string };
+
+/** Why a home explicitly cannot hand over itself, as its own reply said it. */
+export type CompanionHomeRefusal = 'control-off' | 'access-revoked' | 'older-cindy';
+/**
+ * The only replies that let a home be taken over without the owner forcing it (allow-list,
+ * cloud-companions.md §3.1), as the home's own dispatcher answers them: its same-account control off,
+ * or this computer's access revoked. The routing gate on the home's side answers other codes
+ * (`CHANNEL_NOT_ALLOWED` «Encrypted transport required», `BACKPRESSURE`), so it never reaches these.
+ */
+const HOME_EXPLICIT_REFUSALS: Readonly<Record<string, CompanionHomeRefusal>> = {
+  REMOTE_DISABLED: 'control-off',
+  ACCESS_REVOKED: 'access-revoked',
+};
 /**
  * What the home's dispatcher answers for a channel it does not have (unchanged since the first
  * open-source release). The same code also comes from the routing layer before any handler runs
  * (`Encrypted transport required`) or from other gates: those prove nothing about the home's version.
  */
 const OLDER_CINDY_ANSWER = `channel '${COMPANION_CLOUD_CAPS_CHANNEL}' not allowed remotely`;
-/**
- * Thrown without the home's own answer but still published by the target (through the relay or the
- * device directory): its control turned off, or this computer's access revoked. A locally thrown
- * `CHANNEL_NOT_ALLOWED` is this computer's transport policy, not the home's answer, so it is not here.
- */
-const HOME_TARGET_PUBLISHED = new Set(['REMOTE_DISABLED', 'ACCESS_REVOKED']);
 /** First wait, then one longer try: right after start-up the link to an online home can be slow. */
 const HOME_PROBE_WAITS_MS = [8_000, 15_000];
 
-/** The version a probe outcome confirms (0 = the home explicitly cannot hand over), or null when nothing was confirmed. */
-function confirmedHomeVersion(outcome: CompanionHomeProbeOutcome): number | null {
-  if (outcome.kind === 'answer') return outcome.version >= 1 ? outcome.version : null;
-  if (outcome.kind === 'refused') return HOME_EXPLICIT_REFUSALS.has(outcome.code)
-    || (outcome.code === 'CHANNEL_NOT_ALLOWED' && outcome.message === OLDER_CINDY_ANSWER) ? 0 : null;
-  return outcome.code && HOME_TARGET_PUBLISHED.has(outcome.code) ? 0 : null;
-}
-
 /**
  * What a companion's home answered, for deciding a move (cloud-companions.md §3.1). Three states that
- * are never folded into each other: `answered` (the version it declared), `refused` (an explicit
- * refusal from the allow-list above: the original automatic take-over) and `unconfirmed` (anything
- * else). A missing answer is never read as a refusal.
+ * are never folded into each other: `answered` (the version it declared), `refused` (an allow-listed
+ * refusal in the home's own reply: the original automatic take-over) and `unconfirmed` (anything else).
+ * A missing answer, or one this computer or a middle layer gave instead of the home, is never a refusal.
  */
-export type CompanionHomeAnswer = { kind: 'answered'; version: number } | { kind: 'refused' } | { kind: 'unconfirmed' };
+export type CompanionHomeAnswer =
+  | { kind: 'answered'; version: number }
+  | (HomeReply & { kind: 'refused'; refusal: CompanionHomeRefusal })
+  | { kind: 'unconfirmed' };
+
+/** What one probe confirms: only the home's own reply, with a version or an allow-listed refusal. */
+function confirmedHomeAnswer(outcome: CompanionHomeProbeOutcome): CompanionHomeAnswer | null {
+  if (outcome.from !== 'peer') return null;
+  if (outcome.kind === 'answer') return outcome.version >= 1 ? { kind: 'answered', version: outcome.version } : null;
+  const refusal = HOME_EXPLICIT_REFUSALS[outcome.code]
+    ?? (outcome.code === 'CHANNEL_NOT_ALLOWED' && outcome.message === OLDER_CINDY_ANSWER ? 'older-cindy' : undefined);
+  return refusal ? { ...replyEvidence(outcome), kind: 'refused', refusal } : null;
+}
+
+/** The source of a home reply, carried into what it decides (only ever from a reply). */
+function replyEvidence(reply: HomeReply): HomeReply {
+  return { from: reply.from } as HomeReply;
+}
 
 /** The device directory as read for one home decision, with how far it can be trusted. */
 export interface CompanionDeviceDirectory {
@@ -311,52 +329,70 @@ export interface CompanionDeviceDirectory {
 }
 
 /**
- * One caps probe of a companion's home through `invoke` (the device-link call), keeping apart what the
- * home itself answered (a version, or its own error code and message) from a call that failed without
- * its answer (thrown locally, by the relay or by the transport, or timed out after `timeoutMs`).
- * `askCompanionHome` decides which of these may count as a refusal.
+ * One caps probe of a companion's home through `invoke` (the device-link call). A resolved call is the
+ * invoke-result paired to the request it wrote, so it is the home's reply (`from: 'peer'`); a call that
+ * threw, rejected or timed out after `timeoutMs` is `from: 'local'`, whatever its code.
+ * `askCompanionHome` decides which replies may count as a refusal.
  */
 export function companionHomeProbe(invoke: () => Promise<InvokeResultPayload>) {
+  const reply = { from: 'peer' } as HomeReply;
   return async (timeoutMs: number): Promise<CompanionHomeProbeOutcome> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: InvokeResultPayload;
     try {
-      const result = await Promise.race([
+      result = await Promise.race([
         invoke(),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('caps probe timed out')), timeoutMs); }),
       ]);
-      return result.ok ? { kind: 'answer', version: companionCloudCapsVersion(result.result) }
-        : { kind: 'refused', code: result.error.code, message: result.error.message };
     } catch (error) {
-      return error instanceof DeviceLinkError ? { kind: 'thrown', code: error.code } : { kind: 'thrown' };
+      return { from: 'local', kind: 'failed', ...(error instanceof DeviceLinkError ? { code: error.code } : {}) };
     } finally { clearTimeout(timer); }
+    return result.ok ? { ...reply, kind: 'answer', version: companionCloudCapsVersion(result.result) }
+      : { ...reply, kind: 'refused', code: result.error.code, message: result.error.message };
   };
 }
 
 /**
- * Ask a companion's home what it can do (cloud-companions.md §3.1). Only a known, explicit answer
- * counts: a version the home declared, or a refusal from the allow-list above. Anything else — a
- * timeout, a local transport error, an error without a code, an unknown or new code, a malformed
- * answer, a probe that rejected — is asked once more with a longer wait, and is then `unconfirmed`:
- * the move needs the owner's explicit force.
+ * Ask a companion's home what it can do (cloud-companions.md §3.1). Only the home's own explicit reply
+ * counts: a version it declared, or a refusal from the allow-list above. Anything else — anything thrown
+ * here or by a middle layer (cached control-off, relay, link, breaker, timeout), an unknown or new code,
+ * a malformed answer, a probe that rejected — is asked once more with a longer wait, and is then
+ * `unconfirmed`: the move needs the owner's explicit force.
  */
 export async function askCompanionHome(probe: (timeoutMs: number) => Promise<CompanionHomeProbeOutcome>): Promise<CompanionHomeAnswer> {
   for (const timeoutMs of HOME_PROBE_WAITS_MS) {
-    const outcome = await probe(timeoutMs).catch((): CompanionHomeProbeOutcome => ({ kind: 'thrown' }));
-    const version = confirmedHomeVersion(outcome);
-    if (version !== null) return version === 0 ? { kind: 'refused' } : { kind: 'answered', version };
+    const outcome = await probe(timeoutMs).catch((): CompanionHomeProbeOutcome => ({ from: 'local', kind: 'failed' }));
+    const answer = confirmedHomeAnswer(outcome);
+    if (answer) return answer;
   }
   return { kind: 'unconfirmed' };
 }
 
 /**
- * Why a move may take the companion over here without the owner forcing it, or why it was forced. Only
- * these reach `takeOver` from `switchHome`; an unconfirmed home is not one of them (type-checked).
+ * A directory read complete and fresh (not the stale snapshot, not a partial merge): the only one whose
+ * row may say a home is offline. Only `freshDirectory` makes one.
  */
-type TakeOverBasis = 'no-home' | 'offline' | 'refused' | 'forced';
+declare const freshDirectoryEvidence: unique symbol;
+type FreshDirectory = CompanionDeviceDirectory & { readonly [freshDirectoryEvidence]: true };
+function freshDirectory(directory: CompanionDeviceDirectory | null): FreshDirectory | null {
+  return directory && !directory.stale && !directory.partial ? directory as FreshDirectory : null;
+}
+
+/**
+ * Why a move may take the companion over here without the owner forcing it, each with its evidence, or
+ * the owner's force for the home it was confirmed for. Only these reach `takeOver` from `switchHome`:
+ * an `offline` needs a fresh, complete directory; a `refused` (older Cindy included) needs the home's
+ * own reply; an unconfirmed home is none of them (type-checked).
+ */
+type TakeOverBasis =
+  | { kind: 'no-home' }
+  | { kind: 'offline'; directory: FreshDirectory }
+  | { kind: 'refused'; reply: Extract<CompanionHomeAnswer, { kind: 'refused' }> }
+  | { kind: 'forced'; home: string };
 /** One home decision: the choices shown, and what they rest on. */
 interface HomeDecision {
   choices: CompanionHomeChoices;
-  basis: 'local' | 'remote' | 'unavailable' | 'unconfirmed' | Exclude<TakeOverBasis, 'forced'>;
+  basis: { kind: 'local' | 'remote' | 'unavailable' | 'unconfirmed' } | Exclude<TakeOverBasis, { kind: 'forced' }>;
 }
 
 /** Same computers Orca may run work on (orcaRemoteWorkers.isExecutionDeviceCandidate). */
@@ -1056,33 +1092,34 @@ export function startCompanionCloud(input: {
     const self = input.selfDeviceId;
     const actor = actorOf(botId);
     const home = actor?.homeDeviceId ?? null;
-    if (!self || !live()) return { basis: 'unavailable', choices: { homeDeviceId: home, mode: 'unavailable', reason: 'NOT_ENABLED', targets: [] } };
-    if (!actor) return { basis: 'unavailable', choices: { homeDeviceId: null, mode: 'unavailable', reason: 'NOT_FOUND', targets: [] } };
+    if (!self || !live()) return { basis: { kind: 'unavailable' }, choices: { homeDeviceId: home, mode: 'unavailable', reason: 'NOT_ENABLED', targets: [] } };
+    if (!actor) return { basis: { kind: 'unavailable' }, choices: { homeDeviceId: null, mode: 'unavailable', reason: 'NOT_FOUND', targets: [] } };
     // Read failure is kept (null), not turned into an empty directory: an empty one would read as «home not listed».
     const directory = input.host.readDeviceDirectory ? await input.host.readDeviceDirectory().catch(() => null) : null;
     const devices = directory?.devices ?? [];
     const homeRow = home ? devices.find(device => device.deviceId === home) : undefined;
     const homeName = homeRow?.name || '';
-    if (home === self) return { basis: 'local', choices: { homeDeviceId: home, homeName, mode: 'local', targets: await runtime.transferTargets() } };
+    if (home === self) return { basis: { kind: 'local' }, choices: { homeDeviceId: home, homeName, mode: 'local', targets: await runtime.transferTargets() } };
     const selfDevice = devices.find(device => device.deviceId === self);
     const here: CompanionTransferTarget = { deviceId: self, name: selfDevice?.name ?? '', online: true, isSelf: true };
     const takeOver = (basis: HomeDecision['basis'], reason?: 'HOME_UNRESPONSIVE'): HomeDecision =>
       ({ basis, choices: { homeDeviceId: home, homeName, mode: 'takeOver', ...(reason ? { reason } : {}), targets: [here] } });
-    if (!home) return takeOver('no-home');
+    if (!home) return takeOver({ kind: 'no-home' });
     // The directory confirms the home offline only with its own row in a complete, fresh read. A failed
     // read, a stale snapshot (it marks rows offline), a partial one (it keeps rows of an earlier complete
     // read, an old offline row included) or a missing row confirms nothing: the home is asked by its id.
-    if (directory && !directory.stale && !directory.partial && homeRow?.online === false) return takeOver('offline');
+    const fresh = freshDirectory(directory);
+    if (fresh && homeRow?.online === false) return takeOver({ kind: 'offline', directory: fresh });
     const link = input.host.homeLink;
     const answer: CompanionHomeAnswer = link ? await link.homeStatus(home).catch((): CompanionHomeAnswer => ({ kind: 'unconfirmed' }))
       : { kind: 'unconfirmed' };
-    if (answer.kind === 'refused') return takeOver('refused');
-    if (answer.kind === 'unconfirmed') return takeOver('unconfirmed', 'HOME_UNRESPONSIVE');
+    if (answer.kind === 'refused') return takeOver({ kind: 'refused', reply: answer });
+    if (answer.kind === 'unconfirmed') return takeOver({ kind: 'unconfirmed' }, 'HOME_UNRESPONSIVE');
     if (answer.version < REMOTE_HAND_OVER_VERSION)
-      return { basis: 'unavailable', choices: { homeDeviceId: home, homeName, mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] } };
+      return { basis: { kind: 'unavailable' }, choices: { homeDeviceId: home, homeName, mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] } };
     // The home's own view: it decides which computers can receive the companion (this one included).
     const targets = await link!.targets(home);
-    return { basis: 'remote', choices: { homeDeviceId: home, homeName, mode: 'remote',
+    return { basis: { kind: 'remote' }, choices: { homeDeviceId: home, homeName, mode: 'remote',
       targets: targets.filter(target => target.deviceId !== home).map(target => target.deviceId === self
         ? { ...target, name: target.name || here.name, isSelf: true } : { ...target, isSelf: false }),
       // The home only lists computers that allow its control, so this one is missing for that reason.
@@ -1396,15 +1433,17 @@ export function startCompanionCloud(input: {
       if (options?.force && options.forceHomeDeviceId !== choices.homeDeviceId)
         return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: choices.homeDeviceId, homeName: choices.homeName ?? '' };
       // Never a silent take-over of a home that may still be running and syncing: only on the owner's explicit choice.
-      if (decision.basis === 'unconfirmed' && !(options?.force && targetDeviceId === self))
+      if (decision.basis.kind === 'unconfirmed' && !(options?.force && targetDeviceId === self))
         return { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: choices.homeDeviceId, homeName: choices.homeName ?? '' };
       const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
       if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);
       if (choices.mode === 'takeOver') {
         // Only an explicit basis, or the owner's force for this very home (checked above), takes it over.
-        const basis: TakeOverBasis | null = decision.basis === 'unconfirmed' ? (options?.force ? 'forced' : null)
-          : decision.basis === 'no-home' || decision.basis === 'offline' || decision.basis === 'refused' ? decision.basis : null;
+        const { basis: decided } = decision;
+        const basis: TakeOverBasis | null = decided.kind === 'unconfirmed'
+          ? (options?.force && choices.homeDeviceId ? { kind: 'forced', home: choices.homeDeviceId } : null)
+          : decided.kind === 'no-home' || decided.kind === 'offline' || decided.kind === 'refused' ? decided : null;
         if (!basis) return { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: choices.homeDeviceId, homeName: choices.homeName ?? '' };
         return takeOverDecided(botId, basis, choices.homeDeviceId, options);
       }
