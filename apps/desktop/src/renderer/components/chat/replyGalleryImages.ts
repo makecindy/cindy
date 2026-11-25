@@ -9,6 +9,7 @@
 import {
   RichAnswerStream,
   richMarkdown,
+  richString,
   splitRichAnswer,
   type RichDocument,
 } from '@cindy/maker-shared/rich-answer';
@@ -16,6 +17,7 @@ import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { replySectionId, type GalleryImage } from './ImageGalleryContext';
 import { markdownImageAddress, type MarkdownImageAddressOptions } from './MarkdownRenderer';
 import { extractMarkdownGalleryImages } from './markdownImageTargets';
+import { isInvalidRichImageSource } from './RichAnswer';
 import { peekWorkspaceMediaSrc, usesWorkspaceLookup } from './useWorkspaceMediaPath';
 
 /** One image a reply renders, located in the reply section the renderer receives. */
@@ -54,7 +56,9 @@ function richImageMarkdown(doc: RichDocument): { id: string; markdown: string }[
     const node = doc.nodes.get(id);
     if (!node || seen.has(id)) return;
     seen.add(id);
-    if (node.kind === 'image' || node.kind === 'markdown') {
+    // An invalid cindy-media image renders as a status line, not an image.
+    const invalidImage = node.kind === 'image' && isInvalidRichImageSource(richString(node, 'src').trim());
+    if ((node.kind === 'image' && !invalidImage) || node.kind === 'markdown') {
       const markdown = richMarkdown(node);
       if (markdown) out.push({ id, markdown });
     }

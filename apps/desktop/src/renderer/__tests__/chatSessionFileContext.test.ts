@@ -678,6 +678,32 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
 
   // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，
   // 其中的图片语法不进画廊。最小失败输入：选项 `![hidden](B)` 让画廊多出 B。
+  // PR #12724 review：组件里的 cindy-media 图地址被截断时，回复显示「图片地址无效」提示而不是图，
+  // 画廊与渲染端共用 isInvalidRichImageSource。最小失败输入：截断地址的组件图被收进画廊。
+  it('组件里地址无效的 cindy-media 图不进任务画廊', () => {
+    const valid = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const reply = [
+      '```cindy-ui',
+      '{"version":1,"seq":1,"op":"create","id":"col","kind":"stack"}',
+      '{"seq":2,"op":"create","id":"bad","kind":"image","parent":"col","props":{"src":"cindy-media://blobs/abc","alt":"bad"}}',
+      `{"seq":3,"op":"create","id":"good","kind":"image","parent":"col","props":{"src":"${valid}","alt":"good"}}`,
+      '```',
+    ].join('\n');
+    const gallery = collectTaskImageGallery(
+      [{ type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: reply } }],
+      (node) => collectSessionImageSrcs([node as RenderItem]),
+      {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: false,
+      },
+    );
+    expect(gallery.map((image) => image.src)).toEqual([valid]);
+  });
+
   it('回复里显示层剥离的内容不进任务画廊', () => {
     const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
     const [shown, hidden] = ['s', 'h'].map(blob);
