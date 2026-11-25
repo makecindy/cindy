@@ -34,8 +34,10 @@ const flags = run('pkg-config', [
   '--cflags',
   '--libs',
   'wayland-client',
-  'libturbojpeg',
   'libpng',
+  'x11',
+  'xext',
+  'xfixes',
 ]).split(/\s+/);
 const binary = path.join(output, 'cindy-linux-desktop-capture');
 run('cc', [
@@ -50,6 +52,8 @@ run('cc', [
   output,
   ...flags,
   '-lm',
+  // JPEG backends are loaded at runtime (jpeg.h); none is a link dependency.
+  '-ldl',
   '-o',
   binary + '.tmp',
 ]);

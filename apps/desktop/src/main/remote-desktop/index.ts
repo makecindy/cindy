@@ -68,7 +68,7 @@ import {
 } from './waylandCapture';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
-import { NativeDesktopCapture } from './nativeCapture';
+import { NativeDesktopCapture, x11CaptureDisplay } from './nativeCapture';
 import { HyprlandCapture, supportsHyprlandCapture } from './hyprlandCapture';
 import { readLinuxDesktopInputSupport, isX11Desktop } from './linuxInput';
 import { LinuxDesktopAudio, supportsLinuxAudio } from './linuxAudio';
@@ -82,7 +82,7 @@ import {
   linuxDisplay,
   linuxMonitor,
 } from './linuxDesktop';
-import { readLinuxCursorSupport } from './linuxCapture';
+import { readLinuxCursorSupport, readLinuxX11CaptureSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
 import {
@@ -217,6 +217,12 @@ const linuxAudio = new LinuxDesktopAudio();
 const linuxMute = new LinuxDesktopMute();
 const linuxWindows = new LinuxWindowActions();
 const nativeWayland = () => wayland() && supportsHyprlandCapture();
+/** X11 sessions show the remote pointer as the viewer's own cursor when the
+ * native root capture is ready and the display's geometry is unambiguous. */
+const x11CursorCapture = async (displayId?: string) =>
+  isX11Desktop() &&
+  (await readLinuxX11CaptureSupport()) &&
+  (displayId === undefined || x11CaptureDisplay(displayId) !== null);
 const portalWayland = () => wayland() && !nativeWayland();
 // #9712: diagnostics only. The logged facts are fixed labels and wayland-N socket names.
 const displayBackendLog = createLogger('remote-desktop:display-backend');
@@ -548,7 +554,11 @@ async function offer(
     let source: DesktopCapturerSource | null = null;
     const hyprland = nativeWayland();
     if (hyprland && lease.display.id !== WAYLAND_DISPLAY_ID) await linuxMonitor(lease.display.id);
-    let nativeAvailable = process.platform === 'darwin' || hyprland;
+    // Only a cursor-overlay viewer moves X11 off Chromium's capture; older
+    // viewers keep the embedded pointer and their existing timing.
+    const x11Native =
+      !hyprland && !handoff && cursorOverlay === true && (await x11CursorCapture(lease.display.id));
+    let nativeAvailable = process.platform === 'darwin' || hyprland || x11Native;
     if (!hyprland && !handoff) {
       nativeAvailable ||=
         process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
@@ -593,6 +603,7 @@ async function offer(
       (cursorOverlay === true &&
         (process.platform === 'darwin' ||
           (process.platform === 'win32' && nativeAvailable) ||
+          x11Native ||
           (hyprland && (await readLinuxCursorSupport()))));
     if (!current() || host !== currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
@@ -948,7 +959,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       cursorOverlay:
         process.platform === 'darwin' ||
         (process.platform === 'win32' && windowsAvailable) ||
-        Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())),
+        Boolean(enabled && nativeWayland() && (await readLinuxCursorSupport())) ||
+        Boolean(enabled && (await x11CursorCapture())),
       lockOnExit:
         process.platform === 'darwin' ||
         (process.platform === 'win32' && WINDOWS_PRIVACY_SCREEN_ENABLED) ||
@@ -1058,6 +1070,11 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         nativeSettings,
       );
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
+    }
+    if (cursorOverlay === true && (await x11CursorCapture(displayId))) {
+      const frame = await nativeCapture.frame(displayId, true, nativeSettings);
+      // A failed helper falls back to the screenshot below, pointer included.
+      if (frame) return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
     }
     const available = await sources(true).catch((error) => {
       if (error instanceof Error && error.message === 'DESKTOP_VIDEO_TIMEOUT') return [];
@@ -1271,8 +1288,10 @@ export function registerRemoteDesktopIpc(
   const linuxLayoutChanged = () => {
     if (remoteDesktop.changingDisplay || !remoteDesktop.displayId || liveSession) return;
     if (isX11Desktop()) {
-      // Another monitor moving changes the X root origin too. Drop queued input.
+      // Another monitor moving changes the X root origin too. Drop queued input,
+      // and restart root capture so its next frame uses the new rectangle.
       void remoteDesktop.releaseControl();
+      nativeCapture.stop();
       return;
     }
     if (!nativeWayland()) return;

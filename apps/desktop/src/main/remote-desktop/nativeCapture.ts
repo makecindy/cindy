@@ -18,6 +18,7 @@ import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 import { resolveLinuxCaptureBinary } from './linuxCapture';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import { linuxMonitor } from './linuxDesktop';
+import { isX11Desktop, x11InputGeometry } from './linuxInput';
 
 const log = createLogger('remote-desktop:native-capture');
 const exec = promisify(execFile);
@@ -166,6 +167,20 @@ export async function photographMacWindow(
   });
 }
 
+/** The X root pixel rectangle of one Electron display, shared with XTest input
+ * so pointer coordinates and cursor positions use the same mapping. Mixed
+ * scaling is ambiguous and keeps the existing Chromium capture. */
+export function x11CaptureDisplay(display: string): { output: string; scale: number } | null {
+  try {
+    const displays = screen.getAllDisplays();
+    const geometry = x11InputGeometry(displays, display);
+    const scale = displays.find((item) => String(item.id) === display)?.scaleFactor ?? 1;
+    return { output: `x11:${geometry.join(',')}`, scale };
+  } catch {
+    return null;
+  }
+}
+
 /** One capture child for the current lease. No sockets, files, or frame history.
  * macOS/Linux use user-session children; Windows uses the authorized SYSTEM broker.
  * No adapter keeps frame history on disk.
@@ -265,9 +280,13 @@ export class NativeDesktopCapture {
         : '';
     if (this.child && this.config !== config) this.stop();
     const linux = process.platform === 'linux';
+    // X11 displays keep Electron's numeric IDs; the helper reads root pixels.
+    const x11 = linux && isX11Desktop() && /^[0-9]{1,20}$/.test(display);
     if (
       linux
-        ? display !== WAYLAND_DISPLAY_ID && !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
+        ? !x11 &&
+          display !== WAYLAND_DISPLAY_ID &&
+          !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(display)
         : process.platform !== 'darwin' || !/^[0-9]{1,10}$/.test(display)
     )
       return null;
@@ -280,16 +299,21 @@ export class NativeDesktopCapture {
     try {
       const cold = !this.child;
       if (!this.child) {
-        const output = linux && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
+        const x11Display = x11 ? x11CaptureDisplay(display) : null;
+        if (x11 && !x11Display) return null;
+        const output =
+          linux && !x11 && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
         const executable = await binary();
         if (generation !== this.generation) return null;
         const quality = profile.jpegQuality;
         const args = linux
           ? [
               overlay ? 'cursor-overlay' : 'video',
-              String(output?.scale ?? screen.getAllDisplays()[0]?.scaleFactor ?? 1),
+              String(
+                x11Display?.scale ?? output?.scale ?? screen.getAllDisplays()[0]?.scaleFactor ?? 1,
+              ),
               String(Math.round(quality * 100)),
-              ...(output ? [output.name] : []),
+              ...(x11Display ? [x11Display.output] : output ? [output.name] : []),
             ]
           : overlay
             ? [

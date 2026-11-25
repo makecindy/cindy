@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { isX11Desktop } from './linuxInput';
 
 const exec = promisify(execFile);
 const binaryName = 'cindy-linux-desktop-capture';
@@ -20,6 +21,28 @@ export async function readLinuxCursorSupport(): Promise<boolean> {
     return false;
   }
 }
+let x11Ready: Promise<boolean> | null = null;
+/** X11 root capture without the pointer, plus XFIXES cursor metadata.
+ * A positive probe is kept for this run (the X session cannot change under a
+ * running app); a failed one is retried by the next caller. */
+export function readLinuxX11CaptureSupport(): Promise<boolean> {
+  if (!isX11Desktop()) return Promise.resolve(false);
+  x11Ready ??= (async () => {
+    try {
+      const { stdout } = await exec(await resolveLinuxCaptureBinary(), ['--x11-check'], {
+        timeout: 3000,
+        maxBuffer: 1024,
+      });
+      return stdout.trim() === 'ready';
+    } catch {
+      return false;
+    }
+  })().then((ready) => {
+    if (!ready) x11Ready = null;
+    return ready;
+  });
+  return x11Ready;
+}
 export function resolveLinuxCaptureBinary(): Promise<string> {
   if (app.isPackaged)
     return Promise.resolve(path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName));
@@ -30,6 +53,9 @@ export function resolveLinuxCaptureBinary(): Promise<string> {
     for (const name of [
       'main.c',
       'cursor.h',
+      'cursor_shape.h',
+      'jpeg.h',
+      'x11.h',
       'build.mjs',
       'wlr-screencopy-unstable-v1.xml',
       'ext-image-copy-capture-v1.xml',

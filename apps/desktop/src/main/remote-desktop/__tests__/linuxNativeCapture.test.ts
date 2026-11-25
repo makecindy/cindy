@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
+import { screen } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
@@ -100,4 +101,40 @@ it('parses a bounded Linux cursor frame and applies requested encoding quality',
   const frame = { jpeg: 'anBlZw==', cursor: null };
   child.stdout.write(JSON.stringify(frame) + '\n');
   await expect(pending).resolves.toEqual(frame);
+});
+// X11 cursor-free capture (docs/remote-desktop.md, X11 local cursor): the helper
+// must read the same root rectangle XTest clicks into, or the viewer's pointer
+// and the remote click land in different places. Mixed scaling has no single
+// mapping and must keep Chromium's capture instead of guessing.
+it('captures an X11 monitor by its root pixel rectangle and refuses mixed scaling', async () => {
+  vi.stubGlobal('process', {
+    ...process,
+    platform: 'linux',
+    env: { ...process.env, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: '' },
+  });
+  const left = { id: 1, scaleFactor: 2, bounds: { x: -960, y: 0, width: 960, height: 540 } };
+  const main = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 1280, height: 800 } };
+  const displays = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([left, main] as never);
+  try {
+    const { child, owner } = setup();
+    const pending = owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+    expect(h.spawn).toHaveBeenCalledWith(
+      '/capture',
+      ['cursor-overlay', '2', '80', 'x11:1920,0,2560,1600'],
+      { stdio: 'pipe' },
+    );
+    const frame = {
+      jpeg: 'anBlZw==',
+      cursor: { visible: true, x: 0.5, y: 0.5, width: 12, height: 12, hotX: 2, hotY: 1, png: 'iVBORw0KGgoA', shape: 'text' },
+    };
+    child.stdout.write(JSON.stringify(frame) + '\n');
+    await expect(pending).resolves.toEqual(frame);
+    owner.stop();
+    displays.mockReturnValue([{ ...left, scaleFactor: 1 }, main] as never);
+    await expect(owner.frame('2', true)).resolves.toBeNull();
+    expect(h.spawn).toHaveBeenCalledOnce();
+  } finally {
+    displays.mockRestore();
+  }
 });

@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include "cursor.h"
+#include "jpeg.h"
 #include "wlr-screencopy-unstable-v1.h"
+#include "x11.h"
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
@@ -8,13 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <turbojpeg.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
 /* Private, serial protocol: one 'f' request, one bounded base64 JPEG line.
  * The connection and shm buffer survive requests, but no frame history does.
  * Unsupported output layouts exit so the parent can use grim's composition.
+ * An `x11:<x>,<y>,<width>,<height>` output selects root-window capture of that
+ * pixel rectangle on an X11 session instead (see x11.h).
  */
 struct output_info {
   struct wl_output *output;
@@ -34,7 +37,7 @@ struct capture {
   void *pixels;
   unsigned char *scaled, *oriented;
   size_t size;
-  int overlay, quality, cursor_free;
+  int overlay, quality, cursor_free, x11;
   struct output_info output_info[32];
   const char *requested_output;
 };
@@ -287,17 +290,13 @@ static const unsigned char *oriented_pixels(struct capture *c, int *width,
   }
   return c->oriented;
 }
-static int send_jpeg(struct capture *c, tjhandle encoder) {
+static int send_jpeg(struct capture *c) {
   unsigned char *jpeg = NULL;
   unsigned long length = 0;
-  int format = (c->format == WL_SHM_FORMAT_XRGB8888 ||
-                c->format == WL_SHM_FORMAT_ARGB8888)
-                   ? TJPF_BGRX
-                   : TJPF_RGBX;
-  int flags = TJFLAG_FASTDCT;
-  if (c->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
-      (c->flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT))
-    flags |= TJFLAG_BOTTOMUP;
+  int bgrx = c->format == WL_SHM_FORMAT_XRGB8888 ||
+             c->format == WL_SHM_FORMAT_ARGB8888;
+  int bottom_up = c->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
+                  (c->flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT);
   int width, height, stride;
   const unsigned char *pixels = oriented_pixels(c, &width, &height, &stride);
   if (!pixels)
@@ -305,8 +304,9 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   int status = -1;
   for (int quality = c->quality ? c->quality : 65; quality >= 25;
        quality -= 20) {
-    if (tjCompress2(encoder, pixels, width, stride, height, format, &jpeg,
-                    &length, TJSAMP_420, quality, flags))
+    jpeg_release(jpeg);
+    if (jpeg_encode(pixels, width, stride, height, bgrx, bottom_up, quality,
+                    &jpeg, &length))
       goto done;
     if (length <= 1000000)
       break;
@@ -333,7 +333,9 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   line[count] = 0;
   if (c->overlay) {
     printf("{\"jpeg\":\"%s\",\"cursor\":", line);
-    if (c->cursor_free)
+    if (c->x11)
+      x11_cursor_json();
+    else if (c->cursor_free)
       cursor_json(c->width, c->height);
     else
       fputs("null", stdout);
@@ -345,13 +347,62 @@ static int send_jpeg(struct capture *c, tjhandle encoder) {
   status = ferror(stdout) || fflush(stdout) ? -1 : 0;
   free(line);
 done:
-  tjFree(jpeg);
+  jpeg_release(jpeg);
+  return status;
+}
+/* Same serial request loop as the Wayland path, over the X root window. */
+static int x11_main(struct capture *c) {
+  int status = 1;
+  if (x11_open(c->requested_output + 4) || jpeg_open())
+    goto done;
+  xc.scale = cc.scale;
+  c->x11 = 1;
+  c->transform = WL_OUTPUT_TRANSFORM_NORMAL;
+  c->format = xc.bgrx ? WL_SHM_FORMAT_XRGB8888 : WL_SHM_FORMAT_XBGR8888;
+  for (;;) {
+    alarm(10);
+    char command;
+    ssize_t n = read(STDIN_FILENO, &command, 1);
+    if (!n) {
+      status = 0;
+      break;
+    }
+    if (n != 1 || command != 'f')
+      break;
+    alarm(3);
+    if (x11_frame())
+      break;
+    if (c->overlay)
+      x11_cursor();
+    c->pixels = xc.image->data;
+    c->width = (uint32_t)xc.width;
+    c->height = (uint32_t)xc.height;
+    c->stride = (uint32_t)xc.image->bytes_per_line;
+    if (send_jpeg(c))
+      break;
+  }
+done:
+  /* The X image owns its pixels; never munmap them as a Wayland buffer. */
+  c->pixels = NULL;
+  free(c->scaled);
+  x11_close();
+  jpeg_close();
   return status;
 }
 int main(int argc, char **argv) {
   if (argc != 1 && argc != 4 && argc != 5 && argc != 2)
     return 2;
   struct capture c = {0};
+  if (argc == 2 && !strcmp(argv[1], "--x11-check")) {
+    /* Probe only: no image, cursor read or frame. */
+    alarm(3);
+    int ready = !x11_open(NULL) && !jpeg_open();
+    x11_close();
+    jpeg_close();
+    if (ready)
+      puts("ready");
+    return ready ? 0 : 1;
+  }
   int probe = argc == 2 && !strcmp(argv[1], "--cursor-check");
   if (argc == 2 && !probe)
     return 2;
@@ -367,6 +418,10 @@ int main(int argc, char **argv) {
     if (argc == 5)
       c.requested_output = argv[4];
   }
+  if (c.requested_output && !strncmp(c.requested_output, "x11:", 4)) {
+    alarm(3);
+    return x11_main(&c);
+  }
   /* Bound compositor stalls, blocked writes and orphaned idle children. No
    * files survive a signal exit: memfd and Wayland objects belong to this
    * process. */
@@ -377,7 +432,6 @@ int main(int argc, char **argv) {
   struct wl_registry *registry = wl_display_get_registry(c.display);
   wl_registry_add_listener(registry, &registry_listener, &c);
   int status = 1;
-  tjhandle encoder = NULL;
   if (wl_display_roundtrip(c.display) < 0 ||
       wl_display_roundtrip(c.display) < 0 || !c.shm || !c.manager || c.failed)
     goto done;
@@ -401,8 +455,7 @@ int main(int argc, char **argv) {
     goto done;
   if (c.overlay && cursor_begin(c.shm, c.output))
     goto done;
-  encoder = tjInitCompress();
-  if (!encoder)
+  if (jpeg_open())
     goto done;
   for (;;) {
     alarm(10);
@@ -438,13 +491,12 @@ int main(int argc, char **argv) {
       if (c.output_info[i].id == c.output_name &&
           c.output_info[i].transform != c.transform)
         c.failed = 1; // Layout changed during this capture; obtain fresh geometry.
-    if (c.failed || send_jpeg(&c, encoder))
+    if (c.failed || send_jpeg(&c))
       break;
   }
 done:
   cursor_destroy();
-  if (encoder)
-    tjDestroy(encoder);
+  jpeg_close();
   release_buffer(&c);
   free(c.scaled);
   free(c.oriented);
