@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/auth/AuthContext";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
@@ -164,16 +165,29 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const activeRef = useRef(false);
+  // In the background the route stays focused and the computer stays online for Device Link's exit grace period,
+  // but nobody sees the market: queued reads and automatic follow-up pages stop, and resume in the foreground.
+  // The ref closes the fence as soon as the app leaves the foreground, before the next render.
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
+  const foregroundRef = useRef(foreground);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      foregroundRef.current = next === "active";
+      setForeground(next === "active");
+    });
+    return () => subscription.remove();
+  }, []);
   /**
    * The one send fence for every market read (probe, pages, counts, detail): the plugins page is mounted and
-   * the market is shown on a focused, online computer. The client re-checks it right before a queued request
-   * leaves, so nothing queued before unmount or leaving the market goes out on the shared link.
+   * the market is shown on a focused, online computer while the app is in the foreground. The client re-checks
+   * it right before a queued request leaves, so nothing queued before unmount, leaving the market or going to
+   * the background goes out on the shared link.
    */
-  const readsOpen = () => mounted.current && activeRef.current;
+  const readsOpen = () => mounted.current && activeRef.current && foregroundRef.current;
   const client = useMemo<PluginManagementClient | null>(() => deviceId
     ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => readsOpen() && liveScope.current === scope })
     : null, [deviceId, invoke, scope]);
-  const active = visible && focused && online && !!client;
+  const active = visible && focused && online && foreground && !!client;
   activeRef.current = active;
 
   const [probe, setProbe] = useState<{ scope: string; status: "loading" | "supported" | "outdated" | "failed" }>();

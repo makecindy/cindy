@@ -99,9 +99,9 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     ...item.labelArgs,
     defaultValue: item.kind,
   });
-  // Pinned above the buttons: one short line per high-risk class, in the Host's order, so its height stays
-  // bounded however many bindings or methods a package declares. Several credential bindings collapse into one
-  // counted line; the full list is in the scrolled permissions.
+  // Pinned above the buttons: one short fixed line per high-risk class, in the Host's order, so its height stays
+  // bounded however many bindings or methods a package declares and however long their names are. Credential
+  // bindings use a fixed line (one, or a count); the full list is in the scrolled permissions.
   const pinned = granted.filter(isPinnedHighRiskPermission);
   const secretCount = pinned.filter((item) => item.key.startsWith("node:secret:")).length;
   const highRiskLines: string[] = [];
@@ -110,9 +110,12 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     const highRiskClass = item.key.startsWith("node:secret:") ? "node:secret" : item.key;
     if (seenClasses.has(highRiskClass)) continue;
     seenClasses.add(highRiskClass);
-    highRiskLines.push(highRiskClass === "node:secret" && secretCount > 1
-      ? t("plugins.management.permissions.nodeSecretCount", { count: secretCount })
-      : titleOf(item));
+    // Credential bindings never interpolate the package-declared name here (up to 64 characters, may contain
+    // line breaks): a long name could push "to the local Node program" past the two-line cap. The name and the
+    // allowed methods stay in the scrolled list.
+    highRiskLines.push(highRiskClass !== "node:secret" ? titleOf(item)
+      : secretCount > 1 ? t("plugins.management.permissions.nodeSecretCount", { count: secretCount })
+        : t("plugins.management.permissions.nodeSecretOne"));
   }
   return {
     title: facts.name + " · " + facts.version,

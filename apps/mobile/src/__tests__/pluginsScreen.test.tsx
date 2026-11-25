@@ -2239,6 +2239,29 @@ describe("market caches across two computers", () => {
     await settle(20);
     expect(requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts)).toHaveLength(1);
   });
+  // Codex review (d3fccdf7): in the background the route stays focused and the computer stays online during
+  // Device Link's exit grace period; an empty publisher page then kept chaining reads nobody could see.
+  it("stops chaining empty publisher pages while the app is in the background and resumes in the foreground", async () => {
+    const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let page = 0;
+    const requests = marketWire(async (request) => {
+      if (request.input?.read === "capabilities") return { catalogPaging: true };
+      if (request.input?.query?.counts) return { ...marketPage([]), counts: null };
+      if (++page === 1) await held;
+      return { ...marketPage([{ ...community, pluginId: `market/c${page}`, ghostId: `c${page}` }]), nextCursor: `cursor-${page}` };
+    });
+    const pages = () => requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts);
+    await openMarket();
+    await act(async () => { fixture.appStateListeners.forEach((listener) => listener("background")); });
+    await act(async () => { release(); });
+    await settle(20);
+    expect(pages()).toHaveLength(1);
+    await act(async () => { fixture.appStateListeners.forEach((listener) => listener("active")); });
+    await settle(20);
+    expect(pages().length).toBeGreaterThan(1);
+  });
   it("judges search pages by every source, so community results do not trigger extra reads", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -2616,6 +2639,96 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     expect(shownMarket().rowState(item)).not.toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
+  });
+  // Maintainer review 04:20: A (read after NOT_FOUND) is held; refresh B lands showing nothing; a newer refresh C is
+  // still in flight when A returns. B was replaced by C, so it must not conclude "not on this computer".
+  it("waits for the newest installed read when the facts after NOT_FOUND are replaced twice", async () => {
+    const readA = deferred(), readC = deferred();
+    let hold: "A" | "C" | null = null, began = false;
+    queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          // A and B answer without the plugin; C answers with it installed.
+          return managementSnapshot((request as any).read === "C");
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (hold && request !== "manifest" && request.actionId === "management:snapshot" && request.input?.read === "installed") {
+        const which = hold;
+        hold = null;
+        (request as any).read = which;
+        return which === "A" ? readA.promise : readC.promise;
+      }
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    hold = "A";
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(6);
+    // B: a plugin-change refresh lands with an empty list.
+    await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
+    await settle(6);
+    // C: a newer refresh is sent and stays in flight; then A returns.
+    hold = "C";
+    await act(async () => { void fixture.props.get("confirmation").controller.refresh(); });
+    await settle(6);
+    expect(hold).toBeNull();
+    await act(async () => { readA.release(); });
+    await settle(14);
+    expect(shownMarket()).toMatchObject({ installBusy: true });
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    // C lands with the plugin installed: the result follows the newest facts.
+    await act(async () => { readC.release(); });
+    await settle(14);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
+  });
+  // Maintainer review 04:20: a newer installed snapshot replaces the facts, so a market detail read on the older
+  // facts must not settle the result.
+  it("drops a market detail read on facts that a newer installed snapshot replaced", async () => {
+    const heldDetail = deferred();
+    let began = false, present = true, holdDetail = false;
+    queuedWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          return managementSnapshot(began && present);
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:begin": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+        case "management:operation": throw hostError("NOT_FOUND");
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    }, (request) => {
+      if (holdDetail && request !== "manifest" && request.actionId === "management:market-detail") {
+        holdDetail = false;
+        return heldDetail.promise;
+      }
+      return undefined;
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    holdDetail = true;
+    await act(async () => { void shownMarket().checkResult(); });
+    await settle(14);
+    // The facts after NOT_FOUND showed the same-id instance; its market detail is in flight. Then the instance
+    // is removed and a plugin-change refresh lands with the newer facts.
+    expect(holdDetail).toBe(false);
+    present = false;
+    await act(async () => { await fixture.props.get("confirmation").controller.refresh(); });
+    await settle(14);
+    await act(async () => { heldDetail.release(); });
+    await settle(14);
+    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
   });
   it("ignores a market detail from an earlier verification that arrives late", async () => {
     let verifying = false;

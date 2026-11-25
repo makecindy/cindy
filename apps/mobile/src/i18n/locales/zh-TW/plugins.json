@@ -306,7 +306,8 @@
       "mcpUi": "可在對話中顯示互動頁面",
       "mcpUiDomains": "頁面可連線網域：{{domains}}",
       "uiPageAccess": "頁面：{{pages}}\n頁面可連線網域：{{domains}}\n頁面可呼叫工具：{{tools}}",
-      "nodeSecretCount": "可將 {{count}} 個已儲存憑證提供給本機 Node 程式"
+      "nodeSecretCount": "可將 {{count}} 個已儲存憑證提供給本機 Node 程式",
+      "nodeSecretOne": "可將 1 個已儲存憑證提供給本機 Node 程式"
     },
     "releaseChanged": "可用版本已變更，請查看更新後的版本，再選擇安裝。",
     "settingsUnavailable": "插件設定載入失敗，請重新載入設定後再試。",

@@ -1351,8 +1351,13 @@ describe("pinned high-risk permission", () => {
   const cases = [
     ["a first install with Node", installOf([notify, node]), ["plugins.management.permissions.nodeRuntime"],
       ["plugins.management.permissions.nodeRuntimeDetail"]],
-    ["an update that only adds a credential binding", secretOnlyUpdate, ["plugins.management.permissions.nodeSecret"],
+    ["an update that only adds a credential binding", secretOnlyUpdate, ["plugins.management.permissions.nodeSecretOne"],
       ["plugins.management.permissions.nodeSecretDetail", "upload_with_token"]],
+    // Maintainer review 04:09: a long, multi-line package-declared name stays out of the two-line summary.
+    ["an update that adds one binding with a long multi-line name",
+      { ...secretOnlyUpdate, added: [{ ...secret, labelArgs: { name: "Production deployment token\nfor the shared release pipeline\n(rotated weekly)" } }] },
+      // (This stand-in translator drops arguments; the name itself is checked in pluginManagement.test.ts.)
+      ["plugins.management.permissions.nodeSecretOne"], ["plugins.management.permissions.nodeSecretDetail", "upload_with_token"]],
     ["a first install without Node but with Agent high-risk items", installOf([errand, background, notify]),
       ["plugins.management.permissions.agentErrand", "plugins.management.permissions.agentBackground"],
       ["plugins.management.permissions.agentErrandDetail", "plugins.management.permissions.agentBackgroundDetail"]],

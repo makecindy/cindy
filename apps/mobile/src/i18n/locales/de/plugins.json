@@ -306,7 +306,8 @@
       "mcpUi": "Kann interaktive Seiten in Unterhaltungen anzeigen",
       "mcpUiDomains": "Domains, mit denen sich die Seiten verbinden können: {{domains}}",
       "uiPageAccess": "Seiten: {{pages}}\nDomains, mit denen sich die Seiten verbinden können: {{domains}}\nTools, die die Seiten aufrufen können: {{tools}}",
-      "nodeSecretCount": "Kann {{count}} gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen"
+      "nodeSecretCount": "Kann {{count}} gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen",
+      "nodeSecretOne": "Kann gespeicherte Zugangsdaten dem lokalen Node-Programm bereitstellen"
     },
     "releaseChanged": "Die verfügbare Version hat sich geändert. Prüfe die aktualisierte Version vor der Installation.",
     "settingsUnavailable": "Die Plugin-Einstellungen konnten nicht geladen werden. Lade die Einstellungen neu, um es erneut zu versuchen.",

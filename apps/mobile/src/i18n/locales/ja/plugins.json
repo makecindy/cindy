@@ -306,7 +306,8 @@
       "mcpUi": "会話にインタラクティブページを表示できる",
       "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
       "uiPageAccess": "ページ：{{pages}}\nページが接続できるドメイン：{{domains}}\nページが呼び出せるツール：{{tools}}",
-      "nodeSecretCount": "保存済みの認証情報 {{count}} 件をローカル Node プログラムに渡せます"
+      "nodeSecretCount": "保存済みの認証情報 {{count}} 件をローカル Node プログラムに渡せます",
+      "nodeSecretOne": "保存済みの認証情報 1 件をローカル Node プログラムに渡せます"
     },
     "releaseChanged": "利用可能なバージョンが変更されました。更新後のバージョンを確認してからインストールしてください。",
     "settingsUnavailable": "プラグイン設定を読み込めませんでした。設定を再読み込みしてお試しください。",

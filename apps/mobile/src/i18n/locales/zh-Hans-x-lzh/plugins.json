@@ -304,7 +304,8 @@
       "mcpUi": "可于言谈中示交互之页",
       "mcpUiDomains": "页可连之网域：{{domains}}",
       "uiPageAccess": "页：{{pages}}\n页可连之网域：{{domains}}\n页可唤之工具：{{tools}}",
-      "nodeSecretCount": "可将已存之凭证 {{count}} 件交予本机 Node 程序"
+      "nodeSecretCount": "可将已存之凭证 {{count}} 件交予本机 Node 程序",
+      "nodeSecretOne": "可将已存之凭证一件交予本机 Node 程序"
     },
     "releaseChanged": "可用之版已变，请观更新后之版，再择安装。",
     "settingsUnavailable": "法器规制加载未成，请重载规制后再试。",

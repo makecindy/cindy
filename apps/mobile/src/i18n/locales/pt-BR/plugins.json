@@ -308,7 +308,8 @@
       "mcpUi": "Pode exibir páginas interativas nas conversas",
       "mcpUiDomains": "Domínios aos quais as páginas podem se conectar: {{domains}}",
       "uiPageAccess": "Páginas: {{pages}}\nDomínios aos quais as páginas podem se conectar: {{domains}}\nFerramentas que as páginas podem chamar: {{tools}}",
-      "nodeSecretCount": "Pode fornecer credenciais armazenadas ao programa Node local ({{count}})"
+      "nodeSecretCount": "Pode fornecer credenciais armazenadas ao programa Node local ({{count}})",
+      "nodeSecretOne": "Pode fornecer uma credencial armazenada ao programa Node local"
     },
     "releaseChanged": "A versão disponível mudou. Revise a versão atualizada antes de instalar.",
     "settingsUnavailable": "Não foi possível carregar as configurações do plugin. Recarregue as configurações para tentar novamente.",

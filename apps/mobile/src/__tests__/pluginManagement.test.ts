@@ -831,7 +831,7 @@ describe('confirmation sheet wording', () => {
     const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
     // Pinned above the buttons: a heading and one short line per high-risk class, in the Host's order.
     expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle',
-      lines: ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeMcp'] });
+      lines: ['plugins.management.permissions.nodeSecretOne', 'plugins.management.permissions.nodeMcp'] });
     // The scrolled list keeps every full explanation (credential names and methods included), high-risk items first.
     expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
       ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeSecretDetail\n\nrun'],
@@ -864,9 +864,23 @@ describe('confirmation sheet wording', () => {
     const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
       facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
         unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
-    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeSecret(name=API token)'] });
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeSecretOne'] });
     expect(view.permissions[0]).toEqual({ title: 'plugins.management.permissions.added · plugins.management.permissions.nodeSecret(name=API token)',
       detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' });
+  });
+  // Maintainer review 04:09: the Host accepts binding names up to 64 characters, line breaks included. Interpolated
+  // into the two-line summary, a long name pushed "to the local Node program" out of view while Allow stayed enabled.
+  it('keeps the package-declared name out of the pinned line for an update that adds one binding with a long name', () => {
+    const name = 'Production deployment token\nfor the shared release pipeline\n(rotated every Monday)';
+    const secret = { ...item('node:secret:deploy:worker.cjs:publish', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name }, detail: 'publish' };
+    const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
+      facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
+        unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeSecretOne']);
+    expect(JSON.stringify(view.highRisk)).not.toContain('Production');
+    // The full name and its method stay in the scrolled list.
+    expect(view.permissions[0].title).toContain(name);
+    expect(view.permissions[0].detail).toContain('publish');
   });
   it('pins Agent high-risk permissions in a first install without Node', () => {
     const view = pluginConsentPresentation(install({}, [item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail'),
