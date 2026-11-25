@@ -177,6 +177,20 @@ describe('CloudCompanionOfflineView', () => {
     expect(maker.takeOverCompanion).toHaveBeenCalledTimes(2);
     expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia');
   });
+  // #12843: the continue button used to look dead when the only problem was a missing companion
+  // model; the view must name that cause instead of the generic failure.
+  it('names a missing companion model when continuing here cannot start', async () => {
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [] });
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'FAILED', reason: 'COMPANION_MODEL_UNAVAILABLE' });
+    resetCompanionCloudStoreForTests(cloud);
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.continueHere' }));
+    expect(await screen.findByText(/^bots.cloud.takeOverModelMissing/)).toBeTruthy();
+  });
+
   // #10112, integration tier: enter through the failed companion, edit the complete
   // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
   it('corrects the rejected profile through its real form and preserves edits when saving fails', async () => {

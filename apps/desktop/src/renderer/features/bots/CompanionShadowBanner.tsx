@@ -38,6 +38,8 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
       if (result.ok) { await ensureBotProfilesLoaded(true).catch(() => undefined); return; }
       conflict.report(result);
       if (result.code === 'HOME_CONFLICT') toast.info(t('bots.cloud.takeOverConflict', { name, device }));
+      else if (result.reason === 'COMPANION_MODEL_UNAVAILABLE') setError(t('bots.cloud.takeOverModelMissing', {
+        name, defaultValue: 'This computer has no usable companion model, so {{name}} cannot continue here. Connect a model provider or choose a companion model in Settings, then try again.' }));
       else setError(t(result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline' : result.code === 'NOT_ENABLED'
         ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
           ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed', { name }));

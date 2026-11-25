@@ -12534,6 +12534,7 @@
       "takeOverConflict": "{{name}} has already moved to “{{device}}”",
       "takeOverOffline": "Can’t reach the server, so {{name}} can’t continue here right now",
       "takeOverFailed": "Couldn’t take over {{name}} on this computer",
+      "takeOverModelMissing": "This computer has no usable companion model, so {{name}} cannot continue here. Connect a model provider or choose a companion model in Settings, then try again.",
       "profileIdentityTooLong": "The cloud persona exceeds {{limit}} characters and cannot be restored. Shorten and sync it, then retry. Existing data has been preserved.",
       "profileUserTooLong": "The cloud user context exceeds {{limit}} characters and cannot be restored. Shorten and sync it, then retry. Existing data has been preserved.",
       "localCindyConflict": "The computer taking over already has another Cindy. Manage that Cindy in its settings, or choose a different main computer",

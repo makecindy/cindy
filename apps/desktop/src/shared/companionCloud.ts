@@ -71,6 +71,8 @@ export type CompanionCloudActionResult =
       conflictingBotId?: string; conflictingDeviceId?: string | null;
       /** Optional detail of FAILED; older clients retain the existing generic failure. */
       profileFailure?: BotProfileSourceFailure;
+      /** Actionable setup a FAILED take-over is waiting on; older hosts omit it. */
+      reason?: 'COMPANION_MODEL_UNAVAILABLE';
       /** Only on the local recovery editor response; no source text in broadcasts. */
       profileRepairError?: 'changed' | 'invalid' | 'backup' };
 

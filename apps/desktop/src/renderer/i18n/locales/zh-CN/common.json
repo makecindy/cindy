@@ -12489,6 +12489,7 @@
       "takeOverConflict": "{{name}} 已经换到「{{device}}」继续了",
       "takeOverOffline": "连不上服务器，{{name}} 暂时无法在这台电脑继续",
       "takeOverFailed": "未能在这台电脑上接手 {{name}}",
+      "takeOverModelMissing": "这台电脑还没有可用的伙伴模型，所以 {{name}} 无法在这里接手。请先在设置里连接一个模型供应商或选择伙伴模型，然后重试。",
       "profileIdentityTooLong": "云端人格资料超过 {{limit}} 字符，无法接手。请缩短资料并同步后重试；现有资料已保留。",
       "profileUserTooLong": "云端用户资料超过 {{limit}} 字符，无法接手。请缩短资料并同步后重试；现有资料已保留。",
       "localCindyConflict": "接手的电脑上已有另一位 Cindy。请先在那位 Cindy 的设置中处理，或选择其他主力电脑",
