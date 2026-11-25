@@ -29,6 +29,17 @@ import { committedCodexSourceSwitch, createPendingCredentialSwitchRouteReader, c
 import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
 import { withSendToSessionLock } from '../sendToSessionLock.js';
 
+const sourceSwitchStore = vi.hoisted(() => ({
+  record: vi.fn(async () => {}),
+  matches: vi.fn(() => false),
+  consume: vi.fn(async () => {}),
+}));
+vi.mock('../sourceSwitchStore.js', () => ({
+  recordSourceSwitch: sourceSwitchStore.record,
+  matchesSourceSwitch: sourceSwitchStore.matches,
+  consumeSourceSwitch: sourceSwitchStore.consume,
+}));
+
 const touchedSessions = new Set<string>();
 
 afterEach(() => {
@@ -929,5 +940,74 @@ describe('the desktop pending switch service on a migrated database', () => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+
+// 挂起的换源在回合结束真正落库时才写换源记录：写早了会让还没生效的选择偷跑，
+// 写漏了重启后或延后生效后就没有交接（2026-11-25 复核意见）。
+describe('deferred source switch landing', () => {
+  async function landDeferredSwitch(input: { beforeProvider: string; afterProvider: string }): Promise<{
+    record: typeof sourceSwitchStore.record; sessionId: string;
+  }> {
+    const dir = mkdtempSync(path.join(tmpdir(), 'deferred-source-switch-'));
+    const file = path.join(dir, 'cindy.db');
+    const vec = process.platform === 'darwin' ? 'dylib' : process.platform === 'win32' ? 'dll' : 'so';
+    configureMigrationRuntime({ drizzleDir: fileURLToPath(new URL('../../../../drizzle', import.meta.url)), isPackaged: true });
+    configureSqliteVecExtPath(fileURLToPath(new URL(`../../../../native/sqlite-vec/${process.platform}-${process.arch}/vec0.${vec}`, import.meta.url)));
+    const db = createBetterSqliteDatabase(file);
+    expect(loadSqliteVec(db).loaded).toBe(true);
+    await runMigrations(db, file);
+    const client = createDbClientForHandle({ db, drizzle: drizzle(db, { schema }) });
+    setCurrentDbClient(client, 'deferred-source-switch');
+    const sessionId = rememberSession(`deferred-source-switch-${input.afterProvider}`);
+    try {
+      const now = Date.now();
+      await getDbClient().drizzle.insert(schema.sessions).values({ id: sessionId, model: 'gpt-old', effort: 'high',
+        agentKind: 'codex', providerId: input.beforeProvider, createdAt: now, updatedAt: now });
+      const views = [{ id: 'openai', connected: true, agents: ['codex'], source: 'user', routing: { codex: {} },
+        models: { codex: [{ id: 'gpt-new', efforts: [], defaultEffort: null, supportsFastMode: false }] } }];
+      const service = createPendingCredentialSwitchService({
+        maker: { listActiveSessions: () => [], closeSession: async () => {} },
+        isSessionInTurn: () => false,
+        applyPiPendingSelection: vi.fn(),
+        broadcastToAllWindows: vi.fn(),
+        inputCoordinator: { wakeSession: vi.fn() },
+        resolveLenientSessionRoute: async (_agent, model, providerId) => ({ model, providerId, degraded: false }),
+        getSessionDbAgentKind: () => 'codex',
+        getDesktopProviderService: () => ({ listProviders: async () => views }) as never,
+        resolveConfiguredContextWindow: () => null,
+        agentInputCoordinatorHolder: { refreshQueuedRoute: vi.fn() },
+        broadcastSessionPatched: vi.fn(),
+        log: { debug() {}, info() {}, warn() {}, error: vi.fn() } as never,
+      });
+      sourceSwitchStore.record.mockClear();
+      await registerPendingCredentialSwitchWith({
+        pendingCredentialSwitchHolder: service,
+        agentInputCoordinatorHolder: { wakeSession: vi.fn() },
+        getSessionDbAgentKind: () => 'codex',
+        getMaker: () => ({ getSession: () => null }) as never,
+      }, sessionId, { model: 'gpt-new', providerId: input.afterProvider,
+        deferredSelection: { agentKind: 'codex' as const, effort: null, fastMode: false, clearScheduledBaseline: false } });
+      await service.onTurnSettled(sessionId);
+      service.clear(sessionId);
+      expect(db.prepare('SELECT provider_id AS providerId FROM sessions WHERE id = ?').get(sessionId))
+        .toEqual({ providerId: input.afterProvider });
+      return { record: sourceSwitchStore.record, sessionId };
+    } finally {
+      clearCurrentDbClient(client);
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('records the switch only after the deferred route commits', async () => {
+    const { record, sessionId } = await landDeferredSwitch({ beforeProvider: 'openai-old', afterProvider: 'openai' });
+    expect(record).toHaveBeenCalledExactlyOnceWith(sessionId, 'openai');
+  });
+
+  it('does not record a deferred model change that stays on the same source', async () => {
+    const { record } = await landDeferredSwitch({ beforeProvider: 'openai', afterProvider: 'openai' });
+    expect(record).not.toHaveBeenCalled();
   });
 });
