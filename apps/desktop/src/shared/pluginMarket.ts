@@ -53,8 +53,8 @@ export interface PluginMarketItem {
   sourceIdentity?: PluginMarketSourceIdentity;
   /**
    * 这台电脑上当前已装实例的来源标识（同 `sourceIdentity.sourceId` 的算法，由安装账本记录的来源指纹
-   * 生成）。只在已装实例存在、账本记录为已安装且属于本条目的 `pluginId` 时给出。控制端核实回执过期的
-   * 安装时，要求它与原尝试确认回执里的 `originSource.sourceId` 完全相等。
+   * 生成）。只在已装实例存在、账本记录为已安装且属于本条目的 `pluginId` 时给出。它只说明「来自哪里」，
+   * 用于确认前的来源比对与换源判断；回执过期后核实「是不是这次操作」用 `installedOperationId`（契约 V2.9）。
    */
   installedSourceId?: string;
   /**

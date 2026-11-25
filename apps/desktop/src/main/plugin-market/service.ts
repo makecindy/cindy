@@ -3126,7 +3126,7 @@ export class PluginMarketService {
     const iconKey = entry.iconKey;
     const { sourceIdentity } = entry;
     // 已装实例的来源：取自这份安装记录（落位时写下的来源标识），只在该实例确由本条目的 pluginId 装入、
-    // 且磁盘上的包仍是记录里那份时给出。控制端核实回执过期的安装时与原尝试的 originSource.sourceId 比对。
+    // 且磁盘上的包仍是记录里那份时给出。它只说明来自哪里；回执过期后的核实用 installedOperationId（契约 V2.9）。
     const installedSourceId = ghost && record?.installed && record.pluginId === pluginId && identity &&
       verifyInstalledMarketManifest(record, identity)
       ? installedSourceIdOf(record, entry.sourceIds)
