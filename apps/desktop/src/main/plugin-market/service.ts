@@ -155,7 +155,7 @@ import {
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
 import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
 import { MarketSourceManager } from './sources/index.js';
-import { createMarketSourceIdOf, SOURCE_ID_KEY_FILE } from './sources/sourceId.js';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from './sources/sourceId.js';
 import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
@@ -623,27 +623,39 @@ function isGhostBusy(
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
+/** 同一 owner 当前密钥下的来源标识视图（见 sources/sourceId.ts）。只有同一 keyId 算出的标识才能比较。 */
+interface CustomSourceIds {
+  keyId: string | null;
+  /** 本地来源的标识只由来源指纹决定，可按当前密钥现算。 */
+  localSourceIdOf: (sourceKey: string) => string | null;
+}
+
+function customSourceIdsOf(manager: MarketSourceManager): CustomSourceIds {
+  return { keyId: manager.sourceKeyId(), localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey) };
+}
+
 /**
- * 已装实例的来源标识，取自安装记录的 `sourceIdBinding`：绑定的 `sourceKey` 与 raw manifest 摘要必须仍等于
- * 记录当前的值，否则缺省（防止某条写入保留了旧标识、来源或包却已变）。没有绑定的旧记录：本地来源由记录的
- * 来源指纹现算（不涉及 git 改写，结果等价）；Git 来源缺省，控制端按未确认处理。
+ * 已装实例在当前密钥下的来源标识，取自安装记录的 `sourceIdBinding`：绑定的 `sourceKey` 与 raw manifest 摘要
+ * 必须仍等于记录当前的值，且 `keyId` 等于当前密钥，否则缺省（防止某条写入保留了旧标识、来源或包却已变；
+ * 密钥重建后旧绑定一律无法核实，而不是「来源不同」）。本地来源在绑定缺省或密钥换过时由记录的来源指纹现算
+ * （不涉及 git 改写，结果等价）；Git 来源缺省，控制端按未确认处理，换源判断也不成立。
  */
 function installedSourceIdOf(
   record: PluginMarketInstallationRecord,
-  localSourceIdOf: (sourceKey: string) => string | null,
+  sourceIds: CustomSourceIds,
 ): string | null {
   const binding: unknown = record.sourceIdBinding;
   if (binding !== undefined) {
     if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return null;
     const value = binding as Record<string, unknown>;
-    return isPluginMarketSourceId(value.sourceId) &&
+    const bound = isPluginMarketSourceId(value.sourceId) &&
       typeof record.sourceKey === 'string' && value.sourceKey === record.sourceKey &&
-      typeof record.rawManifestSha256 === 'string' && value.rawManifestSha256 === record.rawManifestSha256
-      ? value.sourceId
-      : null;
+      typeof record.rawManifestSha256 === 'string' && value.rawManifestSha256 === record.rawManifestSha256;
+    if (!bound) return null;
+    if (sourceIds.keyId && value.keyId === sourceIds.keyId) return value.sourceId as string;
   }
   return record.source === 'local-market' && typeof record.sourceKey === 'string' && record.sourceKey
-    ? localSourceIdOf(record.sourceKey)
+    ? sourceIds.localSourceIdOf(record.sourceKey)
     : null;
 }
 
@@ -655,8 +667,8 @@ interface CustomMarketEntry {
   sourceIdentity: PluginMarketSourceIdentity | null;
   /** 同一份配置与缓存版本的不透明来源标识（展示身份生成不出时仍可能有）。 */
   sourceId: string | null;
-  /** 同一 owner 密钥的本地来源标识计算器；旧账本记录没有存标识时，本地来源按记录的来源指纹现算。 */
-  localSourceIdOf: (sourceKey: string) => string | null;
+  /** 同一 owner 当前密钥下的来源标识视图；已装记录的绑定只有 keyId 相同才能与候选比较。 */
+  sourceIds: CustomSourceIds;
 }
 
 interface CustomMarketDiscovery {
@@ -2552,7 +2564,7 @@ export class PluginMarketService {
               plugin,
               sourceIdentity: discovered.sourceIdentity,
               sourceId: discovered.sourceId,
-              localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
+              sourceIds: customSourceIdsOf(manager),
               iconKey: await customMarketIconKey(
                 owner,
                 discovered.config,
@@ -2646,7 +2658,7 @@ export class PluginMarketService {
         }
         // 同一路由（同一配置）下实际来源是否已变：已装实例的标识取自安装记录，候选取自这份打包所用的缓存版本。
         const installedSourceIdAtReview = matchesSelectedRoute && currentRecord
-          ? installedSourceIdOf(currentRecord, (key) => manager.localSourceIdOf(key))
+          ? installedSourceIdOf(currentRecord, customSourceIdsOf(manager))
           : null;
         const sourceSwitch = isCustomSourceSwitch(installedSourceIdAtReview, discovered.sourceId);
         if (automatic && sourceSwitch) throw new CustomSourceSwitchConsentRequiredError();
@@ -2685,8 +2697,9 @@ export class PluginMarketService {
           // 不在确认前按市场名重读（可能已被同名来源替换）。beforeCommit 复核 sourceKey，来源被换即
           // 拒绝，所以确认展示的就是随后安装的来源。
           sourceIdentity: discovered.sourceIdentity,
-          // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要一起写进账本。
+          // 同一份配置与缓存版本的来源标识；落位后与这份包的 raw manifest 摘要、算出它的密钥标识一起写进账本。
           sourceId: discovered.sourceId,
+          sourceIdKeyId: manager.sourceKeyId(),
           sourceSwitch,
           assertCustomApprovalStateUnchanged,
         };
@@ -2703,6 +2716,7 @@ export class PluginMarketService {
           sourceType,
           sourceIdentity,
           sourceId,
+          sourceIdKeyId,
           sourceSwitch,
           assertCustomApprovalStateUnchanged,
         } = packedAttempt;
@@ -2790,16 +2804,18 @@ export class PluginMarketService {
             if (current && !routeStillMatches && options.allowSourceReplacement !== true) {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin source changed');
             }
-            // 提交前再按现读的安装记录比较实际来源：后台路径一律不换源；显式路径只放行确认时已提示过的换源。
-            if (
-              routeStillMatches && record &&
-              isCustomSourceSwitch(installedSourceIdOf(record, (key) => manager.localSourceIdOf(key)), sourceId) &&
-              (automatic || !sourceSwitch)
-            ) {
+            // 提交前再按现读的安装记录比较实际来源（同一密钥下两边都可核实且不相等）：后台路径一律不换源；
+            // 显式路径只放行确认时已提示过的换源。
+            const actualSourceSwitch = Boolean(routeStillMatches && record &&
+              isCustomSourceSwitch(installedSourceIdOf(record, customSourceIdsOf(manager)), sourceId));
+            if (actualSourceSwitch && (automatic || !sourceSwitch)) {
               if (automatic) throw new CustomSourceSwitchConsentRequiredError();
               throwIpcError('PRECONDITION_FAILED', 'The installed Plugin came from another source');
             }
-            sourceChanged = Boolean(current && !routeStillMatches);
+            // 换源事务（运行时的空闲检查、旧账号与数据隔离归档）：路由换了，或同一路由下这里核实到的实际换源
+            // （用户已在确认里看到）。旧记录没有绑定、候选无法核实或密钥换过时 actualSourceSwitch 为 false，
+            // 按同源更新保留数据。
+            sourceChanged = Boolean(current && (!routeStillMatches || actualSourceSwitch));
           },
           expectedInstalledApproval: options.expectedInstalledApproval,
           assertCurrent: assertScope,
@@ -2878,8 +2894,8 @@ export class PluginMarketService {
                 rawManifestSha256: evidence.rawManifestSha256,
                 // 这份包取自的来源标识（打包所在租约里的同一份配置与缓存版本）。显式安装、后台自动更新、
                 // 换源都经这里整条重写，标识随新包更新；绑定 sourceKey 与 raw 摘要，投影时对不上即缺省。
-                ...(sourceId
-                  ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256 } }
+                ...(sourceId && sourceIdKeyId
+                  ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256, keyId: sourceIdKeyId } }
                   : {}),
               });
             });
@@ -2996,7 +3012,7 @@ export class PluginMarketService {
             plugin,
             sourceIdentity,
             sourceId,
-            localSourceIdOf: (sourceKey) => manager.localSourceIdOf(sourceKey),
+            sourceIds: customSourceIdsOf(manager),
             iconKey: await customMarketIconKey(owner, config, plugin, iconProjectionGeneration),
           });
         }
@@ -3062,7 +3078,7 @@ export class PluginMarketService {
     // 且磁盘上的包仍是记录里那份时给出。控制端核实回执过期的安装时与原尝试的 originSource.sourceId 比对。
     const installedSourceId = ghost && record?.installed && record.pluginId === pluginId && identity &&
       verifyInstalledMarketManifest(record, identity)
-      ? installedSourceIdOf(record, entry.localSourceIdOf)
+      ? installedSourceIdOf(record, entry.sourceIds)
       : null;
     // 同一路由下候选的实际来源与已装的不同（两边都可核实）：不作为可静默套用的更新，标成等待用户确认。
     const sourceSwitch = matchesUpdateRoute && isCustomSourceSwitch(installedSourceId, entry.sourceId);
@@ -3128,7 +3144,7 @@ export class PluginMarketService {
     return new MarketSourceManager({
       store: this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json')),
       cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
-      sourceIdOf: createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_FILE)),
+      sourceIdOf: createMarketSourceIdOf(ownerScopedUserDataPath('plugin-market', SOURCE_ID_KEY_DIR)),
     });
   }
 

@@ -390,7 +390,7 @@ export function RemotePluginCatalogSource({
                   {t(pluginSourceWarningKey(consent.installationSource)!)}
                 </p>}
                 <GhostInstallConsentContent facts={consent.facts} origin={consent.origin} communityMarket={consent.communityMarket}
-                  capabilityOnly={consent.purpose === 'ui-capability'} />
+                  capabilityOnly={consent.purpose === 'ui-capability'} originSourceChanged={consent.originSourceChanged === true} />
               </>,
               confirmText: t(
                 consent.purpose === 'ui-capability' ? 'newChat.pluginUi.enable' : consent.facts.kind === 'install'

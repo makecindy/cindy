@@ -109,10 +109,15 @@ function ConsentSection({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false }: {
+export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false, originSourceChanged = false }: {
   facts: GhostInstallConsentFacts; origin?: GhostInstallConsentRequest['origin'];
   communityMarket?: GhostInstallConsentRequest['communityMarket'];
   capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
+  /**
+   * 自定义市场更新的实际来源与已装的不同（确认后旧账号与数据隔离保存）。本机确认、电脑作远程端的确认与
+   * 分享替换共用这段内容，调用方必须原样传入请求里的 `originSourceChanged`，否则远程用户看不到在换源。
+   */
+  originSourceChanged?: boolean;
 }) {
   const { t } = useTranslation();
   if (facts.kind === 'install') {
@@ -147,6 +152,11 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
   }
   return (
     <div>
+      {origin === 'custom-market' && originSourceChanged === true ? (
+        <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">
+          {t('settings.ghosts.installConsent.originSourceChanged')}
+        </p>
+      ) : null}
       <p className="text-13 leading-5 text-[var(--confirm-desc)]">
         {capabilityOnly ? null : t(replacement ? 'sharing.localReplaceNotice' : 'settings.ghosts.installConsent.updateDescription')}
       </p>
@@ -254,8 +264,6 @@ export function GhostInstallConsentHost() {
                 content: <>
                   {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
                     <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
-                  {request.origin === 'custom-market' && request.originSourceChanged && facts.kind === 'update' &&
-                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t('settings.ghosts.installConsent.originSourceChanged')}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
@@ -263,7 +271,8 @@ export function GhostInstallConsentHost() {
                     {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
                   </div>}
                   <GhostInstallConsentContent facts={facts} origin={request.origin} communityMarket={request.communityMarket} capabilityOnly={capabilityOnly}
-                    replacement={replacement} sourceChanged={request.target?.sourceChanged} />
+                    replacement={replacement} sourceChanged={request.target?.sourceChanged}
+                    originSourceChanged={request.originSourceChanged === true} />
                 </>,
                 maxWidth: 460,
                 // 来源行可能带最长 256 字符、无空格的仓库标识，必须可断行，不能撑宽弹窗。

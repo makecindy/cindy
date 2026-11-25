@@ -670,7 +670,7 @@ describe('PluginMarketLedger', () => {
   it('keeps custom records carrying the optional source id binding, well-formed or not, across a rewrite', () => {
     const h = harness();
     const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
-    const binding = { sourceId: 'AbCdEfGhIjKlMnOpQrStUv', sourceKey: 'k', rawManifestSha256: 'c'.repeat(64) };
+    const binding = { sourceId: 'AbCdEfGhIjKlMnOpQrStUv', sourceKey: 'k', rawManifestSha256: 'c'.repeat(64), keyId: 'AbCdEfGhIjKl' };
     h.ledger.upsertInstallation(record({ ghostId: 'bound', pluginId: 'custom:team-lib/bound', source: 'local-market',
       sourceKey: 'k', rawManifestSha256: 'c'.repeat(64), sourceIdBinding: binding }));
     h.ledger.upsertInstallation(record({ ghostId: 'broken', pluginId: 'custom:team-lib/broken', source: 'git-market',

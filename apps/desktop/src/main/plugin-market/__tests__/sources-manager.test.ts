@@ -895,7 +895,7 @@ describe('MarketSourceManager source identity', () => {
       store: new MarketSourceStore(path.join(root, 'sources.v1.json')),
       cloneRoot: path.join(root, 'sources'),
       homeDir: root,
-      sourceIdOf: createMarketSourceIdOf(path.join(root, 'plugin-market', 'source-id.key')),
+      sourceIdOf: createMarketSourceIdOf(path.join(root, 'plugin-market', 'source-id')),
       ...(gitExecutor ? { gitExecutor } : {}),
     });
   }
@@ -939,8 +939,8 @@ describe('MarketSourceManager source identity', () => {
   }
   const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
   /** 生产里 MarketSourceManager 在发现与取包前调用 prepare()；直接用计算器的用例同样先备好密钥。 */
-  async function preparedSourceIdOf(keyPath: string) {
-    const sourceIdOf = createMarketSourceIdOf(keyPath);
+  async function preparedSourceIdOf(keyDir: string) {
+    const sourceIdOf = createMarketSourceIdOf(keyDir);
     await sourceIdOf.prepare?.();
     return sourceIdOf;
   }
@@ -963,7 +963,7 @@ describe('MarketSourceManager source identity', () => {
 
   it('gives two ports of one host different source ids', async () => {
     const root = makeRoot();
-    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id.key'));
+    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id'));
     const sourceKey = marketSourceKey({ type: 'git', url: 'https://git.example.test/acme/plugins.git', sparsePaths: [] });
     const at = (port: number) => sourceIdOf({ kind: 'git', sourceKey,
       address: pluginMarketFetchAddress(`https://git.example.test:${port}/acme/plugins.git`)! });
@@ -975,7 +975,7 @@ describe('MarketSourceManager source identity', () => {
   // resolve per login user, so the user is part of the source (only inside the local HMAC input).
   it('gives the same relative scp path under two SSH users different source ids', async () => {
     const root = makeRoot();
-    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id.key'));
+    const sourceIdOf = await preparedSourceIdOf(path.join(root, 'source-id'));
     const sourceKey = marketSourceKey({ type: 'git', url: 'https://origin.example.test/acme/plugins.git', sparsePaths: [] });
     const as = (url: string) => sourceIdOf({ kind: 'git', sourceKey, address: pluginMarketFetchAddress(url)! });
     expect(as('alice@git.example.test:plugins.git')).toMatch(SOURCE_ID);
@@ -998,32 +998,116 @@ describe('MarketSourceManager source identity', () => {
     expect(`${JSON.stringify(sourceIdentity)}${records.join('')}`).not.toContain('alice');
   });
 
-  it('keeps the key on this computer and rebuilds it only when missing or damaged', async () => {
+  it('keeps the key on this computer and publishes a new generation only when missing or damaged', async () => {
     const root = makeRoot();
-    const keyPath = path.join(root, 'plugin-market', 'source-id.key');
+    const keyDir = path.join(root, 'plugin-market', 'source-id');
     const key = marketSourceKey({ type: 'local', path: path.join(root, 'a') });
     // Reads are asynchronous (IPC read paths must not block the main thread): before prepare() there is no id
     // and nothing is touched on disk.
-    expect(createMarketSourceIdOf(keyPath)({ kind: 'local', sourceKey: key })).toBeNull();
-    expect(fs.existsSync(keyPath)).toBe(false);
-    const first = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
-    if (process.platform !== 'win32') expect(fs.statSync(keyPath).mode & 0o777).toBe(0o600);
-    // Lost or damaged key: a new one is written and read back; old ids no longer match (controllers stay
-    // "unconfirmed"), and the rebuilt key is stable for later operations.
-    fs.rmSync(keyPath);
-    const second = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
+    expect(createMarketSourceIdOf(keyDir)({ kind: 'local', sourceKey: key })).toBeNull();
+    expect(fs.existsSync(keyDir)).toBe(false);
+    const firstOf = await preparedSourceIdOf(keyDir);
+    const first = firstOf({ kind: 'local', sourceKey: key });
+    expect(firstOf.keyId()).toMatch(/^[A-Za-z0-9_-]{12}$/);
+    if (process.platform !== 'win32') expect(fs.statSync(path.join(keyDir, 'v1', 'key')).mode & 0o777).toBe(0o600);
+    // Lost or damaged key: the next generation is published and read back; old ids no longer match (controllers
+    // stay "unconfirmed", and a different keyId means "unverifiable", not "another source").
+    fs.rmSync(path.join(keyDir, 'v1', 'key'));
+    const secondOf = await preparedSourceIdOf(keyDir);
+    const second = secondOf({ kind: 'local', sourceKey: key });
     expect(second).toMatch(SOURCE_ID);
     expect(second).not.toBe(first);
-    fs.writeFileSync(keyPath, 'damaged');
-    const third = (await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key });
+    expect(secondOf.keyId()).not.toBe(firstOf.keyId());
+    fs.writeFileSync(path.join(keyDir, 'v2', 'key'), 'damaged');
+    const third = (await preparedSourceIdOf(keyDir))({ kind: 'local', sourceKey: key });
     expect(third).toMatch(SOURCE_ID);
     expect(third).not.toBe(second);
-    expect((await preparedSourceIdOf(keyPath))({ kind: 'local', sourceKey: key })).toBe(third);
-    // A key that exists but cannot be read is left alone: no ids this time.
-    const lockedPath = path.join(root, 'locked', 'source-id.key');
-    fs.mkdirSync(lockedPath, { recursive: true });
-    expect((await preparedSourceIdOf(lockedPath))({ kind: 'local', sourceKey: key })).toBeNull();
-    expect(fs.statSync(lockedPath).isDirectory()).toBe(true);
+    expect((await preparedSourceIdOf(keyDir))({ kind: 'local', sourceKey: key })).toBe(third);
+    expect(fs.readdirSync(keyDir).sort()).toEqual(['v1', 'v2', 'v3']);
+    // A key location that exists but cannot be read is left alone: no ids this time.
+    const lockedDir = path.join(root, 'locked', 'source-id');
+    fs.mkdirSync(path.dirname(lockedDir), { recursive: true });
+    fs.writeFileSync(lockedDir, 'not a directory');
+    expect((await preparedSourceIdOf(lockedDir))({ kind: 'local', sourceKey: key })).toBeNull();
+    expect(fs.readFileSync(lockedDir, 'utf8')).toBe('not a directory');
+  });
+
+  /* 测试价值（PR #12731 维护者评审 07:49：同一来源在首次并发读取时可能得到两个标识）
+   * - 生产入口与可观察结果：两个独立的 createMarketSourceIdOf（相当于两个市场操作，或两个 Cindy 进程——发布只靠
+   *   文件系统，不靠进程内状态）对同一目录 prepare() 后的 keyId 与 sourceId，以及随后新计算器重读的结果。
+   * - 缺口：此前各自写临时文件再 rename 覆盖目标，先读回 K1 的一方随后被另一方覆盖成 K2。
+   * - 最小失败输入：两方都判定「缺失」（或「损坏」）之后，第一方发布并读回、第二方才写入。用文件系统调用上的
+   *   闸门固定这个交错，不靠计时。
+   * - tier：unit（临时目录，真实文件系统）。
+   */
+  it.each([
+    ['missing', () => undefined],
+    ['damaged', (keyDir: string) => {
+      fs.mkdirSync(path.join(keyDir, 'v1'), { recursive: true });
+      fs.writeFileSync(path.join(keyDir, 'v1', 'key'), 'damaged');
+    }],
+  ])('publishes one key when two operations find it %s at the same time', async (_label, setup) => {
+    const root = makeRoot();
+    const keyDir = path.join(root, 'plugin-market', 'source-id');
+    setup(keyDir);
+    const realWriteFile = fs.promises.writeFile.bind(fs.promises);
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let releaseFirstRename!: () => void;
+    const firstRename = new Promise<void>((resolve) => { releaseFirstRename = resolve; });
+    let releaseSecondWrite!: () => void;
+    const secondWrite = new Promise<void>((resolve) => { releaseSecondWrite = resolve; });
+    let writes = 0;
+    let renames = 0;
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
+      writes += 1;
+      // The second operation has decided to create a key: let the first one publish and read back, then go on.
+      if (writes === 2) {
+        releaseFirstRename();
+        await secondWrite;
+      }
+      return realWriteFile(...args);
+    });
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args: Parameters<typeof fs.promises.rename>) => {
+      renames += 1;
+      if (renames === 1) await firstRename;
+      return realRename(...args);
+    });
+    try {
+      const a = createMarketSourceIdOf(keyDir);
+      const b = createMarketSourceIdOf(keyDir);
+      const preparing = [a.prepare!(), b.prepare!()];
+      // Whichever wrote first publishes and finishes; the other is held at its write until then.
+      await Promise.race(preparing);
+      releaseSecondWrite();
+      await Promise.all(preparing);
+      const later = await preparedSourceIdOf(keyDir);
+      const sourceKey = marketSourceKey({ type: 'local', path: path.join(root, 'market') });
+      expect(a.keyId()).toMatch(/^[A-Za-z0-9_-]{12}$/);
+      expect(b.keyId()).toBe(a.keyId());
+      expect(later.keyId()).toBe(a.keyId());
+      expect(b({ kind: 'local', sourceKey })).toBe(a({ kind: 'local', sourceKey }));
+      expect(writes).toBe(2);
+    } finally {
+      writeSpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+  });
+
+  // PR #12731 maintainer review (07:49): once the key is rebuilt, ids recorded under the old key are unverifiable,
+  // not "another source". The fetch record is ignored until the next refresh re-records it under the new key.
+  it('treats a fetch record made with an earlier key as unverifiable until the next refresh', async () => {
+    const root = makeRoot();
+    const git = rewritingGit(() => 'https://github.com/acme/plugins.git');
+    await identityManager(root, git.executor).addSource({ source: 'acme/plugins' });
+    const before = (await identityManager(root, git.executor).discoverSource('hub')).sourceIdentity;
+    expect(before).toMatchObject({ kind: 'git', repository: 'github.com/acme/plugins' });
+    fs.writeFileSync(path.join(root, 'plugin-market', 'source-id', 'v1', 'key'), 'damaged');
+    const manager = identityManager(root, git.executor);
+    expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
+    await manager.refreshSource('hub');
+    const after = (await identityManager(root, git.executor).discoverSource('hub')).sourceIdentity;
+    expect(after).toMatchObject({ kind: 'git', repository: 'github.com/acme/plugins' });
+    expect(after?.sourceId).not.toBe(before?.sourceId);
   });
 
   it('binds the source id to the actual fetch address: a rewrite to another repository changes it', async () => {
@@ -1105,6 +1189,16 @@ describe('MarketSourceManager source identity', () => {
       const { sourceIdentity } = await manager.discoverSource('hub');
       expect(sourceIdentity === null, label).toBe(!verified);
     }
+  });
+
+  // Codex P1 on PR #12731: git reports the address with its trailing space and fetches another repository than the
+  // same address without it. Only the line terminator is removed, so the whitelist sees and rejects the space.
+  it('does not verify an address that git reports with surrounding whitespace', async () => {
+    const root = makeRoot();
+    const git = rewritingGit(() => 'ssh://git@git.example.test/acme/plugins.git ');
+    const manager = identityManager(root, git.executor);
+    await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git' });
+    expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
   });
 
   it('leaves the identity unverified when the fetch address changes around the clone', async () => {

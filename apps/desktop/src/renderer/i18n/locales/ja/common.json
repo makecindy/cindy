@@ -8448,7 +8448,7 @@
         "originRepository": "リポジトリ {{repository}}",
         "originRepositoryRef": "リポジトリ {{repository}}（{{ref}}）",
         "originLocalFolder": "ローカルフォルダー",
-        "originSourceChanged": "この更新はインストール済みのバージョンとは別のソースから取得されています。上に表示されたリポジトリを信頼できる場合のみ続けてください。"
+        "originSourceChanged": "この更新はインストール済みのバージョンとは別のソースから取得されています。既存のアカウントとデータは別に保管されるため、更新後にアカウントを接続し直してください。上に表示されたリポジトリを信頼できる場合のみ続けてください。"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",

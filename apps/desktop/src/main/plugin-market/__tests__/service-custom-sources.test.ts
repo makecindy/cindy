@@ -176,6 +176,7 @@ const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
 };
 import { MarketSourceManager } from '../sources';
 import { MarketSourceStore } from '../sources/store';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from '../sources/sourceId';
 import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
@@ -2264,15 +2265,17 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
    * - 最小失败输入：安装后把记录的 sourceKey 或 raw 摘要换掉但保留绑定；没有绑定的旧本地记录。
    * - tier：unit（临时目录，本地来源）。
    */
-  /* 测试价值（PR #12731 维护者评审 06:33 第 2 条：已知实际来源变化时，后台不能沿用旧来源的批准装入新来源）
-   * - 生产入口与可观察结果：PluginMarketService.snapshot（后台自动更新）与 install（显式更新）；runtime.install
-   *   是否被调用、条目 updateRequiresConsent、确认请求与账本绑定。
-   * - 缺口：此前市场投影与提交前只按配置 sourceKey 判断路由，同一配置被改写到 B 时，B 的较高版本、权限无新增
-   *   即被后台静默装入。
-   * - 最小失败输入：已装记录绑定来源 A（可核实），当前候选来源 B（可核实且不同），B 有更高版本、无新增权限。
-   * - tier：unit（临时目录，本地来源；A 的绑定由账本记录模拟，与同一配置被 Git 改写的效果相同）。
-   */
-  it('holds a background update whose actual source changed and asks before switching', async () => {
+  /** 当前 owner 的来源标识密钥标识（与服务读的是同一个密钥目录）。 */
+  async function currentSourceKeyId(): Promise<string> {
+    const sourceIds = createMarketSourceIdOf(
+      path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR),
+    );
+    await sourceIds.prepare!();
+    return sourceIds.keyId()!;
+  }
+
+  /** 已装 1.0.0、市场上有 2.0.0（权限不变）的自定义市场插件；sourceIdBinding 与来源类别由用例给出。 */
+  async function installedAlphaWithUpdate(record: { source?: 'local-market' | 'git-market'; binding?: (sourceKey: string, rawManifestSha256: string) => object }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
@@ -2287,16 +2290,34 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const pluginId = customMarketPluginId('team-lib', 'alpha');
     h.ledger.upsertInstallation({
       pluginId, ghostId: 'alpha', releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'), version: '1.0.0',
-      sha256: 'custom-unverified', scope: 'public', organizationId: null, source: 'local-market', installed: true,
-      updatedAt: '2026-07-30T02:00:00.000Z', sourceKey,
+      sha256: 'custom-unverified', scope: 'public', organizationId: null, source: record.source ?? 'local-market',
+      installed: true, updatedAt: '2026-07-30T02:00:00.000Z', sourceKey,
       manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')), rawManifestSha256,
-      // Installed from source A, which the same configuration no longer fetches from.
-      sourceIdBinding: { sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256 },
+      ...(record.binding
+        ? { sourceIdBinding: record.binding(sourceKey, rawManifestSha256) as NonNullable<PluginMarketInstallationRecord['sourceIdBinding']> }
+        : {}),
     });
     runtime.install.mockImplementation(async () => {
       const upgraded = installedGhost(root, 'alpha', '2.0.0');
       runtime.ghosts = [upgraded];
       return upgraded;
+    });
+    return { h, pluginId, sourceKey };
+  }
+
+  /* 测试价值（PR #12731 维护者评审 06:33 第 2 条：已知实际来源变化时，后台不能沿用旧来源的批准装入新来源）
+   * - 生产入口与可观察结果：PluginMarketService.snapshot（后台自动更新）与 install（显式更新）；runtime.install
+   *   是否被调用、条目 updateRequiresConsent、确认请求与账本绑定。
+   * - 缺口：此前市场投影与提交前只按配置 sourceKey 判断路由，同一配置被改写到 B 时，B 的较高版本、权限无新增
+   *   即被后台静默装入。
+   * - 最小失败输入：已装记录绑定来源 A（可核实），当前候选来源 B（可核实且不同），B 有更高版本、无新增权限。
+   * - tier：unit（临时目录，本地来源；A 的绑定由账本记录模拟，与同一配置被 Git 改写的效果相同）。
+   */
+  it('holds a background update whose actual source changed and asks before switching', async () => {
+    const keyId = await currentSourceKeyId();
+    // Installed from source A (same key), which the same configuration no longer fetches from.
+    const { h, pluginId } = await installedAlphaWithUpdate({
+      binding: (sourceKey, rawManifestSha256) => ({ sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256, keyId }),
     });
 
     // Background: B's higher version without new permissions is not installed; the item waits for the user.
@@ -2314,9 +2335,52 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originSourceChanged: true,
       originSource: detail.sourceIdentity, facts: { kind: 'update', added: [] } });
     expect(runtime.install).toHaveBeenCalledTimes(1);
+    // The confirmed switch reaches the runtime's source-change transaction (idle check, old accounts and data
+    // archived for the replacement), not an in-place update.
+    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({ sourceChanged: true });
     // The installation is now bound to B, so later updates from B are not held again.
     expect(h.ledger.installationForGhost('alpha')?.sourceIdBinding?.sourceId).toBe(detail.sourceIdentity?.sourceId);
     expect(await h.service.detail(pluginId)).not.toHaveProperty('updateRequiresConsent');
+  });
+
+  /* 测试价值（PR #12731 维护者评审 07:34 / 07:49：换源会隔离插件数据，误判即丢账号与数据）
+   * - 生产入口与可观察结果：PluginMarketService.snapshot 的后台更新；runtime 安装是否被调用、是否带
+   *   sourceChanged（运行时据此隔离旧账号与数据）、条目是否 updateRequiresConsent。
+   * - 缺口：只有「两边都可核实且同一密钥下不相等」才算实际换源。升级前的安装记录没有绑定、密钥重建后的旧
+   *   绑定都只能算无法核实；若被当成换源，存量用户升级后第一次更新就会被暂停并隔离数据。
+   * - 最小失败输入：Git 来源记录没有绑定；绑定的标识与候选不同但 keyId 是旧密钥的；绑定就是当前来源。
+   * - tier：unit（临时目录，本地市场；Git 记录的来源类别只影响「无绑定时能否现算」，用记录字段模拟）。
+   */
+  it.each([
+    ['an installation recorded before source ids', { source: 'git-market' as const }],
+    ['a binding made with an earlier key', {
+      source: 'git-market' as const,
+      binding: (sourceKey: string, rawManifestSha256: string) =>
+        ({ sourceId: 'AAAAAAAAAAAAAAAAAAAAAA', sourceKey, rawManifestSha256, keyId: 'oldKeyOldKey' }),
+    }],
+    ['the same source', { source: 'local-market' as const, binding: 'current' as const }],
+  ])('updates %s in the background and keeps its data', async (_label, input) => {
+    const keyId = await currentSourceKeyId();
+    let currentSourceId = '';
+    const { h, pluginId } = await installedAlphaWithUpdate({
+      source: input.source,
+      ...('binding' in input
+        ? {
+            binding: input.binding === 'current'
+              ? (sourceKey: string, rawManifestSha256: string) => ({ sourceId: currentSourceId, sourceKey, rawManifestSha256, keyId })
+              : input.binding,
+          }
+        : {}),
+    });
+    currentSourceId = (await h.service.detail(pluginId)).sourceIdentity!.sourceId;
+    if ('binding' in input && input.binding === 'current') {
+      const record = h.ledger.installationForGhost('alpha')!;
+      h.ledger.upsertInstallation({ ...record, sourceIdBinding: { ...record.sourceIdBinding!, sourceId: currentSourceId } });
+    }
+    await h.service.snapshot();
+    expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('sourceChanged');
+    expect(h.ledger.installationForGhost('alpha')?.sourceIdBinding).toMatchObject({ sourceId: currentSourceId, keyId });
   });
 
   it('binds the installed source id to the record it was written with', async () => {
@@ -2335,6 +2399,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const record = h.ledger.installationForGhost('alpha')!;
     expect(record.sourceIdBinding).toEqual({
       sourceId: detail.sourceIdentity?.sourceId, sourceKey: record.sourceKey, rawManifestSha256: record.rawManifestSha256,
+      keyId: await currentSourceKeyId(),
     });
     expect((await h.service.detail(pluginId)).installedSourceId).toBe(detail.sourceIdentity?.sourceId);
 

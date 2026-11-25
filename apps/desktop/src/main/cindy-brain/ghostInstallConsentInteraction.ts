@@ -155,7 +155,8 @@ export function buildGhostInstallConsentInteraction(
     kind: 'permission',
     requestId,
     toolName: GHOST_INSTALL_CONSENT_TOOL_NAME,
-    // 结构化来源（契约第 2 版 V2.4 第 3 处）：控制端据此显示仓库，缺身份的自定义市场卡不在控制端批准。
+    // 结构化来源（契约第 2 版 V2.4 第 3 处）：控制端据此显示仓库，缺身份的自定义市场卡不在控制端批准；
+    // originSourceChanged 见契约 V2.4b。
     // 卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；IM 卡把它当参数显示，其中 sourceId 是
     // 本机密钥生成的不透明标识，仓库名本来就在说明文字里。
     input: {
@@ -165,6 +166,10 @@ export function buildGhostInstallConsentInteraction(
       origin: request.origin,
       ...(request.origin === 'custom-market' && isPluginMarketSourceIdentity(request.originSource)
         ? { source: request.originSource }
+        : {}),
+      // 自定义市场更新的实际来源与已装的不同（确认后旧账号与数据隔离保存）：控制端据此在卡片收起时也能提示。
+      ...(request.origin === 'custom-market' && request.facts.kind === 'update' && request.originSourceChanged === true
+        ? { originSourceChanged: true }
         : {}),
     },
     title: text.title,

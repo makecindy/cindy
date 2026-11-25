@@ -248,7 +248,11 @@ const SOURCE_IDENTITY_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
  */
 // eslint-disable-next-line no-control-regex
 const SOURCE_IDENTITY_UNSAFE_CHARS = /[\s\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\\%]/;
-const SOURCE_IDENTITY_URL_SCHEME = /^(https?|ssh|git):\/\//i;
+/**
+ * URL 形式按原始字节拆分（不经 WHATWG URL：它会做 IDNA、去掉默认端口、对不同协议的 host 大小写处理不一），
+ * `scheme://[userinfo@]host[:port]/path`。userinfo 与 host 里都不能有 `@`，多个 `@` 时整体不匹配。
+ */
+const SOURCE_IDENTITY_URL = /^(https?|ssh|git):\/\/(?:([^@/]*)@)?([^@/:]+)(?::([0-9]{1,5}))?(\/.*)$/i;
 /** scp 形式 `user@host:owner/repo`：冒号前不能有 `/`，路径不能以 `/` 开头。 */
 const SOURCE_IDENTITY_SCP = /^([^@/:]+)@([^@/:]+):(?!\/)(.+)$/;
 /** SSH 登录用户：只进本机 HMAC 输入，字符集限制在常见账户名内，其它一律按无法核实处理。 */
@@ -265,16 +269,24 @@ export interface PluginMarketFetchAddress {
    * userinfo（含 `https://TOKEN@host` 单段令牌）是凭证，一律不读取，凭证轮换不改变来源标识。
    */
   user: string;
-  /** 小写 host。 */
+  /** 小写 host（DNS 不区分大小写；只接受 ASCII 主机名，不做 IDNA 转换）。 */
   host: string;
-  /** 端口，缺省为空串。 */
+  /** 端口，按地址里写的原样（`:443` 与缺省不归并，`0443` 与 `443` 也不归并），缺省为空串。 */
   port: string;
-  /** URL 解析后的路径（以 `/` 开头）；scp 形式为冒号后的部分。 */
+  /**
+   * 路径，按地址里写的原样（以 `/` 开头；scp 形式为冒号后的部分）。不去掉结尾 `.git` 或 `/`、不改大小写：
+   * 有的服务把 `plugins` 与 `plugins.git`、带不带结尾斜杠、大小写不同的路径当成不同仓库，核实用的标识宁可
+   * 按原值区分（展示用的 repository 另行规整，见 pluginMarketRepositoryFromUrl）。
+   */
   path: string;
 }
 
 /**
  * 把一个 Git 地址（配置地址，或 git 解析出的实际取包地址）白名单拆成部件，解析不了返回 null：
+ * - 先对 git 实际使用的原始字节校验，再拆分；不做任何会把两个不同实际地址变成同一组部件的规整：不 trim
+ *   （首尾空白也是地址的一部分，出现即拒绝）、不经 URL 解析器归一、端口与路径保持原样。只有协议与 host 转成
+ *   小写：DNS 主机名不区分大小写；git 对大写协议要么按同一协议处理、要么取包失败（不会有身份），都不会把两个
+ *   能取到包的不同地址并成一个；
  * - 只接受 `https` / `http` / `ssh` / `git` 与 `user@host:path` 的 scp 形式；
  * - 只读取协议、SSH 登录用户（仅 ssh / scp）、host、端口、路径；https / http / git 的用户名与密码（含
  *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）与任何密码一律不读取；
@@ -285,34 +297,21 @@ export interface PluginMarketFetchAddress {
  */
 export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddress | null {
   if (typeof value !== 'string') return null;
-  const url = value.trim();
+  const url = value;
   if (!url || url.length > 2048 || SOURCE_IDENTITY_UNSAFE_CHARS.test(url)) return null;
-  const scheme = SOURCE_IDENTITY_URL_SCHEME.exec(url);
-  if (scheme) {
-    const rest = url.slice(scheme[0].length);
-    const authority = rest.split('/', 1)[0] ?? '';
-    // 多个 `@` 时各解析器对 host 的认定可能不同；`.`/`..` 段会被 URL 归一掉。
-    if (authority.split('@').length > 2 || /\/\.{1,2}(?=[/?#]|$)/.test(rest.slice(authority.length))) return null;
-    if (/[?#]/.test(rest)) return null;
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      return null;
-    }
-    const host = parsed.hostname.toLowerCase();
-    if (!host || host.length > 253 || !SOURCE_IDENTITY_HOST.test(host) || !/^\/./.test(parsed.pathname)) return null;
-    const protocol = scheme[1]!.toLowerCase() as PluginMarketFetchAddress['scheme'];
-    // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。
-    const user = protocol === 'ssh' ? parsed.username : '';
+  const parsed = SOURCE_IDENTITY_URL.exec(url);
+  if (parsed) {
+    const [, rawScheme, userinfo, rawHost, port = '', path] = parsed as unknown as [string, string, string | undefined, string, string | undefined, string];
+    // URL 解析器会把 `?`/`#` 当查询串、片段截掉，git 却当路径的一部分（ssh、git）或拼进请求（http）；`.`/`..` 段
+    // 与空段在不同实现里归一方式不同：一律不生成。
+    if (/[?#]/.test(path) || /\/\.{1,2}(?=\/|$)/.test(path) || /\/\//.test(path) || !/^\/./.test(path)) return null;
+    const host = rawHost.toLowerCase();
+    if (host.length > 253 || !SOURCE_IDENTITY_HOST.test(host)) return null;
+    const protocol = rawScheme.toLowerCase() as PluginMarketFetchAddress['scheme'];
+    // 只有 ssh 的用户名是身份；其它协议的 userinfo 是凭证，不读取。ssh 的 `user:password` 只取用户名。
+    const user = protocol === 'ssh' && userinfo ? userinfo.split(':', 1)[0]! : '';
     if (user && !SOURCE_IDENTITY_SSH_USER.test(user)) return null;
-    return {
-      scheme: protocol,
-      user,
-      host,
-      port: parsed.port,
-      path: parsed.pathname,
-    };
+    return { scheme: protocol, user, host, port, path };
   }
   const scp = SOURCE_IDENTITY_SCP.exec(url);
   if (!scp) return null;

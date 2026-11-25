@@ -8448,7 +8448,7 @@
         "originRepository": "儲存庫 {{repository}}",
         "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
         "originLocalFolder": "此機卷匣",
-        "originSourceChanged": "此番更新所出之源，與已裝之版不同。唯信上列之儲存庫，方可續之。"
+        "originSourceChanged": "此番更新所出之源，與已裝之版不同。舊名籍與資料隔離保留，須重新連接名籍。唯信上列之儲存庫，方可續之。"
       },
       "trust": {
         "official": "Cindy 官方法器",

@@ -107,6 +107,25 @@ describe('pluginMarketFetchAddress', () => {
   it('keeps the endpoint parts that tell sources apart and drops credentials', () => {
     expect(pluginMarketFetchAddress('https://ghp_SECRET@Git.Example.test:8443/acme/plugins.git'))
       .toEqual({ scheme: 'https', user: '', host: 'git.example.test', port: '8443', path: '/acme/plugins.git' });
+    // PR #12731 Codex P1 (trailing whitespace) and the follow-up audit: the parts are the raw bytes git uses.
+    // Nothing that could merge two different actual addresses is normalised: no trimming, no URL-parser
+    // normalisation, path and port kept as written. Only the host (DNS) and the scheme are lower-cased.
+    for (const raw of ['ssh://git@git.example.test/acme/plugins.git ', ' https://git.example.test/acme/plugins.git',
+      'git@git.example.test:acme/plugins.git\t', 'https://bücher.example/acme/plugins.git']) {
+      expect(pluginMarketFetchAddress(raw)).toBeNull();
+    }
+    const part = (raw: string) => pluginMarketFetchAddress(raw);
+    expect(part('https://git.example.test/acme/plugins')?.path).toBe('/acme/plugins');
+    expect(part('https://git.example.test/acme/plugins.git')?.path).toBe('/acme/plugins.git');
+    expect(part('https://git.example.test/acme/plugins.git/')?.path).toBe('/acme/plugins.git/');
+    expect(part('https://git.example.test/Acme/Plugins.git')?.path).toBe('/Acme/Plugins.git');
+    expect(part('https://git.example.test:443/acme/plugins.git')?.port).toBe('443');
+    expect(part('https://git.example.test/acme/plugins.git')?.port).toBe('');
+    expect(part('HTTPS://Git.Example.TEST/acme/plugins.git')).toMatchObject({ scheme: 'https', host: 'git.example.test' });
+    // Display may still normalise: these spellings share one repository text but not one source id.
+    for (const raw of ['https://git.example.test/acme/plugins', 'https://git.example.test/acme/plugins.git/']) {
+      expect(pluginMarketRepositoryFromUrl(raw)).toBe('git.example.test/acme/plugins');
+    }
     // PR #12731 Codex P1: `?…` / `#…` would be cut off by a URL parser while git fetches a different repository
     // (`plugins.git?other` is another path on an SSH server), so such addresses have no endpoint at all.
     for (const suffix of ['?other', '#other']) {

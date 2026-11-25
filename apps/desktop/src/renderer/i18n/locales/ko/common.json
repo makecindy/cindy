@@ -8448,7 +8448,7 @@
         "originRepository": "저장소 {{repository}}",
         "originRepositoryRef": "저장소 {{repository}} ({{ref}})",
         "originLocalFolder": "로컬 폴더",
-        "originSourceChanged": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 위에 표시된 저장소를 신뢰하는 경우에만 계속하세요."
+        "originSourceChanged": "이 업데이트는 설치된 버전과 다른 소스에서 가져옵니다. 기존 계정과 데이터는 별도로 보관되므로 업데이트 후 계정을 다시 연결하세요. 위에 표시된 저장소를 신뢰하는 경우에만 계속하세요."
       },
       "trust": {
         "official": "Cindy 공식 플러그인",

@@ -88,14 +88,19 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
      用这次打包实际所用的缓存版本、取包记录和同一份配置生成，与提交前复核的 `sourceKey` 同出一处。提交时落位的
      就是租约内打好的那份包（`packed.tempPath`），不在提交时重新取包。
   3. Agent 发起的任务确认卡（`toolName:'cindy.plugin.install'`，`hostOwnedConfirmation:'plugin_install'`）的
-     `input`：`{ghost_id, version, operation, origin, source?}`。`source` 与同一次确认的 `originSource` 相同，
-     只在 `origin === 'custom-market'` 且能生成时给出。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
+     `input`：`{ghost_id, version, operation, origin, source?, originSourceChanged?}`。`source` 与同一次确认的
+     `originSource` 相同，只在 `origin === 'custom-market'` 且能生成时给出；`originSourceChanged: true` 只在
+     custom-market 更新且这次确认带该字段时给出（见下文「实际来源变化时的更新」），其它情况缺省。卡输入不进模型上下文（宿主交互不是 Agent 的工具调用）；
      IM 卡与官方 hook 卡的参数预览去掉 `source.sourceId`，仓库名本来就在说明里。
 - **`sourceId`**（`^[A-Za-z0-9_-]{22}$`）：
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
     - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
     - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
-      **实际取包地址**的白名单部件，不含密码、令牌。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
+      **实际取包地址**的白名单部件，不含密码、令牌。部件取自 git 实际使用的原始字节：`resolveFetchUrl` 只去掉 git
+      输出的行终止符，白名单不 trim、不经 URL 解析器归一，任何空白都不生成；端口与路径按原样（`plugins` 与
+      `plugins.git`、带不带结尾斜杠、`:443` 与缺省、路径大小写都得到不同标识），只有协议与 host 转小写（DNS 主机名
+      不区分大小写，大写协议在 git 里要么等同、要么取包失败）。展示用的 `repository` 仍可规整（去 `.git`、去结尾
+      斜杠、小写 host）。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
       查询串、片段截掉，git 却把它们当作仓库路径的一部分（ssh、git）或拼进请求（http），截掉会把不同仓库认成同一个。
   - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
     scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
@@ -105,7 +110,12 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     `sourceId` 都不同；同主机、同路径但 SSH 登录用户不同，`sourceId` 也不同。只改变 https 认证信息（例如改写
     注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
-  - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 密钥 K 每个数据所有者一把，按「代」存放，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+    新的一代在暂存子目录里写好后整体 rename 成 `v<N>`，目标已存在即失败，所以同一代只有一个写入者胜出，并发的
+    其它调用方（同进程或另一个 Cindy 进程）重读得到同一把；不依赖硬链接。缺失或损坏时写下一代，不就地覆盖。
+  - 密钥标识 `keyId`（由 K 派生的 12 字符短标识）随取包记录与安装绑定一起记下。比较两个 `sourceId` 前先比
+    `keyId`：不同即「无法核实」，不是「来源不同」。密钥被重建后，旧取包记录的标识在下次刷新前不用（身份缺省），
+    旧安装绑定不参与换源判断，所以不会因此暂停更新或隔离插件数据；下一次取包或安装后按新密钥重新记下。
   - 密钥与取包记录的读写都是异步的（市场列表、详情、远程目录这些 IPC 读路径会读到），同步计算只用已读好的
     密钥，没读好时标识缺省，不回退到同步读盘。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
@@ -131,17 +141,24 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 市场投影：该条目若为 `update-available`，同时带既有字段 `updateRequiresConsent: true`（与权限变多时同一字段、
     同一暂停机制），后台自动更新不尝试。
   - 实际取包（来源租约内）与提交前：后台路径一律拒绝换源并按「等待用户确认」暂停；显式更新强制弹出确认（即使
-    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「来源与已安装的版本不同」。
-  - 用户确认后安装记录改绑新来源，之后不再反复询问。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
+    权限没有变多），确认请求带 `originSourceChanged: true`，确认框与任务卡提示「这次更新的来源与已安装的版本
+    不同，旧账号和数据会隔离保存，需要重新连接账号」，任务卡 `input` 同时带 `originSourceChanged: true`。
+  - 用户确认后，提交锁内再核实一次；仍是实际换源时按既有换源事务落位：运行时先做换源空闲检查，旧实例的账号、
+    密钥、OAuth、KV 与私有数据按 `sourceStateArchiveId` 隔离归档，新来源读不到，归档可按既有流程恢复。安装记录
+    改绑新来源，之后不再反复询问。同一来源的更新、只换凭证、本地来源、服务端市场都不走这个事务，数据照常保留。旧记录没有绑定或候选身份缺省时不拦，保持既有行为（第一次
     后台更新会写入绑定，之后才开始比较），升级后不会让所有自定义市场插件集体暂停更新。服务端市场与本地来源
     （配置不变即同一来源）不受影响。
-  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，可据此提示来源已变；条目的
-    `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
+  - 只有同一 `keyId` 下两边都可核实且不相等才算实际换源。旧记录没有绑定、候选身份缺省、绑定是旧密钥算的，
+    一律按同一来源的更新处理：不暂停、不强制确认、不隔离数据（有用例锁住）。
+  - 控制端：确认回执的 `consent.originSourceChanged?: true` 为可选新字段，表示「来源变了，确认后旧账号和数据
+    隔离保存」，控制端只展示这一句；自定义市场的确认不带 `target`，所以这种情况下 `target.sourceChanged` 不会
+    出现，不会与之重复。条目的 `updateRequiresConsent` 是既有字段，现在也可能因来源变化置位。
 - **账本**（存量兼容）：
   - 自定义市场安装记录（`custom-ledger.v1.json`）只增一个可选字段 `sourceIdBinding:
-    {sourceId, sourceKey, rawManifestSha256}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
+    {sourceId, sourceKey, rawManifestSha256, keyId}`。显式安装、后台自动更新、换源都经 `customInstall` 整条重写，
     值取自打包所用的版本。
-  - 投影 `installedSourceId` 时，绑定的 `sourceKey` 与 raw 摘要必须仍等于记录当前的值，否则缺省。这样，
+  - 投影 `installedSourceId` 时，绑定的 `sourceKey` 与 raw 摘要必须仍等于记录当前的值、`keyId` 必须等于当前
+    密钥，否则缺省（本地来源改为按记录的 `sourceKey` 现算）。这样，
     任何保留了旧值、但来源或包已变的写入都不会让它误配。
   - 读取校验不检查这个字段，形状不对时投影当缺省，不会因此丢记录。旧记录不迁移：本地来源按记录的
     `sourceKey` 现算，Git 来源缺省（控制端未确认）。

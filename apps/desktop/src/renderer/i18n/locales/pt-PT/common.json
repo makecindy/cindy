@@ -8565,7 +8565,7 @@
         "originRepository": "Repositório {{repository}}",
         "originRepositoryRef": "Repositório {{repository}} ({{ref}})",
         "originLocalFolder": "Pasta local",
-        "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. Continue apenas se confiar no repositório indicado acima."
+        "originSourceChanged": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização. Continue apenas se confiar no repositório indicado acima."
       },
       "trust": {
         "official": "Plugin oficial de Cindy",

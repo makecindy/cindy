@@ -8448,7 +8448,7 @@
         "originRepository": "仓库 {{repository}}",
         "originRepositoryRef": "仓库 {{repository}}（{{ref}}）",
         "originLocalFolder": "本地文件夹",
-        "originSourceChanged": "这次更新的来源与已安装的版本不同。请确认你信任上面显示的仓库后再继续。"
+        "originSourceChanged": "这次更新的来源与已安装的版本不同。旧账号和数据会隔离保存，需要重新连接账号。请确认你信任上面显示的仓库后再继续。"
       },
       "trust": {
         "official": "Cindy 官方插件",
