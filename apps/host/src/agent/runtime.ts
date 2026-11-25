@@ -507,10 +507,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
-          // As the desktop's oauth-bearer readState: the local file's own reason, else the
-          // shared-link reason when the system login is signed in but unreachable, else no_oauth.
+          // As the desktop's oauth-bearer readState: the local file's own reason, then the
+          // shared-link reason, and only a credential that is actually absent counts as
+          // "never logged in" (a present one that cannot dispatch is unbound/disconnected).
           const local = native ?? await readCodexLocalAuthState(codexHome);
-          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
+          return { authenticated: false, errorReason: local.errorReason ?? sharedLinkReason
+            ?? (local.authenticated ? 'oauth_not_bound' : 'no_oauth') };
         }
         return { authenticated: false, errorReason: native?.errorReason ?? sharedLinkReason ?? 'oauth_not_bound' };
       }

@@ -194,6 +194,12 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     await expect(adapter.getAccessToken()).resolves.toBeNull();
     // 归属绝不被改写。
     expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
+    // 显式订阅会话也不能把「凭证在、但没授权给当前账号」说成从未登录:
+    // 只报 no_oauth 时界面不会给出重新连接入口(2026-11-25)。
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'oauth_not_bound',
+    });
   });
 
   it('does not claim while a durable user disconnect suppresses the local credential', async () => {

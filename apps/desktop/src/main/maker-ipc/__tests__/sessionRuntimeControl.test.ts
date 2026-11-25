@@ -22,7 +22,10 @@ import {
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
+  consumeUserSourceSwitch,
+  matchesUserSourceSwitch,
   recordUserSessionRuntimeMutation,
+  recordUserSourceSwitch,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeAxisPatch,
   resolveSessionRuntimeAxes,
@@ -176,6 +179,23 @@ describe('session runtime control state', () => {
         expect(sessionRuntimeGenerationMatches(sessionId, before.generation)).toBe(false);
       }
     });
+
+  // 规则: 只有用户显式换源才记录; 记录只对落定的那个来源生效, 消费一次即失效,
+  // 再次换选会作废旧记录 —— 普通续聊从不记录, 因此不会跨账号。
+  it('records a user source switch once and never lets it fire on another provider', () => {
+    const sessionId = 'source-switch';
+    expect(matchesUserSourceSwitch(sessionId, 'openai')).toBe(false);
+    recordUserSourceSwitch(sessionId, 'openai-sub-1');
+    // 不是落定的那个来源: 旧记录当场作废, 不会留到下一次发送误触发。
+    expect(matchesUserSourceSwitch(sessionId, 'openai')).toBe(false);
+    expect(matchesUserSourceSwitch(sessionId, 'openai-sub-1')).toBe(false);
+    recordUserSourceSwitch(sessionId, 'openai');
+    // 匹配时保留: 交接失败后重试仍要能接手历史。
+    expect(matchesUserSourceSwitch(sessionId, 'openai')).toBe(true);
+    expect(matchesUserSourceSwitch(sessionId, 'openai')).toBe(true);
+    consumeUserSourceSwitch(sessionId);
+    expect(matchesUserSourceSwitch(sessionId, 'openai')).toBe(false);
+  });
 
   it('uses one monotonic generation for deferred and settled mutations', () => {
     const sessionId = 'runtime-generation';

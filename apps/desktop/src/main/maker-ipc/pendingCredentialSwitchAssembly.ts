@@ -38,8 +38,8 @@ import { readCredentialTaskSettings, readEffectiveCredentialSettings, type Crede
 import { isSupportedRuntimeEffort } from './runtimeSelectionAxes.js';
 import { withSendToSessionLock } from './sendToSessionLock.js';
 import {
-  projectSessionRuntimeControl, recordUserSessionRuntimeMutation, resolveSessionRuntimeAxes,
-  sessionRuntimeControlOwnerEpochMatches,
+  projectSessionRuntimeControl, recordUserSessionRuntimeMutation, recordUserSourceSwitch,
+  resolveSessionRuntimeAxes, sessionRuntimeControlOwnerEpochMatches,
 } from './sessionRuntimeControl.js';
 import type { createHandleSetModel } from './sessionRuntimeSelectionApply.js';
 
@@ -301,6 +301,11 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
         throw error;
       }
       if (staged || ports.settlementPermit) setSessionProvider(sessionId, route.providerId);
+      // A user switch that had to wait for the running turn: its native thread still belongs to
+      // the source the task is leaving, so the next start hands the transcript over.
+      if (staged?.agentKind === 'codex' && (desiredRow?.providerId ?? null) !== (route.providerId ?? null)) {
+        recordUserSourceSwitch(sessionId, route.providerId ?? null);
+      }
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);
       if (staged && finalModel) {

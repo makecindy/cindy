@@ -704,6 +704,8 @@ export function describeAgentAuthError(error: string | null | undefined): string
       return `${agentLabel} 无法使用：电脑端还没有配置可用的 API Key。${goSettings}完成配置后再试。`;
     case 'no_oauth':
       return `${agentLabel} 无法使用：电脑端尚未完成账号授权。${goSettings}重新连接账号后再试。`;
+    case 'oauth_not_bound':
+      return `${agentLabel} 无法使用：这个任务要用的账号连接已断开或未授权给当前账号。${goSettings}重新连接后再试。`;
     case 'no_credentials':
       return `${agentLabel} 无法使用：电脑端尚未登录 ${agentLabel}。${goSettings}完成登录后再试。`;
     case 'no_encryption':

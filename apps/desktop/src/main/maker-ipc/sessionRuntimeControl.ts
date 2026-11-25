@@ -115,6 +115,8 @@ interface SessionRuntimeControlState {
   pendingRouteExplicit: boolean;
   fallbackHop: number;
   visitedRoutes: Set<string>;
+  /** Provider a user source switch committed to; consumed by the next start. */
+  sourceSwitch: string | null | undefined;
 }
 
 const states = new Map<string, SessionRuntimeControlState>();
@@ -136,6 +138,7 @@ function stateFor(sessionId: string): SessionRuntimeControlState {
       pendingRouteExplicit: true,
       fallbackHop: 0,
       visitedRoutes: new Set(),
+      sourceSwitch: undefined,
     };
     states.set(sessionId, state);
   }
@@ -485,6 +488,34 @@ export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRunt
 
 export function clearSessionRuntimeControlState(sessionId: string): void {
   states.delete(sessionId);
+}
+
+/**
+ * The user switched this task's source. The task's native thread belongs to the previous source,
+ * so the next start must hand the transcript over instead of resuming it there. One-shot and
+ * in-memory on purpose: after a restart the send reports the source's own error again rather
+ * than guessing. Only an explicit source switch records it; an ordinary resume never does.
+ */
+export function recordUserSourceSwitch(sessionId: string, providerId: string | null): void {
+  stateFor(sessionId).sourceSwitch = providerId;
+}
+
+/**
+ * Whether this start still runs on the source the user picked. A record that no longer matches
+ * (the user picked again) is dropped instead of firing against a later, unrelated route.
+ */
+export function matchesUserSourceSwitch(sessionId: string, providerId: string | null): boolean {
+  const state = states.get(sessionId);
+  if (!state || state.sourceSwitch === undefined) return false;
+  if ((state.sourceSwitch ?? null) === (providerId ?? null)) return true;
+  state.sourceSwitch = undefined;
+  return false;
+}
+
+/** The handoff that protected the transcript committed; nothing else may act on the record. */
+export function consumeUserSourceSwitch(sessionId: string): void {
+  const state = states.get(sessionId);
+  if (state) state.sourceSwitch = undefined;
 }
 
 export function clearAllSessionRuntimeControlStates(): void {

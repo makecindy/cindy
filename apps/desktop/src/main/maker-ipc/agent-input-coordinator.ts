@@ -4241,6 +4241,10 @@ export class AgentInputCoordinator {
       if (!automatic && isSchedulerOriginItem(item)) item.origin = undefined;
       if (opts?.beforeDelivery) bindTaskActionInput(sessionId, item, opts.beforeDelivery);
       if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(item);
+      // A retry of a failed turn follows the route the task has now: the user may have picked
+      // another source after the failure, and replaying the captured one would keep failing on
+      // the source they left (2026-11-25).
+      if (state.queuedRoute) rebaseQueuedItemRoute(item, state.queuedRoute);
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);
       // 「用户显式重试」信号 —— **只在 active-turn recovery 上发**。这一支重试的是

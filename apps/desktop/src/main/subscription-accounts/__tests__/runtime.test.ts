@@ -253,6 +253,9 @@ vi.mock('../store.js', () => ({
     assertCurrent?.();
     for (const key of keys) h.bindings.set(key, { providerId, accountId, ...(via && via !== providerId ? { via } : {}) });
   },
+  clearAccountBindings: async (keys: string[]) => {
+    for (const key of keys) h.bindings.delete(key);
+  },
   updatePool: async (
     p: SubscriptionProvider,
     edit: (value: SubscriptionPoolConfig) => SubscriptionPoolConfig,
@@ -7113,6 +7116,9 @@ describe('unbound Codex history account recovery', () => {
       readSession: vi.fn(async () => row),
       isRunning: vi.fn(() => false),
       resolveCodexHistoryHome: vi.fn(async (): Promise<string | undefined> => 'openai/imported'),
+      // Only a user source switch records one; ordinary resumes never do.
+      matchesSourceSwitch: vi.fn((_providerId: string | null) => false),
+      consumeSourceSwitch: vi.fn(),
       rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
         assertCurrent();
         row.sdkSessionId = null;
@@ -7120,6 +7126,50 @@ describe('unbound Codex history account recovery', () => {
     };
     return { row, deps };
   }
+  // 测试价值: 生产入口 prepareSubscriptionAccountForSend + withSubscriptionAccounts.startSession。
+  // 用户可观察结果: 主动换源后任务带着上下文在新来源上继续, 不再用旧来源的原生线程或账号绑定。
+  // 依据: 2026-11-25 实报的换源重试/不可用绑定; 既有覆盖只测了目录属于某个账号的交接。
+  // 最小失败输入: 用户换源记录 + 原生线程归属旧来源 + 旧账号绑定; tier: unit。
+  it('hands a task the user moved to another source over before the next start', async () => {
+    const { row, deps } = fixture();
+    h.pools.openai = { strategy: 'order', accounts: [account('second'), account('third')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'third', via: 'openai-old' });
+    h.bindings.set('native:legacy', { providerId: 'openai', accountId: 'third', via: 'openai-old' });
+    deps.matchesSourceSwitch.mockReturnValue(true);
+    const start = vi.fn<(options: StartSessionOptions) => Promise<{ id: string; close: () => Promise<void> }>>(
+      async () => ({ id: 'fresh-native', close: async () => {} }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent,
+      { getState: h.legacyRead, resolveCodexHistoryHome: deps.resolveCodexHistoryHome });
+    const before = await agent.startSession({ providerId: 'openai', sessionId: 'old-task',
+      resumeSessionId: 'legacy', model: row.model! } as StartSessionOptions);
+    expect(start.mock.calls[0][0].resumeSessionId).toBe('legacy');
+    await before.close();
+
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(true);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+    expect(row.sdkSessionId).toBeNull();
+    // 旧来源的账号绑定随来源一起作废, 新来源自己选号。
+    expect(h.bindings.has('task:old-task')).toBe(false);
+    expect(h.bindings.has('native:legacy')).toBe(false);
+    expect(deps.consumeSourceSwitch).toHaveBeenCalledOnce();
+
+    const handle = await agent.startSession({ providerId: 'openai', sessionId: 'old-task',
+      model: row.model! } as StartSessionOptions);
+    expect(start.mock.calls[1][0].resumeSessionId).toBeUndefined();
+    expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+    await handle.close();
+  });
+  // 反例: 只是普通续聊(没有换源记录)时, 即使原来源自己的登录起不了, 也不跨账号移动。
+  it('keeps an ordinary resume on its own account instead of crossing accounts', async () => {
+    const { row, deps } = fixture();
+    deps.resolveCodexHistoryHome.mockResolvedValue('/unregistered-private-home');
+    h.bindings.set('task:old-task', { providerId: 'openai', accountId: 'second' });
+    expect(await prepareSubscriptionAccountForSend('old-task', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(h.bindings.get('task:old-task')?.accountId).toBe('second');
+    expect(row.sdkSessionId).toBe('legacy');
+  });
   it.each(['removed', 'paused'] as const)('hands off %s history before starting a fresh native session', async cause => {
     const { row, deps } = fixture();
     if (cause === 'paused') h.pools.openai!.accounts.push({ ...account('imported'), paused: true });

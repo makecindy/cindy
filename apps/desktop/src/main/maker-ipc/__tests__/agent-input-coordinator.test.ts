@@ -13024,6 +13024,44 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(h.sendToAgent.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'new-model', providerId: 'new-provider' });
   });
 
+  // 2026-11-25 实报: 失败的那一轮被重试时仍带着它入队时的来源, 用户在失败之后换了来源,
+  // 重试却继续打旧来源(旧账号已不可用), 于是同一个错误反复出现。
+  it('retries a failed turn on the route the user committed after the failure', async () => {
+    const h = createHarness();
+    const sid = 'failed-turn-route-switch';
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] the old account is gone');
+    });
+    const failed = makeItem('failed-turn', 'Retry me');
+    failed.createOpts.providerId = 'old-provider';
+    h.coordinator.enqueue(sid, failed);
+    await flush();
+    expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'active-turn' });
+
+    h.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'new-model', providerId: 'new-provider' });
+  });
+
+  // 反例: 没有更新的已提交路线时, 重试保持它自己的路线, 不被静默换到别处。
+  it('keeps the captured route on an ordinary retry of a failed turn', async () => {
+    const h = createHarness();
+    const sid = 'failed-turn-route-unchanged';
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] the old account is gone');
+    });
+    const failed = makeItem('failed-turn', 'Retry me');
+    failed.createOpts.providerId = 'old-provider';
+    h.coordinator.enqueue(sid, failed);
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls.at(-1)?.[2]).toMatchObject({ providerId: 'old-provider' });
+  });
+
   it.each(['member', 'plan'] as const)('drops restored %s group inputs before a new execution can use their lane', async kind => {
     const sid = 'reused-group-lane';
     const oldId = kind === 'member' ? BOT_GROUP_CLIENT_ID.memberTurn('room', 'old-execution', 'bot')

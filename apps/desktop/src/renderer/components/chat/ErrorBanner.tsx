@@ -320,7 +320,8 @@ export function ErrorBanner({
   // Codex 401 auth-missing detection 分三层:
   //  - isCodexAuthMissing: codex session + 401/Missing bearer pattern。
   //  - isCodexRemoteAuthMissing: 远端 codex + 上面命中 → 显「同步登录态」按钮。
-  //  - isCodexLocalOAuthAuthMissing: 本机 OpenAI 来源的 401 → 隐藏 Retry，打开该连接设置。
+  //  - isCodexLocalOAuthAuthMissing: 本机 OpenAI 来源的 401，或发送前已被鉴权门禁退回的
+  //    登录原因（codex not authenticated: …）→ 隐藏 Retry，打开该连接设置。
   //    显式来源优先于 runtime fallback；没有来源记录时只对 oauth-bearer 引导登录，
   //    避免把 env-key 网关错误误判为订阅问题。
   // 父组件 (CCAgentSessionView) 必须只对 codex session 传 agentKind='codex' +
@@ -362,9 +363,17 @@ export function ErrorBanner({
     agentKind === 'codex' &&
     isCodexOpenAiSource &&
     /\b401\b|Missing bearer/i.test(error);
+  // 发送前的鉴权门禁会把来源自己的登录状态原样带回（LAZY_CREATE_FAILED:
+  // codex not authenticated: oauth_not_bound）。它和 401 一样只能去设置里重连:
+  // 当普通失败只剩一句英文 reason，用户无法自查。
+  const isCodexAuthRejected =
+    !isProviderSafetyRefusal &&
+    agentKind === 'codex' &&
+    isCodexOpenAiSource &&
+    /codex not authenticated: (?:oauth_not_bound|no_oauth|no_credentials)\b/.test(error);
   const isCodexRemoteAuthMissing = isCodexAuthMissing && !!remoteHostId;
   const isCodexLocalOAuthAuthMissing =
-    isCodexAuthMissing && isLocalAuthSession &&
+    (isCodexAuthMissing || isCodexAuthRejected) && isLocalAuthSession &&
     (hasExplicitOpenAiProvider || codexAuthInjection === 'oauth-bearer');
   // 明确的 OpenAI token/session invalidation 不可直接 Retry。Codex 路径不再要求当前
   // runtime route 仍是 oauth-bearer：invalidate 会先收割旧 host 并把 route 广播成

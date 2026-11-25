@@ -1553,8 +1553,10 @@ import {
   recordFailedSessionRuntimeFallbackCandidate,
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
+  consumeUserSourceSwitch,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
+  matchesUserSourceSwitch,
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
@@ -5333,6 +5335,10 @@ async function prepareSessionAccountsAndHistory(
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
+    // Only a source the user picked moves a task; an ordinary resume never does.
+    matchesSourceSwitch: providerId => matchesUserSourceSwitch(sessionId, providerId),
+    consumeSourceSwitch: () => consumeUserSourceSwitch(sessionId),
+    log: subscriptionAccountRecoveryDeps.log,
     rebuild: async (id, assertCurrent) => {
       await accountRecovery.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);

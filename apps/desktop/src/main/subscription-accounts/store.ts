@@ -280,3 +280,15 @@ export async function writeAccountBindings(
     };
   });
 }
+
+/** Drop a task's account affinity after the user moved it to another source. */
+export async function clearAccountBindings(
+  keys: string[],
+  providerId: SubscriptionProvider,
+): Promise<void> {
+  await store.updateAtomic(({ value }) => {
+    const bindings = { ...value.bindings };
+    for (const key of keys) if (key) delete bindings[`${providerId}:${key}`];
+    return { bindings };
+  });
+}

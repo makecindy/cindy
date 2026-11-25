@@ -1,6 +1,7 @@
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { readAccountBinding, readPool } from './store.js';
+import { clearAccountBindings, readAccountBinding, readPool } from './store.js';
+import { resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from './placement.js';
 import { acquireSubscriptionAccount, codexSubscriptionAccountForHistoryHome } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount } from './taskAccount.js';
 import { apiKeyPoolMember } from './apiKeyMembers.js';
@@ -10,6 +11,14 @@ interface PrepareAccountSendDeps {
   isRunning(id: string): boolean;
   /** Same owner-scoped, read-only canonical history lookup used by Codex startup. */
   resolveCodexHistoryHome?(threadId: string): Promise<string | undefined>;
+  /**
+   * One-shot record of a user source switch. It matches only while this send still runs on the
+   * provider the user picked, and is consumed once the handoff commits; ordinary resumes never
+   * record one. Split so a failed attempt keeps the record for the retry.
+   */
+  matchesSourceSwitch?(providerId: string | null): boolean;
+  consumeSourceSwitch?(): void;
+  log?(message: string, fields: Record<string, unknown>): void;
   /** Retires only this runtime and durably retains its context before clearing the native id. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
   /**
@@ -23,6 +32,8 @@ interface PrepareAccountSendDeps {
  * Disabling an account is an explicit routing decision. Quota exhaustion alone is not.
  * A task on a merged legacy connection hands off like any other (2026-11-13): pausing that
  * account in the merged OpenAI list is the only way left to move such tasks by hand.
+ * A task the user moved to another source also hands off here: its native thread and account
+ * binding belong to the source it left, so the next start continues on the new source.
  */
 export async function prepareSubscriptionAccountForSend(
   sessionId: string,
@@ -38,10 +49,41 @@ export async function prepareSubscriptionAccountForSend(
   assertOwner();
   // Keep comparing against what this send saw, even if the caller reuses its row object.
   const row = read && { ...read };
+  // A user source switch ends this task's affinity with the source it left (recorded once at
+  // selection, so an ordinary resume never reaches this). Hand the transcript over and drop the
+  // old account binding; the source the user picked then chooses its own account.
+  if (row && row.providerId && row.agentKind === 'codex' && !row.remoteHostId && !row.agentDeviceId
+    && resolveSubscriptionPoolProviderRef(row.providerId)?.kind === 'openai'
+    && deps.matchesSourceSwitch?.(row.providerId)) {
+    if (deps.isRunning(sessionId)) return false;
+    try {
+      // Prove the destination can serve this model before retiring the old context. Reserve nothing.
+      await acquireSubscriptionAccount(row.providerId, row.model ?? undefined, [], false, { dryRun: true });
+    } catch {
+      return false;
+    }
+    assertOwner();
+    deps.log?.('subscription account handoff: user moved the task to another source', {
+      sessionId, providerId: row.providerId, model: row.model ?? null,
+    });
+    if (row.sdkSessionId) {
+      await deps.rebuild(sessionId, () => {
+        assertOwner();
+        if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+      });
+    }
+    await clearAccountBindings([
+      `task:${sessionId}`,
+      ...(row.sdkSessionId ? [`native:${row.sdkSessionId}`] : []),
+    ], 'openai');
+    deps.consumeSourceSwitch?.();
+    return true;
+  }
   let historyAccountId: string | undefined;
   // Startup can pin an unbound old thread by its canonical history home. Resolve that
   // affinity here too so a removed/paused account reaches the existing durable handoff.
-  if (row?.status !== 'deleted' && row?.providerId === 'openai' && row.agentKind === 'codex'
+  if (row?.status !== 'deleted' && row?.agentKind === 'codex'
+    && row?.providerId && resolveSubscriptionPoolProviderRef(row.providerId)?.kind === 'openai'
     && row.sdkSessionId && !row.remoteHostId && !row.agentDeviceId && readPool('openai')
     && !readAccountBinding(`task:${sessionId}`, 'openai')
     && !readAccountBinding(`native:${row.sdkSessionId}`, 'openai') && deps.resolveCodexHistoryHome) {
