@@ -306,6 +306,8 @@ export class InputHandoffSession {
   private fieldPlanRetired = false;
   /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
   private asked = false;
+  /** The last step that asked the owner for something: shown again while the agent's completion hint is pending. */
+  private askedStep: ExtractedStep | null = null;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
   private doneOutside = false;
   private ambiguousTitles: string[] | undefined;
@@ -726,6 +728,15 @@ export class InputHandoffSession {
     // Past a sign-in, a page's own fields (a reply box) are not its next step.
     const signInOver = this.signInMode && !read.signIn && !this.pageUnknown(read) && !read.deviceCode && !hasSecretField(read);
     const step = signInOver ? { ...read, shown: [] } : read;
+    // The owner has not answered through the card and the agent's completion hint is not met: a page that swapped
+    // its fields away (a slider check, a scan tab) is mid-way. Whoever read it, the window watch or a refresh after
+    // the live view closed, keeps the asked step instead of handing back as done outside.
+    if (this.asked && this.submissions === 0 && this.askedStep && !actionable(step) && !step.pageMissing && this.hintsPending(step)) {
+      this.step = this.askedStep;
+      this.fieldsGoneReads = 0;
+      this.publish('ready');
+      return;
+    }
     this.step = step;
     this.guardSignInPage(step);
     this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
@@ -735,6 +746,7 @@ export class InputHandoffSession {
       return;
     }
     this.asked = true;
+    if (actionable(step)) this.askedStep = step;
     if (this.stepNumber === 0) this.stepNumber = 1;
     if ((!suppressAutoFinish || this.doneOutside) && this.shouldFinish(step)) {
       this.finishingUntil = this.now() + (this.options.finishingDelayMs ?? 3000);

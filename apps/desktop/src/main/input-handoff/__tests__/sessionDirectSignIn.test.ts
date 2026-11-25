@@ -535,6 +535,32 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
   });
 
+  // PR #12766 review (greptile, r4691611648): closing the live view re-reads the window through decide(refresh),
+  // which presented the fieldless page as done outside and bypassed the pending hint. Same entry, unit tier.
+  // Minimal failing input: hint pending, password page -> blank page, then afterLiveView().
+  it('does not hand back when the live view closes on a page that still misses the completion hint', async () => {
+    const { driver, state } = desktop('password');
+    // The sign-in window is the focused one, so the refresh re-reads it rather than following another window.
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(run.latest()).toMatchObject({ phase: 'ready' });
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
+  });
+
   it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {
     const { driver, state } = desktop('password');
     driver.qr = async () => ({
