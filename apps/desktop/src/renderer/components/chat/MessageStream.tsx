@@ -1461,11 +1461,6 @@ export function collectSessionImageSrcs(
       for (const m of item.items) {
         if (m.kind === 'image' && m.url) push(m.url);
       }
-    } else if (item.type === 'work_group') {
-      // A finished work timeline still renders its replies' replacement cards.
-      out.push(
-        ...collectSessionImageSrcs(item.children as RenderItem[], mediaOrigin, ghostCards, isSessionStreaming),
-      );
     } else if (item.type === 'ghost_card') {
       if (ghostCards) {
         for (const image of collectGhostCardGalleryImages(
@@ -1553,21 +1548,35 @@ export function collectReplyGalleryImages(
 /**
  * The task image gallery: every image in the loaded history, across turns, in
  * render order. Each entry records the render item showing it, so a URL shown
- * twice opens where it was clicked.
+ * twice opens where it was clicked. `structuredImages` lists one item's uploads,
+ * tool media and plugin-card images (collectSessionImageSrcs).
  */
 export function collectTaskImageGallery(
   items: readonly RenderItem[],
-  itemImages: ReadonlyMap<string, readonly GalleryImage[]>,
+  structuredImages: (item: RenderItem | WorkGroupChildItem) => readonly GalleryImage[],
   replyOptions: ReplyGalleryOptions,
   ghostCards?: GhostCardSnapshot,
 ): GalleryImage[] {
   const gallery: GalleryImage[] = [];
   for (const item of items) {
+    // A finished work timeline renders its children in order (replies and the
+    // cards replacing them), so the row lists them in that order too.
+    const row: GalleryImage[] = [];
+    const visit = (node: RenderItem | WorkGroupChildItem) => {
+      if (node.type === 'work_group') {
+        for (const child of node.children) visit(child);
+        return;
+      }
+      row.push(...structuredImages(node));
+      row.push(...collectReplyGalleryImages(node, item.key, replyOptions, ghostCards));
+    };
+    visit(item);
     // Uploads and tool media: repeats of one address in a row are told apart by
-    // order, as their renderers count them (plugin-card images carry galleryId).
-    const structured = (itemImages.get(item.key) ?? []).filter((image) => !image.galleryId);
+    // order, as their renderers count them (reply images carry their own
+    // occurrence; plugin-card images carry galleryId).
+    const structured = row.filter((image) => !image.galleryId && image.target === undefined);
     const repeats = repeatIndexes(structured.map((image) => image.src));
-    for (const image of itemImages.get(item.key) ?? []) {
+    for (const image of row) {
       const at = structured.indexOf(image);
       gallery.push({
         ...image,
@@ -1575,7 +1584,6 @@ export function collectTaskImageGallery(
         ...(at >= 0 ? { occurrence: structuredImageOccurrence(repeats[at]!) } : {}),
       });
     }
-    gallery.push(...collectReplyGalleryImages(item, item.key, replyOptions, ghostCards));
   }
   return gallery;
 }
@@ -4397,15 +4405,20 @@ export function MessageStream({
       ownershipPending: Boolean(sessionId) && !localConfirmed,
       resolveInWorkspace: Boolean(sessionId) && localConfirmed,
     };
+    // Rows reuse their memoized list; children of a work timeline are listed here.
+    const rows = new Set<RenderItem | WorkGroupChildItem>(renderMetadataItems);
     return collectTaskImageGallery(
       renderMetadataItems,
-      messageImageCollections,
+      (node) =>
+        (rows.has(node) ? messageImageCollections.get(node.key) : undefined) ??
+        collectSessionImageSrcs([node as RenderItem], galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming),
       replyOptions,
       ghostCardSnapshot,
     );
   }, [
     renderMetadataItems,
     messageImageCollections,
+    isSessionStreaming,
     sessionFileValue,
     galleryMediaOrigin,
     workingDir,

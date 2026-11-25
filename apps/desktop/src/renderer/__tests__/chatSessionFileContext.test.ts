@@ -383,7 +383,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     ];
     const gallery = collectTaskImageGallery(
       turns,
-      new Map(turns.map((item) => [item.key, collectSessionImageSrcs([item])])),
+      (item) => collectSessionImageSrcs([item as RenderItem]),
       {
         cache: new Map(),
         workingDir: '/work',
@@ -438,7 +438,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
         { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: first } },
         { type: 'message', key: 'a2', message: { clientId: 'a2', role: 'assistant', content: second } },
       ];
-      const gallery = collectTaskImageGallery(turns, new Map(), {
+      const gallery = collectTaskImageGallery(turns, () => [], {
         cache: new Map(),
         workingDir: '/work',
         allowPrivilegedLinks: true,
@@ -510,7 +510,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     };
     const gallery = collectTaskImageGallery(
       [item],
-      new Map([[item.key, collectSessionImageSrcs([item])]]),
+      (node) => collectSessionImageSrcs([node as RenderItem]),
       {
         cache: new Map(),
         workingDir: '/work',
@@ -547,10 +547,12 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
   });
 
   // PR #12724 review：收进已完成工作时间线的回复被插件卡片替换后，卡片仍在时间线里显示，
-  // 卡片图要进任务画廊、被替换的正文图不进。最小失败输入：画廊为空（卡片图漏收）。
-  it('工作时间线里替换回复的插件卡片图进任务画廊', () => {
+  // 卡片图要进任务画廊、被替换的正文图不进，且与前面普通回复的图按时间线顺序排列。
+  // 最小失败输入：画廊漏收卡片图；或卡片图排在前一条回复的图之前。
+  it('工作时间线里替换回复的插件卡片图按时间线顺序进任务画廊', () => {
     const cardImage = `cindy-media://blobs/${'c'.repeat(64)}.png`;
     const replyImage = `cindy-media://blobs/${'r'.repeat(64)}.png`;
+    const earlierImage = `cindy-media://blobs/${'e'.repeat(64)}.png`;
     const ghostCards: GhostCardSnapshot = {
       version: 1,
       liveCards: [],
@@ -563,12 +565,13 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       key: 'wg',
       isStreaming: false,
       children: [
+        { type: 'message', key: 'a0', message: { clientId: 'a0', role: 'assistant', content: `![e](${earlierImage})` } },
         { type: 'message', key: 'a1', message: { clientId: 'a1', role: 'assistant', content: `![r](${replyImage})` } },
       ],
     } as unknown as RenderItem;
     const gallery = collectTaskImageGallery(
       [group],
-      new Map([[group.key, collectSessionImageSrcs([group], undefined, ghostCards)]]),
+      (node) => collectSessionImageSrcs([node as RenderItem], undefined, ghostCards),
       {
         cache: new Map(),
         workingDir: '/work',
@@ -579,7 +582,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       },
       ghostCards,
     );
-    expect(gallery.map((image) => image.src)).toEqual([cardImage]);
+    expect(gallery.map((image) => image.src)).toEqual([earlierImage, cardImage]);
   });
 
   // PR #12724 review：画廊只收回复实际显示的图。伙伴开场选项列表显示成按钮、不渲染正文，
@@ -600,7 +603,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
         },
       },
     ];
-    const gallery = collectTaskImageGallery(turns, new Map(), {
+    const gallery = collectTaskImageGallery(turns, () => [], {
       cache: new Map(),
       workingDir: '/work',
       allowPrivilegedLinks: true,
@@ -638,7 +641,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       const session = { sessionId: 'task', workingDir: '/work', origin: LOCAL_FILE_ORIGIN, localConfirmed: true };
       const mount = (content: string) => {
         const item: RenderItem = { type: 'message', key: 'r', message: { clientId: 'r', role: 'assistant', content } };
-        const gallery = collectTaskImageGallery([item], new Map(), options);
+        const gallery = collectTaskImageGallery([item], () => [], options);
         return render(
           React.createElement(ChatSessionFileProvider, {
             value: session,
