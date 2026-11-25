@@ -5,7 +5,7 @@ import { createZstdDecompress, constants } from 'node:zlib';
 const MAX_FRAME = 1024 * 1024 * 1024;
 const MAX_OUTPUT = 1024 * 1024 * 1024;
 
-export async function* readZstdFrames(file: string, onBytes?: (bytes: number) => void): AsyncGenerator<Buffer> {
+export async function* readZstdFrames(file: string, onBytes?: (bytes: number) => void, signal?: AbortSignal): AsyncGenerator<Buffer> {
   const handle = await fs.open(file, 'r');
   let size: number;
   try {
@@ -15,16 +15,26 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
     throw error;
   }
   let offset = 0;
+  // A frame can contain many tiny blocks. Read ahead in bounded chunks so
+  // walking block headers does not issue one filesystem request per block.
+  const buffer = Buffer.alloc(64 * 1024);
+  let bufferStart = 0, buffered = 0;
   const read = async (count: number): Promise<Buffer> => {
+    signal?.throwIfAborted();
     if (count < 0 || offset + count > size) throw new Error('Truncated Zstandard frame');
-    const result = Buffer.alloc(count);
-    const { bytesRead } = await handle.read(result, 0, count, offset);
-    if (bytesRead !== count) throw new Error('Truncated Zstandard frame');
+    if (offset < bufferStart || offset + count > bufferStart + buffered) {
+      bufferStart = offset;
+      const result = await handle.read(buffer, 0, buffer.length, offset);
+      buffered = result.bytesRead;
+    }
+    if (offset + count > bufferStart + buffered) throw new Error('Truncated Zstandard frame');
+    const result = buffer.subarray(offset - bufferStart, offset - bufferStart + count);
     offset += count;
     return result;
   };
   try {
     while (offset < size) {
+      signal?.throwIfAborted();
       const start = offset;
       const magic = (await read(4)).readUInt32LE();
       if (magic >= 0x184d2a50 && magic <= 0x184d2a5f) {
@@ -57,7 +67,7 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
       }
       if (descriptor & 4) await read(4);
       if (offset - start > MAX_FRAME) throw new Error('Oversized Zstandard frame');
-      const raw = createReadStream(file, { start, end: offset - 1 });
+      const raw = createReadStream(file, { start, end: offset - 1, signal });
       if (onBytes) raw.on('data', (chunk) => onBytes(chunk.length));
       const decoder = createZstdDecompress({ params: { [constants.ZSTD_d_windowLogMax]: 27 } });
       raw.on('error', (error) => decoder.destroy(error));
@@ -74,6 +84,8 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
         decoder.destroy();
       }
     }
+  } catch (error) {
+    if (!signal?.aborted) throw error;
   } finally {
     await handle.close();
   }

@@ -60,3 +60,24 @@ it('scans and reads messages across appended DeepSeek frames', async () => {
     expect(messages).toEqual(['question', 'answer']);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+// Regression: a small frame with many empty blocks must not stall session discovery.
+it('reads a frame with many tiny blocks within the scan budget', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-zstd-blocks-'));
+  const file = path.join(dir, 'sample.zstd');
+  try {
+    // Single-segment frame with a five-byte raw block followed by 200,000 empty blocks.
+    const prefix = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x20, 5, 0x28, 0, 0, ...Buffer.from('test\n')]);
+    const empty = Buffer.alloc(200_000 * 3);
+    const last = Buffer.from([1, 0, 0]);
+    await writeFile(file, Buffer.concat([prefix, empty, last]));
+    const lines = [];
+    for await (const line of readLines(file, { concatenatedZstd: true })) lines.push(line);
+    expect(lines).toEqual(['test']);
+    const controller = new AbortController();
+    controller.abort();
+    const cancelled = [];
+    for await (const line of readLines(file, { concatenatedZstd: true, signal: controller.signal })) cancelled.push(line);
+    expect(cancelled).toEqual([]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 5000);

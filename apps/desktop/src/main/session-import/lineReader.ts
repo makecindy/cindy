@@ -29,7 +29,7 @@ export interface LineReadOptions {
 
 function openText(file: string, opts: LineReadOptions): { stream: Readable; close: () => void } {
   if (isZstdPath(file) && opts.concatenatedZstd) {
-    const stream = Readable.from(readZstdFrames(file, opts.onBytes));
+    const stream = Readable.from(readZstdFrames(file, opts.onBytes, opts.signal));
     stream.setEncoding('utf-8');
     return { stream, close: () => stream.destroy() };
   }
