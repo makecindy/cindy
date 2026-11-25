@@ -5256,7 +5256,9 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['before clear', 'after clear']);
   });
 
-  it('keeps a device-link queue item settling until its DB message arrives', async () => {
+  // Unit regression: a controller's own queued send can be withdrawn on the host.
+  // A missed withdrawal push must also clear the provisional bubble on the next snapshot.
+  it.each(['dispatch', 'withdraw', 'late withdrawal', 'missed withdrawal'] as const)('reconciles a remote queue head after %s', async (outcome) => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
       sessionId: SESSION_ID,
@@ -5272,6 +5274,7 @@ describe('makerChatStore text delta batching', () => {
         queued = args[1] as AgentInputQueuedMessage;
         return projection(SESSION_ID, { pendingQueue: [queued] });
       }
+      if (channel === 'local-db:messages:around-client-id') throw new Error('[NOT_FOUND] Message 不存在');
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
       throw new Error(`unexpected remote channel: ${channel}`);
     });
@@ -5289,8 +5292,21 @@ describe('makerChatStore text delta batching', () => {
     const clientId = queued?.clientId;
     expect(clientId).toBeTruthy();
 
-    onInputProjection?.(projection(SESSION_ID));
+    if (outcome === 'late withdrawal') onInputProjection?.(projection(SESSION_ID));
+    onInputProjection?.(projection(SESSION_ID, outcome === 'missed withdrawal' ? {
+      queueSnapshot: { host: 'restarted', sequence: 1, dispatchClientId: null },
+    } : outcome === 'dispatch' ? {} : {
+      withdrawnQueueClientIds: [clientId!],
+    }));
+    if (outcome === 'missed withdrawal') {
+      vi.advanceTimersByTime(10_000);
+      await flushPromises();
+    }
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
+    if (outcome !== 'dispatch') {
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([]);
+      return;
+    }
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
       expect.objectContaining({ clientId, content: 'settling remote', isPendingPersist: true }),
     ]);
@@ -5304,6 +5320,27 @@ describe('makerChatStore text delta batching', () => {
     const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(messages.filter((message) => message.clientId === clientId)).toHaveLength(1);
     expect(messages[0]?.isPendingPersist).toBeUndefined();
+  });
+
+  // Unit regression: remove B captured A before a second device withdrew A.
+  it('ignores an older remove response after a newer withdrawal push', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const a = activeTurnRecoveryItem('A', 'a');
+    const b = activeTurnRecoveryItem('B', 'b');
+    const snapshot = (sequence: number, pendingQueue: AgentInputQueuedMessage[]) =>
+      projection(SESSION_ID, { pendingQueue, queueSnapshot: { host: 'host', sequence, dispatchClientId: null } });
+    let reply!: (value: AgentInputProjection) => void;
+    deviceLinkInvoke.mockImplementation(async (_deviceId, channel) => {
+      if (channel === 'maker:input:remove') return new Promise<AgentInputProjection>(resolve => { reply = resolve; });
+      return snapshot(3, []);
+    });
+    onInputProjection?.(snapshot(1, [a, b]));
+    makerChatStore.removeFromQueue(SESSION_ID, b.clientId);
+    await flushPromises();
+    onInputProjection?.({ ...snapshot(3, []), withdrawnQueueClientIds: [a.clientId, b.clientId] });
+    reply(snapshot(2, [a]));
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([]);
   });
 
   it('keeps pending remote attachment URLs live until the DB ack retires the send', async () => {
@@ -5600,7 +5637,9 @@ describe('makerChatStore text delta batching', () => {
       expect.objectContaining({ clientId, text: 'materialized steer' }),
     ]);
 
-    onInputProjection?.(projection(SESSION_ID));
+    onInputProjection?.(projection(SESSION_ID, {
+      queueSnapshot: { host: 'host', sequence: 1, dispatchClientId: null, pendingSteerClientIds: [clientId!] },
+    }));
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
       expect.objectContaining({ clientId, content: 'materialized steer', isPendingPersist: true }),
     ]);
