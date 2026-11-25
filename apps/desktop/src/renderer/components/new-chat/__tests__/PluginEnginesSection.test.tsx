@@ -19,6 +19,7 @@
  *   那台没开开关或报告不可用的引擎仍被列出。
  * - tier：unit(jsdom，渲染真实组件，外部 hook 用内存替身)。
  */
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -375,7 +376,8 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
       draft.result.current.refresh();
       await Promise.resolve();
     });
-    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    // A legacy peer can omit artwork. The local catalogue supplies the approved mark.
+    expect(draft.result.current.engines).toEqual([{ ...newlyEnabled, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
     // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
@@ -391,7 +393,7 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
     // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
     draft.rerender({ active: true });
     await act(async () => { await Promise.resolve(); });
-    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(draft.result.current.engines).toEqual([{ ...newlyPublished, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
