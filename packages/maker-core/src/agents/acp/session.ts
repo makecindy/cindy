@@ -176,7 +176,11 @@ export interface OpenAcpSessionOptions {
   expandSlashInvocation?: (text: string) => Promise<string | null>;
   /** Deliver `briefing` once even on a resumed/loaded session (mid-session Orca Lead promotion). */
   forceBriefingOnResume?: boolean;
-  /** Invoked once when `briefing` is actually prepended to a dispatched non-command prompt. */
+  /**
+   * Invoked once when the role instructions (`roleBriefing`, or rules queued with `queuePluginEngineBriefing`) are actually
+   * prepended to a dispatched non-command prompt. It goes with the rules and with nothing else: the host briefing alone
+   * (for instance the companion profile of a resumed conversation) never calls it.
+   */
   onBriefingDelivered?: () => void;
   /** Called when the host mutates per-session vendor options (e.g. Orca Lead role activation/teardown). */
   onSetVendorOptions?: (patch: Record<string, unknown>) => void;
@@ -596,7 +600,7 @@ export class AcpSession {
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
     this.pendingBriefing = init.briefing.trim() ? init.briefing : null;
     this.pendingRoleBriefing = init.roleBriefing.trim() ? init.roleBriefing : null;
-    this.pendingBriefingDelivered = this.pendingBriefing || this.pendingRoleBriefing ? init.options.onBriefingDelivered : undefined;
+    this.pendingBriefingDelivered = this.pendingRoleBriefing ? init.options.onBriefingDelivered : undefined;
     for (const name of init.options.skillCommandNames ?? []) {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
@@ -1030,12 +1034,11 @@ export class AcpSession {
       if (!carrier) continue;
       this.briefingCarriers.delete(prompt);
       // Rules queued after it (a newer promotion) already replaced its own.
-      const restoresGeneral = carrier.general !== null && this.pendingBriefing === null;
-      const restoresRole = carrier.role !== null && this.pendingRoleBriefing === null;
-      if (restoresGeneral) this.pendingBriefing = carrier.general;
-      if (restoresRole) this.pendingRoleBriefing = carrier.role;
-      // The callback belongs to the rules the block carried, or to the host briefing when it carried none.
-      if (carrier.role !== null ? restoresRole : restoresGeneral) this.pendingBriefingDelivered = carrier.onDelivered;
+      if (carrier.general !== null && this.pendingBriefing === null) this.pendingBriefing = carrier.general;
+      if (carrier.role !== null && this.pendingRoleBriefing === null) {
+        this.pendingRoleBriefing = carrier.role;
+        this.pendingBriefingDelivered = carrier.onDelivered;
+      }
     }
   }
 

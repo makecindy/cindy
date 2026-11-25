@@ -1547,7 +1547,7 @@ describe('AcpAgent (the acp engine)', () => {
       transport: agent.transport,
       cwd: '/w',
       clientInfo: { name: 'cindy', version: 'test' },
-      briefing: 'Orca Lead role instructions',
+      roleBriefing: 'Orca Lead role instructions',
       onBriefingDelivered: delivered,
     });
     expect(delivered).not.toHaveBeenCalled();
@@ -2039,7 +2039,7 @@ describe('AcpAgent (the acp engine)', () => {
       const delivered = vi.fn();
       const session = await openAcpSession({
         transport: fake.transport, cwd: '/w', clientInfo, resumeSessionId: 'old-1',
-        briefing: 'Lead rules', forceBriefingOnResume: true, onBriefingDelivered: delivered,
+        roleBriefing: 'Lead rules', forceBriefingOnResume: true, onBriefingDelivered: delivered,
       });
       vi.spyOn(fake.transport, 'write').mockImplementationOnce(() => { throw new Error('EPIPE'); });
       await session.send({ type: 'user', content: 'start delegating' });
@@ -2130,6 +2130,54 @@ describe('AcpAgent (the acp engine)', () => {
       await session.send({ type: 'user', content: 'hello' });
       await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
       expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text }, { type: 'text', text: 'hello' }]);
+      await session.close();
+    });
+
+    // The delivery callback tells the host which team's rules reached the agent, so it goes with the rules and with
+    // nothing else: not with the host briefing, which a conversation resumed after the team was briefed still carries.
+    // Gap: the host briefing waiting behind a native command took its place back after Stop and erased the callback of
+    // rules queued meanwhile (their team stayed "not briefed"); a conversation resumed with its profile alone kept the
+    // old team's callback, so a team that ended was marked briefed again once the profile went out.
+    // Minimal failing input: "/compact" running, a message queued behind it, then rules queued and Stop; and a resume
+    // with the profile alone whose queued message is followed by the end of the team.
+    it('calls the callback of rules queued while the host briefing waited in a queued prompt that Stop discards', async () => {
+      const fake = createFakeAgent();
+      const delivered = vi.fn();
+      const session = await openAcpSession({ transport: fake.transport, cwd: '/w', clientInfo, briefing: 'Plugins and Skills' });
+      await session.send({ type: 'user', content: '/compact' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      await session.send({ type: 'user', content: 'queued' });
+      session.queuePluginEngineBriefing('Lead rules B', delivered);
+      await session.abort();
+      fake.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+      await session.send({ type: 'user', content: 'again' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Plugins and Skills\n\nLead rules B' },
+        { type: 'text', text: 'again' },
+      ]);
+      expect(delivered).toHaveBeenCalledOnce();
+      await session.close();
+    });
+
+    it('does not report a team briefed when only the profile of a resumed conversation went out', async () => {
+      const fake = createFakeAgent({ agentCapabilities: { sessionCapabilities: { resume: {} } }, handlers: { 'session/resume': () => ({}) } });
+      const delivered = vi.fn();
+      const session = await openAcpSession({
+        transport: fake.transport, cwd: '/w', clientInfo, resumeSessionId: 'old-1',
+        resumedCompanionBriefing: 'Companion profile', roleBriefing: 'Lead rules A', onBriefingDelivered: delivered,
+      });
+      await session.send({ type: 'user', content: '/compact' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+      await session.send({ type: 'user', content: 'queued' });
+      await session.setVendorOptions({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+      expect(fake.prompts[1]!.params.prompt).toEqual([
+        { type: 'text', text: 'Companion profile' },
+        { type: 'text', text: 'queued' },
+      ]);
+      expect(delivered).not.toHaveBeenCalled();
       await session.close();
     });
 
