@@ -204,10 +204,11 @@ describe('BotGlanceButton', () => {
     expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
-  // cloud-companions.md §3.1 「主力电脑行的显示」 (#11999 review, zqchris 11-25 20:44Z): the home row says
-  // «running there» only from a confirmed fact — a local companion that is active, or this companion's own
-  // answer from the very computer the row names. Every other state shows no running label, whatever else
-  // it shows. Before, a failed read and a paused companion fell back to «running there».
+  // cloud-companions.md §3.1 「主力电脑行的显示」 (#11999 review, zqchris 11-25 20:44Z and 21:31Z): the home row
+  // says «running there» only from a confirmed fact — a local companion that is active. Another computer's
+  // answer is about that computer's Cindy (version, computers it can hand over to), never about this
+  // companion, so a remote home never shows the running label. Before, a failed read, a paused companion and
+  // a home that answered while its companion runtime was not ready all said «running there».
   const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
   const cloudWith = (home: string | null, botId = 'bot-1') => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
     actors: [{ id: `a-${botId}`, externalId: botId, name: '葫芦', avatar: null, homeDeviceId: home,
@@ -230,7 +231,10 @@ describe('BotGlanceButton', () => {
     ['a local companion that is active', 'desk', { homeDeviceId: 'desk', mode: 'local', targets: [{ deviceId: 'laptop', name: 'Laptop', online: true }] }, 'active', true, null, 'Laptop'],
     ['a local companion that is paused (not asked)', 'desk', 'pending', 'paused', false, 'bots.cloud.resumeToMove', null],
     ['a remote home still being checked', 'laptop', 'pending', undefined, false, 'bots.cloud.checkingHome', null],
-    ['a remote home that answered, the same computer as the row', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] }, undefined, true, null, 'bots.cloud.thisComputer'],
+    ['a remote home that answered, the same computer as the row', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
+    // zqchris 21:31Z: the home's Cindy answers (version and an empty target list) while its companion runtime
+    // is not ready; nothing says this companion runs there.
+    ['a remote home whose Cindy answers while the companion state is unknown', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [] }, undefined, false, null, null],
     ['a remote answer about another home than the row', 'laptop', { homeDeviceId: 'carbon', homeName: 'Carbon', mode: 'remote', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
     ['a remote home that cannot be confirmed', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }, undefined, false, 'bots.cloud.homeUnresponsive', 'bots.cloud.forceHere'],
     ['a remote home explicitly offline or refusing', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
@@ -270,7 +274,9 @@ describe('BotGlanceButton', () => {
     expect(homeRow()).not.toContain('bots.glance.runningHere');
     expect(screen.getByText('bots.cloud.checkingHome')).toBeTruthy();
     answers.get('bot-2')!({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
-    await waitFor(() => expect(homeRow()).toContain('bots.glance.runningHere'));
+    await waitFor(() => expect(screen.queryByText('bots.cloud.checkingHome')).toBeNull());
+    expect(screen.getByRole('button', { name: /bots\.cloud\.thisComputer/ })).toBeTruthy();
+    expect(homeRow()).not.toContain('bots.glance.runningHere');
   });
 
   it('never shows an earlier answer for the same companion once the popover asked again', async () => {

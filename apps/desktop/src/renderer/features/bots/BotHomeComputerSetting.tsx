@@ -256,12 +256,11 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const checkingHome = !!currentRead?.pending && movable && !homeHere && !!home;
   /**
    * Whether the companion is known to run on its home, from confirmed facts only (cloud-companions.md §3.1):
-   * here, a local companion that is active; elsewhere, this companion's own answer from that very home (the
-   * computer the row names). Checking, no answer, a failed read, a paused companion, an answer about another
-   * home or no home at all: not known, so never shown as running.
+   * only a local companion that is active. Another computer's answer is about that computer's Cindy (its
+   * version and the computers it can hand over to), never about this companion: the request carries no
+   * companion and the answer no companion state (#11999 review). So a remote home is never shown as running.
    */
-  const homeRunning = homeHere ? status === 'active'
-    : !!home && choices?.mode === 'remote' && choices.homeDeviceId === home;
+  const homeRunning = homeHere && status === 'active';
   /** The home's own name for that line (null: the unnamed wording, never a placeholder name). */
   const checkingName = homeHere ? null : actor?.homeDevice?.name?.trim() || null;
   return { actor, home, homeHere, homeName, checkingHome, homeRunning, checkingName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,

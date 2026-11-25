@@ -239,7 +239,8 @@ function CloudComputers({
   // Listed online but not answering: only an explicit, forced take-over here (with its own warning).
   const unresponsive = state.choices?.reason === 'HOME_UNRESPONSIVE';
   const rows: ComputerRowModel[] = [
-    // «Running there» only from a confirmed fact (`homeRunning`), never from the absence of a known problem.
+    // «Running there» only from a confirmed fact (`homeRunning`: a local companion that is active), never from
+    // the absence of a known problem nor from another computer's device-level answer.
     { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true,
       ...(state.homeRunning ? {} : { unconfirmed: true }) },
     ...targets
