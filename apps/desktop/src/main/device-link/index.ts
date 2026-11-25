@@ -287,12 +287,16 @@ function officialWsUrl(): string {
  *
  * 无法静态确定时返回 null(主连接由 agent-net 承载、对端在 scoped agent-net 路由连接上、
  * client 未就绪),调用方按「没有判定」处理:宁可不报,也不谎称走了代理。
+ *
+ * legacy 连接从 `compatibilityConnection` 拿,不走 `client`:业务拿到的 client 是路由外壳
+ * (PeerLinks,会话层与 Device Link 共用),外壳上只暴露归组过的方法,legacy 连接由外壳外的
+ * `compatibilityConnection` 直接给出。
  */
 export function deviceLinkPeerTransportUrl(deviceId: string): string | null {
   if (!client) return null;
   const conn = client.connectionFor(deviceId);
   const cross = client.crossAccountConnection();
-  const legacy = client.legacyConnection();
+  const legacy = compatibilityConnection?.() ?? null;
   const route = classifyPeerTransportRoute({
     isPrimary: conn === client,
     isLegacy: !!legacy && conn === legacy,

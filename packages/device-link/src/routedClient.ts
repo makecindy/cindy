@@ -254,16 +254,6 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return (this.crossAccountRunning ? this.crossAccount : null) ?? this;
   }
 
-  /**
-   * 旧同账号对端专用的兼容连接(没有则为 null)。
-   *
-   * host 据此区分「承载某个 peer 的连接是哪条」—— 它与跨账号的官方连接是两条不同的
-   * 连接,用的中转也不同(legacy 走当前中转,跨账号走官方中转)。
-   */
-  override legacyConnection(): DeviceLinkClient | null {
-    return this.legacy;
-  }
-
   preferPrimaryScopedConnection(check: () => boolean): () => void {
     this.primaryScopedPreference = check;
     return () => { if (this.primaryScopedPreference === check) this.primaryScopedPreference = () => false; };

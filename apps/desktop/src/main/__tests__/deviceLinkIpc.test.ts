@@ -31,6 +31,9 @@ const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }
 vi.mock('../device-link/deviceLinkApi.desktop.js', () => ({
   deviceLinkApiFetch: vi.fn(),
   resolveDeviceLinkApiBase: () => relayScope.baseUrl,
+  // 官方中转的 origin:自建中转选中时,跨账号对端(共享任务 / 供应商分享)走独立官方连接,
+  // 出站判定要把这条线路也作为候选(见 device-link/ipc.ts 的 handleGetProxyVerdict)。
+  officialDeviceLinkApiBase: () => 'https://official-relay.test.invalid',
 }));
 
 // Transport windows are outside this in-memory IPC handler harness.
@@ -289,6 +292,8 @@ describe('device-link IPC handlers', () => {
   });
 
   it('#9537 出站路径判定:两条候选线路 origin 都探测,透传脱敏判定', async () => {
+    // 当前中转(自建)与官方中转是两个 origin:自建中转选中时跨账号对端走独立官方连接。
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
     const probe = vi.fn(async () => ({
       source: 'system' as const,
       kind: 'proxy' as const,
@@ -301,10 +306,9 @@ describe('device-link IPC handlers', () => {
       proxy: 'http://127.0.0.1:7890',
     });
     // 两条候选:当前中转(同账号设备)+ 官方中转(自建中转下共享任务走独立官方连接)。
-    // 测试端点替身对两者同值,无自建中转时即退化为单候选。
     expect(probe).toHaveBeenCalledWith([
-      'https://continuity.test.invalid',
-      'https://continuity.test.invalid',
+      'https://relay-a.test.invalid',
+      'https://official-relay.test.invalid',
     ]);
   });
 
