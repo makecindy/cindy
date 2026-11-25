@@ -532,6 +532,32 @@ describe('BotHomeComputerSetting', () => {
     expect(screen.queryByText(text)).toBeNull();
   });
 
+  // cloud-companions.md §3.1 「主力电脑行的显示」: the settings menu for each state of the table. The row itself only
+  // names the main computer (no running label); a failed read keeps its failure line and never falls back to
+  // a checking or loading line, and a paused companion is not asked.
+  const answered = (homeDeviceId: string, extra: Record<string, unknown> = {}) =>
+    ({ homeDeviceId, homeName: homeDeviceId === 'laptop' ? 'Laptop' : 'Carbon', mode: 'remote', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }], ...extra });
+  it.each([
+    ['a local companion that is active', 'desk', undefined, local(), 'bots.cloud.switchTo:{"device":"Laptop"}'],
+    ['a local companion that is paused', 'desk', 'paused', null, 'bots.cloud.resumeToMove:{"name":"Mia"}'],
+    ['a remote home still being checked', 'laptop', undefined, 'pending', 'bots.cloud.checkingHome:{"device":"Laptop"}'],
+    ['a remote home that answered, the same computer', 'laptop', undefined, answered('laptop'), 'bots.cloud.switchHere'],
+    ['a remote answer about another home', 'laptop', undefined, answered('carbon'), 'bots.cloud.switchHere'],
+    ['a remote home that cannot be confirmed', 'laptop', undefined, answered('laptop', { mode: 'takeOver', reason: 'HOME_UNRESPONSIVE' }), 'bots.cloud.forceHere'],
+    ['a remote home explicitly offline or refusing', 'laptop', undefined, answered('laptop', { mode: 'takeOver' }), 'bots.cloud.switchHere'],
+    ['a remote home running an older Cindy', 'laptop', undefined, answered('laptop', { mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] }), 'bots.cloud.homeOutdated:{"name":"Mia","device":"Laptop"}'],
+    ['a read that failed', 'laptop', undefined, 'reject', 'bots.cloud.devicesFailed'],
+  ] as const)('shows the menu for %s', async (_, home, status, read, text) => {
+    if (read === 'pending') maker.getCompanionHomeChoices.mockReturnValue(new Promise(() => {}));
+    else if (read === 'reject') maker.getCompanionHomeChoices.mockRejectedValue(new Error('directory read failed'));
+    else if (read) maker.getCompanionHomeChoices.mockResolvedValue(read);
+    show(snapshot(home), status ? { status } : {});
+    openMenu();
+    expect(await screen.findByText(text)).toBeTruthy();
+    if (read !== 'pending') expect(screen.queryByText(/bots\.cloud\.(checkingHome|loadingDevices)/)).toBeNull();
+    if (!read) expect(maker.getCompanionHomeChoices).not.toHaveBeenCalled();
+  });
+
   // While a confirmation runs, the main computer is asked again: the dialog says so. A confirmed force asks it
   // once, briefly (its own wording); an ordinary confirmation asks in full.
   it.each([

@@ -204,32 +204,119 @@ describe('BotGlanceButton', () => {
     expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: decided });
   });
 
-  // cloud-companions.md §3.1 (author self-review, 11-25): opening the popover asks the main computer about its
-  // state (up to about half a minute when it does not answer). Meanwhile the popover says so, and the home row
-  // claims «running there» only once the home answered: never while checking, nor when only a take-over is left.
-  it.each([
-    ['answers', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, true],
-    ['cannot be confirmed', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, false],
-    ['is explicitly gone', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] }, false],
-  ] as const)('says it is checking the main computer, then shows its state once it %s', async (_, choices, running) => {
-    const cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
-      actors: [{ id: 'a-1', externalId: 'bot-1', name: '葫芦', avatar: null, homeDeviceId: 'laptop',
-        homeDevice: { deviceId: 'laptop', name: 'Laptop', online: true, isSelf: false } }] };
-    resetCompanionCloudStoreForTests(cloud);
-    h.local = [{ id: 'bot-1', name: '葫芦', status: 'active', sessionId: 's1' }];
-    let answer!: (value: unknown) => void;
+  // cloud-companions.md §3.1 「主力电脑行的显示」 (#11999 review, zqchris 11-25 20:44Z): the home row says
+  // «running there» only from a confirmed fact — a local companion that is active, or this companion's own
+  // answer from the very computer the row names. Every other state shows no running label, whatever else
+  // it shows. Before, a failed read and a paused companion fell back to «running there».
+  const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
+  const cloudWith = (home: string | null, botId = 'bot-1') => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [],
+    actors: [{ id: `a-${botId}`, externalId: botId, name: '葫芦', avatar: null, homeDeviceId: home,
+      homeDevice: home ? { deviceId: home, name: home === 'desk' ? 'Desk' : 'Laptop', online: true, isSelf: home === 'desk' } : null }] });
+  type Read = 'pending' | 'reject' | Record<string, unknown>;
+  const showCloud = (home: string | null, read: Read, localStatus?: string) => {
+    resetCompanionCloudStoreForTests(cloudWith(home));
+    h.local = localStatus ? [{ id: 'bot-1', name: '葫芦', status: localStatus, sessionId: 's1' }] : [];
+    const getCompanionHomeChoices = vi.fn(() => read === 'pending' ? new Promise(() => {})
+      : read === 'reject' ? Promise.reject(new Error('directory read failed')) : Promise.resolve(read));
     Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
-      getCompanionCloudState: async () => cloud,
-      onCompanionCloudChanged: () => () => undefined,
-      getCompanionHomeChoices: () => new Promise((resolve) => { answer = resolve; }),
+      getCompanionCloudState: async () => cloudWith(home), onCompanionCloudChanged: () => () => undefined, getCompanionHomeChoices,
     });
     render(<BotGlanceButton bot={bot} cloudHome />);
     fireEvent.click(screen.getByTestId('bot-glance-button'));
-    expect((await screen.findByRole('status')).textContent).toBe('bots.cloud.checkingHome');
-    expect(screen.getAllByTestId('bot-glance-computer')[0]!.textContent).not.toContain('bots.glance.runningHere');
-    answer(choices);
-    await waitFor(() => expect(screen.queryByText('bots.cloud.checkingHome')).toBeNull());
-    expect(screen.getAllByTestId('bot-glance-computer')[0]!.textContent?.includes('bots.glance.runningHere')).toBe(running);
+    return getCompanionHomeChoices;
+  };
+  const homeRow = () => screen.getAllByTestId('bot-glance-computer')[0]!.textContent ?? '';
+  it.each([
+    ['a local companion that is active', 'desk', { homeDeviceId: 'desk', mode: 'local', targets: [{ deviceId: 'laptop', name: 'Laptop', online: true }] }, 'active', true, null, 'Laptop'],
+    ['a local companion that is paused (not asked)', 'desk', 'pending', 'paused', false, 'bots.cloud.resumeToMove', null],
+    ['a remote home still being checked', 'laptop', 'pending', undefined, false, 'bots.cloud.checkingHome', null],
+    ['a remote home that answered, the same computer as the row', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] }, undefined, true, null, 'bots.cloud.thisComputer'],
+    ['a remote answer about another home than the row', 'laptop', { homeDeviceId: 'carbon', homeName: 'Carbon', mode: 'remote', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
+    ['a remote home that cannot be confirmed', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }, undefined, false, 'bots.cloud.homeUnresponsive', 'bots.cloud.forceHere'],
+    ['a remote home explicitly offline or refusing', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'takeOver', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
+    ['a remote home running an older Cindy', 'laptop', { homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'unavailable', reason: 'HOME_OUTDATED', targets: [] }, undefined, false, null, null],
+    ['a read that failed', 'laptop', 'reject', undefined, false, 'bots.cloud.devicesFailed', null],
+    ['a companion without a home', null, { homeDeviceId: null, mode: 'takeOver', targets: [here] }, undefined, false, null, 'bots.cloud.thisComputer'],
+  ] as const)('shows the home row for %s', async (_, home, read, localStatus, running, line, action) => {
+    const asked = showCloud(home, read as Read, localStatus);
+    await screen.findByTestId('bot-glance-popover');
+    if (line) expect(await screen.findByText(line)).toBeTruthy();
+    else await waitFor(() => expect(asked).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByTestId('bot-glance-computer').length).toBe(action ? 2 : 1));
+    expect(homeRow().includes('bots.glance.runningHere')).toBe(running);
+    if (action) expect(screen.getByRole('button', { name: new RegExp(action) })).toBeTruthy();
+    if (localStatus === 'paused') expect(asked).not.toHaveBeenCalled();
+    // Settled states keep their own line: no checking line left behind, no running label coming back.
+    if (line !== 'bots.cloud.checkingHome') expect(screen.queryByText('bots.cloud.checkingHome')).toBeNull();
+  });
+
+  // Late results: switching companions while the popover is open asks again for the new one; the previous
+  // companion's answer arriving afterwards never shows (neither its running label nor its choices).
+  it("never shows the previous companion's late answer after switching companions", async () => {
+    const both = { ...cloudWith('laptop'), actors: [...cloudWith('laptop').actors, ...cloudWith('laptop', 'bot-2').actors] };
+    resetCompanionCloudStoreForTests(both);
+    const answers = new Map<string, (value: unknown) => void>();
+    Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
+      getCompanionCloudState: async () => both, onCompanionCloudChanged: () => () => undefined,
+      getCompanionHomeChoices: vi.fn((botId: string) => new Promise((resolve) => { answers.set(botId, resolve); })),
+    });
+    const view = render(<BotGlanceButton bot={bot} cloudHome />);
+    fireEvent.click(screen.getByTestId('bot-glance-button'));
+    await waitFor(() => expect(answers.has('bot-1')).toBe(true));
+    view.rerender(<BotGlanceButton bot={{ ...bot, id: 'bot-2' }} cloudHome />);
+    await waitFor(() => expect(answers.has('bot-2')).toBe(true));
+    answers.get('bot-1')!({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(homeRow()).not.toContain('bots.glance.runningHere');
+    expect(screen.getByText('bots.cloud.checkingHome')).toBeTruthy();
+    answers.get('bot-2')!({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
+    await waitFor(() => expect(homeRow()).toContain('bots.glance.runningHere'));
+  });
+
+  it('never shows an earlier answer for the same companion once the popover asked again', async () => {
+    const answers: Array<(value: unknown) => void> = [];
+    resetCompanionCloudStoreForTests(cloudWith('laptop'));
+    Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
+      getCompanionCloudState: async () => cloudWith('laptop'), onCompanionCloudChanged: () => () => undefined,
+      getCompanionHomeChoices: () => new Promise((resolve) => { answers.push(resolve); }),
+    });
+    render(<BotGlanceButton bot={bot} cloudHome />);
+    const toggle = () => fireEvent.click(screen.getByTestId('bot-glance-button'));
+    toggle();
+    await waitFor(() => expect(answers).toHaveLength(1));
+    toggle();
+    await waitFor(() => expect(screen.queryByTestId('bot-glance-popover')).toBeNull());
+    toggle();
+    await waitFor(() => expect(answers).toHaveLength(2));
+    answers[0]!({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(homeRow()).not.toContain('bots.glance.runningHere');
+    expect(screen.getByText('bots.cloud.checkingHome')).toBeTruthy();
+  });
+
+  it('drops an answer that arrives after the popover is gone', async () => {
+    let answer!: (value: unknown) => void;
+    resetCompanionCloudStoreForTests(cloudWith('laptop'));
+    Object.assign((window as unknown as { electronAPI: { maker: Record<string, unknown> } }).electronAPI.maker, {
+      getCompanionCloudState: async () => cloudWith('laptop'), onCompanionCloudChanged: () => () => undefined,
+      getCompanionHomeChoices: () => new Promise((resolve) => { answer = resolve; }),
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const view = render(<BotGlanceButton bot={bot} cloudHome />);
+    fireEvent.click(screen.getByTestId('bot-glance-button'));
+    await screen.findByText('bots.cloud.checkingHome');
+    view.unmount();
+    answer({ homeDeviceId: 'laptop', homeName: 'Laptop', mode: 'remote', targets: [here] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  // Guard: only the cloud companion's home row changed. An ordinary companion's row still says it runs here.
+  it("keeps «running here» on an ordinary companion's row", async () => {
+    h.local = [{ id: 'bot-1', name: '葫芦', status: 'active', sessionId: 's1' }];
+    await openGlance();
+    expect(homeRow()).toContain('bots.glance.runningHere');
   });
 
   // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.

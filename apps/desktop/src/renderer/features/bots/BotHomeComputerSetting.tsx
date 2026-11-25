@@ -4,7 +4,7 @@
  * 本机是主力电脑时由本机交出；主力电脑在线时请它交出；主力电脑连不上时只能在这台电脑继续。
  * 确认后打开换过去的伙伴。服务器不支持云端伙伴时不出现。
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, Monitor } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -94,8 +94,17 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
   const conflict = useCompanionCindyConflictAction();
-  const [choices, setChoices] = useState<CompanionHomeChoices | null>(null);
-  const [choicesFailed, setChoicesFailed] = useState(false);
+  /**
+   * The latest read of the home choices, for the companion it was asked for: in flight, answered or failed.
+   * A result for another companion, or from an earlier request, never shows (see `load`).
+   */
+  const [homeRead, setHomeRead] = useState<{ botId: string; pending: boolean; choices: CompanionHomeChoices | null; failed: boolean } | null>(null);
+  const homeReadSeq = useRef(0);
+  // Switching companions or unmounting retires the request in flight: its late result is dropped.
+  useEffect(() => () => { homeReadSeq.current += 1; }, [bot.id]);
+  const currentRead = homeRead?.botId === bot.id ? homeRead : null;
+  const choices = currentRead?.choices ?? null;
+  const choicesFailed = !!currentRead?.failed;
   const [pending, setPending] = useState<CompanionTransferTarget | null>(null);
   /** The companion was still working when asked to move there: wait for it, or stop it. */
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
@@ -137,14 +146,18 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
 
   const load = () => {
     if (!movable) return;
-    setChoices(null);
-    setChoicesFailed(false);
+    const botId = bot.id;
+    const request = ++homeReadSeq.current;
     const api = companionCloudApi();
-    if (!api) { setChoicesFailed(true); return; }
+    if (!api) { setHomeRead({ botId, pending: false, choices: null, failed: true }); return; }
+    setHomeRead({ botId, pending: true, choices: null, failed: false });
     const owner = getDataOwnerGeneration();
-    void api.getCompanionHomeChoices(bot.id).then(
-      (next) => { if (isDataOwnerGenerationCurrent(owner)) setChoices(next); },
-      () => { if (isDataOwnerGenerationCurrent(owner)) setChoicesFailed(true); },
+    const settle = (next: { choices: CompanionHomeChoices | null; failed: boolean }) => {
+      if (isDataOwnerGenerationCurrent(owner) && request === homeReadSeq.current) setHomeRead({ botId, pending: false, ...next });
+    };
+    void api.getCompanionHomeChoices(botId).then(
+      (next) => settle({ choices: next, failed: false }),
+      () => settle({ choices: null, failed: true }),
     );
   };
 
@@ -240,10 +253,18 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
    * Opening the menu or the 近况 popover asks the home (another computer) about its state before any choice
    * is shown, and a confirmation asks it again: say so while it runs (cloud-companions.md §3.1).
    */
-  const checkingHome = movable && !homeHere && !!home && choices === null && !choicesFailed;
+  const checkingHome = !!currentRead?.pending && movable && !homeHere && !!home;
+  /**
+   * Whether the companion is known to run on its home, from confirmed facts only (cloud-companions.md §3.1):
+   * here, a local companion that is active; elsewhere, this companion's own answer from that very home (the
+   * computer the row names). Checking, no answer, a failed read, a paused companion, an answer about another
+   * home or no home at all: not known, so never shown as running.
+   */
+  const homeRunning = homeHere ? status === 'active'
+    : !!home && choices?.mode === 'remote' && choices.homeDeviceId === home;
   /** The home's own name for that line (null: the unnamed wording, never a placeholder name). */
   const checkingName = homeHere ? null : actor?.homeDevice?.name?.trim() || null;
-  return { actor, home, homeHere, homeName, checkingHome, checkingName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
+  return { actor, home, homeHere, homeName, checkingHome, homeRunning, checkingName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
     forceTarget, setForceTarget, forceHome, askForce, decidedHome, homeText, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }

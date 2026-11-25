@@ -162,8 +162,8 @@ interface ComputerRowModel {
    */
   force?: boolean;
   /**
-   * A cloud companion's home whose state is not confirmed (still being checked, or only a take-over here
-   * is possible): no «running there» claim on the row. Other rows are unchanged.
+   * A cloud companion's home not confirmed to run it (`HomeSwitch.homeRunning` is false): no «running
+   * there» claim on the row. Only the cloud companion's home row sets it; other rows are unchanged.
    */
   unconfirmed?: boolean;
   onSelect?: () => void;
@@ -226,22 +226,22 @@ function CloudComputers({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const loaded = useRef(false);
+  const loaded = useRef<string | null>(null);
   useEffect(() => {
-    if (open && !loaded.current) {
-      loaded.current = true;
+    if (open && loaded.current !== bot.id) {
+      loaded.current = bot.id;
       state.load();
     }
-    if (!open) loaded.current = false;
-    // 每次打开只读一次可以换去的电脑。
-  }, [open]);
+    if (!open) loaded.current = null;
+    // 每次打开只读一次可以换去的电脑；打开期间换了伙伴就为新伙伴重读（旧伙伴迟到的结果不会显示）。
+  }, [open, bot.id]);
   const targets = state.choices && state.choices.mode !== 'unavailable' ? state.choices.targets : [];
   // Listed online but not answering: only an explicit, forced take-over here (with its own warning).
   const unresponsive = state.choices?.reason === 'HOME_UNRESPONSIVE';
   const rows: ComputerRowModel[] = [
-    // The home is only said to be running there once it answered (or it is this computer).
+    // «Running there» only from a confirmed fact (`homeRunning`), never from the absence of a known problem.
     { key: `home:${state.home ?? ''}`, name: state.homeName, current: true, online: true,
-      ...(state.checkingHome || state.choices?.mode === 'takeOver' ? { unconfirmed: true } : {}) },
+      ...(state.homeRunning ? {} : { unconfirmed: true }) },
     ...targets
       .filter((target) => target.deviceId !== state.home)
       .map((target) => ({
