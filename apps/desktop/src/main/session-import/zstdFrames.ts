@@ -106,6 +106,11 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
       const decoder = createZstdDecompress({ params: { [constants.ZSTD_d_windowLogMax]: 27 } });
       raw.on('error', (error) => decoder.destroy(error));
       raw.pipe(decoder);
+      // A consumer that stops after a prefix leaves a pending read on the
+      // decoder. Aborting settles it at once instead of draining the frame.
+      const abort = (): void => { raw.destroy(); decoder.destroy(new Error('Zstandard read aborted')); };
+      if (signal?.aborted) abort();
+      else signal?.addEventListener('abort', abort, { once: true });
       let output = 0;
       try {
         for await (const chunk of decoder) {
@@ -114,6 +119,7 @@ export async function* readZstdFrames(file: string, onBytes?: (bytes: number) =>
           yield chunk as Buffer;
         }
       } finally {
+        signal?.removeEventListener('abort', abort);
         raw.destroy();
         decoder.destroy();
       }

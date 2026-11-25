@@ -110,6 +110,40 @@ it('stops reading a large frame once the consumer stops', async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 10000);
 
+// Regression: closing a prefix consumer must stop the frame read, not leave a
+// prefetched read draining the rest of the frame in the background.
+it('stops reading after a prefix consumer closes', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-zstd-close-'));
+  const file = path.join(dir, 'sample.zstd');
+  try {
+    const head = Buffer.from(JSON.stringify({ type: 'session', id: 'close-test', version: 4 }) + '\n');
+    const contentSize = Buffer.alloc(4);
+    contentSize.writeUInt32LE(head.length);
+    const blockHeader = head.length << 3;
+    const empty = Buffer.alloc(2_000_000 * 3); // ~6 MB of empty blocks after the text
+    await writeFile(file, Buffer.concat([
+      Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0xa0]),
+      contentSize,
+      Buffer.from([blockHeader & 0xff, (blockHeader >>> 8) & 0xff, (blockHeader >>> 16) & 0xff]),
+      head,
+      empty,
+      Buffer.from([1, 0, 0]),
+    ]));
+
+    let bytes = 0;
+    for await (const line of readLines(file, { concatenatedZstd: true, onBytes: (n) => { bytes += n; } })) {
+      expect(line).toContain('session');
+      break;
+    }
+    const atClose = bytes;
+    expect(atClose).toBeLessThan(512 * 1024);
+    // real-wait: a leaked frame read only appears once the pending file read settles
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(bytes - atClose).toBeLessThanOrEqual(128 * 1024);
+    expect(bytes).toBeLessThan(1024 * 1024);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 10000);
+
 // Regression: a small frame with many empty blocks must not stall session discovery.
 it('reads a frame with many tiny blocks within the scan budget', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-zstd-blocks-'));

@@ -29,9 +29,13 @@ export interface LineReadOptions {
 
 function openText(file: string, opts: LineReadOptions): { stream: Readable; close: () => void } {
   if (isZstdPath(file) && opts.concatenatedZstd) {
-    const stream = Readable.from(readZstdFrames(file, opts.onBytes, opts.signal));
+    // Destroying the wrapper alone leaves a prefetched frame read running until
+    // the whole frame decodes, so closing must abort the reader as well.
+    const closing = new AbortController();
+    const signal = opts.signal ? AbortSignal.any([opts.signal, closing.signal]) : closing.signal;
+    const stream = Readable.from(readZstdFrames(file, opts.onBytes, signal));
     stream.setEncoding('utf-8');
-    return { stream, close: () => stream.destroy() };
+    return { stream, close: () => { closing.abort(); stream.destroy(); } };
   }
   const raw = createReadStream(file, isZstdPath(file) || opts.maxBytes === undefined ? {} : { end: opts.maxBytes - 1 });
   if (opts.onBytes) raw.on('data', (chunk: Buffer | string) => opts.onBytes?.(chunk.length));
