@@ -1072,6 +1072,25 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Quota fallback regression (unit): unknown old capacity is not a reason to
+  // block a known overfull target; preserve history through the real handoff.
+  it.each([10_000, 300_000])('continues a Claude switch with unknown old window and %s tokens', async contextTokens => {
+    const deps = makeDeps([msg('user', 'Keep the migration plan and continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...(await deps.getSessionRow()),
+      agentKind: 'cc', contextWindow: 0, contextTokens, model: 'uncatalogued-model' });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareModelWindowSwitch('s1', {
+      contextWindow: 200_000, recheckTargetPressure: true, confirmedTargetPressure: true,
+    })).resolves.toBe(contextTokens > 200_000 ? 'rebuilt' : 'not-needed');
+    if (contextTokens > 200_000) {
+      expect(deps.commitRebuild).toHaveBeenCalledWith('s1',
+        expect.stringContaining('Keep the migration plan and continue'),
+        expect.objectContaining({ reason: 'model-window-switch' }));
+    } else expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('fails closed for a pressured cold SSH session without closing or rebuilding it', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({

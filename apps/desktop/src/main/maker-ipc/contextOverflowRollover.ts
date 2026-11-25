@@ -1098,7 +1098,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             reportedCurrentWindow,
             verifiedCurrentWindow,
           );
-    if (contextTokens > 0 && currentContextWindow <= 0) return 'unknown-context';
     const targetPressureRequiresRebuild =
       target.recheckTargetPressure === true &&
       shouldHandoffAfterContextAssessment(
@@ -1108,6 +1107,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
         }),
       );
+    // Missing old-route metadata cannot block a switch. If target pressure is
+    // known, use the existing durable handoff; otherwise try native continuation.
+    if (currentContextWindow <= 0 && !targetPressureRequiresRebuild) return 'not-needed';
     if (
       !targetPressureRequiresRebuild &&
       !shouldRebuildForModelWindowSwitch({
