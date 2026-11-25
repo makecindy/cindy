@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { InputHandoffSnapshot } from '@cindy/device-link';
 import type { HandoffDriver } from '../macDriver.js';
-import { InputHandoffSession, type HandoffResult, type HandoffTargetSpec } from '../session.js';
+import { InputHandoffSession, type HandoffCompletionHints, type HandoffResult, type HandoffTargetSpec } from '../session.js';
 import type { HandoffFieldPlan, NativeAxNode } from '../types.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
@@ -107,6 +107,7 @@ function start(
   driver: HandoffDriver,
   target: HandoffTargetSpec = { app: 'Google Chrome', windowTitle: 'Sign in' },
   fields?: HandoffFieldPlan[],
+  completeWhen?: HandoffCompletionHints,
 ) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
@@ -117,6 +118,7 @@ function start(
     purpose: 'Sign in',
     target,
     fields,
+    completeWhen,
     timeoutMs: 600_000,
     hostPid: 1,
     remoteInput: true,
@@ -508,6 +510,29 @@ describe('a waiting card watching its window', () => {
     await settle();
     expect(second.finished).toEqual([]);
     second.session.cancel();
+  });
+
+  // Production entry: InputHandoffSession watching the window, unit tier (fake driver). 2026-11-25 real run:
+  // twice a Ctrip sign-in handoff with complete_when url_contains ended "succeeded" while the page was still the
+  // sign-in page, because the owner switched to the scan tab / a slider check and the password fields went away.
+  // Existing tests only cover a page without hints ("ends when a form that is not a sign-in goes away").
+  // Minimal failing input: hint urlContains=app.example.com, password page -> blank page at the same address.
+  it('keeps waiting while fields are gone but the agent\'s completion hint is not met yet', async () => {
+    const { driver, state } = desktop('password');
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await settle();
+    await settle();
+    expect(run.finished).toEqual([]);
+    expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toContain('password');
+    state.screen = 'password';
+    await settle();
+    expect(run.finished).toEqual([]);
+    state.screen = 'signedIn';
+    state.windowTitle = 'Inbox';
+    await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
   });
 
   it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {

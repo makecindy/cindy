@@ -755,6 +755,12 @@ export class InputHandoffSession {
     return !!hints?.urlContains && !!step.url?.includes(hints.urlContains);
   }
 
+  /** The agent named a page text or address that marks the end, and this screen does not show it yet. */
+  private hintsPending(step: ExtractedStep): boolean {
+    const hints = this.options.completeWhen;
+    return !!(hints?.textAppears || hints?.urlContains) && !this.hintsMet(step);
+  }
+
   private shouldFinish(step: ExtractedStep): boolean {
     if (this.stayedOn !== undefined && this.stayedOn === step.signature) return false;
     if (this.hintsMet(step) || this.doneOutside) return true;
@@ -1177,12 +1183,20 @@ export class InputHandoffSession {
     if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
     // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
     if (!this.hintsMet(step)) {
+      const asked = this.step;
       this.step = step;
       const scanning = await this.showQr();
       // The owner may have ended it or started answering meanwhile.
       if (this.ended || this.busy || this.phase !== 'ready') return;
       if (scanning) {
         this.publish('ready');
+        return;
+      }
+      // The agent said what the end looks like and this is not it: a sign-in page that swapped its fields for a
+      // slider check or a scan tab is still mid-way. Keep the card as it was and keep watching the window.
+      if (this.hintsPending(step)) {
+        this.step = asked;
+        this.fieldsGoneReads = 0;
         return;
       }
     }
