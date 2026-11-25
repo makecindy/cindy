@@ -252,7 +252,7 @@ import {
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
 import {
-  PI_CACHE_RECOVERY_EXPECTATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT,
+  verifyPiResponsesCompletion, PI_CACHE_RECOVERY_EXPECTATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, TurnDispatchRejectedError,
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
@@ -6479,12 +6479,13 @@ function settleDirectProviderDispatch(session: Session, generation: number, even
   const direct = directApiTurnEvidence.get(session);
   if (direct?.generation !== generation) return;
   directApiTurnEvidence.delete(session);
-  if (event.type !== 'done' || !direct.verified || direct.id !== getSessionProvider(session.id)
+  if (event.type !== 'done' || direct.id !== getSessionProvider(session.id)
     || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)) return;
   const outcome = event.data as { raw?: { status?: string }; status?: string; cancelled?: boolean; silentStop?: boolean } | null;
   if (!outcome?.cancelled && !outcome?.silentStop && (
-    (event.source === 'codex' && outcome?.raw?.status === 'completed')
-    || (event.source === 'pi' && outcome?.status === 'completed')
+    (event.source === 'codex' && direct.verified && outcome?.raw?.status === 'completed')
+    || (event.source === 'pi' && outcome?.status === 'completed'
+      && verifyPiResponsesCompletion(event, direct.id, direct.recover.fingerprint))
   )) void direct.recover().catch(() => {});
 }
 

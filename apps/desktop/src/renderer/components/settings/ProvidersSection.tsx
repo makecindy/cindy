@@ -951,7 +951,7 @@ function DetailHeader({
         )}
         {provider && openAiGroupKind && (openAiGroup.allocation || (!subscriptionPool && openAiGroupKind === 'apiKey')) && (
           <OpenAiAccountGroupSection key={`openai-account-group:${provider.id}`} providerId={provider.id} group={openAiGroup}
-            mergeAction={openAiGroupKind === 'apiKey' ? <MergeProviderButton kind={null} providerId={provider.id}
+            settingsAnchor={!subscriptionPool} mergeAction={openAiGroupKind === 'apiKey' ? <MergeProviderButton kind={null} providerId={provider.id}
               providerName={provider.name} openAiAccounts={openAiGroup.accounts} onDone={openAiGroup.refresh} /> : undefined} />
         )}
         {assetModule ??

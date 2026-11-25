@@ -584,9 +584,9 @@ export function SubscriptionAccountsSection({
                       </div>
                       {!identityOnly && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
                         {mixed && view.strategy === 'order' && <div className="flex items-center gap-1">
-                          <Button variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
                             disabled={busy || index === 0} onClick={() => moveInOrder(index, -1)}><ArrowUp size={14} /></Button>
-                          <Button variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
                             disabled={busy || index === accounts.length - 1} onClick={() => moveInOrder(index, 1)}><ArrowDown size={14} /></Button>
                         </div>}
                         <Select
@@ -654,13 +654,13 @@ export function SubscriptionAccountsSection({
                           const test = t('settings.providers.custom.test.button');
                           const engine = check.agent === 'pi' ? 'Pi' : 'Codex';
                           const label = account.apiKey!.checks.length > 1 ? `${test} · ${engine}` : test;
-                          return <Button key={check.agent} variant="secondary" tone="quiet" size="sm" loading={pending}
+                          return <Button key={check.agent} data-settings-search-action="Test this pool API key on the selected engine" variant="secondary" tone="quiet" size="sm" loading={pending}
                             aria-label={`${label} · ${name}`} disabled={pending || busy}
                             onClick={() => void testKey(connectionId, check.agent)}>
                             {label}
                           </Button>;
                         })}
-                        <DropdownMenu>
+                        {account.apiKey?.connectionId !== providerId && <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
                                 closes the menu) never covers the controls wrapped above it. */}
@@ -730,7 +730,7 @@ export function SubscriptionAccountsSection({
                               {t('subscriptionAccounts.remove')}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
+                        </DropdownMenu>}
                       </div>}
                     </div>
                     {account.apiKey?.checks.flatMap(check => check.result ? [

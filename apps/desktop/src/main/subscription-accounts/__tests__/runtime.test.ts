@@ -456,6 +456,62 @@ it('reserves one API key slot across local, paired and shared starts with live a
   }
 });
 
+// Unit: moving a member must not strand its local native history or transfer
+// old group grants to the now independent connection. Existing sharing tests
+// did not change membership while the old engine was idle.
+it('keeps an existing local Key task on its native history after removal, but not an old share', async () => {
+  const model = 'gpt-6';
+  const connection = 'detached-fixture-key';
+  const member = { ...account('detached-member'), connectionId: connection, providerId: 'openai' };
+  h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+  h.apiMembers = [member];
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  const startSession = vi.fn(async (options: StartSessionOptions) => ({
+    id: options.resumeSessionId ?? randomUUID(), close: async () => {}, send: vi.fn(async () => {}),
+  } as unknown as AgentSessionHandle));
+  const agent = withSubscriptionAccounts({ kind: 'codex', startSession } as unknown as BaseAgent);
+  const start = (id: string, guest = false, providerId = 'openai', resumeSessionId?: string) => agent.startSession({
+    sessionId: id, providerId, model, resumeSessionId,
+    ...(guest ? { deviceHosted: { guest: true, guestProvider: {
+      providerId: 'openai', modelIds: [model], routeToken: 'synthetic-route',
+    } } } : {}),
+  } as StartSessionOptions);
+  try {
+    const pin = async (id: string) => {
+      const lease = await acquireSubscriptionAccount('openai', model, [], false, {
+        includeApiKeys: true, accountId: member.id,
+      });
+      await lease!.bind(['task:' + id]);
+      lease!.release();
+    };
+    await pin('detached-local');
+    await pin('detached-guest');
+    const local = await start('detached-local');
+    const guest = await start('detached-guest', true);
+    expect(startSession.mock.calls.map(([options]) => options.providerId)).toEqual([connection, connection]);
+    h.apiMembers = [{ ...member, providerId: connection }];
+
+    await local.send({ type: 'user', content: 'continue native thread' });
+    await expect(guest.send({ type: 'user', content: 'old group grant' })).rejects.toThrow('unavailable');
+    await guest.close();
+    await expect(start('detached-guest', true, 'openai', guest.id)).rejects.toThrow('unavailable');
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await local.close();
+    const resumed = await start('detached-local', false, 'openai', local.id);
+    expect(startSession.mock.lastCall?.[0]).toMatchObject({ providerId: connection, resumeSessionId: local.id });
+    await resumed.close();
+
+    h.apiAllowed = false;
+    const explicit = await start('detached-new', false, connection);
+    await explicit.send({ type: 'user', content: 'explicit recovery' });
+    expect(startSession.mock.lastCall?.[0].providerId).toBe(connection);
+    expect(h.bindings.has('task:detached-new')).toBe(false);
+    await explicit.close();
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
 // Unit through the production local handoff and reservation. The subscription is
 // the only native account, so a native-only sibling check hides the live Key.
 it.each([

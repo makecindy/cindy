@@ -15,6 +15,8 @@ import { providerManagementErrorKey } from '@/features/provider-group/providerMa
 import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupProbeResult } from '../../../shared/openAiAccountGroup';
 import { withLocalProviderGroupAccounts, type ProviderGroupAccountAllocation } from '../../../shared/providerGroup';
 import type { SubscriptionAccountView } from '../../../shared/subscriptionAccounts';
+import { providersSettings } from './ProvidersSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
 
@@ -55,7 +57,7 @@ function SubscriptionQuota({ providerId, accountId }: { providerId: string; acco
           : <p className="text-12 text-[var(--text-secondary)]">{t('subscriptionAccounts.unavailable')}</p>}
       </div>;
     }) : <p className="text-12 text-[var(--text-secondary)]">{t('subscriptionAccounts.unavailable')}</p>}
-    <Button variant="secondary" size="sm" disabled={busy} onClick={refresh}>{t('openAiAccountGroup.refresh')}</Button>
+    <Button data-settings-search-action="Refresh this subscription account's current quota" variant="secondary" size="sm" disabled={busy} onClick={refresh}>{t('openAiAccountGroup.refresh')}</Button>
   </div>;
 }
 
@@ -106,11 +108,13 @@ export function useOpenAiAccountGroup(providerId: string | undefined) {
     readFailed: current?.failed ?? false, loading: current?.loading ?? Boolean(providerId), refresh };
 }
 
-export function OpenAiAccountGroupSection({ providerId, group, mergeAction }: {
+export function OpenAiAccountGroupSection({ providerId, group, mergeAction, settingsAnchor = true }: {
   providerId: string;
   group: ReturnType<typeof useOpenAiAccountGroup>;
   mergeAction?: ReactNode;
+  settingsAnchor?: boolean;
 }) {
+  const accountSetting = useSettingDefinition(providersSettings.subscriptionAccounts);
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { accounts, allocation, targets, readFailed, loading, refresh } = group;
@@ -210,13 +214,13 @@ export function OpenAiAccountGroupSection({ providerId, group, mergeAction }: {
           {mixedConfig?.strategy === 'weight' && settings &&
             <ProviderGroupWeightSelect name={account.name} weight={settings.weight} disabled={blocked}
               onChange={next => void saveAllocation({ accountId: account.id, weight: next })} />}
-          {settings && <Switch checked={!settings.paused} disabled={blocked}
+          {settings && <Switch {...accountSetting.controlProps} checked={!settings.paused} disabled={blocked}
             aria-label={t('providerGroup.member.assignAria', { name: account.name })}
             onCheckedChange={checked => void saveAllocation({ accountId: account.id, paused: !checked })} />}
           {ordered && <>
-            <Button variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
+            <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
               disabled={blocked || index === 0} onClick={() => move(index, index - 1)}><ArrowUp size={15} /></Button>
-            <Button variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
+            <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
               disabled={blocked || index === membership.length - 1} onClick={() => move(index, index + 1)}><ArrowDown size={15} /></Button>
           </>}
           {(checks.length > 0 || account.id !== groupProviderId) && (
@@ -226,14 +230,14 @@ export function OpenAiAccountGroupSection({ providerId, group, mergeAction }: {
                 const engine = engineName(check.agent);
                 const test = t('settings.providers.custom.test.button');
                 const label = checks.length > 1 ? `${test} · ${engine}` : test;
-                return <Button key={check.agent} variant="secondary" size="sm"
+                return <Button key={check.agent} data-settings-search-action="Test this API key connection on the selected engine" variant="secondary" size="sm"
                   compact={checks.length > 1} loading={testing} aria-label={`${label} · ${account.name}`}
                   disabled={loading || readFailed || !account.connected || testing || busy.has(account.id)}
                   onClick={() => void run('account-test', account.id, check.agent)}>
                   {label}
                 </Button>;
               })}
-              {account.id !== groupProviderId && <Button variant="secondary" size="sm" compact={checks.length > 1}
+              {account.id !== groupProviderId && <Button data-settings-search-action="Remove this account from its current provider group" variant="secondary" size="sm" compact={checks.length > 1}
                 disabled={pending || blocked} onClick={() => void remove(account)}>
                 {t('providerGroup.member.remove')}
               </Button>}
@@ -258,7 +262,7 @@ export function OpenAiAccountGroupSection({ providerId, group, mergeAction }: {
   const standaloneKey = !mixedConfig ? membership.find(account => account.id === providerId && account.kind === 'apiKey') : undefined;
   if (!mixedConfig && !standaloneKey && !readFailed && !loading && !targets?.length) return null;
   return (
-    <section data-testid="openai-account-group" className="border-t border-[var(--border-default)] px-5 py-5">
+    <section {...(settingsAnchor ? accountSetting.anchorProps : {})} data-testid="openai-account-group" className="border-t border-[var(--border-default)] px-5 py-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {mixedConfig && <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-16 font-medium text-[var(--text-primary)]">{t('openAiAccountGroup.title')}</h3>
@@ -269,7 +273,7 @@ export function OpenAiAccountGroupSection({ providerId, group, mergeAction }: {
       </div>
       {readFailed && <div role="alert" className="my-2 flex flex-wrap items-center gap-2 text-13 text-[var(--text-secondary)]">
         {t('providerGroup.section.loadFailed')}
-        <Button variant="secondary" size="sm" onClick={refresh}>{t('commonUi.retry')}</Button>
+        <Button data-settings-search-action="Retry loading this provider's account group" variant="secondary" size="sm" onClick={refresh}>{t('commonUi.retry')}</Button>
       </div>}
       {loading && !accounts && <p role="status" className="my-2 text-13 text-[var(--text-secondary)]">{t('providerGroup.section.loading')}</p>}
       {targets && <div className="flex flex-wrap gap-x-3 gap-y-1 py-2">

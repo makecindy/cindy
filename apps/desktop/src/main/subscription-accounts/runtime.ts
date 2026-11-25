@@ -1913,6 +1913,8 @@ export async function readSubscriptionSessionAccount(
     };
   const api = provider === 'openai' ? apiKeyPoolMember(binding.accountId) : undefined;
   if (api) {
+    if (options.remote && api.providerId === api.connectionId && requestedRoute !== api.connectionId)
+      return { providerId: provider, state: 'unavailable' };
     if (options.remote && (!(apiAlias ? legacyRouteAdmits() : subscriptionRouteAllowsModel(requestedRoute, keys.model, options))
       || !subscriptionRouteAllowsModel(api.connectionId, keys.model?.replace(/^chatgpt\//, ''), options))) {
       return { providerId: provider, state: 'unavailable' };
@@ -2566,6 +2568,14 @@ interface AccountAcquireOptions {
     reportScheduling?(value: SubscriptionPoolScheduling): void;
 }
 
+/** A single restored Key is a direct provider, not a pool to dispatch explicitly through. */
+export function isStandaloneApiKeyPoolConnection(connectionId: string): boolean {
+  const members = apiKeyPoolMembers(connectionId);
+  const pool = readPool('openai');
+  return members.length === 1 && members[0]?.connectionId === connectionId
+    && providerAccounts('openai', pool?.accounts ?? [], connectionId).length === 0;
+}
+
 export function acquireSubscriptionAccount(providerId: string, model: string | undefined, keys: string[],
   control: boolean, options: AccountAcquireOptions & { includeApiKeys: true }): Promise<SubscriptionAccountLease | null>;
 export function acquireSubscriptionAccount(providerId: string, model: string | undefined, keys: string[],
@@ -2623,6 +2633,12 @@ export async function acquireSubscriptionAccount(
   // to an independent connection again therefore never hands its task to another account.
   const pinnedTarget = options.accountId ?? binding?.accountId;
   const selectionProvider = pinnedTarget && !createdImage ? accountProviderId(provider, pinnedTarget) : ref.providerId;
+  const pinnedKey = provider === 'openai' && pinnedTarget ? apiKeyPoolMember(pinnedTarget) : undefined;
+  // An old group grant cannot follow a Key that has been restored to an
+  // independent connection, even if that connection has its own valid grant.
+  if (options.remote && pinnedKey && pinnedKey.providerId === pinnedKey.connectionId
+    && ref.providerId !== pinnedKey.connectionId)
+    throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
   if (pool.disconnected && selectionProvider === provider) throw new Error('Subscription provider was disconnected');
   const scoped = accountsFor(pool.accounts, selectionProvider);
   const needsModelMembership = provider === 'openai' && !control && !!model
@@ -2923,7 +2939,11 @@ export async function acquireSubscriptionAccount(
     const current = readPool(provider);
     if (api) {
       const member = apiKeyPoolMember(selected);
-      if (member?.providerId !== selectionProvider || !targetModel
+      // The owner can continue the exact native history on its bound Key
+      // after removal. Never apply this exception to group grants or new picks.
+      const detachedLocalBinding = !options.remote && member?.providerId === api.connectionId
+        && keys.some(key => readAccountBinding(key, provider)?.accountId === selected);
+      if ((member?.providerId !== selectionProvider && !detachedLocalBinding) || !targetModel
         || getProviderRouteCredentialRevision(api.connectionId) !== credentialRevision || !hasCustomProviderKey(api.connectionId, agent)
         || !subscriptionRouteAllowsModel(api.connectionId, targetModel.replace(/^chatgpt\//, ''), options)
         || (modelSwitch && !isLocalOpenAiGroupAccountUsable(api.connectionId, api.connectionId, targetModel.replace(/^chatgpt\//, ''), agent))) {

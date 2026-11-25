@@ -24,6 +24,7 @@ import {
   refreshSubscriptionPoolClaudeModels,
   hasConnectedSubscriptionPool,
   hasUnavailableSubscriptionPoolAccount,
+  isStandaloneApiKeyPoolConnection,
   type SubscriptionAccountLease,
 } from './runtime.js';
 import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexProviderId } from './store.js';
@@ -461,11 +462,21 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             if (!provider) return startLegacy();
             const kind = kindOf(provider);
             const ref = resolveSubscriptionPoolProviderRef(provider);
+            // Retain the member ID for old bindings, but an explicitly selected,
+            // independent local Key runs through its normal direct provider.
+            const legacyKey = ref?.apiKey ? legacyApiKeyPoolBinding(options.sessionId, provider) : undefined;
+            const standaloneKey = ref?.apiKey && options.providerId === provider && !options.deviceHosted
+              && isStandaloneApiKeyPoolConnection(provider) && (!legacyKey || legacyKey === ref.ownAccount)
+              && keys.every(key => {
+                const binding = readAccountBinding(key, kind);
+                return !binding || binding.accountId === ref.ownAccount;
+              });
+            if (standaloneKey) return startLegacy();
             if (ref?.apiKey && pinnedOwnAccount(ref) && !keys.some(key => readAccountBinding(key, kind))
-              && !legacyApiKeyPoolBinding(options.sessionId, provider)) return startLegacy();
+              && !legacyKey) return startLegacy();
             if (kind === 'openai' && options.providerId && keys.length
               && !keys.some(key => readAccountBinding(key, kind))) {
-              const migrated = legacyApiKeyPoolBinding(options.sessionId, options.providerId);
+              const migrated = ref?.apiKey ? legacyKey : legacyApiKeyPoolBinding(options.sessionId, options.providerId);
               if (migrated) {
                 await writeAccountBindings(keys, kind, migrated, options.providerId);
                 imported = migrated;

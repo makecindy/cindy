@@ -133,6 +133,27 @@ describe('SubscriptionAccountsSection usage', () => {
       action: 'remove', providerId: 'anthropic', accountId: 'default',
     }));
   });
+  // Unit: a target's own API Key is a permanent part of this source. Only
+  // another, merged connection should offer the remove command.
+  it('keeps testing but hides the impossible remove action on the target Key', async () => {
+    const providerId = 'target-key-fixture';
+    const apiAccount = (id: string, connectionId: string) => ({
+      ...view.accounts[0]!, id, identity: connectionId, usage: undefined,
+      apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
+    });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      providerId, configured: true, strategy: 'least',
+      accounts: [apiAccount('key-target', providerId), apiAccount('key-member', 'other-key-fixture')],
+    });
+    render(<SubscriptionAccountsSection providerId={providerId} kind="openai" />);
+    const [own, merged] = await screen.findAllByTestId('subscription-account');
+    expect(within(own).getByRole('button', { name: /settings.providers.custom.test.button/ })).toBeTruthy();
+    expect(within(own).queryByRole('button', { name: 'providerGroup.member.moreAria' })).toBeNull();
+    fireEvent.pointerDown(within(merged).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' })).toBeTruthy();
+  });
+
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {

@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { verifyPiResponsesCompletion } from '../responses-completion.js';
 import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
@@ -42,6 +43,26 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  // Unit: the actual projected terminal is the one Desktop observes. Attaching
+  // proof to the earlier, unprojected event lost recovery even on a valid reply.
+  it.each([true, false])('only exposes proof on the usable projected terminal (aborted: %s)', aborted => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'model-a', stopReason: 'stop',
+      content: [{ type: 'text', text: 'Completed reply' }],
+    } }), queue, ctx);
+    if (aborted) markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx, (id, key) => id === 'a' && key === 'key-a');
+    const done = events.find(event => event.type === 'done')!;
+    expect(done.data).toMatchObject({ status: aborted ? 'cancelled' : 'completed' });
+    expect(verifyPiResponsesCompletion(done, 'a', 'key-a')).toBe(!aborted);
+    expect(verifyPiResponsesCompletion(done, 'b', 'key-a')).toBe(false);
+    expect(verifyPiResponsesCompletion(done, 'a', 'different-key')).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
   // #8887: prior retry tests omitted the second native agent_start. Each
   // completed request must be observable before settlement (unit, no I/O).
   it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {

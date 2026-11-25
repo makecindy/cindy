@@ -271,7 +271,7 @@ export function captureOpenAiGroupDirectRecovery(id: string, agent: AgentKind, m
   if (!scope.fingerprint) return;
   const versions = holdVersions(scope, readHealth());
   if (!versions) return;
-  return () => setHold(scope, undefined, versions);
+  return Object.assign(() => setHold(scope, undefined, versions), { fingerprint: scope.fingerprint });
 }
 
 function captureObservation(scope: CredentialScope, testedHolds?: string) {
