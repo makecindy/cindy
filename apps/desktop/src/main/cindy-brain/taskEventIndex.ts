@@ -9,6 +9,7 @@ import { tryGetDbClient } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import type { GhostSubscriptionGateway } from './subscriptionGateway.js';
 import { isToolExecutionEvent, projectToolExecutionEvent } from './toolExecutionEvents.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 const log = createLogger('ghost-task-events');
 
@@ -91,6 +92,26 @@ export class GhostTaskEventIndex {
       data = { sessionId: event.sessionId, state: taskState(event.state) };
     }
     gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data);
+  }
+
+  /**
+   * Publish a host-authenticated result to the plugin that owns the originating
+   * IM relay. It uses the existing task-state pipe so old plugins simply ignore
+   * the extra state field, while unrelated subscribers never see another
+   * plugin's conversation result.
+   */
+  publishRelay(
+    pluginId: string,
+    data: GhostTaskEventData,
+    owner: DataOwnerPushStamp,
+    gateway: () => GhostSubscriptionGateway,
+  ): void {
+    if (!this.owner || owner.dataOwnerId !== this.owner.dataOwnerId
+      || owner.ownerGeneration !== this.owner.ownerGeneration) return;
+    const ghosts = (this.topics.get('task-state') ?? []).filter(ghost =>
+      installedGhostStoragePart(ghost) === pluginId);
+    if (!ghosts.length) return;
+    gateway().publishIndexed(ghosts, 'task-state', 'did-task-state-changed', data);
   }
 }
 

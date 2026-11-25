@@ -1300,7 +1300,12 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import {
+  readMessageSourcePlugin,
+  readMessageSourcePluginRelay,
+  sanitizeSourceName,
+  type MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -1703,6 +1708,7 @@ import {
   setGhostLibraryExtraDirSync,
   setGhostAgentModelLocationSources,
   getFocusedGhostSessionId,
+  notifyGhostTaskRelay,
   notifyGhostSessionEvent,
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
@@ -6252,8 +6258,57 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
 // Keep holder reads live, including reads after an awaited pricing/persistence
 // operation. Capturing these services when wiring a Session would freeze the
 // pre-initialization or previous runtime value for later events.
+/** Read the latest user-message relay marker for a task. */
+async function readChannelRelayContext(
+  sessionId: string | undefined,
+): Promise<{ sourcePlugin: MessageSourcePlugin; sourceSessionId: string } | undefined> {
+  if (!sessionId) return undefined;
+  try {
+    const [row] = await getDbClient().drizzle
+      .select({ agentMeta: messages.agentMeta })
+      .from(messages)
+      .where(and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+      ))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1);
+    if (!row) return undefined;
+    let meta: unknown = row.agentMeta;
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta); } catch { return undefined; }
+    }
+    const sourcePlugin = readMessageSourcePlugin(meta);
+    if (!sourcePlugin?.relay) return undefined;
+    const relaySourceSessionId =
+      typeof (meta as { channelRelaySourceSessionId?: unknown } | null)?.channelRelaySourceSessionId === 'string'
+        ? (meta as { channelRelaySourceSessionId: string }).channelRelaySourceSessionId
+        : sessionId;
+    return { sourcePlugin, sourceSessionId: relaySourceSessionId };
+  } catch {
+    return undefined;
+  }
+}
+
 const settlePluginTaskTerminal: NonNullable<SessionEventDependencies['onPluginTaskTerminal']> =
   (sessionId, execution, outcome, outputMessageId, inputClientIds) => {
+    // A child created from an IM-origin turn carries the relay marker on its
+    // accepted user message. Its own terminal must be sent to that IM source,
+    // while the original IM task continues to use the plugin's normal run
+    // polling path and therefore is deliberately excluded here.
+    void readChannelRelayContext(sessionId).then(async context => {
+      if (!context || context.sourceSessionId === sessionId || !context.sourcePlugin.relay) return;
+      await drainPersistQueue();
+      notifyGhostTaskRelay({
+        pluginId: context.sourcePlugin.pluginId,
+        sessionId,
+        sourceSessionId: context.sourceSessionId,
+        ...(outputMessageId ? { outputMessageId } : {}),
+        outcome,
+        relay: context.sourcePlugin.relay,
+      });
+    }).catch(() => undefined);
     notePluginTaskLifecycle(service => service.settle(sessionId, execution, outcome, outputMessageId));
     for (const inputClientId of inputClientIds ?? []) {
       const snapshot = getCurrentDbClientSnapshot();
@@ -12442,17 +12497,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createDefaults,
       inheritSourcePermissionMode,
     } = params;
+    const inheritedRelayContext = params.sourcePlugin?.relay
+      ? undefined
+      : await readChannelRelayContext(dispatcherSessionId);
+    const sourcePlugin = params.sourcePlugin ?? inheritedRelayContext?.sourcePlugin;
+    const relaySourceSessionId = sourcePlugin?.relay
+      ? (params.sourcePlugin?.relay
+        ? targetSessionId ?? dispatcherSessionId
+        : inheritedRelayContext?.sourceSessionId ?? dispatcherSessionId)
+      : undefined;
     const queuedOrigin = sessionQueueOriginForDispatcher({
       dispatcherSessionId,
       ...(await readSenderIdentity(origin ? undefined : dispatcherSessionId)),
       message,
       explicitOrigin: origin,
     });
-    const inputAgentMeta: AgentMeta | undefined = queuedOrigin || params.sourcePlugin || params.autoReviewUserText !== undefined
+    const inputAgentMeta: AgentMeta | undefined = queuedOrigin || sourcePlugin || params.autoReviewUserText !== undefined
       ? {
           ...(queuedOrigin ? { origin: queuedOrigin } : {}),
           // 插件来源只用于标签(主机在插件派发入口盖章,名字已清洗)。
-          ...(params.sourcePlugin ? { sourcePlugin: params.sourcePlugin } : {}),
+          ...(sourcePlugin ? { sourcePlugin } : {}),
+          ...(relaySourceSessionId ? { channelRelaySourceSessionId: relaySourceSessionId } : {}),
           ...(params.autoReviewUserText !== undefined
             ? { autoReviewUserText: params.autoReviewUserText, delivery: 'turn' as const }
             : {}),
@@ -12463,7 +12528,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!message && !params.files?.length) {
       return { ok: false, errorCode: 'INVALID_ARGS', message: 'message required' };
     }
-    const sourcePlugin = params.sourcePlugin;
     // 空闲直发的 wire 来源说明与落库标签读同一份数据。
     const directSource = {
       origin: queuedOrigin,

@@ -3080,6 +3080,35 @@ export const GHOST_ASSISTANT_PENDING_CHANNEL = 'ghosts:assistant-message-pending
 const taskEventIndex = new GhostTaskEventIndex();
 
 /**
+ * Deliver a completed child task back to the plugin that supplied the IM
+ * source. The event contains only the opaque task/message ids and the relay
+ * display context already supplied by that plugin.
+ */
+export function notifyGhostTaskRelay(data: {
+  pluginId: string;
+  sessionId: string;
+  sourceSessionId: string;
+  outputMessageId?: string;
+  outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  relay: unknown;
+}): void {
+  const owner = getGhostOwnerPushStamp();
+  if (!owner) return;
+  taskEventIndex.publishRelay(data.pluginId, {
+    sessionId: data.sessionId,
+    state: {
+      channelRelay: {
+        sourceSessionId: data.sourceSessionId,
+        taskSessionId: data.sessionId,
+        ...(data.outputMessageId ? { outputMessageId: data.outputMessageId } : {}),
+        outcome: data.outcome,
+        relay: data.relay,
+      },
+    },
+  }, owner, getGhostSubscriptionGateway);
+}
+
+/**
  * 订阅网关单例(卡槽①):did- 旁听扇出与 will- 拦截裁决的装配点。
  * deps 全部懒取现查(与派发器同纪律):装卸/启停即时反映。
  */
