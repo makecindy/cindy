@@ -1210,6 +1210,8 @@ import {
 } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionCreateRoute,
+  resolveSendToSessionPluginEngineCreate,
+  type SendToSessionCreateOverrides,
   type SendToSessionExecutionOverrides,
 } from './sendToSessionExecutionConfig.js';
 import { registerOrcaWorkerControlHandlers } from './orcaWorkerControlHandlers.js';
@@ -2716,7 +2718,7 @@ function markTurnEndedAfterPersistDrain(
 // — 仅闭包捕获 holder 引用); 真正调用工具时 registerMakerIpc 早已执行完毕
 // 给 holder 赋值, requireOrcaCollabService() 能拿到 ready 的 service。
 type SendToSessionCreateDefaults = {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId?: string | null;
   effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -2935,7 +2937,7 @@ interface OrcaCollabService {
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: SendToSessionCreateOverrides;
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
@@ -12392,7 +12394,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: SendToSessionCreateOverrides;
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     onAccepted?: () => void | Promise<void>;
@@ -12592,7 +12594,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .limit(1);
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
-            agentKind: requireBuiltinAgentKind(meta.agentKind, 'Creating tasks from a plugin-engine task'),
+            agentKind: meta.agentKind,
             workingDir: resolvedWorkDir,
             workspaceKind: params.projectDir === null ? 'dialogue'
               : params.projectDir !== undefined ? 'project' : (meta.workspaceKind ?? 'project'),
@@ -12609,42 +12611,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ? permissionModeOrAsk(row?.permissionMode)
                 : 'bypassPermissions',
           };
-          const route = await resolveSendToSessionCreateRoute({
-            source: {
-              agentKind: inheritedBase.agentKind,
-              model: inheritedBase.model,
-              effort: inheritedBase.effort,
-              fastMode: (inheritedBase.fastMode ?? false),
-              providerId: inheritedBase.providerId,
-            },
-            sourceAgentDeviceId,
-            sourceIsSsh: Boolean(meta.remoteHostId),
-            ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
-            ...(executionOverrides ? { overrides: executionOverrides } : {}),
-          }, {
-            isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
-            readLocalRouting: async (agentKind) => ({
-              availableModels: maker.getCapabilities(agentKind).availableModels,
-              providerRouting: await getProviderRoutingContext(),
-              hasCindyAiApiKey: readClaudeApiKey() != null,
-            }),
-            readDeviceRouting: async (deviceId, agentKind) => {
-              const deviceRouting = deviceWorkerRoutingContext(
-                await readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
-                agentKind,
-              );
+          const targetEngineKind: EngineKind = executionOverrides?.agentKind ?? inheritedBase.agentKind;
+          if (targetEngineKind === 'acp') {
+            const pluginRoute = resolveSendToSessionPluginEngineCreate({
+              source: {
+                agentKind: inheritedBase.agentKind,
+                model: inheritedBase.model,
+                effort: inheritedBase.effort,
+                providerId: inheritedBase.providerId,
+              },
+              sourceAgentDeviceId,
+              sourceIsSsh: Boolean(meta.remoteHostId),
+              ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+              ...(executionOverrides ? { overrides: executionOverrides } : {}),
+            }, {
+              isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
+              admitPluginEngine: (body) =>
+                admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf, pluginEngineSettingsOf),
+            });
+            if (!pluginRoute.ok) {
+              return { ok: false, errorCode: pluginRoute.errorCode, message: pluginRoute.message };
+            }
+            inheritedAgentDeviceId = undefined;
+            inherited = { ...inheritedBase, ...pluginRoute.config };
+          } else {
+            if (inheritedBase.agentKind === 'acp' && !executionOverrides?.model) {
               return {
-                availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,
-                providerRouting: deviceRouting,
-                hasCindyAiApiKey: true,
+                ok: false,
+                errorCode: 'INVALID_ARGS',
+                message: `从插件引擎任务切换到内置引擎 ${targetEngineKind} 时必须明确指定 model。`,
               };
-            },
-          });
-          if (!route.ok) {
-            return { ok: false, errorCode: route.errorCode, message: route.message };
+            }
+            const builtinSource = inheritedBase.agentKind === 'acp'
+              ? {
+                  agentKind: targetEngineKind,
+                  model: '',
+                  effort: undefined,
+                  fastMode: false as const,
+                  providerId: null,
+                }
+              : {
+                  agentKind: inheritedBase.agentKind,
+                  model: inheritedBase.model,
+                  effort: inheritedBase.effort,
+                  fastMode: (inheritedBase.fastMode ?? false),
+                  providerId: inheritedBase.providerId,
+                };
+            const builtinOverrides: SendToSessionExecutionOverrides | undefined = executionOverrides
+              ? (() => {
+                  const { agentKind: requestedKind, ...restOverrides } = executionOverrides;
+                  return {
+                    ...restOverrides,
+                    ...(requestedKind ? { agentKind: targetEngineKind } : {}),
+                  };
+                })()
+              : undefined;
+            const route = await resolveSendToSessionCreateRoute({
+              source: builtinSource,
+              sourceAgentDeviceId,
+              sourceIsSsh: Boolean(meta.remoteHostId),
+              ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+              ...(builtinOverrides ? { overrides: builtinOverrides } : {}),
+            }, {
+              isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
+              readLocalRouting: async (agentKind) => ({
+                availableModels: maker.getCapabilities(agentKind).availableModels,
+                providerRouting: await getProviderRoutingContext(),
+                hasCindyAiApiKey: readClaudeApiKey() != null,
+              }),
+              readDeviceRouting: async (deviceId, agentKind) => {
+                const deviceRouting = deviceWorkerRoutingContext(
+                  await readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+                  agentKind,
+                );
+                return {
+                  availableModels: deviceRouting.remoteCodexModels ?? maker.getCapabilities(agentKind).availableModels,
+                  providerRouting: deviceRouting,
+                  hasCindyAiApiKey: true,
+                };
+              },
+            });
+            if (!route.ok) {
+              return { ok: false, errorCode: route.errorCode, message: route.message };
+            }
+            inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
+            inherited = { ...inheritedBase, ...route.config };
           }
-          inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
-          inherited = { ...inheritedBase, ...route.config };
           // 所有可能提前失败的 workingDir / 执行配置校验完成后才创建 worktree，
           // 避免非法 agent/model/effort/Fast 组合留下无主目录与 store 绑定。
           // useWorktree:为新 session 预建正规 session worktree(与 UI 新会话勾选
@@ -12663,7 +12715,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 suggestName: worktreeManager.suggestName,
                 listBranches: worktreeManager.listBranches,
                 resolveCommit: worktreeManager.revParseCommit,
-                createWorktree: worktreeManager.createWorktree,
+                createWorktree:
+                  inherited.agentKind === 'acp'
+                    ? (req) => worktreeManager.createWorktree(req, { awaitFullCheckout: true })
+                    : worktreeManager.createWorktree,
                 createId: () => randomUUID(),
                 resolveFreshSource: resolveFreshSourceBranch,
               },
@@ -12709,7 +12764,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await assertTaskActionCurrent();
         const { row: openedRow, value: { session } } = await openSession({
           id: createOpts.id, body: { title: newTitle,
-            agentKind: inherited.agentKind === 'claude-code' ? 'cc' : inherited.agentKind,
+            agentKind: (inherited.agentKind === 'claude-code' ? 'cc' : inherited.agentKind) as 'cc' | 'codex' | 'pi',
             model: inherited.model, providerId: inherited.providerId, effort: inherited.effort,
             fastMode: (inherited.fastMode ?? false), permissionMode: createOpts.permissionMode,
             workspaceKind: inherited.workspaceKind, projectDir: inherited.projectDir, workingDir: createOpts.workingDir,

@@ -1,5 +1,10 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineKeyFromProviderId,
+} from '../../shared/pluginEngines.js';
+import type { SessionOpenBody } from '../localDb/sessionOpening.js';
 import {
   budgetModelRequiresApiKey,
   budgetModelRequiresApiKeyMessage,
@@ -32,6 +37,22 @@ export interface SendToSessionExecutionOverrides {
   model?: string;
   effort?: Effort;
   fastMode?: boolean | 'ultrafast';
+}
+
+export interface SendToSessionCreateOverrides {
+  providerId?: string;
+  agentKind?: EngineKind;
+  model?: string;
+  effort?: Effort;
+  fastMode?: boolean | 'ultrafast';
+}
+
+export interface SendToSessionPluginEngineConfig {
+  agentKind: 'acp';
+  model: string;
+  effort?: Effort;
+  fastMode: false;
+  providerId: string;
 }
 
 export type SendToSessionExecutionConfigResult =
@@ -364,4 +385,107 @@ export async function resolveSendToSessionCreateRoute(
     locationChanged,
   });
   return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config } : resolved;
+}
+
+export type SendToSessionPluginEngineCreateResult =
+  | { ok: true; agentDeviceId: null; config: SendToSessionPluginEngineConfig }
+  | { ok: false; errorCode: 'INVALID_ARGS' | 'PROVIDER_ROUTE_UNAVAILABLE'; message: string };
+
+/**
+ * 解析本机插件引擎 (`agent_kind = 'acp'`) 的 send_to_session create 配置 (#12127)。
+ *
+ * - 不指定引擎时继承来源插件引擎的实际 provider_id / model / effort；
+ * - 显式指定 `agent_kind: 'acp'` 时配合 `provider_id`（`acp-plugin:...`）；
+ * - 仅支持本机普通任务，不支持 SSH、远程位置（agentDeviceId）或 Fast 模式；
+ * - 创建前复用普通插件任务的准入检查 (`admitPluginEngineSession`)，不可用时返回明确原因，
+ *   绝不静默回落到内置引擎。
+ */
+export function resolveSendToSessionPluginEngineCreate(
+  params: {
+    source: {
+      agentKind: EngineKind;
+      model: string;
+      effort?: Effort;
+      providerId?: string | null;
+    };
+    sourceAgentDeviceId: string | null;
+    sourceIsSsh: boolean;
+    requestedAgentDeviceId?: string | null;
+    overrides?: SendToSessionCreateOverrides;
+  },
+  deps: {
+    isSelfDeviceId: (deviceId: string) => boolean;
+    admitPluginEngine: (body: SessionOpenBody) => SessionOpenBody;
+  },
+): SendToSessionPluginEngineCreateResult {
+  const location = resolveRequestedAgentDeviceId({
+    requested: params.requestedAgentDeviceId,
+    inherited: params.sourceAgentDeviceId,
+    sourceIsSsh: params.sourceIsSsh,
+    isSelfDeviceId: deps.isSelfDeviceId,
+  });
+  if (!location.ok) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: location.reason === 'invalid_format'
+        ? 'agent_device_id must be "local", a device id or a shared provider id'
+        : 'the source task runs its Agent on an SSH host; agent_device_id is not supported',
+    };
+  }
+  if (params.sourceIsSsh || location.agentDeviceId !== null) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: '插件引擎新建任务仅支持在本机运行，不支持 SSH 或远程供应商位置。',
+    };
+  }
+  const overrides = params.overrides ?? {};
+  if (overrides.fastMode) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: '插件引擎不支持 Fast 模式。',
+    };
+  }
+  const inheritedProviderId = params.source.agentKind === 'acp' ? params.source.providerId : undefined;
+  const providerId = overrides.providerId ?? inheritedProviderId ?? undefined;
+  if (!providerId || !pluginEngineKeyFromProviderId(providerId)) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: '使用插件引擎新建任务需要指定有效的 provider_id（取自 list_available_models 的 plugin_engines[].provider_id）。',
+    };
+  }
+  const samePluginSource = params.source.agentKind === 'acp' && providerId === params.source.providerId;
+  const model = overrides.model ?? (samePluginSource && params.source.model.trim() ? params.source.model : PLUGIN_ENGINE_DEFAULT_MODEL);
+  const effort = overrides.effort ?? (samePluginSource && model === params.source.model ? params.source.effort : undefined);
+  let admitted: SessionOpenBody;
+  try {
+    admitted = deps.admitPluginEngine({
+      title: '',
+      agentKind: 'acp' as SessionOpenBody['agentKind'],
+      model,
+      providerId,
+      effort: effort ?? '',
+      fastMode: false,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+  return {
+    ok: true,
+    agentDeviceId: null,
+    config: {
+      agentKind: 'acp',
+      model: admitted.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+      effort: (admitted.effort || undefined) as Effort | undefined,
+      fastMode: false,
+      providerId,
+    },
+  };
 }

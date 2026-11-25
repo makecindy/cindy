@@ -5,8 +5,11 @@ import type { OrcaWorkerProviderRoutingContext } from '../orcaWorkerCreationServ
 import {
   resolveSendToSessionCreateRoute,
   resolveSendToSessionExecutionConfig,
+  resolveSendToSessionPluginEngineCreate,
   type SendToSessionRoutingSnapshot,
 } from '../sendToSessionExecutionConfig';
+import { admitPluginEngineSession } from '../pluginEngineSessionAdmission';
+import type { PluginHarness } from '../../cindy-brain/pluginHarnesses';
 
 const available = (agent: AgentKind) => (
   agent === 'codex'
@@ -604,5 +607,199 @@ describe('resolveSendToSessionCreateRoute', () => {
       source: fableSource(), sourceAgentDeviceId: 'device-a', sourceIsSsh: false,
       overrides: { effort: 'high' },
     }, deps)).rejects.toThrow('device offline');
+  });
+
+  it('pins the initial config to an available local connection without fallback (#12519 parity)', async () => {
+    const deps = routingDeps();
+    const snapshot = await deps.readLocalRouting('claude-code');
+    const catalog = snapshot.providerRouting.availability;
+    const second = { id: 'second', name: 'Secondary', models: ['claude-fable-5'] };
+    deps.readLocalRouting.mockResolvedValue({
+      ...snapshot,
+      providerRouting: {
+        ...snapshot.providerRouting,
+        availability: { ...catalog, 'claude-code': [...catalog['claude-code'], second] },
+      },
+    });
+    const request = { source: fableSource(), sourceAgentDeviceId: null, sourceIsSsh: false };
+    expect(await resolveSendToSessionCreateRoute({ ...request, overrides: { providerId: second.id } }, deps))
+      .toMatchObject({ ok: true, config: { providerId: second.id } });
+    expect(await resolveSendToSessionCreateRoute({ ...request, overrides: { providerId: 'offline' } }, deps))
+      .toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
+    expect(await resolveSendToSessionCreateRoute({ ...request, sourceAgentDeviceId: 'device-b', overrides: { providerId: second.id } }, deps))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+});
+
+describe('resolveSendToSessionPluginEngineCreate (#12127)', () => {
+  const SELF = 'device-self';
+  const AGY_PROVIDER = 'acp-plugin:agy-acp:agy';
+  const harness = (overrides: Partial<PluginHarness> = {}): PluginHarness => ({
+    key: 'agy-acp:agy',
+    pluginId: 'agy-acp',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    entryPath: '/plugins/agy/entry.js',
+    availability: { state: 'available' },
+    models: [
+      { id: 'gemini-4-neon', name: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high'] },
+    ],
+    modes: ['default', 'auto'],
+    defaultMode: 'default',
+    ...overrides,
+  } as PluginHarness);
+
+  const makeDeps = (
+    harnesses: readonly PluginHarness[] = [harness()],
+    settingsOf?: (provider: Pick<PluginHarness, 'key'>) => { suspended?: boolean; disabledModels?: readonly string[] },
+  ) => ({
+    isSelfDeviceId: (deviceId: string) => deviceId === SELF,
+    admitPluginEngine: (body: Parameters<typeof admitPluginEngineSession>[0]) =>
+      admitPluginEngineSession(
+        body,
+        harnesses,
+        (item) => (item.models ?? []).map((model) => ({
+          id: model.id,
+          displayName: model.name,
+          ...(model.efforts ? { efforts: model.efforts } : {}),
+        })),
+        settingsOf,
+      ),
+  });
+
+  it('inherits plugin engine provider, model and effort when source is acp and overrides are omitted', () => {
+    const result = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'acp', model: 'gemini-4-neon', effort: 'high', providerId: AGY_PROVIDER },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+    }, makeDeps());
+    expect(result).toEqual({
+      ok: true,
+      agentDeviceId: null,
+      config: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        effort: 'high',
+        fastMode: false,
+        providerId: AGY_PROVIDER,
+      },
+    });
+  });
+
+  it('creates an explicit acp task from a builtin or switched source with provider_id', () => {
+    const result = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'codex', model: 'gpt-5.6-sol', effort: 'high', providerId: 'openai' },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+      overrides: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'medium' },
+    }, makeDeps());
+    expect(result).toEqual({
+      ok: true,
+      agentDeviceId: null,
+      config: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        effort: 'medium',
+        fastMode: false,
+        providerId: AGY_PROVIDER,
+      },
+    });
+
+    const defaultModelResult = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'codex', model: 'gpt-5.6-sol', providerId: 'openai' },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+      overrides: { agentKind: 'acp', providerId: AGY_PROVIDER },
+    }, makeDeps());
+    expect(defaultModelResult).toMatchObject({
+      ok: true,
+      config: { agentKind: 'acp', model: 'default', providerId: AGY_PROVIDER },
+    });
+  });
+
+  it.each([
+    {
+      name: 'missing provider_id when source is builtin',
+      params: {
+        source: { agentKind: 'codex' as const, model: 'gpt-5.6-sol', providerId: 'openai' },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'acp' as const },
+      },
+    },
+    {
+      name: 'non-plugin provider_id',
+      params: {
+        source: { agentKind: 'codex' as const, model: 'gpt-5.6-sol', providerId: 'openai' },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'acp' as const, providerId: 'openai' },
+      },
+    },
+    {
+      name: 'remote agent_device_id',
+      params: {
+        source: { agentKind: 'acp' as const, model: 'gemini-4-neon', providerId: AGY_PROVIDER },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        requestedAgentDeviceId: 'device-b',
+      },
+    },
+    {
+      name: 'SSH source',
+      params: {
+        source: { agentKind: 'codex' as const, model: 'gpt-5.6-sol', providerId: 'openai' },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: true,
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER },
+      },
+    },
+    {
+      name: 'fastMode enabled',
+      params: {
+        source: { agentKind: 'acp' as const, model: 'gemini-4-neon', providerId: AGY_PROVIDER },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { fastMode: true },
+      },
+    },
+  ])('rejects $name with INVALID_ARGS', ({ params }) => {
+    const result = resolveSendToSessionPluginEngineCreate(params, makeDeps());
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+
+  it('returns PROVIDER_ROUTE_UNAVAILABLE with specific reason when engine is unavailable, suspended, or uninstalled', () => {
+    const unavailable = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'acp', model: 'gemini-4-neon', providerId: AGY_PROVIDER },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+    }, makeDeps([harness({ availability: { state: 'unavailable', message: 'not signed in' } })]));
+    expect(unavailable).toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('not signed in'),
+    });
+
+    const suspended = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'acp', model: 'gemini-4-neon', providerId: AGY_PROVIDER },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+    }, makeDeps([harness()], () => ({ suspended: true })));
+    expect(suspended).toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('停用'),
+    });
+
+    const uninstalled = resolveSendToSessionPluginEngineCreate({
+      source: { agentKind: 'acp', model: 'gemini-4-neon', providerId: AGY_PROVIDER },
+      sourceAgentDeviceId: null,
+      sourceIsSsh: false,
+    }, makeDeps([]));
+    expect(uninstalled).toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('停用或卸载'),
+    });
   });
 });

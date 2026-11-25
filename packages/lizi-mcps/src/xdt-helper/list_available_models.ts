@@ -125,7 +125,7 @@ const DESCRIPTION = [
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
-  '- plugin_engines: 仅在任务电脑本机、且不传 agent 时出现：插件提供的执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用(message 是插件给的原因)。用它创建 Worker 时 agent 传 acp、provider_id 传该项 provider_id、model 传 models[].id(default = 由引擎自己选)。插件引擎只在本机运行，不能配 execution_device_id / agent_device_id。',
+  '- plugin_engines: 仅在任务电脑本机、且不传 agent 时出现：插件提供的执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用(message 是插件给的原因)。用它创建 Worker 时 agent 传 acp、provider_id 传该项 provider_id、model 传 models[].id(default = 由引擎自己选)；本机用 send_to_session 新建普通任务时同样可传 agent_kind=acp、provider_id 与 model。插件引擎只在本机运行，不能配 execution_device_id / agent_device_id / device。',
   '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。本机新建普通任务可用 send_to_session 的可选 provider_id 指定本机连接；需要指定连接时先确认工具声明该参数。省略时沿用原选路。创建 Worker 可传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',

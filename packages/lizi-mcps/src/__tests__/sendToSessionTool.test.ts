@@ -73,6 +73,26 @@ describe('send_to_session tool', () => {
     }
   });
 
+  // #12127 & #12060, unit: forward agent_kind=acp and provider_id on create, ignore provider_id on jump.
+  it('forwards plugin engine agent_kind and provider_id only on create', async () => {
+    const { registry, sendToSession } = setup();
+    for (const args of [
+      { agent_kind: 'acp', provider_id: 'acp-plugin:agy-acp:agy', model: 'gemini-4-neon' },
+      { provider_id: 'second' },
+      { target_session_id: 'existing-task', provider_id: 'acp-plugin:agy-acp:agy' },
+    ]) {
+      expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })).ok).toBe(true);
+    }
+    const calls = sendToSession.mock.calls as unknown as [Record<string, unknown>][];
+    expect(calls[0]![0]).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:agy-acp:agy',
+      model: 'gemini-4-neon',
+    });
+    expect(calls[1]![0]).toMatchObject({ providerId: 'second' });
+    expect(calls[2]![0]).not.toHaveProperty('providerId');
+  });
+
   // Unit contract: task host and provider location are independent; conflicting aliases
   // must fail before host dispatch, and uncertain creation returns an address to inspect.
   it('routes creation locations independently and preserves a recovery address', async () => {
