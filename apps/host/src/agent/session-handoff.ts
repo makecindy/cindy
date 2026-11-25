@@ -105,7 +105,8 @@ export function createHostSessionHandoff(ports: {
       const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
       const source = route ? {
         agentKind: route.harness === 'claude' ? 'claude-code' as const : route.harness,
-        model: route.model, effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode,
+        model: route.model, providerId: route.providerId,
+        effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode,
       } : undefined;
       const agent = input.agentKind ?? source?.agentKind;
       const views = await ports.readProviders();

@@ -753,6 +753,33 @@ test('a remote task handoff returns NOT_FOUND if its target disappears before en
   assert.deepEqual(h.persisted, []);
 });
 
+// Unit, synthetic engine and in-memory persistence: with Plan armed on a task,
+// guarded handoff enqueue must pass that intent to the engine only for a plugin
+// delegation. The existing queue tests cover input from the local composer.
+test('remote task handoff inherits the target Plan intent only for plugin delegation', async t => {
+  const h = createHarness({ readSession: async id => ({
+    id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+    workingDir: '/tmp', providerId: 'xd', permissionMode: 'ask', planModeEnabled: true,
+  }) });
+  t.after(() => h.queue.dispose());
+  for (const plugin of [false, true]) {
+    const id = plugin ? 'plugin-handoff' : 'ordinary-handoff';
+    const text = 'delegated message';
+    await enqueueUntilSent(h, id, { clientId: `remote-task-action:${id}`, text }, 1, {
+      taskActionDeliveryGuard: async () => {},
+      ...(plugin ? {
+        inheritTargetPlanMode: true,
+        sourcePlugin: { pluginId: 'other-computer::plugin' },
+        autoReviewUserText: text,
+      } : {
+        origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: text },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
+      }),
+    });
+    assert.equal(h.maker.getSession(id).sendOptions.at(-1).planMode, plugin);
+  }
+});
+
 test('valid App messages keep source metadata and escape native commands', async () => {
   const owner = {};
   const h = createHarness({ getOwner: () => owner, loadClearBoundary: async () => null });
@@ -796,7 +823,7 @@ async function enqueue(h, id, item) {
   return enqueueUntilSent(h, id, item, 1);
 }
 /** enqueue, then wait (as above) until the task's runtime has received `count` messages in all. */
-async function enqueueUntilSent(h, id, item, count) {
+async function enqueueUntilSent(h, id, item, count, handoff) {
   const reached = () => (h.maker.getSession(id)?.sent.length ?? 0) >= count;
   const settledWithout = projection => Boolean(projection?.error)
     || (projection?.recovery?.clientId ?? projection?.recovery?.item?.clientId) === item?.clientId;
@@ -817,7 +844,7 @@ async function enqueueUntilSent(h, id, item, count) {
   // Awaited only while the send is still on its way; a rejection before that is reported below instead.
   started.catch(() => {});
   try {
-    await h.queue.enqueue(id, item);
+    await h.queue.enqueue(id, item, handoff);
     if (!reached()) {
       if (settledWithout(h.queue.projection(id))) throw new Error(`the input ${item?.clientId} settled without reaching the engine: ${JSON.stringify(h.queue.projection(id))}`);
       await started;

@@ -180,6 +180,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
     routing: { 'claude-code': { authStrategy: 'api-key' } },
     models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
+  }, {
+    id: 'selected-provider', name: 'Selected provider', connected: true, source: 'user', agents: ['claude-code'],
+    routing: { 'claude-code': { authStrategy: 'api-key' } },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
   }];
   // Model-service IO is synthetic. The Host adapter still performs repository
   // model checks, real session opening, SQLite writes and queue admission.
@@ -669,15 +673,24 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       });
       const id = randomUUID();
       const sender = async () => ({ sessionId: 'source-task', title: 'Desktop task' });
+      // Integration regression: when two connected sources serve the same model,
+      // the persisted draft's provider must win over the catalog's default.
+      const draft = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
+        agent: 'claude-code', providerId: 'selected-provider', modelId: 'fixture-model',
+        active: true, markModelChoice: true, selectDraftAgent: true,
+      }] });
+      assert.equal(draft.ok, true, JSON.stringify(draft));
       const create = await send({ deviceId: 'host', sessionId: id }, {
         sender, message: 'First delegated message',
-        create: async () => ({ agentKind: 'claude-code', model: 'fixture-model', permissionMode: 'ask', projectDir: null }),
+        create: async () => ({ permissionMode: 'ask', projectDir: null }),
       });
       assert.equal(create.ok, true, JSON.stringify(create));
       assert.equal(create.wakeKind, 'created');
       const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id));
       assert.equal(stored.permissionMode, 'ask');
       assert.equal(stored.model, 'fixture-model');
+      assert.equal(stored.providerId, 'selected-provider');
+      assert.equal(create.providerId, 'selected-provider');
       const jump = await send({ deviceId: 'host', sessionId: id }, { sender, message: 'Follow-up message' });
       assert.equal(jump.wakeKind, 'queued', JSON.stringify(jump));
       assert.deepEqual(handoffQueue.map(({ id, item, handoff }) => [id, item.text, handoff.origin.senderSessionId]), [

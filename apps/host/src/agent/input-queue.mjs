@@ -88,7 +88,10 @@ function composeInput(item, stored, handoff) {
     result.autoReviewUserText = handoff.autoReviewUserText;
     result.origin = handoff.origin;
     result.sourcePlugin = handoff.sourcePlugin;
-    result.createOpts = storedSessionOptions(stored);
+    result.createOpts = {
+      ...storedSessionOptions(stored),
+      planMode: handoff.inheritTargetPlanMode === true && Boolean(stored.planModeEnabled),
+    };
     return result;
   }
   // Only the in-process App service can mint this symbol. Wire JSON cannot
