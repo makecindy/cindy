@@ -19,6 +19,7 @@ import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { CloudInstanceAccessProvider } from '@/features/cloud-settings/CloudInstanceAccess';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
+import { TeamPublishProgressProvider } from '@/contexts/TeamPublishProgressContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
 import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
@@ -507,6 +508,7 @@ export function App() {
                 <AuthProvider>
                   <HostConnectionNotice />
                   <PluginReviewUpdatesProvider>
+                  <TeamPublishProgressProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>
                       <PrRefsProvider>
@@ -552,6 +554,7 @@ export function App() {
                       </PrRefsProvider>
                     </WorktreeProvider>
                   </AppShellCoverProvider>
+                  </TeamPublishProgressProvider>
                   </PluginReviewUpdatesProvider>
                 </AuthProvider>
               </EnvCheckProvider>

@@ -1,14 +1,15 @@
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
 import { PluginDetailHero } from './PluginDetailHero';
-import { ChevronRight, Info, Plus, RotateCw, Search } from 'lucide-react';
+import { Building2, ChevronRight, Globe, Info, Plus, RotateCw, Search } from 'lucide-react';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import type { GhostPluginListItem } from './lib/ghostPluginViewModel';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { AccountSwitcherDialog } from '@/components/sidebar/AccountSwitcherDialog';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useWindowShown } from '@/hooks/useWindowVisible';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,7 @@ import {
 } from './PluginPublishVersions';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
+import { useTeamPublishProgress } from '@/contexts/TeamPublishProgressContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { contributionErrorKey, useContributionPreview } from './lib/useContributionPreview';
 export { contributionErrorKey } from './lib/useContributionPreview';
@@ -44,7 +46,13 @@ import type {
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import { PLUGIN_MANAGEMENT_FRAME_CLASS, PluginManagementPage } from './PluginManagementLayout';
 import { GhostPluginIcon } from './GhostPluginIcon';
-import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions } from './PluginPublishDialog';
+import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions, type TeamPublishingOption } from './PluginPublishDialog';
+import { TeamPluginDetail } from './team/TeamPluginDetail';
+import { TeamPluginRows } from './team/TeamPluginRows';
+import { TeamPublishResults } from './team/TeamPublishResults';
+import { matchesTeamFilter, matchesTeamQuery } from './team/teamPluginModel';
+import { useTeamPlugins } from './team/useTeamPlugins';
+import { ORGANIZATION_REVIEW_ID_PREFIX } from '../../../shared/pluginAuthor';
 export type { PluginSubmitOptions } from './PluginPublishDialog';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import './plugin-detail-layout.css';
@@ -68,6 +76,7 @@ export interface MyPluginsPageCache {
 export function MyPluginsPage({
   reader,
   localPlugins,
+  teamPublishing,
   installedPluginCount,
   onSubmitUpdate,
   onPrepare,
@@ -80,6 +89,8 @@ export function MyPluginsPage({
 }: {
   reader: PluginContributionsApi;
   localPlugins: readonly GhostPluginListItem[];
+  /** Organization identity: the publish dialog offers team sharing first. */
+  teamPublishing?: TeamPublishingOption;
   installedPluginCount: number;
   cache: MyPluginsPageCache;
   onSubmitUpdate: (instanceId: string, options?: PluginSubmitOptions) => Promise<boolean>;
@@ -172,6 +183,40 @@ export function MyPluginsPage({
   const contributor = mode === 'cloud' && (user?.membershipKind === 'personal' || user?.membershipKind === 'org');
   const openPicker = () => {
     setPicker({ id: ++pickerSequence.current, owner: ownerKey, open: true });
+  };
+
+  // Organization identity: the page also manages team-shared plugins (#1541).
+  const isOrg = contributor && user?.membershipKind === 'org';
+  const teamPluginId = isOrg ? params.get('teamPlugin') : null;
+  const [teamRefresh, setTeamRefresh] = useState(0);
+  // Read only while the list is shown; the team detail reads its own plugin. The list reads again
+  // when the organization change signal moves (any author-visible change, not only review results:
+  // a first submission or becoming a maintainer), when a review result changes, and when a team
+  // publish from the UI or the conversation succeeds. The public list never follows these.
+  const teamReviewSignal = reviewUpdates.updates
+    .filter((item) => item.pluginId.startsWith(ORGANIZATION_REVIEW_ID_PREFIX)).map((item) => item.key).join('|');
+  const { publishedSignal: teamPublishedSignal } = useTeamPublishProgress();
+  // A hidden window does not read (engineering-conventions §8.3): changes that arrive meanwhile
+  // (a publish finishing, a change signal) only move the latest signal; the list and the open
+  // detail follow the value last seen while shown, so showing the window again reads once.
+  const windowShown = useWindowShown();
+  const teamSignal = JSON.stringify([teamReviewSignal, reviewUpdates.teamChangeToken, teamPublishedSignal]);
+  const shownTeamSignal = useRef(teamSignal);
+  if (windowShown) shownTeamSignal.current = teamSignal;
+  const team = useTeamPlugins(Boolean(isOrg) && ownerMatches && !teamPluginId && !selectedId, ownerKey,
+    JSON.stringify([teamRefresh, shownTeamSignal.current]));
+  const teamLocalPlugins = teamPublishing?.plugins ?? [];
+  const openTeamDetail = (pluginId: string) => {
+    if (scrollFrame.current) listScroll.current = scrollFrame.current.scrollTop;
+    cache.scroll = listScroll.current;
+    const next = new URLSearchParams(params);
+    next.set('teamPlugin', pluginId);
+    setParams(next);
+  };
+  const closeTeamDetail = () => {
+    const next = new URLSearchParams(params);
+    next.delete('teamPlugin');
+    setParams(next, { replace: true });
   };
 
   useEffect(() => { setPicker(null); }, [selectedId]);
@@ -375,7 +420,9 @@ export function MyPluginsPage({
   }, [refresh, loadVersions]);
   const refreshAllRef = useRef(refreshAll);
   refreshAllRef.current = refreshAll;
-  const reviewSignature = reviewUpdates.updates.map(item => item.key).sort().join('|');
+  // Public results only: a team result changing must not reload (and reset) the public list.
+  const reviewSignature = reviewUpdates.updates
+    .filter(item => !item.pluginId.startsWith(ORGANIZATION_REVIEW_ID_PREFIX)).map(item => item.key).sort().join('|');
   const lastReviewRefresh = useRef('');
   useEffect(() => {
     const signature = `${ownerKey}:${reviewSignature}`;
@@ -607,7 +654,12 @@ export function MyPluginsPage({
     if (snapshotToRead && !visibleHasContent) void loadSnapshot(snapshotToRead);
   }, [selectedKey, snapshotToRead, visibleHasContent, loadSnapshot]);
   const isDetail = Boolean(selectedId);
-  const listEmpty = page?.plugins.length === 0;
+  const teamPlugins = team.status === 'unsupported' ? null : team.plugins;
+  const visibleTeamPlugins = teamPlugins?.filter((entry) => matchesTeamFilter(entry, filter) && matchesTeamQuery(entry, query)) ?? null;
+  const showTeamGroup = Boolean(isOrg) && team.status !== 'unsupported';
+  const publicEmpty = page?.plugins.length === 0;
+  // With team sharing, the page is empty only when both groups are.
+  const listEmpty = publicEmpty && (!showTeamGroup || (team.status === 'ready' && visibleTeamPlugins?.length === 0 && !team.nextCursor));
   const cancelReview = async (plugin: MyPluginView, release: ContributionReleaseView) => {
     if (cancelling.current || !writeReady || !plugin.actions.submitUpdate || !release.canCancelReview || !navigator.onLine) return;
     const owner = ownerKey;
@@ -677,7 +729,10 @@ export function MyPluginsPage({
         aria-label={t(`${copy}.${isDetail ? 'refreshDetail' : 'refreshList'}`)}
         loading={loading || versionsLoading}
         disabled={!contributor}
-        onClick={() => void refreshAll()}
+        onClick={() => {
+          if (isOrg && !isDetail) setTeamRefresh((value) => value + 1);
+          void refreshAll();
+        }}
       >
         <RotateCw size={16} />
       </Button>
@@ -813,6 +868,39 @@ export function MyPluginsPage({
     </section>
   ) : null;
 
+  if (teamPluginId) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <main className="app-wallpaper-surface plugin-publish-detail min-h-0 flex-1 overflow-y-auto bg-[var(--surface)]" onScroll={onScroll}>
+          <TeamPluginDetail
+            key={JSON.stringify([ownerKey, teamPluginId])}
+            pluginId={teamPluginId}
+            memberId={user?.id ?? null}
+            orgName={teamPublishing?.orgName || user?.orgName || user?.orgSlug || ''}
+            localPlugins={teamLocalPlugins}
+            onStartPublish={teamPublishing?.onStart ?? (async () => false)}
+            refreshSignal={shownTeamSignal.current}
+            renderHeaderAction={(refreshTeam, teamLoading) => (
+              <Tip text={t(`${copy}.refreshDetail`)}>
+                <Button variant="secondary" tone="quiet" size="sm" className="size-7 p-0"
+                  aria-label={t(`${copy}.refreshDetail`)} loading={teamLoading} onClick={refreshTeam}>
+                  <RotateCw size={16} />
+                </Button>
+              </Tip>
+            )}
+            // Same frame as the public detail (#12773): back and refresh in the top bar.
+            renderFrame={(headerAction, body) => <>
+              <PluginDetailTopBar label={t(`${copy}.backToPublish`)} onBack={closeTeamDetail} scrolled={scrolled}
+                actions={headerAction}
+                frameClassName={`${PLUGIN_MANAGEMENT_FRAME_CLASS} plugin-publish-detail-frame`} />
+              <PluginManagementPage className="plugin-publish-detail-frame pt-6">{body}</PluginManagementPage>
+            </>}
+          />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <main
@@ -885,6 +973,7 @@ export function MyPluginsPage({
               ) : null}
             </header>
           )}
+          {!isDetail && contributor ? <TeamPublishResults /> : null}
           {!contributor ? (
             <div className="space-y-4">
               <p role="status" className="text-14 leading-6 text-[var(--text-secondary)]">
@@ -935,6 +1024,13 @@ export function MyPluginsPage({
                         </Button>
                       ) : null}
                     </div>
+                  ) : null}
+                  {showTeamGroup && !listEmpty && page ? (
+                    <GroupHeading icon={<Globe size={16} aria-hidden="true" />} label={t(`${copy}.target.public`)}
+                      count={page.plugins.length} more={Boolean(page.nextCursor)} first />
+                  ) : null}
+                  {showTeamGroup && !listEmpty && publicEmpty ? (
+                    <p className="pb-2 text-14 leading-[1.714] text-[var(--text-tertiary)]">{t(`${copy}.${query || filter !== 'all' ? 'noMatches' : 'empty'}`)}</p>
                   ) : null}
                   {page?.plugins.length ? (
                     <ul className="-mx-3 grid gap-0.5">
@@ -1020,6 +1116,32 @@ export function MyPluginsPage({
                       {t(`${copy}.loadMore`)}
                     </Button>
                   ) : null}
+                  {showTeamGroup && !listEmpty ? (
+                    <section aria-label={t('settings.ghosts.page.origin.organization')}>
+                      <GroupHeading icon={<Building2 size={16} aria-hidden="true" />} label={t('settings.ghosts.page.origin.organization')}
+                        count={visibleTeamPlugins?.length ?? null}
+                        more={'nextCursor' in team && Boolean(team.nextCursor)} />
+                      {team.status === 'failed' ? (
+                        <p role="alert" className="pb-3 text-14 leading-[1.714] text-[var(--text-secondary)]">
+                          {t(team.errorKey, { defaultValue: t(`${copy}.loadFailed`) })}
+                        </p>
+                      ) : null}
+                      {visibleTeamPlugins === null ? (
+                        team.status === 'loading' ? <p role="status" className="text-14 text-[var(--text-secondary)]">{t(`${copy}.loading`)}</p> : null
+                      ) : visibleTeamPlugins.length ? (
+                        <TeamPluginRows plugins={visibleTeamPlugins} localPlugins={teamLocalPlugins}
+                          reviewUpdates={reviewUpdates.updates} onOpen={openTeamDetail} />
+                      ) : (
+                        <p className="text-14 leading-[1.714] text-[var(--text-tertiary)]">{t(`${copy}.${query || filter !== 'all' ? 'noMatches' : 'empty'}`)}</p>
+                      )}
+                      {'nextCursor' in team && team.nextCursor ? (
+                        <Button variant="secondary" size="sm" compact className="mt-3" loading={team.status === 'loading'}
+                          disabled={team.status === 'loading'} onClick={team.loadMore}>
+                          {t(`${copy}.loadMore`)}
+                        </Button>
+                      ) : null}
+                    </section>
+                  ) : null}
                 </>
               ) : currentDetail && plugin ? (
                 <>
@@ -1053,6 +1175,8 @@ export function MyPluginsPage({
           ownerKey={ownerKey}
           reader={reader}
           localPlugins={localPlugins}
+          team={teamPublishing}
+          teamPlugins={team.status === 'ready' ? team.plugins : null}
           installedPluginCount={installedPluginCount}
           onPrepare={onPrepare}
           onSubmitUpdate={onSubmitUpdate}
@@ -1064,5 +1188,18 @@ export function MyPluginsPage({
         />
       ) : null}
     </div>
+  );
+}
+
+/** 「公开市场 / 团队共享」 group title with its count, shown only for organization identities. */
+function GroupHeading({ icon, label, count, more = false, first = false }: {
+  icon: ReactNode; label: string; count: number | null; more?: boolean; first?: boolean;
+}) {
+  return (
+    <h2 className={cn('mb-2 flex items-center gap-2 text-14 font-medium leading-normal text-[var(--text-primary)]', first ? 'mt-1' : 'mt-9')}>
+      <span className="text-[var(--text-tertiary)]">{icon}</span>
+      <span>{label}</span>
+      {count !== null ? <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{count}{more ? '+' : ''}</span> : null}
+    </h2>
   );
 }

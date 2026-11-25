@@ -35,6 +35,8 @@ export interface PluginDetailHeroProps {
   actions?: ReactNode;
   enableControl?: ReactNode;
   fallbackFacts?: { permissionCount?: number; toolCount?: number; source?: string };
+  /** Counts for plugins without a market item (team shared plugins); a market item's counts win. */
+  usage?: { downloadCount?: string; usageCount?: string };
 }
 
 export function PluginDetailHero({
@@ -56,13 +58,14 @@ export function PluginDetailHero({
   actions,
   enableControl,
   fallbackFacts,
+  usage,
 }: PluginDetailHeroProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const sharedMarketItem = marketItem?.sourceType === 'server' && marketItem.scope !== 'personal' ? marketItem : undefined;
-  const downloadCount = sharedMarketItem?.downloadStatistics?.requestCount;
+  const downloadCount = sharedMarketItem?.downloadStatistics?.requestCount ?? (sharedMarketItem ? undefined : usage?.downloadCount);
   const weeklyUsage = sharedMarketItem?.usageStatistics?.usageCountLast7Days;
-  const usageCount = weeklyUsage ?? sharedMarketItem?.usageStatistics?.usageCount;
+  const usageCount = weeklyUsage ?? sharedMarketItem?.usageStatistics?.usageCount ?? (sharedMarketItem ? undefined : usage?.usageCount);
   const releaseDate = sharedMarketItem?.publishedAt ? new Date(sharedMarketItem.publishedAt) : null;
   const visibleAuthor = origin === 'public' && publisherKind !== 'official' ? null : author;
   const identityLabel = versionLabel === 'listed'
