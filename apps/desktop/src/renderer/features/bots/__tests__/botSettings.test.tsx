@@ -17,6 +17,9 @@ vi.mock('@/components/settings/avatarCropImage', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({ migrateModelVisibilityDefaults: vi.fn() }));
 
+vi.mock('@/hooks/useControllableDevices', () => ({
+  useSelectableDevices: () => ({ devices: mocks.selectableDevices }),
+}));
 vi.mock('@/hooks/useProviderOnboarding', () => ({
   useProviderOnboarding: () => ({ visible: mocks.onboarding }),
 }));
@@ -26,7 +29,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   key.startsWith('settings.builtinTools.plugins.') ? String(opts?.defaultValue ?? key) : opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate, i18n: { language: 'en' } }) }));
 
 const mocks = vi.hoisted(() => {
@@ -35,6 +38,7 @@ const mocks = vi.hoisted(() => {
   navigate: vi.fn(),
   retryBotInvitation: vi.fn(async (_id: string) => {}),
   onboarding: false,
+  selectableDevices: [] as Array<{ deviceId: string; name: string; platform: string; online: boolean }>,
   readSession: sessionGet,
   initialSearch: '' as string,
   listCustomMcpServers: vi.fn<(context?: CustomMcpListContext) => Promise<CustomMcpListResult>>(),
@@ -236,6 +240,7 @@ beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.retryBotInvitation.mockClear();
   mocks.onboarding = false;
+  mocks.selectableDevices = [];
   mocks.readSession.mockReset();
   mocks.updateBotProfile.mockReset();
   mocks.updateBotProfile.mockImplementation(async (_id, patch) => ({
@@ -669,6 +674,21 @@ describe('Bot settings profile consolidation', () => {
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledWith(emptyBot.id, expect.objectContaining({
       capabilities: expect.objectContaining({ modelChainOverride: [expect.objectContaining({ model: 'custom-model', providerId: 'custom' })] }),
     })));
+  });
+
+  // Unit, BotsHomeView recovery: an online same-account computer may offer the only model.
+  // With onboarding active and an empty chain, the old gate hid the model picker before the directory could load.
+  it('lets an empty-chain companion browse models when another computer is online', () => {
+    const emptyBot = bot({ capabilities: capabilities({ modelChain: [], model: '' }), sessions: [], canonicalSessionId: undefined });
+    mocks.profiles = [emptyBot];
+    mocks.params = { botId: emptyBot.id };
+    mocks.onboarding = true;
+    mocks.selectableDevices = [{ deviceId: 'other-computer', name: 'Other computer', platform: 'win32', online: true }];
+
+    render(<BotsHomeView />);
+
+    expect(screen.getByTestId('model-selector')).toBeTruthy();
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
   });
 
   it('can connect a source from existing empty-chain recovery when onboarding is hidden', () => {

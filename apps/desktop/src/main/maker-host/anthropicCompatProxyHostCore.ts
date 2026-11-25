@@ -19,6 +19,7 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -1379,6 +1380,7 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
         createToolReferenceRecoveryRule(),
+        createNativeMcpHistoryRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。

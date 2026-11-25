@@ -30,6 +30,7 @@ import type {
 import {
   LOCAL_AGENT_CLIENT,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   isolatedBotProfile,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
@@ -261,11 +262,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
-    // 插件引擎只由自己账号的电脑提供：分享来的供应商与供应商组没有它(那台也会拒绝)，这里先拦下，不发任何请求。
-    if (input.agentKind === 'acp' && initialShareId) {
-      throw new Error('[REMOTE_AGENT_UNSUPPORTED] Plugin engines are only available from your own computers.');
-    }
-    // 下面的分享授权、直连与备用记录只认内置引擎；插件引擎不会走到那些分支，这里只是给它们一个内置种类。
+    // 下面的分享组分配、直连与备用记录只认内置引擎；插件引擎走分享者本机直连，这里给内置分支一个兜底种类。
     const agentKind: AgentKind = input.agentKind === 'acp' ? 'pi' : input.agentKind;
     const ownerScope = activeOwnerScopeKey();
     const initialOwner = initialShareId ? findReceivedShareForExecution(initialShareId) : null;
@@ -368,10 +365,22 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         log.warn('shared provider failed direct allocation release will expire', { error: String(error) });
       }
     };
-    const standbyPlacement = shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
+    const standbyPlacement = input.agentKind !== 'acp' && shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
     const handoffPlacement = switchToken ? standbyPlacement : undefined;
     requireCurrent();
-    if (shareId && (opts.resumeSessionId || (standbyPlacement && !switchToken))) {
+    if (input.agentKind === 'acp' && shareId) {
+      if (initialOwnerPeer && (initialOwner?.hostDeviceOnline ?? initialOwner?.hostOnline)) {
+        const closeEpoch = getRemoteLinkCloseEpoch(initialOwnerPeer);
+        startupOwnerPeer = initialOwnerPeer;
+        assertOwnerLinkCurrent = () => {
+          if (getRemoteLinkCloseEpoch(initialOwnerPeer) !== closeEpoch) {
+            throw new Error('[LINK_NOT_OPEN] shared owner link closed during startup');
+          }
+        };
+        await deps.renewSharedProviderLink?.(initialOwnerPeer);
+        requireCurrent();
+      }
+    } else if (shareId && (opts.resumeSessionId || (standbyPlacement && !switchToken))) {
       if (!sessionId) throw new Error('[REMOTE_AGENT_INVALID] shared history requires its task identity');
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
@@ -706,6 +715,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
+    let preparedCleanup: Promise<void> | undefined;
     let restartedHistory = false;
     // The executor can stall before confirming startup. Feed changes into the
     // existing attempt cancellation so close/release/local cleanup do not wait for it.
@@ -770,7 +780,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           workingDir: startOpts.workingDir,
           ...(startOpts.makerMemoryScopeKey ? { memoryScopeKey: startOpts.makerMemoryScopeKey } : {}),
           memoryEnabled: startOpts.makerMemoryEnabled === true,
-          ...(startOpts.botRuntimeProfile?.mcpPolicy ? { botMcpPolicy: startOpts.botRuntimeProfile.mcpPolicy } : {}),
+          // V2 teammates (projectContext) use the ordinary task's MCP surface; their policy is a snapshot only.
+          ...(isolatedBotProfile(startOpts.botRuntimeProfile)?.mcpPolicy ? { botMcpPolicy: isolatedBotProfile(startOpts.botRuntimeProfile)!.mcpPolicy } : {}),
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
@@ -778,6 +789,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
+          closeSessionInstance: () => extra?.closeSessionInstance?.(),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {
@@ -836,12 +848,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       offStartupPermission?.();
       offStartupLink?.();
       offStandbyOwner?.();
-    }).then(handle => {
+    }).then(async handle => {
       // Keep cancellation attached until the service finishes its optional early renewal.
-      cancelPreparedHandle = () => { void handle.close({ reason: 'account-boundary' }).catch(() => undefined); };
+      const closePrepared = () => preparedCleanup ??= handle.close({ reason: 'account-boundary' });
+      cancelPreparedHandle = () => { void closePrepared().catch(() => undefined); };
       attempt.signal.addEventListener('abort', cancelPreparedHandle, { once: true });
       if (startupAbort.signal.aborted) {
-        cancelPreparedHandle();
+        await closePrepared();
         throw startupAbort.signal.reason;
       }
       return handle;
@@ -961,7 +974,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         directTasks.delete(shareId + ':' + sessionId);
         void releaseFailedDirectAllocation(openingDirectGeneration);
       }
-      void handle.close({ reason: 'account-boundary' }).catch(() => undefined);
+      await (preparedCleanup ?? handle.close({ reason: 'account-boundary' }));
       throw attempt.signal.reason;
     }
     // The recursive attempt already owns its lease and lifecycle. Wrapping it
@@ -1307,6 +1320,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             nextRenewAt = Date.now() + 60_000;
           } else {
             stop();
+            // Renewal can fail with a new "closed" error after cancellation.
+            // Preserve the prepared handle's actual cleanup proof, including failure.
+            if (attempt.signal.aborted && preparedCleanup) {
+              await preparedCleanup;
+              throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+            }
             await close().catch(() => undefined);
             throw error;
           }
@@ -1333,24 +1352,32 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
     }
     if (prepareStandby) void prepareStandby().catch(() => undefined);
+    if (preparedCleanup) await preparedCleanup;
     return handle;
   };
   return async (input: StartInput): Promise<AgentSessionHandle> => {
     if (!input.options.sessionId) throw new Error('remote agent sessions require a session id');
     liveDirectGuestSessions.get(input.options.sessionId)?.failedStartCleanup?.();
     const attempt = registerPendingRemoteStart(input.options.sessionId);
-    let ready: AgentSessionHandle | undefined;
+    let startup!: Promise<AgentSessionHandle>;
     let rejectCancelled!: (error: unknown) => void;
     const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
-    const closeCancelled = () => { void ready?.close({ reason: 'account-boundary' }).catch(() => undefined); };
-    const onCancel = () => { closeCancelled(); rejectCancelled(attempt.signal.reason); };
+    const onCancel = () => { rejectCancelled(attempt.cancellationError(Promise.resolve().then(() => startup))); };
     attempt.signal.addEventListener('abort', onCancel, { once: true });
     try {
-      return await Promise.race([startAttempt(input, false, attempt).then(handle => {
-        ready = handle;
-        if (attempt.signal.aborted) { closeCancelled(); throw attempt.signal.reason; }
+      startup = startAttempt(input, false, attempt).then(async handle => {
+        if (attempt.signal.aborted) {
+          await handle.close({ reason: 'account-boundary' });
+          throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+        }
         return handle;
-      }), cancelled]);
+      }, error => {
+        // Before the remote starter (or after awaited handle teardown), the
+        // attempt's own abort reason carries no remaining local resources.
+        if (attempt.signal.aborted && error === attempt.signal.reason) throw new AgentStartupResourcesReleasedError(error);
+        throw error;
+      });
+      return await Promise.race([startup, cancelled]);
     } catch (error) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as

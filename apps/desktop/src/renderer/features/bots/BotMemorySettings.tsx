@@ -273,7 +273,7 @@ function MemoryList({
             <Search
               size={14}
               aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[var(--text-tertiary)]"
+              className="pointer-events-none absolute left-3 top-1/2 z-raised -translate-y-1/2 text-[var(--text-tertiary)]"
             />
             <Input
               size="md"

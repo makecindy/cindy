@@ -553,14 +553,17 @@ describe('Worker worktree source resolution', () => {
     headState: 'branch' as const, dirty: false, isWorktree: false, commonDir: '/repo/.git', checkoutRoot: '/repo', realDirectory: '/repo'};
   it.each([
     {headState: 'branch' as const, branch: 'feature', source: undefined, expected: 'feature'},
+    // #12391: omitting the source follows the attached local branch even when its name matches origin's default.
+    {headState: 'branch' as const, branch: 'origin/main', source: undefined, expected: 'refs/heads/origin/main'},
     {headState: 'detached' as const, branch: 'a'.repeat(40), source: undefined, expected: 'a'.repeat(40)},
     {headState: 'branch' as const, branch: 'main', source: 'release', expected: 'release'},
+    {headState: 'branch' as const, branch: 'origin/main', source: 'origin/main', expected: 'refs/remotes/origin/main'},
     {headState: 'unborn' as const, branch: null, source: 'main', expected: 'main'},
   ])('resolves $headState with source $source', async ({headState, branch, source, expected}) => {
     if (source !== undefined) vi.mocked(gitExec).mockResolvedValueOnce({stdout: 'a'.repeat(40) + '\n', stderr: ''});
     await expect(resolveWorkerWorktreeSource('/repo', source, async () => ({...target, headState, branch}))).resolves.toBe(expected);
     if (source !== undefined) expect(gitExec).toHaveBeenLastCalledWith(
-      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${source}^{commit}`], '/repo', {timeoutMs: 5000});
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${expected}^{commit}`], '/repo', {timeoutMs: 5000});
   });
   it.each([
     {exists: false}, {baseRepo: null}, {headState: 'unborn' as const, branch: null}, {branch: null},
@@ -584,11 +587,13 @@ describe('Worker worktree source resolution', () => {
   // Real resolver, injected read/probe; invalid remembered refs must fall back, explicit refs must fail.
   // PR #7933 P2 (unit): a different subdirectory/checkout of the same repo must keep its HEAD.
   // Previously only identical directories bypassed the repository preference.
-  it.each(['valid', 'missing', 'read-failed', 'same', 'same-subdir', 'same-worktree', 'same-main', 'explicit'])(
+  it.each(['valid', 'local-origin-name', 'remote-default', 'missing', 'read-failed', 'same', 'same-subdir', 'same-worktree', 'same-main', 'explicit'])(
     'resolves remembered source: %s', async scenario => {
       const read = vi.fn(() => {
         if (scenario === 'read-failed') throw new Error('store unavailable');
-        return { baseRepo: '/repo', sourceBranch: 'release', revision: 1 };
+        const sourceBranch = scenario === 'local-origin-name' ? 'origin/main'
+          : scenario === 'remote-default' ? 'refs/remotes/origin/main' : 'release';
+        return { baseRepo: '/repo', sourceBranch, revision: 1 };
       });
       const sameRepo = scenario.startsWith('same');
       const directory = scenario === 'same-subdir' ? '/repo/apps/api'
@@ -605,7 +610,11 @@ describe('Worker worktree source resolution', () => {
       }, async () => {
         const result = await resolveWorkerWorktreeSourceSelection(directory, scenario === 'explicit' ? 'picked' : undefined,
           probe, leadDirectory, read);
-        expect(result.sourceBranch).toBe(scenario === 'valid' ? 'release' : scenario === 'explicit' ? 'picked' : 'main');
+        // #12391: short local preferences need namespacing; the saved remote ref is already full.
+        const expected = scenario === 'local-origin-name' ? 'refs/heads/origin/main'
+          : scenario === 'remote-default' ? 'refs/remotes/origin/main'
+          : scenario === 'valid' ? 'release' : scenario === 'explicit' ? 'picked' : 'main';
+        expect(result.sourceBranch).toBe(expected);
         if (scenario === 'missing' || scenario === 'read-failed') expect(result.fallbackReason).toContain('current checkout');
         if (sameRepo || scenario === 'explicit') expect(read).not.toHaveBeenCalled();
         else expect(read).toHaveBeenCalledWith('/repo');

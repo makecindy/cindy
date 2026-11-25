@@ -159,7 +159,7 @@ function PendingAttachmentChip({
       data-state={state}
       className={cn(
         'inline-flex h-7 min-w-0 max-w-[min(280px,100%)] items-center gap-1.5 px-2.5 py-1.5',
-        'rounded-[9999px] border border-dashed border-[var(--msg-user-border)] bg-[var(--surface-chip)]',
+        'rounded-full border border-dashed border-[var(--msg-user-border)] bg-[var(--surface-chip)]',
         'text-13 font-medium text-[var(--text-secondary)]',
       )}
     >

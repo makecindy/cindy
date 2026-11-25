@@ -9,6 +9,8 @@ type Decision = Awaited<ReturnType<ToolCallAuthorizer>>;
 /** These names describe effects, not tool visibility or an Agent permission mode. */
 export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'set_teammate_project',
+  'configure_teammate_imessage_group',
+  'remove_teammate_personal_skill',
   'send_to_session',
   'steer_session',
   'stop_session_turn',
@@ -31,6 +33,9 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'move_session_queued_message',
   'archive_sessions',
   'unarchive_sessions',
+  'pin_sessions',
+  'unpin_sessions',
+  'snooze_sessions',
   'delete_session',
   'fork_session',
   'rewind_session',

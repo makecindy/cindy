@@ -157,9 +157,9 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal">
           <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(event) => event.preventDefault()} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
-            className={`modal-panel fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
+            className={`modal-panel fixed left-1/2 top-1/2 z-modal-raised max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
             {content}
           </Dialog.Content>
         </Dialog.Overlay>

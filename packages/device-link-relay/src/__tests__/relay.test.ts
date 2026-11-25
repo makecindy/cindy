@@ -385,6 +385,23 @@ describe('device-link relay wire contract', () => {
     // 设备签名原样交给收件设备核对。
     expect((delivered as Envelope & { auth?: unknown }).auth).toEqual(auth);
 
+    // Unit: the optional remote-desktop op is business data, so deployed
+    // relay routing must preserve it and its boolean reply without an op allowlist.
+    const editablePayload = {
+      channel: 'device-link:remote-desktop:v1',
+      args: [{ op: 'editableClick', lease: 'desktop-lease', sequence: 7 }],
+    };
+    phone.send({ v: 1, kind: 'invoke', id: 'editable-click', dst: OWNER_DEVICE, payload: editablePayload, auth });
+    const editableRequest = await host.waitFor(env => env.kind === 'invoke' && env.id === 'editable-click');
+    expect(editableRequest.payload).toEqual(editablePayload);
+    expect((editableRequest as Envelope & { auth?: unknown }).auth).toEqual(auth);
+    for (const editable of [false, true]) {
+      const id = `editable-result-${editable}`;
+      host.send({ v: 1, kind: 'invoke-result', id, dst: 'phone-1', payload: { ok: true, result: { editable } } });
+      const response = await phone.waitFor(env => env.kind === 'invoke-result' && env.id === id);
+      expect(response.payload).toEqual({ ok: true, result: { editable } });
+    }
+
     // Remote recommendation protocol regression (unit): old/new response shapes
     // must survive the real self-hosted relay; the prior test only sent requests.
     for (const [index, result] of [

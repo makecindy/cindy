@@ -54,7 +54,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
-import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { STANDARD_CHAT_MESSAGE_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -374,18 +374,24 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     // A queued read can finish before React commits the previous successful snapshot.
     let hasTimeline = stateRef.current.kind === 'ready';
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let readAfter = 0;
     const clearRetry = () => {
       clearTimeout(retryTimer);
       retryTimer = undefined;
     };
-    const retryRead = (owner: ReturnType<typeof getDataOwnerGeneration>, sources: string[], changed: string[]) => {
+    const retryRead = (owner: ReturnType<typeof getDataOwnerGeneration>, sources: string[], changed: string[], deadline?: number) => {
       // A first read already has an explicit retry; keep the visible history on a failed refresh.
-      if (!hasTimeline) return;
+      if (!hasTimeline && !deadline) return;
+      readAfter = deadline ?? 0;
       clearRetry();
       retryTimer = setTimeout(() => {
         retryTimer = undefined;
-        if (!cancelled && isDataOwnerGenerationCurrent(owner)) load(sources, changed);
-      }, TIMELINE_READ_RECOVERY_MS);
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+        // Long HTTP dates can exceed the range of a native timer.
+        if (readAfter > Date.now()) { retryRead(owner, sources, changed, readAfter); return; }
+        readAfter = 0;
+        load(sources, changed);
+      }, deadline ? Math.min(2_147_483_647, Math.max(0, deadline - Date.now())) : TIMELINE_READ_RECOVERY_MS);
     };
     const run = async (additionalSources: string[], changedIds: string[]) => {
       clearRetry();
@@ -424,6 +430,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         if (result.ok && readDeltaVersion !== deltaVersion) return;
         if (result.ok) {
           hasTimeline = true;
+          if (result.group.metadataRetryAt) retryRead(owner, additionalSources, changedIds, result.group.metadataRetryAt);
           readOwner.current = owner;
           const shown = stateRef.current;
           setState((previous) => {
@@ -469,7 +476,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           // Keep a timeline that is already on screen; only a first read fails loudly.
           setState((previous) => (previous.kind === 'ready' ? previous : { kind: 'error' }));
           if (['REQUEST_TIMEOUT', 'SERVICE_ERROR', 'CHAT_UNAVAILABLE', 'HOST_NOT_READY', 'INTERNAL'].includes(result.errorCode)) {
-            retryRead(owner, additionalSources, changedIds);
+            retryRead(owner, additionalSources, changedIds, result.retryAt);
           }
         }
       } catch {
@@ -479,11 +486,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         }
       } finally {
         inFlight = false;
-        if (queued && !cancelled) {
-          const next = queued;
-          queued = null;
-          void run(next.sources, next.changed);
-        }
+        if (queued && !cancelled && !readAfter) load();
       }
     };
     /**
@@ -492,11 +495,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
      * re-read, since the latest page does not cover them.
      */
     const load = (additionalSources: string[] = [], changedIds: string[] = []) => {
-      if (inFlight) {
-        queued = { sources: [...(queued?.sources ?? []), ...additionalSources], changed: [...(queued?.changed ?? []), ...changedIds] };
+      if (inFlight || readAfter > Date.now()) {
+        queued = { sources: [...new Set([...(queued?.sources ?? []), ...additionalSources])],
+          changed: [...new Set([...(queued?.changed ?? []), ...changedIds])] };
         return;
       }
-      void run(additionalSources, changedIds);
+      const pending = queued;
+      queued = null;
+      void run([...(pending?.sources ?? []), ...additionalSources], [...(pending?.changed ?? []), ...changedIds]);
     };
     /**
      * Re-reads the older pages holding quoted originals (and copies this client changed) after a
@@ -1443,7 +1449,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           previousScrollTop.current = element.scrollTop;
           if (atBottom) acknowledgeSoon();
         }}
-        className="min-h-0 flex-1 overflow-y-auto pb-4 pt-4"
+        className="min-h-0 flex-1 overflow-y-auto pb-4 pt-4 [scrollbar-gutter:stable_both-edges]"
       >
         <div ref={contentRef} className="mx-auto flex w-full max-w-[var(--cindy-message-width)] flex-col">
           {hasMoreBefore ? (
@@ -1622,7 +1628,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       {dragOver ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-50"
+          className="pointer-events-none absolute inset-0 z-float"
           style={{
             backgroundColor: 'var(--drop-overlay-bg)',
             border: '2px dashed var(--drop-overlay-border)',
@@ -1639,7 +1645,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 /** Mount the observer with the ready view, after the loading/error early returns. */
 function BotGroupChatMain(props: ComponentProps<'main'>) {
   // Share the task/private-chat cap, padding and narrow-pane behavior.
-  const { containerRef } = useProportionalWidth(914);
+  const { containerRef } = useProportionalWidth(STANDARD_CHAT_MESSAGE_WIDTH);
   return <main {...props} ref={containerRef} />;
 }
 

@@ -34,6 +34,7 @@ import {
   contributionActionKey,
   useCindyMakeContributions,
 } from './CindyMakeContribution';
+import { Checkbox } from '@/components/ui/checkbox';
 
 type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
@@ -603,7 +604,8 @@ export function CindyMakeHistoryPanel({
                   setCheckedIds([]);
                 }}
                 disabled={!!pending}
-                className="h-8 w-[168px]"
+                size="compact"
+                width="sm"
               />
               <Input
                 size="sm"
@@ -652,16 +654,12 @@ export function CindyMakeHistoryPanel({
             {selecting && (
               <div className="flex flex-wrap items-center gap-3 text-12 text-[var(--text-secondary)]">
                 <label className="flex min-h-8 cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={allChecked}
                     disabled={!!pending || !selectable.length}
-                    ref={(node) => {
-                      if (node)
-                        node.indeterminate =
-                          !allChecked && selectable.some((item) => checkedIds.includes(item.runId));
-                    }}
-                    className="size-4 accent-[var(--confirm-btn-primary-bg)]"
+                    indeterminate={
+                      !allChecked && selectable.some((item) => checkedIds.includes(item.runId))
+                    }
                     onChange={() =>
                       setCheckedIds((previous) =>
                         allChecked
@@ -767,14 +765,12 @@ export function CindyMakeHistoryPanel({
             <li key={item.runId} className="flex items-center gap-1">
               {selecting && (
                 <label className="flex min-h-8 min-w-8 shrink-0 cursor-pointer items-center justify-center">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={checked.some((entry) => entry.runId === item.runId)}
                     disabled={!!pending || !item.canSelectForBuild}
                     aria-label={t('cindyMake.history.batch.selectItem', {
                       title: formatCindyMakeTitle(item.title, item.runId),
                     })}
-                    className="size-4 accent-[var(--confirm-btn-primary-bg)]"
                     onChange={(event) =>
                       setCheckedIds((previous) =>
                         event.target.checked

@@ -515,6 +515,46 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     });
   });
 
+  // #11953: exercise the environment actually handed to the Desktop fork.
+  it.each([
+    ['http://127.0.0.1:18080', undefined, undefined, true],
+    ['http://127.0.0.1:18080', 'corp.test,localhost', undefined, true],
+    ['http://127.0.0.1:18080', undefined, 'upper.test', true],
+    ['http://127.0.0.1:18080', 'corp.test', 'upper.test', true],
+    ['http://localhost:99999', undefined, undefined, false],
+    [undefined, undefined, undefined, false],
+  ] as const)('passes safe CLI proxy routes through the Desktop fork (%s, %s, %s)', (endpoint, lower, upper, allowed) => {
+    // A plain object also exercises distinct POSIX aliases on a Windows runner.
+    const environment = process.env;
+    process.env = {
+      ...environment, HTTP_PROXY: undefined, NO_PROXY: upper,
+      http_proxy: endpoint, no_proxy: lower,
+      https_proxy: 'http://demo:synthetic@localhost:8080',
+      HTTPS_PROXY: 'http://localhost:18081',
+    };
+    const fork = vi.fn((_entry: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => new FakeUtilityProcess());
+    const worker = createUtilityNodeWorkerProcess('demo.cjs', os.tmpdir(), 'demo', fork as never);
+    try {
+      const env = fork.mock.calls[0][2].env;
+      expect(env.http_proxy ?? env.HTTP_PROXY).toBe(allowed ? endpoint : undefined);
+      for (const [value, inherited] of [[env.no_proxy, lower ?? upper], [env.NO_PROXY, upper ?? lower]]) {
+        if (allowed) {
+          const entries = value?.split(',');
+          expect(entries).toEqual(expect.arrayContaining(['localhost', '127.0.0.1', '::1']));
+          for (const item of inherited?.split(',') ?? []) expect(entries).toContain(item);
+          expect(entries?.length).toBe(new Set(entries).size);
+        } else {
+          expect(value).toBeUndefined();
+        }
+      }
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+    } finally {
+      worker.kill();
+      process.env = environment;
+    }
+  });
+
   it('不依赖 RunAsNode，过滤宿主秘密，并只用 parentPort 推送 stdin', () => {
     vi.stubEnv('PATH', '/usr/bin');
     vi.stubEnv('NODE_OPTIONS', '--inspect=0.0.0.0:9229');
@@ -3292,13 +3332,15 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
   // 对外协议(plugin-harnesses.md「自己的其他电脑使用插件引擎」)：任务的文件在另一台电脑时，入口进程收到的
   // 唯一参数是宿主固定给的 --cindy-remote-workspace，插件据此关掉 Agent 自带的文件与命令工具。字面量就是
   // 插件作者依赖的约定，改了它已发布的插件就认不出这种启动；平常启动必须仍然没有任何参数。
-  it('passes only the host-authored remote-workspace argument to an engine started for another computer', async () => {
+  it('passes only the host-authored remote/guest workspace arguments to an engine started for another computer', async () => {
     const { broker, spawned } = setupHarness(harnessGhost());
     try {
       await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true });
       expect(spawned[0].args).toEqual(['--cindy-remote-workspace']);
+      await broker.spawnHarness('node-ghost', 'dsh', { remoteWorkspace: true, guestWorkspace: true });
+      expect(spawned[1].args).toEqual(['--cindy-remote-workspace', '--cindy-guest-workspace']);
       await broker.spawnHarness('node-ghost', 'dsh');
-      expect(spawned[1].args).toEqual([]);
+      expect(spawned[2].args).toEqual([]);
     } finally { broker.destroyAll(); }
   });
 
@@ -3318,6 +3360,22 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     try {
       await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toBeInstanceOf(AgentStartupStoppedError);
       expect(spawned).toHaveLength(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  // #12595: the ninth request needs an actionable error, and an exit must allow a retry.
+  it('reports plugin capacity before forking and accepts a retry after an engine exits', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      for (let i = 0; i < 8; i++) await broker.spawnHarness('node-ghost', 'dsh');
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow(
+        'Plugin "node-ghost" is using 8/8 task engine slots. Try again after an engine process for this plugin exits.',
+      );
+      expect(spawned).toHaveLength(8);
+
+      spawned[0].proc.emit('exit', 0);
+      const replacement = await broker.spawnHarness('node-ghost', 'dsh');
+      expect(replacement).toBe(spawned[8].proc);
     } finally { broker.destroyAll(); }
   });
 

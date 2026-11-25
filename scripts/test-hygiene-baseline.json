@@ -292,9 +292,6 @@
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/maker-ipc/__tests__/botInvitation.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/maker-ipc/__tests__/deferredRestartQueueDrain.test.ts": {
       "sourceReads": 1
     },
@@ -320,9 +317,6 @@
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-ipc/__tests__/schedulerQueuedPreparation.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/silentStopContinuationBinding.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/mcp-integrations/__tests__/forgeIconConversionPackaging.test.ts": {

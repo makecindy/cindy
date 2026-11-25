@@ -17,10 +17,18 @@
  * getGhost 同一身份,不会把同名的组织实例与 root 实例混为一谈;实例键不含 `:`,所以
  * `key = ${ghostId}:${harnessId}` 无歧义。
  */
+import path from 'node:path';
+
 import {
+  GHOST_HARNESS_ACCOUNT_SECRET_MAX,
   ghostHarnessText,
+  parseGhostHarnessAccountLoginResult,
+  parseGhostHarnessAccountStatus,
   parseGhostHarnessUsage,
   storedGhostHarnessAvailability,
+  type GhostHarnessAccountLoginResult,
+  type GhostHarnessAccountMethod,
+  type GhostHarnessAccountStatus,
   type GhostHarnessMode,
   type GhostHarnessModel,
   type GhostHarnessUsage,
@@ -31,20 +39,48 @@ import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { NodeWorkerProcess } from './nodeRuntimeBroker.js';
 
+/** Worker methods the Host calls for engine accounts (plugin-harnesses.md 引擎账号). */
+export type PluginHarnessAccountMethod = 'accountStatus' | 'accountLogin' | 'accountLoginCancel';
+/**
+ * Browser sign-ins wait for the user: the call stays open while the worker keeps reporting progress
+ * (the broker's silence window), at most 11 minutes in all; the plugin itself gives up earlier.
+ */
+export const PLUGIN_HARNESS_ACCOUNT_LOGIN_TIMING = { timeoutMs: 60_000, maxTotalMs: 11 * 60_000 } as const;
+const ACCOUNT_STATUS_TIMING = { timeoutMs: 26_000 } as const;
+
 /** How one engine process is started. */
 export interface PluginHarnessSpawnOptions {
+  /**
+   * Run the agent on one of the accounts Cindy added: the entry gets
+   * GHOST_HARNESS_ACCOUNT_DIR_ARG with this directory. Refused unless the plugin published account
+   * methods for this engine and the directory is one Cindy created for it.
+   */
+  accountDir?: string;
   /**
    * The task's files and commands are on another computer: the entry is started with
    * GHOST_HARNESS_REMOTE_WORKSPACE_ARG and must leave file and command work to Cindy's tools.
    * Refused unless the plugin published `remoteWorkspace` for this engine.
    */
   remoteWorkspace?: boolean;
+  /**
+   * The task belongs to another Cindy account (provider sharing): the entry is started with
+   * GHOST_HARNESS_GUEST_WORKSPACE_ARG alongside GHOST_HARNESS_REMOTE_WORKSPACE_ARG. Refused unless
+   * the plugin published both `remoteWorkspace` and `guestWorkspace` for this engine.
+   */
+  guestWorkspace?: boolean;
 }
 
 export interface PluginHarness {
   reportsUsage?: true;
+  /**
+   * The plugin reports this engine's account (`methods: []`) or lets Cindy add accounts (one or more
+   * methods). Only with a JSON-RPC main worker, which answers the account calls.
+   */
+  accounts?: { methods: GhostHarnessAccountMethod[] };
   /** The plugin says this engine can serve a task whose files are on another computer. */
   remoteWorkspace?: true;
+  /** The plugin says this engine isolates personal context/tools for shared users. */
+  guestWorkspace?: true;
   /** `${ghostId}:${harnessId}`,任务记录里的稳定标识。 */
   key: string;
   ghostId: string;
@@ -62,6 +98,8 @@ export interface PluginHarness {
   modes?: GhostHarnessMode[];
   defaultMode?: GhostHarnessMode;
 }
+
+export const PLUGIN_USAGE_WORKER_FAILURE = Symbol('plugin usage worker failure');
 
 export interface PluginHarnessRegistry {
   /** 已启用 + 已批准 + 已声明 + 协议已支持。 */
@@ -88,13 +126,37 @@ export interface PluginHarnessRegistryDeps {
    * 逻辑页不在线时返回 false。缺省 = 不支持刷新。
    */
   requestRefresh?(ghostId: string): boolean;
-  /** Call only the approved plugin's main worker, with a fixed method and harness id. */
-  readUsage?(ghostId: string, harnessId: string): Promise<unknown>;
+  /**
+   * Call only the approved plugin's main worker, with a fixed method and harness id. `accountDir` is
+   * sent only to engines that publish account methods (an older plugin would answer for its
+   * original login instead).
+   */
+  readUsage?(ghostId: string, harnessId: string, accountDir?: string): Promise<unknown>;
+  /** Fixed account methods of the approved plugin's main worker; params are built by the registry. */
+  callAccount?(
+    ghostId: string,
+    method: PluginHarnessAccountMethod,
+    params: Record<string, unknown>,
+    timing: { timeoutMs: number; maxTotalMs?: number },
+  ): Promise<unknown>;
+  /**
+   * The only directory under which Cindy creates this engine's account directories (owner-scoped).
+   * Null while no account scope is active; spawning on an account then fails.
+   */
+  accountRoot?(ghostId: string, harnessId: string): string | null;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
 
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
-  readUsage(key: string): Promise<GhostHarnessUsage | null>;
+  readUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null>;
+  /** The plugin's view of one account (no `accountDir` = the agent's original login). */
+  readAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null>;
+  /**
+   * Runs the plugin's sign-in for an account directory Cindy created (undefined = the agent's
+   * original login); resolves when it ends.
+   */
+  loginAccount(key: string, accountDir: string | undefined, methodId: string, secret?: string): Promise<GhostHarnessAccountLoginResult>;
+  cancelAccountLogin(key: string, accountDir: string | undefined): Promise<void>;
   /** 重算列表;内容变化才通知。`ghosts` 缺省时现读 deps.listGhosts()。 */
   reconcile(ghosts?: InstalledGhost[]): void;
   /** 丢弃缓存(不通知);下一次 list 现算。 */
@@ -138,7 +200,11 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
           : { state: 'unknown' },
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         ...(status?.reportsUsage && ghost.manifest.node?.protocol === 'json-rpc-stdio' ? { reportsUsage: true } : {}),
+        ...(status?.accounts && ghost.manifest.node?.protocol === 'json-rpc-stdio'
+          ? { accounts: { methods: status.accounts.methods.map((method) => ({ ...method })) } }
+          : {}),
         ...(status?.remoteWorkspace ? { remoteWorkspace: true } : {}),
+        ...(status?.remoteWorkspace && status?.guestWorkspace ? { guestWorkspace: true } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
         ...(status?.modes ? { modes: [...status.modes] } : {}),
         ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
@@ -172,6 +238,24 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
     }
     return next;
   };
+  /** Re-projects one plugin now: revocation and newly published state count at every call. */
+  const findLive = (key: string, accept: (harness: PluginHarness) => boolean): PluginHarness | undefined => {
+    const separator = key.lastIndexOf(':');
+    if (separator < 1 || key.length > 256) return undefined;
+    const ghostId = key.slice(0, separator);
+    const ghost = deps.listGhosts().find((item) => installedGhostStoragePart(item) === ghostId);
+    const harness = ghost && projectHarnesses(deps, [ghost]).find((item) => item.key === key);
+    return harness && accept(harness) ? harness : undefined;
+  };
+  /** A direct child of the engine's own account root, for an engine that keeps accounts apart. */
+  const isAccountDir = (harness: PluginHarness, dir: string): boolean => {
+    if (!harness.accounts?.methods.length || !path.isAbsolute(dir)) return false;
+    const root = deps.accountRoot?.(harness.ghostId, harness.harnessId);
+    if (!root) return false;
+    const relative = path.relative(path.resolve(root), path.resolve(dir));
+    return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative) && !relative.includes(path.sep)
+      && /^[A-Za-z0-9_-]{1,80}$/.test(relative);
+  };
   return {
     list() {
       return snapshot(current ?? reconcile());
@@ -182,19 +266,57 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
-    async readUsage(key) {
+    async readUsage(key, accountDir, options) {
       const read = deps.readUsage;
-      const separator = key.lastIndexOf(':');
-      if (!read || separator < 1 || key.length > 256) return null;
-      const ghostId = key.slice(0, separator);
-      const find = () => {
-        const ghost = deps.listGhosts().find(item => installedGhostStoragePart(item) === ghostId);
-        return ghost && projectHarnesses(deps, [ghost]).find(item => item.key === key && item.reportsUsage);
-      };
+      if (!read) return null;
+      const find = () => findLive(key, (item) => !!item.reportsUsage
+        && (accountDir === undefined || (!!item.accounts?.methods.length && isAccountDir(item, accountDir))));
       const harness = find();
       if (!harness) return null;
-      const raw = await read(ghostId, harness.harnessId);
-      return find() ? parseGhostHarnessUsage(raw) ?? null : null;
+      const raw = await (accountDir === undefined ? read(harness.ghostId, harness.harnessId) : read(harness.ghostId, harness.harnessId, accountDir));
+      if (!find()) return null;
+      if (raw === PLUGIN_USAGE_WORKER_FAILURE && options?.reportWorkerFailure) {
+        throw new Error('Plugin usage worker unavailable');
+      }
+      return parseGhostHarnessUsage(raw) ?? null;
+    },
+    async readAccountStatus(key, accountDir) {
+      const call = deps.callAccount;
+      if (!call) return null;
+      const find = () => findLive(key, (item) => !!item.accounts
+        && (accountDir === undefined || (!!item.accounts.methods.length && isAccountDir(item, accountDir))));
+      const harness = find();
+      if (!harness) return null;
+      const raw = await call(harness.ghostId, 'accountStatus', {
+        harnessId: harness.harnessId, ...(accountDir !== undefined ? { accountDir } : {}),
+      }, ACCOUNT_STATUS_TIMING);
+      return find() ? parseGhostHarnessAccountStatus(raw) : null;
+    },
+    async loginAccount(key, accountDir, methodId, secret) {
+      const call = deps.callAccount;
+      const harness = call && findLive(key, (item) => !!item.accounts?.methods.length
+        && (accountDir === undefined || isAccountDir(item, accountDir)));
+      const method = harness?.accounts?.methods.find((item) => item.id === methodId);
+      if (!call || !harness || !method) return { ok: false, error: 'unsupported' };
+      // A secret goes only to a method that asks for one, and only as typed (never stored or logged).
+      if ((method.kind === 'secret') !== (typeof secret === 'string')
+        || (secret !== undefined && (!secret.trim() || secret.length > GHOST_HARNESS_ACCOUNT_SECRET_MAX))) {
+        return { ok: false, error: 'invalid-secret' };
+      }
+      const raw = await call(harness.ghostId, 'accountLogin', {
+        harnessId: harness.harnessId, ...(accountDir !== undefined ? { accountDir } : {}), methodId,
+        ...(secret !== undefined ? { secret } : {}),
+      }, PLUGIN_HARNESS_ACCOUNT_LOGIN_TIMING);
+      return parseGhostHarnessAccountLoginResult(raw);
+    },
+    async cancelAccountLogin(key, accountDir) {
+      const call = deps.callAccount;
+      const harness = call && findLive(key, (item) => !!item.accounts?.methods.length
+        && (accountDir === undefined || isAccountDir(item, accountDir)));
+      if (!call || !harness) return;
+      await call(harness.ghostId, 'accountLoginCancel', {
+        harnessId: harness.harnessId, ...(accountDir !== undefined ? { accountDir } : {}),
+      }, ACCOUNT_STATUS_TIMING);
     },
     async spawn(key, options) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
@@ -205,16 +327,29 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         if (current.availability.state === 'unavailable') {
           throw new Error(`Task engine ${current.name} is unavailable${current.availability.message ? `: ${current.availability.message}` : ''}`);
         }
+        // An account directory is only for engines whose plugin keeps each account apart. Starting
+        // one that does not would silently run the task on the original login instead.
+        if (options?.accountDir !== undefined && !isAccountDir(current, options.accountDir)) {
+          throw new Error(`Task engine ${current.name} cannot run on this account`);
+        }
         // 插件没有声明能把文件与命令交给 Cindy 时,它的工具只会作用在本机:项目不在这里,不能启动。
-        if (options?.remoteWorkspace && !current.remoteWorkspace) {
+        if ((options?.remoteWorkspace || options?.guestWorkspace) && !current.remoteWorkspace) {
           throw new Error(`Task engine ${current.name} cannot run a task whose files are on another computer`);
+        }
+        if (options?.guestWorkspace && !current.guestWorkspace) {
+          throw new Error(`Task engine ${current.name} cannot be shared with other accounts`);
         }
         harness = current;
       } catch (error) {
         throw new AgentStartupStoppedError(error);
       }
-      return options?.remoteWorkspace
-        ? deps.spawn(harness.ghostId, harness.harnessId, { remoteWorkspace: true })
+      const spawnOptions: PluginHarnessSpawnOptions = {
+        ...(options?.remoteWorkspace || options?.guestWorkspace ? { remoteWorkspace: true } : {}),
+        ...(options?.guestWorkspace ? { guestWorkspace: true } : {}),
+        ...(options?.accountDir !== undefined ? { accountDir: options.accountDir } : {}),
+      };
+      return Object.keys(spawnOptions).length
+        ? deps.spawn(harness.ghostId, harness.harnessId, spawnOptions)
         : deps.spawn(harness.ghostId, harness.harnessId);
     },
     reconcile(ghosts) {
@@ -241,7 +376,11 @@ const registry = createPluginHarnessRegistry({
   readAvailability: (ghostId) => registryDeps.readAvailability(ghostId),
   uiLocale: () => registryDeps.uiLocale(),
   spawn: (ghostId, harnessId, options) => (options ? registryDeps.spawn(ghostId, harnessId, options) : registryDeps.spawn(ghostId, harnessId)),
-  readUsage: async (ghostId, harnessId) => registryDeps.readUsage?.(ghostId, harnessId),
+  readUsage: async (ghostId, harnessId, accountDir) => (accountDir === undefined
+    ? registryDeps.readUsage?.(ghostId, harnessId)
+    : registryDeps.readUsage?.(ghostId, harnessId, accountDir)),
+  callAccount: async (ghostId, method, params, timing) => registryDeps.callAccount?.(ghostId, method, params, timing),
+  accountRoot: (ghostId, harnessId) => registryDeps.accountRoot?.(ghostId, harnessId) ?? null,
   log: { warn: (message, meta) => registryDeps.log?.warn(message, meta) },
 });
 
@@ -259,8 +398,22 @@ export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
 }
 
-export function readPluginHarnessUsage(key: string): Promise<GhostHarnessUsage | null> {
-  return registry.readUsage(key);
+export function readPluginHarnessUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null> {
+  return registry.readUsage(key, accountDir, options);
+}
+
+export function readPluginHarnessAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null> {
+  return registry.readAccountStatus(key, accountDir);
+}
+
+export function loginPluginHarnessAccount(
+  key: string, accountDir: string | undefined, methodId: string, secret?: string,
+): Promise<GhostHarnessAccountLoginResult> {
+  return registry.loginAccount(key, accountDir, methodId, secret);
+}
+
+export function cancelPluginHarnessAccountLogin(key: string, accountDir: string | undefined): Promise<void> {
+  return registry.cancelAccountLogin(key, accountDir);
 }
 
 export function getPluginHarnessRegistry(): PluginHarnessRegistry {
@@ -276,10 +429,14 @@ const lastRefreshRequestAt = new Map<string, number>();
  * 引擎状态与模型列表。插件怎么取模型由插件自己决定；结果经 `PUT /harnesses` 回来，照常对账。
  * 只发给当前列出引擎的插件；冷却内与逻辑页不在线时不发(不在线的下次再试)。
  */
-export function requestPluginHarnessRefresh(now = Date.now()): void {
+export function requestPluginHarnessRefresh(now = Date.now(), targetGhostId?: string): void {
   const send = registryDeps.requestRefresh;
   if (!send) return;
-  const ghostIds = new Set(registry.list().map((harness) => harness.ghostId));
+  const harnesses = registry.list();
+  const ghostIds = new Set(
+    (targetGhostId ? harnesses.filter((harness) => harness.ghostId === targetGhostId) : harnesses)
+      .map((harness) => harness.ghostId),
+  );
   for (const ghostId of ghostIds) {
     const last = lastRefreshRequestAt.get(ghostId);
     if (last !== undefined && now - last < PLUGIN_HARNESS_REFRESH_COOLDOWN_MS) continue;

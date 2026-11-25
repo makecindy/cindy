@@ -74,12 +74,19 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: () => ({ providers: [], loading: false }),
+}));
+
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable, remoteAgent }: {
+  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable, remoteAgent, deviceId, agentDevice }: {
     onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
     remoteAgent?: { devices: readonly { deviceId: string }[] };
+    deviceId?: string;
+    agentDevice?: { deviceId: string; name: string | null } | null;
   }) => <>
     <span data-testid="route-devices">{remoteAgent?.devices.map(device => device.deviceId).join(',')}</span>
+    <span data-testid="trigger-catalog">{`${deviceId ?? 'local'}|${agentDevice?.name ?? ''}`}</span>
     <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
       onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>
     <button data-testid="select-shared" onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'owner-model', providerId: 'owner-provider', effort: 'high', agentDevice: { deviceId: 'share:owner', name: 'Owner' } })}>Select shared</button>
@@ -169,6 +176,22 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('lists same-account computers and received shares through the common route candidates', async () => {
     render(<ImDefaultSettingsSection channel="telegram" />);
     expect((await screen.findByTestId('route-devices')).textContent).toBe('studio,share:s1');
+  });
+
+  // 生产入口: 真实 ImDefaultSettingsSection 读回已存路由后交给模型字段的目录位置。
+  // Bug: 飞书「新对话配置」选了分享 / 另一台电脑的模型, 字段只按本机目录解析,
+  // 显示「模型信息暂不可用」(ModelSelector 的 deviceId 契约: 非空 = 按那台的目录解析)。
+  // 缺口: 相邻用例只验证保存与候选电脑, 不看已存的远程路由如何回显。
+  // 最小失败输入: codex 默认带 agentDeviceId=share:s1。tier: unit(jsdom)。
+  it.each([
+    ['a stored remote route resolves on its own catalog', 'share:s1', 'share:s1|From Magi'],
+    ['a local route stays on the local catalog', null, 'local|'],
+  ])('field label: %s', async (_name, agentDeviceId, expected) => {
+    const stored = defaults('codex');
+    stored.agents.codex = { providerId: 'owner-provider', model: 'gpt-6.2-sol', effort: 'high', agentDeviceId };
+    window.electronAPI.maker.imDefaultSettingsGet = vi.fn(async () => stored);
+    render(<ImDefaultSettingsSection channel="feishu" />);
+    expect((await screen.findByTestId('trigger-catalog')).textContent).toBe(expected);
   });
 
   it('saves a shared model and its location together without local catalog membership', async () => {

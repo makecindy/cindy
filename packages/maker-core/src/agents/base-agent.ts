@@ -164,6 +164,8 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -313,6 +315,16 @@ export interface PiNativeProvidersResult {
   providers: PiNativeProviderSpec[];
   /** 注入 spawn env 的键值(通常是各 provider 的 api key,键名对应 spec.apiKeyEnvVar)。 */
   env: Record<string, string>;
+}
+
+/** The selected BYOM source was absent from Pi's native route set at startup.
+ * The host must separately verify whether the saved connection still exists.
+ */
+export class PiByomRouteAbsentError extends Error {
+  constructor(readonly providerId: string, message: string) {
+    super(message);
+    this.name = 'PiByomRouteAbsentError';
+  }
 }
 
 /**
@@ -906,6 +918,17 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
+   * Pi-only:宿主已知的订阅来源连接态(纯读,无自愈副作用)。
+   *
+   * 子代理路由不列确知断开的来源:账号断开或被移除后目录里的模型名仍在,按这些名字
+   * 派发的子任务会先建 run、随后在首次上游请求时因缺凭证必败(#12298)。
+   *
+   * 入参是 provider 的**来源 id**(spec.sourceProviderId ?? spec.id),不是 Pi 侧的 provider id。
+   * 缺省 / 读不到结论 → 视为连接,不过滤(宁可多列也不误伤可用来源)。
+   */
+  isNativeProviderSourceConnected?: (sourceProviderId: string) => boolean;
+
+  /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
    * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
    * availableModels 或授予新选择准入。
@@ -1053,6 +1076,9 @@ export interface AgentDeps {
     modelId: string,
     signal?: AbortSignal,
   ) => CodexLocalAuthPolicyResolution | Promise<CodexLocalAuthPolicyResolution>;
+
+  /** Whether the selected local route adds a Fast declaration to its native catalog. */
+  needsCodexFastCatalog?: (providerId: string | null | undefined, modelId: string) => boolean;
 
   /**
    * Per-model requested context window (user override first, explicit provider default second).
@@ -1364,6 +1390,8 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+  /** Optional host-resolved review input for an alias. Never replaces execution input. */
+  getMcpToolApprovalEvidence?: (context: McpToolApprovalContext) => unknown;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -2569,6 +2597,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
@@ -2742,6 +2772,8 @@ export interface AgentSessionHandle {
   getUsageSnapshot(): UsageSnapshot;
   /** Replayable authoritative usage for Host-synthesized terminal events. */
   getPendingTurnUsage?(): Record<string, unknown> | undefined;
+  /** True only while a delivered reply is waiting for automatic compaction. */
+  isCompactingDeliveredReply?(): boolean;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;
@@ -3123,7 +3155,8 @@ export abstract class BaseAgent {
   }
 
   async requiresCodexThreadHostTransfer(
-    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId' | typeof NATIVE_SUBSCRIPTION_ACCOUNT>
+      & { threadId: string },
   ): Promise<boolean> {
     void opts;
     return false;

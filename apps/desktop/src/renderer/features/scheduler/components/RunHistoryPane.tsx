@@ -164,6 +164,7 @@ export function RunHistoryPane({
         description: t('scheduler.confirm.deleteRun.description'),
         confirmText: t('scheduler.confirm.deleteRun.confirm'),
         cancelText: t('scheduler.confirm.deleteRun.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -226,7 +227,7 @@ export function RunHistoryPane({
     ? t('scheduler.detail.manualTrigger')
     : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
   const rules = schedulePrTriggers(s);
-  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
     ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
     : timingText;
@@ -251,7 +252,7 @@ export function RunHistoryPane({
   return (
     <section className="flex min-w-0 flex-1 flex-col">
       {/* Pane header */}
-      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-[18px]">
+      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-4">
         <div className="flex min-w-0 flex-col gap-1.5">
           <h2 className="truncate text-lg font-medium text-[var(--msg-assistant-text)]">
             {s.name}

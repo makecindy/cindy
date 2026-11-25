@@ -1,10 +1,10 @@
-import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@cindy/maker-shared/model-route';
+import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
 export const BOT_MODEL_CHAIN_MAX = 5;
 
-export type BotHarness = 'claude' | 'codex' | 'pi';
+export type BotHarness = CompanionModelRoute['harness'];
 
-export type BotModelRoute = ModelRoute;
+export type BotModelRoute = CompanionModelRoute;
 
 /** Runtime-control uses the same full route identity as the Bot editor. */
 export function botModelRouteRuntimeKey(
@@ -15,10 +15,10 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' ? value : 'claude';
 }
 
-export const normalizeBotModelRoute = normalizeModelRoute;
+export const normalizeBotModelRoute = normalizeCompanionModelRoute;
 
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
@@ -36,6 +36,14 @@ export function normalizeBotModelChain(
     if (single) candidates.push(single);
   }
   return uniqueBotModelRoutes(candidates).slice(0, BOT_MODEL_CHAIN_MAX);
+}
+
+/** A remote form must save every submitted route, in order, or reject the entire edit. */
+export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
+  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_MAX
+    || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
+  const routes = normalizeBotModelChain(value);
+  return routes.length === value.length ? routes : null;
 }
 
 /** A group entry and a plain route with the same fallback model are different choices. */

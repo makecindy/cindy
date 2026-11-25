@@ -1,9 +1,56 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, readLocalPluginSnapshot, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
+import { pluginCatalogMemory, pluginCatalogOwnerKey, readLocalPluginSnapshot, readPluginRecommendations, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
+import { forgetFailedMarketIcon, mergePluginItems, readReusedMarketIcon } from '../lib/pluginBrowserCache';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { schedulePluginCatalogPrewarm } from '../lib/prewarmPluginCatalog';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); resetPluginCatalogMemoryForTest(); });
+
+it('reuses signed icons across recommendations and search results in the same catalog partition', async () => {
+  const memory = pluginCatalogMemory('first-owner', 'local');
+  const item = {
+    pluginId: 'plugin', ghostId: 'plugin-ghost', scope: 'public', publisherKind: 'official',
+    releaseId: 'release-1', sourceType: 'server',
+    icon: { mimeType: 'image/png', sizeBytes: 1024, sha256: 'a'.repeat(64),
+      url: 'https://icons.invalid/recommended', thumbnailUrl: 'https://icons.invalid/thumb-a',
+      expiresAt: '2099-01-01T00:00:00Z' },
+  } as PluginMarketItem;
+  const searchItem = { ...item, icon: { ...item.icon!, url: 'https://icons.invalid/search' } };
+  const other = { ...item, pluginId: 'other-plugin', ghostId: 'other-ghost' };
+  const withoutIcon = { ...item, pluginId: 'no-icon', icon: null };
+  const recommendations = vi.fn()
+    .mockResolvedValueOnce([item, other, withoutIcon])
+    .mockRejectedValueOnce(new Error('temporary outage'))
+    .mockResolvedValueOnce([searchItem]);
+  const lookup = vi.fn().mockRejectedValue(new Error('would scan custom markets'));
+  vi.stubGlobal('window', { electronAPI: { pluginMarket: { recommendations, lookup } } });
+  memory.todayPool = await readPluginRecommendations(memory);
+  const cachedPage = mergePluginItems([], [searchItem], false, memory.marketIcons);
+  expect(cachedPage[0]?.icon).toBe(item.icon);
+  expect(mergePluginItems([], [{ ...searchItem, releaseId: 'release-2' }], false, memory.marketIcons)[0]?.icon).toBe(searchItem.icon);
+  expect(mergePluginItems([], [searchItem], false, pluginCatalogMemory('second-owner', 'local').marketIcons)[0]?.icon).toBe(searchItem.icon);
+  forgetFailedMarketIcon(memory.marketIcons, cachedPage[0]!);
+  await expect(readPluginRecommendations(memory, memory.todayPool)).rejects.toThrow('temporary outage');
+  expect(memory.todayPool[0]?.icon).toBe(item.icon);
+  const renewed = await readPluginRecommendations(memory, memory.todayPool);
+  expect(renewed).toEqual([searchItem, { ...other, icon: null }, withoutIcon]);
+  expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
+  expect(recommendations).toHaveBeenCalledTimes(3);
+  expect(recommendations).toHaveBeenNthCalledWith(1);
+  expect(recommendations).toHaveBeenNthCalledWith(2, ['plugin', 'other-plugin']);
+  expect(recommendations).toHaveBeenNthCalledWith(3, ['plugin', 'other-plugin']);
+
+  memory.todayPool = renewed;
+  const newRelease = { ...searchItem, releaseId: 'release-2', version: '2.0.0',
+    icon: { ...searchItem.icon!, sha256: 'b'.repeat(64), thumbnailUrl: undefined } };
+  recommendations.mockResolvedValueOnce([newRelease]);
+  const updated = await readPluginRecommendations(memory, memory.todayPool);
+  expect(updated).toEqual([newRelease, ...renewed.slice(1)]);
+  expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
+  expect(recommendations).toHaveBeenLastCalledWith(['plugin']);
+  expect(lookup).not.toHaveBeenCalled();
+});
 
 // Unit: login preheat must use the page's exact owner/language bucket, and must
 // not scan/count a market the user has not opened. The navigation suite only

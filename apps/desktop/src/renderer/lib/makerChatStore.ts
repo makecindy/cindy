@@ -67,6 +67,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
@@ -211,7 +212,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError, hostProfileInUseI18nKey } from '@/utils/ipcError';
+import { extractIpcError, hostProfileHoldI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -381,7 +382,7 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return held;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
@@ -392,7 +393,7 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return i18n.t(held);
   const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
@@ -407,10 +408,11 @@ export function decodeRemoteErrorMessage(msg: string): string {
 }
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
-export function remoteErrorMessageForBanner(msg: string): string {
+export function remoteErrorMessageForBanner(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
   // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
   // say why and what to do here, in the window's language (the Host's own sentence is not shown).
-  const held = hostProfileInUseI18nKey(msg, 'send');
+  const held = hostProfileHoldI18nKey(msg, 'send');
   if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.
@@ -685,6 +687,7 @@ export interface ChatMessage {
   systemCardData?: Record<string, unknown>;
   /** First input resumed after group quota recovery; its user bubble stays visible. */
   usageLimitAutoResumeInfo?: Record<string, unknown>;
+  inputNotice?: AgentMeta['inputNotice'];
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
   planReviewRequestId?: string;
@@ -2600,6 +2603,15 @@ export function builtinAgentSwitchIntent(
   return intent && intent.target !== 'acp' ? (intent as BuiltinAgentSwitchIntentRecord) : null;
 }
 
+/** Same-engine Claude/Codex previews are applied only by the task's host. */
+export function isSameEngineNonPiModelIntent(
+  intent: BuiltinAgentSwitchIntentRecord | null,
+  agentKind: AgentSwitchIntentRecord['target'],
+): boolean {
+  return !!intent && (agentKind === 'claude-code' || agentKind === 'codex') &&
+    intent.target === agentKind && intent.agentDeviceId === undefined;
+}
+
 /** 待切到插件引擎的意图(下一条消息发送时生效)。 */
 export function pluginEngineAgentSwitchIntent(
   intent: AgentSwitchIntentRecord | null | undefined,
@@ -2876,6 +2888,11 @@ export interface SessionChatState {
    * optimistic user bubble and preserve the original queued snapshot.
    */
   steeringQueueClientIds: string[];
+  /**
+   * The host reports this task's engine cannot take input into its running turn
+   * (projection `steerUnsupported`): no steer action, input waits for the next turn.
+   */
+  steerUnsupported: boolean;
   /** Queue is paused by an explicit Stop and resumes only via the queue Continue button. */
   queuePaused: boolean;
   /**
@@ -3064,6 +3081,7 @@ export type SessionChatLightState = Pick<
   | 'lastExpandedPlanViewerState'
   | 'pendingQueue'
   | 'steeringQueueClientIds'
+  | 'steerUnsupported'
   | 'queuePaused'
   | 'queueEditLocks'
   | 'queueInteractionLocks'
@@ -3078,6 +3096,7 @@ export type SessionChatLightState = Pick<
 > & {
   /** 窗口是否掺进过孤岛(由 historyWindowIslands 派生,给 UI / 判定用)。 */
   historyWindowHasIsland: boolean;
+  queueHeadRetry: boolean;
 };
 
 /** 没有孤岛的空模型(共享只读实例,避免无谓分配)。 */
@@ -3149,6 +3168,7 @@ function createInitialState(): SessionChatState {
     sdkSessionId: null,
     pendingQueue: [],
     steeringQueueClientIds: [],
+    steerUnsupported: false,
     queuePaused: false,
     queueInteractionLocks: [],
     queueEditLocks: [],
@@ -3236,6 +3256,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
   steeringQueueClientIds: [],
+  steerUnsupported: false,
   queuePaused: false,
   queueInteractionLocks: [],
   queueEditLocks: [],
@@ -3258,6 +3279,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 export const EMPTY_LIGHT_STATE: SessionChatLightState = Object.freeze({
   ...EMPTY_SESSION_STATE,
   historyWindowHasIsland: false,
+  queueHeadRetry: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -5211,6 +5233,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )
@@ -5309,6 +5333,8 @@ function applyInputProjection(
       messages,
       pendingQueue,
       steeringQueueClientIds: projection.steeringQueueClientIds,
+      // Older hosts omit it: steer stays available, as before.
+      steerUnsupported: projection.steerUnsupported === true,
       queuePaused: projection.queuePaused,
       queueExpanded: projection.queueExpanded,
       queueInteractionLocks: projection.queueInteractionLocks,
@@ -9748,6 +9774,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             sessionId?: string;
             totalMoney?: unknown;
             totalCostUsd?: number;
+            totalCostUsdIsApproximate?: boolean;
           } | null;
           const totalMoney =
             normalizeRegionalMoney(p?.totalMoney) ??
@@ -9760,6 +9787,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalMoney,
               ...(typeof p.totalCostUsd === 'number' ? { totalCostUsd: p.totalCostUsd } : {}),
+              ...(p.totalCostUsdIsApproximate !== undefined && { totalCostUsdIsApproximate: p.totalCostUsdIsApproximate }),
             });
           }
           break;
@@ -10234,17 +10262,22 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       if (isSidebarWindow() || isSecondaryWindow()) return;
       const p = raw as {
+        ghostId?: string;
         name?: string;
         iconDataUrl?: string;
         sessionId?: string;
         url?: string;
+        reuseExisting?: true;
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
       // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
       // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
       // (detached 形态 + Windows 上 focus() 即抢前台)。
-      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
+      const pluginPreview = isPluginInstanceKey(p.ghostId) && isDataOwnerPushStampCurrent(ownerStamp)
+        ? { instanceId: p.ghostId, ownerStamp, ...(p.reuseExisting === true ? { reuseExisting: true as const } : {}) }
+        : undefined;
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false, pluginPreview }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {
@@ -10509,6 +10542,7 @@ function visibleAskUser(state: SessionChatState): PendingAskUser | null {
 }
 
 function selectLightState(state: SessionChatState): SessionChatLightState {
+  const queueHead = state.pendingQueue[0];
   return {
     agentSwitchIntent: state.agentSwitchIntent,
     agentStatus: state.agentStatus,
@@ -10520,6 +10554,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    queueHeadRetry: state.inputRecovery?.kind === 'queue-head'
+      && queueHead?.clientId === state.inputRecovery.clientId
+      && !queueHead.origin && !queueHead.originalSyntheticTrigger && !queueHead.sourcePlugin,
     errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
@@ -10553,6 +10590,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     lastExpandedPlanViewerState: state.lastExpandedPlanViewerState,
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
+    steerUnsupported: state.steerUnsupported,
     queuePaused: state.queuePaused,
     queueEditLocks: state.queueEditLocks,
     queueInteractionLocks: state.queueInteractionLocks,
@@ -10578,6 +10616,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.queueHeadRetry === b.queueHeadRetry &&
     a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
@@ -10609,6 +10648,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.lastExpandedPlanViewerState === b.lastExpandedPlanViewerState &&
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
+    a.steerUnsupported === b.steerUnsupported &&
     a.queuePaused === b.queuePaused &&
     a.queueEditLocks === b.queueEditLocks &&
     a.queueInteractionLocks === b.queueInteractionLocks &&
@@ -12076,7 +12116,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
     ...(error !== undefined
       ? {
           // Keep the code so the banner can expose recovery guidance in its active locale.
-          error: remoteErrorMessageForBanner(error instanceof Error ? error.message : String(error)),
+          error: remoteErrorMessageForBanner(error),
           usageLimitRecovery: null,
           errorReason: null,
           toolLoop: null,
@@ -15042,6 +15082,7 @@ export function buildCreateOptsForCurrentSession(
 ): AgentInputCreateOpts {
   const current = getOrCreateState(sessionId);
   const deviceLinkRemote = isRemoteSessionSticky(sessionId);
+  const intent = builtinAgentSwitchIntent(current.agentSwitchIntent);
   return {
     agentKind: current.agentKind,
     workingDir,
@@ -15061,9 +15102,9 @@ export function buildCreateOptsForCurrentSession(
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
-    // 待切到插件引擎时 createOpts 仍描述当前引擎：主进程在发送事务里先完成切换，再按任务行启动插件引擎。
-    ...(builtinAgentSwitchIntent(current.agentSwitchIntent)
-      ? { providerId: current.agentSwitchIntent!.providerId }
+    // Same-engine credential previews and plugin-engine intents keep the committed source in the send snapshot.
+    ...(intent && !isSameEngineNonPiModelIntent(intent, current.agentKind)
+      ? { providerId: intent.providerId }
       : current.sessionProviderId !== undefined
         ? { providerId: current.sessionProviderId }
         : {}),
@@ -16312,7 +16353,7 @@ async function sendMessageCore(
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
-      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+      const message = remoteErrorMessageForBanner(err);
       setState(sessionId, (s) => ({
         ...s,
         error: message,
@@ -16364,7 +16405,7 @@ function compactSession(
       // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
       .then(({ projection }) => projection.error === null)
       .catch((err) => {
-        const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+        const message = remoteErrorMessageForBanner(err);
         setState(sessionId, (s) => ({
           ...s,
           error: message,
@@ -16703,7 +16744,7 @@ async function steerMessageCore(
       // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
       // (不经 stream error event reducer)。保留已知 code 的 wrapper，让 ErrorBanner
       // 选择可操作的 provider 指引；未知 code 仍由 helper 解码为通用本地化摘要。
-      const message = remoteErrorMessageForBanner(err instanceof Error ? err.message : String(err));
+      const message = remoteErrorMessageForBanner(err);
       rollbackOptimisticSteer();
       setState(sessionId, (s) => ({
         ...s,
@@ -19191,6 +19232,9 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** Read only the presence of an existing feedback request, without creating chat state. */
+  hasPendingIssueConfirm: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.pendingIssueConfirm != null,
   /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
   hasRunningWakeTask: (sessionId: string): boolean => {
     const state = sessions.get(sessionId);
@@ -20073,7 +20117,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp, initialHeight: mcpApp.initialHeight },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -20502,6 +20546,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(m.agentMeta?.autoResumeInfo?.reason === 'usage-limit-reset'
           ? { usageLimitAutoResumeInfo: { ...m.agentMeta.autoResumeInfo } }
           : {}),
+        ...(m.agentMeta?.inputNotice === 'oversized-input-skipped'
+          ? { inputNotice: m.agentMeta.inputNotice } : {}),
         ...(parsed.images.length > 0 && { images: parsed.images }),
         ...(parsed.files.length > 0 && { files: parsed.files }),
         ...(parsed.quotesEncoded === true && { quotesEncoded: true }),

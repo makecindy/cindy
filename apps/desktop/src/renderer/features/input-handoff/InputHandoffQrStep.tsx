@@ -143,7 +143,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
   const disabled = busy || inputBlocked || state !== 'shown';
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="flex size-[240px] items-center justify-center overflow-hidden rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      <div className="flex size-[240px] items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
         {src && (state === 'shown' || state === 'sending') ? (
           <button
             type="button"

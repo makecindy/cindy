@@ -381,6 +381,8 @@ export interface SessionSendOptions extends SendOptions {
 }
 
 export interface SessionTurnLifecycleObserver {
+  /** A reservation precedes async preparation; it may never reach provider dispatch. */
+  onTurnReserved?(generation: number): ((dispatched: boolean) => void) | void;
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
@@ -1038,7 +1040,7 @@ export class Session {
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
-    onTurnReserved?.(reservedTurnGeneration);
+    let releaseReservation: ((dispatched: boolean) => void) | void = undefined;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -1059,6 +1061,8 @@ export class Session {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
+      releaseReservation = turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
+      onTurnReserved?.(reservedTurnGeneration);
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
@@ -1280,6 +1284,14 @@ export class Session {
         }
       } else {
         this.terminalObservedDuringReservation = null;
+      }
+      try {
+        releaseReservation?.(turnDispatched);
+      } catch (error) {
+        this.logger.warn('turn reservation observer cleanup failed', {
+          turnGeneration: reservedTurnGeneration,
+          error: String(error),
+        });
       }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
@@ -1763,7 +1775,8 @@ export class Session {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE,
+        teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.());
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1803,10 +1816,10 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string): void {
+  private settleUnfinishedTurn(message: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
     const usage = this.handle.getPendingTurnUsage?.();
-    if (this.abortRecoveryScheduledFor === this.turnGeneration) {
+    if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
@@ -1854,9 +1867,11 @@ export class Session {
     try {
       // Emit only in the async teardown phase: terminal listeners may themselves
       // close transports, so they must not run before the host's sync tree sweep.
-      // Only Claude's host-reaped process needs this terminal classification.
-      // Other adapters retain their own teardown and usage-settlement contract.
-      if (teardown.reason === 'app-quit' && this.agentKind === 'claude-code' && this.hasUnsettledTurn()) {
+      // Claude and Pi are interrupted by this explicit host exit, not a model
+      // failure. Settle before Pi's close fallback can synthesize a crash, while
+      // retaining usage and leaving the other adapters' detach contracts alone.
+      if (teardown.reason === 'app-quit'
+        && (this.agentKind === 'claude-code' || this.agentKind === 'pi') && this.hasUnsettledTurn()) {
         const usage = this.handle.getPendingTurnUsage?.();
         this.fanOutEvent({ type: 'done', source: this.agentKind,
           data: { status: 'cancelled', ...(usage ? { usage } : {}) } });
@@ -2411,6 +2426,10 @@ export class Session {
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────
   // Claude 走 SDK checkpoint；Codex 走 thread/rollback 裁剪对话。
   // 业务层 (desktop agentRewind.ts) 通过这个委托对外暴露。
+
+  hasReclaimedSharedRun(): boolean {
+    return this.getStatus() === 'active' && this.handle.hasReclaimedSharedRun?.() === true;
+  }
 
   /**
    * 当前是否有 turn 在跑 (rewind preview/commit 业务前置守卫用)。

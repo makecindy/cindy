@@ -18,6 +18,7 @@ import { extractIpcError } from '@/utils/ipcError';
 
 import {
   MODEL_GROUPS_IPC,
+  modelGroupResolveResultFromRemote,
   modelGroupSelectionForOwner,
   normalizeModelGroupsConfig,
   type ModelGroupResolveRequest,
@@ -213,7 +214,8 @@ export async function resolveDeviceModelGroup(
       ...(location ? { location } : {}),
       ...(options?.remoteInvocableOnly ? { remoteInvocableOnly: true } : {}),
     };
-    return await invoke<ModelGroupResolveResult>(deviceId, MODEL_GROUPS_IPC.RESOLVE, [request]);
+    const result = await invoke<ModelGroupResolveResult>(deviceId, MODEL_GROUPS_IPC.RESOLVE, [request]);
+    return result && typeof result === 'object' ? modelGroupResolveResultFromRemote(result) : result;
   } catch (err) {
     log.warn('device model group resolve failed', err);
     return null;

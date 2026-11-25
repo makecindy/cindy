@@ -22,6 +22,7 @@ import {
 import {
   projectAgentFacingText,
   readAgentInputReferences,
+  type AgentSendToSessionHint,
 } from '@cindy/maker-shared/agent-input-projection';
 
 import {
@@ -89,6 +90,17 @@ export function isContextOverflowErrorData(data: unknown, agentKind?: string): b
       typeof value === 'string' &&
       (isContextOverflowErrorMessage(value) || isRemoteCompactEncryptedContentError(value)),
   );
+}
+
+function isPromptLengthRejection(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const { reason, message, sdkError } = data as Record<string, unknown>;
+  // The current input or accumulated context can hit the context limit.
+  // Other recoverable failures, such as invalid compact data, use their own paths.
+  if (reason != null && reason !== CONTEXT_OVERFLOW_REASON) return false;
+  const diagnostics = [message, sdkError].filter((value): value is string => typeof value === 'string');
+  return !diagnostics.some(isRemoteCompactEncryptedContentError) &&
+    (reason === CONTEXT_OVERFLOW_REASON || diagnostics.some(isContextOverflowErrorMessage));
 }
 
 export function isOversizedHistoryErrorData(data: unknown): boolean {
@@ -344,6 +356,7 @@ export function planContextOverflowRollover(
 export function withReplaySourceNotes(
   wire: OverflowReplayWireMessage,
   agentMeta: Record<string, unknown> | null | undefined,
+  sendToSession?: AgentSendToSessionHint,
 ): OverflowReplayWireMessage {
   if (!agentMeta) return wire;
   const sourceNote = buildWireMessageSourceNote(
@@ -352,6 +365,7 @@ export function withReplaySourceNotes(
     {
       visibleText: typeof wire === 'string' ? wire : extractPlainText(wire.content),
       autoResume: agentMeta.autoResume === true,
+      sendToSession,
     },
   );
   const device = readMessageSourceDevice(agentMeta);
@@ -368,8 +382,9 @@ export function withReplaySourceNotes(
 function replayWireWithSourceNotes(
   sourceWire: OverflowReplayWireMessage,
   plan: Extract<OverflowRolloverPlan, { action: 'rebuild' }>,
+  sendToSession?: AgentSendToSessionHint,
 ): unknown {
-  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta);
+  const withNotes = withReplaySourceNotes(sourceWire, plan.sourceUserAgentMeta, sendToSession);
   return withNotes === sourceWire ? plan.sourceUserAgentFacingWireContent : withNotes;
 }
 
@@ -392,6 +407,8 @@ function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
 export function engineLabelForOverflow(agentKind: string): string {
   if (agentKind === 'codex') return 'Codex';
   if (agentKind === 'pi') return 'Pi';
+  // A plugin engine task handed to another account of its engine (plugin engine accounts, 2026-11-23).
+  if (agentKind === 'acp') return 'the plugin engine';
   return 'Claude Code';
 }
 
@@ -436,6 +453,8 @@ export function findLatestRebuildableError(
 }
 
 export interface ContextOverflowRolloverDeps {
+  /** Confirmed send_to_session route of the session about to be replayed; sampled before close. */
+  sendToSessionHint?(sessionId: string): AgentSendToSessionHint | undefined;
   getSessionRow(sessionId: string): Promise<{
     status: string;
     source?: string | null;
@@ -490,6 +509,15 @@ export interface ContextOverflowRolloverDeps {
     listBackgroundTasks?(): ReadonlyArray<unknown>;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
+  /**
+   * The task's runtime whatever its engine, a plugin engine's included (getLiveSession reads only
+   * built-in engines). An account handoff (`retain-route`) retires it so the next send starts on the
+   * new account. Absent = getLiveSession.
+   */
+  getRuntimeSession?(sessionId: string): {
+    isTurnRunning(): boolean;
+    listBackgroundTasks?(): ReadonlyArray<unknown>;
+  } | null | undefined;
   rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   drainPersistQueue(): Promise<void>;
@@ -523,7 +551,7 @@ export interface ContextOverflowRolloverDeps {
       sourceCapabilitySelectionText: string;
     },
   ): Promise<{ accepted: boolean }>;
-  getRecoveryAbortSignal?(sessionId: string): AbortSignal;
+  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput): AbortSignal;
   /**
    * Read persisted learning for the exact connection/wire-model/route.
    * A live runtime receipt separately confirms whether it actually loaded the fix.
@@ -561,7 +589,8 @@ export function canContinueContextRecovery(row: { source?: string | null; botRol
   return row.source === 'desktop' || isCanonicalBotContext(row);
 }
 
-type RecoveryTurnIdentity = { instanceId?: string; generation?: number };
+type RecoveryTurnIdentity = { instanceId?: string; generation?: number; inputClientId?: string };
+export type ClaimedOversizedInput = Required<RecoveryTurnIdentity>;
 
 export type ContextRebuildReason =
   | 'context-overflow'
@@ -643,7 +672,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     errorData: unknown,
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
-    turnIdentity?: { instanceId?: string; generation?: number },
+    turnIdentity?: RecoveryTurnIdentity,
   ): Promise<boolean>;
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
@@ -731,6 +760,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
+      // Sampled while the source runtime is still live; the replay below goes through the send transaction.
+      const sendToSession = deps.sendToSessionHint?.(sessionId);
       if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
@@ -837,7 +868,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const replay = await deps.replayUserMessage(
           sessionId,
           plan.sourceUserContent,
-          replayWireWithSourceNotes(sourceWire, plan),
+          replayWireWithSourceNotes(sourceWire, plan, sendToSession),
           {
             signal,
             // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
@@ -951,7 +982,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       const replay = await deps.replayUserMessage(
         sessionId,
         oversized ? CODEX_HISTORY_CONTINUE_MESSAGE : plan.sourceUserContent,
-        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan),
+        oversized ? undefined : replayWireWithSourceNotes(sourceWire, plan, sendToSession),
         oversized ? {
           signal,
           continueFromHistory: true,
@@ -1067,7 +1098,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             reportedCurrentWindow,
             verifiedCurrentWindow,
           );
-    if (contextTokens > 0 && currentContextWindow <= 0) return 'unknown-context';
     const targetPressureRequiresRebuild =
       target.recheckTargetPressure === true &&
       shouldHandoffAfterContextAssessment(
@@ -1077,6 +1107,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           autoCompactThresholdPct: MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
         }),
       );
+    // Missing old-route metadata cannot block a switch. If target pressure is
+    // known, use the existing durable handoff; otherwise try native continuation.
+    if (currentContextWindow <= 0 && !targetPressureRequiresRebuild) return 'not-needed';
     if (
       !targetPressureRequiresRebuild &&
       !shouldRebuildForModelWindowSwitch({
@@ -1298,11 +1331,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+          // An account handoff retires the task's runtime whatever its engine (plugin engine accounts).
+          const runtime = target === 'retain-route' && deps.getRuntimeSession ? deps.getRuntimeSession(sessionId) : live;
+          if (target && (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0)) {
             throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.
-          if (live) await deps.closeSession(sessionId);
+          if (runtime) await deps.closeSession(sessionId);
           assertReady();
           if (!target) {
             // Include any last output persisted while the old runtime was stopping.
@@ -1387,7 +1422,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     async tryRecover(
       sessionId: string,
       errorData: unknown,
-      turnIdentity?: { instanceId?: string; generation?: number },
+      turnIdentity?: RecoveryTurnIdentity,
     ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
@@ -1401,8 +1436,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           && (deps.hasExternalRecoveryOwner?.(sessionId) ?? false);
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);
-        if (turnIdentity && !claimTurns.has(claim)) claimTurns.set(claim, turnIdentity);
-        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
+        const claimed = claimTurns.get(claim);
+        if (turnIdentity && !claimed) claimTurns.set(claim, turnIdentity);
+        const skippedInput = !claim.signal.aborted && claimed?.inputClientId && claimed.instanceId &&
+          claimed.generation !== undefined && claimed.inputClientId === turnIdentity?.inputClientId &&
+          claimed.instanceId === turnIdentity.instanceId && claimed.generation === turnIdentity.generation &&
+          isPromptLengthRejection(errorData)
+          ? { inputClientId: claimed.inputClientId, instanceId: claimed.instanceId, generation: claimed.generation }
+          : undefined;
+        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput);
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>

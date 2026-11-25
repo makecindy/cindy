@@ -8,6 +8,14 @@
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import type { ConversationSearchJump } from './conversationSearchJump.js';
+import type { DataOwnerPushStamp } from './dataOwnerPush.js';
+
+/** Internal preview intent derived from the authorized plugin push. */
+export interface RsbPluginPreview {
+  instanceId: string;
+  reuseExisting?: true;
+  ownerStamp: DataOwnerPushStamp;
+}
 
 /** 子窗口全局状态：均仅在当前进程有效；重启后 detached / lastOpen 重置。 */
 export interface RsbWindowState {
@@ -55,7 +63,7 @@ export type RsbWindowCommand =
     }
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'toggle-review-tab'; sessionId: string }
-  | { type: 'open-web-browser'; sessionId: string; url: string }
+  | { type: 'open-web-browser'; sessionId: string; url: string; pluginPreview?: RsbPluginPreview }
   | { type: 'open-mail-preview'; sessionId: string; url: string }
   | { type: 'open-mail-card'; sessionId: string; callId: string }
   | {

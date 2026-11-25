@@ -23,6 +23,7 @@ import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unloc
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** ssh-add failure reasons mirrored from the main-side classification. Kept in
  *  sync with `AgentFailureReason` in vite-env.d.ts / ssh-keys.ts. */
@@ -208,11 +209,11 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div
@@ -531,12 +532,12 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
       </label>
 
       <label className="flex items-start gap-2 cursor-pointer">
-        <input
-          type="checkbox"
+        <Checkbox
+          data-settings-search-action="Chooses whether the SSH key being generated is passphrase-protected"
           checked={encrypt}
           onChange={(e) => setEncrypt(e.target.checked)}
           disabled={generating}
-          className="mt-0.5 accent-[var(--settings-menu-text-selected)]"
+          className="mt-0.5"
         />
         <span className="flex flex-col gap-0.5">
           <span className="text-12 font-medium"
@@ -639,11 +640,11 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
         >
           <div className="flex items-center justify-between px-5 py-3"
                style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}>
@@ -994,11 +995,11 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           <div
             className="flex items-center justify-between px-5 py-3"

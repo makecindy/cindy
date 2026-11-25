@@ -17,7 +17,7 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
 }): void {
   registry.register({
     name: 'export_session', category: 'history',
-    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Plugin calls use installation authorization; Agent calls follow their own runtime permissions. For Agent calls, the user selects the export location in the native save dialog and the final file_path is returned; the Agent cannot specify a destination path. Plugins receive an instance-bound attachment_ref, never a host path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
+    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Plugin calls use installation authorization; Agent calls follow their own runtime permissions. For Agent calls, the package is saved to the export location the owner set in Settings → Storage (never overwriting; a name suffix is added) without a dialog, or, when none is set, the owner selects a location in the native save dialog; the final file_path is returned. The Agent cannot specify a destination path. EXPORT_DIRECTORY_UNAVAILABLE means the set location is missing or not writable; ask the owner to fix it. Plugins receive an instance-bound attachment_ref, never a host path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
     inputShape: {
       session_id: z.string().min(1),
       exclude_media: z.boolean().default(false),

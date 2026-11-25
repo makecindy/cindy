@@ -16,7 +16,10 @@ import { remoteProviderDisableKey } from '@cindy/model-providers';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
+import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareCommand } from '../../shared/providerShare';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -166,6 +169,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalAuthUser: () => null,
   useOptionalDataOwnerGeneration: () => 0,
   useOptionalAuthDeviceId: () => null,
   useAuth: () => ({
@@ -296,6 +300,61 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Unit: the real settings page and received store must keep the selected
+  // share's retry reachable after one unavailable snapshot, then retire it on removal.
+  it('offers a retry for the selected received share after its list fails', async () => {
+    const owner = getDataOwnerGeneration();
+    const ownerStamp = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+    const share: ProviderShareReceived = {
+      shareId: 'settings-retry', memberId: 'member', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'host', deviceName: 'Host', status: 'active', hostOnline: true, hostCapable: true,
+      owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    };
+    let snapshot = { ownerStamp, confirmedRegions: ['global'], received: [share], unavailableShareIds: [] as string[] };
+    const listeners = new Set<(received: ProviderShareReceived[]) => void>();
+    const push = (received: ProviderShareReceived[]) => listeners.forEach(listener => listener(received));
+    const deviceId = 'share:settings-retry';
+    const command = vi.fn(async (request: ProviderShareCommand) => {
+      if (request.action === 'received-snapshot') return snapshot;
+      if (request.action === 'get-credential-consent') return { skip: false };
+      if (request.action === 'retry-model-catalog') return { ok: true };
+      throw new Error('Unexpected provider-share command');
+    });
+    window.electronAPI.providerShare = {
+      command,
+      onReceivedChanged: (listener: typeof push) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    } as unknown as Window['electronAPI']['providerShare'];
+    resetProviderShareStoreForTests();
+    try {
+      render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      fireEvent.click(await screen.findByTestId('provider-share-received-row'));
+      expect(await screen.findByTestId('provider-share-received-detail')).toBeTruthy();
+
+      await act(async () => {
+        snapshot = { ...snapshot, received: [], unavailableShareIds: [share.shareId] };
+        push([]);
+      });
+      expect(screen.queryByTestId('provider-share-received-row')).toBeNull();
+      expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+      const retry = screen.getByRole('button', { name: 'providerShare.received.retryModels' });
+      expect(command.mock.calls.filter(([request]) => request.action === 'retry-model-catalog')).toHaveLength(0);
+      await act(async () => fireEvent.click(retry));
+      expect(command).toHaveBeenCalledWith({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+
+      await act(async () => {
+        snapshot = { ...snapshot, unavailableShareIds: [] };
+        push([]);
+      });
+      expect(screen.queryByRole('button', { name: 'providerShare.received.retryModels' })).toBeNull();
+    } finally {
+      cleanup();
+      resetProviderShareStoreForTests();
+    }
+  });
+
   // Reuse receiver-side disable, retaining the settings row for re-enabling.
   it('disables an extra remote provider and re-enables it from the same action menu after reopening', async () => {
     ownDevicesState.devices = [{ deviceId: 'peer', name: 'Other computer', platform: 'darwin' }];
@@ -325,6 +384,9 @@ describe('ProvidersSection — 双栏管理', () => {
     expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
     view.unmount();
     const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    // A disabled provider is folded into the 已停用 group, which starts closed after reopening.
+    expect(screen.queryByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /settings\.providers\.pill\.suspended/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
     expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
@@ -1136,9 +1198,13 @@ describe('ProvidersSection — 双栏管理', () => {
 
       const imageSwitch = await screen.findByRole('switch', { name: 'Gemini image test' });
       fireEvent.click(imageSwitch);
-      expect(setModelVisibilities).toHaveBeenCalledWith(
-        'gemini', [expect.objectContaining({ modelId: 'gemini-image-test' })], expect.any(Boolean),
-      );
+      // Functional models use the enable axis, including models managed on a bound connection.
+      expect(setModelDisable).toHaveBeenCalledWith({
+        kind: 'model',
+        providerId: 'gemini',
+        modelIds: ['gemini-image-test'],
+        disabled: true,
+      });
       if (legacyConnected) {
         fireEvent.click(screen.getByRole('button', { name: /^My old Gemini/ }));
         expect(screen.queryByText('Gemini image test')).toBeNull();

@@ -83,7 +83,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
   return (
     <details
       open={defaultOpen}
-      className="group/precheck rounded-[8px] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
+      className="group/precheck rounded-lg bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
     >
       <summary
         className={cn(
@@ -151,7 +151,12 @@ export function RunHistoryCard({
   const { t, i18n } = useTranslation();
   const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
   const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
-  const errorKey = isScheduleActionExpired(run.errorMsg)
+  // Match the persisted refusal with or without the recovery sentence added to new runs.
+  const boundPluginEngineRefusal = run.status === 'failed' &&
+    /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.test(errorDetail ?? '');
+  const errorKey = boundPluginEngineRefusal
+    ? 'scheduler.runs.boundPluginEngineRecovery'
+    : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
@@ -246,7 +251,7 @@ export function RunHistoryCard({
       onClick={handleCardClick}
       title={canMarkRead ? t('scheduler.runs.markReadTitle') : undefined}
       className={cn(
-        'group flex flex-col gap-2 rounded-xl border p-[14px_16px]',
+        'group flex flex-col gap-2 rounded-xl border py-3.5 px-4',
         'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         canMarkRead && 'cursor-pointer',
       )}
@@ -384,7 +389,7 @@ export function RunHistoryCard({
       ) : (
         <p
           className={cn(
-            'rounded-[8px] border px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg border px-2 py-1.5 font-mono text-11 break-words',
             'border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]',
           )}
         >
@@ -396,13 +401,18 @@ export function RunHistoryCard({
           "为什么这轮没跑"在历史里可追溯,与调度器故障区分。 */}
       {run.preRunHookResult && <PreRunHookResultDetails result={run.preRunHookResult} />}
 
-      {run.status === 'skipped' && !run.preRunHookResult && run.resultText && (
+      {run.status === 'skipped' && run.preRunHookResult?.status !== 'skipped' && run.resultText && (
         <p
           className={cn(
-            'rounded-[8px] px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg px-2 py-1.5 font-mono text-11 break-words',
             'bg-[hsl(var(--content-area))] text-[var(--cmd-palette-item-meta)]',
           )}
         >
+          {run.resultText.startsWith('[QUEUE_WAIT_TIMEOUT] ') && (
+            <span className="mb-1 block font-sans">
+              {t('scheduler.runs.queueWaitTimeoutRecovery', { action: t('scheduler.button.runNow') })}
+            </span>
+          )}
           {run.resultText}
         </p>
       )}
