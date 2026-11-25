@@ -404,6 +404,7 @@ import {
   resolveMobileNearBottomOnScroll,
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
+  shouldRepinMobileFollowOnViewportExpand,
   shouldUnpinMobileFollowOnDrag,
   mobileMessageListNearBottomThreshold,
 } from '@/session/messageScroll';
@@ -1222,15 +1223,26 @@ export function MessageRenderer({
   const getTailFollower = useCallback(() => {
     if (!tailFollowerRef.current) {
       tailFollowerRef.current = createMobileTailFollower({
-        read: () => ({
-          metrics: scrollMetricsRef.current,
-          stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
-          userControllingScroll: isUserControllingScroll(),
-          preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
-          layoutSettleAt: mvcpSettleAtRef.current,
-          animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
-            ? programmaticScrollSettleAtRef.current : 0,
-        }),
+        read: () => {
+          const nativeMetrics = scrollMetricsRef.current;
+          // A delayed native onScroll from a transiently shorter layout can overwrite
+          // scrollMetricsRef.contentHeight after LegendList has already expanded. Cross-check
+          // with LegendList's laid-out contentLength so the verifier does not falsely settle.
+          const listContentLength = listRef.current?.getState()?.contentLength;
+          const metrics = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+            && listContentLength > nativeMetrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+            ? { ...nativeMetrics, contentHeight: listContentLength }
+            : nativeMetrics;
+          return {
+            metrics,
+            stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
+            userControllingScroll: isUserControllingScroll(),
+            preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
+            layoutSettleAt: mvcpSettleAtRef.current,
+            animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
+              ? programmaticScrollSettleAtRef.current : 0,
+          };
+        },
         seekEnd: (animated) => {
           markProgrammaticScroll(animated);
           return listRef.current?.scrollToEnd({ animated });
@@ -2376,6 +2388,7 @@ export function MessageRenderer({
       viewportHeight: event.nativeEvent.layoutMeasurement.height,
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
+    const previousViewportHeight = scrollMetricsRef.current.viewportHeight;
     const resumedProcessFollow = processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
       metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
@@ -2440,7 +2453,20 @@ export function MessageRenderer({
       nearBottomRef.current = false;
       setIsAwayFromBottom(true);
     } else {
-      const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
+      const repinnedByViewportExpand = !nearBottomRef.current
+        && !isDragSample
+        && !isMomentumScrollingRef.current
+        && historyTouchStartYRef.current === null
+        && !programmaticScrollInFlightRef.current
+        && !processViewport.inspecting.current
+        && inlineEditorCountRef.current === 0
+        && shouldRepinMobileFollowOnViewportExpand({
+          previousViewportHeight,
+          nextViewportHeight: metrics.viewportHeight,
+          contentHeight: metrics.contentHeight,
+          offsetY: metrics.offsetY,
+        });
+      const preserveHistoryBrowseIntent = !repinnedByViewportExpand && shouldPreserveMobileHistoryBrowseIntent({
         // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
         // final native event must not turn a temporary follow suspension into an unpin.
         historyBrowseIntent: (userScrollForOlderRef.current || processViewport.inspecting.current) && !nearBottomRef.current,
@@ -2454,7 +2480,7 @@ export function MessageRenderer({
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
       const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current || inlineEditorCountRef.current > 0
         ? false
-        : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
+        : repinnedByViewportExpand || resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,
@@ -2462,10 +2488,9 @@ export function MessageRenderer({
           bottomOverlayHeight,
         });
       nearBottomRef.current = nearBottom;
-      // A genuine downward false→true transition means the user manually returned to the
-      // latest edge. The old history-browsing intent no longer owns follow verification;
-      // a later drag will set it again before any new upward browse.
-      if (!wasNearBottom && nearBottom && scrollDelta > 0) {
+      // A genuine downward false→true transition (or a viewport expansion that clamps the
+      // list back to its end, e.g. dismissing the keyboard) returns to the latest edge.
+      if (!wasNearBottom && nearBottom && (scrollDelta > 0 || repinnedByViewportExpand)) {
         userScrollForOlderRef.current = false;
       }
       setIsAwayFromBottom(!nearBottom);
@@ -2476,9 +2501,13 @@ export function MessageRenderer({
     // no subsequent layout/content-size callback will wake follow again. Use the
     // same bounded controller, never an immediate scroll from onScroll. Its
     // gesture/history guards and pending-seek ownership still take precedence.
+    const listContentLength = listRef.current?.getState()?.contentLength;
+    const effectiveContentHeight = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+      && listContentLength > metrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+      ? listContentLength : metrics.contentHeight;
     if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
-      && metrics.contentHeight > 0 && metrics.viewportHeight > 0
-      && metrics.contentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      && effectiveContentHeight > 0 && metrics.viewportHeight > 0
+      && effectiveContentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
       runStickToLatestVerify();
     }
     acknowledgeCompanionReadRef.current();
@@ -2681,11 +2710,39 @@ export function MessageRenderer({
     messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
-    scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
+    const previous = scrollMetricsRef.current;
+    scrollMetricsRef.current = { ...previous, viewportHeight };
+    if (
+      !nearBottomRef.current
+      && !readingOlderRef.current
+      && !isUserControllingScroll()
+      && !programmaticScrollInFlightRef.current
+      && !processViewport.inspecting.current
+      && inlineEditorCountRef.current === 0
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })
+    ) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [messageListVisibility, markMobileMvcpSettle, runStickToLatestVerify]);
+  }, [
+    isUserControllingScroll,
+    messageListVisibility,
+    markMobileMvcpSettle,
+    processViewport.inspecting,
+    runStickToLatestVerify,
+    setHasNewMessages,
+    setIsAwayFromBottom,
+  ]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2923,11 +2980,14 @@ export function MessageRenderer({
     if (!focusedItemKey && decision.shouldAutoFollow && decision.autoFollowTarget === 'content-end') {
       setHasNewMessages(false);
       setIsAwayFromBottom(false);
+      if (initialAnchorDoneRef.current && historyPositioningRef.current && nearBottomRef.current) {
+        runStickToLatestVerify();
+      }
     } else if (decision.showNewMessageIndicator) {
       setHasNewMessages(true);
     }
     previousItemKeysRef.current = itemKeys;
-  }, [focusedItemKey, itemKeys]);
+  }, [focusedItemKey, itemKeys, runStickToLatestVerify]);
 
   const handleLoadEarlierPress = useCallback(() => {
     userScrollForOlderRef.current = true;

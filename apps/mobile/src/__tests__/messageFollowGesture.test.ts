@@ -27,7 +27,7 @@ const callbackNames = [
   'scrollToBottom', 'handleScroll', 'handleHistoryTouchStart', 'maybeTriggerHistoryTouch',
   'handleHistoryTouchMove', 'handleHistoryTouchEnd', 'handleHistoryTouchCancel',
   'handleScrollBeginDrag', 'handleScrollEndDrag', 'handleMomentumScrollBegin',
-  'handleMomentumScrollEnd', 'handleContentSize', 'reconcileReopeningAnchor',
+  'handleMomentumScrollEnd', 'handleListLayout', 'handleContentSize', 'reconcileReopeningAnchor',
 ] as const;
 type CallbackName = typeof callbackNames[number];
 const declarations = renderer!.body!.statements.filter((node) => (
@@ -55,6 +55,7 @@ const visibilityCompiled = ts.transpileModule(`return (${visibilityCallback})();
 
 function harness(richContent: RichContentRuntime | null = new RichContentRuntime(), inspection?: ReturnType<typeof useProcessDisclosureViewport>) {
   const ref = <T>(current: T) => ({ current });
+  const listContentLength = ref<number | undefined>(undefined);
   const state = {
     historyActiveRef: ref(true),
     historyPositioningRef: ref(true),
@@ -104,6 +105,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     initialRevealProgress: { setValue: vi.fn() }, setListRevealed: vi.fn(),
     listRef: ref({
       getState: () => ({ scrollLength: 800, scroll: state.scrollMetricsRef.current.offsetY,
+        ...(listContentLength.current !== undefined ? { contentLength: listContentLength.current } : {}),
         data: [{ key: 'saved' }], sizeAtIndex: () => 1000 }),
       scrollToEnd: tailScroll,
       scrollToIndex: vi.fn(),
@@ -128,7 +130,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     contentOffset: { y: offsetY }, layoutMeasurement: { height: 800 },
   } });
   return {
-    ...callbacks, state, tailScroll, scrollEvent, processViewport,
+    ...callbacks, state, listContentLength, tailScroll, scrollEvent, processViewport,
     setPositioning: (enabled: boolean) => {
       state.historyPositioningRef.current = enabled;
       const bindings = { ...environment, ...callbacks, historyPositioning: enabled };
@@ -784,5 +786,73 @@ describe('streaming follow yields to the reader', () => {
     h.handleHistoryTouchEnd(touch());
     settle();
     expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：复现日志中滞后短列表 onScroll(ch=18618, oy=17662) 覆写 scrollMetricsRef 后
+  // LegendList 已恢复真实高度(141834)的场景，确认 tailFollower 不假收敛并补滚到底，tier unit/jsdom。
+  it('recovers when a delayed short-layout onScroll arrives after LegendList has already expanded', () => {
+    const h = harness();
+    h.state.scrollMetricsRef.current = { contentHeight: 141834, offsetY: 140878, viewportHeight: 956 };
+    h.listContentLength.current = 141834;
+    // Delayed native scroll sample from a transient short-list frame clamps offsetY to 17662.
+    h.handleScroll({ nativeEvent: { contentSize: { height: 18618 },
+      contentOffset: { y: 17662 }, layoutMeasurement: { height: 956 } } });
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.tailScroll).toHaveBeenCalled();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(140878);
+  });
+
+  // 测试价值：复现日志中键盘弹起(vh=608)微滑收键盘解除 nearBottom，随后视口扩大到 956 把列表贴回
+  // 底端(dist=0)的场景；确认贴底时自动恢复 nearBottom 且后续新消息正常跟底，而真正翻看旧消息时仍保持解除，tier unit/jsdom。
+  it.each(['layout-first', 'scroll-first'] as const)('re-pins follow when keyboard dismissal clamps back to the end (%s)', (order) => {
+    const h = harness();
+    h.state.scrollMetricsRef.current = { contentHeight: 142106, offsetY: 141498, viewportHeight: 608 };
+    h.handleScrollBeginDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141498 }, layoutMeasurement: { height: 608 } } });
+    h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141456 }, layoutMeasurement: { height: 608 } } });
+    h.handleScrollEndDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141456 }, layoutMeasurement: { height: 608 } } });
+    expect(h.state.nearBottomRef.current).toBe(false);
+    if (order === 'layout-first') {
+      h.handleListLayout({ nativeEvent: { layout: { height: 956 } } });
+      h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141150 }, layoutMeasurement: { height: 956 } } });
+    } else {
+      h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141150 }, layoutMeasurement: { height: 956 } } });
+      h.handleListLayout({ nativeEvent: { layout: { height: 956 } } });
+    }
+    expect(h.state.nearBottomRef.current).toBe(true);
+    expect(h.state.userScrollForOlderRef.current).toBe(false);
+    h.tailScroll.mockClear();
+    h.handleContentSize(440, 142800);
+    settle();
+    expect(h.tailScroll).toHaveBeenCalled();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(141844);
+  });
+
+  it('keeps deliberate history position unpinned when keyboard dismissal does not reach the end', () => {
+    const h = harness();
+    h.state.scrollMetricsRef.current = { contentHeight: 142106, offsetY: 141498, viewportHeight: 608 };
+    h.handleScrollBeginDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141498 }, layoutMeasurement: { height: 608 } } });
+    h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 140000 }, layoutMeasurement: { height: 608 } } });
+    h.handleScrollEndDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 140000 }, layoutMeasurement: { height: 608 } } });
+    expect(h.state.nearBottomRef.current).toBe(false);
+    h.handleListLayout({ nativeEvent: { layout: { height: 956 } } });
+    h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 140000 }, layoutMeasurement: { height: 956 } } });
+    expect(h.state.nearBottomRef.current).toBe(false);
+    h.handleContentSize(440, 142800);
+    settle();
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：复现日志中底部过滚区(offsetY > endOffset)拖动回弹到 dist=0 时误解除跟随的问题，tier unit/jsdom。
+  it('stays pinned through a bottom overscroll drag bounce back to the tail edge', () => {
+    const h = harness();
+    h.handleScrollBeginDrag(h.scrollEvent(1240));
+    h.handleScroll(h.scrollEvent(1210));
+    h.handleScrollEndDrag(h.scrollEvent(1200));
+    expect(h.state.nearBottomRef.current).toBe(true);
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.tailScroll).toHaveBeenCalled();
+    expect(h.state.scrollMetricsRef.current.offsetY).toBe(1700);
   });
 });
