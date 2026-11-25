@@ -95,7 +95,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
     if (state.kind === "conflict" || state.kind === "installed") return <View style={styles.progress} />;
     const label = state.kind === "unknown" ? t("plugins.management.checkResult")
       : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
-    const disabled = state.kind === "unknown" ? !market.online : !market.canInstall;
+    const disabled = state.kind === "unknown" ? !market.online : state.kind === "sourceUnverified" || !market.canInstall;
     return (
       <Pressable accessibilityRole="button" testID={`plugins.market.install.${item.pluginId}`}
         accessibilityLabel={state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label}
@@ -113,6 +113,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
       : state.kind === "installing" ? t("plugins.market.installing")
       : state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
+        : state.kind === "sourceUnverified" ? t("plugins.market.sourceUnverifiedShort")
         : state.kind === "installed" ? t("plugins.market.alreadyInstalled")
         : state.kind === "unknown" ? t("plugins.market.resultUnknownDetail") : item.description ?? "";
     return (

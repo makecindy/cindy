@@ -1,5 +1,6 @@
 import {
   isBoundedPluginResponse,
+  isPluginMarketSourceIdentity,
   parsePluginManagementSnapshot,
   type ManagedMarketItem,
 } from "./pluginManagementTypes";
@@ -88,11 +89,13 @@ function parseCounts(value: unknown): PluginMarketCounts | null {
 
 const ITEM_FIELDS = ["pluginId", "ghostId", "namespace", "name", "description", "author", "publisherKind", "scope",
   "organizationId", "defaultInstall", "releaseId", "version", "publishedAt", "icon", "installState", "enabled",
-  "sourceType", "sourceMarketName", "updateRequiresConsent"] as const;
+  "sourceType", "sourceMarketName", "updateRequiresConsent", "sourceIdentity"] as const;
 /** Keep only the list fields the phone shows or sends back; extra Host fields are not retained. */
 function marketItemFields(item: ManagedMarketItem): ManagedMarketItem {
   const picked: Record<string, unknown> = {};
   for (const key of ITEM_FIELDS) if (Object.hasOwn(item, key)) picked[key] = item[key];
+  // Additive identity: an unusable value is dropped (source checks then fail closed).
+  if (picked.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(picked.sourceIdentity)) delete picked.sourceIdentity;
   return picked as unknown as ManagedMarketItem;
 }
 
@@ -165,6 +168,14 @@ export function pluginMarketOrigin(item: ManagedMarketItem): "official" | "commu
   if (item.sourceType !== "server") return "custom";
   if (item.scope === "organization") return "organization";
   return pluginMarketPublisher(item);
+}
+
+/**
+ * A custom-market item from a Host that does not name the item's repository (older Host). A new install from the
+ * phone is not offered: the confirmation could only show the marketplace name, and two repositories can share it.
+ */
+export function pluginMarketSourceUnverified(item: Pick<ManagedMarketItem, "sourceType" | "sourceIdentity">): boolean {
+  return item.sourceType !== "server" && !item.sourceIdentity;
 }
 
 export function pluginMarketMatchesFilter(item: ManagedMarketItem, filter: PluginMarketFilter): boolean {

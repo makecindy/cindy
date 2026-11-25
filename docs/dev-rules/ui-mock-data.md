@@ -131,11 +131,13 @@ pnpm mobile:sim:whoami -- --mock --json
   走真实的分页、详情、确认面板与安装回执；Demo Glossary Translate 演示下载失败，Demo Uncertain Sync 演示结果待确认，
   Demo Notes 是同标识冲突。确认面板的对照：Demo Device Simulator（官方，有高风险 `node:execute`）、Demo Agenda
   （官方，无高风险）、Demo Shift Calendar（社区，回执带 `communityMarket`）、Demo Repo Tools（Demo Git Market 自定义市场，
-  可正常安装，有高风险）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、Demo Vault Bridge（官方，Node 常驻 + 4 个凭证绑定、每个 16 个方法，
-  用来看高风险摘要的高度上限和滚动区里的完整方法列表）。已安装列表里预置
-  Demo Weather Board、Demo Secret Sync 与 Demo Reading List 的 1.3.0，详情里「管理插件 → 更新」会出现升级确认：
+  可正常安装，有高风险，确认面板显示仓库 github.com/demo-org/demo-git-market）、Demo Auto Agent（官方，没有 Node，但有后台 Agent 与派活取件两项高风险）、
+  Demo Vault Bridge（官方，五类高风险同时出现：Node 常驻、4 个凭证绑定（每个 16 个方法，摘要合成一行）、运行 Node 程序、后台 Agent、派活取件，用来看高风险摘要的高度上限和滚动区里的完整方法列表）、
+  Demo Legacy Tools（Demo Legacy Market，模拟不提供仓库身份的旧 Host：行内与详情的「安装」不可点并说明原因）。已安装列表里预置
+  Demo Weather Board、Demo Secret Sync、Demo Reading List 与 Demo Legacy Sync 的 1.3.0，详情里「管理插件 → 更新」会出现升级确认：
   Weather Board 新增运行 Node 程序、Secret Sync 已有 Node 只新增凭证绑定（两者都显示高风险固定段）、Reading List 只新增通知
-  （没有固定段）。整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
+  （没有固定段）、Legacy Sync 来自旧 Host 的自定义市场（仓库行显示核实路径，「允许」照常可点）。
+  整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
   `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的
   CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态），
   `normal` 回到默认。插件页已打开时再发带不同 `market` 参数的深链，场景已经切换，但要在插件页下拉刷新一次

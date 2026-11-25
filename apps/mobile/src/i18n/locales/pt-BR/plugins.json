@@ -345,7 +345,12 @@
       "customMarketUnnamed": "De um marketplace personalizado",
       "localFile": "De um arquivo .cindy local",
       "forge": "Plugin desenvolvido localmente",
-      "initiatedByAgent": "Solicitado pelo Agent · {{origin}}"
+      "initiatedByAgent": "Solicitado pelo Agent · {{origin}}",
+      "repository": "Repositório {{repository}}",
+      "repositoryRef": "Repositório {{repository}} ({{ref}})",
+      "localFolder": "Pasta local",
+      "repositoryMissingInstall": "Este computador não informou o repositório, então esta instalação não pode ser permitida pelo celular. Atualize a Cindy no computador ou instale por lá.",
+      "repositoryMissingUpdate": "Este computador não informou o repositório. Para conferir a origem, veja este marketplace em “Marketplaces adicionados” nas configurações do computador."
     },
     "sourceNotice": {
       "community": "Este plugin é desenvolvido e mantido por membros da comunidade. A {{appName}} revisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de uso.",
@@ -453,6 +458,8 @@
     "resultUnknownDetail": "Ainda não foi confirmado se esta instalação foi concluída.",
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador no momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
-    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador."
+    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador.",
+    "sourceUnverified": "A Cindy neste computador não informa de qual repositório vem este marketplace, então ainda não dá para instalar pelo celular. Atualize a Cindy no computador ou instale por lá.",
+    "sourceUnverifiedShort": "Este computador não informa o repositório. Instale pelo computador."
   }
 }

@@ -906,6 +906,49 @@ describe('confirmation sheet wording', () => {
       detail: 'plugins.management.permissions.nodeRuntimeDetail' });
   });
 
+  // PR #12684 maintainer review: a custom-market install names the Host-generated repository next to the computer.
+  it('names the repository of a custom-market install right under the computer line', () => {
+    const custom = (originSource?: unknown) => install({ origin: 'custom-market', originLabel: 'Acme',
+      ...(originSource ? { originSource } : {}) }, []);
+    expect(pluginConsentPresentation(custom({ kind: 'git', repository: 'github.com/acme/plugins' }), t, 'Mac'))
+      .toMatchObject({ device: 'plugins.market.installTo(device=Mac)', repository: 'plugins.notice.consentSource.repository(repository=github.com/acme/plugins)' });
+    expect(pluginConsentPresentation(custom({ kind: 'git', repository: 'github.com/acme/plugins', ref: 'main' }), t).repository)
+      .toBe('plugins.notice.consentSource.repositoryRef(repository=github.com/acme/plugins,ref=main)');
+    expect(pluginConsentPresentation(custom({ kind: 'local' }), t).repository).toBe('plugins.notice.consentSource.localFolder');
+    // Market installs never show a repository line, even if a Host sent one.
+    expect(pluginConsentPresentation(install({ originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []), t).repository).toBeUndefined();
+  });
+  // PR #12684 (older Host without repository identity; proposal pending maintainer confirmation): a first install
+  // cannot be allowed on the phone, an update stays allowed with the way to check the source on the computer.
+  it('blocks Allow only for a first custom-market install without a repository identity', () => {
+    const named = install({ origin: 'custom-market', originLabel: 'Acme', originSource: { kind: 'git', repository: 'github.com/acme/plugins' } }, []);
+    const unnamed = install({ origin: 'custom-market', originLabel: 'Acme' }, []);
+    const update = { ...unnamed, facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [],
+      removed: [], unchangedCount: 0, builtinOauthClientChanged: false } };
+    expect(pluginConsentPresentation(unnamed, t, 'Mac')).toMatchObject({ allowBlocked: true,
+      repository: 'plugins.notice.consentSource.repositoryMissingInstall' });
+    expect(pluginConsentPresentation(update, t, 'Mac')).toMatchObject({ allowBlocked: false,
+      repository: 'plugins.notice.consentSource.repositoryMissingUpdate' });
+    expect(pluginConsentPresentation(named, t, 'Mac').allowBlocked).toBe(false);
+    // Official and community market installs carry no repository and are never blocked by its absence.
+    expect(pluginConsentPresentation(install({}, []), t, 'Mac')).toMatchObject({ allowBlocked: false, repository: undefined });
+  });
+  it('accepts only a credential-free source identity from the Host', () => {
+    const receipt = (originSource: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
+      origin: 'custom-market', originLabel: 'Acme', originSource, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
+    for (const value of [{ kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' }, { kind: 'git', repository: 'gitlab.example.com/g/s/plugins', ref: 'v1.2' }])
+      expect(parsePluginManagementReceipt(receipt(value), 'op').consent?.originSource).toEqual(value);
+    for (const value of [{ kind: 'git', repository: 'https://ghp_x@github.com/acme/plugins' }, { kind: 'git', repository: 'github.com/acme' },
+      { kind: 'git', repository: 'github.com/acme/plugins?token=x' }, { kind: 'local', path: '/Users/me/market' }, { kind: 'git', repository: 'github.com/a/b', url: 'x' },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: '--upload-pack=x' }, 'github.com/acme/plugins'])
+      expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
+    // A page item with an unusable identity keeps the item but drops the identity (source checks then fail closed).
+    const page = parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null, sourceType: 'git-market', sourceMarketName: 'Acme',
+      sourceIdentity: { kind: 'git', repository: 'https://u:p@github.com/a/b' } }] });
+    expect(page.items[0]).not.toHaveProperty('sourceIdentity');
+    expect(parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed', enabled: null, sourceType: 'git-market', sourceMarketName: 'Acme',
+      sourceIdentity: { kind: 'git', repository: 'github.com/a/b' } }] }).items[0]!.sourceIdentity).toEqual({ kind: 'git', repository: 'github.com/a/b' });
+  });
   it('accepts the community flag only as true', () => {
     const receipt = (communityMarket: unknown) => ({ operationId: 'op', phase: 'confirmation', consent: { requestId: 'r', initiator: 'user',
       origin: 'market', ...(communityMarket === undefined ? {} : { communityMarket }), facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });

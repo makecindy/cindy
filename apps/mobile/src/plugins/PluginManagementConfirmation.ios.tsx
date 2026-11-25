@@ -25,12 +25,12 @@ export function PluginManagementConfirmation(
     { colors } = useTheme();
   const { consent, visible, answer } = usePluginConsent(props);
   const info = consent ? pluginConsentPresentation(consent, t, props.deviceName) : undefined;
-  const body = (text?: string) =>
+  const body = (text?: string, lead = false) =>
     text ? (
       <Text
         modifiers={[
           font({ textStyle: "footnote" }),
-          foregroundStyle(colors.textSecondary),
+          foregroundStyle(lead ? colors.textPrimary : colors.textSecondary),
           fixedSize({ horizontal: false, vertical: true }),
         ]}
       >
@@ -83,7 +83,8 @@ export function PluginManagementConfirmation(
                   buttonStyle(accept ? "borderedProminent" : "bordered"),
                   ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
                   disabled(
-                    !props.active || props.state.busy || !props.state.online,
+                    !props.active || props.state.busy || !props.state.online
+                      || (accept && info?.allowBlocked === true),
                   ),
                   frame({ maxWidth: Infinity, minHeight: 44 }),
                 ]}
@@ -115,12 +116,15 @@ export function PluginManagementConfirmation(
         >
           {info?.title ?? ""}
         </Text>
-        {body(info?.device)}
-        {body(info?.identity)}
-        {body(info?.trust)}
-        {body(info?.origin)}
+        {/* Where it goes and where it comes from first, in primary text, so they stay in view with the
+            pinned high-risk summary at the medium detent; the explanations follow in secondary text. */}
+        {body(info?.device, true)}
+        {body(info?.origin, true)}
+        {body(info?.repository, true)}
+        {body(info?.trust, true)}
         {body(info?.sourceNotice)}
         {body(info?.version)}
+        {body(info?.identity)}
         {info?.permissions.map((permission, index) => (
           <VStack key={index} alignment="leading" spacing={spacing.xs}>
             <Text

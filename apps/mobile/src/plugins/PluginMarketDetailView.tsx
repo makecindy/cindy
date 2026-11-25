@@ -36,7 +36,8 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
   const pending = state.kind === "waiting" || state.kind === "installing";
   const primary = state.kind === "unknown" ? t("plugins.management.checkResult")
     : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
-  const disabled = state.kind === "conflict" || (state.kind === "unknown" ? !online : !market.canInstall || !online);
+  const disabled = state.kind === "conflict" || state.kind === "sourceUnverified"
+    || (state.kind === "unknown" ? !online : !market.canInstall || !online);
   return (
     <ScrollView testID="plugins.market.detail" contentContainerStyle={styles.content}>
       {!online ? <PluginNotice icon="offline" testID="plugins.market.detailOffline" title={t("plugins.market.offline", { device })} /> : null}
@@ -74,6 +75,9 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
       <Text style={[styles.note, styles.center]}>{t("plugins.market.installDestination", { device })}</Text>
       {state.kind === "failed" ? <Text style={styles.note}>{t(state.messageKey)}</Text> : null}
       {state.kind === "conflict" ? <Text style={styles.note}>{t("plugins.market.conflict")}</Text> : null}
+      {state.kind === "sourceUnverified" ? (
+        <Text testID="plugins.market.detailSourceUnverified" style={styles.note}>{t("plugins.market.sourceUnverified")}</Text>
+      ) : null}
       {state.kind === "installed" ? <Text style={styles.note}>{t("plugins.market.alreadyInstalled")}</Text> : null}
       {publisher ? <Text style={styles.body}>{t(publisher)}</Text> : null}
       {item.description ? <Text style={styles.body}>{item.description}</Text> : null}

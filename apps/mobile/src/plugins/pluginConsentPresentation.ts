@@ -42,6 +42,21 @@ function sourceLabel(consent: Consent, t: Translate): string {
     : origin;
 }
 
+/** Custom markets: the repository this install packs from, as the Host generated it (same wording as the computer). */
+function repositoryLine(consent: Consent, t: Translate): string | undefined {
+  if (consent.origin !== "custom-market") return undefined;
+  const source = consent.originSource;
+  // Older Host: no repository identity. A new install cannot be allowed here (see allowBlocked); an update
+  // of an already installed plugin stays allowed with a way to check the source on the computer.
+  if (!source) return t(consent.facts.kind === "install"
+    ? "plugins.notice.consentSource.repositoryMissingInstall"
+    : "plugins.notice.consentSource.repositoryMissingUpdate");
+  if (source.kind === "local") return t("plugins.notice.consentSource.localFolder");
+  return source.ref
+    ? t("plugins.notice.consentSource.repositoryRef", { repository: source.repository, ref: source.ref })
+    : t("plugins.notice.consentSource.repository", { repository: source.repository });
+}
+
 /** Same rule as the computer's ghostInstallSourceNoticeKey; shown for new installs only, as on the computer. */
 function sourceNotice(consent: Consent, t: Translate): string | undefined {
   if (consent.facts.kind !== "install") return undefined;
@@ -105,6 +120,13 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     device: deviceName
       ? facts.kind === "install" ? t("plugins.market.installTo", { device: deviceName }) : deviceName
       : undefined,
+    /** Shown right under the source line so it stays in view with the pinned summary at the medium detent. */
+    repository: repositoryLine(consent, t),
+    /**
+     * A first install from a custom market whose repository the Host did not name: the phone cannot show which
+     * repository the person would be allowing, so Allow stays unavailable (install on the computer instead).
+     */
+    allowBlocked: consent.origin === "custom-market" && facts.kind === "install" && !consent.originSource,
     identity: facts.ghostId,
     trust: pluginSourceWarningKey(consent.installationSource) ? t(pluginSourceWarningKey(consent.installationSource)!) : undefined,
     origin: [

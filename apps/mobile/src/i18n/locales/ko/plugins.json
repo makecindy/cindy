@@ -343,7 +343,12 @@
       "customMarketUnnamed": "사용자 지정 마켓에서",
       "localFile": "로컬 .cindy 파일에서",
       "forge": "로컬에서 개발한 플러그인",
-      "initiatedByAgent": "Agent 요청 · {{origin}}"
+      "initiatedByAgent": "Agent 요청 · {{origin}}",
+      "repository": "저장소 {{repository}}",
+      "repositoryRef": "저장소 {{repository}} ({{ref}})",
+      "localFolder": "로컬 폴더",
+      "repositoryMissingInstall": "이 컴퓨터가 저장소 정보를 보내지 않아 휴대폰에서는 이 설치를 허용할 수 없습니다. 컴퓨터의 Cindy를 업데이트하거나 컴퓨터에서 설치하세요.",
+      "repositoryMissingUpdate": "이 컴퓨터가 저장소 정보를 보내지 않았습니다. 출처를 확인하려면 컴퓨터 설정의 ‘추가된 마켓’에서 이 마켓을 확인하세요."
     },
     "sourceNotice": {
       "community": "이 플러그인은 커뮤니티 개발자가 개발하고 유지 관리합니다. {{appName}}는 이 버전을 검토했지만 모든 사용 상황에서 안전하다고 보장할 수는 없습니다.",
@@ -451,6 +456,8 @@
     "resultUnknownDetail": "이번 설치가 완료되었는지 아직 확인되지 않았습니다.",
     "unconfirmedNotInstalled": "이번 설치 결과를 확인하지 못했습니다. 현재 이 컴퓨터에는 이 플러그인이 없습니다.",
     "alreadyInstalled": "이 컴퓨터에는 이 플러그인이 이미 설치되어 있습니다.",
-    "unconfirmedMismatch": "이번 설치 결과를 확인하지 못했습니다. 이 컴퓨터에 있는 같은 ID의 플러그인은 로컬 파일, 다른 버전 또는 다른 출처의 것일 수 있습니다. 컴퓨터에서 확인해 주세요."
+    "unconfirmedMismatch": "이번 설치 결과를 확인하지 못했습니다. 이 컴퓨터에 있는 같은 ID의 플러그인은 로컬 파일, 다른 버전 또는 다른 출처의 것일 수 있습니다. 컴퓨터에서 확인해 주세요.",
+    "sourceUnverified": "이 컴퓨터의 Cindy는 이 마켓이 어느 저장소에서 왔는지 알려 주지 않아 아직 휴대폰에서 설치할 수 없습니다. 컴퓨터의 Cindy를 업데이트하거나 컴퓨터에서 설치하세요.",
+    "sourceUnverifiedShort": "이 컴퓨터는 저장소 정보를 보내지 않습니다. 컴퓨터에서 설치하세요."
   }
 }

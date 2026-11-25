@@ -5,10 +5,13 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGe
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import type { RemoteResourceHostTarget } from "@/device-link/remoteResources";
 import { createPluginManagementClient, pluginManagementErrorCode, type PluginManagementClient } from "./pluginManagementClient";
-import { marketItemMatchesPlugin, type ManagedMarketDetail, type ManagedMarketItem } from "./pluginManagementTypes";
+import {
+  marketItemMatchesPlugin, samePluginMarketSourceIdentity, type ManagedMarketDetail, type ManagedMarketItem,
+  type PluginMarketSourceIdentity,
+} from "./pluginManagementTypes";
 import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
-  pluginMarketRequest, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
+  pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
 import { usePluginManagement } from "./usePluginManagement";
 import type { PluginManagementState } from "./pluginManagementController";
@@ -28,6 +31,8 @@ export type PluginMarketRowState =
   | { kind: "unknown" }
   | { kind: "failed"; messageKey: string }
   | { kind: "conflict" }
+  /** Custom market on an older Host that does not name the repository: install on the computer instead. */
+  | { kind: "sourceUnverified" }
   | { kind: "installed" };
 interface CatalogList {
   key: string;
@@ -50,6 +55,8 @@ interface InstallAttempt {
   detail?: ManagedMarketDetail;
   started: boolean;
   confirmed: boolean;
+  /** Custom markets: the Host's source identity when the install started; a later check must match it. */
+  source?: PluginMarketSourceIdentity;
 }
 export interface PluginMarketDetailState {
   item: ManagedMarketItem;
@@ -395,7 +402,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     focused, install ? `plugin-market:${install.id}` : "plugin-market", false, "installed");
   const blocked = !!options.blocked;
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
-    if (installRef.current || blocked || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed") return;
+    if (installRef.current || blocked || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed"
+      || pluginMarketSourceUnverified(known ?? item)) return;
     setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++attemptId.current, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
@@ -456,6 +464,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       }
       if (!current()) return;
       if (value.releaseId !== attempt.item.releaseId) { finish(attempt, "plugins.management.releaseChanged"); return; }
+      // The detail read now is what the install binds to; without a repository the phone cannot show what is allowed.
+      if (pluginMarketSourceUnverified(value)) { finish(attempt, "plugins.market.sourceUnverified"); return; }
+      // Bind this attempt to the source the Host reported now (same object as the attempt in state and ref).
+      started.source = value.sourceIdentity;
       await controller.install(value);
       // The controller returns quietly when its connection generation changed or it only published
       // an error (offline, not ready). Nothing was sent, so release this attempt instead of waiting.
@@ -494,7 +506,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       return; // Market facts not read: still unconfirmed; "Check result" verifies again.
     }
     if (!current()) return;
-    if (market.installState === "installed" && market.releaseId === attempt.item.releaseId) complete(attempt, instance.instanceKey);
+    // A custom market can be replaced by another repository under the same name, with the same plugin id and
+    // release: the Host's "installed" then describes the new source. Require the source identity recorded
+    // when this install started; without it (older Host) the result stays unconfirmed.
+    const sameSource = attempt.item.sourceType === "server" || samePluginMarketSourceIdentity(attempt.source, market.sourceIdentity);
+    if (market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource) complete(attempt, instance.instanceKey);
     else finish(attempt, "plugins.market.unconfirmedMismatch");
   }, [invoke, complete, finish, management.controller]);
   useEffect(() => {
@@ -526,6 +542,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       if (install.confirmed && (outcome === "running" || outcome === "succeeded")) return { kind: "installing" };
       return { kind: "waiting" };
     }
+    if (item.installState === "not-installed" && pluginMarketSourceUnverified(item)) return { kind: "sourceUnverified" };
     const failure = deviceId ? rowErrors[errorKey(deviceId, item.pluginId)] : undefined;
     if (failure) return { kind: "failed", messageKey: failure };
     if (item.installState === "conflict") return { kind: "conflict" };

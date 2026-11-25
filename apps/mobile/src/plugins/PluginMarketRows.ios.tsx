@@ -116,7 +116,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
       <Button testID={`plugins.market.install.${item.pluginId}`}
         onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item); }}
         modifiers={[buttonStyle("bordered"), buttonBorderShape("capsule"), frame({ minHeight: 44 }),
-          disabled(state.kind === "unknown" ? !market.online : !market.canInstall),
+          disabled(state.kind === "unknown" ? !market.online : state.kind === "sourceUnverified" || !market.canInstall),
           accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label)]}>
         <Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), foregroundStyle(colors.textPrimary)]}>{label}</Text>
       </Button>
@@ -127,6 +127,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
     const origin = pluginMarketOrigin(item);
     const line = state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
+        : state.kind === "sourceUnverified" ? t("plugins.market.sourceUnverifiedShort")
         : state.kind === "installed" ? t("plugins.market.alreadyInstalled")
         : state.kind === "unknown" ? t("plugins.market.resultUnknownDetail") : item.description ?? "";
     return (

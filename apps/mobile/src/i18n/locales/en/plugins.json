@@ -343,7 +343,12 @@
       "customMarketUnnamed": "From a custom marketplace",
       "localFile": "From a local .cindy file",
       "forge": "Locally developed plugin",
-      "initiatedByAgent": "Requested by Agent · {{origin}}"
+      "initiatedByAgent": "Requested by Agent · {{origin}}",
+      "repository": "Repository {{repository}}",
+      "repositoryRef": "Repository {{repository}} ({{ref}})",
+      "localFolder": "Local folder",
+      "repositoryMissingInstall": "This computer didn’t share the repository, so this install can’t be allowed from your phone. Update Cindy on the computer, or install it there.",
+      "repositoryMissingUpdate": "This computer didn’t share the repository. To check the source, look up this marketplace in Added Marketplaces in the computer’s settings."
     },
     "sourceNotice": {
       "community": "Community developers build and maintain this plugin. {{appName}} has reviewed this version but can’t guarantee it’s safe in every situation.",
@@ -451,6 +456,8 @@
     "resultUnknownDetail": "It’s not confirmed yet whether this installation finished.",
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
     "alreadyInstalled": "This computer already has this plugin installed.",
-    "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer."
+    "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
+    "sourceUnverified": "Cindy on this computer doesn’t say which repository this marketplace comes from, so it can’t be installed from your phone yet. Update Cindy on the computer, or install it there.",
+    "sourceUnverifiedShort": "This computer doesn’t share the repository. Install it on the computer."
   }
 }

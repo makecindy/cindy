@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginDirectoryView } from "@/plugins/PluginDirectoryView.ios";
 import { PluginMarketSection } from "@/plugins/PluginMarketSection";
+import { PluginMarketDetailView as MarketDetailView } from "@/plugins/PluginMarketDetailView.ios";
+import { PluginMarketDetailView as AndroidMarketDetailView } from "@/plugins/PluginMarketDetailView";
 import { PluginDetailView } from "@/plugins/PluginDetailView.ios";
 import { PluginDetailView as AndroidDetailView } from "@/plugins/PluginDetailView";
 import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
@@ -1244,6 +1246,90 @@ it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery re
  * - 缺口：此前 Node 权限说明只在可滚动的权限列表里。
  * - 最小失败输入：新装含 node:execute；对照组不含。tier: unit。
  */
+// PR #12684 maintainer review: before allowing, a custom-market install names the target computer and the repository.
+it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+  "%s shows the repository right after the computer line", (_platform, Sheet) => {
+    const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+      requestId: "request", origin: "custom-market", originLabel: "Acme", initiator: "user",
+      originSource: { kind: "git", repository: "github.com/acme/plugins" },
+      facts: { kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions: [] } } } } as any;
+    const { container } = mount(Sheet, { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" });
+    const text = container.textContent!;
+    // Order (PR #12684 layout review): computer, marketplace, repository, then the explanations and the identifier.
+    const device = text.indexOf("plugins.market.installTo"), origin = text.indexOf("plugins.notice.consentSource.customMarket");
+    const repository = text.indexOf("plugins.notice.consentSource.repository");
+    expect(device).toBeGreaterThanOrEqual(0);
+    expect(origin).toBeGreaterThan(device);
+    expect(repository).toBeGreaterThan(origin);
+    expect(repository).toBeLessThan(text.indexOf("plugins.notice.sourceNotice.customMarket"));
+    expect(repository).toBeLessThan(text.indexOf("runner"));
+  });
+
+/**
+ * PR #12684 maintainer decision (older Host without repository identity), proposal pending confirmation:
+ * - 依据：新装只能看到市场名时，手机无法说明允许的是哪个仓库；升级是已装插件，保留可允许并给出核实路径。
+ * - 缺口：此前缺少 originSource 时确认面板照常可点「允许」，且不说明来源无法核实。
+ * - 最小失败输入：custom-market 新装无 originSource；对照组为升级、带 originSource 的新装。tier: unit。
+ */
+describe("older Host without a repository identity", () => {
+  const sheetProps = (consent: Record<string, unknown>, facts: Record<string, unknown>) => {
+    const state = { outcome: "confirmation", online: true, busy: false, receipt: { consent: {
+      requestId: "request", origin: "custom-market", originLabel: "Acme", initiator: "user", ...consent, facts } } } as any;
+    return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" };
+  };
+  const installFacts = { kind: "install", ghostId: "runner", name: "Runner", version: "1", permissions: [] };
+  const updateFacts = { kind: "update", ghostId: "runner", name: "Runner", version: "2", previousVersion: "1", added: [], removed: [],
+    unchangedCount: 1, builtinOauthClientChanged: false };
+  const disabled = (id: string) => {
+    const value = bridge.props.get(id);
+    return value.disabled ?? value.modifiers?.find((m: any) => m && "disabled" in m)?.disabled;
+  };
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s keeps Allow unavailable for a first install it cannot name the repository of", (_platform, Sheet) => {
+      const p = sheetProps({}, installFacts);
+      const { container } = mount(Sheet, p);
+      expect(container.textContent).toContain("plugins.notice.consentSource.repositoryMissingInstall");
+      expect(disabled("plugins.management.allow")).toBe(true);
+      // Rejecting stays possible, so the waiting install can be closed from the phone.
+      expect(disabled("plugins.management.reject")).toBe(false);
+    });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s keeps Allow for an update and names where to check the source", (_platform, Sheet) => {
+      const { container } = mount(Sheet, sheetProps({}, updateFacts));
+      expect(container.textContent).toContain("plugins.notice.consentSource.repositoryMissingUpdate");
+      expect(disabled("plugins.management.allow")).toBe(false);
+    });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s allows a first install whose repository the Host named", (_platform, Sheet) => {
+      const { container } = mount(Sheet, sheetProps({ originSource: { kind: "git", repository: "github.com/acme/plugins" } }, installFacts));
+      expect(container.textContent).not.toContain("repositoryMissing");
+      expect(disabled("plugins.management.allow")).toBe(false);
+    });
+  const legacyItem = { pluginId: "custom:Acme/runner", ghostId: "runner", name: "Runner", description: "From Acme",
+    scope: "public", sourceType: "git-market", sourceMarketName: "Acme", installState: "not-installed", icon: null,
+    version: "1", releaseId: "runner@1" };
+  it("iOS market row offers no install for it and says to install on the computer", () => {
+    const market = marketModel({ items: [legacyItem], rowState: () => ({ kind: "sourceUnverified" }) });
+    const { container } = mount(PluginDirectoryView, { ...directory(), market, segment: "market" });
+    expect(disabled("plugins.market.install.custom:Acme/runner")).toBe(true);
+    expect(container.textContent).toContain("plugins.market.sourceUnverifiedShort");
+  });
+  it("Android market row offers no install for it and says to install on the computer", () => {
+    const market = marketModel({ items: [legacyItem], rowState: () => ({ kind: "sourceUnverified" }) });
+    const { container } = mount(PluginMarketSection, { market, onConnectComputer: vi.fn() });
+    expect(disabled("plugins.market.install.custom:Acme/runner")).toBe(true);
+    expect(container.textContent).toContain("plugins.market.sourceUnverifiedShort");
+  });
+  it.each([["iOS", MarketDetailView], ["Android", AndroidMarketDetailView]] as const)(
+    "%s market detail keeps Install unavailable with the full explanation", (_platform, Detail) => {
+      const market = marketModel({ rowState: () => ({ kind: "sourceUnverified" }) });
+      const { container } = mount(Detail, { market, detail: { item: legacyItem, target: row.host, loading: false, failed: false } });
+      expect(disabled("plugins.market.detailInstall")).toBe(true);
+      // The full note (not the short row text); this test's Android Text stand-in keeps no testID.
+      expect(container.textContent).toMatch(/plugins\.market\.sourceUnverified(?!Short)/);
+    });
+});
+
 describe("pinned high-risk permission", () => {
   const consentState = (facts: any) => ({ outcome: "confirmation", online: true, busy: false, receipt: { consent: {
     requestId: "request", origin: "market", initiator: "user", facts } } }) as any;

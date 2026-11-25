@@ -36,10 +36,19 @@ export function PluginManagementConfirmation(
             {t("plugins.notice.title.confirmation")}
           </Text>
           <Text style={styles.title}>{info?.title}</Text>
-          {[info?.device, info?.identity, info?.trust, info?.origin, info?.sourceNotice, info?.version]
+          {/* Where it goes and where it comes from first, in primary text, so they stay in view with the
+              pinned high-risk summary on short screens; the explanations follow in secondary text. */}
+          {[info?.device, info?.origin, info?.repository, info?.trust]
             .filter(Boolean)
             .map((text, index) => (
-              <Text key={index} style={styles.body}>
+              <Text key={"lead" + index} style={styles.lead}>
+                {text}
+              </Text>
+            ))}
+          {[info?.sourceNotice, info?.version, info?.identity]
+            .filter(Boolean)
+            .map((text, index) => (
+              <Text key={"note" + index} style={styles.body}>
                 {text}
               </Text>
             ))}
@@ -75,9 +84,10 @@ export function PluginManagementConfirmation(
               accessibilityRole="button"
               disabled={
                 !props.active || props.state.busy || !props.state.online
+                || (accept && info?.allowBlocked === true)
               }
               onPress={() => answer(accept)}
-              style={[styles.button, accept && styles.primary]}
+              style={[styles.button, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
             >
               <Text style={[styles.label, accept && styles.primaryText]}>
                 {t("plugins.management." + (accept ? "allow" : "reject"))}
@@ -117,6 +127,11 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textSecondary,
     },
+    lead: {
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      color: c.textPrimary,
+    },
     highRisk: { gap: spacing.xs, paddingBottom: spacing.md },
     highRiskTitle: {
       fontSize: typeScale.footnote,
@@ -130,6 +145,7 @@ const makeStyles = (c: ThemeColors) =>
       color: c.textPrimary,
     },
     actions: { flexDirection: "row", gap: spacing.sm },
+    unavailable: { opacity: 0.5 },
     button: {
       flex: 1,
       minHeight: 44,

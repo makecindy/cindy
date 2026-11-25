@@ -343,7 +343,12 @@
       "customMarketUnnamed": "Aus einem benutzerdefinierten Marktplatz",
       "localFile": "Aus einer lokalen .cindy-Datei",
       "forge": "Lokal entwickeltes Plugin",
-      "initiatedByAgent": "Vom Agent angefordert · {{origin}}"
+      "initiatedByAgent": "Vom Agent angefordert · {{origin}}",
+      "repository": "Repository {{repository}}",
+      "repositoryRef": "Repository {{repository}} ({{ref}})",
+      "localFolder": "Lokaler Ordner",
+      "repositoryMissingInstall": "Dieser Computer hat das Repository nicht angegeben. Diese Installation kann nicht vom Handy aus erlaubt werden. Aktualisiere Cindy auf dem Computer oder installiere dort.",
+      "repositoryMissingUpdate": "Dieser Computer hat das Repository nicht angegeben. Um die Quelle zu prüfen, sieh dir diesen Marktplatz in den Einstellungen des Computers unter „Hinzugefügte Marktplätze“ an."
     },
     "sourceNotice": {
       "community": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. {{appName}} hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",
@@ -451,6 +456,8 @@
     "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde.",
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
-    "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer."
+    "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
+    "sourceUnverified": "Cindy auf diesem Computer gibt nicht an, aus welchem Repository dieser Marktplatz stammt. Installieren vom Handy ist daher noch nicht möglich. Aktualisiere Cindy auf dem Computer oder installiere dort.",
+    "sourceUnverifiedShort": "Dieser Computer gibt das Repository nicht an. Installiere am Computer."
   }
 }

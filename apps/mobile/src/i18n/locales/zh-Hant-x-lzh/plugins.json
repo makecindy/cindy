@@ -341,7 +341,12 @@
       "customMarketUnnamed": "出自自訂之坊",
       "localFile": "出自此機 .cindy 卷",
       "forge": "此機自造之法器",
-      "initiatedByAgent": "由 Agent 所發 · {{origin}}"
+      "initiatedByAgent": "由 Agent 所發 · {{origin}}",
+      "repository": "庫 {{repository}}",
+      "repositoryRef": "庫 {{repository}}（{{ref}}）",
+      "localFolder": "本地之匣",
+      "repositoryMissingInstall": "此機未示庫之所出，不能於手機許此納。請先更新電腦之 Cindy，或於電腦納之。",
+      "repositoryMissingUpdate": "此機未示庫之所出。欲核其源，請於電腦設置「已增之坊」中觀此坊。"
     },
     "sourceNotice": {
       "community": "此法器由社群作者開發與維護，{{appName}} 已審核此版本，但無法保證其在所有使用情境下皆安全。",
@@ -449,6 +454,8 @@
     "resultUnknownDetail": "此番納器成否，尚未確認。",
     "unconfirmedNotInstalled": "此番納器之果未能確認；今此機未有此法器。",
     "alreadyInstalled": "此機已納此法器。",
-    "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，請就機核之。"
+    "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，請就機核之。",
+    "sourceUnverified": "此機之 Cindy 不告此坊出自何庫，暫不能自手機納之。請先更新電腦之 Cindy，或於電腦納之。",
+    "sourceUnverifiedShort": "此機未示庫之所出，請於電腦納之。"
   }
 }

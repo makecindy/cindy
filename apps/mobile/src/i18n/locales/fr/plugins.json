@@ -345,7 +345,12 @@
       "customMarketUnnamed": "Depuis un marketplace personnalisé",
       "localFile": "Depuis un fichier .cindy local",
       "forge": "Plugin développé localement",
-      "initiatedByAgent": "Demandé par l'Agent · {{origin}}"
+      "initiatedByAgent": "Demandé par l'Agent · {{origin}}",
+      "repository": "Dépôt {{repository}}",
+      "repositoryRef": "Dépôt {{repository}} ({{ref}})",
+      "localFolder": "Dossier local",
+      "repositoryMissingInstall": "Cet ordinateur n’a pas indiqué le dépôt : cette installation ne peut pas être autorisée depuis le téléphone. Mettez à jour Cindy sur l’ordinateur ou installez-le depuis celui-ci.",
+      "repositoryMissingUpdate": "Cet ordinateur n’a pas indiqué le dépôt. Pour vérifier la source, retrouvez ce marketplace dans « Marketplaces ajoutés » dans les réglages de l’ordinateur."
     },
     "sourceNotice": {
       "community": "Ce plugin est développé et maintenu par des membres de la communauté. {{appName}} a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",
@@ -453,6 +458,8 @@
     "resultUnknownDetail": "Il n’est pas encore confirmé que cette installation est terminée.",
     "unconfirmedNotInstalled": "Impossible de confirmer le résultat de cette installation. Le plugin n’est pas présent sur cet ordinateur pour le moment.",
     "alreadyInstalled": "Ce plugin est déjà installé sur cet ordinateur.",
-    "unconfirmedMismatch": "Impossible de confirmer le résultat de cette installation. Le plugin portant le même identifiant sur cet ordinateur peut provenir d’un fichier local, d’une autre version ou d’une autre source. Vérifiez-le sur l’ordinateur."
+    "unconfirmedMismatch": "Impossible de confirmer le résultat de cette installation. Le plugin portant le même identifiant sur cet ordinateur peut provenir d’un fichier local, d’une autre version ou d’une autre source. Vérifiez-le sur l’ordinateur.",
+    "sourceUnverified": "Cindy sur cet ordinateur n’indique pas de quel dépôt provient ce marketplace : l’installation depuis le téléphone n’est pas encore possible. Mettez à jour Cindy sur l’ordinateur ou installez-le depuis celui-ci.",
+    "sourceUnverifiedShort": "Cet ordinateur n’indique pas le dépôt. Installez-le sur l’ordinateur."
   }
 }

@@ -45,6 +45,8 @@ interface DemoPlugin {
   installedVersion?: string;
   /** The update's permission change versus the installed version. */
   update?: { added: DemoPermission[]; removed: DemoPermission[]; unchangedCount: number };
+  /** Custom market of an older Host that does not name the repository (no sourceIdentity / originSource). */
+  legacySource?: true;
 }
 type DemoPermission = { key: string; kind: string; labelKey: string; labelArgs?: Record<string, string>; detailKey?: string; detail?: string };
 // Same keys, kinds and copy keys as the Host's ghostPermissionItems; node:execute is the one it calls high risk.
@@ -108,14 +110,25 @@ const DEMOS: DemoPlugin[] = [
     description: "Sync notes with a service. Its update hands a saved API token to the bundled Node program.", tools: ["demo_sync_notes"],
     permissions: [nodeExecute(), nodeSecret, network("sync.example.com")], installedVersion: "1.3.0",
     update: { added: [nodeSecret], removed: [], unchangedCount: 2 } },
-  // Layout check for the pinned summary: many bindings and methods stay in the scrolled list.
+  // Layout check for the pinned summary: all five high-risk classes at once (four bindings collapse into one
+  // counted line), while every binding and method stays in the scrolled list.
   { ghostId: "demo-vault-bridge", name: "Demo Vault Bridge", publisher: "official", author: "Cindy",
-    description: "Bridge several saved tokens into a bundled Node program. Shows the largest permission list.",
-    tools: ["demo_vault_sync"], permissions: [nodeResident, ...vaultBindings, nodeExecute(), network("vault.example.com")] },
+    description: "Bridge several saved tokens into a bundled Node program. Shows every high-risk class and the largest permission list.",
+    tools: ["demo_vault_sync"],
+    permissions: [nodeResident, ...vaultBindings, nodeExecute(), agentBackground, agentErrand, network("vault.example.com")] },
   // A first install without Node that still asks for Agent high-risk permissions (pinned).
   { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],
     permissions: [agentErrand, agentBackground, agentUserAction, notify] },
+  // Older Host: a custom market without a repository identity. A new install is not offered on the phone.
+  { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
+    description: "From a custom market on an older computer version that does not name its repository.",
+    tools: ["demo_legacy_check"], permissions: [nodeExecute(), network("legacy.example.com")] },
+  // Older Host, already installed: the update stays allowed and says where to check the source on the computer.
+  { ghostId: "demo-legacy-sync", name: "Demo Legacy Sync", publisher: "custom", author: null, legacySource: true,
+    description: "Installed from a custom market on an older computer version. Its update adds notifications.",
+    tools: ["demo_legacy_sync"], permissions: [network("legacy.example.com"), notify], installedVersion: "1.3.0",
+    update: { added: [notify], removed: [], unchangedCount: 1 } },
   { ghostId: "demo-reading-list", name: "Demo Reading List", publisher: "official", author: "Cindy",
     description: "Save articles to read later. Its update only adds notifications.", tools: ["demo_save_article"],
     permissions: [network("reader.example.com"), notify], installedVersion: "1.3.0",
@@ -126,7 +139,11 @@ const DEMOS: DemoPlugin[] = [
   })),
 ];
 const CUSTOM_MARKET = "Demo Git Market";
+// What a new Host generates for a Git market: host/owner/repo only, never the configured URL.
+const CUSTOM_MARKET_SOURCE = { kind: "git" as const, repository: "github.com/demo-org/demo-git-market" };
 const OFFLINE_MARKET = "Demo Offline Market";
+const LEGACY_MARKET = "Demo Legacy Market";
+const marketName = (demo: DemoPlugin) => demo.legacySource ? LEGACY_MARKET : CUSTOM_MARKET;
 const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string }>();
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
@@ -150,7 +167,8 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     releaseId: `${demo.ghostId}@${RELEASE}`, version: RELEASE, publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
     installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === RELEASE ? "installed" : "update-available",
     enabled: entry?.enabled ?? null,
-    sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : CUSTOM_MARKET,
+    sourceType: server ? "server" : "git-market", sourceMarketName: server ? null : marketName(demo),
+    ...(server || demo.legacySource ? {} : { sourceIdentity: CUSTOM_MARKET_SOURCE }),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
   };
 }
@@ -186,7 +204,7 @@ function catalog(query: Record<string, unknown> = {}) {
   return {
     items: page,
     unavailableReason: scenario === "unavailable" ? "MARKET_UNAVAILABLE" : null,
-    customSourceNames: scenario === "customPartial" ? [CUSTOM_MARKET, OFFLINE_MARKET] : [CUSTOM_MARKET],
+    customSourceNames: scenario === "customPartial" ? [CUSTOM_MARKET, LEGACY_MARKET, OFFLINE_MARKET] : [CUSTOM_MARKET, LEGACY_MARKET],
     unavailableCustomSourceNames: scenario === "customPartial" ? [OFFLINE_MARKET] : [],
     organizationAccessError: scenario === "organization" ? "PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE" : null,
     nextCursor: offset + page.length < inScope.length ? String(offset + page.length) : null,
@@ -199,7 +217,8 @@ function ghost(key: string, entry: { demo: DemoPlugin; enabled: boolean; version
 }
 function snapshot() {
   return { version: 1, ghosts: [...installed].map(([key, entry]) => ghost(key, entry)),
-    market: { items: DEMOS.map(marketItem), unavailableReason: null, customSourceNames: [CUSTOM_MARKET], unavailableCustomSourceNames: [] } };
+    market: { items: DEMOS.map(marketItem), unavailableReason: null, customSourceNames: [CUSTOM_MARKET, LEGACY_MARKET],
+      unavailableCustomSourceNames: [] } };
 }
 function receipt(operationId: string) {
   const op = operations.get(operationId);
@@ -212,7 +231,7 @@ function receipt(operationId: string) {
   const entry = installed.get(instanceKey(demo.ghostId));
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
-    ...(demo.publisher === "custom" ? { originLabel: CUSTOM_MARKET } : {}),
+    ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: CUSTOM_MARKET_SOURCE }) } : {}),
     // The Host marks a verified public community publisher; the phone shows the community notice.
     ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
     // Host: trust comes from the inspected package signature; unsigned custom-market packages are "unverified".

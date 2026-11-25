@@ -345,7 +345,12 @@
       "customMarketUnnamed": "De un mercado personalizado",
       "localFile": "De un archivo .cindy local",
       "forge": "Complemento desarrollado localmente",
-      "initiatedByAgent": "Solicitado por Agent · {{origin}}"
+      "initiatedByAgent": "Solicitado por Agent · {{origin}}",
+      "repository": "Repositorio {{repository}}",
+      "repositoryRef": "Repositorio {{repository}} ({{ref}})",
+      "localFolder": "Carpeta local",
+      "repositoryMissingInstall": "Este ordenador no ha indicado el repositorio, así que no se puede permitir esta instalación desde el teléfono. Actualiza Cindy en el ordenador o instálalo allí.",
+      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio. Para comprobar el origen, busca este mercado en «Mercados agregados» en los ajustes del ordenador."
     },
     "sourceNotice": {
       "community": "Este complemento lo desarrollan y mantienen miembros de la comunidad. {{appName}} ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
@@ -453,6 +458,8 @@
     "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó.",
     "unconfirmedNotInstalled": "No se pudo confirmar el resultado de esta instalación. El complemento no está en este ordenador ahora mismo.",
     "alreadyInstalled": "Este complemento ya está instalado en este ordenador.",
-    "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador."
+    "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador.",
+    "sourceUnverified": "Cindy en este ordenador no indica de qué repositorio procede este mercado, así que aún no se puede instalar desde el teléfono. Actualiza Cindy en el ordenador o instálalo allí.",
+    "sourceUnverifiedShort": "Este ordenador no indica el repositorio. Instálalo en el ordenador."
   }
 }

@@ -343,7 +343,12 @@
       "customMarketUnnamed": "来自自定义市场",
       "localFile": "来自本地 .cindy 文件",
       "forge": "本地开发的插件",
-      "initiatedByAgent": "由 Agent 发起 · {{origin}}"
+      "initiatedByAgent": "由 Agent 发起 · {{origin}}",
+      "repository": "仓库 {{repository}}",
+      "repositoryRef": "仓库 {{repository}}（{{ref}}）",
+      "localFolder": "本地文件夹",
+      "repositoryMissingInstall": "这台电脑没有提供仓库信息，不能在手机上允许这次安装。请先更新电脑上的 Cindy，或在电脑上安装。",
+      "repositoryMissingUpdate": "这台电脑没有提供仓库信息。如需核对来源，请在电脑设置的「已添加的市场」里查看这个市场。"
     },
     "sourceNotice": {
       "community": "此插件由社区作者开发和维护，{{appName}} 已审核该版本，但无法保证插件在所有使用场景下都安全。",
@@ -451,6 +456,8 @@
     "resultUnknownDetail": "还没确认这次安装是否完成。",
     "unconfirmedNotInstalled": "没能确认这次安装的结果；目前这台电脑上没有这个插件。",
     "alreadyInstalled": "这台电脑已经安装了这个插件。",
-    "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。"
+    "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。",
+    "sourceUnverified": "这台电脑上的 Cindy 版本不会告知这个市场来自哪个仓库，暂不能从手机安装。请先更新电脑上的 Cindy，或在电脑上安装。",
+    "sourceUnverifiedShort": "这台电脑未提供仓库信息，请在电脑上安装。"
   }
 }

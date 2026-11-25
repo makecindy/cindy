@@ -103,7 +103,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
               <Button testID="plugins.market.detailInstall"
                 onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item, detail.detail); }}
                 modifiers={[...(state.kind === "unknown" ? secondaryStyle : primaryStyle), frame({ maxWidth: Infinity }),
-                  disabled(state.kind === "unknown" ? !online : !online || !market.canInstall),
+                  disabled(state.kind === "unknown" ? !online : state.kind === "sourceUnverified" || !online || !market.canInstall),
                   accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : primaryLabel)]}>
                 <Text modifiers={[font({ textStyle: "body", weight: "semibold" }),
                   foregroundStyle(state.kind === "unknown" ? colors.textPrimary : colors.ctaText),
@@ -115,6 +115,8 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
             </HStack>
             {state.kind === "failed" ? text(t(state.messageKey), "footnote", "plugins.market.detailError") : null}
             {state.kind === "conflict" ? text(t("plugins.market.conflict"), "footnote", "plugins.market.detailConflict") : null}
+            {state.kind === "sourceUnverified"
+              ? text(t("plugins.market.sourceUnverified"), "footnote", "plugins.market.detailSourceUnverified") : null}
             {state.kind === "installed" ? text(t("plugins.market.alreadyInstalled"), "footnote", "plugins.market.detailInstalled") : null}
           </VStack>
           {publisher || item.description ? (

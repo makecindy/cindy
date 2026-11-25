@@ -3,6 +3,7 @@ import { PLUGIN_COLLECTION, type DeviceView } from '@cindy/device-link';
 import { getRemoteResource, listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
 import { invokePlugin } from '@/plugins/pluginClient';
 import { createPluginManagementClient } from '@/plugins/pluginManagementClient';
+import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { UI_MOCK_PROJECTS } from '@cindy/maker-shared/ui-mock';
@@ -72,8 +73,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the three market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(31);
+  // 28 teammate/demo plugins plus the four market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(32);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -400,7 +401,12 @@ it('serves the market demo consents in the Host shape, including updates that ad
   expect((await consentOf('demo-market/demo-shift-calendar')).consent).toMatchObject({ origin: 'market', communityMarket: true });
   const custom = await consentOf('demo-market/demo-repo-tools');
   expect(custom.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Git Market', trust: 'unverified',
-    installationSource: { kind: 'third-party' } });
+    installationSource: { kind: 'third-party' }, originSource: { kind: 'git', repository: 'github.com/demo-org/demo-git-market' } });
+  // Older Host demos: no repository identity on the new-install item, nor on the installed plugin's update consent.
+  expect((await client.detail('demo-market/demo-legacy-tools')).sourceIdentity).toBeUndefined();
+  const legacyUpdate = await consentOf('demo-market/demo-legacy-sync', '_root__demo-legacy-sync');
+  expect(legacyUpdate.consent).toMatchObject({ origin: 'custom-market', originLabel: 'Demo Legacy Market', facts: { kind: 'update' } });
+  expect(legacyUpdate.consent.originSource).toBeUndefined();
   expect(keys((custom.consent.facts as any).permissions)[0]).toBe('node:execute');
   // Updates: the installed detail's update is an install naming the installed instance.
   const weather = await consentOf('demo-market/demo-weather-board', '_root__demo-weather-board');
@@ -411,10 +417,14 @@ it('serves the market demo consents in the Host shape, including updates that ad
   expect(keys((secretSync.consent.facts as any).added)).toEqual(['node:secret:api-token:node/worker.cjs:sync']);
   expect(keys(((await consentOf('demo-market/demo-auto-agent')).consent.facts as any).permissions))
     .toEqual(['agent:errand', 'agent:background', 'agent:user-action', 'notify']);
-  // Layout check demo: the Host's upper bound of 4 bindings × 16 methods.
-  const vault = (await consentOf('demo-market/demo-vault-bridge')).consent.facts as any;
+  // Layout check demo: all five high-risk classes at once, with the Host's upper bound of 4 bindings × 16 methods.
+  const vaultConsent = (await consentOf('demo-market/demo-vault-bridge')).consent;
+  const vault = vaultConsent.facts as any;
   expect(vault.permissions.filter((entry: any) => entry.key.startsWith('node:secret:'))).toHaveLength(4);
   expect(vault.permissions[1].detail.split('\n')).toHaveLength(16);
+  const vaultSummary = pluginConsentPresentation(vaultConsent, (key: string) => key).highRisk!;
+  expect(vaultSummary.lines).toEqual(['plugins.management.permissions.nodeResident', 'plugins.management.permissions.nodeSecretCount',
+    'plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.

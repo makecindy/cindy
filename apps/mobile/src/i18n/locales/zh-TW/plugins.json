@@ -343,7 +343,12 @@
       "customMarketUnnamed": "來自自訂市場",
       "localFile": "來自本機 .cindy 檔案",
       "forge": "本機開發的插件",
-      "initiatedByAgent": "由 Agent 發起 · {{origin}}"
+      "initiatedByAgent": "由 Agent 發起 · {{origin}}",
+      "repository": "儲存庫 {{repository}}",
+      "repositoryRef": "儲存庫 {{repository}}（{{ref}}）",
+      "localFolder": "本機資料夾",
+      "repositoryMissingInstall": "這台電腦沒有提供儲存庫資訊，無法在手機上允許這次安裝。請先更新電腦上的 Cindy，或在電腦上安裝。",
+      "repositoryMissingUpdate": "這台電腦沒有提供儲存庫資訊。如需核對來源，請在電腦設定的「已新增的市場」中查看這個市場。"
     },
     "sourceNotice": {
       "community": "此插件由社群作者開發與維護，{{appName}} 已審核這個版本，但無法保證插件在所有使用情境下都安全。",
@@ -451,6 +456,8 @@
     "resultUnknownDetail": "尚未確認這次安裝是否完成。",
     "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
     "alreadyInstalled": "這台電腦已經安裝了這個插件。",
-    "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。"
+    "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。",
+    "sourceUnverified": "這台電腦上的 Cindy 版本不會告知這個市場來自哪個儲存庫，暫時無法從手機安裝。請先更新電腦上的 Cindy，或在電腦上安裝。",
+    "sourceUnverifiedShort": "這台電腦未提供儲存庫資訊，請在電腦上安裝。"
   }
 }
