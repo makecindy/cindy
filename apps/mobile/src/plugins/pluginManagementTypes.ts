@@ -49,6 +49,12 @@ export interface ManagedMarketItem {
   sourceIdentity?: PluginMarketSourceIdentity;
   /** Custom-market items: the source id of the instance installed on this computer, when it came from this item. */
   installedSourceId?: string;
+  /**
+   * Contract V2.9: the remote management operation id that installed the instance on this computer, given only to the
+   * device that started that operation (and only while that package is still the installed one). The only evidence
+   * that a lost-receipt install is this attempt's result.
+   */
+  installedOperationId?: string;
 }
 /**
  * Host-generated, credential-free source of a custom market: the repository actually fetched from (host/owner/repo,
@@ -64,6 +70,11 @@ const SOURCE_REF = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const SOURCE_ID = /^[A-Za-z0-9_-]{22}$/;
 export function isPluginMarketSourceId(v: unknown): v is string {
   return typeof v === 'string' && SOURCE_ID.test(v);
+}
+/** Contract V2.9 shape of an operation id the Host records as install evidence (the phone's ids are random UUIDs). */
+const OPERATION_EVIDENCE_ID = /^[A-Za-z0-9_-]{8,128}$/;
+export function isPluginOperationEvidenceId(v: unknown): v is string {
+  return typeof v === 'string' && OPERATION_EVIDENCE_ID.test(v);
 }
 export function isPluginMarketSourceIdentity(v: unknown): v is PluginMarketSourceIdentity {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
@@ -201,6 +212,8 @@ function safeMarketItem<T extends ManagedMarketItem>(v: T): T {
   // Additive identity: an unusable value is dropped, which makes any source check fail closed.
   if (safe.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(safe.sourceIdentity)) delete safe.sourceIdentity;
   if (safe.installedSourceId !== undefined && !isPluginMarketSourceId(safe.installedSourceId)) delete safe.installedSourceId;
+  // Additive evidence (V2.9): a value of another shape counts as absent, so the result stays unconfirmed.
+  if (safe.installedOperationId !== undefined && !isPluginOperationEvidenceId(safe.installedOperationId)) delete safe.installedOperationId;
   return safe;
 }
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {

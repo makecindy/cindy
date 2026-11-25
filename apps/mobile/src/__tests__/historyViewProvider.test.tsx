@@ -282,7 +282,7 @@ it('runs a caller preSend at entry and right before the first socket write, and 
 // the business request), the caller's write receipt (`onRequestWritten`) is this request's own first write: a handshake
 // that was written and then timed out is in flight but never this request; a request stopped by the last check in the
 // queue was never written; a request written and then timed out was. The plugin client classifies its answer from it:
-// only a written Allow is an unknown outcome, and only a written one counts as sent.
+// only a written Allow is an unknown outcome.
 // Gap: the stand-in client models where Device Link calls the receipt; client.test.ts drives the real client. Tier: unit/jsdom.
 describe('the write receipt of one request through link recovery', () => {
   const lost = (message: string) => { const error = new DeviceLinkError('INVOKE_TIMEOUT', message); error.inFlight = true; return error; };
@@ -304,14 +304,12 @@ describe('the write receipt of one request through link recovery', () => {
       throw lost('no reply after first socket write');
     });
     setMobileAuthOwner('owner');
-    const sent = vi.fn();
     const plugins = createPluginManagementClient({ deviceId: 'host', invoke: context.invoke, isCurrent: () => current });
     let error: unknown;
-    await act(async () => { error = await plugins.answer('operation-1', 'consent-1', true, undefined, sent).catch((e) => e); });
+    await act(async () => { error = await plugins.answer('operation-1', 'consent-1', true).catch((e) => e); });
     expect(client.openLink).toHaveBeenCalled();
     expect(sends).toEqual(end === 'handshake' ? [] : ['client.invoke']);
     expect(error).toMatchObject({ outcomeUnknown: written });
-    expect(sent).toHaveBeenCalledTimes(written ? 1 : 0);
   });
 });
 

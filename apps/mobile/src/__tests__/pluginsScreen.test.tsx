@@ -1083,6 +1083,108 @@ it("holds the management slot while an update reads its market detail, so the ma
   // Only the update reaches begin.
   expect(begins().map((request) => request.input.pluginId)).toEqual([market.pluginId]);
 });
+// Codex review of b93ba486: on a wide screen the market sits beside an installed detail. While a market install was
+// still in its preflight, the installed detail's page approval stayed available, so two controllers could each reach a
+// confirmation. Every installed-detail entry that starts a management operation shares the one slot.
+// Minimal failing input: one held market preflight; the page-approval action, the toggle and the menu while it waits.
+it("keeps every installed-detail management entry unavailable while a market install is preparing", async () => {
+  const { plugin, snapshot } = realManagementHost();
+  Object.assign(plugin.manifest, { tools: [{ name: "open" }], mcpApps: { ui: { resources: [{ uri: "ui://form", file: "ui/form.html" }], tools: { open: { resourceUri: "ui://form" } } } } });
+  Object.assign(snapshot, { uiCapabilityApproval: true });
+  fixture.width = 900;
+  const other = { ...marketItem("other", "Other"), pluginId: "market/other" };
+  let releaseDetail!: () => void;
+  const held = new Promise<void>((resolve) => { releaseDetail = resolve; });
+  let holding = false;
+  fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
+    options?.preSend?.(); options?.onRequestWritten?.();
+    if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+    const request = args[0];
+    if (request.actionId === "management:snapshot") {
+      if (request.input?.read === "capabilities") return { result: { catalogPaging: true } };
+      if (request.input?.read === "catalog") return { result: marketPage([other]) };
+      return { result: snapshot };
+    }
+    if (request.actionId === "management:market-detail") {
+      if (holding) await held;
+      return { result: { ...other, manifest: { schemaVersion: 3, id: "other", name: "Other", version: "1" } } };
+    }
+    throw new Error("Unexpected action " + request.actionId);
+  });
+  await openDetail();
+  await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+  await settle(14);
+  const approval = () => fixture.props.get("detail").uiApprovalNotice?.actions?.[0];
+  expect(approval()).toMatchObject({ testID: "plugins.uiApproval.enable", disabled: false });
+  expect(fixture.props.get("detail").busy).toBe(false);
+  holding = true;
+  await act(async () => { void shownMarket().install(shownMarket().items[0]); });
+  await settle(6);
+  expect(shownMarket()).toMatchObject({ installBusy: true });
+  expect(approval()).toMatchObject({ disabled: true });
+  expect(fixture.props.get("detail").busy).toBe(true);
+  for (const action of fixture.props.get("header").rightToolbar.props.actions) expect(action.disabled).toBe(true);
+  await act(async () => { releaseDetail(); });
+  await settle(14);
+});
+// Codex review of b93ba486: with the market beside an installed detail, an uninstall there refreshed only the installed
+// list; the market kept the computer's old pages (which, excluding installed plugins, lack the removed one) and old
+// counts. A successful operation in the installed detail, or a burst of `plugins` change notifications from that
+// computer, makes its market lists and counts read again (one read per burst). Minimal failing input: one uninstall;
+// three notifications in a row. Tier: unit (jsdom, in-memory Host).
+describe("market cache after plugin changes on the computer", () => {
+  const setup = () => {
+    const { snapshot } = realManagementHost();
+    fixture.width = 900;
+    const other = { ...marketItem("other", "Other"), pluginId: "market/other" };
+    const reads = { pages: 0, counts: 0 };
+    fixture.wire.mockImplementation(async (_host: string, channel: string, args: any[], options: any) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+      const request = args[0];
+      if (request.actionId === "management:snapshot") {
+        if (request.input?.read === "capabilities") return { result: { catalogPaging: true } };
+        if (request.input?.read === "catalog") {
+          if (request.input.query?.counts) reads.counts += 1; else reads.pages += 1;
+          return { result: marketPage([other]) };
+        }
+        return { result: snapshot };
+      }
+      if (request.actionId === "management:begin") return { result: { operationId: request.input.operationId, phase: "succeeded" } };
+      throw new Error("Unexpected action " + request.actionId);
+    });
+    return reads;
+  };
+  const showBoth = async () => {
+    await openDetail();
+    await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+    await settle(14);
+  };
+  it("reads the market of that computer again after an uninstall in the installed detail", async () => {
+    const reads = setup();
+    await showBoth();
+    const before = { ...reads };
+    expect(before.pages).toBeGreaterThan(0);
+    await act(async () => fixture.props.get("header").rightToolbar.props.onAction("uninstall"));
+    await act(async () => fixture.alert.mock.calls.at(-1)![2][1].onPress());
+    await settle(14);
+    expect(reads.pages).toBe(before.pages + 1);
+    expect(reads.counts).toBe(before.counts + 1);
+  });
+  it("reads it again once for a burst of plugin change notifications from that computer", async () => {
+    const reads = setup();
+    await showBoth();
+    const before = { ...reads };
+    await act(async () => {
+      for (let i = 0; i < 3; i++) fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "plugins" }));
+      fixture.resourceListeners.forEach((listener) => listener("mac", { collectionId: "sessions" }));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    await settle(14);
+    expect(reads.pages).toBe(before.pages + 1);
+    expect(reads.counts).toBe(before.counts + 1);
+  });
+});
 // Maintainer review 05:55 #3: an installed custom-market plugin's update. The preflight tells a source the computer did
 // not name (refresh or update there) apart from a source that really changed; neither reaches begin.
 describe("installed custom-market update and its source", () => {
@@ -2008,7 +2110,9 @@ describe("older Host custom market without a repository identity", () => {
 
 describe("market install recovery", () => {
   const item = marketItem("demo", "Demo");
-  function installWire(options: { begin?: () => unknown; answer?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean }) {
+  // `installedBy`: the operation id the Host recorded with the installed package (contract V2.9), shown to this device.
+  function installWire(options: { begin?: () => unknown; answer?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean;
+    installedBy?: () => string | undefined }) {
     return marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
@@ -2018,6 +2122,7 @@ describe("market install recovery", () => {
         case "management:market-detail":
           // Like the Host: installState comes from the market-source record of this exact plugin.
           return options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
+            ...(options.installedBy?.() ? { installedOperationId: options.installedBy() } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return options.begin!();
         case "management:answer": return options.answer!();
@@ -2047,9 +2152,11 @@ describe("market install recovery", () => {
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.actionFailed" });
   });
   it.each([
-    ["installed on the computer", true, null],
-    ["not on the computer", false, "plugins.market.unconfirmedNotInstalled"],
-  ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey) => {
+    ["installed on the computer", true, null, "screen-operation"],
+    ["not on the computer", false, "plugins.market.unconfirmedNotInstalled", "screen-operation"],
+    // Contract V2.9: Allow was written, but the computer's record says another operation installed this release.
+    ["installed on the computer by another operation", true, "plugins.market.unconfirmedMismatch", "computer-update-0001"],
+  ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey, installedBy) => {
     let installed = false;
     const requests = installWire({
       begin: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
@@ -2057,6 +2164,8 @@ describe("market install recovery", () => {
       answer: () => { installed = installedAfter; throw new Error("[TIMEOUT] remote invoke timed out"); },
       operation: () => { throw hostError("NOT_FOUND"); },
       installed: () => installed,
+      // The operation the Host recorded with the installed package (contract V2.9 evidence).
+      installedBy: () => installed ? installedBy : undefined,
     });
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
@@ -2070,6 +2179,51 @@ describe("market install recovery", () => {
     else expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
     // Never a second begin: the unknown result is only looked up, never replayed.
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  });
+  // Maintainer reviews 09:30 #2 and 10:36 #2 (contract V2.9): Allow was written; the computer went offline before its reply
+  // timed out, the receipt expired, the phone came back. The result is confirmed only from the Host's own record that
+  // this attempt's operation installed the package, so the offline period cannot lose it; the same id and release
+  // installed by another operation stays unconfirmed. Minimal failing input: written Allow → offline → timeout →
+  // receipt gone → reconnect. Tier: unit (jsdom, in-memory Host).
+  it.each([
+    ["this attempt's operation installed it", "screen-operation", true],
+    ["another operation installed the same release", "computer-update-0001", false],
+    ["the Host gives no operation evidence (older Host)", undefined, false],
+  ] as const)("checks a written Allow after offline, timeout and an expired receipt: %s", async (_name, installedBy, confirmed) => {
+    let installed = false, receiptGone = false, releaseReply!: () => void;
+    const reply = new Promise<void>((resolve) => { releaseReply = resolve; });
+    const requests = installWire({
+      begin: () => demoConsent({ input: { operationId: "screen-operation" } } as any),
+      // Written; the reply is held until the computer is offline, then times out.
+      answer: async () => { installed = true; await reply; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { if (receiptGone) throw hostError("NOT_FOUND"); return { operationId: "screen-operation", phase: "running" }; },
+      installed: () => installed,
+      installedBy: () => installed ? installedBy : undefined,
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    const controller = fixture.props.get("confirmation").controller;
+    await act(async () => { void controller.answer(true); });
+    await settle(6);
+    expect(requests.filter((request) => request.actionId === "management:answer")).toHaveLength(1);
+    await act(async () => controller.setOnline(false));
+    await act(async () => { releaseReply(); });
+    await settle(14);
+    receiptGone = true;
+    await act(async () => controller.setOnline(true));
+    await settle(14);
+    if (shownMarket().rowState(item).kind === "unknown") { await act(async () => { await shownMarket().checkResult(); }); await settle(14); }
+    const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+    expect(opened).toBe(confirmed);
+    // Unconfirmed: the row keeps the note and the market is released (confirmed opens the installed detail instead).
+    if (!confirmed) {
+      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+      expect(shownMarket()).toMatchObject({ installBusy: false });
+    }
+    // Only looked up: never a second begin or answer.
+    expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+    expect(requests.filter((request) => request.actionId === "management:answer")).toHaveLength(1);
   });
   // Review (2026-11-25): with the receipt gone, a local package sharing the ghost id and namespace was taken
   // as the market install and its detail opened.
@@ -2104,13 +2258,14 @@ describe("market install recovery", () => {
   });
   // Maintainer reviews (2026-11-25, 01:52 and 04:44): after the receipt expired, the computer replaced custom market A
   // with a same-name repository or folder B and installed B's plugin with the same id and release; the phone took it
-  // as A's result. The Host's installedSourceId must equal the sourceId of the consent shown for this attempt.
+  // as A's result. Contract V2.9 (maintainer reviews 09:30 and 10:36): only the Host's record that this attempt's
+  // operation installed the package confirms it; the installed source id is no longer the check.
   const sourceA = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
   it.each([
-    ["the installed instance comes from another source under the same name", "SourceB_0123456789abcd", "unconfirmed"],
-    ["the computer reports no installed source (older Host)", undefined, "unconfirmed"],
-    ["the installed instance comes from the source of the consent shown", sourceA.sourceId, "installed"],
-  ])("binds a lost-receipt check of a custom-market install to its consent's source: %s", async (_name, installedSourceId, expected) => {
+    ["another operation installed the same id and release (e.g. from a same-name source)", "other-operation-0001", "unconfirmed"],
+    ["the computer gives no operation evidence (older Host)", undefined, "unconfirmed"],
+    ["this attempt's operation installed it", "screen-operation", "installed"],
+  ])("confirms a lost-receipt custom-market install only from the Host's operation evidence: %s", async (_name, installedOperationId, expected) => {
     const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
     const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
     let installed = false, receiptGone = false;
@@ -2122,7 +2277,8 @@ describe("market install recovery", () => {
           return managementSnapshot(installed);
         case "management:market-detail":
           return { ...item, installState: installed ? "installed" : "not-installed",
-            ...(installed && installedSourceId ? { installedSourceId } : {}),
+            ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
+            ...(installed && installedOperationId ? { installedOperationId } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
           requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: sourceA,
@@ -2184,9 +2340,9 @@ describe("market install recovery", () => {
     expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
   });
-  // Maintainer review 07:23: a lost receipt may be confirmed only from what the person actually approved on the phone.
-  // In each case the computer later has the same plugin at the same release (from another operation); the receipt is
-  // gone. Nothing may be opened as this attempt's result, and nothing is sent again.
+  // Maintainer review 07:23: in each case the computer later has the same plugin at the same release (from another
+  // operation); the receipt is gone. Nothing may be opened as this attempt's result, and nothing is sent again. Since
+  // contract V2.9 this follows from the Host's evidence: none of these installs carries this attempt's operation id.
   const folderA = { kind: "local", sourceId: "SourceA_0123456789abcd" }, folderB = { kind: "local", sourceId: "SourceB_0123456789abcd" };
   it.each([
     ["① the consent named another source than the one chosen (Allow unavailable)", "mismatch"],
@@ -2883,7 +3039,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(verifying);
-        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", ...(verifying ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -2925,7 +3081,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           // A answers with the state at the time it was sent (before the instance appeared).
           return managementSnapshot(instancePresent && !(request as any).sentBeforeInstance);
-        case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", ...(instancePresent ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -2967,7 +3123,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           // A and B answer without the plugin; C answers with it installed.
           return managementSnapshot((request as any).read === "C");
-        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -3018,7 +3174,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(began && present);
-        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -3075,7 +3231,7 @@ describe("market read fences and lost-receipt facts", () => {
             if (label === "B") bReturned = true;
             return managementSnapshot(began && (label === "A" ? true : label === "B" || bReturned ? bPresent : true));
           }
-          case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
           case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
           case "management:operation": throw hostError("NOT_FOUND");
@@ -3143,7 +3299,7 @@ describe("market read fences and lost-receipt facts", () => {
               if (request.input?.read === "capabilities") return { catalogPaging: true };
               if (request.input?.read === "catalog") return marketPage([item]);
               return managementSnapshot(began && (round < 2 || presentInRound2));
-            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
             case "management:begin": return demoConsent(request);
             case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
             case "management:operation": throw hostError("NOT_FOUND");
@@ -3219,16 +3375,17 @@ describe("market read fences and lost-receipt facts", () => {
     // Only an Allow that actually left can confirm the result.
     it.each(orderings(["refresh", "releaseAllow"]).map((order) => [order.join(" → "), order] as const))("allow queued, then %s", async (_label, order) => {
       const g = gates();
-      let present = false, holdAllow = false, receiptGone = false;
+      let present = false, holdAllow = false, receiptGone = false, ours = false;
       const sent = queuedWire((request) => {
         switch (request.actionId) {
           case "management:snapshot":
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage([item]);
             return managementSnapshot(present);
-          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed",
+            ...(ours ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
-          case "management:answer": present = true; throw new Error("[TIMEOUT] remote invoke timed out");
+          case "management:answer": present = true; ours = true; throw new Error("[TIMEOUT] remote invoke timed out");
           case "management:operation":
             if (receiptGone) throw hostError("NOT_FOUND");
             return { operationId: request.input.operationId, phase: "running" };

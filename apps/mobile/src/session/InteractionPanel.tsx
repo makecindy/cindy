@@ -948,9 +948,14 @@ function PermissionCard({
         touchLayout={touchLayout}
       />}
       {installRepository ? <Text style={styles.body} testID="interaction.permission.installRepository">{installRepository}</Text> : null}
-      {installSource && installInput?.operation === 'update' && installInput.originSourceChanged === true ? (
+      {/* A source switch is confirmed like a first install (contract V2.4b): the card says 'install' and carries the flag.
+          Same sentences as the computer: a custom market (with a valid source) or a replacement with the market's version. */}
+      {isPluginInstall && installInput?.originSourceChanged === true
+        && (installInput.origin === 'market' || installInput.origin === 'custom-market') ? (
         <Text style={styles.body} testID="interaction.permission.installOriginSourceChanged">
-          {t('plugins.notice.consentSource.originSourceChanged')}
+          {t(installInput.origin === 'market' ? 'plugins.notice.consentSource.marketSourceChanged'
+            : installSource?.kind === 'git' ? 'plugins.notice.consentSource.originSourceChanged'
+              : 'plugins.notice.consentSource.sourceChangedIsolated')}
         </Text>
       ) : null}
       {installSourceUnverified ? (

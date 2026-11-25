@@ -1,6 +1,6 @@
 import {
   isBoundedPluginResponse,
-  isPluginMarketSourceId, isPluginMarketSourceIdentity,
+  isPluginMarketSourceId, isPluginMarketSourceIdentity, isPluginOperationEvidenceId,
   parsePluginManagementSnapshot,
   type ManagedMarketItem,
 } from "./pluginManagementTypes";
@@ -89,7 +89,7 @@ function parseCounts(value: unknown): PluginMarketCounts | null {
 
 const ITEM_FIELDS = ["pluginId", "ghostId", "namespace", "name", "description", "author", "publisherKind", "scope",
   "organizationId", "defaultInstall", "releaseId", "version", "publishedAt", "icon", "installState", "enabled",
-  "sourceType", "sourceMarketName", "updateRequiresConsent", "sourceIdentity", "installedSourceId"] as const;
+  "sourceType", "sourceMarketName", "updateRequiresConsent", "sourceIdentity", "installedSourceId", "installedOperationId"] as const;
 /** Keep only the list fields the phone shows or sends back; extra Host fields are not retained. */
 function marketItemFields(item: ManagedMarketItem): ManagedMarketItem {
   const picked: Record<string, unknown> = {};
@@ -97,6 +97,7 @@ function marketItemFields(item: ManagedMarketItem): ManagedMarketItem {
   // Additive identity: an unusable value is dropped (source checks then fail closed).
   if (picked.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(picked.sourceIdentity)) delete picked.sourceIdentity;
   if (picked.installedSourceId !== undefined && !isPluginMarketSourceId(picked.installedSourceId)) delete picked.installedSourceId;
+  if (picked.installedOperationId !== undefined && !isPluginOperationEvidenceId(picked.installedOperationId)) delete picked.installedOperationId;
   return picked as unknown as ManagedMarketItem;
 }
 

@@ -1344,9 +1344,11 @@ describe("older Host without a repository identity", () => {
       const { container } = mount(Sheet, sheetProps({ originSource: { kind: "local", sourceId: "SourceA_0123456789abcd" },
         originSourceChanged: true }, updateFacts));
       const text = container.textContent!;
-      const line = text.indexOf("plugins.notice.consentSource.originSourceChanged");
+      // A local folder shows no repository, so the sentence does not ask to trust one (#12731 e2fbe72a).
+      const line = text.indexOf("plugins.notice.consentSource.sourceChangedIsolated");
       expect(line).toBeGreaterThan(text.indexOf("plugins.notice.consentSource.localFolder"));
       expect(line).toBeLessThan(text.indexOf("plugins.management.versionChange"));
+      expect(text).not.toContain("plugins.notice.consentSource.originSourceChanged");
     });
   // Maintainer review 05:55 #2: the consent names another source than the one chosen on the phone.
   it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(

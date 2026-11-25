@@ -215,12 +215,6 @@ function PluginDirectory() {
         ["running", "confirmation", "unknown"].includes(
           management.state.outcome,
         )));
-  const managementAvailable =
-    management.state?.capability === "supported" &&
-    !management.state.errorCode &&
-    !!management.state.snapshot &&
-    management.state.online &&
-    !managementPending;
   // Market browsing and installs live in usePluginMarket; this screen only routes views.
   const market = usePluginMarket({
     visible: focused && (segment === "market" || !!query.trim()) && (wide || !selected),
@@ -248,6 +242,16 @@ function PluginDirectory() {
   });
   const liveMarketBusy = useRef(market.installBusy);
   liveMarketBusy.current = market.installBusy;
+  // One management slot for the whole screen (Codex review of b93ba486): a market install and every installed-detail
+  // entry that starts a management operation or opens a confirmation (update, uninstall, enable / disable, page
+  // approval, task settings) share it, so two confirmations can never be active side by side on a wide screen.
+  const managementLocked = managementPending || market.installBusy;
+  const managementAvailable =
+    management.state?.capability === "supported" &&
+    !management.state.errorCode &&
+    !!management.state.snapshot &&
+    management.state.online &&
+    !managementLocked;
   const marketDetail = selected ? null : market.detail;
   const marketView = {
     ...market,
@@ -808,6 +812,7 @@ function PluginDirectory() {
       !selected ||
       !detail ||
       enableLock.current ||
+      managementLocked ||
       !list.isOnline(selected.row.host)
     )
       return;
@@ -874,7 +879,6 @@ function PluginDirectory() {
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
-      market.installBusy ||
       !selected ||
       !management.controller ||
       liveManagement.current !== management.controller ||
@@ -969,7 +973,7 @@ function PluginDirectory() {
           {
             id: "update",
             title: t("plugins.management.update") + " · " + marketItem.version,
-            disabled: !managementAvailable || market.installBusy,
+            disabled: !managementAvailable,
           },
         ]
       : []),
@@ -979,7 +983,7 @@ function PluginDirectory() {
             id: "uninstall",
             title: t("plugins.management.uninstall"),
             destructive: true,
-            disabled: !managementAvailable || market.installBusy,
+            disabled: !managementAvailable,
           },
         ]
       : []),
@@ -999,6 +1003,8 @@ function PluginDirectory() {
       generation = detailGeneration.current,
       owner = getMobileAuthOwner();
     void list.refresh();
+    // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
+    if (row) market.invalidate(row.host.deviceId);
     const controller = management.controller;
     void controller?.refresh().then(() => {
       if (
@@ -1112,9 +1118,9 @@ function PluginDirectory() {
       <PluginDetailView
         row={selected.row}
         enabled={enabled}
-        busy={busy || detailLoading || managementPending}
+        busy={busy || detailLoading || managementLocked}
         statusRecoveryBusy={busy || detailLoading}
-        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t)}
+        uiApprovalNotice={pluginUiApprovalNotice(managed, management.state, management.controller, t, false, managementLocked)}
         managementNotice={management.state?.outcome === "unknown" ? {
           testID: "plugins.managementUnknown",
           title: t("plugins.notice.title.resultUnknown"),

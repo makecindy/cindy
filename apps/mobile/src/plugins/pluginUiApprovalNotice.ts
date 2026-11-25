@@ -9,11 +9,13 @@ export function pluginUiApprovalNotice(
   controller: PluginManagementController | null,
   t: (key: string, args?: Record<string, unknown>) => string,
   proactive = false,
+  /** Another management operation on this screen holds the slot (for example a market install). */
+  locked = false,
 ): PluginNoticeProps | undefined {
   if (!plugin || !state || !controller || ('manifest' in plugin && !pluginNeedsUiApproval(plugin))) return;
   const supported = state.snapshot?.uiCapabilityApproval === true || state.uiConsent?.uiCapabilityApproval === true;
   if (proactive && (!supported || ('manifest' in plugin && plugin.uiPromptSuppressed))) return;
-  const pending = state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
+  const pending = locked || state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
   return {
     testID: 'plugins.uiApproval',
     title: t('plugins.uiApproval.title', { name: 'manifest' in plugin ? plugin.manifest.name : plugin.name }),

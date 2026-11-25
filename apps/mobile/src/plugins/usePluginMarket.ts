@@ -20,6 +20,8 @@ import type { PluginManagementState } from "./pluginManagementController";
 const MARKET_REFRESH_MS = 30_000;
 const CACHED_LISTS = 6;
 const SEARCH_DEBOUNCE_MS = 300;
+/** Plugin change notifications from one computer often come in a burst (install, enable, readback): read once after. */
+const PLUGIN_CHANGE_COALESCE_MS = 500;
 /** Publisher tabs filter public pages locally; bound how many empty pages one view may chain. */
 const MAX_EMPTY_CHAIN = 3;
 
@@ -95,7 +97,7 @@ function useDebounced(value: string, delay: number) {
  * target computer and connection generation; nothing is replayed.
  */
 export function usePluginMarket(options: UsePluginMarketOptions) {
-  const { invoke, connectionEpoch } = useDeviceLink();
+  const { invoke, connectionEpoch, onRemoteResourceChanged } = useDeviceLink();
   const { accountGeneration } = useAuth();
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const owner = useRef(getMobileAuthOwner()).current;
@@ -441,27 +443,48 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     setInstall(null);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, []);
-  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
-    if (installRef.current?.id !== attempt.id) return;
-    finish(attempt);
-    const installedOn = attempt.target.deviceId;
+  /**
+   * The plugins on one computer changed (an install here, an uninstall or update in the installed detail, or a
+   * `plugins` change notification from that computer): its cached lists and counts no longer describe it. Reads
+   * sent before the change are dropped (their replies no longer land); the list on screen reads again now, other
+   * cached lists on the next visit. Rows already shown stay until the new page lands, minus a plugin just installed.
+   */
+  const invalidateComputer = useCallback((changedOn: string, installedPluginId?: string) => {
     for (const [key, entry] of [...lists.current]) {
-      if (entry.deviceId !== installedOn) continue;
-      // Reads sent before the install still describe the old computer; drop them (their replies no longer
-      // land) and read again on the next visit. Rows already shown stay, minus the installed plugin.
+      if (entry.deviceId !== changedOn) continue;
       entry.token += 1;
-      entry.items = entry.items.filter((item) => item.pluginId !== attempt.item.pluginId);
+      if (installedPluginId) entry.items = entry.items.filter((item) => item.pluginId !== installedPluginId);
       entry.loadingMore = false;
       entry.at = 0;
       if (entry.status === "loading") {
         if (entry.items.length) entry.status = "ready"; else lists.current.delete(key);
       }
     }
-    for (const entry of counts.current.values()) if (entry.deviceId === installedOn) entry.at = 0;
+    for (const entry of counts.current.values()) if (entry.deviceId === changedOn) entry.at = 0;
     setCountsTick((tick) => tick + 1);
+  }, []);
+  useEffect(() => {
+    const changed = new Set<string>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = onRemoteResourceChanged((source, payload) => {
+      if (payload.collectionId !== "plugins") return;
+      changed.add(source);
+      timer ??= setTimeout(() => {
+        timer = undefined;
+        const devices = [...changed];
+        changed.clear();
+        if (mounted.current) for (const device of devices) invalidateComputer(device);
+      }, PLUGIN_CHANGE_COALESCE_MS);
+    });
+    return () => { off(); if (timer) clearTimeout(timer); };
+  }, [onRemoteResourceChanged, invalidateComputer]);
+  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
+    if (installRef.current?.id !== attempt.id) return;
+    finish(attempt);
+    invalidateComputer(attempt.target.deviceId, attempt.item.pluginId);
     setDetail((current) => current?.item.pluginId === attempt.item.pluginId ? null : current);
     onInstalled.current(attempt.target, instanceKey, attempt.item);
-  }, [finish]);
+  }, [finish, invalidateComputer]);
   useEffect(() => {
     const attempt = install, state = management.state, controller = management.controller;
     if (!attempt || attempt.started || !state || !controller) return;
@@ -537,15 +560,13 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     };
     const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(attempt.item, ghost));
     if (!instance) { conclude("notInstalled"); return; }
-    // Only what the person actually approved on the phone can be this attempt's result: Allow was handed to the Host for
-    // this operation and, for custom markets, the consent named exactly the source they chose. Rejected, never
-    // answered, consent never received or Allow unavailable: whatever is on the computer now came from elsewhere.
-    const state = controller?.getState();
-    const approval = state?.approval?.operationId === state?.operationId ? state?.approval : undefined;
-    const chosen = (attempt.detail ?? attempt.item).sourceIdentity;
-    const approvedSource = attempt.item.sourceType === "server" ? !!approval
-      : !!approval?.originSource && samePluginMarketSourceIdentity(approval.originSource, chosen);
-    if (!approvedSource) { conclude("mismatch"); return; }
+    // Contract V2.9: only the Host's own evidence can make this attempt's result: the computer recorded this attempt's
+    // operation id with the installed package and shows it to this device only. An instance installed by another
+    // operation (from the computer, another controller, an automatic update), by an older Host, or after this device's
+    // identity changed (signed out and in, reinstalled) has none of it and stays unconfirmed. Whether Allow was written
+    // does not matter, so a lost reply or a dropped connection cannot lose the evidence.
+    const operationId = controller?.getState().operationId;
+    if (!operationId) { conclude("mismatch"); return; }
     let market: ManagedMarketDetail;
     try {
       market = await createPluginManagementClient({ invoke, deviceId: attempt.target.deviceId, isCurrent: current })
@@ -553,13 +574,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     } catch {
       return; // Market facts not read: still unconfirmed; "Check result" verifies again.
     }
-    // A custom market can be replaced by another repository or folder under the same name, with the same plugin id
-    // and release: the Host's "installed" then describes the new source. The installed instance's source id must be
-    // exactly the approved one; without it (installed by an older Host) the result stays unconfirmed.
-    const sameSource = attempt.item.sourceType === "server"
-      || (!!approval?.originSource && market.installedSourceId === approval.originSource.sourceId);
-    conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId && sameSource
-      ? { installed: instance.instanceKey } : "mismatch");
+    conclude(market.installState === "installed" && market.releaseId === attempt.item.releaseId
+      && market.installedOperationId === operationId ? { installed: instance.instanceKey } : "mismatch");
   }, [invoke, complete, finish, management.controller]);
   useEffect(() => {
     const attempt = install, state = management.state;
@@ -624,6 +640,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     loadingMore: !!list?.loadingMore,
     refreshing: !!list && list.status === "loading" && list.items.length > 0,
     loadMore, refresh,
+    /** The plugins on this computer changed outside the market (e.g. an uninstall in the installed detail). */
+    invalidate: invalidateComputer,
     notices: {
       /** A re-read failed but the last rows stay visible (the installed list says the same). */
       stale: settled && list?.status === "failed" && list.items.length > 0,

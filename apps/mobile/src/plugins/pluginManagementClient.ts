@@ -50,13 +50,12 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
    * Whether a request was written is decided by the transport only, never by `preSend` (which is only a check, run at
    * several points before the write; see plugin-mobile-implementation.md): DeviceLinkContext.invoke calls
    * `onRequestWritten` at the first write of this request itself (a link handshake's writes never count).
-   * - written: a reply came back, or `onRequestWritten` ran before the failure — `onWritten` runs;
+   * - written: a reply came back, or `onRequestWritten` ran before the failure;
    * - not written: the call failed and `onRequestWritten` never ran (refused by a check, the queue or the route,
    *   a handshake that failed, or expired before writing): a plain failure, safe to try again.
    * A mutation that was written but whose result is lost is an unknown outcome: it is looked up, never replayed.
    */
-  async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false,
-    onWritten?: () => void): Promise<T> {
+  async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false): Promise<T> {
     const requestCurrent = () => (cleanup ? isOwnerCurrent() : isCurrent()) && (!guard || guard());
     const assertRequestCurrent = () => {
       if (isSharedTaskPeer(options.deviceId) || isProviderSharePeer(options.deviceId)) localError('PLUGIN_MANAGEMENT_OWNER_ONLY');
@@ -68,11 +67,9 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     try {
       response = await options.invoke(options.deviceId, channel, [payload], { preSend: assertRequestCurrent, onRequestWritten });
     } catch (error) {
-      if (written) onWritten?.();
       if (error instanceof PluginManagementRequestError && (!mutation || !written)) throw error;
       throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation && written);
     }
-    onWritten?.();
     try {
       // A write's reply is the Host's state of its operation: once written, only a changed account or target drops it
       // (the controller places it by operation id). The per-request guard fences sending only.
@@ -85,8 +82,7 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       throw new PluginManagementRequestError(pluginManagementErrorCode(error), mutation);
     }
   }
-  async function action<T>(name: string, input: Record<string, unknown>, parse: (value: unknown) => T, instance?: string, mutation = false, guard?: () => boolean, cleanup = false,
-    onWritten?: () => void) {
+  async function action<T>(name: string, input: Record<string, unknown>, parse: (value: unknown) => T, instance?: string, mutation = false, guard?: () => boolean, cleanup = false) {
     if (!isBoundedPluginResponse(input)) return localError('INVALID_INPUT');
     if (utf8Bytes(JSON.stringify(input)) > 64 * 1024) return localError('INPUT_TOO_LARGE');
     return call(REMOTE_RESOURCE_INVOKE_CHANNEL, {
@@ -95,12 +91,11 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     }, (response) => {
       if (!response || typeof response !== 'object' || !('result' in response)) throw new Error('INVALID_RESPONSE');
       return parse(response.result);
-    }, mutation, guard, cleanup, onWritten);
+    }, mutation, guard, cleanup);
   }
-  const receiptAction = (name: string, operationId: string, input: Record<string, unknown> = {}, mutation = false, guard?: () => boolean, cleanup = false,
-    onWritten?: () => void) => {
+  const receiptAction = (name: string, operationId: string, input: Record<string, unknown> = {}, mutation = false, guard?: () => boolean, cleanup = false) => {
     if (!validId(operationId)) return localError('INVALID_INPUT');
-    return action(name, { operationId, ...input }, (v) => parsePluginManagementReceipt(v, operationId), undefined, mutation, guard, cleanup, onWritten);
+    return action(name, { operationId, ...input }, (v) => parsePluginManagementReceipt(v, operationId), undefined, mutation, guard, cleanup);
   };
   return {
     deviceId: options.deviceId,
@@ -178,10 +173,9 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       return action('begin', input, (v) => parsePluginManagementReceipt(v, request.operationId), installed?.instanceKey, true, guard);
     },
     operation: (id: string) => receiptAction('operation', id),
-    /** `onWritten`: the answer reached the wire (see `call`); a queued or stopped answer never calls it. */
-    answer(id: string, requestId: string, confirmed: boolean, guard?: () => boolean, onWritten?: () => void) {
+    answer(id: string, requestId: string, confirmed: boolean, guard?: () => boolean) {
       if (!validId(requestId) || typeof confirmed !== 'boolean') return localError('INVALID_INPUT');
-      return receiptAction('answer', id, { requestId, confirmed }, true, guard, false, onWritten);
+      return receiptAction('answer', id, { requestId, confirmed }, true, guard, false);
     },
     cancel: (id: string, guard?: () => boolean) => receiptAction('cancel', id, {}, true, guard),
     /** Controller teardown only: cancel the original Host operation after its view is gone. Owner fencing remains mandatory. */

@@ -76,6 +76,22 @@ function repositoryLine(consent: Consent, t: Translate): string | undefined {
     : t("plugins.notice.consentSource.repository", { repository: source.repository });
 }
 
+/**
+ * Same rule as the computer's ghostInstallSourceChangedNoticeKey (contract V2.4b): a confirmation whose source changed
+ * (`originSourceChanged`, confirmed like a first install with the new source's full permissions) says that the old
+ * accounts and data are kept apart. A custom market also asks to check the repository shown; a replacement with the
+ * plugin market's version uses the sentence without a repository; other origins say nothing.
+ */
+function sourceChangedNotice(consent: Consent, t: Translate): string | undefined {
+  if (consent.originSourceChanged !== true) return undefined;
+  if (consent.origin === "market") return t("plugins.notice.consentSource.marketSourceChanged");
+  // Only a consent that shows a repository asks to trust "the repository shown above" (#12731 e2fbe72a): a local
+  // folder, or a source the phone cannot name, uses the sentence without it.
+  if (consent.origin === "custom-market") return t(consent.originSource?.kind === "git"
+    ? "plugins.notice.consentSource.originSourceChanged" : "plugins.notice.consentSource.sourceChangedIsolated");
+  return undefined;
+}
+
 /** Same rule as the computer's ghostInstallSourceNoticeKey; shown for new installs only, as on the computer. */
 function sourceNotice(consent: Consent, t: Translate): string | undefined {
   if (consent.facts.kind !== "install") return undefined;
@@ -148,15 +164,20 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
   }
   return {
     title: facts.name + " · " + facts.version,
-    /** New installs say where the plugin goes; updates keep the computer name only. */
+    /**
+     * New installs say where the plugin goes; updates keep the computer name only. A source switch updates the plugin
+     * already there (confirmed like a first install), so it keeps the computer name too.
+     */
     device: deviceName
-      ? facts.kind === "install" ? t("plugins.market.installTo", { device: deviceName }) : deviceName
+      ? facts.kind === "install" && consent.originSourceChanged !== true ? t("plugins.market.installTo", { device: deviceName }) : deviceName
       : undefined,
     /** Shown right under the source line so it stays in view with the pinned summary at the medium detent. */
     repository: repositoryLine(consent, t),
-    /** Same sentence as the computer's dialog: this custom-market update comes from another source than the installed one. */
-    originSourceChanged: custom && facts.kind === "update" && consent.originSourceChanged === true
-      ? t("plugins.notice.consentSource.originSourceChanged") : undefined,
+    /**
+     * Same sentence as the computer's dialog: this custom-market update comes from another source than the installed one.
+     * A source switch is confirmed like a first install (contract V2.4b: full permissions, `facts.kind === "install"`).
+     */
+    originSourceChanged: sourceChangedNotice(consent, t),
     /** The consent names another source than the one chosen (it changed after the last check): choose again. */
     sourceChanged: sourceChanged ? t("plugins.notice.consentSource.sourceChanged") : undefined,
     /**

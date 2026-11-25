@@ -193,27 +193,24 @@ describe('what counts as written', () => {
     const client = createPluginManagementClient({ invoke, deviceId: 'host-1', isCurrent: () => active });
     await expect(uninstall(client)).rejects.toMatchObject({ outcomeUnknown: unknown });
   });
-  it('reports a write only from the transport, never from a passing check or a handshake', async () => {
-    const written = vi.fn();
+  it('classifies an answer from the transport, never from a passing check or a handshake', async () => {
     let active = true;
-    // Passes the entry check, then is refused right before the write: not written.
+    // Passes the entry check, then is refused right before the write: not written, a plain failure.
     const refused = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); active = false; opts!.preSend!(); }) as PluginManagementInvoke;
     await expect(createPluginManagementClient({ invoke: refused, deviceId: 'host-1', isCurrent: () => active })
-      .answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
-    expect(written).not.toHaveBeenCalled();
+      .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
     // Only the handshake was written and timed out: not written.
     const handshake = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); throw handshakeTimeout(); }) as PluginManagementInvoke;
     await expect(createPluginManagementClient({ invoke: handshake, deviceId: 'host-1' })
-      .answer('operation-1', 'consent-1', true, undefined, written)).rejects.toMatchObject({ outcomeUnknown: false });
-    expect(written).not.toHaveBeenCalled();
-    // Written, reply lost: written. A reply: written.
+      .answer('operation-1', 'consent-1', true)).rejects.toMatchObject({ outcomeUnknown: false });
+    // Written, reply lost: unknown.
     const lost = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!();
       const error = new DeviceLinkError('INVOKE_TIMEOUT', 'lost'); error.inFlight = true; throw error; }) as PluginManagementInvoke;
-    await expect(createPluginManagementClient({ invoke: lost, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written)).rejects.toBeTruthy();
-    expect(written).toHaveBeenCalledTimes(1);
+    await expect(createPluginManagementClient({ invoke: lost, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true))
+      .rejects.toMatchObject({ outcomeUnknown: true });
     const replied = vi.fn(async (_d, _c, _a, opts) => { opts!.preSend!(); opts!.preSend!(); opts!.onRequestWritten!(); return { effects: [], result: receipt('running') }; }) as PluginManagementInvoke;
-    await createPluginManagementClient({ invoke: replied, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true, undefined, written);
-    expect(written).toHaveBeenCalledTimes(2);
+    await expect(createPluginManagementClient({ invoke: replied, deviceId: 'host-1' }).answer('operation-1', 'consent-1', true))
+      .resolves.toMatchObject({ phase: 'running' });
   });
 });
 
@@ -1265,6 +1262,38 @@ describe('confirmation sheet wording', () => {
   const install = (consent: Record<string, unknown>, permissions: any[]) => ({ requestId: 'r', initiator: 'user', origin: 'market',
     ...consent, facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions } }) as any;
 
+  // Contract V2.4b (2026-11-25, #12731 00b3c1a6): a source switch is confirmed like a first install with the new source's
+  // full permissions, and only `originSourceChanged` marks it, whatever the origin. An explicit replacement with the
+  // plugin market's version comes as origin 'market' without a source; the phone cannot start one, but shows it like
+  // the computer: every permission and every high-risk item, the market sentence, no repository line, and Allow.
+  it('shows a source switch like a first install, with the sentence for its origin', () => {
+    const permissions = [nodeExecute(), item('agent:background', 'agent', 'agentBackground'), item('tool:open', 'tool', 'tool')];
+    const market = pluginConsentPresentation(install({ originSourceChanged: true }, permissions), t, 'Mac');
+    expect(market.originSourceChanged).toBe('plugins.notice.consentSource.marketSourceChanged');
+    expect(market.repository).toBeUndefined();
+    expect(market.allowBlocked).toBe(false);
+    // An update of the plugin already there: the computer name, not "install to".
+    expect(market.device).toBe('Mac');
+    expect(market.permissions).toHaveLength(3);
+    expect(market.highRisk?.lines).toHaveLength(2);
+    // A custom market names the repository it shows (#12731 e2fbe72a): only a Git source asks to trust "the repository
+    // shown above"; a local folder, or no usable source, gets the sentence without it.
+    const git = { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'SourceB_0123456789abcd' };
+    const custom = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team', originSource: git, originSourceChanged: true }, permissions), t, 'Mac');
+    expect(custom.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+    expect(custom).toMatchObject({ allowBlocked: false, device: 'Mac' });
+    expect(custom.highRisk?.lines).toHaveLength(2);
+    const folder = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team',
+      originSource: { kind: 'local', sourceId: 'SourceB_0123456789abcd' }, originSourceChanged: true }, permissions), t, 'Mac');
+    expect(folder).toMatchObject({ originSourceChanged: 'plugins.notice.consentSource.sourceChangedIsolated', allowBlocked: false });
+    // The relaxed check does not relax the custom-market rule: without a source only Reject stays available.
+    const sourceless = pluginConsentPresentation(install({ origin: 'custom-market', originLabel: 'Team', originSourceChanged: true }, permissions), t, 'Mac');
+    expect(sourceless).toMatchObject({ originSourceChanged: 'plugins.notice.consentSource.sourceChangedIsolated', allowBlocked: true });
+    // Other origins have no switch sentence, like the computer.
+    expect(pluginConsentPresentation(install({ origin: 'local-file', originSourceChanged: true }, permissions), t, 'Mac').originSourceChanged).toBeUndefined();
+    // A plain first install still says where it goes.
+    expect(pluginConsentPresentation(install({}, permissions), t, 'Mac').device).toBe('plugins.market.installTo(device=Mac)');
+  });
   it('pins the Host items it treats as high risk, by their stable keys', () => {
     for (const key of ['node:execute', 'node:secret:token:worker.cjs:run', 'node:resident', 'agent:background', 'agent:errand'])
       expect(isPinnedHighRiskPermission({ key })).toBe(true);
@@ -1463,6 +1492,18 @@ describe('confirmation sheet wording', () => {
     expect(item({ installedSourceId: 'not-an-id' })).not.toHaveProperty('installedSourceId');
     expect(item({ installedSourceId: id }).installedSourceId).toBe(id);
   });
+  // Contract V2.9: installedOperationId matches ^[A-Za-z0-9_-]{8,128}$ (on page items, server items included, and on
+  // the market detail); any other value counts as absent, so a lost-receipt result stays unconfirmed.
+  it('keeps only a well-formed installed operation id from the Host', () => {
+    const uuid = '12345678-1234-4123-8123-123456789abc';
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'installed', enabled: true, ...extra }] }).items[0]!;
+    expect(item({ installedOperationId: uuid }).installedOperationId).toBe(uuid);
+    expect(item({ installedOperationId: 'a'.repeat(128) }).installedOperationId).toBe('a'.repeat(128));
+    for (const value of ['short7!', 'abcdefg', 'a'.repeat(129), 'has space ok', 'semi;colon', 12345678, null])
+      expect(item({ installedOperationId: value })).not.toHaveProperty('installedOperationId');
+    expect(parsePluginManagementDetail({ ...detail, installState: 'installed', installedOperationId: uuid }).installedOperationId).toBe(uuid);
+    expect(parsePluginManagementDetail({ ...detail, installState: 'installed', installedOperationId: 'bad id' })).not.toHaveProperty('installedOperationId');
+  });
   // Maintainer review 04:44 #1: every local folder used to compare equal; two folders now differ by sourceId.
   it('compares source identities on every key, sourceId included', () => {
     const a = 'SourceA_0123456789abcd', b = 'SourceB_0123456789abcd';
@@ -1475,7 +1516,7 @@ describe('confirmation sheet wording', () => {
     expect(samePluginMarketSourceIdentity(git, undefined)).toBe(false);
   });
   // Contract V2.4b: a custom-market update from another (verifiable) source than the installed instance carries
-  // originSourceChanged; the phone says so next to the repository, like the computer's dialog.
+  // originSourceChanged (older builds of #12731 sent it on update facts, current ones on install facts); the phone says so next to the repository, like the computer's dialog.
   it('says when a custom-market update comes from another source than the installed version', () => {
     const id = 'SourceA_0123456789abcd';
     const receipt = (originSourceChanged: unknown, kind = 'update') => ({ operationId: 'op', phase: 'confirmation', consent: {
@@ -1485,10 +1526,13 @@ describe('confirmation sheet wording', () => {
         unchangedCount: 1, builtinOauthClientChanged: false } : { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [] } } });
     const consent = parsePluginManagementReceipt(receipt(true), 'op').consent!;
     expect(consent.originSourceChanged).toBe(true);
-    expect(pluginConsentPresentation(consent, t, 'Mac').originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+    // This consent's source is a local folder: no repository is shown, so the sentence without it (#12731 e2fbe72a).
+    expect(pluginConsentPresentation(consent, t, 'Mac').originSourceChanged).toBe('plugins.notice.consentSource.sourceChangedIsolated');
     expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(undefined), 'op').consent!, t, 'Mac').originSourceChanged).toBeUndefined();
-    // Only for updates; any other value makes the receipt invalid.
-    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(true, 'install'), 'op').consent!, t, 'Mac').originSourceChanged).toBeUndefined();
+    // Contract V2.4b (2026-11-25 update): a source switch is confirmed like a first install (full permissions of the
+    // new source, facts.kind 'install'); the sentence shows there too. Any other value makes the receipt invalid.
+    expect(pluginConsentPresentation(parsePluginManagementReceipt(receipt(true, 'install'), 'op').consent!, t, 'Mac').originSourceChanged)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
     for (const value of [false, 'true', 1]) expect(() => parsePluginManagementReceipt(receipt(value), 'op')).toThrow('INVALID_RESPONSE');
   });
   it('accepts the community flag only as true', () => {

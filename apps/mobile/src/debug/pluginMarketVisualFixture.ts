@@ -140,9 +140,16 @@ const DEMOS: DemoPlugin[] = [
     description: "From a marketplace in a local folder on the computer.", tools: ["demo_folder_tools"],
     permissions: [nodeExecute(), network("folder.example.com")] },
   // An update whose source differs from the installed instance's (the computer forces the consent and says so).
+  // Contract V2.4b: it is confirmed like a first install, with the new source's full permissions (old approvals are
+  // not carried over), so the sheet lists every permission and every high-risk item.
   { ghostId: "demo-moved-source", name: "Demo Moved Source", publisher: "custom", author: null, sourceMoved: true,
     description: "Installed from another repository than the market now points to. Its update says the source changed.",
-    tools: ["demo_moved"], permissions: [network("moved.example.com")], installedVersion: "1.3.0",
+    tools: ["demo_moved"], permissions: [nodeExecute(), agentBackground, network("moved.example.com")], installedVersion: "1.3.0",
+    update: { added: [], removed: [], unchangedCount: 1 } },
+  // The same switch from a local-folder market: no repository is shown, so the computer's sentence without it.
+  { ghostId: "demo-moved-folder", name: "Demo Moved Folder", publisher: "custom", author: null, market: "folder", sourceMoved: true,
+    description: "Installed from another folder than the market now points to. Its update says the source changed.",
+    tools: ["demo_moved_folder"], permissions: [nodeExecute(), network("folder.example.com")], installedVersion: "1.3.0",
     update: { added: [], removed: [], unchangedCount: 1 } },
   // Older Host: a custom market without a repository identity. A new install is not offered on the phone.
   { ghostId: "demo-legacy-tools", name: "Demo Legacy Tools", publisher: "custom", author: null, legacySource: true,
@@ -271,7 +278,8 @@ function receipt(operationId: string) {
   if (!op.answered) return { operationId, phase: "confirmation", consent: {
     requestId: `demo-consent-${operationId}`, initiator: "user", origin: demo.publisher === "custom" ? "custom-market" : "market",
     ...(demo.publisher === "custom" ? { originLabel: marketName(demo), ...(demo.legacySource ? {} : { originSource: marketSource(demo) }) } : {}),
-    // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged.
+    // Host: an update from another (verifiable) source than the installed instance's carries originSourceChanged and is
+    // confirmed like a first install (full permissions of the new source).
     ...(demo.sourceMoved && op.kind === "update" ? { originSourceChanged: true as const } : {}),
     // The Host marks a verified public community publisher; the phone shows the community notice.
     ...(demo.publisher === "personal" ? { communityMarket: true } : {}),
@@ -281,7 +289,7 @@ function receipt(operationId: string) {
     installationSource: demo.publisher === "custom" ? { kind: "third-party" }
       : demo.publisher === "organization" ? { kind: "organization", namespace: "demo-org" }
         : { kind: demo.publisher === "official" ? "official" : "market" },
-    facts: op.kind === "update" && entry && demo.update
+    facts: op.kind === "update" && entry && demo.update && !demo.sourceMoved
       ? { kind: "update", ghostId: demo.ghostId, name: demo.name, version: RELEASE, previousVersion: entry.version,
         added: demo.update.added, removed: demo.update.removed, unchangedCount: demo.update.unchangedCount,
         builtinOauthClientChanged: false }

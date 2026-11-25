@@ -1077,6 +1077,50 @@ describe('plugin first-install task card and its source', () => {
     await render({ operation: 'update', origin: 'custom-market', source, originSourceChanged: 'yes' });
     expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')).toBeNull();
   });
+  // Maintainer review 08:15 #2: verify with a Host-built card, not a hand-made field. This is byte for byte the
+  // input asserted for buildGhostInstallConsentInteraction in apps/desktop/src/main/cindy-brain/__tests__/
+  // ghostInstallConsentInteraction.test.ts ("marks a custom-market update confirmed for a source change in the task
+  // card input", SOURCE_SWITCH_CARD_INPUT_SAMPLE); the phone cannot import Desktop test code. A source switch is confirmed
+  // like a first install (contract V2.4b), so the card's operation is 'install'.
+  const hostSourceSwitchCardInput = JSON.parse('{"ghost_id":"weather-chip","version":"2.0.0","operation":"install","origin":"custom-market","source":{"kind":"git","repository":"github.com/acme/plugins","ref":"main","sourceId":"AbCdEfGhIjKlMnOpQrStUv"},"originSourceChanged":true}');
+  it.each([false, true])('shows the source change of a Host-built source-switch card without opening details (companion=%s)', async (companion) => {
+    remoteSessionStore.setPendingInteractions('s1', [{ request: { kind: 'permission', requestId, toolName: 'cindy.plugin.install',
+      description: 'Update Weather 2.0.0\nPermission detail', input: hostSourceSwitchCardInput } }]);
+    await act(async () => root.render(<Harness companion={companion} />));
+    // Collapsed: no details opened.
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.originSourceChanged');
+    expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)
+      .toBe('plugins.notice.consentSource.repositoryRef');
+    expect(host.textContent).not.toContain('AbCdEfGhIjKlMnOpQrStUv');
+    // It names its source, so it is not treated as a card without one: Allow works.
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+  });
+  // Contract V2.4b (#12731 00b3c1a6): a replacement with the plugin market's version is marked by originSourceChanged
+  // alone (origin 'market', no source); the card shows the computer's sentence for it and stays allowable. A
+  // custom-market switch card without a valid source stays rejectable only, with no switch sentence.
+  it('picks the source switch sentence on the card the way the computer does', async () => {
+    await render({ operation: 'install', origin: 'market', originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.marketSourceChanged');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+    resolveInteraction.mockResolvedValueOnce({ accepted: true });
+    await click('interaction.permission.allowOnceButton');
+    expect(resolveInteraction).toHaveBeenLastCalledWith(requestId, expect.objectContaining({ behavior: 'allow' }));
+    // A custom-market switch card without a valid source names no repository: the sentence without it, and only Reject.
+    await render({ operation: 'install', origin: 'custom-market', originSourceChanged: true });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).not.toBeNull();
+    // A local-folder source: the sentence without a repository too (#12731 e2fbe72a); it has a source, so Allow stays.
+    await render({ operation: 'install', origin: 'custom-market', originSourceChanged: true, source: { kind: 'local', sourceId: 'SourceB_0123456789abcd' } });
+    expect(host.querySelector('[data-testid="interaction.permission.installOriginSourceChanged"]')?.textContent)
+      .toBe('plugins.notice.consentSource.sourceChangedIsolated');
+    expect(host.querySelector('[data-testid="interaction.permission.installSourceUnverified"]')).toBeNull();
+  });
   it('shows the repository of a custom-market card and allows it', async () => {
     await render({ operation: 'install', origin: 'custom-market', source });
     expect(host.querySelector('[data-testid="interaction.permission.installRepository"]')?.textContent)

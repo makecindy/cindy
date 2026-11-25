@@ -33,14 +33,6 @@ export interface PluginManagementState {
    * name after the last detail read). Absent for server items and consents not started here.
    */
   expectedSource?: PluginMarketSourceIdentity | null;
-  /**
-   * Set when Allow reached the wire for this operation (the transport's write evidence: a reply, or a failure marked
-   * in flight), with the source the consent named; an Allow still queued or stopped before writing never sets it.
-   * A result whose receipt is later gone may be confirmed only from this: without it (rejected, never answered,
-   * consent never received, Allow unavailable) nothing on the computer counts as this attempt's result. Cleared by a
-   * new operation only.
-   */
-  approval?: { operationId: string; originSource?: PluginMarketSourceIdentity } | null;
 }
 export interface PluginManagementControllerOptions {
   /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
@@ -280,7 +272,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     let began = false, operationId: string | null = null;
     const holder = hold();
     answers.clear(); cancelling = null;
-    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle', approval: null,
+    publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle',
       expectedSource: intent.kind === 'install' && intent.detail.sourceType !== 'server' ? intent.detail.sourceIdentity ?? null : null });
     const installed = intent.installed;
     if (!installed && intent.kind !== 'install') { release(holder, { outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
@@ -419,17 +411,12 @@ export function createPluginManagementController(client: PluginManagementClient,
         if (!current(token)) { unsent(); return; }
         if (!receiverCurrent(snapshot)) throw new PluginManagementRequestError('PLUGIN_INSTALL_CHANGED');
       }
-      // The approval is recorded only when Allow reached the wire, as the transport reports it (a reply, or a failure
-      // marked in flight; `preSend` passing is not evidence): still queued or stopped before writing (a refresh changed
-      // the facts, the computer went offline) is not an approval; written with the reply lost may be, and only that can
-      // later confirm a result whose receipt is gone. One place writes it.
-      const recordApproval = () => {
-        if (confirmed && current(token)) publish({ approval: { operationId: receipt.operationId, originSource: consent.originSource } });
-      };
+      // A result whose receipt is later gone is confirmed from the Host's own evidence (contract V2.9:
+      // `installedOperationId` equals this operation id), never from whether this Allow was written.
       if (!current(token)) { unsent(); return; }
       sentAt = mutationSentAt = ++receiptClock;
       const reply = await client.answer(receipt.operationId, requestId, confirmed,
-        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts))), recordApproval);
+        () => current(token) && state.online && (!confirmed || (!!facts && receiverCurrent(facts))));
       answers.set(requestId, 'written');
       await acceptReceipt(reply, token, holder);
     } catch (error) {
@@ -479,7 +466,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (client.isCurrent()) return;
     ++epoch; stopPolling(); busyHolder = 0; answers.clear(); cancelling = null;
     publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null,
-      approval: null });
+    });
   });
   return {
     getState: () => state,

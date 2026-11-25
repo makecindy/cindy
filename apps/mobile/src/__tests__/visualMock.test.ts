@@ -81,8 +81,8 @@ it('supplies valid demo plugin projections and confirms enable/disable through t
   const link = mock.createVisualMockDeviceLinkContext();
   const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
   const items = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, PLUGIN_COLLECTION), PLUGIN_COLLECTION);
-  // 28 teammate/demo plugins plus the six market demos pre-installed at an older version (update consent).
-  expect(items).toHaveLength(34);
+  // 28 teammate/demo plugins plus the seven market demos pre-installed at an older version (update consent).
+  expect(items).toHaveLength(35);
   expect(items.filter(item => item.display.badges?.length)).toHaveLength(2);
   const ref = items[0].ref;
   await invokePlugin(link.invoke, host.deviceId, ref.id, 'disable');
@@ -442,10 +442,18 @@ it('serves the market demo consents in the Host shape, including updates that ad
   const vaultUpgrade = (await consentOf('demo-market/demo-vault-upgrade', '_root__demo-vault-upgrade')).consent;
   expect(vaultUpgrade.facts).toMatchObject({ kind: 'update', previousVersion: '1.3.0' });
   expect(pluginConsentPresentation(vaultUpgrade, (key: string) => key).highRisk!.lines).toEqual(vaultSummary.lines);
-  // Contract V2.4b demo: the update comes from another source than the installed instance.
+  // Contract V2.4b demo: the update comes from another source than the installed instance; it is confirmed like a
+  // first install with the full permissions, so every high-risk item shows.
   const moved = (await consentOf('demo-market/demo-moved-source', '_root__demo-moved-source')).consent;
-  expect(moved).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'update' } });
-  expect(pluginConsentPresentation(moved, (key: string) => key).originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+  expect(moved).toMatchObject({ origin: 'custom-market', originSourceChanged: true, facts: { kind: 'install' } });
+  const movedView = pluginConsentPresentation(moved, (key: string) => key);
+  expect(movedView.originSourceChanged).toBe('plugins.notice.consentSource.originSourceChanged');
+  expect(movedView.highRisk!.lines).toEqual(['plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground']);
+  expect(movedView.permissions).toHaveLength(3);
+  // The local-folder switch: no repository is shown, so the sentence does not ask to trust one.
+  const movedFolder = (await consentOf('demo-market/demo-moved-folder', '_root__demo-moved-folder')).consent;
+  expect(movedFolder).toMatchObject({ origin: 'custom-market', originSource: { kind: 'local' }, originSourceChanged: true, facts: { kind: 'install' } });
+  expect(pluginConsentPresentation(movedFolder, (key: string) => key).originSourceChanged).toBe('plugins.notice.consentSource.sourceChangedIsolated');
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.
