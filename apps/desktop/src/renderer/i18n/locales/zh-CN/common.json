@@ -4583,6 +4583,15 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商",
+        "icon": "连接图标",
+        "appearance": "名称与图标",
+        "ownImage": "选择自己的图片",
+        "imageError": "请选择 10 MB 以内的 PNG、JPG 或 WebP 图片。",
+        "connectionIcon": {
+          "default": "默认",
+          "personal": "个人",
+          "work": "工作"
+        },
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },

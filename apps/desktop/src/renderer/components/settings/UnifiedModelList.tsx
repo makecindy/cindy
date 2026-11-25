@@ -48,6 +48,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import {
   litWholeMarks,
@@ -1102,7 +1103,7 @@ export function UnifiedModelList({
     const brand = modelBrand(rep);
     const explicitIcon = resolveModelIconKind(rep.icon);
     const logoKind =
-      explicitIcon === 'claude'
+      isProviderConnectionIcon(provider.logoKind) ? provider.logoKind : explicitIcon === 'claude'
         ? 'anthropic'
         : explicitIcon === 'codex'
           ? 'openai'
@@ -1138,7 +1139,9 @@ export function UnifiedModelList({
           className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--text-secondary)]"
           aria-hidden="true"
         >
-          {logoKind ? (
+          {isProviderConnectionImage(provider.customIcon) ? (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>{null}</CustomProviderIcon>
+          ) : logoKind ? (
             <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={logoKind} size={19} />
           ) : brand ? (
             <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>

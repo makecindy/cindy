@@ -4626,6 +4626,15 @@
       "menu": {
         "disableProvider": "Diesen Anbieter deaktivieren",
         "enableProvider": "Diesen Anbieter aktivieren",
+        "icon": "Verbindungssymbol",
+        "appearance": "Name und Symbol",
+        "ownImage": "Bild auswählen",
+        "imageError": "Wähle ein PNG-, JPG- oder WebP-Bild unter 10 MB.",
+        "connectionIcon": {
+          "default": "Standard",
+          "personal": "Privat",
+          "work": "Arbeit"
+        },
         "hideProvider": "In der Modellauswahl ausblenden",
         "showProvider": "In der Modellauswahl anzeigen"
       },

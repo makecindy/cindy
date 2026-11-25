@@ -4583,6 +4583,15 @@
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする",
+        "icon": "接続アイコン",
+        "appearance": "名前とアイコン",
+        "ownImage": "画像を選ぶ",
+        "imageError": "10 MB 以下の PNG、JPG、WebP 画像を選んでください。",
+        "connectionIcon": {
+          "default": "デフォルト",
+          "personal": "個人用",
+          "work": "仕事用"
+        },
         "hideProvider": "モデル選択で非表示にする",
         "showProvider": "モデル選択に表示する"
       },

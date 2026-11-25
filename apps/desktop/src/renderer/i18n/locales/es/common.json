@@ -4682,6 +4682,15 @@
       "menu": {
         "disableProvider": "Deshabilitar este proveedor",
         "enableProvider": "Habilitar este proveedor",
+        "icon": "Icono de conexión",
+        "appearance": "Nombre e icono",
+        "ownImage": "Elegir imagen",
+        "imageError": "Elige una imagen PNG, JPG o WebP de menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predeterminado",
+          "personal": "Personal",
+          "work": "Trabajo"
+        },
         "hideProvider": "Ocultar del selector de modelos",
         "showProvider": "Mostrar en el selector de modelos"
       },

@@ -509,7 +509,7 @@ function DefaultProviderMark({
 
 /**
  * 模型行 / trigger 的图标 —— 统一规则(桌面与手机同源,见 resolveModelIconKind):
- * 优先使用模型目录的厂牌 `icon`，缺省时回落来源供应商标。
+ * 已选的连接图标优先，否则使用模型厂牌 `icon`，缺省时回落来源供应商标。
  * 禁止在客户端按 model id 猜厂牌。
  */
 export function ModelIconMark({
@@ -535,7 +535,7 @@ export function ModelIconMark({
   withMargin?: boolean;
   dense?: boolean;
 }) {
-  const kind = resolveModelIconKind(icon);
+  const kind = resolveModelIconKind(icon, logoKind, customIcon);
   if (kind) {
     const common = cn(withMargin && 'mr-1.5', 'shrink-0', colorClass);
     const markSize = dense ? 12.3 : 13;

@@ -517,17 +517,33 @@ describe('ProvidersSection — 深链定位', () => {
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
     ).toEqual([
-      'settings.providers.pill.rename',
+      'settings.providers.menu.appearance',
       'settings.providers.menu.hideProvider',
       'settings.providers.menu.disableProvider',
       'settings.providers.custom.deleteAria',
     ]);
-    fireEvent.click(within(menu).getByText('settings.providers.pill.rename'));
+    fireEvent.click(within(menu).getByText('settings.providers.menu.appearance'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Personal' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'settings.providers.menu.connectionIcon.personal' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      { providerId: 'openai-work', action: 'rename', name: 'Work account', dataOwnerId: 'owner', ownerGeneration: 1 },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Personal', icon: 'personal' }),
     ));
     expect(updateCustomProvider).not.toHaveBeenCalled();
     expect(customDialogSpy).not.toHaveBeenCalled();
+  });
+
+  // Unit: selecting a mark in Settings must target just that saved connection.
+  it('sets the selected connection icon from its detail menu', async () => {
+    providersState.providers = [makeProvider('glm-team', { source: 'user', name: 'GLM', connected: true })];
+    renderAt('?tab=providers&connect=glm-team');
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.appearance' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Magpie' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(window.electronAPI.maker.setProviderPresentation).not.toHaveBeenCalled();
   });
 
   it('renames an account when its sidebar row is double-clicked', async () => {
@@ -545,17 +561,11 @@ describe('ProvidersSection — 深链定位', () => {
 
     fireEvent.doubleClick(await screen.findByRole('button', { name: /Work account/ }));
 
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'settings.providers.pill.rename' }),
-    ));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Desk' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      {
-        providerId: 'openai-work',
-        action: 'rename',
-        name: 'Work account',
-        dataOwnerId: 'owner',
-        ownerGeneration: 1,
-      },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Desk' }),
     ));
   });
 

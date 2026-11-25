@@ -132,6 +132,7 @@ import {
   type MobileVoiceDictionaryLearningRequest,
 } from '@cindy/maker-shared/device-link-contract';
 import {
+  isProviderConnectionIcon, isProviderConnectionImage,
   resolveProviderLogoKind,
   type ProviderLogoKind,
   type ProviderLogoRouting,
@@ -1197,7 +1198,8 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
-    if (!sameAccountController || p.source !== 'organization') delete rest.customIcon;
+    const userThumbnail = supportsFullLogoKinds && p.source === 'user' && isProviderConnectionImage(p.customIcon);
+    if (!sameAccountController || (p.source !== 'organization' && !userThumbnail)) delete rest.customIcon;
     if (!sameAccountController) {
       delete rest.subscriptionPoolTarget;
       delete rest.subscriptionAccountKeys;
@@ -1220,6 +1222,8 @@ function projectInvokeResultForTunnel(
       ? 'xd'
       : sameAccountController && p.source === 'organization' && p.logoKind === 'openai-spectrum'
       ? 'openai-spectrum'
+      : sameAccountController && supportsFullLogoKinds && p.source === 'user' && isProviderConnectionIcon(p.logoKind)
+      ? p.logoKind
       : typeof p.id === 'string'
         ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
         : null;

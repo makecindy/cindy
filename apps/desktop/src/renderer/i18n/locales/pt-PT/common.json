@@ -4682,6 +4682,15 @@
       "menu": {
         "disableProvider": "Desativar este fornecedor",
         "enableProvider": "Ativar este fornecedor",
+        "icon": "Ícone da ligação",
+        "appearance": "Nome e ícone",
+        "ownImage": "Escolher imagem",
+        "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predefinido",
+          "personal": "Pessoal",
+          "work": "Trabalho"
+        },
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
