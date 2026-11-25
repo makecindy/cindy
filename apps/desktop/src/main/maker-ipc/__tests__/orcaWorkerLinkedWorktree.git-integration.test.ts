@@ -123,4 +123,40 @@ describe('Worker worktree linked-worktree ref resolution', () => {
       expect(existsSync(path.join(workerDir, 'main-1.txt'))).toBe(false);
     }
   }, 30_000);
+
+  /*
+   * Test value (docs/dev-rules/engineering-conventions.md §3.2):
+   * - Entry and observable result: createWorkerWorktree from a linked worktree with an origin source; the new
+   *   Worker starts at the origin default branch as fetched at creation time, not at the stale local ref.
+   * - Basis: WorktreeManager refreshes the origin default by ref name only. Resolving every source to a commit ID
+   *   inside the linked worktree (#11823) would skip that refresh silently.
+   * - Gap: the test above only covers local refs; unit tests mock WorktreeManager and cannot observe the fetch.
+   * - Minimal failing input: a linked worktree, origin/main published ahead of the local origin/main ref.
+   * - Tier: git-integration (local bare remote, real fetch and worktree add).
+   */
+  it('keeps refreshing the origin default branch for a remote source created from a linked worktree', async () => {
+    const remote = path.join(fixture, 'remote.git');
+    const project = path.join(fixture, 'fresh-project');
+    const projectLinked = path.join(fixture, 'fresh-linked');
+    const publisher = path.join(fixture, 'publisher');
+    gitIn(fixture, 'init', '--bare', '--initial-branch=main', remote);
+    mkdirSync(project, { recursive: true });
+    gitIn(project, 'init', '--initial-branch=main');
+    commitFile(project, 'base.txt', 'base\n', 'base commit');
+    gitIn(project, 'remote', 'add', 'origin', remote);
+    gitIn(project, 'push', '--quiet', 'origin', 'main');
+    gitIn(project, 'worktree', 'add', '-b', 'fresh-linked', projectLinked);
+
+    // Another clone publishes a newer origin/main, so the project's origin/main ref is now stale.
+    gitIn(fixture, 'clone', '--quiet', remote, publisher);
+    const freshSha = commitFile(publisher, 'fresh.txt', 'fresh\n', 'origin commit');
+    gitIn(publisher, 'push', '--quiet', 'origin', 'main');
+    expect(gitIn(project, 'rev-parse', 'refs/remotes/origin/main')).not.toBe(freshSha);
+
+    const source = await resolveWorkerWorktreeSource(projectLinked, 'origin/main');
+    expect(source).toBe('refs/remotes/origin/main');
+    const workerDir = await createWorkerWorktree('acp-linked-origin', projectLinked, source, { awaitFullCheckout: true });
+    expect(gitIn(workerDir, 'rev-parse', 'HEAD')).toBe(freshSha);
+    expect(existsSync(path.join(workerDir, 'fresh.txt'))).toBe(true);
+  }, 30_000);
 });
