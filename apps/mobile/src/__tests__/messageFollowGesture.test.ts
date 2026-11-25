@@ -63,7 +63,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     nearBottomRef: ref(true), readingOlderRef: ref(false),
     inlineEditorCountRef: ref(0),
     isDraggingRef: ref(false), isMomentumScrollingRef: ref(false),
-    pendingViewportExpandRepinRef: ref(false), pendingViewportExpandPreviousHeightRef: ref(0),
+    pendingViewportExpandPreviousHeightRef: ref(0),
     historyTouchStartYRef: ref<number | null>(null), historyTouchTriggeredRef: ref(false),
     dragStartOffsetYRef: ref<number | null>(null), userScrollForOlderRef: ref(false),
     lastAutoLoadEarlierKeyRef: ref<string | null>(null),
@@ -830,7 +830,14 @@ describe('streaming follow yields to the reader', () => {
     expect(h.state.scrollMetricsRef.current.offsetY).toBe(141844);
   });
 
-  it('re-pins after the keyboard expands the viewport during the active drag', () => {
+  // Unit regression for PR #12757: native layout and scroll can report keyboard
+  // dismissal in either order while a drag owns the list. The release sample
+  // must restore follow only when the reader actually ends at the new tail.
+  it.each([
+    { order: 'layout-first', finalOffset: 141150, follows: true },
+    { order: 'scroll-first', finalOffset: 141150, follows: true },
+    { order: 'layout-first', finalOffset: 140000, follows: false },
+  ])('checks the tail at drag release ($order, follows=$follows)', ({ order, finalOffset, follows }) => {
     const h = harness();
     h.state.scrollMetricsRef.current = { contentHeight: 142106, offsetY: 141498, viewportHeight: 608 };
     h.handleScrollBeginDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141498 }, layoutMeasurement: { height: 608 } } });
@@ -838,11 +845,16 @@ describe('streaming follow yields to the reader', () => {
     expect(h.state.nearBottomRef.current).toBe(false);
     // The keyboard dismissal arrives before endDrag. The final sample is already clamped to
     // the expanded viewport's tail, but the active drag must defer repinning until release.
-    h.handleScroll({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141150 }, layoutMeasurement: { height: 956 } } });
+    const tailSample = { nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141150 }, layoutMeasurement: { height: 956 } } };
+    if (order === 'layout-first') h.handleListLayout({ nativeEvent: { layout: { height: 956 } } });
+    h.handleScroll(tailSample);
     expect(h.state.nearBottomRef.current).toBe(false);
-    h.handleScrollEndDrag({ nativeEvent: { contentSize: { height: 142106 }, contentOffset: { y: 141150 }, layoutMeasurement: { height: 956 } } });
-    expect(h.state.nearBottomRef.current).toBe(true);
-    expect(h.state.userScrollForOlderRef.current).toBe(false);
+    h.handleScrollEndDrag({ nativeEvent: { ...tailSample.nativeEvent, contentOffset: { y: finalOffset } } });
+    h.handleContentSize(440, 142800);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(follows);
+    expect(h.state.userScrollForOlderRef.current).toBe(!follows);
+    expect(h.tailScroll.mock.calls.length > 0).toBe(follows);
   });
 
   it('keeps deliberate history position unpinned when keyboard dismissal does not reach the end', () => {
