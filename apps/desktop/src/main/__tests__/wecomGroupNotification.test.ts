@@ -56,6 +56,23 @@ function createSecrets(initialUrl: string | null = null, initialEnabled: string 
 }
 
 describe('WeCom group notification security boundary', () => {
+  it('edits only the notification switch with CAS, resets the override and never discloses or sends the webhook', () => {
+    activateImAccountBoundary();
+    const webhook = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=fixture-private-key';
+    const secrets = createSecrets(webhook);
+    const fetch = vi.fn();
+    const service = new WecomGroupNotificationService(fetch, secrets);
+    const before = service.inspectEnabledPreference();
+    expect(before).toMatchObject({ status: 'ready', value: { enabled: true }, customizedKeys: [] });
+    expect(JSON.stringify(before)).not.toMatch(/fixture-private-key|maskedKey|weixin/);
+    const saved = service.commitEnabledPreference(false, { expectedRevision: before.revision! });
+    expect(saved).toMatchObject({ value: { enabled: false }, customizedKeys: ['enabled'] });
+    expect(() => service.commitEnabledPreference(true, { expectedRevision: before.revision! })).toThrow();
+    expect(service.commitEnabledPreference(null, { expectedRevision: saved.revision })).toMatchObject({ value: { enabled: true }, customizedKeys: [] });
+    expect(secrets.read(WEBHOOK_SECRET_NAME)).toBe(webhook);
+    expect(secrets.read(ENABLED_SETTING_NAME)).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     activateImAccountBoundary();
