@@ -1589,6 +1589,15 @@ export class Session {
   }
 
   /**
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
+  }
+
+  /**
    * Provider work that outlives a turn but is not listed as a background task
    * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
    * A throwing probe counts as busy: reclamation must never guess "idle".

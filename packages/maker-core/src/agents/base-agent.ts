@@ -2739,6 +2739,14 @@ export interface AgentSessionHandle {
   hasLiveBackgroundWork?(): Promise<boolean>;
 
   /**
+   * Whether closing this runtime keeps the conversation: the next send can reopen
+   * the same native session. Idle runtime reclamation releases only runtimes that
+   * can. Built-in engines always resume and omit it; a plugin engine answers from
+   * what its agent advertised.
+   */
+  canResumeAfterClose?(): boolean;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */

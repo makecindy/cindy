@@ -911,7 +911,7 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, ORDINARY_PLUGIN_ENGINE_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES, DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
 import { configureTaskArchiveRuntime } from '../task-management/service.js';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
@@ -3421,6 +3421,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
+let pluginEngineIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3461,6 +3462,8 @@ export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher = null;
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = null;
+  pluginEngineIdleReleaseWatcher?.stop();
+  pluginEngineIdleReleaseWatcher = null;
   configureTaskArchiveRuntime(null);
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
@@ -17319,6 +17322,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warn: (message) => log.warn(message),
   });
   codexIdleReleaseWatcher.start();
+
+  // Ordinary local plugin engine (ACP) tasks: same scope and gates as Codex. Each task holds
+  // one engine process, and a plugin may run only a few at once, so idle ones must give their
+  // slot back. Only runtimes whose agent can reopen the conversation (session/resume or
+  // session/load) are released; the next send resumes it lazily.
+  pluginEngineIdleReleaseWatcher?.stop();
+  pluginEngineIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    agentKind: 'acp',
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: () => DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES,
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_PLUGIN_ENGINE_TASK_SQL),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || hasIdleReleaseQueuedWork(inputCoordinator, id)
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('pluginEngineIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  pluginEngineIdleReleaseWatcher.start();
 
   let applySessionRuntimeSelection: ApplySessionRuntimeSelection = async () => {
     throw new Error('session runtime selection is not ready');
