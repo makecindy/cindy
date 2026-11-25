@@ -9,9 +9,7 @@ import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
 import type { ContributionTransferView, MyPluginDetailView, MyPluginReleasePageView } from '../../../../shared/pluginContributions';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
-import { __testing as dataOwnerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
-import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
 import {
   cancelPendingPluginSuggestion,
   getPendingPluginSuggestion,
@@ -34,7 +32,12 @@ const { auth, translation, pickAndUpdateGhost, catalog, detailRenders, readmeRen
   detailRenders: vi.fn(),
   catalog: { device: null as { deviceId: string; name: string } | null },
   pickAndUpdateGhost: vi.fn(),
-  auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner', dataOwnerGeneration: 0 },
+  auth: {
+    user: { membershipKind: 'personal' },
+    mode: 'local' as Parameters<typeof pluginCatalogOwnerKey>[0],
+    dataOwnerId: 'navigation-owner',
+    dataOwnerGeneration: 0,
+  },
   translation: {
     t: ((key: string) => key) as (key: string, options?: Record<string, unknown>) => string,
     i18n: { language: 'en', resolvedLanguage: 'en' },
@@ -198,7 +201,7 @@ beforeEach(() => {
     ghosts: {
       listSync: () => ({ ghosts: [] }),
       legacyRecoveryStatus: vi.fn().mockResolvedValue({ state: 'none' }),
-      recentUsage: async () => ({ ids: [] }),
+      recentUsageSync: () => ({ ids: [] }),
       onChanged: () => () => {},
       onRecentUsageChanged: () => () => {},
     },
@@ -274,104 +277,74 @@ function page(entry: string, withRetirementNavigation = false) {
 }
 
 describe('installed recent usage', () => {
-  type Listener = (payload: { ids: string[] }, stamp?: DataOwnerPushStamp) => void;
-  afterEach(() => dataOwnerTesting.reset());
-
-  function setupRecentUsage() {
-    const owner = { dataOwnerId: auth.dataOwnerId, ownerGeneration: auth.dataOwnerGeneration };
-    setDataOwnerGeneration(owner.dataOwnerId, owner.ownerGeneration);
+  function setupRecentUsage(ids: string[]) {
     const installed: InstalledGhost[] = ['alpha', 'beta'].map(id => ({
       manifest: { ...detail.manifest, id, name: id }, dir: path.join('plugins', id), enabled: true,
       approval: { state: 'approved', revision: 'recent-usage' },
     }));
     const listSync = vi.fn(() => ({ ghosts: installed }));
     window.electronAPI.ghosts.listSync = listSync;
-    const pending: Array<{ resolve: (payload: { ids: string[] }) => void; reject: (error: Error) => void }> = [];
-    const recentUsage = vi.fn(() => new Promise<{ ids: string[] }>((resolve, reject) => { pending.push({ resolve, reject }); }));
-    const listeners = new Set<Listener>();
+    const recentUsageSync = vi.fn(() => ({ ids }));
+    const listeners = new Set<(payload: { ids: string[] }) => void>();
     Object.assign(window.electronAPI.ghosts, {
-      recentUsage,
-      onRecentUsageChanged: (listener: Listener) => {
+      recentUsageSync,
+      onRecentUsageChanged: (listener: (payload: { ids: string[] }) => void) => {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
     });
     const readOrder = () => [...screen.getByRole('main').querySelectorAll<HTMLElement>('[data-plugin-id^="installed:"]')]
       .map(row => row.dataset.pluginId);
-    return { pending, recentUsage, readOrder, owner, listSync,
-      push: (ids: string[], stamp = owner) => { listeners.forEach(listener => listener({ ids }, stamp)); } };
+    return { recentUsageSync, readOrder, listSync, listeners,
+      push: (nextIds: string[]) => { listeners.forEach(listener => listener({ ids: nextIds })); } };
   }
 
   // Unit / 工程约定 §7: exercise the first render of the actual page with the
   // shared sidebar snapshot populated and every background data source stalled.
-  it('renders the cached installed list without waiting and keeps late recent usage for the next visit', async () => {
-    const { pending, recentUsage, readOrder, listSync } = setupRecentUsage();
+  it('renders the cached installed list in recent-use order on the first frame', () => {
+    const { recentUsageSync, readOrder, listSync } = setupRecentUsage(['beta']);
     readInstalledGhostsSnapshot();
     const pendingMarketData = new Promise<never>(() => {});
     window.electronAPI.pluginMarket.snapshot = () => pendingMarketData;
     window.electronAPI.pluginMarket.query = () => pendingMarketData;
     window.electronAPI.pluginMarket.recommendations = () => pendingMarketData;
 
-    const view = render(page('/plugins'));
+    render(page('/plugins'));
     expect(screen.getByRole('button', { name: 'alpha' })).toBeTruthy();
     expect(listSync).toHaveBeenCalledOnce();
-    const scroller = screen.getByRole('main');
-    scroller.scrollTop = 24;
-    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-    expect(recentUsage).toHaveBeenCalledOnce();
-    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
-    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-    expect(screen.getByRole('main')).toBe(scroller);
-    expect(scroller.scrollTop).toBe(24);
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    expect(recentUsageSync).toHaveBeenCalledOnce();
+  });
 
+  it('releases the old recent-use listener and reads the new owner history at mount', () => {
+    const { recentUsageSync, readOrder, listeners } = setupRecentUsage(['beta']);
+    const view = render(page('/plugins'));
+    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
+    expect(listeners.size).toBe(1);
     view.unmount();
+    expect(listeners.size).toBe(0);
+    auth.dataOwnerId = 'recent-usage-next-owner';
+    auth.dataOwnerGeneration += 1;
+    recentUsageSync.mockReturnValue({ ids: ['alpha'] });
+    render(page('/plugins'));
+    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    expect(recentUsageSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies a recent-use push to the mounted list without reading history again', () => {
+    const { recentUsageSync, readOrder, push } = setupRecentUsage(['beta']);
     render(page('/plugins'));
     expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
-  });
-
-  it('discards recent usage that resolves between the owner fence and the new owner render', async () => {
-    const { pending, recentUsage, readOrder, push, owner } = setupRecentUsage();
-    const view = render(page('/plugins'));
-    await screen.findByRole('button', { name: 'alpha' });
-    expect(recentUsage).toHaveBeenCalledOnce();
-    const nextOwner = { dataOwnerId: 'recent-usage-next-owner', ownerGeneration: owner.ownerGeneration + 1 };
-    setDataOwnerGeneration(nextOwner.dataOwnerId, nextOwner.ownerGeneration);
-    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
-    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-    Object.assign(auth, { dataOwnerId: nextOwner.dataOwnerId, dataOwnerGeneration: nextOwner.ownerGeneration });
-    view.rerender(page('/plugins'));
-    expect(recentUsage).toHaveBeenCalledTimes(2);
-    act(() => push(['beta'], owner));
-    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-    await act(async () => { pending[1]!.resolve({ ids: ['alpha'] }); });
-    view.unmount();
-    await act(async () => { render(page('/plugins')); });
-    expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
-  });
-
-  it('uses prewarmed ordering on first render and keeps the latest push for the next visit', async () => {
-    const { pending, recentUsage, readOrder, push } = setupRecentUsage();
-    const memory = pluginCatalogMemory(pluginCatalogOwnerKey(auth.mode, auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
-    memory.recentUsageIds = ['beta'];
-    const view = render(page('/plugins'));
-    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
-    expect(recentUsage).toHaveBeenCalledOnce();
     act(() => push(['alpha']));
-    await act(async () => { pending[0]!.resolve({ ids: ['beta'] }); });
-    expect(readOrder()).toEqual(['installed:beta', 'installed:alpha']);
-
-    view.unmount();
-    render(page('/plugins'));
     expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
+    expect(recentUsageSync).toHaveBeenCalledOnce();
   });
 
-  it('keeps the installed page usable when the recent usage read fails', async () => {
-    const { pending, recentUsage, readOrder } = setupRecentUsage();
+  it('keeps the original installed order when the preload falls back to empty history', () => {
+    const { recentUsageSync, readOrder } = setupRecentUsage([]);
     const error = vi.spyOn(toast, 'error');
     render(page('/plugins'));
-    await screen.findByRole('button', { name: 'alpha' });
-    expect(recentUsage).toHaveBeenCalledOnce();
-    await act(async () => { pending[0]!.reject(new Error('Recent usage unavailable')); });
+    expect(recentUsageSync).toHaveBeenCalledOnce();
     expect(readOrder()).toEqual(['installed:alpha', 'installed:beta']);
     expect(error).not.toHaveBeenCalled();
   });

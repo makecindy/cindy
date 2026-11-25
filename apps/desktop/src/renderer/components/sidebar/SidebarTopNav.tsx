@@ -24,14 +24,14 @@
  * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
-import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   CirclePlus,
   Ellipsis,
   SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
-import { matchPath, UNSAFE_DataRouterStateContext, useLocation, useNavigate, useMatch } from 'react-router-dom';
+import { matchPath, useLocation, useNavigate, useMatch, useNavigation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -126,7 +126,7 @@ function useSidebarNavigationActions(
   const navigate = useNavigate();
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
-  const pendingLocation = useContext(UNSAFE_DataRouterStateContext)?.navigation.location;
+  const pendingLocation = useNavigation().location;
   const pendingPlugins = Boolean(pendingLocation && matchPath('/plugins', pendingLocation.pathname));
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。

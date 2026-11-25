@@ -40,11 +40,6 @@ const pluginPageSource = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
-const pluginCatalogMemorySource = readFileSync(
-  resolve(__dirname, '..', 'features', 'plugin', 'lib', 'pluginCatalogMemory.ts'),
-  'utf8',
-).replace(/\r\n?/g, '\n');
-
 const useCCAgentChatSource = readFileSync(
   resolve(__dirname, '..', 'hooks', 'useCCAgentChat.ts'),
   'utf8',
@@ -438,16 +433,12 @@ describe('ChatInput session switch focus contract', () => {
 
   it('keeps MRU ordering scoped to the installed shortcut row and subscribes to updates', () => {
     expect(pluginPageSource).toContain(
-      'window.electronAPI.ghosts.onRecentUsageChanged(({ ids }, ownerStamp) => {',
+      'window.electronAPI.ghosts.onRecentUsageChanged(({ ids }) => {',
     );
-    expect(pluginPageSource).toContain('void refreshLocalPluginRecentUsage(catalogMemory, owner);');
-    expect(pluginCatalogMemorySource).toContain('await window.electronAPI.ghosts.recentUsage()');
-    expect(pluginPageSource).not.toContain('recentUsageSync');
-    expect(pluginCatalogMemorySource).not.toContain('recentUsageSync');
     // Ranking runs over the (searched) installed set, not the raw ghost list, and feeds
     // recent-use + unread signals into the shared pure sorter.
     expect(pluginPageSource).toMatch(/sortInstalledForDisplay\(searchedInstalledItems, \{/);
-    expect(pluginPageSource).toContain('recentIds: recentUsageAtEntry.ids');
+    expect(pluginPageSource).toContain('recentIds: recentGhostIds');
     expect(pluginPageSource).not.toContain('sortInstalledForDisplay(ghosts');
     expect(pluginPageSource).not.toContain('sortInstalledForDisplay(installedItems');
   });

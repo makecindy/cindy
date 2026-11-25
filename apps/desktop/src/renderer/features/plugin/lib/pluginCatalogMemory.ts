@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { emptyPluginBrowserCache, mergePluginItems, readReusedMarketIcon, reuseMarketIcon, samePluginValue, PLUGIN_CATALOG_REFRESH_MS, type MarketIconCache } from './pluginBrowserCache';
 import { ghostWebviewOwnerKey } from './ghostPluginViewModel';
 import { resolveSystemLocale } from '../../../../shared/locale';
@@ -15,7 +14,6 @@ function emptyCatalogMemory() {
     browser: { current: emptyPluginBrowserCache() },
     marketIcons: new Map() as MarketIconCache,
     installedGrid: { columns: 2, measurements: [] } as PluginGridCache, installedQuery: '',
-    recentUsageIds: [] as readonly string[], recentUsagePending: false,
     scroll: { offset: 0, anchor: null as { id: string; top: number } | null },
     todayPool: [] as PluginMarketItem[], consumedToday: new Set<string>(), todayLoaded: false,
     recommendationOrder: { ids: [] as string[] },
@@ -73,23 +71,6 @@ export function pluginInstalledGrid(memory: CatalogMemory, query: string) {
     memory.installedLimit = 10;
   }
   return memory.installedGrid;
-}
-
-export async function refreshLocalPluginRecentUsage(memory: CatalogMemory, owner: DataOwnerGeneration): Promise<void> {
-  if (memory.recentUsagePending || !isDataOwnerGenerationCurrent(owner)) return;
-  memory.recentUsagePending = true;
-  const previousIds = memory.recentUsageIds;
-  let ids: string[] = [];
-  try {
-    ({ ids } = await window.electronAPI.ghosts.recentUsage());
-  } catch {
-    // An unavailable local history is equivalent to an empty history.
-  }
-  // A live push that arrived during the read is more recent than this reply.
-  if (isDataOwnerGenerationCurrent(owner) && memory.recentUsageIds === previousIds) {
-    memory.recentUsageIds = ids;
-  }
-  memory.recentUsagePending = false;
 }
 
 export function mergePluginSnapshot(previous: PluginMarketSnapshot | null, next: PluginMarketSnapshot, renewIcons = false) {

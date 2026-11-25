@@ -776,7 +776,6 @@ import {
 import {
   forgetGhostRecentUsage,
   loadGhostRecentIds,
-  loadGhostRecentIdsAsync,
   markGhostRecentlyUsed,
   relocateGhostRecentUsage,
 } from './ghostRecentUsageStore.js';
@@ -10823,19 +10822,18 @@ export function registerGhostIpc(): void {
     }
   });
 
-  // 最近使用是 Plugin 页已安装区的排序元数据，由 Main 读取当前账号的历史。
-  ipcMain.handle('ghosts:recent-usage', async (event) => {
-    assertTrustedAppRendererEvent(event);
-    if (isAppSessionBoundaryPending()) return { ids: [] };
-    const ownerStamp = getActiveDataOwnerPushStamp();
+  // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入
+  // publisher-owned manifest；同步读保证列表首帧不先按扫描序再跳成最近序。
+  ipcMain.on('ghosts:recent-usage', (event) => {
     try {
-      const ids = await loadGhostRecentIdsAsync();
-      return { ids: !isAppSessionBoundaryPending() && isGhostOwnerStampCurrent(ownerStamp) ? ids : [] };
+      event.returnValue = { ids: loadGhostRecentIds() };
     } catch (error) {
+      // 最近使用只是快捷行排序元数据，不得因配置文件损坏 /
+      // 权限异常阻断 Plugin 页首屏。main 记录后空历史降级。
       log.warn('ghost recent usage 读取失败', {
         error: error instanceof Error ? error.message : String(error),
       });
-      return { ids: [] };
+      event.returnValue = { ids: [] };
     }
   });
   ipcMain.handle('ghosts:mark-used', (event, id: unknown) => {

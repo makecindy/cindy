@@ -122,18 +122,18 @@ it('reuses the prewarmed plugin module on the first visit', async () => {
   expect(importPage).toHaveBeenCalledOnce();
 });
 
-it('shares a single intent load and shows a rejected import only after navigating', async () => {
+it('shares an unfinished intent load and shows its error in the active navigation', async () => {
   const { module, importPage, preloadPluginPage, open } = renderRoute();
   expect(importPage).not.toHaveBeenCalled();
   preloadPluginPage();
   preloadPluginPage();
   expect(importPage).toHaveBeenCalledTimes(1);
-  await act(async () => { module.reject(new Error('fixture chunk load failed')); });
   expect(screen.queryByText('appError.title')).toBeNull();
   expect(screen.getByText('Old task')).toBeTruthy();
   const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
   try {
     await open();
+    await act(async () => { module.reject(new Error('fixture chunk load failed')); });
     expect(screen.getByText('appError.title')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Plugins' }).getAttribute('aria-current')).toBe('page');
     expect(screen.queryByText('Old task')).toBeNull();
@@ -141,4 +141,21 @@ it('shares a single intent load and shows a rejected import only after navigatin
   } finally {
     consoleError.mockRestore();
   }
+});
+
+// Unit / 工程约定 §7: a rejected hover request must not poison the first click.
+// The in-flight failure case leaves navigation waiting before the rejection.
+it('retries an intent import that already failed when Plugins is clicked', async () => {
+  const { importPage, preloadPluginPage, open, resolvePage } = renderRoute();
+  importPage.mockRejectedValueOnce(new Error('fixture hover import failed'));
+  await act(async () => { preloadPluginPage(); });
+  expect(importPage).toHaveBeenCalledOnce();
+  expect(screen.getByText('Old task')).toBeTruthy();
+  expect(screen.queryByText('appError.title')).toBeNull();
+
+  await open();
+  expect(importPage).toHaveBeenCalledTimes(2);
+  await act(async () => { resolvePage(); });
+  expect(screen.getByText('Plugin page')).toBeTruthy();
+  expect(screen.queryByText('appError.title')).toBeNull();
 });

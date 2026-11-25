@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { createMemoryRouter, MemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
+import { createMemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SidebarRailNavigation, SidebarTopNav, type SidebarRailSearchOptions } from '../SidebarTopNav';
@@ -104,12 +105,30 @@ function NavigationHarness() {
   );
 }
 
+const RouteFixtureContext = createContext<ReactNode>(null);
+
+function RouteFixture() {
+  return useContext(RouteFixtureContext);
+}
+
+function SidebarTestRouter({ initialEntries, children }: { initialEntries: string[]; children: ReactNode }) {
+  const [router] = useState(() => createMemoryRouter(
+    [{ path: '*', element: <RouteFixture /> }],
+    { initialEntries },
+  ));
+  return (
+    <RouteFixtureContext.Provider value={children}>
+      <RouterProvider router={router} />
+    </RouteFixtureContext.Provider>
+  );
+}
+
 function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: string }) {
   return (
     <MainViewHistoryProvider key={owner}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <SidebarTestRouter initialEntries={[initialPath]}>
         <NavigationHarness />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>
   );
 }
@@ -168,11 +187,11 @@ describe('Retirement attention across sidebar navigation placements', () => {
       }
       const ui = () => (
         <MainViewHistoryProvider>
-          <MemoryRouter initialEntries={['/cc-agent/session-1']}>
+          <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
             {placement.startsWith('rail')
               ? <SidebarRailNavigation renderSearch={() => null} />
               : <SidebarTopNav />}
-          </MemoryRouter>
+          </SidebarTestRouter>
         </MainViewHistoryProvider>
       );
       const view = render(ui());
@@ -456,9 +475,9 @@ describe('Sidebar navigation rows and More', () => {
   it('renders nothing in the rail slot other features borrow', () => {
     // Teammates used to lend other features' rails a tile here; the task rail's
     // CollapsedView owns that entry now.
-    const view = render(<MainViewHistoryProvider><MemoryRouter initialEntries={['/plugins']}>
+    const view = render(<MainViewHistoryProvider><SidebarTestRouter initialEntries={['/plugins']}>
       <SidebarTopNav section="rail" />
-    </MemoryRouter></MainViewHistoryProvider>);
+    </SidebarTestRouter></MainViewHistoryProvider>);
     expect(view.container.childElementCount).toBe(0);
   });
 
@@ -507,7 +526,7 @@ describe('Sidebar navigation rows and More', () => {
       );
     }
     function PersistentRouter({ owner }: { owner: string }) {
-      return <MemoryRouter initialEntries={[oldPath]}><OwnerRouter owner={owner} /></MemoryRouter>;
+      return <SidebarTestRouter initialEntries={[oldPath]}><OwnerRouter owner={owner} /></SidebarTestRouter>;
     }
     const view = render(<PersistentRouter owner="one" />);
     view.rerender(<PersistentRouter owner="two" />);
@@ -554,9 +573,9 @@ describe('Narrow rail navigation', () => {
   }
   const renderRail = (props: { forceSearch?: boolean } = {}) => render(
     <MainViewHistoryProvider>
-      <MemoryRouter initialEntries={['/cc-agent/session-1']}>
+      <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
         <RailHarness {...props} />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>,
   );
   const openMore = () => {
@@ -664,9 +683,9 @@ describe('Plugins joining the sidebar', () => {
   const NEWCOMER: MainViewMock = { ghostId: 'newcomer', instanceId: 'newcomer', title: 'Newcomer', icon: 'globe', manifest: { name: 'Newcomer' } };
   const renderNav = () => render(
     <MainViewHistoryProvider>
-      <MemoryRouter initialEntries={['/cc-agent']}>
+      <SidebarTestRouter initialEntries={['/cc-agent']}>
         <SidebarTopNav section="all" />
-      </MemoryRouter>
+      </SidebarTestRouter>
     </MainViewHistoryProvider>,
   );
   const openMore = (name: string | RegExp = /sidebar\.navigation\.more/) => {
@@ -690,9 +709,9 @@ describe('Plugins joining the sidebar', () => {
     mainViewsMock.sidebarVisible = [SITES, NEWCOMER];
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Newcomer' })).toBeNull();
@@ -718,9 +737,9 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-1';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.getByRole('button', { name: '站点' })).toBeTruthy();
@@ -734,9 +753,9 @@ describe('Plugins joining the sidebar', () => {
     mainViewsMock.sidebarVisible = [NEWCOMER];
     render(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarRailNavigation renderSearch={() => null} />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Newcomer' })).toBeNull();
@@ -753,9 +772,9 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-2';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'sidebar.tabs.plugins' })).toBeNull();
@@ -785,9 +804,9 @@ describe('Plugins joining the sidebar', () => {
     authMock.owner = 'owner-2';
     view.rerender(
       <MainViewHistoryProvider>
-        <MemoryRouter initialEntries={['/cc-agent']}>
+        <SidebarTestRouter initialEntries={['/cc-agent']}>
           <SidebarTopNav section="all" />
-        </MemoryRouter>
+        </SidebarTestRouter>
       </MainViewHistoryProvider>,
     );
     expect((screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }) as HTMLInputElement).checked)

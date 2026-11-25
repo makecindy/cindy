@@ -1539,13 +1539,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       (): import('../shared/homePluginRecommendations').HomePluginRecommendationsSnapshot =>
         ipcRenderer.sendSync('ghosts:recommendations'),
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
-    recentUsage: async (): Promise<{ ids: string[] }> => {
-      const result = await ipcRenderer.invoke('ghosts:recent-usage') as { ids?: unknown } | null;
-      return {
-        ids: Array.isArray(result?.ids)
-          ? result.ids.filter((id): id is string => typeof id === 'string')
-          : [],
-      };
+    recentUsageSync: (): { ids: string[] } => {
+      try {
+        const result = ipcRenderer.sendSync('ghosts:recent-usage') as { ids?: unknown } | null;
+        return {
+          ids: Array.isArray(result?.ids)
+            ? result.ids.filter((id): id is string => typeof id === 'string')
+            : [],
+        };
+      } catch {
+        // MRU 是非关键展示数据；main 不可用 /旧版无 channel 时首屏按空历史渲染。
+        return { ids: [] };
+      }
     },
     markUsed: (id: string): Promise<{ ids: string[] }> =>
       ipcRenderer.invoke('ghosts:mark-used', id),

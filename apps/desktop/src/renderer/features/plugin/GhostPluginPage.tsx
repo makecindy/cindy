@@ -12,7 +12,7 @@ import { featureRetirementById, type FeatureRetirement } from '../../../shared/f
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
 import { PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, refreshLocalPluginRecentUsage, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
 import { marketDetailAccessRejected, marketDetailCacheFor, retainMarketDetailIcon, marketItemSummary } from './lib/marketDetailCache';
 /**
@@ -56,7 +56,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAuth } from '@/contexts/AuthContext';
-import { isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { readInstalledGhostsSnapshot, useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -855,13 +855,9 @@ function LocalPluginCatalogSource({
       scopeDir === null ? globallyEnabled : globallyEnabled && !projectDisabled.has(id),
     [projectDisabled, scopeDir],
   );
-  // 进页时固定最近使用顺序。晚到的读取和推送只备给下一次，不移动眼前的行。
-  const [recentUsageAtEntry, setRecentUsageAtEntry] = useState(() => ({
-    memory: catalogMemory, active, ids: catalogMemory.recentUsageIds,
-  }));
-  if (recentUsageAtEntry.memory !== catalogMemory || recentUsageAtEntry.active !== active) {
-    setRecentUsageAtEntry({ memory: catalogMemory, active, ids: catalogMemory.recentUsageIds });
-  }
+  const [recentGhostIds, setRecentGhostIds] = useState(
+    () => window.electronAPI.ghosts.recentUsageSync().ids,
+  );
   useEffect(() => window.electronAPI.ghosts.onWorkdirPrefsChanged?.((policy, ownerStamp) => {
     if (!scopeDirRef.current || !isDataOwnerPushCurrent(ownerStamp)) return;
     if (scopeKeyRef.current === undefined) { handlePickScope(scopeDirRef.current); return; }
@@ -883,17 +879,13 @@ function LocalPluginCatalogSource({
       }),
     [],
   );
-  useEffect(() => {
-    if (!active) return;
-    const owner = { dataOwnerId, generation: dataOwnerGeneration };
-    const unsubscribe = window.electronAPI.ghosts.onRecentUsageChanged(({ ids }, ownerStamp) => {
-      if (isDataOwnerGenerationCurrent(owner) && isDataOwnerPushCurrent(ownerStamp)) {
-        catalogMemory.recentUsageIds = ids;
-      }
-    });
-    void refreshLocalPluginRecentUsage(catalogMemory, owner);
-    return unsubscribe;
-  }, [active, catalogMemory, dataOwnerId, dataOwnerGeneration]);
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onRecentUsageChanged(({ ids }) => {
+        setRecentGhostIds(ids);
+      }),
+    [],
+  );
   useEffect(() => {
     legacyRecoveryStatusRequestRef.current += 1;
     legacyRecoveryRetryRequestRef.current += 1;
@@ -1032,7 +1024,11 @@ function LocalPluginCatalogSource({
         ? 'all'
         : originFilter;
 
-  // 未读通知优先；最近使用沿用进页时的顺序。
+  // ── 已安装区排序:未读通知(新→旧) → 最近使用 → 基础序,实时计算 ──
+  // 反应式而非冻结快照:排序信号变化即重排。安全边界——`markUsed` 只在对话里
+  // 触发(ChatInput),插件页自身不打点,所以「最近使用」的变化只发生在离开本页
+  // 之后,回到页面即已重排,不会在用户眼皮下洗牌;后台到达的未读通知冒头则正是
+  // 目的所在。切账号/模式时 recentGhostIds 与未读表都会随 owner 快照整体作废。
   // marketUpdate 刻意不作排序键——更新已有统一横幅兜底,可被折叠。
   const unreadEntries = useGhostUnreadEntries();
   const unreadAtById = useMemo(
@@ -1042,10 +1038,10 @@ function LocalPluginCatalogSource({
   const displayInstalledItems = useMemo(
     () =>
       sortInstalledForDisplay(searchedInstalledItems, {
-        recentIds: recentUsageAtEntry.ids,
+        recentIds: recentGhostIds,
         unreadAtById,
       }),
-    [searchedInstalledItems, recentUsageAtEntry.ids, unreadAtById],
+    [searchedInstalledItems, recentGhostIds, unreadAtById],
   );
   const primaryInstalledItems = useMemo(
     () => displayInstalledItems.slice(0, installedLimit),
