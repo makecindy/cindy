@@ -5137,7 +5137,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       }
       let goalSetError: string | null = null;
       try {
-        await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
+        await maker.goal.set({
+          sessionId: result.sessionId,
+          objective: input.objective,
+          persistInitialTitle: true,
+          ...(input.limits ? { limits: input.limits } : {}),
+        });
       } catch (goalErr) {
         goalSetError = humanizeRemoteError(goalErr);
       }

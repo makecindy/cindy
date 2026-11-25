@@ -144,7 +144,11 @@ describe('new task /goal page callback', () => {
     await h.run();
     expect(h.bindings.setGoalError).toHaveBeenLastCalledWith(null);
     expect(h.bindings.maker.createSession).toHaveBeenCalledOnce();
-    expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({ sessionId: 'new-goal-task', objective: 'target' });
+    expect(h.bindings.maker.goal.set).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'new-goal-task',
+      objective: 'target',
+      persistInitialTitle: true,
+    });
     expect(h.bindings.router.replace).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ sessionId: 'new-goal-task' }) }));
     expect(h.bindings.createMessageSession).not.toHaveBeenCalled();
   });

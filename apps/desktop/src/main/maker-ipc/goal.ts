@@ -124,7 +124,12 @@ export function registerGoalHandlers(): void {
     }
     const controller = await requireGoalController();
     try {
-      await controller.setGoal({ sessionId, objective, ...(limits ? { limits } : {}) });
+      await controller.setGoal({
+        sessionId,
+        objective,
+        ...(limits ? { limits } : {}),
+        ...(obj.persistInitialTitle === true ? { persistInitialTitle: true } : {}),
+      });
     } catch (err) {
       throwGoalControllerIpcError(err);
     }

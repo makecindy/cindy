@@ -843,6 +843,7 @@ export interface MobileMakerTransport {
       sessionId: string;
       objective: string;
       limits?: MobileGoalLimitsInput;
+      persistInitialTitle?: true;
     }): Promise<void>;
     clear(sessionId: string): Promise<void>;
     getStatus(sessionId: string): Promise<MobileGoalStatusPayload | null>;
