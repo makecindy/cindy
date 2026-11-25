@@ -28,6 +28,7 @@ class CindySelectionMenuModule : Module() {
     val view: WeakReference<TextView>,
     val previous: ActionMode.Callback?,
     val callback: ActionMode.Callback,
+    var activeMode: ActionMode? = null,
   )
   private val bindings = mutableMapOf<String, Binding>()
 
@@ -72,6 +73,7 @@ class CindySelectionMenuModule : Module() {
 
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
           if (previous?.onCreateActionMode(mode, menu) == false) return false
+          bindings[registration]?.activeMode = mode
           addActions(menu)
           return true
         }
@@ -102,6 +104,7 @@ class CindySelectionMenuModule : Module() {
         }
 
         override fun onDestroyActionMode(mode: ActionMode) {
+          bindings[registration]?.let { if (it.activeMode === mode) it.activeMode = null }
           previous?.onDestroyActionMode(mode)
         }
 
@@ -125,6 +128,9 @@ class CindySelectionMenuModule : Module() {
   }
 
   private fun restore(binding: Binding) {
+    // A retained React history can hide without detaching its TextView. Finish
+    // the platform selection while its callback still owns the action mode.
+    binding.activeMode?.finish()
     val view = binding.view.get() ?: return
     if (view.customSelectionActionModeCallback === binding.callback) {
       view.customSelectionActionModeCallback = binding.previous

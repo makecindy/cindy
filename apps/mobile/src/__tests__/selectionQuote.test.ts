@@ -9,6 +9,7 @@ import {
   sliceRenderedSelection,
 } from '@/session/selectionQuote';
 import { SelectionMenuText } from '@/session/SelectionMenuText';
+import { MessageHistoryActive } from '@/session/messageHistoryActivity';
 
 const bridge = vi.hoisted(() => ({
   attach: vi.fn(async () => {}),
@@ -152,6 +153,30 @@ describe('SelectionMenuText', () => {
   it('leaves the native system menu alone in a read-only host', () => {
     mount(null);
     expect(bridge.attach).not.toHaveBeenCalled();
+  });
+
+  // Unit: a retained history blurs without unmounting its TextView. The native
+  // binding must be released on blur and restored when the same history returns.
+  it('releases the retained history selection binding while the text stays mounted', () => {
+    const ctx = { commitQuote: vi.fn() };
+    const root = mount(ctx);
+    const render = (active: boolean) => act(() => root.render(
+      createElement(MessageHistoryActive.Provider, { value: active },
+        createElement(SelectionQuoteContext.Provider, { value: ctx },
+          createElement(SelectionMenuText, { selectable: true }, 'rendered message'))),
+    ));
+    render(true);
+    // Keep the same native text node across the active-to-inactive transition.
+    act(() => document.querySelector('span')!.click());
+    const text = document.querySelector('span');
+    const registration = (bridge.attach.mock.calls.at(-1) as unknown as [number, string])[1];
+    bridge.detach.mockClear();
+    render(false);
+    expect(document.querySelector('span')).toBe(text);
+    expect(bridge.detach).toHaveBeenCalledExactlyOnceWith(registration);
+    expect(bridge.listeners.size).toBe(0);
+    render(true);
+    expect(bridge.listeners.size).toBe(1);
   });
 
   // Production entry: SelectionMenuText must offer quote/side-chat once selection
