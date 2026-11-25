@@ -46,6 +46,7 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export type ToolDiffSegment =
   | {
@@ -286,7 +287,7 @@ export function ToolPayloadLightbox({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 9999,
+        zIndex: Z_INDEX_LAYERS.fullscreen,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',

@@ -530,6 +530,25 @@ function providerRoutingContext(
   };
 }
 
+it('boots a Worker with the selected group route and leaves the first dispatch receipt on that Worker', async () => {
+  const { deps } = createDeps({
+    modelGroupStart: {
+      prepare: vi.fn(async () => ({
+        token: 'group-receipt',
+        route: { agentKind: 'cc' as const, model: 'claude-sonnet-4-6', providerId: 'xd', agentDeviceId: null },
+      })),
+    },
+  });
+  const result = await createOrcaWorkerCreationService(deps).createWorker({
+    leadSessionId: 'lead-1', role: 'developer', label: 'developer-1',
+    agent: 'codex', model: 'gpt-5.5', effort: 'low', modelGroup: 'coding',
+  });
+  expect(result).toMatchObject({ ok: true, resolved: { agent: 'claude-code', model: 'claude-sonnet-4-6', effort: 'high' } });
+  expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+    id: WORKER_SESSION_ID, agentKind: 'claude-code', model: 'claude-sonnet-4-6', modelGroupStart: 'group-receipt',
+  }));
+});
+
 function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
   const calls: string[] = [];
   const ids = ['worker-1'];
@@ -654,8 +673,8 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
 
 /**
  * 插件引擎 Worker（docs/plans/acp-plugin-bridge.md 第二期「协作」）：经真实 createWorker 入口建出 agentKind=acp 的
- * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机、不用 worktree。
- * 缺口：此前没有任何用例覆盖 acp 分支，接线错了会静默建成 Claude Code Worker 或带上 worktree 才报错。
+ * Worker 任务，按插件自己的准入定模型与权限，不读内置模型目录；只在本机运行，worktree 与内置 Worker 相同。
+ * 缺口：此前没有任何用例覆盖 acp 分支，接线错了会静默建成 Claude Code Worker，或 worktree 没检出就在基础仓库里跑。
  * 最小失败输入：agent=acp + provider_id；再分别带 worktree / execution_device_id / SSH Lead / 已停用的引擎。tier：unit。
  */
 describe('plugin engine Worker', () => {
@@ -680,8 +699,28 @@ describe('plugin engine Worker', () => {
     expect(deps.addOrUpdateWorker).toHaveBeenCalled();
   });
 
+  // 2026-11-25 用户要求插件引擎与内置引擎一样能用 worktree：Worker 在检出好的目录里启动，并登记归属。
+  it('checks out the requested worktree and starts the plugin engine Worker inside it', async () => {
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admitted(),
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+      discardWorkerWorktree: vi.fn(async () => undefined),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
+      worktree: { sourceBranch: 'feature' },
+    });
+    expect(result).toMatchObject({
+      ok: true, workingDir: '/repo/.cindy-worktrees/worker',
+      worktree: { path: '/repo/.cindy-worktrees/worker', branch: 'cindy/worker' },
+    });
+    expect(deps.createWorkerWorktree).toHaveBeenCalledWith(WORKER_SESSION_ID, 'C:\\repo', 'feature');
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, workingDir: '/repo/.cindy-worktrees/worker',
+    }));
+  });
+
   it.each([
-    { name: 'a worktree', params: { worktree: { sourceBranch: 'main' } }, lead: {} },
     { name: 'another computer', params: { executionDeviceId: 'desk-b' }, lead: {} },
     { name: 'an SSH Lead', params: {}, lead: { remoteHostId: 'box' } },
   ])('refuses $name before starting anything', async ({ params, lead }) => {
@@ -690,9 +729,6 @@ describe('plugin engine Worker', () => {
     const { deps, service } = createDeps({
       admitPluginEngineWorker: admit,
       getLeadSessionRow: vi.fn(async () => ({ ...base!, ...lead })),
-      // A host that can make worktrees: the refusal must come from the plugin-engine rule itself.
-      createWorkerWorktree: vi.fn(async () => { throw new Error('must not create a worktree'); }),
-      discardWorkerWorktree: vi.fn(async () => undefined),
     });
     const result = await service.createWorker({
       leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER, ...params,

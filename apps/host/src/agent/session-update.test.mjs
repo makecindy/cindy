@@ -61,7 +61,7 @@ const VIEWS = ['prov-a', 'prov-b'].map(id => ({ id, connected: true, agents: ['c
   routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(WINDOWS).map(model) } }));
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
-async function fixture(t) {
+async function fixture(t, opts = {}) {
   // The development build refuses to migrate what it takes for the official shared profile
   // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
   const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
@@ -138,6 +138,7 @@ async function fixture(t) {
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
     move: sessionMove.move,
+    ...(opts.onSoftDelete ? { onSoftDelete: opts.onSoftDelete } : {}),
   });
   const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0, workDir = root } = {}) => {
     await storage.create({ id, title: 'Window fixture', agentKind, model, workDir, providerId: 'prov-a' });
@@ -410,10 +411,9 @@ test('window budget: with a restart waiting on the task, the budget is saved wit
   f.runtime('budget-restart');
   t.after(() => { appliedContextWindowBudgets.delete('budget-restart'); pendingSessionContextWindowBudgetReconciles.delete('budget-restart'); });
   let restart;
-  await withSendToSessionLock('budget-restart', async () => {
-    // A restart registers its fence, then waits for the lock /sessions/update holds (as main.ts wraps it).
+  await f.update('budget-restart', { contextWindowBudget: 100_000 }, undefined, () => {
+    // The profile check runs after /sessions/update acquires the route lock.
     restart = withSessionRestartLock('budget-restart', async () => { await f.closeRuntime('budget-restart'); });
-    await f.update('budget-restart', { contextWindowBudget: 100_000 });
   });
   await restart;
   assert.equal(readSessionContextWindowBudget('budget-restart'), 100_000, 'the budget is saved');
@@ -776,6 +776,22 @@ test('move: an idle Codex task moves to a project; its runtime is closed, and th
   assert.ok((await listRecentWorkdirs()).find(entry => entry.path === storedDir(to))?.lastUsedAt > new Date(1_000).toISOString());
 });
 
+// L338, unit: preserve the executor cleanup for cold Pi/Codex tasks even when Maker
+// has already released its live session but executor bindings can still exist.
+test('move: cold Pi and Codex tasks still release their executor state', async t => {
+  const f = await fixture(t);
+  for (const agentKind of ['pi', 'codex']) {
+    const id = 'cold-' + agentKind;
+    const from = moveDir(f, id + '-from');
+    const to = moveDir(f, id + '-to');
+    await f.task(id, { agentKind, workDir: from });
+    assert.equal(f.liveSession(id), undefined);
+    await f.update(id, { workingDir: to });
+    assert.equal((await f.row(id)).workingDir, storedDir(to));
+    assert.equal(f.closedByExecutor.filter(closed => closed === id).length, 1);
+  }
+});
+
 test('move: a Claude task\'s transcripts follow it, and the resume id the move persisted is in the row and the published patch', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const claudeConfig = path.join(f.root, 'claude-config');
@@ -788,13 +804,27 @@ test('move: a Claude task\'s transcripts follow it, and the resume id the move p
   const liveId = '22222222-2222-4222-8222-222222222222';
   await f.task('move-claude', { workDir: from });
   await f.database.drizzle.update(sessions).set({ sdkSessionId: storedId }).where(eq(sessions.id, 'move-claude'));
+  const coldId = 'cold-claude';
+  await f.task(coldId, { workDir: from });
+  await f.update(coldId, { workingDir: to });
+  assert.equal((await f.row(coldId)).workingDir, storedDir(to));
+  assert.deepEqual(f.closedByExecutor, [], 'no idle runtime close is needed for a cold task');
   // The live runtime is ahead of the row (a fork whose rows are not written yet); its transcript is on disk.
   const session = f.runtime('move-claude');
   session.sdkSessionId = liveId;
   const source = path.join(claudeConfig, 'projects', 'old-key');
   mkdirSync(source, { recursive: true });
   writeFileSync(path.join(source, `${liveId}.jsonl`), '{"type":"user"}\n');
-  await f.update('move-claude', { workingDir: `${to}/`, workspaceKind: 'project' });
+  const patch = { workingDir: `${to}/`, workspaceKind: 'project' };
+  let running = true;
+  session.isTurnRunning = () => running;
+  const before = await f.row('move-claude');
+  await assert.rejects(f.update('move-claude', patch), error => error.code === 'PRECONDITION_FAILED');
+  assert.deepEqual(await f.row('move-claude'), before);
+  assert.equal(f.liveSession('move-claude'), session);
+  assert.deepEqual(readdirSync(path.join(claudeConfig, 'projects')), ['old-key']);
+  running = false;
+  await f.update('move-claude', patch);
   const row = await f.row('move-claude');
   assert.deepEqual([row.workingDir, row.sdkSessionId], [storedDir(to), liveId]);
   assert.deepEqual(movedEvents(f, 'move-claude').at(-1).patch,
@@ -879,15 +909,21 @@ test('move: the worktree registry decides ownership; no registry is no binding, 
 test('move: a task in a turn, or whose turn is still settling, is not moved and its runtime is not closed', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const to = moveDir(f, 'busy-to');
-  for (const [id, state] of [['busy-turn', 'in a turn'], ['busy-settling', 'settling']]) {
-    await f.task(id, { agentKind: 'pi', workDir: moveDir(f, `${id}-from`) });
-    f.runtime(id, { agentKind: 'pi', inTurn: state === 'in a turn' });
+  for (const [id, agentKind, state] of [
+    ['busy-claude', 'claude-code', 'in a turn'],
+    ['busy-codex', 'codex', 'in a turn'],
+    ['busy-turn', 'pi', 'in a turn'],
+    ['busy-settling', 'pi', 'settling'],
+  ]) {
+    await f.task(id, { agentKind, workDir: moveDir(f, `${id}-from`) });
+    const session = f.runtime(id, { agentKind, inTurn: state === 'in a turn' });
     if (state === 'settling') f.settling.add(id);
     const before = await f.row(id);
     await assert.rejects(f.update(id, { workingDir: to, workspaceKind: 'project' }),
       error => error.code === 'PRECONDITION_FAILED' && error.message.includes('运行中的任务不能移动'), state);
     assert.deepEqual(await f.row(id), before, state);
-    assert.ok(f.liveSession(id), `${state}: the runtime is kept`);
+    assert.equal(f.liveSession(id), session, `${state}: the same runtime is kept`);
+    assert.deepEqual(movedEvents(f, id), []);
   }
   assert.deepEqual(f.closedByExecutor, []);
 });
@@ -1023,4 +1059,52 @@ test('send: only a registered project becomes recent and is announced; an unchan
   await touch('sent', 6_000);
   assert.equal(f.events.length, events, 'nothing is announced once the owner changed during the send');
   assert.equal((await f.row('sent')).userSendAt, 6_000, 'the entry\'s own database is still stamped');
+});
+
+test('archive and soft-delete use terminal transaction, guard deleteTarget, stop runtime and broadcast unpin summary', async t => {
+  const softDeleted = [];
+  const f = await fixture(t, { onSoftDelete: async id => { softDeleted.push(id); } });
+  await f.task('arch');
+  await f.database.drizzle.update(sessions).set({ pinnedAt: 1000, summary: 'pinned', snoozedUntil: Date.now() + 60_000, snoozedAt: 1000 }).where(eq(sessions.id, 'arch'));
+  const archived = await f.update('arch', { status: 'archived', pinnedAt: null });
+  assert.equal(archived.status, 'archived');
+  assert.equal(archived.pinnedAt, null);
+  assert.equal(archived.snoozedUntil, null);
+  assert.equal((await f.row('arch')).summary, null);
+  assert.equal(movedEvents(f, 'arch').at(-1).patch.summary, null);
+  await f.task('del');
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'del', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('del', { status: 'deleted' }, { deleteTarget: 'side-chat' }), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('del')).status, 'active');
+  const deleted = await f.update('del', { status: 'deleted' }, { deleteTarget: 'task' });
+  assert.equal(deleted.status, 'deleted');
+  assert.equal((await f.row('del')).status, 'deleted');
+  assert.equal((await f.row('child')).status, 'deleted');
+  assert.deepEqual(softDeleted, ['del', 'child']);
+  await assert.rejects(f.update('del', { status: 'archived', pinnedAt: null }), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('del')).status, 'deleted');
+});
+
+// PR 12316, SQLite integration: a queued send needs the route lock while parent cleanup
+// fails. Both committed deletions must reach observers and the child must still stop.
+test('soft delete releases the route lock before draining and isolates parent cleanup failure', { timeout: 10_000 }, async t => {
+  const cleaned = [];
+  let releaseSend;
+  const sendReady = new Promise(resolve => { releaseSend = resolve; });
+  const send = sendReady.then(() => withSendToSessionLock('parent', async () => {}));
+  const f = await fixture(t, { onSoftDelete: async id => {
+    cleaned.push(id);
+    if (id === 'parent') {
+      releaseSend();
+      await send;
+      throw new Error('parent abort failed');
+    }
+  } });
+  await f.task('parent');
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'parent', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('parent', { status: 'deleted' }), /parent abort failed/);
+  assert.deepEqual(cleaned.sort(), ['child', 'parent']);
+  for (const id of cleaned) assert.equal(movedEvents(f, id).at(-1).status, 'deleted');
 });

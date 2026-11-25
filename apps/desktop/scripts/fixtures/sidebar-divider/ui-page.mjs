@@ -38,6 +38,7 @@ export default {
     peek: { about: 'Peek drawer border shares its frosted backing' },
   },
   async check(page, ui) {
+    const isMac = ui.platform === 'darwin';
     const aside = page.locator('aside.bg-sidebar');
     const bounds = await aside.boundingBox();
     assert.ok(bounds);
@@ -45,8 +46,8 @@ export default {
       const main = page.locator('[data-empty-route]');
       const header = main.locator('header');
       const content = page.locator('[data-full-page-content]');
-      const direct = ui.case === 'empty-direct';
-      await page.waitForFunction((direct) => !!document.querySelector('[data-empty-route] header') === direct, direct);
+      const hasHeader = !isMac || ui.case === 'empty-direct';
+      await page.waitForFunction((visible) => !!document.querySelector('[data-empty-route] header') === visible, hasHeader);
       const checkTop = async (hasHeader) => {
         const mainBox = await main.boundingBox();
         const contentBox = await content.boundingBox();
@@ -54,8 +55,8 @@ export default {
         assert.equal(contentBox.y - mainBox.y, hasHeader ? 46 : 0,
           'Full-page content only leaves a row when its own pane overlaps chrome');
       };
-      await checkTop(direct);
-      if (!direct) {
+      await checkTop(hasHeader);
+      if (!hasHeader) {
         await page.locator('[data-toggle-owner]').click();
         await header.waitFor();
         await checkTop(true);
@@ -72,15 +73,16 @@ export default {
       const button = page.locator('[data-task-list-mode-toggle]');
       await button.waitFor();
       const zoom = ui.case === 'inbox-normal' ? 1 : ui.case === 'inbox-zoom-70' ? 0.7 : 0.5;
-      const expectedWidth = ui.case === 'inbox-normal' ? 260 :
-        ui.case === 'inbox-wide' ? 360 : zoom === 0.7 ? 280 : 324;
+      const expectedWidth = ui.case === 'inbox-wide' ? 360 :
+        !isMac || zoom === 1 ? 260 : zoom === 0.7 ? 280 : 324;
       const assertFirstRow = async (width, factor) => {
         const sidebar = await aside.boundingBox();
         const box = await button.boundingBox();
         assert.ok(sidebar && box);
         assert.ok(box.y < sidebar.y + 46, 'Inbox belongs in the first chrome row');
         assert.equal(sidebar.width, width);
-        assert.ok(box.x >= sidebar.x + 78 / factor + 124 + 8 &&
+        const clusterInset = isMac ? 78 / factor : 8;
+        assert.ok(box.x >= sidebar.x + clusterInset + 124 + 8 &&
           box.x + box.width <= sidebar.x + width - 8,
           'Inbox stays to the right of all four chrome buttons and clear of the resize handle');
       };
@@ -93,25 +95,28 @@ export default {
         const handle = await aside.locator('[class*="group/handle"]').boundingBox();
         assert.ok(handle);
         const startX = handle.x + 2;
+        const inwardWidth = isMac ? expectedWidth : expectedWidth - 20;
         await page.mouse.move(startX, 180);
         await page.mouse.down();
         await page.mouse.move(startX - 20, 180);
-        await assertFirstRow(expectedWidth, zoom);
+        await assertFirstRow(inwardWidth, zoom);
         await page.mouse.up();
-        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '260');
-        await page.mouse.move(startX, 180);
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), isMac ? '260' : String(inwardWidth));
+        const outwardStart = startX + inwardWidth - expectedWidth;
+        const outwardWidth = inwardWidth + 22;
+        await page.mouse.move(outwardStart, 180);
         await page.mouse.down();
-        await page.mouse.move(startX + 22, 180);
-        await assertFirstRow(expectedWidth + 22, zoom);
+        await page.mouse.move(outwardStart + 22, 180);
+        await assertFirstRow(outwardWidth, zoom);
         await page.mouse.up();
-        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '346');
-        await page.mouse.move(startX + 22, 180);
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), String(outwardWidth));
+        await page.mouse.move(outwardStart + 22, 180);
         await page.mouse.down();
         await page.mouse.move(90, 180);
         await button.waitFor({ state: 'detached' });
         await page.mouse.up();
         assert.equal((await aside.boundingBox()).width, 78);
-        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), '346');
+        assert.equal(await page.evaluate(() => localStorage.getItem('sidebar-width')), String(outwardWidth));
         return;
       }
       await button.click();

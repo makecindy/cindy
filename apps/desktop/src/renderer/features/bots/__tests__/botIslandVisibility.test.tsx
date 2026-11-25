@@ -26,7 +26,9 @@ vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
     return <div data-testid="chat" data-readonly={String(!!readOnly)} />;
   },
 }));
-vi.mock('../botReadState', () => ({ getBotLastReadAt: () => null, markBotRead: vi.fn() }));
+// The chat gate reads the real roster store, whose hydration also uses these two.
+vi.mock('../botReadState', () => ({ getBotLastReadAt: () => null, markBotRead: vi.fn(),
+  getBotLastReadAtMap: () => ({}), seedMissingBotReadState: vi.fn() }));
 
 import { useBotIslandVisibleSession } from '../useBotIslandVisibleSession';
 import { BotSessionView } from '../BotSessionView';

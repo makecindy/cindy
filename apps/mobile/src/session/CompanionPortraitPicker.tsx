@@ -6,7 +6,7 @@ import { Text } from '@/components/AppText';
 import { iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import portraits from '../../assets/bot-presets/portrait-gallery.json';
 
-// Bundled copies of the desktop picker: Cindy first, followed by the same sixteen portraits.
+// Bundled copies of the desktop picker: Cindy first, followed by the same twenty-five portraits.
 export const randomCompanionPortrait = () => portraits[Math.floor(Math.random() * portraits.length)];
 export function CompanionPortraitPicker({ value, onChange, disabled = false }: { value: string; onChange(value: string): void; disabled?: boolean }) {
   const { t } = useTranslation(); const { colors } = useTheme(); const styles = useThemedStyles(makeStyles);

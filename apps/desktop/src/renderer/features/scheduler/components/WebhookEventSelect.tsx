@@ -1,12 +1,12 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, Plus, X } from 'lucide-react';
+import { ChevronDown, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Collapse } from '@/components/ui/collapse';
-import { cn } from '@/lib/utils';
 import { parseWebhookEventSelection, webhookEventOptions } from '../lib/webhookEventOptions';
 
 interface Props {
@@ -121,7 +121,7 @@ export function WebhookEventSelect({ preset, value, onChange }: Props) {
               sideOffset={8}
               collisionPadding={16}
               aria-label={t(`${key}.choose`)}
-              className="z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
+              className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] min-w-0 max-w-[calc(100vw-32px)] flex-col gap-3 p-3"
             >
               <Input
                 size="md"
@@ -286,25 +286,9 @@ function Choice({
   label?: string;
 }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={onClick}
-      className="flex min-h-9 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'flex size-4 shrink-0 items-center justify-center rounded border border-[var(--border-default)]',
-          checked &&
-            'border-[var(--text-primary)] bg-[var(--text-primary)] text-[var(--surface-elevated)]',
-        )}
-      >
-        {checked && <Check size={12} strokeWidth={2} />}
-      </span>
+    <label className="flex min-h-9 w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-left text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]">
+      <Checkbox checked={checked} aria-label={label} onChange={onClick} />
       <span className="min-w-0 break-words">{children}</span>
-    </button>
+    </label>
   );
 }

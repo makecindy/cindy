@@ -10,6 +10,7 @@
   "telegramHookWsUrl": "wss://telegram-hook.cindy.app",
   "xHookWsUrl": "wss://x-hook.cindy.app",
   "feishuHookWsUrl": "wss://feishu-hook.cindy.app",
+  "discordHookWsUrl": "wss://telegram-hook.cindy.app/discord",
   "slackHookWsUrl": "wss://slack-hook.cindy.app",
   "webhookApiBaseUrl": "https://webhook.cindy.com.cn",
   "websiteUrl": "https://cindy.com.cn",

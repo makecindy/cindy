@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi } from 'vitest';
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 import type { MobileUsageWidgetSnapshot as Snapshot, MobileUsageWidgetSource as Source } from '@cindy/maker-shared/device-link-contract';
 import { UsageQuotaColumns } from '@/widgets/UsageQuotaColumns';
 import { DrawerUsage, UsageDashboard } from '@/widgets/UsageDashboard';
@@ -28,7 +29,8 @@ vi.mock('react-native-svg', () => ({
   // The well and the liquid are both Rects; the liquid is drawn last.
   Rect: ({ fill, fillOpacity }: { fill?: string; fillOpacity?: number }) => <b data-liquid={fill} data-liquid-opacity={fillOpacity} />,
   // The hatch of a reserve tube is a plain Path; only the opening liquid has animated props.
-  Path: ({ animatedProps }: { animatedProps?: { d: string } }) => animatedProps ? <u data-opening={animatedProps.d} /> : null,
+  Path: ({ animatedProps, d }: { animatedProps?: { d: string }; d?: string }) =>
+    animatedProps ? <u data-opening={animatedProps.d} /> : d ? <u data-path={d} /> : null,
   Defs: () => null, ClipPath: () => null, LinearGradient: () => null, Stop: () => null,
 }));
 vi.mock('lucide-react-native', () => ({ ChevronRight: () => null }));
@@ -44,6 +46,7 @@ vi.mock('react-native', () => ({
 // Every theme color resolves to its own token name, so assertions can name colors.
 vi.mock('@/theme', () => ({
   useTheme: () => ({ colors: new Proxy({}, { get: (_, token) => token }) }), useThemedStyles: () => ({}),
+  iconSize: { sm: 16 },
 }));
 
 const subscription: Source = { id: 'plan', kind: 'subscription', name: 'Claude Pro', logo: null,
@@ -94,6 +97,17 @@ describe('widget quota countdowns', () => {
   function columns(source: Source, compact = false) {
     return renderToStaticMarkup(<UsageQuotaColumns sources={[source]} strings={strings} compact={compact} />);
   }
+  // Unit / #12735: a legacy ACP source in the real quota panel has the brand
+  // name but no logo. Ordinary subscriptions with that label keep their mark.
+  it('draws the Antigravity arch for a legacy plugin quota source', () => {
+    const legacy = { ...subscription, name: 'Antigravity', monogram: 'A' };
+    expect(columns({ ...legacy, id: 'remote:computer:acp-plugin:legacy:cli' })).toContain(ANTIGRAVITY_MARK_PATH);
+    const detail = { title: 'Antigravity', plan: '', rings: [], bigValue: '68', bigUnit: '%',
+      bigColor: null, bigCompact: false, bigCaption: '', legend: [] };
+    expect(columns({ ...legacy, id: 'remote:computer:acp-plugin:legacy:cli', name: 'Office Mac', detail }))
+      .toContain(ANTIGRAVITY_MARK_PATH);
+    expect(columns(legacy)).not.toContain(ANTIGRAVITY_MARK_PATH);
+  });
   it('uses the reset deadline in both layouts and rounds compact durations to the largest unit', () => {
     const source = { ...subscription, when: 'old time', resetsAtMs: Date.now() + 36 * 3_600_000 + 30_000 };
     expect(columns(source)).toContain('Resets in 1d 12h');
@@ -208,5 +222,19 @@ describe('opening motion', () => {
       expect(drawer.textContent).toContain('68%');
       expect(drawer.textContent).toContain('257K');
     }
+  });
+});
+
+// Drawer card before any reading (unit, rendered DrawerUsage). The card used to say "no account
+// quota" for both cases; a computer that is too old must instead say that updating it helps.
+describe('drawer without a reading', () => {
+  it.each([
+    [null, 'devices.usageWaiting'],
+    [{ kind: 'update-desktop', receivedAtMs: 1 }, 'devices.usageUpdateDesktop'],
+  ])('explains what brings the usage in (%o)', (state, copy) => {
+    sync.state = state;
+    const html = renderToStaticMarkup(<DrawerUsage onOpen={() => {}} />);
+    expect(html).toContain(copy);
+    expect(html).not.toContain('session.menu.usage.quotaUnavailable');
   });
 });

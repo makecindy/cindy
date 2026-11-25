@@ -37,6 +37,7 @@ import {
   crossRegionWithdraw,
   getCrossRegionReceived,
   isCrossRegionShareListUnavailable,
+  hasUnconfirmedCrossRegionReceivedList,
   getMembershipConfirmedCrossRegionReceivedRegions,
   getUnavailableCrossRegionShareIds,
   getConfirmedCrossRegionRegionBudgets,
@@ -45,6 +46,7 @@ import {
   isCrossRegionReceivedReady,
   ensureCrossRegionReceivedForFavorites,
   refreshProviderShareCrossRegion,
+  retryCrossRegionReceivedForShare,
   restoreCrossRegionReceivedForRemoteGroup,
   waitForCrossRegionReceived,
   startProviderShareCrossRegion,
@@ -60,6 +62,7 @@ const RECEIVED_POLL_MS = 60_000;
 const RECEIVED_IDLE_POLL_MS = 5 * 60_000;
 const REQUEST_POLL_MS = 4_000;
 const ACCESS_FAILURE_REFRESH_MS = 10_000;
+const CATALOG_RETRY_INTERVAL_MS = 10_000;
 const GROUP_LOCAL_REFRESH_INTERVAL_MS = 30_000;
 const SHARE_DEVICE_PREFIX = 'share:';
 // 任务记录里的电脑 id 最长 128 个字符(含 `share:` 前缀)。
@@ -95,6 +98,8 @@ interface Runtime {
   authorityIncomplete: boolean;
   listConfirmed: boolean;
   listUnavailable: boolean;
+  /** Shares explicitly left during this runtime keep the original removed verdict. */
+  leftShareIds: Set<string>;
   /** The service retains member IDs for the same share/account across approvals. */
   knownMembers: Map<string, string>;
   departureScope: string;
@@ -106,6 +111,7 @@ interface Runtime {
   pending: Map<string, PendingRequest>;
   groupRecoveries: Set<Promise<void>>;
   nextGroupLocalRefreshAt: number;
+  nextCatalogRetryAt: number;
   stopped: boolean;
 }
 
@@ -134,6 +140,11 @@ let receivedFingerprint = '';
  * catalog push to every controlling computer is only sent on a real change.
  */
 let notifiedFingerprint = '';
+let receivedChangeSequence = 0;
+
+export function providerShareReceivedChangeSequence(): number {
+  return receivedChangeSequence;
+}
 let viewAnchorSequence = 0;
 let leftMemberSequence = 0;
 type DepartureReceipts = { ids: Set<string>; revision: number };
@@ -216,6 +227,8 @@ function invalidateShareMetadataTarget(share: ProviderShareReceived, keepDenialN
 function emitChanged(rt: Runtime): Promise<void> | void {
   if (!current(rt)) return;
   const received = allReceived(rt);
+  // Leaving removes the row before the next list; seeing it again means a newer membership.
+  for (const share of received) rt.leftShareIds.delete(share.shareId);
   const permissionFingerprint = JSON.stringify(received.map(share => [share.shareId, share.memberId,
     share.providerId, share.hostDeviceId, share.status]));
   if (permissionFingerprint !== metadataPermissionFingerprint) {
@@ -261,6 +274,7 @@ function emitChanged(rt: Runtime): Promise<void> | void {
     if (!current(rt)) return;
     const changed = notified !== notifiedFingerprint;
     notifiedFingerprint = notified;
+    receivedChangeSequence++;
     rt.events.changed(received.filter(share => !unavailable.has(share.shareId)), changed);
     for (const listener of receivedListeners) {
       try {
@@ -349,10 +363,17 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
   if (!share) {
+    const removed = () => new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    // Definite answers first: the user left it on this computer, or a local setting hides this older share.
+    if (runtime?.leftShareIds.has(shareId)) throw removed();
     let hidden = false;
     try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
     if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
-    throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+    if (!runtime || !current(runtime) || !runtime.listConfirmed || runtime.unavailable.has(shareId)
+      || hasUnconfirmedCrossRegionReceivedList()) {
+      throw new Error(PROVIDER_SHARE_UNAVAILABLE_MESSAGE);
+    }
+    throw removed();
   }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
   return providerShareHostPeer(share.shareId, share.hostDeviceId);
@@ -362,13 +383,40 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
  * 同上，但刚启动、已收到的分享还没拉到时先等第一次拉取，不把「还没加载」当成「已删除」。
  * 未登录或设备互联未就绪时按连不上处理。
  */
-export async function resolveRemoteAgentTargetWhenReady(agentDeviceId: string): Promise<string> {
+export async function resolveRemoteAgentTargetWhenReady(
+  agentDeviceId: string,
+  options?: { retryDirectory: true },
+): Promise<string> {
   const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
   if (!shareId) return agentDeviceId;
   const rt = runtime;
   if (!rt || !current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing is not ready');
-  if (rt.unavailable.has(shareId) || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId))
-    || isCrossRegionShareListUnavailable(shareId)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
+  const localUnavailable = () => rt.unavailable.has(shareId)
+    || (rt.listUnavailable && rt.received.some(share => share.shareId === shareId));
+  if (options?.retryDirectory) {
+    if (rt.leftShareIds.has(shareId) || (!localUnavailable() && !isCrossRegionShareListUnavailable(shareId))) {
+      return resolveRemoteAgentTarget(agentDeviceId);
+    }
+    if (localUnavailable()) {
+      // This directory is shared by all local shares. Join a poll/manual read
+      // already in flight and limit retries across targets and windows.
+      if (rt.refreshing) {
+        await rt.refreshing;
+      } else if (performance.now() >= rt.nextCatalogRetryAt) {
+        rt.nextCatalogRetryAt = performance.now() + CATALOG_RETRY_INTERVAL_MS;
+        await refreshReceivedShares('catalog-retry');
+      }
+    } else if (isCrossRegionShareListUnavailable(shareId)) {
+      await retryCrossRegionReceivedForShare(shareId);
+    }
+    if (!current(rt)) throw new Error('[DEVICE_LINK_NOT_CONNECTED] provider sharing account changed');
+    if (!localUnavailable() && !isCrossRegionShareListUnavailable(shareId)) {
+      return resolveRemoteAgentTarget(agentDeviceId);
+    }
+  }
+  if (localUnavailable() || isCrossRegionShareListUnavailable(shareId)) {
+    throw new Error('[DEVICE_LINK_NOT_CONNECTED] shared provider service is unavailable');
+  }
   // An already loaded share remains usable even while the other region is unavailable.
   if (findReceivedShare(shareId)) return resolveRemoteAgentTarget(agentDeviceId);
   if (rt.fetchedAt === 0) await refreshReceivedShares('resolve');
@@ -437,6 +485,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     unavailable: new Set(), authorityIncomplete: false,
     listConfirmed: false,
     listUnavailable: false,
+    leftShareIds: new Set(),
     knownMembers: new Map(),
     departureScope: JSON.stringify([getActiveAuthRealm(), scope]),
     timer: null,
@@ -444,6 +493,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     pending: new Map(),
     groupRecoveries: new Set(),
     nextGroupLocalRefreshAt: 0,
+    nextCatalogRetryAt: 0,
     stopped: false,
   };
   runtime = rt;
@@ -515,6 +565,13 @@ export function refreshReceivedShares(reason: string): Promise<void> {
           if (current(rt)) {
             const wasConfirmed = rt.listConfirmed;
             rt.listConfirmed = false;
+            const failure = error as { status?: number; statusCode?: number; code?: string; retryAt?: number } | null | undefined;
+            if ((failure?.statusCode ?? failure?.status) === 429 || failure?.code === 'RATE_LIMITED') {
+              const retryAt = failure?.retryAt;
+              const delay = typeof retryAt === 'number' && Number.isFinite(retryAt)
+                ? Math.max(0, retryAt - Date.now()) : RECEIVED_POLL_MS;
+              rt.nextCatalogRetryAt = Math.max(rt.nextCatalogRetryAt, performance.now() + delay);
+            }
             log.warn('received shares refresh failed', { reason, error: error instanceof Error ? error.message : String(error) });
             if (isAuthoritativeShareListDenial(error)) {
               // Retire the directory immediately without interpreting the
@@ -620,6 +677,7 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
   const unavailable = valid ? [...unavailableShareIds(rt)] : [];
   return {
     ownerStamp,
+    receivedChangeSequence,
     confirmedRegions: loadedRegions,
     received,
     ...(departure ? { leftMemberIds: [...departure.ids], leftMemberRevision: departure.revision } : {}),
@@ -748,6 +806,7 @@ export async function leaveProviderShare(memberId: string): Promise<void> {
   const noteLeft = () => {
     if (left) return;
     left = true;
+    if (shareId) rt.leftShareIds.add(shareId);
     const ids = pendingDepartures.get(rt.departureScope)?.ids ?? new Set<string>();
     ids.add(memberId);
     pendingDepartures.set(rt.departureScope, { ids, revision: ++leftMemberSequence });

@@ -18,6 +18,7 @@ export interface GithubAppStatus {
   repositories?: string[];
   unavailable?: string[];
   /** Optional capabilities; absent on older servers. */
+  userAuthorization?: boolean;
   prSubscriptions?: boolean;
   dailyQuotaExempt?: boolean;
   automationSubscriptions?: boolean;
@@ -31,7 +32,9 @@ export function followedGithubPrs(schedules: readonly Schedule[]): string[] {
   const urls = new Set<string>();
   for (const schedule of schedules) {
     if (schedule.status !== 'active') continue;
-    for (const trigger of schedulePrTriggers(schedule)) urls.add(trigger.url);
+    for (const trigger of schedulePrTriggers(schedule)) {
+      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(trigger.url)) urls.add(trigger.url);
+    }
   }
   return [...urls];
 }
