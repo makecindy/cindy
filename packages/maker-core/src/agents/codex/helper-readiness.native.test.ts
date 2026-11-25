@@ -13,6 +13,7 @@ import { expect, it, vi } from 'vitest';
 import { CodexAgent } from './index.js';
 import { AppServerHost } from './app-server/host.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
+import type { CodexMcpServerStatusListResponse } from './app-server/protocol.js';
 import { readCodexThreadMcpServerTools, readCodexThreadMcpServersTools } from './mcp-server-tools.js';
 import type { AgentDeps, AgentSessionHandle } from '../base-agent.js';
 import type { AgentEvent } from '../../types/events.js';
@@ -25,8 +26,11 @@ const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 // discovery, creating new clients for every server. Existing startup/recovery
 // fixtures did not distinguish that probe from the thread's live connection.
 // Native tier: production reader -> real app-server -> synthetic HTTP MCP.
-// Minimal failure: a healthy helper and a sibling that stalls only new discovery.
-it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP clients or probing a sibling', async () => {
+// Minimal failure: helper + connected/failed plugin gateway, beside a sibling
+// that stalls only new discovery. The healthy-only fixture did not establish
+// the sibling's connected state or exercise an independently failed gateway.
+it.skipIf(!binaryPath).each(['connected', 'failed'] as const)(
+  'reads helper and %s gateway readiness without starting fresh MCP clients or probing a sibling', async gatewayState => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-helper-status-'));
   const initializes = { helper: 0, gateway: 0, sibling: 0 };
   let stallNewSibling = false;
@@ -40,6 +44,7 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     if (q.method === 'initialize') {
       initializes[name]++;
       if (name === 'sibling' && stallNewSibling) return;
+      if (name === 'gateway' && gatewayState === 'failed') { res.writeHead(503).end(); return; }
     }
     if (q.id === undefined) { res.writeHead(202).end(); return; }
     const result = q.method === 'initialize'
@@ -61,16 +66,20 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
           ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
         extraArgs: ['-c', `mcp_servers.cindy_helper.url="${endpoint}/helper"`,
           '-c', `mcp_servers.cindy.url="${endpoint}/gateway"`,
+          '-c', 'mcp_servers.cindy.startup_timeout_sec=2',
           '-c', `mcp_servers.cindy_docs.url="${endpoint}/docs"`,
           '-c', 'mcp_servers.cindy_docs.startup_timeout_sec=2'],
       }),
     });
     const started = await host.request<{ thread: { id: string } }>('thread/start', { cwd: root });
     const threadId = started.thread.id;
-    // Establish the control: all actual thread clients are ready before the
+    // Establish the control: actual thread clients have settled before the
     // sibling becomes unavailable to new discovery. No model request is sent.
     for (const serverName of ['cindy_helper', 'cindy', 'cindy_docs']) {
-      await host.request('mcpServerStatus/list', { threadId, serverName, detail: 'toolsAndAuthOnly' });
+      const status = await host.request<CodexMcpServerStatusListResponse>('mcpServerStatus/list',
+        { threadId, serverName, detail: 'toolsAndAuthOnly' });
+      expect(status.data.find(server => server.name === serverName)?.runtimeStatus)
+        .toBe(serverName === 'cindy' ? gatewayState : 'connected');
     }
     const before = { ...initializes };
     expect(before.helper).toBeGreaterThan(0);
@@ -83,15 +92,17 @@ it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP client
     );
     expect(report.state).toBe('connected');
     expect(report.tools.map(tool => tool.name).sort()).toEqual(['call_tool', 'list_tools']);
-    expect(initializes).toEqual(before);
-    // #12646: the single-service control cannot catch unscoped discovery
-    // when two gateways are requested. The slow sibling is outside that set.
+    const requests = vi.fn((method: string, params: Record<string, unknown>, options: { timeoutMs: number }) =>
+      activeHost.request(method, params, options));
     const reports = await readCodexThreadMcpServersTools(
-      (method, params, options) => activeHost.request(method, params, options), threadId, ['cindy_helper', 'cindy'], 500,
+      requests as Parameters<typeof readCodexThreadMcpServersTools>[0], threadId, ['cindy_helper', 'cindy'], 500,
     );
-    expect([...reports].map(([name, result]) => [name, result.state])).toEqual([
-      ['cindy_helper', 'connected'], ['cindy', 'connected'],
-    ]);
+    const batchHelper = reports.get('cindy_helper');
+    expect(batchHelper?.state).toBe(report.state);
+    expect(batchHelper?.tools.toSorted((a, b) => a.name.localeCompare(b.name)))
+      .toEqual(report.tools.toSorted((a, b) => a.name.localeCompare(b.name)));
+    expect(reports.get('cindy')?.state).toBe(gatewayState);
+    expect(requests.mock.calls.map(([, params]) => params.serverName)).toEqual(['cindy_helper', 'cindy']);
     expect(initializes).toEqual(before);
   } finally {
     await stopWindowsFixtureTree(nativePid);
