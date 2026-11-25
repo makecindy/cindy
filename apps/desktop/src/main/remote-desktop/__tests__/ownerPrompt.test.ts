@@ -209,6 +209,36 @@ it('keeps the panel blocked for the residual request after a forced kill', async
   expect(released).toBe(true);
 });
 
+// Codex P1: 取消发生在助手已经调过 `evaluatePolicy`、Main 还没读到 `ready owner-prompt` 时，
+// `started` 仍是 false。若按「没挂上就不等残留」放行，被强制杀掉的执行文件会把系统验证框留在
+// 屏幕上约十秒，而这一轮 Computer Use 的第一次截屏已经获准。残留判据改成「是否真的杀过」。
+it('keeps the panel blocked when a cancelled start had to be killed', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const panels: Promise<void>[] = [];
+  const cancel = new AbortController();
+  const starting = watchOwnerPrompt(
+    () => {},
+    'remove the privacy screen',
+    { resolveBinary: async () => '/helper', spawn: () => f.child as unknown as ChildProcessWithoutNullStreams },
+    cancel.signal,
+    undefined,
+    (gone) => panels.push(gone),
+  );
+  await Promise.resolve();
+  cancel.abort();
+  await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(f.child.kill).toHaveBeenCalledOnce();
+  let released = false;
+  void panels[0].then(() => { released = true; });
+  f.child.emit('close');
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(released).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(released).toBe(true);
+});
+
 it('never spawns the helper when the cover is released while the binary is still resolving', async () => {
   // A cold build of the native helper takes seconds; the task can end inside that wait.
   let releaseBinary: (binary: string) => void = () => {};

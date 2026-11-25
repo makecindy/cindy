@@ -872,7 +872,20 @@ function handoffWindowDeps(): Pick<
   };
 }
 
+/**
+ * A region selection draws the frozen desktop one level above our masks, so a viewer's
+ * stream would show that snapshot over the privacy cover. Away covers already end the
+ * selection (`closeTransientOverlays`); the in-session mask needs the same hook, wired by
+ * Main instead of imported here to keep this module free of the screenshot surface.
+ */
+let closeTransientOverlays: () => void = () => {};
+export function setRemoteDesktopTransientOverlayCloser(close: () => void): void {
+  closeTransientOverlays = close;
+}
+
 async function setPrivacyScreen(enabled: boolean, current: () => boolean): Promise<void> {
+  // The viewer asked for the cover: nothing may sit above it, including an open selection.
+  if (enabled) closeTransientOverlays();
   if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
     nativeOverlay = true;
     await privacyScreen.set(true, current);

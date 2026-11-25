@@ -84,12 +84,15 @@ async function watchOwner(
   let done = false;
   /** The helper ran `context.invalidate()` itself, so its panel is gone when it exits. */
   let stopped = false;
-  let stopRequested = false;
+  /** We had to kill the helper instead of letting it run `context.invalidate()`. */
+  let killIssued = false;
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
   const panelGone = closed.then(() => {
     // Killing the helper never runs `context.invalidate()`: the system draws the request
-    // for about ten more seconds, and a capture taken now would still show it.
-    if (!started || !stopRequested || stopped) return;
+    // for about ten more seconds, and a capture taken now would still show it. Whether Main
+    // parsed the greeting must not matter: a start cancelled after the helper reached
+    // `evaluatePolicy` but before `ready owner-prompt` was read still leaves the request up.
+    if (!killIssued || stopped) return;
     return new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, KILLED_PROMPT_RESIDUAL_MS);
       (timer as { unref?: () => void }).unref?.();
@@ -133,9 +136,11 @@ async function watchOwner(
   // takes a prompt down uses this protocol, also while the helper is still starting
   // (`stop` waits in the pipe until it reads stdin).
   const requestStop = () => {
-    stopRequested = true;
     child.stdin.write('stop\n');
-    const kill = setTimeout(() => child.kill(), 2000);
+    const kill = setTimeout(() => {
+      killIssued = true;
+      child.kill();
+    }, 2000);
     kill.unref();
     return () => clearTimeout(kill);
   };

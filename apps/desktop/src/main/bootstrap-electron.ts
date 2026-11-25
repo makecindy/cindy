@@ -672,6 +672,7 @@ import {
   registerRemoteDesktopIpc,
   remoteDesktop,
   setAwayCaptureExcludedWindows,
+  setRemoteDesktopTransientOverlayCloser,
   startLinuxAwayCover,
 } from './remote-desktop';
 import { registerLocalNetworkIpc } from './local-network/index.js';
@@ -5391,7 +5392,8 @@ const registerIpcHandlers = () => {
       // helper keeps ownership until it closes (inputHost waits up to 1.5 s for that).
       remoteInUse: () => remoteDesktop.hasActiveLease || remoteDesktop.leaseJustEnded(),
       // The frozen selection overlay is one level above the masks: end it with the cover so
-      // a captured desktop is not left on screen while the owner is away.
+      // a captured desktop is not left on screen while the owner is away. The in-session
+      // remote mask raises the same overlay, so it gets the same hook.
       closeTransientOverlays: closeActiveRegionScreenshot,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
@@ -10987,6 +10989,9 @@ app.on('ready', async () => {
   registerProviderGroupReshare();
   registerFilePeerIpc();
   registerLocalNetworkIpc();
+  // A remote viewer's privacy mask covers the whole screen; the frozen region-selection
+  // overlay would stay above it and be captured, so end it with the mask.
+  setRemoteDesktopTransientOverlayCloser(closeActiveRegionScreenshot);
   registerRemoteDesktopIpc(
     isGlobalVoiceInputOverlaySender,
     { name: getControllerName, revoke: revokeController },

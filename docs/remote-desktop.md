@@ -177,19 +177,25 @@ clicks still turn into the lock. The check lives only as long as the cover holds
 display awake, and goes when the cover locks, ends, or enters the lock-failed state; it
 never unlocks a locked Mac.
 
-The check is not the standard authentication alert. The helper owns a transparent panel
-(`sharingType = .none`) above the cover and puts an `LAAuthenticationView`
+The check is not the standard authentication alert. In `--owner-prompt-app` the bundled
+helper (`Contents/CindyOwnerPrompt.app`, its executable sealed as
+`Resources/tools/remote-desktop/cindy-owner-prompt` for the caller check) owns a 32 pt
+borderless panel (`sharingType = .none`) and puts an `LAAuthenticationView`
 (`LocalAuthenticationEmbeddedUI`) in it, so the system keeps drawing and judging the
-prompt. The panel sits at 2% opacity — invisible on purpose (2026-11-20 user request) —
-because a system that refuses to verify against a control the user cannot see is the only
-thing that can stop it: an instant `LAErrorNotInteractive` / `systemCancel` re-mounts the
-same control at full opacity and asks once more. Cindy still only chooses size and place.
-The helper prints its panel's window number (`panel <id>`) before the versioned greeting
-and Main feeds that id into the away-capture exclusion filter alongside the mask ids:
-modern ScreenCaptureKit ignores `sharingType` and only excludes ids the caller supplies,
-so a viewer whose lease starts between two away-guard ticks still gets frames without
-the control. The id is dropped from the filter the moment the panel closes, since window
-numbers are reused. Mounting is still suppressed while any
+prompt. The panel is at full opacity but sits behind the cover, so the owner never sees
+it; the control's own `isVisibleToUser` gate is answered in the helper, because a control
+the cover hides would otherwise pause the sensor. Cindy only chooses size and place. A
+macOS that refuses the embedded control (`notInteractive` / `systemCancel` within the
+first 2.5 s) answers `fallback`, and Main retries once with the system sheet
+(`--owner-prompt`), which the cover hides but cannot keep out of a capture.
+
+The helper orders its panel front and then prints the window number (`panel <id>`); Main
+feeds that id into the away-capture exclusion filter alongside the mask ids, since modern
+ScreenCaptureKit ignores `sharingType` and only excludes ids the caller supplies. The id
+is only known once the panel exists, so a lease that starts in that instant — or the
+sheet fallback, which has no id at all — can still put the control in an early frame
+until the next away-guard tick takes the prompt down. The id is dropped from the filter
+the moment the panel closes, since window numbers are reused. Mounting is still suppressed while any
 Computer Use session is open (`openComputerUseSessions` / `onComputerUseSessionsChange`)
 and while a remote viewer holds a lease (`RemoteDesktopController.hasActiveLease`,
 including the few seconds after one ends, when native input may still be landing):
