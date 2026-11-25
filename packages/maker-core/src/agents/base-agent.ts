@@ -7,6 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import type { ChildProcess } from 'node:child_process';
 import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
@@ -465,6 +466,8 @@ export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
 
 export interface CodexAppServerProcessRegistration {
   pid: number;
+  /** The local spawn handle used by the owning runtime at shutdown. */
+  child?: ChildProcess;
   role: CodexAppServerProcessRole;
 }
 
@@ -2570,6 +2573,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }

@@ -9182,6 +9182,7 @@
         "taskWorkdirBoundary": "工作目录沿用目标电脑的设置，请在目标电脑修改。",
         "configurationLoading": "正在读取设置…",
         "configurationReadFailed": "未能读取设置。",
+        "settingsWriteUnconfirmed": "未能确认保存结果。请刷新设置，核对后再决定是否重试。",
         "refreshConfiguration": "刷新设置",
         "enableBeforeConfigure": "插件已停用，请先打开上方开关，再进行配置。",
         "settingsPageUnavailable": "请在 {{device}} 的 Cindy 中打开此插件的设置页，目标电脑当前版本暂不支持远程显示。",
@@ -15513,6 +15514,7 @@
       "modelCatalogUnconfirmed": "暂时无法确认模型列表。已保留你选择的模型，可刷新模型列表后重试。",
       "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "modelRebuildRetry": "指令未发送。请在电脑端打开自动化，选择「立即运行」重试。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
       "prCheck_dns": "{{device}} 无法解析 {{host}}。如果问题持续，请检查这台设备的网络或 DNS。已连续失败 {{failures}} 次。从 {{retry}} 起，定时检查可自动重试。",
@@ -17880,7 +17882,7 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动化未运行，因为绑定的任务使用了插件引擎。请将任务切回内置引擎，或将自动化改绑到使用内置引擎的任务。",
+      "boundPluginEngineRecovery": "自动化未运行。绑定到插件引擎任务的自动化会沿用任务自己的模型，并在这台电脑上运行。如果自动化里指定了模型，请先去掉，再重新运行。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",
@@ -18232,6 +18234,7 @@
       "timingMode": {
         "cron": "Cron 定时",
         "interval": "相对间隔",
+        "label": "计时方式",
         "cronHint": "按照日历时钟的固定时间槽位运行。",
         "intervalHint": "上一次运行完成后，再等待指定时长。",
         "intervalUnsupportedHint": "当前精确间隔会原样保留；选择分钟或小时预设后才会替换。",

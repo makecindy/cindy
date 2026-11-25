@@ -706,13 +706,8 @@ export function installQuitHandler(timeoutMs = 2000): void {
     }
     const destroyed = webContents.isDestroyed();
     const id = destroyed ? windowContentsIds.get(webContents) : webContents.id;
-    if (id === undefined) {
-      // Guest、popup 及已经正常关闭的窗口无需触发应用级退出。
-      log.warn(
-        `destroyed contents render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
+    // A late notification can outlive the window; getType() then throws in Electron.
+    if (id === undefined) return;
     if (isGhostSandboxWebContentsId(id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
