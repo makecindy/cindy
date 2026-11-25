@@ -417,14 +417,15 @@ export interface UnifiedModelPanelProps {
  */
 export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
   const { t } = useTranslation();
+  const placeholder = useRef<HTMLDivElement>(null);
   const ready = useInitialPaint(() => {
     const localRows = props.providers.reduce((count, provider) =>
       count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
     const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
     return localRows + remoteRows >= 80;
-  });
+  }, placeholder);
   if (!ready) {
-    return <div role="status" className="flex flex-1 items-center justify-center px-3 py-6 text-13 text-[var(--text-tertiary)]">
+    return <div ref={placeholder} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center px-3 text-13 text-[var(--text-tertiary)]">
       {t('newChat.modelSelector.trigger.loading')}
     </div>;
   }
