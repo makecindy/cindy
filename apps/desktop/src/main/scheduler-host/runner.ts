@@ -727,6 +727,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
   }
 
+  /**
+   * A run in a linked plugin-engine task is a new paid turn: admit the task's current engine and
+   * model by the same rule as a new task (engine provided and available, model not turned off).
+   * Only checks; the task keeps its own model selection.
+   */
+  private admitBoundPluginEngine(route: { providerId: string | null; model?: string; effort?: string | null }): void {
+    if (!this.deps.admitPluginEngine) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    try {
+      this.deps.admitPluginEngine({ providerId: route.providerId, model: route.model?.trim() || 'default', effort: route.effort ?? null });
+    } catch (error) {
+      throw new Error(`schedule route unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** Re-read the execution computer's catalog after dispatch preparation. */
   private async assertRemoteDispatchRoute(
     agentDeviceId: string | null | undefined,
@@ -1491,6 +1505,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
           if (!this.deps.schedulerQueue) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+          this.admitBoundPluginEngine({ providerId: row.providerId ?? null, model: meta?.model, effort: meta?.effort });
           if (this.deps.schedulerQueue.hasQueuedPrompt(sessionId, schedule.id)) {
             return await this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
           }
@@ -3767,11 +3782,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
   ): Promise<void> {
     if (schedule.targetSessionId && (baseline.agentKind === 'acp' || live.agentKind === 'acp')) {
       // A linked plugin-engine task runs this message on its own engine and model,
-      // which its send path just started; recheck only that it still qualifies.
+      // which its send path just started; recheck that it still qualifies and that the
+      // engine and model are still allowed (they may have been turned off while queued).
       const refusal = live.agentKind === 'acp'
         ? boundPluginEngineRefusal(schedule, live)
         : new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
       if (refusal) throw new QueuedRouteDisabledError(refusal.message);
+      // The saved task row is the fallback when the in-memory provider store has no entry.
+      const providerId = getSessionProvider(live.id)
+        ?? (await this.runtime.getSessionRowSnapshot(live.id))?.providerId ?? baseline.providerId;
+      try {
+        this.admitBoundPluginEngine({ providerId, model: live.model ?? baseline.model, effort: baseline.effort });
+      } catch (error) {
+        throw new QueuedRouteDisabledError(error instanceof Error ? error.message : String(error));
+      }
       return;
     }
     if (baseline.agentKind === 'acp' || live.agentKind === 'acp') {
