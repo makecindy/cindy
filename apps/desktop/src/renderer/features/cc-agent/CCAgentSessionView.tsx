@@ -6044,9 +6044,9 @@ function CCAgentSessionContent({
   const bannerErrorClientId = showLiveErrorBanner
     ? getLiveErrorMessageClientId({ error, errorPersistId, historyLoaded, messages, disposedErrorPersistId })
     : showErrorTailBanner ? errorTailMsg!.clientId : null;
-  const savedInterruptedReply = session?.agentKind === 'pi'
-    && !remoteDeviceId && !session.remoteHostId && !session.agentDeviceId
-    && bannerErrorClientId !== null
+  const isLocalPiExecution = session?.agentKind === 'pi'
+    && rightSidebarDeviceLinkDeviceId === null && !session.remoteHostId && !session.agentDeviceId;
+  const savedInterruptedReply = isLocalPiExecution && bannerErrorClientId !== null
     && hasSavedPiInterruptedReply(messages, messages.find(message => message.clientId === bannerErrorClientId));
   const queueNotices = <>
             {/* Error display.
@@ -6251,6 +6251,7 @@ function CCAgentSessionContent({
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
       activeErrorClientId={bannerErrorClientId}
+      showSavedPiInterruptedReplies={isLocalPiExecution}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined}
       onAskInSideChat={!readOnly && sessionId && !sideChatBlockedKey

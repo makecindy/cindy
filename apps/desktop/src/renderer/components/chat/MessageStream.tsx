@@ -505,6 +505,8 @@ interface MessageStreamProps {
   messages: ChatMessage[];
   /** Exact row owned by a rendered replacement error banner; otherwise keep its history card. */
   activeErrorClientId?: string | null;
+  /** The session view confirmed that Pi runs on this computer. */
+  showSavedPiInterruptedReplies?: boolean;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
@@ -3173,6 +3175,7 @@ export function MessageStream({
   onBotReadThrough,
   messages,
   activeErrorClientId = null,
+  showSavedPiInterruptedReplies = false,
   activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -7070,7 +7073,7 @@ export function MessageStream({
                           continuationInFlightProjectionCapability
                         }
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
-                        savedInterruptedReply={agentKind === 'pi' && !remoteHostId && !ownerDeviceId && msg.role === 'error'
+                        savedInterruptedReply={showSavedPiInterruptedReplies && msg.role === 'error'
                           && hasSavedPiInterruptedReply(messages, msg)}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
