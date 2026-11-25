@@ -5,7 +5,7 @@
  * registration was retired while the reaper checked that ancestry.
  */
 import { ChildProcess } from 'node:child_process';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reapCodexToolTreesSync, type CodexProcessSampler } from '../codex-tool-tree-reaper';
 import {
   _resetCodexProcessRegistryForTests,
@@ -40,6 +40,10 @@ function processTable(
 }
 
 describe('reapCodexToolTreesSync', () => {
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+  });
+
   afterEach(() => {
     _resetCodexProcessRegistryForTests();
     Object.defineProperty(process, 'platform', { value: platform, configurable: true });
