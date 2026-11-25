@@ -102,9 +102,10 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
 - **实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库，按仓库路径加载的
-  `includeIf "gitdir:…"` 也可以只在缓存仓库里生效。所以地址在取包实际发生的仓库上下文里用
+  `includeIf "gitdir:…"` / `includeIf "onbranch:…"` 也可以只在缓存仓库或某个分支状态下生效。所以地址在取包实际发生的仓库上下文里用
   `git ls-remote --get-url` 采集（与取包同一执行环境，不联网）：
-  - clone：克隆前（无仓库）、克隆完成落位前在 staging 仓库里、克隆后（无仓库）各解析一次，三次一致才算核实。
+  - clone：克隆前（无仓库）、`git clone` 刚完成时与检出完成后（都在 staging 仓库里，前者覆盖 `includeIf "onbranch:…"`
+    这类随检出状态失效的规则）、克隆后（无仓库）各解析一次，全部一致才算核实。
   - 快进刷新：在 fetch 发生的暂存仓库里前后各解析一次。若这次地址对应的 `sourceId` 与上一版本记录的不同，
     不在旧来源的历史上快进，改走全新克隆。
   - 落位前确认检出的 HEAD 就是本次获取的目标提交（无 ref 与 `@{u}` 比，有 ref 与 `FETCH_HEAD` 比），对不上即

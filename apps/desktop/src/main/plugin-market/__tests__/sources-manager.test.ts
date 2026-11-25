@@ -905,7 +905,7 @@ describe('MarketSourceManager source identity', () => {
    * （cwd 有值即在某个仓库的上下文里解析，可模拟只对缓存仓库生效的 includeIf）；`rev-parse` 默认 HEAD 与
    * 获取目标一致，upstream() 可让上游停在别处。
    */
-  function rewritingGit(resolve: (cwd?: string) => string | null, upstream: () => string = () => 'abc123') {
+  function rewritingGit(resolve: (cwd?: string, calls?: string[][]) => string | null, upstream: () => string = () => 'abc123') {
     const calls: string[][] = [];
     const executor: GitExecutor = async (args, options) => {
       calls.push([...args]);
@@ -917,7 +917,7 @@ describe('MarketSourceManager source identity', () => {
         return { stdout: '', stderr: '' };
       }
       if (args[0] === 'ls-remote') {
-        const url = resolve(options.cwd);
+        const url = resolve(options.cwd, calls);
         if (url === null) throw new Error('fatal: could not read https://ghp_SECRET@github.com/acme/plugins.git');
         return { stdout: `${url}\n`, stderr: '' };
       }
@@ -1026,6 +1026,18 @@ describe('MarketSourceManager source identity', () => {
     // The two contexts disagree, so neither the configured nor the mirrored address is claimed.
     expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
     expect(git.calls.some((call) => call[0] === 'ls-remote')).toBe(true);
+  });
+
+  it('collects the address while the clone is still on its initial branch, not only after detaching', async () => {
+    const root = makeRoot();
+    // An includeIf "onbranch:main" rule rewrites to a mirror only while the fresh clone is on main; a pinned
+    // ref then detaches HEAD and the rule no longer applies (Codex review on PR #12731).
+    const git = rewritingGit((cwd, calls) => cwd && !calls?.some((call) => call[0] === 'checkout' && call.includes('--detach'))
+      ? 'https://mirror.example.test/tenant/plugins.git'
+      : 'https://origin.example.test/acme/plugins.git');
+    const manager = identityManager(root, git.executor);
+    await manager.addSource({ source: 'https://origin.example.test/acme/plugins.git', ref: 'v1.0.0' });
+    expect((await manager.discoverSource('hub')).sourceIdentity).toBeNull();
   });
 
   it('leaves the identity unverified when the fetch address changes around the clone', async () => {

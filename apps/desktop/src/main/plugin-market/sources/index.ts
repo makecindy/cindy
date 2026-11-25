@@ -739,17 +739,17 @@ export class MarketSourceManager {
    * 新克隆目录的取包记录。新目录里没有旧记录，写不下来只是「无法核实」，不让添加或刷新失败。
    */
   /**
-   * 克隆并记下实际取包地址。git clone 读的可能是全局配置上下文，也可能是新仓库自己的上下文（按仓库路径
-   * 加载的 `includeIf "gitdir:…"`）：克隆前（无仓库）、克隆后落位前在 staging 仓库里、克隆后（无仓库）
-   * 三次解析一致才算核实，否则只记「无法核实」。
+   * 克隆并记下实际取包地址。git clone 读的可能是全局配置上下文，也可能是新仓库自己的上下文，且仓库上下文里
+   * 的条件规则会随状态变化（`includeIf "gitdir:…"` 看仓库路径，`includeIf "onbranch:…"` 看当前分支，检出
+   * `--detach` 后即失效）。所以克隆前（无仓库）、克隆刚完成时与检出完成后（staging 仓库里）、克隆后（无仓库）
+   * 各解析一次，全部一致才算核实，否则只记「无法核实」。
    */
   private async cloneWithFetchIdentity(
     source: Extract<MarketSource, { type: 'git' }>,
     dest: string,
   ): Promise<string> {
     const executor = this.deps.gitExecutor;
-    const before = await resolveFetchUrl(source.url, executor);
-    let inRepo: string | null = null;
+    const samples: Array<string | null> = [await resolveFetchUrl(source.url, executor)];
     const revision = await cloneMarketplace(
       {
         url: source.url,
@@ -759,11 +759,12 @@ export class MarketSourceManager {
       dest,
       executor,
       async (repoDir) => {
-        inRepo = await resolveFetchUrl('origin', executor, repoDir);
+        samples.push(await resolveFetchUrl('origin', executor, repoDir));
       },
     );
-    const after = await resolveFetchUrl(source.url, executor);
-    this.recordFetchIdentity(dest, source, before && before === inRepo && before === after ? before : null, revision);
+    samples.push(await resolveFetchUrl(source.url, executor));
+    const [first] = samples;
+    this.recordFetchIdentity(dest, source, first && samples.every((sample) => sample === first) ? first : null, revision);
     return revision;
   }
 

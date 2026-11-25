@@ -4,7 +4,7 @@
  * - 缺口：sources-manager.test.ts 用 fake 执行器模拟 git，不能证明真实 git 会按 insteadOf / includeIf 改写，
  *   也不能证明上游停在祖先时 pull --ff-only 的真实行为。
  * - 最小失败输入：url.<mirror>.insteadOf 改写到另一仓库；只注入凭证的改写；只对缓存仓库路径生效的
- *   includeIf；同一配置改写到落后于缓存的仓库 B 后刷新。
+ *   includeIf；只在初始分支上生效的 onbranch 规则；同一配置改写到落后于缓存的仓库 B 后刷新。
  * - tier：git-integration（真实 git，隔离的全局配置，不联网，不读本机 git 配置）。
  */
 import { execFile } from 'node:child_process';
@@ -88,6 +88,22 @@ describe('fetch address context and refresh target with real git', () => {
     const inside = await resolveFetchUrl('origin', executor, repo);
     expect(pluginMarketRepositoryFromUrl(outside)).toBe('origin.example.test/acme/plugins');
     expect(pluginMarketRepositoryFromUrl(inside)).toBe('mirror.example.test/tenant/plugins');
+  });
+
+  it('sees an onbranch rewrite only while on that branch, so the address must be sampled before detaching', async () => {
+    const { executor, root } = isolatedGit((dir) => {
+      fs.writeFileSync(path.join(dir, 'inner.gitconfig'),
+        '[url "https://mirror.example.test/tenant/"]\n\tinsteadOf = https://origin.example.test/acme/\n');
+      return `[includeIf "onbranch:main"]\n\tpath = ${dir}/inner.gitconfig\n`;
+    });
+    const repo = path.join(root, 'repo');
+    const git = (args: string[]) => executor(args, { cwd: repo, timeoutMs: 10_000 });
+    await executor(['init', '-q', repo], { timeoutMs: 10_000 });
+    await git(['remote', 'add', 'origin', 'https://origin.example.test/acme/plugins.git']);
+    await git(['commit', '-q', '--allow-empty', '-m', 'first']);
+    expect(pluginMarketRepositoryFromUrl(await resolveFetchUrl('origin', executor, repo))).toBe('mirror.example.test/tenant/plugins');
+    await git(['checkout', '-q', '--detach']);
+    expect(pluginMarketRepositoryFromUrl(await resolveFetchUrl('origin', executor, repo))).toBe('origin.example.test/acme/plugins');
   });
 
   it('clones afresh when the rewritten repository is behind the cached commit', async () => {

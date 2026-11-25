@@ -242,16 +242,19 @@ export async function cloneMarketplace(
   destPath: string,
   executor: GitExecutor = defaultExecutor,
   /**
-   * 克隆与检出完成、落位之前，在 git 实际取包的那个仓库（staging 目录）里执行。`includeIf "gitdir:…"`
-   * 这类按仓库路径加载的规则只在这个上下文里生效，所以实际取包地址要在这里采集（见 fetchIdentity.ts）。
+   * 在 git 实际取包的那个仓库（staging 目录）里执行，用来采集实际取包地址（见 fetchIdentity.ts）：
+   * `'cloned'` 紧接 `git clone` 之后、任何 checkout 之前（取包时的分支状态，`includeIf "onbranch:…"` 这类
+   * 规则与取包时一致）；`'checked-out'` 在检出完成、落位之前（`includeIf "gitdir:…"` 与之后刷新的状态）。
+   * 调用方要求各次采集一致才记下地址。
    */
-  inspect?: (repoDir: string) => Promise<void>,
+  inspect?: (repoDir: string, phase: 'cloned' | 'checked-out') => Promise<void>,
 ): Promise<string> {
   const stagingPath = `${destPath}.staging-${crypto.randomUUID()}`;
   const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
   try {
     if (input.sparsePaths.length === 0) {
       await executor(['clone', input.url, stagingPath], { timeoutMs });
+      await inspect?.(stagingPath, 'cloned');
       if (input.ref) {
         // --branch 只支持 branch/tag;显式 checkout 同时覆盖可达的 commit SHA。
         // 必须带 --detach 消歧:`git checkout <ref>` 在 ref 不存在但仓库根恰有
@@ -265,6 +268,7 @@ export async function cloneMarketplace(
         ['clone', '--filter=blob:none', '--no-checkout', input.url, stagingPath],
         { timeoutMs },
       );
+      await inspect?.(stagingPath, 'cloned');
       // -- 终止选项解析：即使上游漏放了以 - 开头的值,也只被当作路径。
       await executor(['sparse-checkout', 'set', '--', ...input.sparsePaths], {
         cwd: stagingPath,
@@ -281,7 +285,7 @@ export async function cloneMarketplace(
         await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
       }
     }
-    await inspect?.(stagingPath);
+    await inspect?.(stagingPath, 'checked-out');
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
     // Windows 上 AV/索引器/云同步会短暂占用刚 clone 出的文件,rename 抛
     // EBUSY/EACCES/EPERM;瞬时锁短退避重试。目标是全新 UUID 路径,不存在覆盖。
