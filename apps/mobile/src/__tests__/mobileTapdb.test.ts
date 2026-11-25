@@ -106,6 +106,31 @@ describe('mobile TapDB analytics', () => {
     expect(clearNativeTapdbUser).toHaveBeenCalled();
   });
 
+  it('coalesces rapid successful payment registrations while preserving visits and retries', async () => {
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_ID', 'client-id');
+    vi.stubEnv('EXPO_PUBLIC_TAPTAP_CLIENT_TOKEN', 'client-token');
+    const tapdb = await importMobileTapdb();
+    const charge = 'pay1_' + '1'.repeat(48);
+    const usage = 'use1_' + '2'.repeat(48);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    try {
+      setTapdbUserId.mockRejectedValueOnce(new Error('registration unavailable'));
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.setTapdbUser(charge, usage);
+      expect(setTapdbUserId.mock.calls).toEqual([[charge], [usage], [charge], [usage], [usage]]);
+
+      now.mockReturnValue(60_000);
+      setTapdbUserId.mockClear();
+      await tapdb.setTapdbUser(charge, usage);
+      await tapdb.stopMobileTapdbReporting();
+      await tapdb.setTapdbUser(charge, usage);
+      expect(setTapdbUserId.mock.calls).toEqual([[charge], [usage], [charge], [usage]]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   // Standard tier: a delayed native write can overlap an account switch.
   // A login tested in isolation cannot detect binding the old retention alias after the switch.
   it('only binds the current retention alias when switching accounts during payment registration', async () => {
