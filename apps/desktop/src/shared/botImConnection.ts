@@ -13,7 +13,10 @@ export type BotImChannel = (typeof BOT_IM_CHANNELS)[number];
 
 /** Group participation identifiers shared by local IPC, remote settings and persistence. */
 export function isBotImGroupChatId(value: unknown): value is string {
-  return typeof value === 'string' && /^(?:-?\d{1,32}|(?:iMessage|any);\+;[^\r\n]{1,480})$/.test(value);
+  return (
+    typeof value === 'string' &&
+    /^(?:-?\d{1,32}|oc_[A-Za-z0-9_-]{1,128}|(?:iMessage|any);\+;[^\r\n]{1,480})$/.test(value)
+  );
 }
 
 export type BotImFeishuService = 'feishu' | 'lark';
@@ -83,9 +86,9 @@ export interface BotImConnectionRecord {
   /** 平台身份(Telegram bot id / 飞书 app id / 企业微信 bot id / 钉钉 AppKey / Discord 应用 id), 首次连上后记下, 用于专线 route key。 */
   botContextId: string | null;
   /**
-   * 群参与模式覆写(Telegram 连接): chatId → 'always' = 全响应·自主判断(每条群消息都进
-   * 专线, 伙伴用 NO_REPLY 决定插不插话)。缺省 = 仅 @ / 回复触发。与 设置 → IM 机器人 那份
-   * 个人 bot 的同名配置互不相干 —— 每条连接自己一份。
+   * 群参与模式覆写(Telegram / 飞书 / Lark / iMessage 连接): chatId → 'always' = 全响应·自主判断
+   * (每条群消息都经前置判定，必要时进专线，伙伴可用 NO_REPLY 沉默)。缺省 = 仅 @ / 回复触发。
+   * 与 设置 → IM 机器人 那份个人 bot 的同名配置互不相干 —— 每条连接自己一份。
    */
   groupActivation?: Record<string, 'always'>;
   /** An approved group can use another teammate on this same local transport. */

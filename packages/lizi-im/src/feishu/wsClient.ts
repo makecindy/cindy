@@ -87,10 +87,26 @@ function createWsState() {
     strangerNoticeAt: new Map<string, number>(),
     inboundInFlight: new Map<string, { generation: number }>(),
     seenInboundMessages: new Map<string, number>(),
+    ambientTriggerIds: new Set<string>(),
   };
 }
 /** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
 const S = () => scopeSlot(ws_SLOT, createWsState);
+const AMBIENT_TRIGGER_MAX_ENTRIES = 512;
+
+function rememberAmbientTrigger(messageId: string): void {
+  const ids = S().ambientTriggerIds;
+  ids.add(messageId);
+  if (ids.size > AMBIENT_TRIGGER_MAX_ENTRIES) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
+  }
+}
+
+/** 这条入站消息是否来自「全响应(Always)」群的未 @ 触发(表情静默 / 惰性建卡用)。 */
+export function isAmbientTrigger(messageId: string): boolean {
+  return S().ambientTriggerIds.has(messageId);
+}
 /** 非 owner 群 @ 的礼貌回应 per-user 冷却(open_id → 上次回应 ts)。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
 
@@ -168,6 +184,7 @@ function abandonInboundTurn(botAppId: string, messageId: string): void {
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
 export function resetInboundDedupeForTest(): void {
   S().seenInboundMessages.clear();
+  S().ambientTriggerIds.clear();
   resetDualDeliveryForTest();
 }
 
@@ -868,17 +885,25 @@ async function processClaimedMessage(
   let abandonUnpairedFlat: (() => void) | undefined;
   let commitTopic: (() => boolean) | undefined;
   let abandonTopic: (() => void) | undefined;
+  let isAmbient = false;
   if (isGroup) {
-    // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
-    if (!mentionsSelf(data.message?.mentions, S().botOpenId)) return;
+    const isMentioned = mentionsSelf(data.message?.mentions, S().botOpenId);
+    if (!isMentioned) {
+      // 未 @ 到本 bot: 默认「仅 @」一律丢弃; 该群显式开启「全响应(always)」时
+      // 走 ambient 路径, 由辅助模型 / 主模型决定是否插话。
+      const activation = getScope().groupActivation?.()?.[chatId] ?? 'mention';
+      if (activation !== 'always') return;
+      isAmbient = true;
+    }
     // 群里绝不 TOFU 认主(钉钉同款): 没有 owner 时群消息全丢。
     if (!ownerGuard.firstAllowed()) {
-      log.info('[feishu/wsClient] drop group mention: no owner bound yet');
+      log.info('[feishu/wsClient] drop group message: no owner bound yet');
       return;
     }
-    // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn; 对外开放的实例
-    // (伙伴自有连接)放行, 带非主人标记进业务层。
+    // 非 owner 群消息: 对外开放的实例(伙伴自有连接)放行, 带非主人标记进业务层;
+    // 未开放时, 明确 @ 给礼貌回应(per-user 冷却), ambient 静默丢弃不打扰群。
     if (!ownerGuard.check(senderOpenId) && !getScope().guests) {
+      if (isAmbient) return;
       const last = S().strangerNoticeAt.get(senderOpenId) ?? 0;
       if (Date.now() - last >= STRANGER_NOTICE_COOLDOWN_MS) {
         S().strangerNoticeAt.set(senderOpenId, Date.now());
@@ -946,8 +971,15 @@ async function processClaimedMessage(
 
   const parsed = parseIncoming(msgType, rawContent);
   const senderIsOwner = ownerGuard.check(senderOpenId);
-  // 命令永远只认主人: 对外开放时陌生人的 `/xxx` 静默丢(不可被探测, 与 Telegram 同口径)。
-  if (!senderIsOwner && /^\s*[/!]/.test(parsed.text)) {
+  // 命令永远只认主人且必须显式召唤: 陌生人命令或 ambient 路径里的命令一律静默丢弃(与 Telegram 同口径)。
+  if ((!senderIsOwner || isAmbient) && /^\s*[/!]/.test(parsed.text)) {
+    abandonUnpairedFlat?.();
+    abandonTopic?.();
+    return;
+  }
+  // 全响应(ambient)模式只处理带正文的群消息: 纯图片/文件/贴纸/卡片不触发 ambient turn,
+  // 也不下载附件或发送 unsupported 提示打扰群聊(与 Telegram 同口径)。
+  if (isAmbient && !parsed.text.trim()) {
     abandonUnpairedFlat?.();
     abandonTopic?.();
     return;
@@ -991,6 +1023,11 @@ async function processClaimedMessage(
   }
 
   // Drop entirely only when there's literally nothing to relay.
+  if (isAmbient && !text.trim()) {
+    abandonUnpairedFlat?.();
+    abandonTopic?.();
+    return;
+  }
   if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {
     abandonUnpairedFlat?.();
     abandonTopic?.();
@@ -1032,6 +1069,7 @@ async function processClaimedMessage(
     const commit = incomingThreadId ? commitTopic : commitUnpairedFlat;
     if (commit && !commit()) return;
     laneUserId = encodeLaneUserId(chatId, incomingThreadId ?? null);
+    if (isAmbient) rememberAmbientTrigger(messageId);
     outbound.pushReplyAnchor(laneUserId, messageId);
   }
 
@@ -1039,7 +1077,8 @@ async function processClaimedMessage(
   // the user-facing wording and the "skip agent for pure-unsupported" rule).
   feishuEvents.emit('message', {
     channelName: 'feishu',
-    invoked: isGroup,
+    invoked: isGroup && !isAmbient,
+    ...(isAmbient ? { ambient: true } : {}),
     senderId: laneUserId ?? senderOpenId,
     ...(!isGroup && data.message?.thread_id && data.message?.root_id
       ? { replyThread: { rootMessageId: data.message.root_id, threadId: data.message.thread_id } }

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   sendText: vi.fn(),
   uploadImage: vi.fn(),
   claimPatchableOpener: vi.fn((): string | null => null),
+  discardReplyAnchor: vi.fn(),
   resolveMediaUrl: vi.fn((): string | null => null),
 }));
 
@@ -403,5 +404,32 @@ describe('feishu streaming text', () => {
     expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
     expect(markdownContent(mocks.patchCardRaw.mock.calls[0][1])).toContain('终态正文');
     expect(mocks.recallMessage).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：Issue #12925 飞书全响应（ambient）惰性建卡与 NO_REPLY 静默收口；
+  // 覆盖主模型选择 NO_REPLY 时零发卡、零撤回、并清理未消费回复锚点；有真实回复时才建卡。unit tier。
+  it('lazy ambient handle skips card creation on NO_REPLY and discards its reply anchor', async () => {
+    const handle = await start('g/oc_chat1', undefined, { lazy: true, ambientTriggerId: 'om_amb_1' });
+    expect(mocks.sendCardRaw).not.toHaveBeenCalled();
+
+    handle.replace('NO');
+    handle.replace('NO_REPLY');
+    await handle.finalize('NO_REPLY');
+
+    expect(mocks.sendCardRaw).not.toHaveBeenCalled();
+    expect(mocks.patchCardRaw).not.toHaveBeenCalled();
+    expect(mocks.recallMessage).not.toHaveBeenCalled();
+    expect(mocks.discardReplyAnchor).toHaveBeenCalledExactlyOnceWith('g/oc_chat1', 'om_amb_1');
+  });
+
+  it('lazy ambient handle sends the final card when the model decides to reply', async () => {
+    const handle = await start('g/oc_chat1', undefined, { lazy: true, ambientTriggerId: 'om_amb_2' });
+    expect(mocks.sendCardRaw).not.toHaveBeenCalled();
+
+    await handle.finalize('这里可以补充一点');
+
+    expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
+    expect(markdownContent(mocks.sendCardRaw.mock.calls[0][1])).toBe('这里可以补充一点');
+    expect(mocks.discardReplyAnchor).not.toHaveBeenCalled();
   });
 });

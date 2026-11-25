@@ -84,6 +84,7 @@ import {
   createBotWecomIM,
 } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
+import { listFeishuKnownGroups } from './feishu/groupSettingsService';
 import { backfillPersonalFeishuSessions } from './feishu/legacySessionBackfill';
 import { setControlProjectCatalogSource } from './shared/controlProjects';
 import { loadImProjectCatalog } from '../hook-control/projectCatalog';
@@ -328,7 +329,10 @@ export function startImOrchestrators(): void {
         return { kind: 'telegram', im, orchestrator };
       }
       if (record.channel === 'feishu') {
-        const im = createBotFeishuIM(prefix);
+        // 群参与模式按连接各一份, 每次入站现读 → 伙伴页改动即生效, 不重启传输层。
+        const im = createBotFeishuIM(prefix, {
+          groupActivation: () => readBotImConnection(record.id)?.groupActivation,
+        });
         const orchestrator = wireFeishuOrchestrator(im, FEISHU_CONFIG, {
           instanceKey: `feishu#${record.id}`,
           companionBotId: record.botId,
@@ -372,11 +376,16 @@ export function startImOrchestrators(): void {
       dingtalkAppKey: ownerScopedImSecrets.read('dingtalk-bot-app-key')?.trim() || null,
       discordToken: ownerScopedImSecrets.read('discord-bot-token')?.trim() || null,
     }),
-    // 群参与模式只有 Telegram 有(个人 bot 同款); 飞书群按平台自己的 @ 规则触发。
-    listKnownGroups: (record) =>
-      record.channel === 'telegram' && record.botContextId
-        ? listTelegramKnownGroups(record.botContextId)
-        : Promise.resolve([]),
+    // 群参与模式支持 Telegram 与飞书 / Lark 伙伴连接(iMessage 由运行时直接读本地群列表)。
+    listKnownGroups: (record, transport) => {
+      if (!record.botContextId) return Promise.resolve([]);
+      if (record.channel === 'telegram') return listTelegramKnownGroups(record.botContextId);
+      if (record.channel === 'feishu') {
+        const im = transport?.kind === 'feishu' ? transport.im : null;
+        return listFeishuKnownGroups(im, record.botContextId, Object.keys(record.groupActivation ?? {}));
+      }
+      return Promise.resolve([]);
+    },
   });
 
   // 把设置页那份个人 bot 移给伙伴: 停 = 与登出同一个 dispose(静默、凭证保留),

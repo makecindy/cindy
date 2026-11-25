@@ -28,6 +28,7 @@ import { app } from 'electron';
 import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
+import type { AmbientReplyJudge } from '../shared/ambientReplyJudge';
 import { receivedHistoryScope } from '../shared/receivedImageHistory';
 import type { FeishuToolScope } from '../shared/channelToolScope';
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
@@ -147,6 +148,10 @@ export function feishuToolsHint(service: 'feishu' | 'lark'): string {
 export interface FeishuAdapterOptions {
   /** 伙伴自有连接: 私聊按主人 / 外部用户分落点(transport 对外开放时才会有外部私聊)。 */
   companionBotId?: string;
+  /** 全响应·自主判断前置判定器(走辅助模型链); 缺省时不做前置过滤, 直接起主模型轮次。 */
+  ambientReplyJudge?: AmbientReplyJudge;
+  /** 为前置判定器提供机器人的名字与简介(伙伴自有连接给伙伴名 + SOUL 摘要)。 */
+  describeSelfForAmbientJudge?: () => Promise<{ name: string; description: string }>;
 }
 
 export function buildFeishuAdapter(
@@ -295,6 +300,54 @@ export function buildFeishuAdapter(
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
       return userId === feishuIm.getOwnerOpenId() ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
     },
+    // 全响应·自主判断: 辅助模型先看一眼该不该插话(带最近群历史 + 发言人 + 伙伴身份),
+    // SKIP 就不起轮次并清理未消费的回复锚点。判不出来(unknown)照旧起轮次交给主模型。
+    ambientTurnGate: async (event) => {
+      const judge = options.ambientReplyJudge;
+      if (!judge || event.ambient !== true) return 'proceed';
+      const lane = decodeFeishuLaneUserId(event.senderId);
+      if (!lane) return 'proceed';
+      const contextLane = event.groupContextLane ?? lane;
+      const [recentHistory, self] = await Promise.all([
+        buildFeishuGroupContext({
+          lane: contextLane,
+          triggerMessageId: event.messageId,
+          question: event.text,
+          excludeMessageId: event.replyContext?.messageId,
+          deps: {
+            fetchPage: (args) => feishuIm.fetchChatHistoryPage(args),
+            // 前置判定不下载群历史附件，也不向主人发缺权限私信提醒。
+            download: async () => ({ attachments: [], unsupported: [] }),
+            notifyFetchFailure: async () => undefined,
+            log,
+          },
+        })
+          .then((built) => built?.displayPrefix ?? '')
+          .catch(() => ''),
+        (options.describeSelfForAmbientJudge ?? (async () => ({ name: '', description: '' })))().catch(
+          () => ({ name: '', description: '' }),
+        ),
+      ]);
+      const speaker = event.speaker
+        ? `[speaker] ${sanitizeDisplayText(event.speaker.name) || event.speaker.id}` +
+          (event.speaker.isOwner ? ' · owner' : '')
+        : '';
+      const verdict = await judge({
+        botName: self.name || channelLabel(),
+        botDescription: self.description,
+        groupContext: recentHistory,
+        speaker,
+        text: event.text,
+        ...(event.replyContext
+          ? { replyTo: { author: event.replyContext.author, text: event.replyContext.text } }
+          : {}),
+      });
+      if (verdict === 'skip') {
+        feishuIm.discardReplyAnchor(event.senderId, event.messageId);
+        return 'skip';
+      }
+      return 'proceed';
+    },
 
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,
     // 注入可借 owner 轮次的宽松档执行危险操作; 确认卡经 deliverToOwnerDm
@@ -434,15 +487,26 @@ export function buildFeishuAdapter(
         reservedMessages: safeReply ? 1 : 0,
         deps: {
           fetchPage: (args) => feishuIm.fetchChatHistoryPage(args),
-          download: (messageId, refs) => feishuIm.downloadMessageAttachments(messageId, refs),
-          notifyFetchFailure: (errMsg) =>
-            notifyContextFetchFailure(feishuIm, contextLane, errMsg, isLark()),
+          // ambient(全响应)轮次不下载群历史附件，避免每条普通群消息都拉音视频/图片。
+          download: event.ambient
+            ? async () => ({ attachments: [], unsupported: [] })
+            : (messageId, refs) => feishuIm.downloadMessageAttachments(messageId, refs),
+          notifyFetchFailure: event.ambient
+            ? async () => undefined
+            : (errMsg) => notifyContextFetchFailure(feishuIm, contextLane, errMsg, isLark()),
           log,
         },
       });
-      if (!built && !replyPrefix) return null;
+      // 全响应·自主判断(ambient): 安静上下文指令 — 值得说才说, 否则 NO_REPLY
+      // 哨兵沉默(transport 在惰性建卡 / finalize 吞掉哨兵, 零卡片零撤回痕迹)。
+      const ambientBlock = event.ambient
+        ? '<ambient_mode>\n本条群消息不是对你的直接召唤(该群开启了全响应模式)。' +
+          '只在你确有价值可补充时回复; 与你无关或不需要你插话时, ' +
+          '只输出 NO_REPLY(不带任何其它字符)。\n</ambient_mode>\n'
+        : '';
+      if (!built && !replyPrefix && !ambientBlock) return null;
       return {
-        agentText: `${built?.prefix ?? ''}${replyPrefix}${event.text}`,
+        agentText: `${ambientBlock}${built?.prefix ?? ''}${replyPrefix}${event.text}`,
         contextSnapshot: captureImContext({
           groupPrefix: built?.displayPrefix,
           groupMessageCount: built?.messageCount,

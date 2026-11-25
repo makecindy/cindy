@@ -12777,6 +12777,7 @@
       "groups": {
         "title": "그룹",
         "hint": "{{name}}이(가) 참여한 그룹이 여기에 표시됩니다. 「항상」= 모든 메시지를 읽고 {{name}}이(가) 끼어들지 스스로 판단합니다(매번 토큰 소모).",
+        "feishuPermissionHint": "“항상 응답”을 켜기 전에 {{platform}} 오픈 플랫폼 개발자 콘솔에서 im:message.group_msg(다른 봇 메시지도 읽으려면 im:message.group_msg.include_bot:read 포함) 권한을 활성화하고 새 버전을 게시하세요. 그렇지 않으면 {{platform}}은 @멘션 메시지만 전달합니다.",
         "empty": "아직 그룹이 없습니다. 봇을 그룹에 추가하고 누군가 말하면 여기에 표시됩니다.",
         "loadFailed": "그룹 목록을 불러오지 못했습니다",
         "saveFailed": "저장되지 않아 이전 모드로 되돌렸습니다",

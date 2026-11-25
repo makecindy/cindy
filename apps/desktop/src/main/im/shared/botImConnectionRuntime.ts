@@ -94,8 +94,11 @@ export interface BotImConnectionRuntimeDeps {
   create(record: BotImConnectionRecord): BotImTransportInstance;
   /** 设置页那份个人 bot 当前用的平台身份(用于拒绝同一个 bot 两处同时用)。 */
   settingsIdentity(): BotImSettingsIdentity;
-  /** 这个机器人进过的群(群窗口表里出现过的 chat); 没有群参与模式的渠道返回空。 */
-  listKnownGroups(record: BotImConnectionRecord): Promise<Array<{ chatId: string; chatName: string | null }>>;
+  /** 这个机器人进过的群(群窗口表里出现过的 chat 或平台群列表); 没有群参与模式的渠道返回空。 */
+  listKnownGroups(
+    record: BotImConnectionRecord,
+    transport?: BotImTransportInstance,
+  ): Promise<Array<{ chatId: string; chatName: string | null }>>;
 }
 
 interface LiveInstance {
@@ -778,7 +781,7 @@ export async function listBotImConnectionGroups(id: string): Promise<BotImConnec
   const transport = instances.get(id)?.transport;
   const groups = transport?.kind === 'imessage'
     ? transport.im.listChats().filter(chat => transport.im.isGroup(chat.guid)).map(chat => ({ chatId: chat.guid, chatName: chat.displayName ?? null }))
-    : record.botContextId ? await requireDeps().listKnownGroups(record) : [];
+    : record.botContextId ? await requireDeps().listKnownGroups(record, transport) : [];
   return {
     connectionId: id,
     groups: groups.map((group) => ({

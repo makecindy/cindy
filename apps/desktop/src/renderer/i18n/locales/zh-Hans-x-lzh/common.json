@@ -12777,6 +12777,7 @@
       "groups": {
         "title": "诸群",
         "hint": "{{name}} 曾入之群组现于此。「全回应」= 每则讯皆阅，由 {{name}} 自断插话与否（每则皆耗 token）。",
+        "feishuPermissionHint": "启「全响应」之前，请诣{{platform}}开放平台开发者后台，开通「获取群组中所有消息」（im:message.group_msg；若需兼读他机之言，并通 im:message.group_msg.include_bot:read）且发布新版本，否则平台唯推 @ 机器人之讯。",
         "empty": "尚无群组。引机器人入群，有人发言后即现于此。",
         "loadFailed": "不能读群组名录",
         "saveFailed": "未能存，已复原模式",

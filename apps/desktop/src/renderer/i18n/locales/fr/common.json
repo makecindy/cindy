@@ -12925,6 +12925,7 @@
       "groups": {
         "title": "Groupes",
         "hint": "Les groupes rejoints par {{name}} apparaissent ici. « Toujours » = lire chaque message et laisser {{name}} décider d'intervenir ou non (chaque message consomme des jetons).",
+        "feishuPermissionHint": "Avant d’activer « Toujours », activez im:message.group_msg (ainsi que im:message.group_msg.include_bot:read pour lire aussi les messages d’autres bots) dans la console développeur {{platform}} Open Platform et publiez une nouvelle version — sinon {{platform}} ne transmettra que les mentions @.",
         "empty": "Aucun groupe pour le moment. Ajoutez le bot à un groupe ; il apparaît ici dès que quelqu'un y écrit.",
         "loadFailed": "Impossible de charger les groupes",
         "saveFailed": "Non enregistré ; retour au mode précédent",

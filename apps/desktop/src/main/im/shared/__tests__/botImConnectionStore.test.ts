@@ -122,12 +122,19 @@ describe('bot im connection store', () => {
             channel: 'telegram',
             createdAt: 5,
             botContextId: '9',
-            groupActivation: { '-1': 'always', '-2': 'mention', abc: 'always', '-3': 'nope' },
+            groupActivation: { '-1': 'always', '-2': 'mention', abc: 'always', '-3': 'nope', oc_feishu_1: 'always' },
           },
         },
       }),
     );
-    expect(readBotImConnection('222222222222')?.groupActivation).toEqual({ '-1': 'always' });
+    expect(readBotImConnection('222222222222')?.groupActivation).toEqual({ '-1': 'always', oc_feishu_1: 'always' });
+
+    // Issue #12925: 飞书 / Lark 群 ID（oc_...）可正常持久化并在切回 mention 时清除。
+    await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu', service: 'lark' }, { id: () => '333333333333' });
+    expect((await setBotImConnectionGroupActivation('333333333333', 'oc_group_99', 'always'))?.groupActivation).toEqual({
+      oc_group_99: 'always',
+    });
+    expect((await setBotImConnectionGroupActivation('333333333333', 'oc_group_99', 'mention'))?.groupActivation).toBeUndefined();
   });
 
   it('keeps a Discord channel allowlist only on Discord records, drops junk ids, and treats missing as closed', async () => {

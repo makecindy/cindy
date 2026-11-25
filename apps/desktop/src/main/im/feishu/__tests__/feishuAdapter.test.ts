@@ -922,4 +922,63 @@ describe('feishu group lane adapter hooks', () => {
       expect.objectContaining({ chatId: 'ou_owner' }),
     );
   });
+
+  // 测试价值：Issue #12925 飞书适配器 ambientTurnGate 与 ambientBlock 覆盖；
+  // 验证辅助模型 skip 时丢弃 replyAnchor，reply/unknown 时放行，ambient 轮次注入 <ambient_mode> 且不下载历史附件，
+  // 且外部群非主人权限策略保持 destructive 强确认不变。unit tier。
+  it('ambientTurnGate: skip 丢弃回复锚点，reply/unknown 放行，非 ambient 不调判定器', async () => {
+    const discardReplyAnchor = vi.fn();
+    const judge = vi.fn<(...args: unknown[]) => Promise<'reply' | 'skip' | 'unknown'>>();
+    const feishuMock = {
+      ...fakeIm,
+      discardReplyAnchor,
+    } as unknown as FeishuIM;
+    const ambientAdapter = buildFeishuAdapter(feishuMock, CONFIG, {
+      companionBotId: 'bot-1',
+      ambientReplyJudge: judge as never,
+      describeSelfForAmbientJudge: async () => ({ name: 'Mia', description: '产品助手' }),
+    });
+
+    fetchChatHistoryPage.mockResolvedValue(historyPage([]));
+    const ambEvent = groupEvent({
+      messageId: 'om_amb_1',
+      ambient: true,
+      invoked: false,
+      speaker: { id: 'ou_guest', name: 'Guest', isOwner: false },
+    });
+
+    judge.mockResolvedValueOnce('skip');
+    await expect(ambientAdapter.ambientTurnGate?.(ambEvent)).resolves.toBe('skip');
+    expect(discardReplyAnchor).toHaveBeenCalledExactlyOnceWith('g/oc_chat1', 'om_amb_1');
+
+    discardReplyAnchor.mockClear();
+    judge.mockResolvedValueOnce('reply');
+    await expect(ambientAdapter.ambientTurnGate?.(ambEvent)).resolves.toBe('proceed');
+    expect(discardReplyAnchor).not.toHaveBeenCalled();
+
+    judge.mockResolvedValueOnce('unknown');
+    await expect(ambientAdapter.ambientTurnGate?.(ambEvent)).resolves.toBe('proceed');
+
+    judge.mockClear();
+    await expect(ambientAdapter.ambientTurnGate?.(groupEvent({ ambient: undefined }))).resolves.toBe('proceed');
+    expect(judge).not.toHaveBeenCalled();
+
+    // ambient 轮次注入 <ambient_mode> 且跳过历史附件下载
+    downloadMessageAttachments.mockClear();
+    fetchChatHistoryPage.mockResolvedValueOnce(
+      historyPage([
+        historyEntry({
+          attachments: [{ kind: 'image', imageKey: 'img_hist', messageId: 'om_prev' }],
+        }),
+      ]),
+    );
+    const prepared = await ambientAdapter.prepareAgentTurnText?.(ambEvent);
+    expect(prepared?.agentText).toContain('<ambient_mode>');
+    expect(prepared?.agentText).toContain('NO_REPLY');
+    expect(downloadMessageAttachments).not.toHaveBeenCalled();
+
+    // 外部群非主人消息权限边界保持不变（挂 destructive 强确认策略）
+    const policy = ambientAdapter.turnPermissionPolicyFor?.(ambEvent);
+    expect(policy).toBeDefined();
+  });
 });

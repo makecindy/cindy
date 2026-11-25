@@ -32,6 +32,8 @@ export interface FeishuScopeOptions {
   ipc?: boolean;
   /** 允许非主人的群 @ 进业务层；不授予私聊权限，命令仍只认主人。 */
   guests?: boolean;
+  /** 按群参与模式(chatId → 'always' | 'mention', 缺省 'mention'); 每次入站现读。 */
+  groupActivation?: () => Readonly<Record<string, 'mention' | 'always'>> | undefined;
   /** Runtime ownership is independent of the owner's saved announcement preference. */
   shouldAnnounceLifecycle?: () => boolean;
 }
@@ -42,6 +44,7 @@ export interface FeishuScope {
   readonly secretKeyPrefix: string;
   readonly ipc: boolean;
   readonly guests: boolean;
+  readonly groupActivation?: () => Readonly<Record<string, 'mention' | 'always'>> | undefined;
   readonly shouldAnnounceLifecycle?: () => boolean;
   readonly events: FeishuEventBus;
   /** 各模块的实例状态(scopeSlot 按 symbol 懒建)。 */
@@ -58,6 +61,7 @@ export function createFeishuScope(options: FeishuScopeOptions): FeishuScope {
     secretKeyPrefix: options.secretKeyPrefix ?? '',
     ipc: options.ipc !== false,
     guests: options.guests === true,
+    groupActivation: options.groupActivation,
     shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     events: new FeishuEventBus(),
     slots: new Map(),

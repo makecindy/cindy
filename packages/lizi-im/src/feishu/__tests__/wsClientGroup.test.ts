@@ -456,6 +456,90 @@ describe('feishu group inbound gate', () => {
       }
     });
   });
+  // 测试价值：Issue #12925 飞书群 Always 模式入站判定；覆盖未 @ 普通文本放行并带 ambient 标、
+  // 话题/主群不跨位置、命令与纯媒体静默丢弃、guests=false 非主人不发 strangerNotice。
+  // 原有测试只测 @ 触发；最小输入为开启 groupActivation={'oc_chat1':'always'} 的未 @ 群消息。unit tier。
+  it('routes unmentioned group messages as ambient only when groupActivation is always', async () => {
+    const activation: Record<string, 'mention' | 'always'> = { oc_chat1: 'always' };
+    await runInScope(
+      createFeishuScope({ host: null, guests: true, groupActivation: () => activation }),
+      async () => {
+        try {
+          await connect();
+          const events = collectEvents();
+
+          // 1. Always 群未 @ 文本（主群 + 话题）：正常放行，invoked=false, ambient=true，留在原位置
+          await mocks.eventHandlers['im.message.receive_v1']!(
+            groupMessage({ sender: STRANGER, messageId: 'om_amb_main', text: '大家觉得这个方案咋样？', mentions: [] }),
+          );
+          await mocks.eventHandlers['im.message.receive_v1']!(
+            groupMessage({
+              sender: OWNER,
+              messageId: 'om_amb_topic',
+              threadId: 'omt_t1',
+              text: '补充一下背景',
+              mentions: [],
+            }),
+          );
+
+          // 2. Always 群未 @ 命令（即使是主人）与纯空文本 / 纯图片：静默丢弃
+          await mocks.eventHandlers['im.message.receive_v1']!(
+            groupMessage({ sender: OWNER, messageId: 'om_amb_cmd', text: '/new', mentions: [] }),
+          );
+          await mocks.eventHandlers['im.message.receive_v1']!({
+            sender: { sender_id: { open_id: OWNER } },
+            message: {
+              message_id: 'om_amb_img',
+              chat_id: 'oc_chat1',
+              chat_type: 'group',
+              message_type: 'image',
+              content: JSON.stringify({ image_key: 'img_1' }),
+            },
+          });
+
+          // 3. 切回 mention（默认）后，未 @ 消息立刻不再触发
+          delete activation.oc_chat1;
+          await mocks.eventHandlers['im.message.receive_v1']!(
+            groupMessage({ sender: OWNER, messageId: 'om_mention_only', text: '现在不该触发', mentions: [] }),
+          );
+
+          expect(events.map((e) => ({ id: e.messageId, senderId: e.senderId, invoked: e.invoked, ambient: e.ambient, isOwner: e.speaker?.isOwner }))).toEqual([
+            { id: 'om_amb_main', senderId: 'g/oc_chat1', invoked: false, ambient: true, isOwner: false },
+            { id: 'om_amb_topic', senderId: 'g/oc_chat1/omt_t1', invoked: false, ambient: true, isOwner: true },
+          ]);
+          expect(wsClient.isAmbientTrigger('om_amb_main')).toBe(true);
+          expect(wsClient.isAmbientTrigger('om_amb_topic')).toBe(true);
+          expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_amb_main');
+          expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_t1', 'om_amb_topic');
+        } finally {
+          await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+          feishuEvents.removeAllListeners('message');
+        }
+      },
+    );
+  });
+
+  // 测试价值：非对外开放实例开启 always 时，非主人未 @ 消息必须静默丢弃，不得向群发送 strangerNotice。
+  // unit tier。
+  it('silently drops non-owner ambient messages without strangerNotice when guests is false', async () => {
+    await runInScope(
+      createFeishuScope({ host: null, guests: false, groupActivation: () => ({ oc_chat1: 'always' }) }),
+      async () => {
+        try {
+          await connect();
+          const events = collectEvents();
+          await mocks.eventHandlers['im.message.receive_v1']!(
+            groupMessage({ sender: STRANGER, messageId: 'om_amb_stranger', text: '随便聊聊', mentions: [] }),
+          );
+          expect(events).toHaveLength(0);
+          expect(mocks.replyText).not.toHaveBeenCalled();
+        } finally {
+          await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+          feishuEvents.removeAllListeners('message');
+        }
+      },
+    );
+  });
 });
 
 describe('private topic notification ancestry', () => {

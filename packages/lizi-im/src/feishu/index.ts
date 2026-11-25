@@ -63,6 +63,8 @@ export interface FeishuIMOptions {
   ipc?: boolean;
   /** 允许非主人的群 @ 进业务层；私聊只认已绑定主人，命令仍只认主人。 */
   guests?: boolean;
+  /** 按群参与模式(chatId → 'always' | 'mention', 缺省 'mention'); 每次入站现读。 */
+  groupActivation?: () => Readonly<Record<string, 'mention' | 'always'>> | undefined;
   /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
   shouldAnnounceLifecycle?: () => boolean;
 }
@@ -104,6 +106,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       secretKeyPrefix: options.secretKeyPrefix ?? '',
       ipc: options.ipc !== false,
       guests: options.guests === true,
+      groupActivation: options.groupActivation,
       shouldAnnounceLifecycle: options.shouldAnnounceLifecycle,
     });
     // 设置页那份(无前缀、带 IPC)就是默认作用域: 单测直接调模块函数、Electron IPC 进来
@@ -527,7 +530,18 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     initial?: string,
     opts?: { threadTs?: string },
   ): Promise<StreamingTextHandle> {
-    return streamingText.start(userId, initial, opts);
+    const pendingAnchor = !opts?.threadTs ? outbound.peekReplyAnchor(userId) : undefined;
+    const isAmbient = Boolean(pendingAnchor && wsClient.isAmbientTrigger(pendingAnchor));
+    return streamingText.start(
+      userId,
+      initial,
+      isAmbient ? { ...opts, lazy: true, ambientTriggerId: pendingAnchor } : opts,
+    );
+  }
+
+  /** 丢弃一条未消费的群回复锚点(ambient 前置判定跳过时调用)。 */
+  discardReplyAnchor(laneUserId: string, messageId: string): void {
+    outbound.discardReplyAnchor(laneUserId, messageId);
   }
 
   /**
@@ -878,6 +892,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * reasonable default.
    */
   reactToMessage(messageId: string, emojiType: string): Promise<string | null> {
+    // 全响应(ambient)消息全静默: 不打处理中/排队表情。
+    if (wsClient.isAmbientTrigger(messageId)) return Promise.resolve(null);
     return outbound.addReaction(messageId, processingReaction(emojiType));
   }
 
