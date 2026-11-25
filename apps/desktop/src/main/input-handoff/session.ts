@@ -814,11 +814,15 @@ export class InputHandoffSession {
    * Scan-to-sign-in: looks for a QR code in the target window and, when there
    * is one, makes it this step. Works on any app or page; nothing product-specific.
    */
-  private async showQr(): Promise<boolean> {
+  /**
+   * `frame`: the window's place from a window list. Looking there does not bring the window forward, which a card
+   * that keeps watching must not do; without it the window is raised once to be looked at.
+   */
+  private async showQr(frame: number[] | null = null): Promise<boolean> {
     const driver = this.options.driver;
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
-    const found = await withDesktopTurn(() => driver.qr!(target, null)).catch(() => null);
+    const found = await withDesktopTurn(() => driver.qr!(target, frame)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
     if (!qr || this.ended) {
@@ -1197,7 +1201,8 @@ export class InputHandoffSession {
     if (!this.hintsMet(step)) {
       const asked = this.step;
       this.step = step;
-      const scanning = await this.showQr();
+      // The window watch never brings the window forward: look where the window list says it is.
+      const scanning = await this.showQr(window.frame?.length === 4 ? window.frame : null);
       // The owner may have ended it or started answering meanwhile.
       if (this.ended || this.busy || this.phase !== 'ready') return;
       if (scanning) {
