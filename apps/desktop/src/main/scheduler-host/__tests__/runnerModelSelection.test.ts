@@ -259,6 +259,7 @@ function createRunnerHarness(
     bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
     getSession?: () => Session | undefined;
+    closeSessionIfCurrent?: Maker['closeSessionIfCurrent'];
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
     prepareModelPreferences?: ConstructorParameters<typeof MakerScheduleRunner>[0]['prepareModelPreferences'];
     onModelDispatched?: ConstructorParameters<typeof MakerScheduleRunner>[0]['onModelDispatched'];
@@ -291,6 +292,7 @@ function createRunnerHarness(
     createSession,
     getSessionMeta: vi.fn(opts.getSessionMeta ?? (async () => meta)),
     getSession: vi.fn(opts.getSession ?? (() => h.session)),
+    closeSessionIfCurrent: opts.closeSessionIfCurrent,
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
     // issue #456:runner fire 时按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
@@ -1546,6 +1548,9 @@ describe('MakerScheduleRunner model selection', () => {
           {
             sessionAlive: true,
             getSession: () => active,
+            closeSessionIfCurrent: async (candidate) => {
+              if (active === candidate) active = undefined;
+            },
             acquirePendingAgentSwitch: async () => () => {},
           },
         );
@@ -1586,6 +1591,7 @@ describe('MakerScheduleRunner model selection', () => {
           expect(resumed.send).not.toHaveBeenCalled();
           expect(mocks.backfillSessionMeta).not.toHaveBeenCalled();
           if (scenario !== 'wrong model') expect(harness.closeSession).not.toHaveBeenCalled();
+          if (scenario === 'wrong model') expect(active).toBeUndefined();
         }
         expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol');
         expect(h.send).not.toHaveBeenCalled();

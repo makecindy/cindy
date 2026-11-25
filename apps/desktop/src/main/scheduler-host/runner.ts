@@ -97,6 +97,7 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
@@ -2131,7 +2132,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (this.deps.maker.getSession(sessionId)) throw unsafeResume;
           const resumedOpts = { ...createSessionOpts };
           const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
-          throwIfFireAborted(ctx.signal, 'model switch rebuild');
           holder.assertOwner?.();
           if (
             resumed === session ||
@@ -2144,8 +2144,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
             resumedOpts.providerId !== createSessionOpts.providerId ||
             this.deps.maker.getSession(sessionId) !== resumed
           ) {
+            if (resumed !== session && resumed.id === sessionId && this.deps.maker.getSession(sessionId) === resumed) {
+              await withRehydrateCloseSuppressed(sessionId, () =>
+                this.deps.maker.closeSessionIfCurrent(resumed, 'runtime-refresh', { afterCurrentTurn: true }),
+              );
+            }
             throw unsafeResume;
           }
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
           session = resumed;
           reusedLiveSession = false;
         } else if (mustSyncReusedPiRoute) {
