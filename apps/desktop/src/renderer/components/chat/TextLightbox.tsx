@@ -25,7 +25,7 @@ import {
   lazy,
   Suspense,
   useCallback,
-  useContext, useEffect, useMemo, useRef, useState } from 'react';
+  useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
@@ -69,6 +69,15 @@ interface TextLightboxProps {
    */
   triggerRef?: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  /**
+   * 「文件已变更」提示(issue #12851):预览期间文件被 Agent 改动时给出,
+   * 用户点一下才按 refreshToken 重新读内容。渲染在预览窗右上角。
+   */
+  changedBadge?: ReactNode;
+  /**
+   * 递增即重新读一次文件内容。0 = 不额外触发。
+   */
+  refreshToken?: number;
 }
 
 // Renderer-side bytes cap. Mirrors the main-process MAX_PREVIEW_MB; the
@@ -149,7 +158,7 @@ export function TextLightbox(props: TextLightboxProps) {
   );
 }
 
-function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose }: TextLightboxProps) {
+function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose, changedBadge, refreshToken = 0 }: TextLightboxProps) {
   const { t } = useTranslation();
   const restorePreviewFocus = usePreviewFocusReturn();
   const collection = useContext(ActivePreviewCollection);
@@ -410,7 +419,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       cancelled = true;
       progress?.dispose();
     };
-  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t, retry]);
+  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t, retry, refreshToken]);
 
 
   useEffect(() => {
@@ -553,6 +562,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
           }
           actions={
             <>
+              {changedBadge}
               <PreviewButton
                 label={t('attachmentPreview.find')}
                 onClick={openSearch}

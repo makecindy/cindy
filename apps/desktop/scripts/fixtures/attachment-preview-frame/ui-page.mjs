@@ -8,7 +8,7 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewChrome (floating panel, scrim, header) and MarkdownRenderer',
   notCovered:
-    'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; file stat, document text and image bytes are fixture data',
+    'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; file stat, document text and image bytes are fixture data; the 「文件已变更」 state is fixture data (its detection and refresh are covered by the targeted vitest)',
   stubs: {
     'src/renderer/features/cc-agent/workdir-browse/PdfPreview':
       'export function PdfPreview() { throw new Error("PDF is outside this fixture"); }',
@@ -19,6 +19,7 @@ export default {
     default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
     image: { about: 'An image in the same floating panel' },
+    changed: { about: 'The same document panel with the 「文件已变更」 hint at the top right' },
   },
   async ready(page) {
     await page.waitForFunction(
@@ -55,6 +56,14 @@ export default {
       assert.equal(panel.left, MARGIN);
       assert.equal(viewport.width - panel.right, MARGIN);
       assert.equal(viewport.height - panel.bottom, MARGIN);
+    }
+    if (ui.case === 'changed') {
+      // 预览期间文件被改动:右上角给出「文件已变更」,点一下才刷新内容。
+      const badge = page.getByRole('button', { name: await ui.t('chat.filePreview.changed') });
+      assert.equal(await badge.count(), 1);
+      const header = page.locator('header').filter({ has: badge });
+      assert.equal(await header.count(), 1);
+      await badge.click();
     }
     if (ui.case !== 'default') return;
     await page.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.revealFolder') }).click();

@@ -15658,6 +15658,10 @@
       "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
     },
+    "filePreview": {
+      "changed": "ファイルが変更されました",
+      "refreshHint": "クリックして更新"
+    },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",
       "openSystemFailed": "システムで開けませんでした",

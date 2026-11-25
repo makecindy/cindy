@@ -15658,6 +15658,10 @@
       "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
     },
+    "filePreview": {
+      "changed": "文件已变更",
+      "refreshHint": "点击刷新"
+    },
     "textLightbox": {
       "unreadable": "无法读取该文件",
       "openSystemFailed": "无法在系统中打开",

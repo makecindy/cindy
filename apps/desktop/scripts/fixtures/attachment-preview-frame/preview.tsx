@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
+import { FileChangedBadge } from '../../../src/renderer/components/chat/FilePreviewLightboxHost';
 
 const ZIP = '/fixture/2026-11-03-八张信用卡发票与核对清单.zip';
 const MARKDOWN = '/fixture/2026-11-03-发票核对说明.md';
@@ -53,7 +54,7 @@ function Conversation() {
   );
 }
 
-function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
+function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' | 'changed' }) {
   const [open, setOpen] = useState(true);
   const [image] = useState(sampleImage);
   return (
@@ -62,6 +63,13 @@ function Fixture({ kind }: { kind: 'zip' | 'markdown' | 'image' }) {
       {open && kind === 'zip' && <TextLightbox filePath={ZIP} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
+      )}
+      {open && kind === 'changed' && (
+        <TextLightbox
+          filePath={MARKDOWN}
+          onClose={() => setOpen(false)}
+          changedBadge={<FileChangedBadge onClick={() => {}} />}
+        />
       )}
       {open && kind === 'image' && (
         <ImageLightbox src={image} filename="示例图片.png" onClose={() => setOpen(false)} />
@@ -89,7 +97,15 @@ mountPage({
   }),
   render: (ctx) => (
     <Fixture
-      kind={ctx.case === 'markdown' ? 'markdown' : ctx.case === 'image' ? 'image' : 'zip'}
+      kind={
+        ctx.case === 'markdown'
+          ? 'markdown'
+          : ctx.case === 'image'
+            ? 'image'
+            : ctx.case === 'changed'
+              ? 'changed'
+              : 'zip'
+      }
     />
   ),
 });

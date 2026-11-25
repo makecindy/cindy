@@ -1,6 +1,6 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
 import { ActivePreviewCollection } from './AttachmentCollectionContext';
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { useTranslation } from 'react-i18next';
@@ -38,11 +38,17 @@ export function FileLightbox({
   fileName,
   triggerRef,
   onClose,
+  changedBadge,
+  refreshToken = 0,
 }: {
   filePath: string;
   fileName?: string;
   triggerRef?: React.RefObject<HTMLElement | null>;
   onClose(): void;
+  /** 「文件已变更」提示(issue #12851),渲染在预览窗右上角。 */
+  changedBadge?: ReactNode;
+  /** 递增即重新读一次内容。 */
+  refreshToken?: number;
 }) {
   const { t } = useTranslation();
   const restorePreviewFocus = usePreviewFocusReturn();
@@ -102,7 +108,11 @@ export function FileLightbox({
   // 媒体走各自查看器,不读内容;其余文件在这里读一次,同时决定预览窗大小。
   const fileLocation =
     local && !['image', 'video', 'audio', 'model'].includes(kind) ? splitLocalPath(local) : null;
-  const { content } = useFileContent(fileLocation?.workdir ?? '', fileLocation?.relPath ?? '');
+  const { content, refresh } = useFileContent(fileLocation?.workdir ?? '', fileLocation?.relPath ?? '');
+  // 「文件已变更」提示被点掉后重新读一次内容(issue #12851)。
+  useEffect(() => {
+    if (refreshToken > 0) refresh();
+  }, [refreshToken, refresh]);
   // 打不开的文件(压缩包、可执行文件等)只有文件信息和打开方式,用小窗,不占大半个窗口。
   const unrenderable =
     content.kind === 'binary' &&
@@ -184,6 +194,7 @@ export function FileLightbox({
         <PreviewHeader
           name={name}
           onClose={close}
+          actions={changedBadge}
           onSave={
             local
               ? () => {

@@ -15657,6 +15657,10 @@
       "diffUnchangedLines_other": "{{count}} 行未變",
       "diffPreviewLoading": "正在準備差異預覽…"
     },
+    "filePreview": {
+      "changed": "檔案已變更",
+      "refreshHint": "點擊重新整理"
+    },
     "textLightbox": {
       "unreadable": "無法讀取該檔案",
       "openSystemFailed": "無法在系統中開啟",

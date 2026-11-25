@@ -96,8 +96,7 @@ export function collectLastTurnPaths(
   workdir: string | null,
   platform = defaultPlatform(),
 ): Set<string> {
-  const paths = new Set<string>();
-  if (!workdir) return paths;
+  if (!workdir) return new Set();
   let start = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i].role === 'user') {
@@ -105,13 +104,44 @@ export function collectLastTurnPaths(
       break;
     }
   }
-  for (let i = start; i < messages.length; i += 1) {
-    for (const filePath of extractToolFilePaths(messages[i])) {
+  return collectEditedPaths(messages.slice(start), workdir, platform);
+}
+
+/**
+ * 一批消息里被编辑过的文件(工作目录相对路径)。
+ *
+ * 不切轮次边界 —— 范围由调用方给:「本轮」看最近一轮,「预览期间」看打开预览
+ * 之后新增的那批。
+ */
+export function collectEditedPaths(
+  messages: readonly ChatMessage[],
+  workdir: string | null,
+  platform = defaultPlatform(),
+): Set<string> {
+  const paths = new Set<string>();
+  if (!workdir) return paths;
+  for (const message of messages) {
+    for (const filePath of extractToolFilePaths(message)) {
       const rel = toolPathToWorkdirRelative(filePath, workdir, platform);
       if (rel) paths.add(rel);
     }
   }
   return paths;
+}
+
+/** 目标文件是否在这批消息里被编辑过。 */
+export function wasFileChangedInMessages(
+  messages: readonly ChatMessage[],
+  workdir: string,
+  absoluteFilePath: string,
+  platform = defaultPlatform(),
+): boolean {
+  const target = absoluteToWorkdirRelative(absoluteFilePath, workdir, platform);
+  if (!target) return false;
+  const normalizedTarget = normalizeForCompare(target, platform);
+  return [...collectEditedPaths(messages, workdir, platform)].some(
+    (path) => normalizeForCompare(path, platform) === normalizedTarget,
+  );
 }
 
 export function wasFileChangedInLastTurn(
