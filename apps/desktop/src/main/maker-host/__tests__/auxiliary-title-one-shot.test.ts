@@ -274,7 +274,7 @@ describe('auxiliary task-title routing', () => {
     expect(h.oneShot).not.toHaveBeenCalled();
   });
 
-  it('returns unsupported-provider for ACP when no auxiliary candidate is available and skips agent fallback', async () => {
+  it('returns failed for ACP when no auxiliary candidate is available and skips built-in agent fallback', async () => {
     h.requestText.mockResolvedValue({ ok: false, reason: 'no_candidate', attempts: [] });
     await expect(
       generateTitleWithAuxiliaryModelResult(
@@ -282,7 +282,7 @@ describe('auxiliary task-title routing', () => {
         {},
         runtimeDeps(),
       ),
-    ).resolves.toEqual({ status: 'unsupported-provider' });
+    ).resolves.toEqual({ status: 'failed' });
     expect(h.oneShot).not.toHaveBeenCalled();
   });
 });

@@ -7295,7 +7295,7 @@ interface ElectronAPI {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       sessionId?: string,
     ) => Promise<{ title: string | null }>;
     /** Optional status copy from public execution facts only. */
@@ -7312,7 +7312,7 @@ interface ElectronAPI {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       isUserText?: boolean;
     }) => Promise<{ applied: boolean; done: boolean }>;
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入。 */

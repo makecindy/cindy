@@ -301,6 +301,9 @@ describe('getOverwritableAutoTitle — 覆写目标', () => {
 
     h.sqlite!.prepare('UPDATE sessions SET agent_kind = ? WHERE id = ?').run('pi', SESSION_ID);
     expect((await getOverwritableAutoTitle(SESSION_ID))?.agentKind).toBe('pi');
+
+    h.sqlite!.prepare('UPDATE sessions SET agent_kind = ? WHERE id = ?').run('acp', SESSION_ID);
+    expect((await getOverwritableAutoTitle(SESSION_ID))?.agentKind).toBe('acp');
   });
 
   it('用它当期望值就能覆写 fork 占位(端到端条件写)', async () => {

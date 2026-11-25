@@ -291,7 +291,23 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
-  it('活跃 ACP 任务走辅助模型链生成标题，并在无可用辅助候选时透传 TITLE_PROVIDER_UNSUPPORTED', async () => {
+  it('maker:generate-title 与 maker:auto-title 接受 agentKind=acp', async () => {
+    await expect(
+      invokeGenerate({ message: '排查插件引擎标题', agentKind: 'acp', sessionId: 's1' }),
+    ).resolves.toEqual({ title: '任务标题' });
+    expect(h.generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 's1', agentKind: 'acp' }),
+      expect.anything(),
+    );
+    await expect(
+      invoke({ sessionId: 's1', text: '排查插件引擎标题', agentKind: 'acp' }),
+    ).resolves.toEqual({ applied: true, done: true });
+    expect(h.run).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 's1', agentKind: 'acp' }),
+    );
+  });
+
+  it('活跃 ACP 任务走辅助模型链生成标题，并在辅助链失败时返回 INTERNAL', async () => {
     vi.mocked(getDbClient).mockReturnValue({
       drizzle: {
         select: () => ({
@@ -310,8 +326,8 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
       expect.anything(),
     );
 
-    h.generateTitleResult.mockResolvedValueOnce({ status: 'unsupported-provider' });
-    await expect(invokeRegenerate('s1')).rejects.toThrow('[TITLE_PROVIDER_UNSUPPORTED]');
+    h.generateTitleResult.mockResolvedValueOnce({ status: 'failed' });
+    await expect(invokeRegenerate('s1')).rejects.toThrow('[INTERNAL]');
   });
 
   it.each([

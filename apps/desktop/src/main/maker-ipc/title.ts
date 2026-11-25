@@ -265,10 +265,11 @@ const AUTO_TITLE_TEXT_MAX = 2000;
 const SESSION_ID_MAX = 128;
 
 const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
+const TITLE_ENGINE_KINDS = ['claude-code', 'codex', 'pi', 'acp'] as const satisfies readonly MakerEngineKindWire[];
 
 interface GenerateTitleRequest {
   message: string;
-  agentKind: AgentKind;
+  agentKind: MakerEngineKindWire;
   sessionId?: string;
 }
 
@@ -284,11 +285,11 @@ function parseSessionId(raw: unknown, optional = false): string | undefined {
   return raw;
 }
 
-function parseAgentKind(raw: unknown): AgentKind {
-  if (!TITLE_AGENT_KINDS.includes(raw as AgentKind)) {
+function parseTitleEngineKind(raw: unknown): MakerEngineKindWire {
+  if (!TITLE_ENGINE_KINDS.includes(raw as MakerEngineKindWire)) {
     throwIpcError('INVALID_PARAMS', 'invalid agentKind');
   }
-  return raw as AgentKind;
+  return raw as MakerEngineKindWire;
 }
 
 /**
@@ -313,7 +314,7 @@ function parseGenerateTitleRequest(raw: unknown): GenerateTitleRequest {
   const parsedSessionId = parseSessionId(sessionId, true);
   return {
     message: message.slice(0, AUTO_TITLE_TEXT_MAX),
-    agentKind: parseAgentKind(agentKind),
+    agentKind: parseTitleEngineKind(agentKind),
     ...(parsedSessionId === undefined ? {} : { sessionId: parsedSessionId }),
   };
 }
@@ -344,7 +345,7 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
     sessionId: parseSessionId(sessionId)!,
     // 截断而非拒绝:超长正文是正常输入,标题只需要开头一小段。
     text: (text as string).slice(0, AUTO_TITLE_TEXT_MAX),
-    agentKind: parseAgentKind(agentKind),
+    agentKind: parseTitleEngineKind(agentKind),
     ...(isUserText === undefined ? {} : { isUserText }),
   };
 }

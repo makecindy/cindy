@@ -8649,7 +8649,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       sessionId?: string,
     ): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:generate-title', { message, agentKind, sessionId }),
@@ -8664,7 +8664,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),

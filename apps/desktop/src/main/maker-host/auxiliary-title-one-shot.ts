@@ -160,9 +160,6 @@ async function generateAuxiliaryTitle(
   }, deps);
   if (!result.ok) {
     log.warn('auxiliary title model failed', { reason: result.reason });
-    if (args.agentKind === 'acp' && result.reason === 'no_candidate') {
-      return { status: 'unsupported-provider' };
-    }
     return { status: 'failed' };
   }
   const title = normalizeAuxiliaryTitle(result.text);
