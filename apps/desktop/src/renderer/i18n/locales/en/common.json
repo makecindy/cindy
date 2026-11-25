@@ -8255,7 +8255,6 @@
         "search": "Search plugins",
         "clearSearch": "Clear Plugin Search",
         "secondaryTabsAria": "Plugin page sections",
-        "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "githubInstall": {
@@ -9253,8 +9252,6 @@
         "skip": "Skip"
       },
       "publish": {
-        "section": "My publishes",
-        "action": "Publish plugin…",
         "confirmTitle": "Publish {{name}}",
         "confirmDescription": "After you confirm, the package is uploaded to the current organization.",
         "org": "Organization",
@@ -9263,33 +9260,25 @@
         "size": "Size",
         "confirm": "Publish",
         "cancel": "Cancel",
-        "disabled": "This organization has not enabled member publishing. Contact an admin.",
-        "loadFailed": "Could not load your publishes",
-        "startFailed": "Could not start publishing",
-        "empty": "No publishes yet",
-        "unknownPlugin": "Plugin",
-        "uploading": "Publishing",
-        "badge": {
-          "validating": "Checking",
-          "processing": "Processing",
-          "pending": "Pending review",
-          "approved": "Published",
-          "rejected": "Rejected",
-          "failed": "Failed",
-          "expired": "Expired"
+        "denied": {
+          "title": "This plugin can't be published",
+          "forbidden": "Member publishing is off for your organization, or you don't have permission to publish. Contact an admin.",
+          "archived": "This plugin is archived and can't get new versions.",
+          "commonManaged": "This plugin comes from a platform common plugin; your organization can't publish versions of it.",
+          "repositoryManaged": "This plugin is published from its code repository. Publish new versions there."
         },
-        "stage": {
-          "confirming": "Waiting for confirmation",
-          "hashing": "Checking the file",
-          "preparing": "Creating the upload",
-          "uploading": "Uploading",
-          "committing": "Submitting",
-          "processing": "Processing",
-          "succeeded": "Finished",
-          "failed": "Failed",
-          "expired": "Expired",
-          "cancelled": "Cancelled",
-          "cancelledTracking": "Stopped watching. The server is still processing."
+        "progress": {
+          "title": "Team sharing publishes",
+          "dismiss": "Dismiss this result",
+          "publishing": "Publishing {{name}}…",
+          "uploading": "Uploading {{name}} · {{percent}}%",
+          "submitted": "{{name}} {{version}} was submitted for review",
+          "published": "{{name}} {{version}} was published",
+          "failed": "Couldn't publish {{name}}. Try again later.",
+          "networkUnreachable": "Couldn't publish {{name}}: no network connection. You can try again.",
+          "versionExists": "{{name}} {{version}} has already been used. Change the version and publish again.",
+          "notAllowed": "{{name}} wasn't published: this plugin can't be published right now",
+          "expired": "The upload of {{name}} expired. Publish it again."
         }
       },
       "retirement": {
@@ -9522,7 +9511,15 @@
           "RELEASE_NOTES_REQUIRED": "Not submitted for review: Complete ghost.json.releaseNotes in the plugin source, install the updated plugin, then submit it for review.",
           "VERSION_ALREADY_SUBMITTED": "This version was already submitted. Change the version number and install the updated plugin before submitting for review again.",
           "PLUGIN_PENDING_RELEASE_EXISTS": "Another version is under review. View or cancel that review first.",
-          "CONTRIBUTION_PACKAGE_CHANGED": "The installed plugin changed after the summary was shown. Refresh and check it again."
+          "CONTRIBUTION_PACKAGE_CHANGED": "The installed plugin changed after the summary was shown. Refresh and check it again.",
+          "PLUGIN_DISABLED_BY_ADMIN": "Unlisted by an admin. Only an admin can list it again.",
+          "PLUGIN_REVIEW_REQUIRED": "No approved version yet, so it can't be listed.",
+          "PLUGIN_REVIEW_FINAL": "This version has already been reviewed, so its review can't be cancelled.",
+          "PLUGIN_REVIEW_STATE_CHANGED": "The review status changed. Refresh and try again.",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "Couldn't check the visibility right now. Try again later.",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "Couldn't confirm the member right now. Try again later.",
+          "PLUGIN_MAINTAINER_EXISTS": "This member is already a maintainer.",
+          "COMMON_PLUGIN_MANAGED": "This plugin is managed by your admins and can't be changed here."
         },
         "installForAccount": "The originally selected plugin installation could not be found. Select the plugin again in the current account and check it before submitting for review.",
         "releaseSha": "Release package SHA-256",
@@ -9539,7 +9536,9 @@
           "approvalRequired": "The plugin permissions have not been approved. Complete the permission check in these details first.",
           "installationUnavailable": "This plugin installation is unavailable. Reopen the original plugin details.",
           "sourceUnverified": "This plugin’s installation source could not be verified. Open a local plugin you developed.",
-          "publishingPermissionRequired": "This account does not have permission to submit this plugin."
+          "publishingPermissionRequired": "This account does not have permission to submit this plugin.",
+          "teamReviewing": "This version is under review",
+          "teamOtherReviewing": "{{version}} is under review"
         },
         "intro": "Manage releases, updates and reviews for public marketplace plugins",
         "pluginColumn": "Plugin",
@@ -9570,7 +9569,45 @@
         "cancelReviewCompleted": "Review cancelled. The currently listed version is unchanged.",
         "cancelReviewAlreadyFinal": "Review already finished, so it was not cancelled. The actual result is shown below.",
         "submitFailed": "Submission failed",
-        "viewDetails": "View details"
+        "viewDetails": "View details",
+        "publishTo": "Publish to",
+        "pluginList": "Plugins",
+        "target": {
+          "team": "Team shared",
+          "teamHint": "Members of {{org}} can install it",
+          "publicHint": "Anyone using Cindy can install it",
+          "public": "Public marketplace"
+        },
+        "next": "Next",
+        "teamStartFailed": "Couldn't start publishing. Try again later.",
+        "team": {
+          "delist": "Unlist",
+          "list": "List",
+          "delistTitle": "Unlist “{{name}}”?",
+          "delistDescription": "Members won’t see this plugin or be able to install it. Existing installs keep working but get no more updates. You can list it again later.",
+          "delistedVersion": "Unlisted · {{version}}",
+          "delistedByAdminVersion": "Unlisted · {{version}}. An administrator unlisted it; only an administrator can list it again.",
+          "listTitle": "List plugin",
+          "listDescription": "List this plugin? Once listed, members allowed by the usage policy can use it.",
+          "edit": "Edit",
+          "localDevelopment": "{{version}} · Local development",
+          "save": "Save",
+          "editAudienceTitle": "Edit visibility",
+          "saveImpact": "After saving, {{audience}} can install it. Members outside it keep the plugin they installed but get no more updates.",
+          "audienceChangedElsewhere": "Visibility was changed elsewhere and now shows the latest setting. Review it again before saving.",
+          "maintainers": "Maintainers",
+          "self": " (you)",
+          "addMaintainer": "Add maintainer",
+          "add": "Add",
+          "searchMaintainer": "Search members or departments",
+          "removeMaintainer": "Remove",
+          "removeMaintainerTitle": "Remove maintainer {{name}}?",
+          "removeMaintainerDescription": "You can add them again later.",
+          "role": {
+            "creator": "Creator",
+            "maintainer": "Maintainer"
+          }
+        }
       },
       "fileTransfer": {
         "reading": "Reading files",
@@ -9579,6 +9616,61 @@
         "importing": "Importing files",
         "finished": "File operation finished",
         "importFinished": "File import finished"
+      },
+      "audience": {
+        "title": "Visibility",
+        "all": "All members",
+        "allMembersOf": "All members of {{org}}",
+        "specified": "Specific departments and members",
+        "choose": "Choose departments or members",
+        "add": "Add",
+        "keepCurrent": "Keep current visibility",
+        "requireOne": "Choose at least one department or member",
+        "tooMany": "{{kind}}: up to {{max}}, {{count}} selected. Remove some first.",
+        "notFound": "Not found",
+        "ambiguous": "Several people share this name. Choose in the picker.",
+        "unresolvedLabel": "Unmatched names",
+        "selectedLabel": "Selected scope",
+        "roleLabels": {
+          "owner": "Owner",
+          "admin": "Admin",
+          "finance": "Finance",
+          "department_manager": "Department admin",
+          "member": "Member"
+        },
+        "picker": {
+          "title": "Choose visibility",
+          "search": "Search departments, member names or emails",
+          "departments": "Departments",
+          "members": "Members",
+          "emails": "Emails",
+          "roles": "Roles",
+          "included": "Included",
+          "loadMore": "Load more",
+          "retry": "Retry",
+          "loading": "Loading…",
+          "loadFailed": "Couldn't load",
+          "noMembers": "No matching members",
+          "addEmail": "Add by email {{email}}",
+          "selected": "{{count}} selected",
+          "clear": "Clear",
+          "noneSelected": "Nothing selected yet",
+          "remove": "Remove {{name}}",
+          "unknownDepartment": "Removed department",
+          "memberId": "Member {{id}}",
+          "searchMembersOnly": "Search members by name or email",
+          "expand": "Expand {{name}}",
+          "collapse": "Collapse {{name}}",
+          "cancel": "Cancel",
+          "done": "Done",
+          "confirm": "Use selection"
+        },
+        "namesMore": "{{names}} and {{count}} in total",
+        "separator": ", ",
+        "blocked": "Can't publish with the visibility you asked for",
+        "blockedLocked": "You can't change this plugin's visibility, or it couldn't be read right now. Cancel and publish without setting one, or ask the plugin's author to change it.",
+        "blockedLegacyRoles": "This plugin's current visibility includes legacy role conditions and can't be changed while publishing. Cancel and publish without setting one, then change it in the plugin details.",
+        "legacyRolesNote": "The current visibility includes legacy role conditions. Change it in the plugin details after publishing."
       }
     },
     "mcp": {
