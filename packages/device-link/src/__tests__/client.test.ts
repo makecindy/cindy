@@ -14763,6 +14763,144 @@ describe('listing read coalescing and stale read invoke-result retirement', () =
   });
 
   // 测试价值
+  // - 生产入口与可观察结果：DeviceLinkClient.invoke -> RemoteListingReadCoalescer 续发路径对 preSend / beforeDispatch 守卫的重验。
+  //   1) 1500ms 长预算调用在 350ms 已派发航班中途加入，随后在 350ms 超时前连接断开 / 调用方守卫失效：首轮超时后续发前必须重新执行
+  //      preSend / beforeDispatch，立即以调用方守卫错误（LINK_NOT_OPEN）拒绝且绝不再向对端发出第二笔列表请求；
+  //   2) 同一续发航班同时包含已失效调用者与仍有效调用者时，仅拒绝失效调用者，有效调用者重验通过后照常发出一次续读并拿到结果。
+  // - Bug／规则依据：PR #12658 评审 P2（listingReadCoalescer.ts 续发保留旧航班的 dispatchedChecked，跳过 preSend/beforeDispatch 重验导致断链后仍发出新请求）。
+  // - 现有覆盖缺口：既有测试覆盖排队期取消与首轮超时续读成功，未覆盖已加入在途航班的长预算调用者在首轮超时前失效时的续发拦截。
+  // - 最小失败输入：350ms 调用 + 5ms 后加入的 1500ms 带守卫调用，200ms 时翻转守卫为已断链，推进过 350ms 观察第二笔 wire invoke 是否发出。
+  // - tier：unit（内存 relay + fake timers，<30ms）。
+  it.each(['preSend', 'beforeDispatch'] as const)(
+    'rechecks %s before dispatching a post-timeout listing continuation and blocks disconnected callers',
+    async (guardKind) => {
+      vi.useFakeTimers();
+      let nowMs = 2_000;
+      const advance = async (ms: number) => {
+        const end = nowMs + ms;
+        while (nowMs < end) {
+          const step = Math.min(5, end - nowMs);
+          nowMs += step;
+          await vi.advanceTimersByTimeAsync(step);
+        }
+      };
+      const relay = new MemoryRelay();
+      const host = makeRelayClient(relay, 'desktop');
+      const phone = makeRelayClient(relay, 'ios');
+      vi.spyOn(host as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => nowMs);
+      vi.spyOn(phone as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => nowMs);
+      const pump = () => relay.settle(async () => { nowMs += 1; await vi.advanceTimersByTimeAsync(1); });
+      const seenInvokeIds: string[] = [];
+      let respondAfterMs: number | null = null;
+      host.onFrame((env) => {
+        if (env.kind === 'link-open' && env.src && env.id) {
+          host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+        }
+        if (env.kind === 'invoke' && env.src && env.id) {
+          seenInvokeIds.push(env.id);
+          if (respondAfterMs !== null) {
+            const src = env.src;
+            const id = env.id;
+            const delay = respondAfterMs;
+            setTimeout(() => {
+              host.sendInvokeResult(src, id, { ok: true, result: [{ id: 'continued-ok' }] });
+            }, delay);
+          }
+        }
+      });
+
+      try {
+        host.start();
+        phone.start();
+        await pump();
+        const opening = phone.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500);
+        await pump();
+        await opening;
+
+        // Case 1: Solo surviving 1500ms caller disconnects before the 350ms flight times out -> 0 continuation wire frames!
+        const disconnectedErr = new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+        let disconnected = false;
+        let guardChecks = 0;
+        const short1 = phone.invoke('desktop', { channel: 'local-db:sessions:list', args: [20] }, 350).catch((e: unknown) => e);
+        await advance(5);
+        await relay.settle(async () => {});
+        const longDisconnected = phone.invoke(
+          'desktop',
+          { channel: 'local-db:sessions:list', args: [20] },
+          1_500,
+          {
+            [guardKind]: () => {
+              guardChecks += 1;
+              if (disconnected) throw disconnectedErr;
+            },
+          },
+        ).catch((e: unknown) => e);
+        expect(guardChecks).toBe(1);
+        expect(seenInvokeIds).toHaveLength(1);
+
+        await advance(200);
+        disconnected = true;
+        await advance(160);
+        await relay.settle(async () => {});
+
+        expect(await short1).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+        expect(await longDisconnected).toBe(disconnectedErr);
+        expect(guardChecks).toBe(2);
+        expect(seenInvokeIds).toHaveLength(1);
+
+        // Case 2: Mixed surviving callers (one disconnected, one still active) -> disconnected rejects, active dispatches once and resolves!
+        let mixedCancelled = false;
+        let activeChecks = 0;
+        const short2 = phone.invoke('desktop', { channel: 'local-db:sessions:list', args: [40] }, 350).catch((e: unknown) => e);
+        await advance(5);
+        await relay.settle(async () => {});
+        const mixedAborted = phone.invoke(
+          'desktop',
+          { channel: 'local-db:sessions:list', args: [40] },
+          1_500,
+          {
+            [guardKind]: () => {
+              if (mixedCancelled) throw disconnectedErr;
+            },
+          },
+        ).catch((e: unknown) => e);
+        const mixedLive = phone.invoke(
+          'desktop',
+          { channel: 'local-db:sessions:list', args: [40] },
+          1_500,
+          {
+            [guardKind]: () => {
+              activeChecks += 1;
+            },
+          },
+        );
+        expect(activeChecks).toBe(1);
+        expect(seenInvokeIds).toHaveLength(2);
+
+        await advance(200);
+        mixedCancelled = true;
+        respondAfterMs = 100;
+        await advance(160);
+        await relay.settle(async () => {});
+
+        expect(await short2).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+        expect(await mixedAborted).toBe(disconnectedErr);
+        expect(activeChecks).toBe(2);
+        expect(seenInvokeIds).toHaveLength(3);
+
+        await advance(120);
+        await pump();
+        await expect(mixedLive).resolves.toEqual({ ok: true, result: [{ id: 'continued-ok' }] });
+        expect(seenInvokeIds).toHaveLength(3);
+      } finally {
+        phone.stop();
+        host.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // 测试价值
   // - 生产入口与可观察结果：DeviceLinkClient 被控端入站只读回包退役（transfer.retired + read-deadline-v1 协商期限）与跨版本互通。
   //   1) 旧控制端/未声明 read-deadline-v1 的只读请求在 30s（>24s）后绝不被猜测上限退役，仍完整保留直至 ACK 或明确 transfer.retired；
   //   2) 新控制端自定义长超时 invoke(..., 60_000) 协商 deadlineMs=60000，在 30s（>24s）后不退役，ACK 后正常交付；

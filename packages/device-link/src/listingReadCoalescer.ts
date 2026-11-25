@@ -13,7 +13,6 @@ function admissionBudgetMs(budgetMs: number): number {
 
 interface ListingWaiter {
   settled: boolean;
-  dispatchedChecked: boolean;
   enqueuedAt: number;
   timeoutMs: number;
   /** Immutable caller deadline from initial `run()` invocation (`enqueuedAt + timeoutMs`). */
@@ -355,6 +354,7 @@ export class RemoteListingReadCoalescer {
                   flight.runWire,
                 );
               }
+              waiter.joinedAfterDispatch = slot.followUp.dispatched;
               slot.followUp.waiters.push(waiter);
               this.armWaiterTimer(slot, slot.followUp, waiter, Math.max(1, Math.round(remainingMs)), waiter.everDispatched);
               continue;
@@ -433,7 +433,6 @@ export class RemoteListingReadCoalescer {
       const callDeadlineAt = enqueuedAt + timeoutMs;
       const waiter: ListingWaiter = {
         settled: false,
-        dispatchedChecked: flight.dispatched,
         enqueuedAt,
         timeoutMs,
         callDeadlineAt,
@@ -523,17 +522,14 @@ export class RemoteListingReadCoalescer {
         waiter.reject(err);
         continue;
       }
-      if (!waiter.dispatchedChecked) {
-        waiter.dispatchedChecked = true;
-        try {
-          waiter.preSend?.();
-          waiter.beforeDispatch?.();
-        } catch (err) {
-          this.clearWaiterTimer(waiter);
-          waiter.settled = true;
-          waiter.reject(err);
-          continue;
-        }
+      try {
+        waiter.preSend?.();
+        waiter.beforeDispatch?.();
+      } catch (err) {
+        this.clearWaiterTimer(waiter);
+        waiter.settled = true;
+        waiter.reject(err);
+        continue;
       }
       waiter.everDispatched = true;
       waiter.activeDeadlineAt = dispatchNow + budgetMs;
