@@ -1380,6 +1380,66 @@ describe('createContextOverflowRollover', () => {
     expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
   });
 
+  // Unit, docs/plans/acp-plugin-bridge.md (overflow continuation on plugin engines): getLiveSession hides a
+  // plugin engine runtime, so recovery committed a rebuild beside the still-open overflowing session (marked
+  // as Claude Code) and the replay was refused, leaving a handoff queued into the old session. Minimal input:
+  // a plugin engine task whose turn overflowed, its runtime visible only to the any-engine lookup.
+  const PLUGIN_PROVIDER = 'acp-plugin:dsh-acp:dsh';
+  function pluginEngineOverflow() {
+    const deps = makeDeps([msg('user', 'retained text', 'accepted')], 'acp');
+    deps.getSessionRow.mockResolvedValue({ ...deps.getSessionRow.getMockImplementation()!(), agentKind: 'acp',
+      providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', contextWindow: 0 } as never);
+    deps.getLiveSession.mockReturnValue(undefined);
+    const engine = vi.fn();
+    const { replayPorts } = recoveryReplayPorts(engine);
+    const buildCreateOptsWithStderr = vi.fn((opts: Record<string, unknown>) => ({ ...opts, extraDirs: [], writableDirs: [] }));
+    const ports = {
+      ...replayPorts,
+      getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: '/fixture', agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', fastMode: false }],
+      }) }) }) } }),
+      buildCreateOptsWithStderr,
+    };
+    const replayUserMessage: ContextOverflowRolloverDeps['replayUserMessage'] = (...args) =>
+      replayContextRecoveryWithPorts(ports as unknown as ReplayContextRecoveryPorts, ...args);
+    return { deps, engine, buildCreateOptsWithStderr, replayUserMessage };
+  }
+
+  it('continues an overflowed plugin engine task in a fresh session on the same engine', async () => {
+    const { deps, engine, buildCreateOptsWithStderr, replayUserMessage } = pluginEngineOverflow();
+    const runtime = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, getRuntimeSession: () => runtime });
+    expect(rollover.claim('s1')).toBe('claimed');
+
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(true);
+
+    expect(deps.closeSession).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(deps.closeSession.mock.invocationCallOrder[0]!).toBeLessThan(deps.commitRebuild.mock.invocationCallOrder[0]!);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({
+      reason: 'context-overflow', sourceAgentKind: 'acp', sourceProviderId: PLUGIN_PROVIDER,
+    }), expect.any(AbortSignal));
+    expect(buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', fastMode: false,
+    }));
+    expect(engine).toHaveBeenCalledOnce();
+  });
+
+  // Same rule: a busy runtime, or a host without the any-engine lookup, rebuilds nothing.
+  it.each([
+    ['a busy plugin engine runtime', { getRuntimeSession: () => ({ isTurnRunning: () => true }) }],
+    ['no any-engine runtime lookup', {}],
+  ])('leaves a plugin engine task untouched with %s', async (_case, extra) => {
+    const { deps, engine, replayUserMessage } = pluginEngineOverflow();
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, ...extra });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(false);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
   it('keeps coordinator recovery when replay is rejected', async () => {
     const deps = makeDeps([msg('user', '再做 B', 'u2')]);
     deps.replayUserMessage.mockResolvedValue({ accepted: false });

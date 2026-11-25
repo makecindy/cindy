@@ -399,8 +399,9 @@ function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | und
   return typeof kind === 'string' && kind.length > 0;
 }
 
-function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
-  if (value === 'codex' || value === 'pi') return value;
+function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' | 'acp' {
+  // A plugin engine task's rebuild records its own engine: forks route by it, never as Claude Code.
+  if (value === 'codex' || value === 'pi' || value === 'acp') return value;
   return 'cc';
 }
 
@@ -528,7 +529,8 @@ export interface ContextOverflowRolloverDeps {
       reason: ContextRebuildReason;
       handoffCoverage?: HandoffCoverage;
       sourceUserClientId: string | null;
-      sourceAgentKind?: 'cc' | 'codex' | 'pi';
+      /** 'acp' = plugin engine task. */
+      sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
       expectedClearedAt?: number | null;
@@ -757,12 +759,19 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
     if (checkExternalOwner && sessionRow.agentKind !== 'codex') return false;
     if (oversized && !canContinueContextRecovery(sessionRow)) return false;
+    // A plugin engine cannot shrink its own history; the task continues in a fresh session on the same
+    // engine with a handoff (docs/plans/acp-plugin-bridge.md). getLiveSession hides plugin engine
+    // runtimes, so the busy check and the retirement read the runtime itself; without that reader
+    // nothing is rebuilt (a rebuild beside a still-open runtime would hand over into the old session).
+    const pluginEngine = sessionRow.agentKind === 'acp';
+    if (pluginEngine && !deps.getRuntimeSession) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
+      const runtime = pluginEngine ? deps.getRuntimeSession?.(sessionId) : live;
       // Sampled while the source runtime is still live; the replay below goes through the send transaction.
       const sendToSession = deps.sendToSessionHint?.(sessionId);
-      if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
+      if (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
@@ -941,7 +950,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         continuedInputs.set(sessionId, plan.sourceUserClientId);
       }
 
-      if (live) await deps.closeSession(sessionId);
+      if (runtime) await deps.closeSession(sessionId);
       signal?.throwIfAborted();
       if (checkExternalOwner && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const sourceWire = persistedUserContentToWireMessage(
@@ -1184,8 +1193,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
+    // Same plugin engine rule as runRecover: busy check and retirement read the runtime itself.
+    const pluginEngine = sessionRow.agentKind === 'acp';
+    if (pluginEngine && !deps.getRuntimeSession) return false;
     const live = deps.getLiveSession(sessionId);
-    if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    const runtime = pluginEngine ? deps.getRuntimeSession?.(sessionId) : live;
+    if (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0) return false;
     const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
     if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
@@ -1274,7 +1287,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。
     signal.throwIfAborted();
-    if (live) await deps.closeSession(sessionId);
+    if (runtime) await deps.closeSession(sessionId);
     signal.throwIfAborted();
     const label = engineLabelForOverflow(sessionRow.agentKind);
     const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
