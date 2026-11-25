@@ -59,6 +59,10 @@ describe('mobile message media thumbnail wiring', () => {
     expect(toolMediaBlock).toContain('onResolveRemoteMedia={actions.onResolveRemoteMedia}');
   });
 
+  it('preserves bounded inline audio for the HTTPS-origin WebView on the normal task route', () => {
+    expect(screenSource).toContain("if (resolved.inlineBase64 && diskCache && media.kind !== 'audio')");
+  });
+
   it('renders same-size resolving and fallback frames inside MediaPreview', () => {
     const mediaPreview = rendererSource.slice(
       rendererSource.indexOf('function MediaPreview'),

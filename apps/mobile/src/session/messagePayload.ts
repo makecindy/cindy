@@ -41,12 +41,17 @@ import {
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
+import type { ResolvedPreviewFile } from './RemoteAttachmentPreview';
+
+export type AudioAttachmentPhase = 'idle' | 'loading' | 'ready' | 'error';
 
 export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, NormalizedToolMedia> & {
   /** Mobile 查看器内的附件身份，不参与跨端传输；地址变化时仍能定位同一页。 */
   galleryImageKey?: string;
   /** 待发送图片条中的位置（含未就绪格），仅在打开前附件被替换、身份失效时兜底。 */
   galleryImageSlot?: number;
+  onAudioPhaseChange?: (phase: AudioAttachmentPhase) => void;
+  preparedAudioSource?: ResolvedPreviewFile;
 };
 
 /** Windows drive letters resemble URI schemes; recognize paths before preserving real URIs. */
@@ -61,12 +66,18 @@ export async function resolveAttachmentPreviewSource(
   payload: Extract<MessagePayload, { kind: 'file' | 'media' }>,
   resolve: ResolveRemoteMediaFn,
   signal: AbortSignal,
+  forceRefresh = false,
 ) {
   if (payload.kind === 'media' && payload.media.previewable && (isPayloadDirectPreviewableUrl(payload.media.url) || /^data:audio\//i.test(payload.media.url)))
     return { url: payload.media.url, mimeType: payload.media.mimeType };
   const source = payload.kind === 'file' ? payload.sourcePath! : payload.media.url;
   const url = toRemoteAttachmentUrl(source);
-  return resolve({ kind: 'file', url, previewable: false }, { front: true, signal });
+  const kind = payload.kind === 'media' && payload.media.kind === 'audio' ? 'audio' : 'file';
+  return resolve({ kind, url, previewable: false }, {
+    front: true,
+    signal,
+    ...(forceRefresh ? { forceRefresh: true } : {}),
+  });
 }
 
 export {

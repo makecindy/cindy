@@ -3,6 +3,7 @@ import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
+import { AUDIO_ATTACHMENT_FIXTURE, audioAttachmentFixture, audioFixtureTracks } from "./audioAttachmentFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
@@ -412,9 +413,8 @@ async function visualMockInvoke<T = unknown>(
     } as T;
   }
   if (channel === "device-link:media:fetch") {
-    const fixture = attachmentPreviewFixture(
-      String((args[0] as { url?: string })?.url ?? ""),
-    );
+    const request = (args[0] ?? {}) as { url?: string; skipCache?: boolean };
+    const fixture = await audioAttachmentFixture(request) ?? attachmentPreviewFixture(request.url ?? "");
     if (fixture) return fixture as T;
   }
   if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
@@ -776,6 +776,7 @@ function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const catalog = getUiMockRows().sessions.map(catalogSession).map(session => ({ ...session, ...taskMetaOverrides.get(session.id) }));
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
+    visualMockSession(AUDIO_ATTACHMENT_FIXTURE),
     { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
     ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
@@ -823,6 +824,11 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === AUDIO_ATTACHMENT_FIXTURE) {
+    const row = getUiMockRows().sessions.find(session => session.id === 'ui-mock-rich-answer')!;
+    return { ...catalogSession(row), id, source: 'bot', title: 'Audio Attachment QA',
+      companion: { id: 'cindy-default', role: 'canonical' } };
+  }
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
   if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
@@ -893,6 +899,14 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'mail-draft-call', 'tool_use', { toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'google-gmail', tool: 'gmail_run' }, toolUseId: 'mail-draft-call' }, -50000),
     message(sessionId, 'mail-draft-result', 'tool_result', JSON.stringify({ ok: true, result: { draft: 'saved', xdt_card_id: VISUAL_MAIL_DRAFT_CALL_ID } }), -49000, { toolUseId: 'mail-draft-call' }),
     message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+  ];
+  if (sessionId === AUDIO_ATTACHMENT_FIXTURE) return [
+    message(sessionId, 'fixture-audio-user', 'user', 'Preview the audio samples.', -10_000),
+    message(sessionId, 'fixture-audio-tool', 'tool_use', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'fixture-audio-tool' }, -9_000),
+    message(sessionId, 'fixture-audio-result', 'tool_result', { xdt_audio_tracks: audioFixtureTracks }, -8_000, { toolUseId: 'fixture-audio-tool' }),
+    message(sessionId, 'fixture-audio-done', 'assistant', 'Here are the audio samples.', -7_000, {
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    }),
   ];
   if (sessionId === 'visual-teammate-process') return [
     message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -420_000),

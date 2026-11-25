@@ -180,6 +180,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  ArrowDown: () => createElement("span", { "data-testid": "audio-fetch-icon" }),
   Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
@@ -215,7 +216,8 @@ vi.mock("lucide-react-native", () => ({
   ListTodo: () => null,
   LoaderCircle: () => null,
   PencilLine: () => null,
-  RefreshCw: () => null,
+  RefreshCw: () => createElement("span", { "data-testid": "retry-icon" }),
+  Play: () => createElement("span", { "data-testid": "play-icon" }),
   Send: () => null,
   Share: () => null,
   Sparkles: () => null,
@@ -363,7 +365,8 @@ vi.mock("@/session/messageActions", async (original) => ({
 }));
 
 import { i18n } from "@/i18n";
-import { MessageRenderer } from "@/session/MessageRenderer";
+import { AttachmentStrip, MessageRenderer } from "@/session/MessageRenderer";
+import { buildMessageContentLayout } from "@/session/messageContentLayout";
 import { copyMessageText, writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
@@ -1084,7 +1087,11 @@ describe("table-heavy assistant replies", () => {
   });
 });
 
-vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+const mockAudioViewer = vi.hoisted(() => vi.fn((_props: {
+  onAudioPhaseChange?: (phase: 'idle' | 'loading' | 'ready' | 'error') => void;
+  resolve(signal: AbortSignal, forceRefresh?: boolean): Promise<unknown>;
+}) => null));
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: mockAudioViewer }));
 
 // 测试价值
 // - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send 分支通过 renderText
@@ -1262,4 +1269,77 @@ it('opens cross-device source labels while redacted sources remain inert', () =>
   act(() => labels.forEach(label => label.dispatchEvent(new MouseEvent('click', { bubbles: true }))));
   expect(onOpenOriginSession).toHaveBeenCalledExactlyOnceWith('dev-A::task-1');
   act(() => root.unmount());
+});
+
+it('opens managed audio on tap and reflects the viewer states on the message card', async () => {
+  const url = `cindy-media://blobs/${'a'.repeat(64)}.wav`;
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Voice sample', xdt_audio_url: url }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const items = buildMobileMessageRenderItems([tool, result]);
+  const playbackSource = { url: 'https://fixture.invalid/tone.wav' };
+  const resolve = vi.fn().mockResolvedValue(playbackSource);
+  mockAudioViewer.mockClear();
+  const mounted = mount([], { items, companion: true, onResolveRemoteMedia: resolve });
+  const card = () => mounted.host.querySelector<HTMLElement>('[data-testid="message.audioAttachmentCard"]')!;
+  try {
+    expect(card().textContent).toContain('Voice sample');
+    expect(card().querySelector('[data-testid="audio-fetch-icon"]')).not.toBeNull();
+    expect(card().querySelector('[data-testid="play-icon"]')).toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.fetchAudio'));
+    expect(resolve).not.toHaveBeenCalled();
+    await act(async () => {
+      card().click();
+      await Promise.resolve();
+      expect(resolve).toHaveBeenCalledWith(
+        { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true },
+      );
+    });
+    const firstViewer = mockAudioViewer.mock.lastCall?.[0]!;
+    expect(card().getAttribute('aria-disabled')).toBe('true');
+    expect(card().textContent).toContain(i18n.t('message.renderer.loading'));
+    await expect(firstViewer.resolve(new AbortController().signal)).resolves.toBe(playbackSource);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    act(() => firstViewer.onAudioPhaseChange?.('ready'));
+    expect(card().querySelector('[data-testid="play-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.renderer.playAudio'));
+    act(() => firstViewer.onAudioPhaseChange?.('error'));
+    expect(card().querySelector('[data-testid="retry-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    resolve.mockRejectedValueOnce(new Error('Controller offline'));
+    await act(async () => card().click());
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    await act(async () => card().click());
+    expect(resolve).toHaveBeenLastCalledWith(
+      { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true, forceRefresh: true },
+    );
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it('renders sent WAVs as audio cards and keeps the original file index for group authorization', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const onOpenFile = vi.fn();
+  const onResolveRemoteMedia = vi.fn();
+  act(() => root.render(
+    <AttachmentStrip attachments={[
+      { kind: 'file', name: 'Readme.pdf', previewable: false },
+      { kind: 'file', name: '录音附件.wav', mimeType: 'audio/wav', previewable: false },
+    ]} messageKey="sent-audio" align="right" layout={buildMessageContentLayout({ screenWidth: 320 })}
+    usePreviewState={useState} onOpenFile={onOpenFile} onResolveRemoteMedia={onResolveRemoteMedia} />,
+  ));
+  try {
+    const card = host.querySelector<HTMLElement>('[data-testid="message.audioAttachmentCard"]');
+    expect(card?.textContent).toContain('录音附件.wav');
+    expect(card?.querySelector('[data-testid="audio-fetch-icon"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="message.filePreviewButton.pdf"]')).not.toBeNull();
+    act(() => card!.click());
+    expect(onOpenFile).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onResolveRemoteMedia).not.toHaveBeenCalled();
+  } finally {
+    act(() => root.unmount());
+  }
 });
