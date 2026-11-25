@@ -7962,6 +7962,7 @@
         "back": "返回鍵盤快捷鍵",
         "retry": "重試",
         "layout": {
+          "bindingSummary": "按鍵對應",
           "title": "鍵位",
           "description": "點按鍵位即可改它做什麼。按下手把時，圖上對應的鍵會亮起。",
           "clickToEdit": "點按即可設定",

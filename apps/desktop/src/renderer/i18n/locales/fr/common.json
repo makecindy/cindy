@@ -8074,6 +8074,7 @@
         "back": "Retour",
         "retry": "Réessayer",
         "layout": {
+          "bindingSummary": "Affectation des boutons",
           "title": "Commandes",
           "description": "Cliquez sur une commande pour changer son action. Appuyer sur la manette met en surbrillance la commande correspondante ici.",
           "clickToEdit": "Cliquer pour définir",

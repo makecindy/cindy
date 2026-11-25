@@ -7962,6 +7962,7 @@
         "back": "归键盘捷径",
         "retry": "再试",
         "layout": {
+          "bindingSummary": "键用一览",
           "title": "键位",
           "description": "点键位，即可改其所司。按手柄时，图上相应之键即亮。",
           "clickToEdit": "点之即设",

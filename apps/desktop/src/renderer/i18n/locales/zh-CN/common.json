@@ -7962,6 +7962,7 @@
         "back": "返回键盘快捷键",
         "retry": "重试",
         "layout": {
+          "bindingSummary": "按键映射",
           "title": "键位",
           "description": "点按键位即可修改其功能。按下手柄按键时，图上对应的键位会亮起。",
           "clickToEdit": "点按即可设置",

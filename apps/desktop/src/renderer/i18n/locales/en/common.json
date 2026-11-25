@@ -8005,6 +8005,7 @@
         "back": "Back",
         "retry": "Retry",
         "layout": {
+          "bindingSummary": "Button mappings",
           "title": "Controls",
           "description": "Click a control to change what it does. Pressing the pad lights the matching control here.",
           "clickToEdit": "Click to set",

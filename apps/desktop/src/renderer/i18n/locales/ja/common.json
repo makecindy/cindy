@@ -7962,6 +7962,7 @@
         "back": "戻る",
         "retry": "再試行",
         "layout": {
+          "bindingSummary": "ボタン割り当て",
           "title": "ボタン配置",
           "description": "ボタンをクリックして割り当てを変更できます。実機を押すと、図の同じ位置が点灯します。",
           "clickToEdit": "クリックして設定",

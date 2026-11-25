@@ -8074,6 +8074,7 @@
         "back": "Atrás",
         "retry": "Reintentar",
         "layout": {
+          "bindingSummary": "Asignación de botones",
           "title": "Controles",
           "description": "Haz clic en un botón para cambiar su función. Al presionarlo en el control, se ilumina aquí.",
           "clickToEdit": "Haz clic para configurar",

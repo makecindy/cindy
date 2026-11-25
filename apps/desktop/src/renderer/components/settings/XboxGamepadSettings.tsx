@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
   ChevronRight,
@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Select, type SelectProps } from '@/components/ui/select';
 
-import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
@@ -42,7 +42,9 @@ import {
   createXboxGamepadDefaultLayout,
   createXboxGamepadDefaultSettings,
   isNintendoJoyConDevice,
+  XBOX_GAMEPAD_BUTTON_IDS,
   XBOX_GAMEPAD_STICK_DIRECTIONS,
+  XBOX_GAMEPAD_STICK_IDS,
   type GamepadFamily,
   type XboxGamepadBinding,
   type XboxGamepadButtonId,
@@ -368,6 +370,8 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
           </div>
         </SettingsCard>
 
+        {state && <GamepadBindingSummary family={family} layout={settings.layout} />}
+
         <XboxGamepadPartEditor
           open={editing !== null && !isStickPart(editing)}
           onOpenChange={(open) => {
@@ -607,6 +611,45 @@ function BindingSelect({
       width="sm"
       groups={groups}
     />
+  );
+}
+
+function GamepadBindingSummary({ family, layout }: { family: GamepadFamily; layout: XboxGamepadLayoutModel }) {
+  const { t } = useTranslation();
+  const unmapped = t('settings.shortcuts.xboxGamepad.actions.none');
+
+  return (
+    <SettingsSection headingLevel={3} title={t('settings.shortcuts.xboxGamepad.layout.bindingSummary')}>
+      <SettingsCard>
+        {XBOX_GAMEPAD_BUTTON_IDS.map((button) => (
+          <SettingsRow
+            key={button}
+            title={t(familyControlKey(family, button))}
+            value={bindingLabel(layout.buttons[button], t) ?? unmapped}
+          />
+        ))}
+        {XBOX_GAMEPAD_STICK_IDS.map((side) => {
+          const stick = layout.sticks[side];
+          const name = t(familyControlKey(family, `${side}Stick`));
+
+          return (
+            <Fragment key={side}>
+              <SettingsRow
+                title={name}
+                value={t(`settings.shortcuts.xboxGamepad.stick.mode.options.${stick.mode}`)}
+              />
+              {stick.mode === 'custom' && XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => (
+                <SettingsRow
+                  key={direction}
+                  title={`${name} · ${t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}`}
+                  value={bindingLabel(stick.directions[direction], t) ?? unmapped}
+                />
+              ))}
+            </Fragment>
+          );
+        })}
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 

@@ -7962,6 +7962,7 @@
         "back": "뒤로",
         "retry": "다시 시도",
         "layout": {
+          "bindingSummary": "버튼 매핑",
           "title": "버튼 배치",
           "description": "버튼을 눌러 동작을 바꿀 수 있습니다. 패드를 누르면 그림의 같은 위치가 켜집니다.",
           "clickToEdit": "눌러서 설정",

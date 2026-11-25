@@ -7962,6 +7962,7 @@
         "back": "歸鍵盤捷徑",
         "retry": "再試",
         "layout": {
+          "bindingSummary": "鍵用一覽",
           "title": "鍵位",
           "description": "點鍵位，即可改其所司。按手把時，圖上相應之鍵即亮。",
           "clickToEdit": "點之即設",

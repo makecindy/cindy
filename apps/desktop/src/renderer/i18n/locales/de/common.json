@@ -8005,6 +8005,7 @@
         "back": "Zurück",
         "retry": "Erneut versuchen",
         "layout": {
+          "bindingSummary": "Tastenbelegung",
           "title": "Bedienelemente",
           "description": "Klicke auf ein Bedienelement, um seine Funktion zu ändern. Wenn du den Controller betätigst, leuchtet hier das entsprechende Bedienelement auf.",
           "clickToEdit": "Zum Festlegen klicken",
