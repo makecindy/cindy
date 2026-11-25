@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
-import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { useResendCountdown } from '@/components/login/useResendCountdown';
@@ -29,11 +28,12 @@ const NEW_VALUE_CODES = new Set([
 ]);
 
 /**
- * 设置页「换绑登录手机号 / 邮箱」入口与分步弹窗:先验证当前联系方式,再验证新联系方式。
+ * 「换绑登录手机号 / 邮箱」入口与分步弹窗:先验证当前联系方式,再验证新联系方式。
+ * 入口是用户卡片 ID 行后的小号文字按钮(不单独占设置分组);不可换绑时不渲染。
  * 入口只读 main 的本地可用性(不发网络请求);打开弹窗并点击发送后才访问服务端。
  * 票据、凭据与网络都在 Electron main,本组件只持有展示状态与用户输入。
  */
-export function ContactChangeSection() {
+export function ContactChangeAction() {
   const { t } = useTranslation();
   const setting = useSettingDefinition(generalSettings.contactChange);
   const { user, mode } = useAuth();
@@ -204,28 +204,22 @@ export function ContactChangeSection() {
 
   return (
     <>
-      <SettingsCard className="mt-3">
-        <SettingsRow
-          {...setting.anchorProps}
-          title={t(`settings.contactChange.${type}.rowTitle`)}
-          hint={t(`settings.contactChange.${type}.rowHint`)}
-          trailing={
-            <Button
-              {...setting.controlProps}
-              variant="secondary"
-              size="md"
-              compact
-              type="button"
-              onClick={() => {
-                resetDraft();
-                setOpen(true);
-              }}
-            >
-              {t(`settings.contactChange.${type}.change`)}
-            </Button>
-          }
-        />
-      </SettingsCard>
+      <Button
+        {...setting.anchorProps}
+        {...setting.controlProps}
+        variant="secondary"
+        tone="quiet"
+        size="xxs"
+        compact
+        type="button"
+        className="shrink-0"
+        onClick={() => {
+          resetDraft();
+          setOpen(true);
+        }}
+      >
+        {t(`settings.contactChange.${type}.change`)}
+      </Button>
 
       <ConfirmDialog
         open={open}

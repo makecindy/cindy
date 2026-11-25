@@ -18,7 +18,7 @@ export const generalSettings = defineSettings({
     sectionKey: 'settings.sections.user',
   },
   // 换绑登录联系方式：国内版换手机号、国际版换邮箱（与登录页同一构建区域判断）。
-  // SSO 等会话不显示这一行，搜索结果回落到「用户」区块。
+  // 入口是用户卡片 ID 行后的文字按钮；SSO 等会话不显示该按钮，搜索结果回落到「用户」区块。
   contactChange: {
     id: 'general.contactChange',
     tab: 'general',

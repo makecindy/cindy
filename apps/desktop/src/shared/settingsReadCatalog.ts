@@ -326,8 +326,6 @@ export const SETTINGS_READ_EXTERNAL_CATALOG = [
   { id: 'localAgent.applications', tab: 'remote-control', control: 'LocalAgentSection', kind: 'authorization', entry: 'local-agent' },
   { id: 'account.profile', tab: 'general', control: 'UserProfileCard', kind: 'external', entry: 'account' },
   { id: 'account.logout', tab: 'general', control: 'LogoutSection', kind: 'action', entry: 'account' },
-  // Changing the sign-in phone or email is a server-side account action, not a v2 snapshot field.
-  { id: 'account.contactChange', tab: 'general', control: 'ContactChangeSection', kind: 'action', entry: 'account' },
   // The new-task default permission is renderer-local and not part of the deployed v2 snapshot.
   { id: 'general.newChatDefaultPermission', tab: 'general', control: 'NewChatDefaultPermissionSection', kind: 'external', entry: 'newTask' },
   // The default new-task folder is renderer-local per data owner; not a v2 snapshot field.

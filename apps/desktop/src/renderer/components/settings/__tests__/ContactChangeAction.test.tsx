@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * 测试价值
- * - 生产入口与可观察结果:设置页 ContactChangeSection;用户看到入口、分步弹窗与错误提示,
+ * - 生产入口与可观察结果:设置页用户卡片 ID 行的 ContactChangeAction;用户看到入口、分步弹窗与错误提示,
  *   main 收到的验证码与新联系方式。
  * - 规则依据:换绑必须先验当前联系方式再验新联系方式;票据失效要回到第一步。
  * - 现有覆盖缺口:新组件,无相邻测试。
@@ -56,7 +56,7 @@ vi.mock('@/components/ui/confirm-dialog', () => ({
     ) : null,
 }));
 
-import { ContactChangeSection } from '../ContactChangeSection';
+import { ContactChangeAction } from '../ContactChangeAction';
 
 const api = {
   authGetContactChangeAvailability: vi.fn(),
@@ -73,7 +73,7 @@ async function enterCode(code: string) {
   });
 }
 
-describe('ContactChangeSection', () => {
+describe('ContactChangeAction', () => {
   beforeEach(() => {
     auth.value = { user: { id: 'membership-id' }, mode: 'cloud' };
     api.authGetContactChangeAvailability.mockResolvedValue({ available: true, type: 'phone' });
@@ -98,13 +98,13 @@ describe('ContactChangeSection', () => {
 
   it('renders nothing when the account cannot change its sign-in contact', async () => {
     api.authGetContactChangeAvailability.mockResolvedValue({ available: false, type: null });
-    const { container } = render(<ContactChangeSection />);
+    const { container } = render(<ContactChangeAction />);
     await waitFor(() => expect(api.authGetContactChangeAvailability).toHaveBeenCalled());
     expect(container.innerHTML).toBe('');
   });
 
   it('verifies the current phone before sending a code to the new one', async () => {
-    render(<ContactChangeSection />);
+    render(<ContactChangeAction />);
     fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
 
     fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
@@ -134,7 +134,7 @@ describe('ContactChangeSection', () => {
       success: false,
       code: 'CONTACT_CHANGE_TICKET_INVALID',
     });
-    render(<ContactChangeSection />);
+    render(<ContactChangeAction />);
     fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
     fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
     await enterCode('123456');
@@ -155,7 +155,7 @@ describe('ContactChangeSection', () => {
     api.authConfirmContactChange
       .mockResolvedValueOnce({ success: false, code: 'CONTACT_TAKEN' })
       .mockResolvedValueOnce({ success: true, value: { type: 'phone', maskedValue: '+8613****77' } });
-    render(<ContactChangeSection />);
+    render(<ContactChangeAction />);
     fireEvent.click(await screen.findByText('settings.contactChange.phone.change'));
     fireEvent.click(screen.getByText('settings.contactChange.sendCode'));
     await enterCode('123456');
