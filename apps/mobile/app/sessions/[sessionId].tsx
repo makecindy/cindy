@@ -11811,6 +11811,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   />
                 </View>
               ) : null}
+              {showComposerActivity && remoteSessionRunStatus.providerRetryDiagnostic ? (
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[styles.providerRetryDiagnostic, { marginHorizontal: composerTouchLayout.composerPaddingHorizontal }]}
+                >
+                  {remoteSessionRunStatus.providerRetryDiagnostic}
+                </Text>
+              ) : null}
               {!shareSelectionActive && currentSession?.source === 'side-chat'
                 && currentSession.parentSessionId ? (
                 <Pressable accessibilityRole="button"
@@ -14512,6 +14520,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   composerActivityFrame: {
     alignSelf: 'stretch',
     marginTop: spacing.lg,
+  },
+  providerRetryDiagnostic: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
+    lineHeight: lineHeight.caption,
   },
   composerActivityMeta: {
     alignItems: 'center',

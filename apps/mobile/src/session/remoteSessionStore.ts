@@ -156,6 +156,7 @@ export interface RemoteSessionRunStatus {
   /** Existing maker:event identity, retained locally for live/history error deduplication. */
   terminalError?: { clientId: string; message: string } | null;
   reconnectAttempt: RemoteSessionReconnectAttempt | null;
+  providerRetryDiagnostic?: string;
   sideTaskRunning: boolean;
   startedAt: number | null;
   status: string;
@@ -5141,9 +5142,18 @@ export const remoteSessionStore = {
     if ((type === 'status' || type === 'done' || type === 'error')
       && !acceptSessionStateSource(sessionId, deviceId, sessionRuntimeSources)) return;
     markSessionMakerActivity(sessionId);
-    const reconnectCleared = type !== null && type !== 'error' && type !== 'done'
+    let reconnectCleared = type !== null && type !== 'error' && type !== 'done'
       ? clearSessionReconnectAttempt(sessionId)
       : false;
+    if (event.turnScope !== 'background'
+      && (type === 'tool_use' || (type === 'text' && readString(event.data, 'text')?.trim()))
+      && sessionStateReadAllowed(sessionId, deviceId, sessionRuntimeSources)) {
+      const current = readSessionRunStatus(sessionId);
+      if (current.providerRetryDiagnostic) {
+        const { providerRetryDiagnostic: _diagnostic, ...next } = current;
+        reconnectCleared = writeSessionRunStatus(sessionId, next) || reconnectCleared;
+      }
+    }
     const fullMessageWriteAllowed = fromList || messageWriteAllowed(sessionId);
     if (type === 'text') {
       if (!fullMessageWriteAllowed) {
@@ -5256,11 +5266,14 @@ export const remoteSessionStore = {
             readString(data, 'reason'),
           )
         : null;
-      const current = readSessionRunStatus(sessionId);
+      const diagnostic = readPiRegionRetryDiagnostic(event, data);
+      const { providerRetryDiagnostic, ...current } = readSessionRunStatus(sessionId);
+      const nextDiagnostic = diagnostic ?? (reconnectAttempt ? undefined : providerRetryDiagnostic);
       const changed = writeSessionRunStatus(sessionId, {
         ...current,
         isRunning: true,
         reconnectAttempt,
+        ...(nextDiagnostic ? { providerRetryDiagnostic: nextDiagnostic } : {}),
         startedAt: current.startedAt ?? Date.now(),
       });
       if (changed || textFlushed) emit();
@@ -5438,6 +5451,8 @@ export const remoteSessionStore = {
         ...(current.hasTerminalError !== undefined ? { hasTerminalError: current.hasTerminalError } : {}),
         ...(current.terminalError !== undefined ? { terminalError: current.terminalError } : {}),
         reconnectAttempt: null,
+        ...(isRunning && current.providerRetryDiagnostic
+          ? { providerRetryDiagnostic: current.providerRetryDiagnostic } : {}),
         sideTaskRunning: isRunning ? data?.skipTurnReset === true : false,
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
         status: rawStatus ?? current.status,
@@ -6063,6 +6078,19 @@ function parseAttemptPair(
  */
 const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
 
+// The Pi translator exposes the known OpenCode Go guidance during its first
+// native backoff. Accept that bounded diagnostic without projecting raw errors.
+function readPiRegionRetryDiagnostic(
+  event: Record<string, unknown>,
+  data: Record<string, unknown> | null,
+): string | undefined {
+  if (event.source !== 'pi' || event.turnScope === 'background'
+    || data?.isTerminal !== false || data.willRetry !== true || data.errorStatus !== 400) return;
+  const guidance = "This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.";
+  const message = readString(data, 'message');
+  if (message === JSON.stringify({ message: guidance })) return guidance;
+}
+
 function parseReconnectAttemptMessage(
   message: string,
   reason?: string | null,
@@ -6119,6 +6147,10 @@ function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
 
 function writeSessionRunStatus(sessionId: string, next: RemoteSessionRunStatus): boolean {
   const current = readSessionRunStatus(sessionId);
+  if (!next.isRunning && next.providerRetryDiagnostic) {
+    const { providerRetryDiagnostic: _diagnostic, ...idle } = next;
+    next = idle;
+  }
   if (next.isRunning && !current.isRunning && current.hasTerminalError) {
     next = { ...next, hasTerminalError: false, terminalError: null };
   }
