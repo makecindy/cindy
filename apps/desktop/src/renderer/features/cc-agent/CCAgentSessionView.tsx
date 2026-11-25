@@ -1495,9 +1495,6 @@ function CCAgentSessionContent({
           prev?.id === patchedId ? patchBuffer.merge(patchedId, prev) : prev,
         );
       }
-      // 被控端本机:控制端远程切的 fastMode 经 persistSessionFields 广播到这里 → 镜像进 chat
-      // in-memory,让本机打开的 fast 开关也即时跟随(以被控端为准;幂等,不碰本机乐观路径)。
-      makerChatStore.mirrorSessionFields(patchedId, patch);
     });
     return unsub;
   }, [sessionId]);

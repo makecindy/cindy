@@ -17,7 +17,7 @@ vi.mock('@/lib/sessionService', () => ({
 // Unit, real chat and draft stores with the preload boundary controlled. Existing
 // Device Link tests don't exercise a local Host's missed terminal event. No real
 // timers, accounts or model execution. Assert visible state, not source patterns.
-// Measured standalone: 4 cases, 1.9 s total (11 ms test body).
+// Measured standalone: 6 cases, 1.62 s total (13 ms test bodies).
 const id = 'host-recovery-task';
 const flush = async () => { for (let n = 0; n < 50; n++) await Promise.resolve(); };
 const projection = (): AgentInputProjection => ({
@@ -29,11 +29,11 @@ const row = (content: string): Message => ({
   id: 'row-1', clientId: 'client-1', sessionId: id, role: 'assistant', content,
   createdAt: '2026-11-10T00:00:00Z', toolUseId: null, agentMeta: null,
 });
-let listeners: Record<string, (value: unknown) => void>;
+let listeners: Record<string, (value: unknown, ownerStamp?: unknown) => void>;
 let getProjection: ReturnType<typeof vi.fn>;
 let pending: ReturnType<typeof vi.fn>;
 let send: ReturnType<typeof vi.fn>;
-const subscribe = (name: string) => (cb: (value: unknown) => void) => {
+const subscribe = (name: string) => (cb: (value: unknown, ownerStamp?: unknown) => void) => {
   listeners[name] = cb;
   return () => { delete listeners[name]; };
 };
@@ -51,7 +51,10 @@ beforeEach(() => {
       onInputProjection: subscribe('projection'), onInteractionRequest: subscribe('interaction'),
       onInteractionDismissed: subscribe('dismissed'),
     },
-    localDb: { messages: { onCreated: subscribe('message') } },
+    localDb: {
+      messages: { onCreated: subscribe('message') },
+      sessionsPush: { onPatched: subscribe('patched') },
+    },
   } });
   vi.mocked(messageService.list).mockResolvedValue([row('before disconnect')]);
   makerChatStore.initGlobalListeners();
@@ -61,6 +64,34 @@ afterEach(() => {
   vi.unstubAllGlobals(); vi.useRealTimers(); ownerTesting.reset();
 });
 async function load() { makerChatStore.ensureInitialMessages(id); await flush(); }
+
+// Unit, #12264: existing mirror tests call the reducer directly and miss the
+// lifetime of the local subscription. A cached chat, one reported snapshot
+// and one committed device change on the same ACP provider are sufficient.
+it('invalidates cached plugin context for a committed execution-device change', async () => {
+  await load();
+  const route = { agentKind: 'acp', providerId: 'acp-plugin:fixture:acp' };
+  const stamp = { dataOwnerId: 'owner', ownerGeneration: 1 };
+  const push = (agentDeviceId: string | null, ownerStamp = stamp) =>
+    listeners.patched?.({ sessionId: id, patch: { ...route, agentDeviceId } }, ownerStamp);
+  push(null);
+  listeners.event({
+    sessionId: id,
+    event: { type: 'status', data: { status: 'running', isRunning: true, contextTokens: 2000, contextWindow: 8000 } },
+  });
+  push(null);
+  push('device-b', { ...stamp, ownerGeneration: 0 });
+  expect(makerChatStore.getSnapshot(id).agentStatus).toMatchObject({
+    contextTokens: 2000, contextWindow: 8000, contextWindowFromRuntime: true,
+  });
+
+  push('device-b');
+  expect(makerChatStore.getSnapshot(id).agentStatus).toMatchObject({
+    contextTokens: 0, contextWindow: 0, contextWindowFromRuntime: false,
+  });
+  expect(makerChatStore.getSnapshot(id).messages.find(message => message.clientId === 'client-1')?.content)
+    .toBe('before disconnect');
+});
 
 it('repairs final history, queue and expired permissions while retaining the editor draft', async () => {
   await load();

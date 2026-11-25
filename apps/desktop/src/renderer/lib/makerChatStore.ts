@@ -8540,6 +8540,17 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   globalListenersInitialized = true;
   const ownsRemoteAuthRetry = options.ownsRemoteAuthRetry !== false;
 
+  // A cached conversation can outlive its view. Mirror committed local route
+  // changes before the next runtime's events, even while its page is closed.
+  const unsubscribeSessionFields = window.electronAPI.localDb?.sessionsPush?.onPatched?.(
+    ({ sessionId, patch }, ownerStamp) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp) || !sessions.has(sessionId) ||
+          getStickySessionDeviceId(sessionId)) return;
+      mirrorSessionFields(sessionId, patch);
+    },
+  );
+  if (unsubscribeSessionFields) ipcUnsubscribers.push(unsubscribeSessionFields);
+
   // ── Maker 主事件流: 一根管子接所有 vendor → maker AgentEvent ──
   // 老链路是 8 个独立 IPC channel; 新链路一个 maker:event 通道,按 event.type 分发。
   // 数据 shape 由 maker-core/agents/claude-code/translator.ts 翻译, 形状对齐老 cc-agent 协议,
@@ -19143,8 +19154,8 @@ function setContextWindow(sessionId: string, contextWindow: number | undefined):
  * permission 的显示已走 serverSession / 远程分片(prop 驱动),无需在此重复镜像。
  *
  * 幂等:值未变即 no-op,绝不与用户本地乐观切换打架。本机会话同样安全(本机 setFastMode 的乐观
- * setState 已设好值,后续若有同值 patched 也是 no-op)。两个 sink 调用:控制端 onRemotePush 的
- * sessions:patched(远程会话回流)+ CCAgentSessionView 的本地 sessionsPush.onPatched(被控端本机)。
+ * setState 已设好值,后续若有同值 patched 也是 no-op)。常驻监听接收本地
+ * sessionsPush.onPatched 和远程 sessions:patched。
  */
 function mirrorSessionFields(
   sessionId: string,
