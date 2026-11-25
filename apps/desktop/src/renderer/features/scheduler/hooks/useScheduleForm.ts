@@ -344,8 +344,8 @@ export interface UseScheduleFormResult {
     followedAgentKind?: ScheduleFormState['agentKind'],
   ) => void;
   /**
-   * 选中插件引擎(docs/plans/acp-plugin-bridge.md)：每次新建任务、在本机运行，清掉运行位置、worktree
-   * 与 Fast；选内置模型(selectModelConfiguration)时清掉它。
+   * 选中插件引擎(docs/plans/acp-plugin-bridge.md)：每次新建任务、在本机运行，清掉运行位置
+   * 与 Fast(worktree 保留)；选内置模型(selectModelConfiguration)时清掉它。
    */
   selectPluginEngine: (selection: PluginEngineSelection) => void;
   /** 选一个模型组(模式)。 */
@@ -446,7 +446,6 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       pluginEngine: selection,
       agentDeviceId: '',
       modelAgentDeviceId: undefined,
-      useWorktree: false,
       fastMode: false,
     }));
   }, []);
@@ -483,7 +482,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         case 'local':
           return { ...f, useWorktree: false, targetSessionId: '' };
         case 'worktree':
-          return { ...f, useWorktree: true, targetSessionId: '', pluginEngine: null };
+          return { ...f, useWorktree: true, targetSessionId: '' };
         case 'thread':
           return {
             ...f,

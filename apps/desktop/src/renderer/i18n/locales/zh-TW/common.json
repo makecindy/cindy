@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "端點不存在（404），請檢查基礎 URL",
     "CONTEXT_TOO_LONG": "上下文超過模型長度限制",
     "WIRE_INCOMPATIBLE": "端點與該協定不完全相容（存在無法識別的請求欄位）",
+    "INVALID_PROBE_RESPONSE": "模型服務傳回空白或無效的回應",
+    "PROBE_NO_OUTPUT": "連線測試未能確認模型已產生內容",
+    "PROBE_REFUSED": "模型服務拒絕或攔截了測試請求",
     "UPSTREAM_ERROR": "上游服務錯誤（5xx），請稍後重試",
     "UPSTREAM_UNREACHABLE": "無法連線到端點，請檢查網路與基礎 URL",
     "TIMEOUT": "連線逾時，請檢查網路與基礎 URL",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登入手機號碼",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換手機號碼",
+        "verifyTitle": "驗證目前的手機號碼",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的手機號碼。",
+        "newTitle": "輸入新的手機號碼",
+        "newDescription": "更換後請使用新的手機號碼登入，原手機號碼將無法再登入此帳號。",
+        "inputLabel": "新的手機號碼",
+        "placeholder": "請輸入手機號碼",
+        "success": "手機號碼已更換為 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登入電子郵件",
+        "rowHint": "用於登入和接收驗證碼",
+        "change": "更換電子郵件",
+        "verifyTitle": "驗證目前的電子郵件",
+        "introDescription": "為保護帳號安全，更換前需要先驗證目前繫結的電子郵件。",
+        "newTitle": "輸入新的電子郵件",
+        "newDescription": "更換後請使用新的電子郵件登入，原電子郵件將無法再登入此帳號。",
+        "inputLabel": "新的電子郵件地址",
+        "placeholder": "請輸入電子郵件地址",
+        "success": "電子郵件已更換為 {{target}}"
+      },
+      "codeSent": "驗證碼已傳送至 {{target}}",
+      "codeLabel": "驗證碼",
+      "codePlaceholder": "6 位驗證碼",
+      "sendCode": "傳送驗證碼",
+      "next": "下一步",
+      "confirm": "確認更換",
+      "cancel": "取消",
+      "resend": "重新傳送驗證碼",
+      "resendIn": "{{seconds}} 秒後可重新傳送",
+      "errors": {
+        "INVALID_CODE": "驗證碼錯誤或已過期",
+        "CODE_ATTEMPTS_EXCEEDED": "驗證碼錯誤次數過多，請重新取得",
+        "CONTACT_TAKEN": "此手機號碼或電子郵件已繫結其他帳號",
+        "CONTACT_UNCHANGED": "與目前繫結的手機號碼或電子郵件相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "驗證已過期，請重新驗證目前的手機號碼或電子郵件",
+        "AUTH_FLOW_SUPERSEDED": "登入狀態已變更，請重新開始",
+        "CONTACT_CHANGE_UNAVAILABLE": "目前帳號不支援在這裡更換登入方式",
+        "CONTACT_CHANGE_BUSY": "上一步仍在處理中",
+        "RATE_LIMITED": "操作過於頻繁，請稍後再試。",
+        "RATE_LIMITED_UNTIL": "操作過於頻繁，請在 {{time}}（本機時間）之後重試。",
+        "INVALID_PARAMS": "格式不正確，請檢查後重試",
+        "EMAIL_DOMAIN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "EMAIL_PATTERN_BLOCKED": "此電子郵件暫不支援使用，請換一個",
+        "ACCOUNT_DELETION_PENDING": "帳號正在等待刪除，無法更換",
+        "NETWORK_ERROR": "網路連線失敗，請檢查網路後重試",
+        "REQUEST_TIMEOUT": "請求逾時，請重試",
+        "fallback": "操作失敗，請稍後重試"
+      }
+    },
     "help": {
       "title": "幫助",
       "description": "瞭解如何用 {{appName}} 完成工作",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "體檢",
         "reconcileFailed": "體檢失敗",
         "reconcileHealthy": "帳實一致，沒有發現異常。",
-        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。"
+        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。",
+        "buddyWorkspaceDirectoryTitle": "夥伴工作區",
+        "buddyWorkspaceDirectoryDescription": "新建夥伴的工作區預設存放於此目錄。既有夥伴維持原位，可在各自的進階設定中單獨遷移。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 會在此目錄下為目前帳號建立獨立子目錄存放新建夥伴的工作區，並在原路徑保留目錄連結。",
+        "buddyWorkspaceDirectoryChoose": "變更目錄",
+        "buddyWorkspaceDirectoryFailed": "無法更新夥伴工作區目錄。"
       },
       "piKernel": {
         "manage": "管理 Pi 版本",
@@ -10027,6 +10089,18 @@
       "title": "自動更新失敗",
       "description": "更新程式無法啟動，可能被系統安全策略攔截。請手動下載最新版安裝包完成更新。",
       "confirm": "前往下載"
+    },
+    "workspaceMigration": {
+      "title": "正在遷移夥伴工作區",
+      "progressLabel": "夥伴工作區遷移進度",
+      "safetyHint": "正在複製並驗證檔案，切換前不會更動原資料，請勿強制關閉 Cindy。",
+      "phase": {
+        "preparing": "正在準備遷移",
+        "copying": "正在複製檔案",
+        "verifying": "正在驗證檔案",
+        "switching": "正在切換位置",
+        "cleaning": "正在清理備份"
+      }
     }
   },
   "welcome": {
@@ -11358,6 +11432,69 @@
           "routines": "需要看一下的例行任務",
           "upgrade": "升級時沒能自動帶過來的"
         }
+      },
+      "workspaceLocation": {
+        "title": "工作區位置",
+        "description": "可將此夥伴的工作區遷移至本機其他磁碟以釋放系統碟空間。Cindy 會在原路徑保留目錄連結，既有任務、自動化與腳本可繼續正常運作。",
+        "movedDescription": "現有任務和指令碼仍可使用原路徑。",
+        "chooseDialogTitle": "選擇夥伴工作區遷移的目標位置",
+        "fullPath": "完整路徑",
+        "targetPathLabel": "目標目錄",
+        "currentPathLabel": "目前目錄",
+        "defaultPathLabel": "目標目錄（預設位置）",
+        "logicalPathLabel": "原邏輯連結路徑",
+        "copyPath": "複製路徑",
+        "pathCopied": "已複製路徑",
+        "pathCopyFailed": "複製路徑失敗",
+        "openTarget": "開啟資料夾",
+        "moveAction": "遷移工作區",
+        "moveBackAction": "搬回預設位置",
+        "chooseAnother": "另選資料夾",
+        "restartNow": "立即重新啟動",
+        "restartAndMove": "重新啟動並遷移",
+        "scheduleNextRestart": "下次重啟時遷移",
+        "cancel": "取消",
+        "dismissFailed": "關閉紀錄",
+        "scheduledToast": "已登記遷移，將於下次重啟 Cindy 時執行",
+        "cancelledToast": "已取消工作區遷移",
+        "previewTitle": "準備遷移工作區",
+        "previewSummary": "檔案大小：{{size}}",
+        "previewNotice": "重新啟動前，請關閉正在使用此工作區的應用程式或指令碼。",
+        "previewClaudeSkillsNotice": "如果工作區沒有自己的 Git 儲存庫，Claude Code 搬遷後可能發現新位置上層資料夾的技能。若不想引入這些技能，請選擇上層未設定 Claude Code 技能的位置。",
+        "pendingHint": "請先關閉佔用該目錄的外部程式，再重啟 Cindy 執行遷移。",
+        "unavailableTitle": "已遷移的工作區無法使用",
+        "unavailableDescription": "Cindy 無法存取 {{target}}。請重新連接磁碟或還原資料夾；Cindy 不會建立空資料夾覆蓋它。",
+        "errorTitle": "無法遷移工作區",
+        "failedTitle": "上次工作區遷移失敗",
+        "interruptedTitle": "工作區遷移待還原",
+        "backupRemainingHint": "原目錄備份已保留供核對：{{backup}}",
+        "personalPreviewHint": "請關閉共用資料的個人測試版，改用主版本 Cindy 登記或執行工作區遷移。",
+        "status": {
+          "default": "預設位置",
+          "pending": "等待重啟",
+          "moved": "已遷移",
+          "failed": "遷移失敗",
+          "interrupted": "待還原",
+          "unavailable": "目標不可用"
+        },
+        "warnings": {
+          "waitingExclusive": "正在等待獨佔啟動。請關閉共用此帳號資料的其他 Cindy 執行個體，再重啟以執行遷移。",
+          "receiptUpdateFailed": "工作區目前可用，但遷移紀錄更新失敗，將於下次重啟時自動修復。"
+        },
+        "errors": {
+          "insufficientSpace": "目標磁碟可用空間不足，無法容納目前工作區。",
+          "overlapsCindyData": "請選擇 Cindy 資料目錄與目前工作區之外的資料夾。",
+          "localDiskRequired": "請選擇本機磁碟資料夾，不支援網路共用路徑。",
+          "unsupportedFileOrHardLink": "工作區包含硬連結或特殊檔案，暫不支援直接安全遷移。",
+          "alreadyRedirected": "Cindy 無法辨識這個工作區的資料夾連結。請保留現有連結和檔案。",
+          "botHomeRedirected": "此夥伴主目錄已被手動重新導向，無法自動遷移其工作區。",
+          "targetExists": "目標資料夾已存在，請另選位置。",
+          "workspaceChanged": "驗證期間工作區內容有所變更，請關閉外部佔用程式後重試。",
+          "backupRetained": "遷移已完成，但原備份驗證存在差異，已保留備份以免遺失資料。",
+          "backupCleanupIncomplete": "遷移已完成，但暫存備份未能清除，將於下次重啟時自動重試。",
+          "cutoverInterrupted": "上次切換中斷，Cindy 已還原原工作區。請另選空資料夾重新遷移。",
+          "generic": "無法完成工作區遷移請求，請重試。"
+        }
       }
     },
     "profile": {
@@ -12302,7 +12439,8 @@
         "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "failed": "操作未完成，請重試。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今天加入",
@@ -13502,6 +13640,7 @@
         },
         "slash": {
           "detachFailed": "❌ 結束接管失敗：{{error}}",
+          "pluginEngineModelsUnavailable": "這個任務的插件引擎目前無法使用，暫時無法列出模型。",
           "companionManaged": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
         },
         "turn": {
@@ -15442,6 +15581,8 @@
       "codexHelperUnavailable": "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。",
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+      "piRetryHistoryTooLarge": "這則訊息未送出。Pi 讀取重試所需的歷史記錄時，有一個資料幀超過本機 16 MiB 限制。你可以在新任務中繼續。",
+      "messageNotSent": "這則訊息未送出。",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -22453,6 +22594,19 @@
     "rendered": "查看文件",
     "wrap": "自動換行",
     "lineNumbers": "行號"
+  },
+  "openAiAccountGroup": {
+    "strategy": "帳號組策略",
+    "leastHint": "優先分配給執行任務最少的連線",
+    "quotaHint": "能讀取訂閱用量時，會先按用量篩選連線，再按組策略分配。",
+    "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
+    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
+    "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
+    "billingPaused": "餘額不足或達到計費上限，已暫停組內分配。",
+    "title": "帳號群組",
+    "testPassed": "測試成功",
+    "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

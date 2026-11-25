@@ -34,6 +34,7 @@ import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
+import { assertWorkspaceMoveReady } from '../workspace-migration/service.js';
 import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -88,6 +89,7 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     .leftJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
     .where(eq(botProfiles.id, botId)).limit(1);
   if (!row) return [];
+  await assertWorkspaceMoveReady(userDataDir, botId);
   // Strict: an unreadable SOUL/USER/prompt file aborts the cycle instead of uploading it as empty.
   const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
   // Which preset it was made from: every computer can then tell the copies of Cindy apart from a
@@ -133,6 +135,9 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const isProject = projectMode;
     values.push(...await readProjectValues(botId, { ...companionProjectIo(), projectDir: async () => isProject ? workspace : null }, selfDeviceId));
   }
+  // Readers may return empty on ENOENT. A lost volume during the read must not
+  // turn the snapshot into deletion requests for this companion's cloud data.
+  await assertWorkspaceMoveReady(userDataDir, botId);
   return values;
 }
 
@@ -471,9 +476,14 @@ export function createCompanionCloudHost(input: {
         `${createHash('sha256').update(`${endpoint}\n${humanActorId}`).digest('hex')}.json`),
       current, log: input.log,
     }),
-    readValues: async (botId, scope) => scope === 'skills'
-      ? (await listBotSkillSourcesForBot(botId)).map(skillSourceValue)
-      : readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    readValues: async (botId, scope) => {
+      if (scope !== 'skills') return readCompanionValues(botId, input.selfDeviceId?.() ?? null);
+      const userDataDir = ownerScopedUserDataPath();
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      const skills = await listBotSkillSourcesForBot(botId);
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      return skills.map(skillSourceValue);
+    },
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();
