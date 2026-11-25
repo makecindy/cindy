@@ -7545,8 +7545,7 @@ describe('shared subscription recovery through controller and account allocation
             const failed = expect(send.mock.results[0].value).rejects.toThrow('REMOTE_AGENT_OFFLINE');
             failOfflineOpen.resolve();
             // The controller retries the read-only capability handshake while offline.
-            await vi.advanceTimersByTimeAsync(8_000);
-            await failed;
+            await Promise.all([failed, vi.advanceTimersByTimeAsync(8_000)]);
             await vi.waitFor(() => expect(persistedError).toHaveBeenCalledExactlyOnceWith(task, expect.stringContaining('REMOTE_AGENT_OFFLINE')));
             expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
               sessionId: task, error: expect.stringContaining('REMOTE_AGENT_OFFLINE'),
