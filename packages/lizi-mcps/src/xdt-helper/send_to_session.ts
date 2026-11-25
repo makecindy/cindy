@@ -140,7 +140,7 @@ const describeSendToSession = (supportsRemote: boolean) => [
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
-  "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
+  "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;wake_kind=queued 仅确认已入队，消费和处理结果待核实，请勿重复投递。",
   ...(supportsRemote ? [
     "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制。",
   ] : []),
@@ -208,6 +208,10 @@ export function projectMembershipNote(input: {
   }
   return {};
 }
+
+const queuedNote = "消息已入队，尚未确认目标已消费或处理。请勿重复投递。";
+const localQueueCheck = "用 list_session_queue 查询 target_session_id，可按返回的 queued_message_id 核对。consuming=true 表示正在投递，条目消失也不能证明处理完成。用 get_chat_history 核对对应输入和回复。";
+const remoteQueueCheck = "在支持跨机历史读取时，用 get_chat_history 查询完整的 target_session_id 并核对对应输入和回复。需要查看队列时，在目标电脑上查询本机队列。";
 
 /**
  * 注册 send_to_session 到 XdtHelperToolRegistry(handoff 类目),经 call_tool 调用。
@@ -349,6 +353,7 @@ export function registerSendToSessionTool(
           target_device_id: qualified.deviceId,
           agent_kind: remote.agentKind,
           wake_kind: remote.wakeKind,
+          ...(remote.wakeKind === "queued" ? { note: queuedNote + remoteQueueCheck } : {}),
           target_title: remote.targetTitle,
           target_last_user_send_at: remote.targetLastUserSendAt,
         });
@@ -386,6 +391,7 @@ export function registerSendToSessionTool(
         ...(result.targetDeviceId ? { target_device_id: result.targetDeviceId } : {}),
         agent_kind: result.agentKind,
         wake_kind: result.wakeKind,
+        ...(result.wakeKind === "queued" ? { note: queuedNote + localQueueCheck } : {}),
         ...(result.responsibilityRecorded === false ? { responsibility_recorded: false, responsibility_note: "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host." } : {}),
         ...(result.wakeKind === "created"
           ? { note: createdNote(result.targetSessionId) }

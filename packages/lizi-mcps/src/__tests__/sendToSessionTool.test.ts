@@ -227,8 +227,8 @@ describe('send_to_session tool', () => {
     expect(payload.note).toContain('list_sessions');
   });
 
-  it('jump 成功返回不带 note(resumed / already-active / queued 都是投给既有任务)', async () => {
-    for (const wakeKind of ['resumed', 'already-active', 'queued'] as const) {
+  it('已唤醒的既有任务不返回入队提示', async () => {
+    for (const wakeKind of ['resumed', 'already-active'] as const) {
       const { registry } = setup({
         result: {
           ok: true,
@@ -490,6 +490,7 @@ describe('send_to_session tool', () => {
       ok: true,
       wake_kind: 'queued',
       queued_message_id: 'queued-by-session-1',
+      note: expect.stringContaining('list_session_queue'),
     });
   });
 
@@ -624,6 +625,7 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     expect(sent).toEqual({
       ok: true, target_session_id: remoteId, target_device_id: 'mbp', agent_kind: 'codex',
       wake_kind: 'queued', target_title: 'remote task', target_last_user_send_at: null,
+      note: expect.stringContaining('get_chat_history'),
     });
   });
 
