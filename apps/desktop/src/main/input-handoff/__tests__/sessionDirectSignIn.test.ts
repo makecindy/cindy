@@ -666,6 +666,48 @@ describe('a waiting card watching its window', () => {
     releases.splice(0).forEach((release) => release());
   });
 
+  // PR #12766 review (codex r4693243900): the fields came back during a passive look for a code and the owner moved
+  // on through the card; the late look then swapped the next step for the old code, clearing its draft.
+  // Entry: window watch with session.submit. Unit tier.
+  it('drops a passive look for a code that returns after the card moved to the next step', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    driver.act = async (request) => {
+      if (request.kind === 'text') state.screen = 'code';
+      return { ok: true };
+    };
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<HandoffDriver['qr']>>>>((resolve) => {
+      releases.push(() => resolve({
+        text: 'weixin://dl/login?x=1',
+        capture: { jpeg: Buffer.from('jpeg'), width: 8, height: 8, area: frame, windowFrame: frame },
+      }));
+    }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    state.screen = 'password';
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const asked = run.latest();
+    const password = asked.controls.find((c) => c.kind === 'text')!;
+    await run.session.submit({ expectedRevision: asked.revision, values: { [password.id]: 'synthetic-secret' }, action: { kind: 'submit' } }, { deviceId: 'phone' });
+    const labels = () => run.latest().controls.map((c) => c.kind === 'text' && c.label);
+    await settle();
+    expect(labels()).toEqual(['Verification code']);
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(labels()).toEqual(['Verification code']);
+    expect(run.latest().qr).toBeUndefined();
+    run.session.cancel();
+  });
+
   it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
     const { driver, state } = desktop('password');
     let deviceCode = false;

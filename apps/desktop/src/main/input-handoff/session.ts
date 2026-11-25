@@ -834,10 +834,14 @@ export class InputHandoffSession {
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
     const look = () => driver.qr!(target, frame);
+    // A passive look runs while the card stays open: the owner may move on through it before the look returns.
+    const step = this.step;
+    const submissions = this.submissions;
     const found = await (frame ? look() : withDesktopTurn(look)).catch(() => null);
     if (!found || 'error' in found) return false;
     const qr = qrContent(found.text);
-    if (!qr || this.ended) {
+    const moved = !!frame && (this.step !== step || this.submissions !== submissions || this.busy || this.phase !== 'ready');
+    if (!qr || this.ended || moved) {
       found.capture.jpeg.fill(0);
       return false;
     }
