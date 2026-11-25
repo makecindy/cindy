@@ -20,6 +20,7 @@ import {
 } from './botStore';
 import { botImConnectionApi } from './botImConnectionClient';
 import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from './botSettingsTarget';
+import { forgetBotAppearance } from './botAppearance';
 
 const api = () => window.electronAPI.localDb.bots;
 // `projects` lists folders on this computer: a remote teammate's target never offers it.
@@ -127,7 +128,14 @@ export const localBotSettingsTarget: BotSettingsTarget = {
     chooseAvatar: (...args) => chooseBotAvatar(...args),
     retryInvitation: (...args) => retryBotInvitation(...args),
   },
-  lifecycle: { run: (request) => runBotLifecycleAction(request) },
+  lifecycle: {
+    async run(request) {
+      const result = await runBotLifecycleAction(request);
+      // Main already removed the wallpaper media; this also drops the local appearance record.
+      if (result?.status === 'deleted') await forgetBotAppearance(request.botId);
+      return result;
+    },
+  },
   useDefaultModelChain,
   useHiddenVendors,
   useRoster: () => useBotProfiles(),

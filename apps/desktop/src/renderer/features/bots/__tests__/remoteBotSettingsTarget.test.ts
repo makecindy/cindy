@@ -217,6 +217,21 @@ it('does not re-read a deleted teammate after the lifecycle action', async () =>
   expect(host.invoke).toHaveBeenCalledTimes(1);
 });
 
+// Review of makecindy/cindy#12542 (783a260): a remote teammate's custom wallpaper is imported and
+// kept on the controlling computer, but deletion runs on the teammate's computer, so the
+// controller's reference (and media) outlived the teammate. Minimal input: remote delete succeeds.
+it('removes this computer’s wallpaper for a remote teammate once its computer deletes it', async () => {
+  const removeBotWallpaper = vi.fn().mockResolvedValue({});
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: host.invoke }, appearanceSettings: { removeBotWallpaper } } });
+  const { target } = create();
+  host.invoke.mockResolvedValueOnce(refused('PRECONDITION_FAILED', 'busy'));
+  await expect(target.lifecycle.run({ botId: 'bot-1', action: 'delete', confirmName: 'Sora' })).rejects.toBeTruthy();
+  expect(removeBotWallpaper).not.toHaveBeenCalled();
+  host.invoke.mockResolvedValueOnce(ok({ botId: 'bot-1', action: 'delete', status: 'deleted', affected: {} }));
+  await target.lifecycle.run({ botId: 'bot-1', action: 'delete', confirmName: 'Sora' });
+  expect(removeBotWallpaper).toHaveBeenCalledExactlyOnceWith('bot-1');
+});
+
 it('never takes credentials and leaves browser sign-in and folder choosing to the teammate computer', async () => {
   const { target } = create();
   const im = target.channels.im!;

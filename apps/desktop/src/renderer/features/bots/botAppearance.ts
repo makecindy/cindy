@@ -182,9 +182,27 @@ export async function importBotCustomWallpaper(botId: string): Promise<boolean> 
 }
 
 export async function removeBotCustomWallpaper(botId: string): Promise<void> {
-  const bridge = window.electronAPI?.appearanceSettings;
+  const bridge = typeof window !== 'undefined' ? window.electronAPI?.appearanceSettings : undefined;
   if (!bridge?.removeBotWallpaper) return;
   setCustomUrls(await bridge.removeBotWallpaper(botId));
+}
+
+/**
+ * 伙伴被删除后，清掉这台电脑上为它记下的外观：localStorage 记录和它的自定义壁纸引用。
+ * 远程伙伴由它所在的电脑删除，但壁纸图片是在本机（控制端）导入、存在本机的，只能由本机清理。
+ * 失败只影响残留，不影响删除结果，所以这里吞掉错误。
+ */
+export async function forgetBotAppearance(botId: string): Promise<void> {
+  try {
+    if (getBotAppearance(botId) !== EMPTY) setBotAppearance(botId, { familyId: null, wallpaperId: null });
+  } catch {
+    // localStorage may be unavailable
+  }
+  try {
+    await removeBotCustomWallpaper(botId);
+  } catch {
+    // The reference stays; the media is kept rather than risked.
+  }
 }
 
 /**
