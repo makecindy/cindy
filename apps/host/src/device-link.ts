@@ -14,6 +14,7 @@ import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRe
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
+import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { createInboundDispatch, type InboundDispatchPorts } from '../../desktop/src/main/device-link/dispatch.js';
 import { createInvokeRegistry } from '../../desktop/src/main/device-link/invokeRegistryCore.js';
 import { toLegacyUsdModelPricing } from '../../desktop/src/main/maker-ipc/usageHandlers.js';
@@ -31,6 +32,8 @@ import { getDbClient } from '../../desktop/src/main/localDb/client/current.js';
 import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { createRemoteHistoryHandler } from '../../desktop/src/main/localDb/ipc/history.js';
+import { listPluginSessionStatuses } from '../../desktop/src/main/maker-ipc/pluginObserveTasks.js';
+import { parseSessionStatusIds, SESSION_STATUS_PROJECTION } from '../../desktop/src/shared/pluginObserve.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
 import { RECOVERY_CHECKPOINT_MARKER } from '../../desktop/src/main/maker-ipc/recoveryMarker.js';
@@ -168,6 +171,7 @@ export interface HostDeviceLinkPorts {
   releaseAuthCaller?(caller: string): void;
   isBusyForProjectArchive(sessionId: string): boolean;
   sessionInTurn(sessionId: string): boolean;
+  hasPendingInteraction(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
@@ -225,6 +229,7 @@ function readGitSafetyWire() {
   };
 }
 
+const SESSION_BATCH_CHANNEL = 'local-db:sessions:get-many';
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges', 'deleteTarget', 'archiveSideChatParentId']);
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
@@ -287,6 +292,24 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     }
     return readRemoteHistory(request);
+  });
+  registry.register(SESSION_BATCH_CHANNEL, async ([request]) => {
+    const peer = getDeviceLinkInvokeContext();
+    if (!peer || peer.sharedTask || isScopedPeer(peer.controllerDeviceId)) {
+      throwIpcError('PERMISSION_DENIED', 'An account-owned link is required');
+    }
+    const ids = parseSessionStatusIds(requireObject(request).ids);
+    if (!ids) throwIpcError('INVALID_PARAMS', 'Invalid session status ids');
+    const sessions = await listPluginSessionStatuses(ids, knownIds => {
+      const flags = new Map<string, Pick<SessionActivitySnapshot, 'phase' | 'attention'>>();
+      for (const id of knownIds) {
+        if (deps.hasPendingInteraction(id)) flags.set(id, { phase: 'needs-interaction', attention: true });
+        else if (deps.sessionInTurn(id)) flags.set(id, { phase: 'running', attention: false });
+      }
+      return flags;
+    });
+    if (!current()) throwIpcError('PERMISSION_DENIED', 'Host account changed');
+    return { sessions };
   });
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
@@ -742,7 +765,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     dispatchLocalInvoke: invoke,
     // Registration above is synchronous, before either link starts. A retiring owner
     // leaves the verdict unknown, including for a late request after stop clears the registry.
-    hasLocalChannel: channel => current() ? registry.has(channel) : undefined,
+    hasLocalChannel: (channel, args) => {
+      if (!current()) return undefined;
+      if (channel !== SESSION_BATCH_CHANNEL) return registry.has(channel);
+      // Older controllers fall back to single-session GETs on CHANNEL_NOT_ALLOWED for an array request.
+      const request = args?.[0];
+      return !!request && typeof request === 'object' && 'projection' in request && request.projection === SESSION_STATUS_PROJECTION;
+    },
     assertRemoteBotInvocationAllowed: botBoundary.assertRemoteBotInvocationAllowed,
     projectRemoteSessionResult: botBoundary.projectRemoteSessionResult,
     projectRemoteBotPush: botBoundary.projectRemoteBotPush,

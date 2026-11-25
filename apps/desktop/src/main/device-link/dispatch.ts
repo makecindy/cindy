@@ -476,8 +476,8 @@ export interface InboundDispatchPorts {
   syncRemoteControlAccessGeneration: typeof syncRemoteControlAccessGeneration;
   requestPluginOauth?: typeof requestPluginOauth;
   invalidatePluginOauth?: typeof invalidatePluginOauth;
-  /** An omitted verdict leaves channel handling to the existing IPC path. */
-  hasLocalChannel?: (channel: string) => boolean | undefined;
+  /** A launcher may implement only a tagged request. An omitted verdict leaves handling to the existing IPC path. */
+  hasLocalChannel?: (channel: string, args?: readonly unknown[]) => boolean | undefined;
   dispatchLocalInvoke: typeof dispatchLocalInvoke;
   assertRemoteBotInvocationAllowed: typeof assertRemoteBotInvocationAllowed;
   projectRemoteSessionResult: typeof projectRemoteSessionResult;
@@ -5626,7 +5626,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const isTurnChangeAction = payload.channel === 'maker:turn-change-set:apply';
     const isTaskTagsAction = payload.channel === TASK_TAG_CHANNEL;
-    if (!isTurnChangeAction && !isTaskTagsAction && hasLocalChannel?.(payload.channel) === false) {
+    if (!isTurnChangeAction && !isTaskTagsAction && hasLocalChannel?.(payload.channel, args) === false) {
       return channelNotAllowed(payload.channel);
     }
     const listingCapabilities = payload.channel === 'maker:provider:list'

@@ -547,8 +547,8 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 
 `sessionStatus({sessionIds, deviceId?})` 用于给已有的普通项目任务或独立对话显示侧栏状态点。先检测 `typeof cindy.observe?.sessionStatus === 'function'`。沿用 `openSession` 的 `agent.observe` 和 `agent.hostTools: ['history']` 批准。仅有 `observe` 批准的插件仍可通过 `projectTasks` 查看本机项目任务。
 
-- 按会话记录所在电脑分组，每次传一台电脑和 1–200 个原始会话 ID。设备参数和带前缀 ID 的处理与 `openSession` 相同。可省略 `deviceId` 来查本机。
-- 结果形如 `{sessions:[{id:'s1',status:'awaiting'}]}`。同一 ID 在一批中只返回一次。状态取 `running | awaiting | error | done | idle`，`done` 表示侧栏仍有完成提醒。隐藏、已删除、伙伴、Worker、Review 和缺失的 ID 均省略。回包只含 ID 和状态。
+- 在 Desktop 插件逻辑页调用。按会话记录所在电脑分组，每批传 1–200 个原始 ID。记录可以保存在 Desktop 或无界面 Host，`deviceId` 指保存记录的电脑。设备前缀的处理与 `openSession` 相同。可省略 `deviceId` 来查本机。
+- 结果形如 `{sessions:[{id:'s1',status:'awaiting'}]}`。同一 ID 在一批中只返回一次。状态取 `running | awaiting | error | done | idle`，`done` 表示侧栏仍有完成提醒。侧边追问在提升为独立任务后可查。隐藏、已删除、伙伴、Worker、Review 和缺失的 ID 均省略。回包只含 ID 和状态。
 - 设备离线或回包无效时抛出 `REMOTE_UNAVAILABLE`，远程版本缺少该能力时抛出 `UNSUPPORTED_CAPABILITY`，权限不足时抛出 `PERMISSION_DENIED`。遇到错误或条目缺失时隐藏对应状态点。仅在打开视图或用户刷新时按需读取，切换账号、设备或失去批准时丢弃已显示及在途结果。
 
 ## 4.11.9 查看伙伴和状态

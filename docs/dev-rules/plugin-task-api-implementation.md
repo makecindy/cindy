@@ -415,7 +415,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 - `openTask` 只校验这一条任务可见且属于已登记项目，再复核批准后以 `openMainWindowSession(..., { focus: 'if-active' })` 打开。
 - 每次请求固定 owner generation、逻辑页与批准 revision，读取后复核；变化返回 `PERMISSION_DENIED` 并丢弃结果。
   入口限本机 Desktop 逻辑页，Mobile 页面返回 `UNSUPPORTED_CAPABILITY`。
-- `sessionStatus({sessionIds, deviceId?})` 与 `openSession` 共用 observe、history 批准及会话可见范围。远程通过已有 `local-db:sessions:get-many` 向所属电脑读取 ID 和状态，协议见 [插件只读查看项目任务](protocol-compatibility/plugin-readonly-project-tasks.md)。
+- `sessionStatus({sessionIds, deviceId?})` 沿用 `openSession` 的 observe、history 批准。按已知 ID 读取可见的普通会话，含归档记录、独立对话和已提升的侧边追问。远程通过已有 `local-db:sessions:get-many` 从记录所属电脑读取 ID 和状态。详见 [插件只读查看项目任务](protocol-compatibility/plugin-readonly-project-tasks.md)。
 
 ## 查看伙伴和状态（增量接口，尚未发布）
 

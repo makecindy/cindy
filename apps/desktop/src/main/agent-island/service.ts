@@ -32,6 +32,7 @@ import {
 } from '../appBadgeService.js';
 import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
+import { getAgentIslandService, setAgentIslandService } from './current.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
   AGENT_ISLAND_MAX_RESIZABLE_WIDTH,
@@ -286,7 +287,7 @@ const HEADLESS_AGENT_ISLAND_NATIVE_HOST: AgentIslandNativeRenderer = {
   suspend: () => undefined,
 };
 
-let serviceSingleton: AgentIslandService | null = null;
+export { getAgentIslandService };
 
 /**
  * Creates the process-wide Agent Island activity coordinator.
@@ -296,36 +297,34 @@ let serviceSingleton: AgentIslandService | null = null;
  * activity snapshots.
  */
 export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslandService | null {
-  if (serviceSingleton) return serviceSingleton;
+  const existing = getAgentIslandService();
+  if (existing) return existing;
   const supportsNativeIsland = isAgentIslandSupportedPlatform(process.platform, getOsRelease());
   const liveActivity = deps.liveActivity
     ?? (supportsNativeIsland && process.platform === 'darwin' ? new AgentIslandLiveActivity({ appName: BRAND_NAME }) : null);
-  serviceSingleton = new AgentIslandService({
+  const service = new AgentIslandService({
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
     liveActivity,
     playSoundWithoutHelper: deps.playSoundWithoutHelper ?? (liveActivity ? playAgentIslandSoundWithAfplay : undefined),
   });
+  setAgentIslandService(service);
   if (liveActivity) {
     app.on('browser-window-focus', () => liveActivity.notifyWindowVisible());
     app.on('will-quit', () => liveActivity.dispose());
   }
   setAgentIslandCompanionChangeSink({
-    companionChanged: (botId) => serviceSingleton?.handleCompanionProfileChanged(botId),
-    groupChanged: (groupId) => serviceSingleton?.handleBotGroupChanged(groupId),
+    companionChanged: (botId) => service.handleCompanionProfileChanged(botId),
+    groupChanged: (groupId) => service.handleBotGroupChanged(groupId),
   });
   // 远程任务同步与原生岛面无关:无原生岛的平台也要靠它发桌面通知。
-  serviceSingleton.registerDeviceSessionIpc();
+  service.registerDeviceSessionIpc();
   if (supportsNativeIsland) {
-    serviceSingleton.registerIpc();
+    service.registerIpc();
   } else {
-    serviceSingleton.setEnabled(false);
+    service.setEnabled(false);
   }
-  return serviceSingleton;
-}
-
-export function getAgentIslandService(): AgentIslandService | null {
-  return serviceSingleton;
+  return service;
 }
 
 function sessionActivitySnapshotsEqual(

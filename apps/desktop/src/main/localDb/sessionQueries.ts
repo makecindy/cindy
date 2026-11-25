@@ -16,11 +16,16 @@ import { projectSessionContextWindow, type ContextWindowSession } from '../../sh
 const OUTER_SESSION_ID_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
 const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
 
+/** A side chat appears alongside ordinary tasks once the user promotes it. */
+export function ordinaryTaskSourceFilter(): SQL | undefined {
+  return or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+    and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)));
+}
+
 /** Main task list: exact teammate lanes join ordinary sources; private chat lanes keep their own entry. */
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
-    or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
-      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
+    or(ordinaryTaskSourceFilter(),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id

@@ -6,50 +6,84 @@
  * 「最后一条 assistant 文本为何不完整」。本地解析与远程被控端 handler 共用同一
  * 判定,避免两端语义分叉。
  */
-import { sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { getDbClient } from './client/current';
 import { messages } from './schema';
+
+const messageRowid = sql<number>`"messages"."rowid"`;
 
 export interface SessionTerminalHint {
   status: 'error';
   createdAt?: number;
 }
 
-/** Each requested ID carries the clear boundary from the caller's session snapshot. */
-export async function readLatestSessionTerminals(
-  db: DbClient['drizzle'],
-  boundaries: ReadonlyArray<readonly [sessionId: string, clearedAt: number | null]>,
-): Promise<Map<string, SessionTerminalHint>> {
-  const terminals = new Map<string, SessionTerminalHint>();
-  if (boundaries.length === 0) return terminals;
-  // One bound parameter also accommodates the workers of all requested leads.
-  const requested = sql`json_each(${JSON.stringify(Object.fromEntries(boundaries))}) AS requested`;
-  // JSON.parse used the last top-level dismissed field when legacy error JSON contained duplicate keys.
-  const rows = await db.select({ sessionId: messages.sessionId, createdAt: messages.createdAt })
-    .from(requested)
-    .innerJoin(messages, sql`messages.rowid = (
-      SELECT tail.rowid FROM messages tail
-      WHERE tail.session_id = requested.key AND tail.rewind_at IS NULL
-      ORDER BY tail.created_at DESC, tail.rowid DESC LIMIT 1
-    )`)
-    .where(sql`(requested.value IS NULL OR ${messages.createdAt} > requested.value)
-      AND CASE WHEN ${messages.role} IS NOT 'error' THEN 0
-        WHEN typeof(${messages.content}) = 'text' AND json_valid(${messages.content}) THEN (
-          SELECT meta.type FROM json_each(${messages.content}) AS meta
-          WHERE meta.key = 'dismissed' ORDER BY meta.id DESC LIMIT 1
-        ) IS NOT 'true'
-        ELSE 1 END`);
-  for (const { sessionId, createdAt } of rows) {
-    terminals.set(sessionId, { status: 'error', ...(Number.isFinite(createdAt) ? { createdAt } : {}) });
-  }
-  return terminals;
-}
-
+/**
+ * Return only a non-sensitive terminal hint for a session snapshot.
+ *
+ * The marker is enough to explain why the last assistant text can be
+ * incomplete; the persisted error body never leaves this layer.
+ */
 export async function readLatestSessionTerminal(
   sessionId: string,
   clearedAt: number | null,
 ): Promise<SessionTerminalHint | undefined> {
-  const terminals = await readLatestSessionTerminals(getDbClient().drizzle, [[sessionId, clearedAt]]);
-  return terminals.get(sessionId);
+  const db = getDbClient().drizzle;
+  const where: SQL<unknown>[] = [
+    eq(messages.sessionId, sessionId),
+    isNull(messages.rewindAt),
+  ];
+  if (clearedAt !== null) where.push(gt(messages.createdAt, clearedAt));
+  const [latest] = await db
+    .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
+    .from(messages)
+    .where(and(...where))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  if (latest?.role !== 'error') return undefined;
+  // An ignored error remains in the database for audit/history, but should no
+  // longer make a fresh quote look like an active failed turn.
+  if (typeof latest.content === 'string') {
+    try {
+      const parsed = JSON.parse(latest.content) as unknown;
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        (parsed as Record<string, unknown>).dismissed === true
+      ) {
+        return undefined;
+      }
+    } catch {
+      // Legacy non-JSON error content is treated as an undismissed error.
+    }
+  }
+  return {
+    status: 'error',
+    ...(Number.isFinite(latest.createdAt) ? { createdAt: latest.createdAt } : {}),
+  };
+}
+
+/** Shared with the native sidebar's unresolved-error query. */
+export const undismissedSidebarError = sql`CASE WHEN json_valid(${messages.content})
+  THEN json_extract(${messages.content}, '$.dismissed') IS NOT 1 ELSE 1 END`;
+
+/** Check just the candidate rows on their owning host and return IDs across the DB worker boundary. */
+export async function readSidebarErrorTailIds(
+  db: DbClient['drizzle'],
+  boundaries: ReadonlyArray<readonly [sessionId: string, clearedAt: number | null]>,
+): Promise<Set<string>> {
+  if (boundaries.length === 0) return new Set();
+  // One bound parameter also accommodates the workers of all requested leads.
+  const requested = sql`json_each(${JSON.stringify(Object.fromEntries(boundaries))}) AS requested`;
+  const rows = await db.select({ id: messages.sessionId })
+    .from(requested)
+    .innerJoin(messages, sql`${messageRowid} = (
+      SELECT tail.rowid FROM messages tail
+      WHERE tail.session_id = requested.key AND tail.rewind_at IS NULL
+        AND tail.created_at > COALESCE(requested.value, 0)
+      ORDER BY tail.created_at DESC, tail.rowid DESC LIMIT 1
+    )`)
+    .where(sql`CASE WHEN ${messages.role} = 'error' THEN ${undismissedSidebarError} ELSE 0 END`);
+  return new Set(rows.map(row => row.id));
 }

@@ -280,9 +280,11 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   }
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
+  // The status envelope is restricted to ordinary visible tasks on every delivery.
+  const statusRows = channel === 'local-db:sessions:get-many' ? record(value)?.sessions : undefined;
   const excludeBackground = BACKGROUND_EXCLUDED_LIST_CHANNELS.has(channel);
-  const excluded = (access: RemoteBotSessionAccess) =>
-    access === 'hidden' || (excludeBackground && access === 'background');
+  const excluded = (access: RemoteBotSessionAccess) => Array.isArray(statusRows)
+    ? access !== 'ordinary' : access === 'hidden' || (excludeBackground && access === 'background');
   const identity = (item: unknown) => {
     const row = record(item);
     const ref = record(row?.ref);
@@ -296,8 +298,9 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     if (!key) return item;
     return excluded(await activeLookup(key.id, key.kind)) ? null : item;
   };
-  if (Array.isArray(value)) {
-    const identities = value.map(identity);
+  const rows = Array.isArray(statusRows) ? statusRows : value;
+  if (Array.isArray(rows)) {
+    const identities = rows.map(identity);
     const accessByKind = new Map<'session' | 'bot', ReadonlyMap<string, RemoteBotSessionAccess>>();
     for (const kind of ['session', 'bot'] as const) {
       const ids = [...new Set(identities.filter((key) => key?.kind === kind).map((key) => key!.id))];
@@ -311,10 +314,11 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
         accessByKind.set(kind, access);
       }
     }
-    return value.filter((item, index) => {
+    const visible = rows.filter((item, index) => {
       const key = identities[index];
       return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
     });
+    return Array.isArray(statusRows) ? { sessions: visible } : visible;
   }
   const row = record(value);
   if (row && !row.id && Array.isArray(row.sessions)) return { ...row, sessions: await projectRemoteSessionResult(channel, row.sessions) };

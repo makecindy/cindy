@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
   phases: new Map<string, { phase: string; attention: boolean }>(),
   snapshots: vi.fn<() => Map<string, { phase: string; attention: boolean }>>(),
 }));
-vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ listRecentWorkdirs: mocks.workdirs }));
-vi.mock('../../agent-island/service.js', () => ({
+vi.mock('../../localDb/ipc/recentWorkdirsCore.js', () => ({ listRecentWorkdirs: mocks.workdirs }));
+vi.mock('../../agent-island/current.js', () => ({
   getAgentIslandService: () => ({ getSessionActivityFlags: mocks.snapshots }),
 }));
 
@@ -29,7 +29,7 @@ beforeEach(() => {
       id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'New Maker', working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project', status TEXT NOT NULL DEFAULT 'active',
       agent_kind TEXT NOT NULL DEFAULT 'cc', source TEXT NOT NULL DEFAULT 'desktop', orca_role TEXT,
-      remote_host_id TEXT, agent_device_id TEXT, hidden_at INTEGER,
+      remote_host_id TEXT, agent_device_id TEXT, hidden_at INTEGER, side_chat_promoted INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER, last_turn_ended_at INTEGER, cleared_at INTEGER,
       last_activity_at INTEGER, user_send_at INTEGER, updated_at INTEGER NOT NULL
     );
@@ -38,6 +38,11 @@ beforeEach(() => {
     CREATE INDEX idx_messages_rewind_at ON messages(rewind_at);
     CREATE INDEX idx_messages_active_error_tail ON messages(session_id, created_at) WHERE role = 'error' AND rewind_at IS NULL;
     CREATE TABLE bot_session_links (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);
+    CREATE TABLE schedules (id TEXT PRIMARY KEY, source TEXT NOT NULL);
+    CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, schedule_id TEXT, session_id TEXT, fired_at INTEGER,
+      status TEXT, read_at INTEGER, pre_run_hook_result TEXT, error_msg TEXT);
+    CREATE TABLE schedule_session_latest_runs (session_id TEXT PRIMARY KEY, run_id TEXT NOT NULL);
+    CREATE INDEX idx_schedule_runs_session_latest ON schedule_runs(session_id, fired_at DESC, id DESC) WHERE session_id IS NOT NULL;
     CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, session_id TEXT NOT NULL, execution_device_id TEXT);
   `);
@@ -100,16 +105,18 @@ it('lists registered project metadata and looks up known ordinary session IDs ac
     { id: 'archived', title: 'title archived', agentKind: 'cc', archived: true, status: 'idle', lastActivityAt: 20 },
   ]);
 
+  insert('private-side-chat', '/repo', 99, "source = 'side-chat'");
+  insert('promoted', '/repo', 99, "source = 'side-chat', side_chat_promoted = 1");
   mocks.workdirs.mockClear();
   readDb.mockClear();
   const statuses = await listPluginSessionStatuses([
     'dialogue', 'missing', 'recent', 'other-project', 'remote', 'device', 'archived',
-    'deleted', 'hidden', 'worker', 'review', 'bot', 'bot-source',
+    'deleted', 'hidden', 'worker', 'review', 'bot', 'bot-source', 'private-side-chat', 'promoted',
   ]);
   expect(statuses).toEqual([
     { id: 'dialogue', status: 'idle' }, { id: 'recent', status: 'running' },
     { id: 'other-project', status: 'idle' }, { id: 'remote', status: 'idle' },
-    { id: 'device', status: 'idle' }, { id: 'archived', status: 'idle' },
+    { id: 'device', status: 'idle' }, { id: 'archived', status: 'idle' }, { id: 'promoted', status: 'idle' },
   ]);
   expect(mocks.workdirs).not.toHaveBeenCalled();
   expect(JSON.stringify(readDb.mock.results)).not.toContain('worktree');
@@ -160,11 +167,11 @@ it('batches visible terminal hints and preserves native completion, interruption
   const errors = [
     ['malformed', 'private-error-body', 'error'],
     ['dismissed', '{"dismissed":true}', 'idle'],
-    ['number', '{"dismissed":1}', 'error'],
+    ['number', '{"dismissed":1}', 'idle'],
     ['string', '{"dismissed":"true"}', 'error'],
-    ['last-dismissal', '{"dismissed":false,"dismissed":true}', 'idle'],
-    ['last-reopened', '{"dismissed":true,"dismissed":false}', 'error'],
-    ['non-text', Buffer.from('{"dismissed":true}'), 'error'],
+    ['last-dismissal', '{"dismissed":false,"dismissed":true}', 'error'],
+    ['last-reopened', '{"dismissed":true,"dismissed":false}', 'idle'],
+    ['non-text', Buffer.from('{"dismissed":true}'), 'idle'],
   ] as const;
   const message = db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)');
   for (const [id, content] of errors) {
@@ -198,6 +205,23 @@ it('batches visible terminal hints and preserves native completion, interruption
   ]);
   expect(readDb.mock.calls.length).toBeLessThanOrEqual(2);
   expect(JSON.stringify(readDb.mock.results)).not.toContain('private-');
+});
+
+it('combines unread schedule results with live waiting and running states', async () => {
+  const run = db.prepare('INSERT INTO schedule_runs (id, schedule_id, session_id, fired_at, status) VALUES (?, ?, ?, 1, ?)');
+  for (const [id, result] of [['completed', 'success'], ['running', 'success'], ['waiting', 'success'], ['failure', 'failed']] as const) {
+    insert(id, null, 1, "workspace_kind = 'dialogue'");
+    db.prepare("INSERT INTO schedules VALUES (?, 'user')").run(id);
+    run.run(id, id, id, result);
+    db.prepare('INSERT INTO schedule_session_latest_runs VALUES (?, ?)').run(id, id);
+  }
+  mocks.phases.set('running', { phase: 'running', attention: false });
+  mocks.phases.set('waiting', { phase: 'needs-interaction', attention: false });
+  mocks.phases.set('failure', { phase: 'running', attention: false });
+  await expect(listPluginSessionStatuses(['completed', 'running', 'waiting', 'failure'])).resolves.toEqual([
+    { id: 'completed', status: 'done' }, { id: 'running', status: 'running' },
+    { id: 'waiting', status: 'awaiting' }, { id: 'failure', status: 'error' },
+  ]);
 });
 
 it.each([

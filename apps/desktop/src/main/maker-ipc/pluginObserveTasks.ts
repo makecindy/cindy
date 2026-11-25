@@ -3,10 +3,12 @@ import { getSessionListActivityAt, type SessionRightStatus } from '@cindy/maker-
 import { getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { botSessionLinks, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
-import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
+import { ordinaryTaskSourceFilter } from '../localDb/sessionQueries.js';
+import { scheduleUnreadSessionStatus } from '../scheduler-host/scheduleUnread.js';
+import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
 import type { PluginObserveTask, PluginObserveTaskStatus, PluginSessionStatus } from '../../shared/pluginObserve.js';
-import { createCanonicalSessionRightStatusBatchReader, type PersistedSessionActivityFacts } from './sessionActivityProjection.js';
+import { createCanonicalSessionRightStatusBatchReader, type PersistedSessionActivityFacts, type ReadSessionActivityFlags } from './sessionActivityProjection.js';
 
 const MAX_PROJECT_TASKS = 200;
 const projectKey = (dir: string) => projectKeyComparisonKey(`local:${dir}`, process.platform);
@@ -31,6 +33,8 @@ const visibleTask = and(
 const activityFacts = {
   status: sessions.status,
   title: sessions.title,
+  source: sessions.source,
+  remoteHostId: sessions.remoteHostId,
   startedAt: sessions.activeTurnStartedAt,
   endedAt: sessions.lastTurnEndedAt,
   clearedAt: sessions.clearedAt,
@@ -53,6 +57,7 @@ function withWorkerAttention(own: SessionRightStatus, workers: SessionRightStatu
 async function readObserveStatuses(
   db: DbClient['drizzle'],
   matched: Array<PersistedSessionActivityFacts & Pick<typeof sessions.$inferSelect, 'id' | 'orcaRole'>>,
+  readLive?: ReadSessionActivityFlags,
 ): Promise<Map<string, PluginObserveTaskStatus>> {
   const statuses = new Map<string, PluginObserveTaskStatus>();
   if (matched.length === 0) return statuses;
@@ -69,7 +74,7 @@ async function readObserveStatuses(
       eq(sessions.status, 'active'),
     ));
   const persisted = new Map<string, PersistedSessionActivityFacts>([...matched, ...workers].map((row) => [row.id, row]));
-  const readStatus = createCanonicalSessionRightStatusBatchReader(persisted, db);
+  const readStatus = createCanonicalSessionRightStatusBatchReader(persisted, db, readLive);
   const workerStatuses = new Map<string, SessionRightStatus[]>();
   for (const worker of workers) {
     const list = workerStatuses.get(worker.leadSessionId) ?? [];
@@ -120,17 +125,17 @@ export async function listPluginObserveTasks(project: string): Promise<PluginObs
 }
 
 /** The record owner is the selected database. SSH and agent-device fields describe execution. */
-export async function listPluginSessionStatuses(ids: string[]): Promise<PluginSessionStatus[]> {
+export async function listPluginSessionStatuses(ids: string[], readLive?: ReadSessionActivityFlags): Promise<PluginSessionStatus[]> {
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot) throw new Error('HOST_NOT_READY');
   if (ids.length === 0) return [];
   const db = snapshot.client.drizzle;
   const requested = [...new Set(ids)];
-  const rows = await db.select({ ...activityFacts, id: sessions.id, orcaRole: sessions.orcaRole })
+  const rows = await db.select({ ...activityFacts, id: sessions.id, orcaRole: sessions.orcaRole, scheduleUnread: scheduleUnreadSessionStatus })
     .from(sessions)
     .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-    .where(and(inArray(sessions.id, requested), observableSession));
-  const statuses = await readObserveStatuses(db, rows);
+    .where(and(inArray(sessions.id, requested), observableSession, ordinaryTaskSourceFilter()));
+  const statuses = await readObserveStatuses(db, rows, readLive);
   if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
   return requested.flatMap(id => {
     const status = statuses.get(id);

@@ -14,7 +14,7 @@ import { getCurrentMembershipDisplayName } from '../authManager';
 import { createLogger } from '../logger.js';
 import { serverApiFetch } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService';
-import type { IssueConfirmBridge } from './issueConfirmBridge';
+import { getIssueConfirmBridge, setIssueConfirmBridge, type IssueConfirmBridge } from './issueConfirmBridge';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { buildGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import {
@@ -38,14 +38,13 @@ export type { IssueConfirmDecision, IssueConfirmInteractionSnapshot } from './is
 
 const log = createLogger('github-issue');
 
-let bridgeHolder: IssueConfirmBridge | null = null;
 let getTurnModelIdHolder: ((sessionId: string) => Promise<string | undefined>) | null = null;
 
 export function initGithubIssueSubmit(
   bridge: IssueConfirmBridge,
   getTurnModelId: (sessionId: string) => Promise<string | undefined>,
 ): void {
-  bridgeHolder = bridge;
+  setIssueConfirmBridge(bridge);
   getTurnModelIdHolder = getTurnModelId;
 }
 
@@ -59,7 +58,7 @@ export async function submitGithubIssueForSession(
       message: '提交官方反馈需要登录 Cindy 账号。',
     };
   }
-  const bridge = bridgeHolder;
+  const bridge = getIssueConfirmBridge();
   const getTurnModelId = getTurnModelIdHolder;
   if (!bridge || !getTurnModelId) {
     return {
@@ -76,7 +75,7 @@ export async function submitGithubIssueForSession(
   return submitGithubIssueWithConfirm(
     {
       confirm: (sessionId, draft, env, submissionChoices, suggestedPublicName) =>
-        bridge.request(sessionId, draft, env, submissionChoices, suggestedPublicName),
+        bridge.request(sessionId, draft, env, submissionChoices, suggestedPublicName, () => activeOwnerScopeKey() === submitScope),
       resolveSubmissionChoices: (workdir) =>
         resolveGithubIssueSubmissionChoices(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {

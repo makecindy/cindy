@@ -2357,6 +2357,7 @@ function startDeviceLink(): void {
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
       || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+    hasPendingInteraction: id => interactionBroker.hasPending(id) || (plugins?.authorization.bridge.pendingSnapshots(id).length ?? 0) > 0,
     closeRuntimeSession: id => {
       const owner = activeOwnerScopeKey();
       return withSendToSessionLock(id, async () => {

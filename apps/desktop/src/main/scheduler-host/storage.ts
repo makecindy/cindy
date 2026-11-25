@@ -51,20 +51,16 @@ import {
   zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
 import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
+import {
+  failureKindSql,
+  failureRecoveredSql,
+  latestUnresolvedFailureId,
+  publicSchedule,
+  recentUnreadRunIds,
+  unreadTerminalRunWhere,
+} from './scheduleUnread.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
-
-/** SQL counterpart of classifyScheduleFailure, shared by display and recovery. */
-function failureKindSql(alias: 'failed' | 'schedule_runs') {
-  const row = sql.raw(alias);
-  return sql<'precheck' | 'rate-limit' | 'execution'>`CASE
-    WHEN CASE WHEN json_valid(${row}.pre_run_hook_result)
-      THEN json_extract(${row}.pre_run_hook_result, '$.decision') = 'block' ELSE 0 END THEN CASE
-        WHEN lower(json_extract(${row}.pre_run_hook_result, '$.stderr')) LIKE '%rate limit%'
-          THEN 'rate-limit' ELSE 'precheck' END
-    WHEN substr(${row}.error_msg, 1, 12) = 'pre-run hook' THEN 'precheck'
-    ELSE 'execution' END`;
-}
 
 /** pre_run_hook_result.missingPlugin is stored JSON; malformed rows simply omit it. */
 function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissingPlugin } {
@@ -75,24 +71,6 @@ function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissi
   } catch {
     return {};
   }
-}
-
-/** A success only recovers failures belonging to the same automation. */
-function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
-  const row = sql.raw(alias);
-  return sql<boolean>`CASE WHEN ${row}.status IN ('failed', 'interrupted') THEN EXISTS (
-    SELECT 1 FROM schedule_runs AS recovered
-    WHERE recovered.schedule_id = ${row}.schedule_id
-      AND recovered.fired_at >= ${row}.fired_at
-      AND (recovered.status = 'success' OR (
-        ${failureKindSql(alias)} != 'execution'
-        AND recovered.status IN ('skipped', 'success', 'failed')
-        AND CASE WHEN json_valid(recovered.pre_run_hook_result)
-          THEN json_extract(recovered.pre_run_hook_result, '$.checkSucceeded') = 1 ELSE 0 END
-      ))
-      AND (recovered.fired_at > ${row}.fired_at
-        OR (recovered.fired_at = ${row}.fired_at AND recovered.id > ${row}.id))
-  ) ELSE 0 END`;
 }
 
 export interface ScheduleSidebarIndexRun {
@@ -225,12 +203,6 @@ interface LegacyScheduleSessionAlias {
 
 const LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] ';
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
-
-const unreadTerminalRunWhere = () =>
-  sql`${scheduleRuns.readAt} IS NULL AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted', 'interrupted')`;
-
-/** 侧栏未读终态硬上限：红点累计用最近失败，避免随空打次数把远程回包顶过 4MB。 */
-const SIDEBAR_UNREAD_RUN_LIMIT = 200;
 
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
   if (value === 'user' || value === 'project' || value === 'bot') return value;
@@ -388,7 +360,7 @@ function legacyRunFromSession(
 
 /** Public automation history must not expose or mutate the routine execution ledger. */
 function publicScheduleRunWhere() {
-  return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
+  return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE NOT (${publicSchedule}))`;
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -864,15 +836,6 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       missingPlugin: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.missingPlugin') END`,
     };
-    // LIMIT on the full projection can still parse every unread hook before
-    // SQLite sorts. Bound eligible IDs first, then evaluate only those rows.
-    const recentUnreadRunIds = db
-      .select({ id: scheduleRuns.id })
-      .from(scheduleRuns)
-      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-      .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
-      .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
-      .limit(SIDEBAR_UNREAD_RUN_LIMIT);
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
         .select(projection)
@@ -896,16 +859,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .from(scheduleSessionLatestRuns)
         .innerJoin(
           scheduleRuns,
-          eq(
-            scheduleRuns.id,
-            sql`(
-            SELECT failed.id FROM schedule_runs AS failed
-            WHERE failed.session_id = ${scheduleSessionLatestRuns.sessionId}
-              AND failed.status IN ('failed', 'interrupted')
-              AND NOT ${failureRecoveredSql('failed')}
-            ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
-          )`,
-          ),
+          eq(scheduleRuns.id, latestUnresolvedFailureId(scheduleSessionLatestRuns.sessionId)),
         )
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
         .where(publicScheduleRunWhere()),

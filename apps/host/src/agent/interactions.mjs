@@ -95,6 +95,14 @@ export function createInteractionBroker(deps) {
       if (binding?.isCurrent()) allowHostPagePermission(binding.session, requestId);
     },
 
+    // Sidebar status needs only the existence of a current request. Keep the card and tool input in the broker.
+    hasPending(sessionId) {
+      for (const { binding } of pending.values()) {
+        if (binding.sessionId === sessionId && binding.isCurrent()) return true;
+      }
+      return false;
+    },
+
     pending(sessionId) {
       return [...pending.values()].filter(entry => entry.binding.sessionId === sessionId && entry.binding.isCurrent())
         .map(({ request, boundaryRequest, persistId }) => ({ requestId: request.requestId,

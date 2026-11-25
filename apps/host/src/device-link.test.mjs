@@ -13,12 +13,14 @@ import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
-  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL,
+  SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostSessionHandoff } from './agent/session-handoff.ts';
+import { createInteractionBroker } from './agent/interactions.mjs';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
 import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
 import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
@@ -35,7 +37,8 @@ import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { startHostEventBridge } from '../../desktop/src/main/host-delegation.ts';
-import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles,
+  recentWorkdirs, projectAliases, schedules, scheduleRuns } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
@@ -68,10 +71,12 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   configureAppDataDir(profile);
   configureHostOwner({ userDataDir: profile, ownerId: 'test-headless-owner' });
   const sqlite = new Database(':memory:');
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles,
+    recentWorkdirs, projectAliases, schedules, scheduleRuns]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
   sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);
+    CREATE TABLE schedule_session_latest_runs (session_id TEXT PRIMARY KEY, run_id TEXT NOT NULL);
     CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
       kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
       PRIMARY KEY (shared_task_id, kind, revision));
@@ -113,7 +118,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     fs.rmSync(profile, { recursive: true, force: true });
   });
   wss.on('connection', (socket, request) => {
-    const match = /^Bearer synthetic-(host|ios|android|desktop)$/.exec(request.headers.authorization ?? '');
+    const match = /^Bearer synthetic-(host|ios|android|desktop|observer)$/.exec(request.headers.authorization ?? '');
     if (!match) { socket.close(1008); return; }
     const id = match[1]; sockets.set(id, socket);
     socket.on('message', raw => {
@@ -186,6 +191,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
   const handoffQueue = [];
+  const interactions = createInteractionBroker({ hub });
+  t.after(() => interactions.dispose());
   const handoffProviders = [{
     id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
     routing: { 'claude-code': { authStrategy: 'api-key' } },
@@ -198,7 +205,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Model-service IO is synthetic. The Host adapter still performs repository
   // model checks, real session opening, SQLite writes and queue admission.
   setSessionOpeningModelAdmission(async body => body);
-  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
+    readMachineStatus: () => assert.fail('Session status must not query machine status'),
+    sessionInTurn: id => id === 'status-running' || id === 'status-waiting',
+    hasPendingInteraction: id => interactions.hasPending(id),
     getToken: async () => 'synthetic-host', canRegister: () => true,
     sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
       input: {
@@ -247,13 +257,17 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sockets.has('host'), false);
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
-  async function connect(id) {
+  async function startClient(id) {
     const client = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
-      getHello: () => ({ deviceName: id, platform: id === 'desktop' ? 'darwin' : id, appVersion: 'test', remoteControlEnabled: false }),
+      getHello: () => ({ deviceName: id, platform: id === 'ios' || id === 'android' ? id : 'darwin', appVersion: 'test', remoteControlEnabled: false }),
       createWebSocket: (address, headers) => new WebSocket(address, { headers }),
     });
     client.start();
     await waitFor(() => client.getStatus() === 'online');
+    return client;
+  }
+  async function connect(id) {
+    const client = await startClient(id);
     await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
     // The first invocation uses one of the last registered ordinary handlers (no startup delay).
     // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
@@ -264,6 +278,51 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     assert.deepEqual(reply.result.map(row => row.id), ['task']);
     return client;
   }
+  // Integration, architecture-invariants §5. Exercise the Node Host registry from a background owner link.
+  await t.test('serves live and persisted sidebar statuses through a background owner link', async t => {
+    const observer = await startClient('observer');
+    t.after(() => observer.stop());
+    const accepted = await observer.openLink('host', { controllerName: 'observer', protocolVersion: PROTOCOL_VERSION,
+      appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
+    assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+    const channel = 'local-db:sessions:get-many';
+    const status = ids => observer.invoke('host', { channel, args: [{ projection: 'sidebar-status', ids }] }, undefined,
+      { noResultCache: true, background: true });
+    sqlite.exec(`SAVEPOINT sidebar_status;
+      INSERT INTO sessions(id,source,status,workspace_kind,hidden_at) VALUES
+        ('status-running','desktop','active','project',NULL), ('status-waiting','desktop','active','dialogue',NULL),
+        ('status-hidden','desktop','active','dialogue',1), ('status-error','desktop','active','dialogue',NULL),
+        ('status-done','scheduler','active','dialogue',NULL);
+      INSERT INTO messages(session_id,role,content,created_at) VALUES ('status-error','error','private fixture detail',10);
+      INSERT INTO schedules(id,source) VALUES ('user-schedule','user');
+      -- The latest mapped success recovers the older failure. Its legacy zero timestamp counts as unread.
+      INSERT INTO schedule_runs(id,schedule_id,session_id,fired_at,status,read_at) VALUES
+        ('previous-run','user-schedule','status-done',5,'failed',NULL),
+        ('unread-run','user-schedule','status-done',10,'success',0);
+      INSERT INTO schedule_session_latest_runs(session_id,run_id) VALUES ('status-done','unread-run');
+      UPDATE sessions SET status='archived', last_turn_ended_at=20 WHERE id='task';`);
+    const wait = interactions.requestHost('status-waiting', { kind: 'permission', requestId: 'status-question' },
+      new AbortController().signal, { isCurrent: () => true });
+    try {
+      assert.deepEqual(await status(['status-waiting', 'status-hidden', 'missing', 'status-running', 'task', 'status-error', 'status-done', 'task']), {
+        ok: true, result: { sessions: [
+          { id: 'status-waiting', status: 'awaiting' }, { id: 'status-running', status: 'running' },
+          { id: 'task', status: 'idle' }, { id: 'status-error', status: 'error' }, { id: 'status-done', status: 'done' },
+        ] },
+      });
+      sqlite.prepare("UPDATE schedule_runs SET read_at=20 WHERE id='unread-run'").run();
+      assert.deepEqual(await status(['status-done']), { ok: true, result: { sessions: [{ id: 'status-done', status: 'idle' }] } });
+      const oversized = await status(Array(201).fill('task'));
+      assert.match(oversized.error?.message ?? '', /^\[INVALID_PARAMS\]/);
+      const legacy = await observer.invoke('host', { channel, args: [['task']] });
+      assert.equal(legacy.error?.code, 'CHANNEL_NOT_ALLOWED', 'legacy clients fall back to their existing single-session reads');
+      assert.deepEqual(host.state().controllers, []);
+    } finally {
+      interactions.respond('status-waiting', 'status-question', { behavior: 'deny' });
+      await wait;
+      sqlite.exec('ROLLBACK TO sidebar_status; RELEASE sidebar_status');
+    }
+  });
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
   // Task tags have a dedicated dispatch port, separate from the ordinary IPC registry.
   const tags = await clients[2].invoke('host', { channel: 'local-db:task-tags:execute', args: [{ action: 'list' }] });
@@ -825,16 +884,18 @@ test('Host device-link refuses provider-share guests and the platform features i
         if (id === 'host') hostDeviceInfo = frame.payload.deviceInfo;
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: `synthetic-${id === 'guest' ? 'other' : 'same'}-user`,
-          capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY],
+          capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_RELAY_CAPABILITY],
         } }));
         if (id === 'desktop') sockets.get('host')?.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed',
           payload: { deviceId: 'desktop', platform: 'darwin', online: true, remoteControlEnabled: true } }));
       } else if (frame.kind === 'ping') socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
       else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
         // Like the relay, author the share source from the sender's identity; never trust the client's.
-        const providerShare = frame.providerShare && { ...frame.providerShare,
-          source: id === 'guest' ? { role: 'guest', memberId: 'member-fixture' } : { role: 'host' } };
-        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id, ...(providerShare ? { providerShare } : {}) }));
+        const source = id === 'guest' ? { role: 'guest', memberId: 'member-fixture' } : { role: 'host' };
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id,
+          ...(frame.providerShare && { providerShare: { ...frame.providerShare, source } }),
+          ...(frame.sharedTask && { sharedTask: { ...frame.sharedTask, source } }),
+        }));
       }
     });
   });
@@ -902,6 +963,11 @@ test('Host device-link refuses provider-share guests and the platform features i
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
+  }
+  const statusRequest = { channel: 'local-db:sessions:get-many', args: [{ projection: 'sidebar-status', ids: ['task'] }] };
+  for (const [target, refusal] of [[hostKey, 'ACCESS_REVOKED'], [sharedTaskHostPeer('shared-task', 'host'), 'NOT_CONNECTED']]) {
+    const reply = await guest.invoke(target, statusRequest);
+    assert.equal(reply.error?.code, refusal, JSON.stringify(reply));
   }
   assert.equal(machineReads, 1, 'only the same-account machine status request reached the reader');
   assert.deepEqual(reached, [], 'no refused channel may reach the Host service');

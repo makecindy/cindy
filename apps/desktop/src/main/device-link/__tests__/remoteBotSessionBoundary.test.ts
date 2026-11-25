@@ -153,6 +153,18 @@ it('filters batch detail reads using the shared fresh visibility lookup', async 
   expect(batch).toHaveBeenCalledTimes(2);
 });
 
+it('rechecks ordinary visibility when a status reply is delivered again', async () => {
+  let access: 'ordinary' | 'background' | 'missing' = 'ordinary';
+  setRemoteBotSessionLookup(async () => access);
+  const result = { sessions: [{ id: 's', status: 'awaiting' }] };
+  const project = () => projectRemoteSessionResult('local-db:sessions:get-many', result);
+  expect(await project()).toEqual(result);
+  access = 'background';
+  expect(await project()).toEqual({ sessions: [] });
+  access = 'missing';
+  expect(await project()).toEqual({ sessions: [] });
+});
+
 it('checks every target of a label batch and filters only task rows in label results', async () => {
   setRemoteBotSessionLookup(async (id) => (id === 'hidden' ? 'hidden' : 'ordinary'));
   await expect(

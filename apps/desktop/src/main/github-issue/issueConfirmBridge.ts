@@ -108,6 +108,7 @@ interface PendingConfirmEntry {
   sessionId: string;
   request: IssueConfirmInteractionSnapshot;
   submissionChoices: IssueSubmissionChoices;
+  isCurrentOwner?: () => boolean;
   resolve: (decision: IssueConfirmDecision) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -124,6 +125,7 @@ export class IssueConfirmBridge {
     env: IssueEnvInfo,
     submissionChoices: IssueSubmissionChoices,
     suggestedPublicName?: string,
+    isCurrentOwner?: () => boolean,
   ): Promise<IssueConfirmDecision> {
     const requestId = `issue-confirm-${randomUUID()}`;
     const request: IssueConfirmInteractionSnapshot = {
@@ -145,6 +147,7 @@ export class IssueConfirmBridge {
         sessionId,
         request,
         submissionChoices,
+        isCurrentOwner,
         resolve,
         timeoutId,
       });
@@ -163,6 +166,16 @@ export class IssueConfirmBridge {
         });
       }
     });
+  }
+
+  /** Sidebar read limited to the caller's session IDs and the owner who requested each card. */
+  pendingSessionIds(ids: Iterable<string>): Set<string> {
+    const requested = new Set(ids);
+    const result = new Set<string>();
+    for (const { sessionId, isCurrentOwner } of this.pending.values()) {
+      if (requested.has(sessionId) && isCurrentOwner?.()) result.add(sessionId);
+    }
+    return result;
   }
 
   /** 打开、重连或刷新会话时供 renderer 补回错过的确认卡。 */
@@ -237,6 +250,16 @@ export class IssueConfirmBridge {
     clearTimeout(entry.timeoutId);
     entry.resolve(decision);
   }
+}
+
+let currentBridge: IssueConfirmBridge | null = null;
+
+export function getIssueConfirmBridge(): IssueConfirmBridge | null {
+  return currentBridge;
+}
+
+export function setIssueConfirmBridge(bridge: IssueConfirmBridge | null): void {
+  currentBridge = bridge;
 }
 
 function parseDecision(
