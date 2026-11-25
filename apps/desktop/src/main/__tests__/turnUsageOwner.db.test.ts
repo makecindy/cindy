@@ -302,6 +302,16 @@ it('records an independently submitted model delta through the original direct A
   expect(a.db.prepare('SELECT input_tokens+output_tokens FROM daily_model_usage').pluck().all()).toEqual([10]);
 });
 
+// #12433 (db): an explicit zero report needs a persisted ACP model row.
+// The existing direct API coverage only writes a nonzero Codex delta.
+it('persists an explicitly reported zero ACP turn in the model ledger', async () => {
+  const { a } = await databases();
+  await recordModelTurnUsage({ agentKind: 'acp', model: 'gemini-4-hydrogen',
+    inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 });
+  expect(a.db.prepare('SELECT agent_kind, model, input_tokens + output_tokens + cache_read_tokens + cache_create_tokens AS tokens FROM daily_model_usage').all())
+    .toEqual([{ agent_kind: 'acp', model: 'gemini-4-hydrogen', tokens: 0 }]);
+});
+
 
 // A cumulative-only Claude packet has no per-request segments. Keep the established
 // process baseline and original pay-as-you-go model route over a same-account repair.

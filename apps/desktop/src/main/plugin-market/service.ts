@@ -1,3 +1,5 @@
+import { assertConfirmedGhostUninstallOwner } from '../cindy-brain/confirmedGhostUninstall.js';
+import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -48,14 +50,18 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
   PluginMarketSnapshot,
+  OfficialModelPluginPage,
   PluginMarketQuery,
   PluginMarketPage,
   PluginMarketCounts,
+  PluginMarketSortFields,
   PluginRemovalUserNotice,
 } from '../../shared/pluginMarket.js';
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  DEFAULT_PLUGIN_MARKET_SORT,
+  isPluginMarketSort,
   marketSourceKey,
   parseCustomMarketPluginId,
   PLUGIN_MARKET_CUSTOM_ICON_PROJECTION_TOKEN_LENGTH,
@@ -301,8 +307,7 @@ function installedGhostMatchingMarketPlugin(
     : isLegacySimulatorListing(plugin) ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, SIMULATOR_ID)) : undefined);
 }
 
-/** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
-export function installedGhostMatchingMarketPluginNow(
+function findCachedMarketInstallation(
   plugin: { ghostId: string; namespace?: string | null; scope?: string },
 ): InstalledGhost | undefined {
   const manager = getGhostManager();
@@ -322,7 +327,13 @@ export function installedGhostMatchingMarketPluginNow(
       if (exact && exact.namespace === expectedNamespace && exact.manifest.id === plugin.ghostId) return exact;
     }
   }
-  return installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
+}
+
+/** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
+export function installedGhostMatchingMarketPluginNow(
+  plugin: { ghostId: string; namespace?: string | null; scope?: string },
+): InstalledGhost | undefined {
+  return findCachedMarketInstallation(plugin) ?? installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
 }
 
 
@@ -1046,6 +1057,8 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
+  private readonly officialEngineReads = new Map<string, Promise<VisiblePluginDetail>>();
+  private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
   private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
@@ -1308,6 +1321,55 @@ export class PluginMarketService {
       ...(result.organizationAccessError ? { organizationAccessError: result.organizationAccessError } : {}) };
   }
 
+  /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
+  async officialModelPlugins(cursor: unknown = null, active = () => true): Promise<OfficialModelPluginPage> {
+    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 4_096))
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
+    this.requireConfigured();
+    const endpoint = getClientEndpoint('pluginApiBaseUrl');
+    const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
+    const assertCurrent = () => {
+      if (owner) requireSameMarketOwner(owner);
+      else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+      if (endpoint !== getClientEndpoint('pluginApiBaseUrl')) throwIpcError('PRECONDITION_FAILED', 'Plugin endpoint changed');
+    };
+    assertCurrent();
+    const page = await this.api.catalog({ scope: 'public', limit: 100, cursor, counts: cursor === null });
+    assertCurrent();
+    const candidates = (page.legacyQueryPlugins ?? page.plugins).filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
+    const items: OfficialModelPluginPage['items'] = [];
+    let incomplete = false;
+    for (const plugin of candidates) {
+      if (!active()) break;
+      const key = JSON.stringify([endpoint, plugin.id]);
+      const digest = plugin.currentRelease.sha256;
+      let capability = this.officialEngineCapabilities.get(key);
+      if (capability?.digest !== digest) {
+        const flightKey = JSON.stringify([key, digest, owner?.dataOwnerId, getActiveAppSession().generation]);
+        let read = this.officialEngineReads.get(flightKey);
+        if (!read) {
+          read = this.api.detail(plugin.id).finally(() => this.officialEngineReads.delete(flightKey));
+          this.officialEngineReads.set(flightKey, read);
+        }
+        const detail = await read.catch(() => null);
+        assertCurrent();
+        if (!detail) {
+          incomplete = true;
+          continue;
+        }
+        if (detail.publisherKind !== 'official') continue;
+        try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
+        const manifest = validateNormalizedGhostManifest(detail.currentRelease.manifest);
+        if (!manifest.ok) continue;
+        capability = { digest, hasEngine: manifest.manifest.harnesses?.some(engine => engine.protocol === 'acp') === true };
+        this.officialEngineCapabilities.set(key, capability);
+      }
+      if (capability.hasEngine)
+        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, ...deliveryNamespaceFields(plugin), name: plugin.name, description: plugin.description });
+    }
+    return { items, incomplete, nextCursor: page.legacyQueryPlugins ? null : page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
+  }
+
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */
   async query(input: PluginMarketQuery = {}): Promise<PluginMarketPage> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin market query');
@@ -1319,6 +1381,7 @@ export class PluginMarketService {
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 100
       || (input.excludeInstalled !== undefined && typeof input.excludeInstalled !== 'boolean')
       || (input.counts !== undefined && typeof input.counts !== 'boolean')
+      || (input.sort !== undefined && !isPluginMarketSort(input.sort))
       || (input.cursor !== undefined && input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 2048)))
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin market query');
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
@@ -1329,13 +1392,19 @@ export class PluginMarketService {
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
       if (getClientEndpoint('pluginApiBaseUrl') !== endpoint) throwIpcError('PRECONDITION_FAILED', 'Plugin endpoint changed');
     };
-    const signature = crypto.createHash('sha256').update(JSON.stringify([owner ? marketOwnerKey(owner) : 'guest', query, scope, !!input.excludeInstalled])).digest('hex');
-    let state = { signature, serverCursor: null as string | null, serverDone: !endpoint, customOffset: 0 };
+    const sort = scope === 'custom' ? undefined : input.sort;
+    const signatureFor = (order?: string) => crypto.createHash('sha256').update(JSON.stringify([
+      owner ? marketOwnerKey(owner) : 'guest', query, scope, !!input.excludeInstalled, ...(order ? [order] : []),
+    ])).digest('hex');
+    const signature = signatureFor(sort);
+    let state = { signature, serverCursor: null as string | null, serverDone: !endpoint, customOffset: 0,
+      sort: undefined as string | undefined };
     if (input.cursor) {
       try {
         const value = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'));
         if (value.signature !== signature || typeof value.serverDone !== 'boolean'
-          || (value.serverCursor !== null && (typeof value.serverCursor !== 'string' || value.serverCursor.length > 128))
+          || (value.serverCursor !== null && (typeof value.serverCursor !== 'string' || value.serverCursor.length > 1024))
+          || (value.sort !== undefined && !isPluginMarketSort(value.sort))
           || !Number.isSafeInteger(value.customOffset) || value.customOffset < 0)
           throwIpcError('INVALID_PARAMS', 'Invalid Plugin market cursor');
         state = value;
@@ -1348,7 +1417,7 @@ export class PluginMarketService {
     if (scope === 'custom' && !includeCounts) state.serverDone = true;
     // Start the independent server read before bounded local-source discovery.
     const serverPage = state.serverDone ? null : this.api.catalog({ scope: scope === 'custom' ? 'all' : scope,
-      query: query || undefined, limit: scope === 'custom' ? 1 : limit, cursor: state.serverCursor, counts: includeCounts })
+      query: query || undefined, limit: scope === 'custom' ? 1 : limit, cursor: state.serverCursor, counts: includeCounts, ...(sort ? { sort } : {}) })
       .then(page => ({ page }), error => ({ error }));
     let discovered = !!owner && customSourceNames.length > 0 && (includeCounts || scope === 'custom' || (scope === 'all' && state.serverDone));
     let discovery = discovered ? await this.discoverCustomEntriesBounded(owner!, this.nextCustomIconProjectionGeneration(), customSourceNames)
@@ -1361,6 +1430,7 @@ export class PluginMarketService {
     let counts: PluginMarketCounts | null = null;
     let organizationAccessError: string | null = null;
     let unavailableReason: string | null = null;
+    let sortFields: PluginMarketSortFields = {};
     try {
     if (!state.serverDone) {
       const result = (await serverPage)!;
@@ -1414,6 +1484,13 @@ export class PluginMarketService {
         }
       }
       if (page.nextCursor && page.nextCursor === state.serverCursor) throwIpcError('PRECONDITION_FAILED', 'Plugin cursor did not advance');
+      if (sort) {
+        if (state.serverCursor && state.sort !== page.sort)
+          throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin sort cursor changed');
+        if (page.sort) sortFields = { sort: page.sort, ...(page.sorts ? { sorts: page.sorts } : {}) };
+        state.sort = page.sort;
+        state.signature = signatureFor(state.sort ?? DEFAULT_PLUGIN_MARKET_SORT);
+      }
       state.serverCursor = page.nextCursor;
       state.serverDone = scope === 'custom' || !page.nextCursor;
     }
@@ -1422,6 +1499,9 @@ export class PluginMarketService {
       const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : null;
       if (typeof code === 'string' && (code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' || code === 'PLUGIN_NAMESPACE_CONFIG_REQUIRED'))
         organizationAccessError = code;
+      else if (state.serverCursor && sort && code === 'INVALID_PARAMS'
+        && (error as { statusCode?: number }).statusCode === 400)
+        throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin sort cursor changed');
       else if (isIpcError(error) || code === 'PLUGIN_LIST_CHANGED') throw error;
       else unavailableReason = 'unavailable';
       state.serverDone = true;
@@ -1445,18 +1525,27 @@ export class PluginMarketService {
     const customCounts = new Map<string, number>();
     for (const item of custom) if (item.sourceMarketName) customCounts.set(item.sourceMarketName, (customCounts.get(item.sourceMarketName) ?? 0) + 1);
     return { items: this.withUpdateConsentHolds(items, owner ?? getActiveAppSession()),
+      ...(!unavailableReason ? sortFields : {}),
       nextCursor: !state.serverDone || moreCustom ? Buffer.from(JSON.stringify(state)).toString('base64url') : null,
       counts, customSourceCounts: [...customCounts].map(([name, count]) => ({ name, count })),
       unavailableReason: unavailableReason ?? (!endpoint && !customSourceNames.length ? 'not-configured' : null),
       customSourceNames, unavailableCustomSourceNames: discovery.unavailableSourceNames, organizationAccessError };
   }
 
-  async recommendations(): Promise<PluginMarketItem[]> {
+  async recommendations(pluginIds?: unknown): Promise<PluginMarketItem[]> {
+    const renewalIds = Array.isArray(pluginIds) ? pluginIds : null;
+    if (pluginIds !== undefined && (!renewalIds || renewalIds.length > 3 || !renewalIds.every(isValidPluginResourceId))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid recommendation Plugin IDs');
+    }
+    if (renewalIds?.length === 0) return [];
     if (!getClientEndpoint('pluginApiBaseUrl')) return [];
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
     const key = owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl');
     try {
-      const response = await this.api.recommendations();
+      const plugins = renewalIds
+        ? (await this.api.resolve([...new Set<string>(renewalIds)].map((pluginId, index) => ({ key: String(index), pluginId })))).results
+          .flatMap(row => row.status === 'available' && row.plugin.scope === 'public' && row.plugin.publisherKind === 'official' ? [row.plugin] : [])
+        : (await this.api.recommendations()).plugins;
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
@@ -1464,8 +1553,11 @@ export class PluginMarketService {
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
-      return response.plugins.map(plugin => this.toItem(plugin, local));
-    } catch { return []; }
+      return plugins.map(plugin => this.toItem(plugin, local));
+    } catch (error) {
+      if (renewalIds) throw error;
+      return [];
+    }
   }
 
   /**
@@ -1901,12 +1993,13 @@ export class PluginMarketService {
   private async detailPublicCatalogWithoutOwner(
     pluginId: string,
     includeReadme: boolean,
+    includeUpdates: boolean,
   ): Promise<PluginMarketDetail> {
     const catalog = await this.resolveSummary(pluginId);
     const requested = catalog.plugins.find(
       (plugin) => plugin.id === pluginId && plugin.scope === 'public',
     );
-    const plugin = await this.api.detail(pluginId, ...readmeRequestArgs(includeReadme));
+    const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates));
     // Plugin Server resolves canonical/historical IDs into the active regional view.
     const summary = requested ?? catalog.plugins.find(
       (item) => item.id === plugin.id && item.scope === 'public',
@@ -1927,6 +2020,7 @@ export class PluginMarketService {
       ...this.toItem(plugin, EMPTY_LOCAL_INSTALL_SNAPSHOT),
       manifest: compatible.manifest,
       ...serverReadmeField(plugin, includeReadme),
+      ...(includeUpdates ? { updates: plugin.updates ?? [] } : {}),
     };
   }
 
@@ -1953,11 +2047,16 @@ export class PluginMarketService {
    */
   async detail(
     pluginId: string,
-    options?: { includeReadme?: boolean },
+    options?: { includeReadme?: boolean; includeUpdates?: boolean },
   ): Promise<PluginMarketDetail> {
+    const includeReadme = options?.includeReadme === true;
+    const includeUpdates = options?.includeUpdates === true;
     // 自定义市场插件走本地发现，不要求服务端可用，也不受 CUID 形状约束。
     const customRef = parseCustomMarketPluginId(pluginId);
-    if (customRef) return this.customDetail(customRef, options?.includeReadme === true);
+    if (customRef) {
+      const detail = await this.customDetail(customRef, includeReadme);
+      return includeUpdates ? { ...detail, updates: [] } : detail;
+    }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
@@ -1966,7 +2065,7 @@ export class PluginMarketService {
       if (isAppSessionBoundaryPending()) {
         throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
       }
-      return this.detailPublicCatalogWithoutOwner(pluginId, options?.includeReadme === true);
+      return this.detailPublicCatalogWithoutOwner(pluginId, includeReadme, includeUpdates);
     }
     return this.runForOwner(async (owner) => {
       // 本地(免账号)模式只对 public 插件暴露详情;目录 summary 也是 detail 身份
@@ -1979,7 +2078,7 @@ export class PluginMarketService {
       if (!requested && listed.organizationAccessError) {
         throwListedPluginUnavailable(listed.organizationAccessError);
       }
-      const plugin = await this.api.detail(pluginId, ...readmeRequestArgs(options?.includeReadme === true));
+      const plugin = await this.api.detail(pluginId, ...detailRequestArgs(includeReadme, includeUpdates));
       requireSameMarketOwner(owner);
       const summary = requested ?? catalog.find((candidate) => candidate.id === plugin.id);
       if (!summary) throwListedPluginUnavailable(listed.organizationAccessError);
@@ -1989,10 +2088,16 @@ export class PluginMarketService {
       if (!compatible.ok) {
         throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
       }
+      const ledger = this.ledgerForOwner(owner);
+      const local = includeUpdates && !includeReadme
+        ? await this.recentUpdatesInstallSnapshot(owner, ledger, plugin)
+        : this.localInstallSnapshot(ledger);
+      requireSameMarketOwner(owner);
       return {
-        ...this.toItem(plugin, this.localInstallSnapshot(this.ledgerForOwner(owner))),
+        ...this.toItem(plugin, local),
         manifest: compatible.manifest,
-        ...serverReadmeField(plugin, options?.includeReadme === true),
+        ...serverReadmeField(plugin, includeReadme),
+        ...(includeUpdates ? { updates: plugin.updates ?? [] } : {}),
       };
     });
   }
@@ -2238,6 +2343,7 @@ export class PluginMarketService {
           prompt: context.consent.prompt,
           initiator: context.consent.initiator,
           origin: 'market',
+          communityMarket: plugin.scope === 'public' && plugin.publisherKind === 'personal' ? true : undefined,
         },
         beforeCommitInLock: assertCurrent,
         assertCurrent: assertScope,
@@ -2258,7 +2364,7 @@ export class PluginMarketService {
     );
   }
 
-  async uninstall(pluginId: string): Promise<{ ok: true }> {
+  async uninstall(pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> {
     // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
     if (!parseCustomMarketPluginId(pluginId) && !isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2267,6 +2373,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
+      if (confirmed) assertConfirmedGhostUninstallOwner(confirmed);
       const data = ledger.read();
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
@@ -2282,7 +2389,10 @@ export class PluginMarketService {
       if (installed) {
         await uninstallGhostAndCleanup(installedGhostPhysicalRelId(installed), {
           skipMarketLedger: true,
+          ...(confirmed ? { confirmed } : {}),
         });
+      } else if (confirmed) {
+        throwIpcError('PRECONDITION_FAILED', 'The confirmed plugin installation changed');
       }
       // The package removal is already complete at this point. The session may
       // have changed while the runtime was stopping, so ledger reconciliation
@@ -3404,7 +3514,7 @@ export class PluginMarketService {
   }
 
   private toItem(
-    plugin: VisiblePluginSummary,
+    plugin: VisiblePluginSummary & Pick<PluginMarketItem, 'sortValue'>,
     local = this.localInstallSnapshot(),
   ): PluginMarketItem {
     const { target, ghost, record, matchesUpdateRoute, installState } = this.serverMarketBinding(plugin, local);
@@ -3415,6 +3525,7 @@ export class PluginMarketService {
     return {
       ...(plugin.usageStatistics ? { usageStatistics: plugin.usageStatistics } : {}),
       ...(plugin.downloadStatistics ? { downloadStatistics: plugin.downloadStatistics } : {}),
+      ...(plugin.sortValue === undefined ? {} : { sortValue: plugin.sortValue }),
       pluginId: plugin.id,
       ghostId: plugin.ghostId,
       ...deliveryNamespaceFields(target),
@@ -3431,6 +3542,7 @@ export class PluginMarketService {
       defaultInstall: plugin.defaultInstall,
       releaseId: plugin.currentRelease.id,
       version: plugin.currentRelease.version,
+      sizeBytes: plugin.currentRelease.sizeBytes,
       publishedAt: plugin.currentRelease.publishedAt,
       icon: plugin.currentRelease.icon,
       installState,
@@ -4520,6 +4632,30 @@ export class PluginMarketService {
       ));
   }
 
+  private async recentUpdatesInstallSnapshot(
+    owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
+    plugin: VisiblePluginSummary,
+  ): Promise<LocalInstallSnapshot> {
+    const counterpart = isSimulatorMigrationTarget(plugin) ? LEGACY_SIMULATOR_ID
+      : isLegacySimulatorListing(plugin) ? SIMULATOR_ID : undefined;
+    const exact = !(plugin.scope === 'organization' && !hasDeliveryNamespace(plugin))
+      ? findCachedMarketInstallation(plugin) : undefined;
+    // A cold or legacy registry can miss the exact key. Preserve the existing
+    // namespace and migration checks with asynchronous discovery in that case.
+    const ghosts = exact && exact.namespaceState !== 'pending' ? [exact]
+      : (await createMarketBackgroundRefresh().list()).filter((ghost) =>
+        ghost.manifest.id === plugin.ghostId || ghost.manifest.id === counterpart);
+    requireSameMarketOwner(owner);
+    const identities = new Map<string, InstalledMarketManifestIdentity | null>();
+    for (const ghost of ghosts) {
+      const result = await readInstalledGhostManifestSnapshotAsync(ghost.dir, GHOST_MANIFEST_MAX_BYTES);
+      requireSameMarketOwner(owner);
+      identities.set(installedGhostStoragePart(ghost), result.ok ? installedMarketManifestIdentity(result.snapshot) : null);
+    }
+    return this.projectLocalInstallSnapshot(ghosts, ledger.read().installations, identities);
+  }
+
   private async localInstallSnapshotAsync(
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
@@ -4687,8 +4823,12 @@ export class PluginMarketService {
 }
 
 /** 详情页才请求介绍；服务端据此按界面语言选介绍文件。 */
-function readmeRequestArgs(includeReadme: boolean): [] | [{ readmeLocale: string }] {
-  return includeReadme ? [{ readmeLocale: ghostReadmeLocale(getResolvedMainLocale()) }] : [];
+function detailRequestArgs(includeReadme: boolean, includeUpdates: boolean): [] | [NonNullable<Parameters<PluginMarketApi['detail']>[1]>] {
+  if (!includeReadme && !includeUpdates) return [];
+  return [{
+    ...(includeReadme ? { readmeLocale: ghostReadmeLocale(getResolvedMainLocale()) } : {}),
+    ...(includeUpdates ? { includeUpdates: true } : {}),
+  }];
 }
 
 /** 服务端介绍投影成界面用的形状；图片地址是服务端签发的短期地址。旧服务端缺字段时不显示。 */

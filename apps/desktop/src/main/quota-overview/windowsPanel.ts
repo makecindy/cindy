@@ -67,7 +67,26 @@ export class WindowsQuotaPanel {
     ipcMain.on(TRAY_EVENT, this.onEvent);
   }
 
+  get state() {
+    return { available: true, enabled: this.panel.settings.enabled };
+  }
+
+  setEnabled(enabled: boolean) {
+    if (this.panel.settings.enabled !== enabled) {
+      this.panel.updateSettings({ enabled });
+      if (this.panel.settings.enabled) this.prewarm();
+      else {
+        this.dismiss();
+        this.panel.stop();
+        // Reuse the mounted renderer on the next enable, without retaining account data.
+        this.send(null);
+      }
+    }
+    return this.state;
+  }
+
   prewarm(): void {
+    if (!this.panel.settings.enabled) return;
     this.controller.prewarm();
     this.panel.start();
   }
@@ -78,7 +97,7 @@ export class WindowsQuotaPanel {
   }
 
   hover(bounds: Rectangle, position: Electron.Point): void {
-    if (this.active || this.preview || this.pendingHover) return;
+    if (!this.panel.settings.enabled || this.active || this.preview || this.pendingHover) return;
     const anchor = bounds.width && bounds.height && this.contains(bounds, position)
       ? bounds : { x: position.x - 8, y: position.y - 8, width: 16, height: 16 };
     this.pendingHover = setTimeout(() => {
@@ -124,6 +143,7 @@ export class WindowsQuotaPanel {
   }
 
   open(anchor?: Rectangle): void {
+    if (!this.panel.settings.enabled) return;
     this.clearHover();
     this.present(anchor);
   }

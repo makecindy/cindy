@@ -60,24 +60,34 @@ export function useSessionListDrawerMotion(initialProgress = 0): SessionListDraw
  * onOpen mounts it at once; releasing short of a third settles it back via onCancel.
  * onSettle reports whether the release committed the opening. Keep `enabled`
  * true until then: disabling a running gesture cancels it. */
-export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen, onCancel, onSettle }: {
+export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen, onCancel, onSettle, onSwipeBack }: {
   motion: SessionListDrawerMotion;
   enabled: boolean;
   width: number;
   onOpen(): void;
   onCancel(): void;
   onSettle(opened: boolean): void;
+  onSwipeBack?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const panelWidth = Math.max(1, width + insets.left);
   const reduceMotion = useReduceMotionEnabled();
   return useMemo(() => {
     const { progress, dragX, tracking, settling } = motion;
-    return Gesture.Pan().enabled(enabled)
+    const pan = Gesture.Pan().enabled(enabled)
       // Rightward only; vertical scrolling and leftward swipes keep their own owners.
       .activeOffsetX(16)
       .failOffsetX(-16)
-      .failOffsetY([-16, 16])
+      .failOffsetY([-16, 16]);
+    if (onSwipeBack) {
+      return pan.onEnd((event, success) => {
+        'worklet';
+        if (success && (event.translationX > panelWidth * DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY)) {
+          runOnJS(onSwipeBack)();
+        }
+      });
+    }
+    return pan
       .onStart((event) => {
         'worklet';
         cancelAnimation(progress);
@@ -119,7 +129,7 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         runOnJS(onCancel)();
         runOnJS(onSettle)(false);
       });
-  }, [enabled, motion, onCancel, onOpen, onSettle, panelWidth, reduceMotion]);
+  }, [enabled, motion, onCancel, onOpen, onSettle, onSwipeBack, panelWidth, reduceMotion]);
 }
 
 /** Container only: Home owns every list row, search, group, menu and subscription. */

@@ -27,7 +27,7 @@
  * 生命周期:
  *   - import 触发 initTapdb(主视图启动时,见 renderer/index.tsx)——它只挂闸、
  *     订阅信号,不碰 SDK
- *   - main 回报 allowed=true 才 init SDK,并立即上报 page_view (#tag=app_start)
+ *   - main 回报 allowed=true 才 init SDK,并立即上报桌面活跃事件（app_start）
  *   - 可见性事件只带设备信息和停留时间，排除 SDK 自动提取的页面地址和标题
  *   - 运行期用户在设置里关掉统计 → optOutTracking():SDK 内部 _isCollectData()
  *     变 false,主动上报与 page_show 全部停止,且状态持久化在 localStorage;
@@ -35,7 +35,7 @@
  *   - 重新打开 → optInTracking() 并补一次 app_start
  *
  * 活跃口径(2026-07-30 起,交互 + 工作驱动):
- *   活跃事件(page_view #tag=app_engaged)由两类真实使用信号触发:
+ *   活跃事件(app_engaged)由两类真实使用信号触发:
  *   - 用户对 Cindy 窗口的动作:窗口获得焦点 / 窗口内按键 / 窗口内按下指针;
  *   - Cindy 会话确实处于 makerChatStore 的 running 状态。
  *   两类信号共用 30 分钟节流。running 期间保留一条只在工作时存在的滚动 timer,
@@ -390,15 +390,24 @@ export function initTapdb(auth: AuthStateObserver): void {
     });
 }
 
+// Only new, manually collected events use these names. Legacy page_show could include URLs and titles.
+let visibleSinceMs: number | null = null;
+
 function reportPageShow(): void {
-  TapDBAPI.track('page_show');
-  TapDBAPI.timeEvent('page_hide');
+  TapDBAPI.track('#cindy_desktop_page_show_v1');
+  visibleSinceMs = performance.now();
 }
 
 function reportPageHide(): void {
   if (!sdkInitialized || !reportingAllowed) return;
   try {
-    TapDBAPI.track('page_hide');
+    const start = visibleSinceMs;
+    visibleSinceMs = null;
+    // The SDK timer serializes fractional seconds; the registered duration field is an integer.
+    const properties = start === null
+      ? {}
+      : { '#duration': Math.min(86400, Math.floor((performance.now() - start) / 1000)) };
+    TapDBAPI.track('#cindy_desktop_page_hide_v1', properties);
   } catch (err) {
     log.error('page_hide report failed (non-fatal)', err);
   }
@@ -417,6 +426,7 @@ function applyReportingAllowed(next: boolean): void {
   // try 里,因为它不可能失败,也绝不该因为后面 SDK 抛异常而回退(fail closed)。
   if (!next) {
     reportingAllowed = false;
+    visibleSinceMs = null;
     clearWorkingReportTimer();
   }
 
@@ -556,7 +566,7 @@ function reportActive(tag: 'app_start' | 'app_engaged'): void {
     }
   }
 
-  TapDBAPI.trackEvent('page_view', { '#tag': tag });
+  TapDBAPI.trackEvent('#cindy_desktop_page_view_v1', { '#cindy_activity_trigger': tag });
   log.info(`active ${tag}`);
 
   if (tag === 'app_start' && document.visibilityState === 'visible') reportUsageLogin();
@@ -630,6 +640,7 @@ export const __testing = {
     currentUsageAlias = null;
     lastUsageLoginDate = null;
     registeredChargeAlias = null;
+    visibleSinceMs = null;
     nextEngagedReportAt = 0;
     engagedDayEndsAt = 0;
     engagedReportLockPending = false;
