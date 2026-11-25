@@ -1243,6 +1243,31 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     await flush();
     expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'held user input' });
   });
+
+  // Unit, #12875: an idle task can retain a never-dispatched input after Resume.
+  // The healthy Resume case above doesn't cover a rejected workdir preflight.
+  it('reports the workdir-blocked queue head without retrying it on resume', async () => {
+    const h = createHarness();
+    const sid = 'resume-workdir-blocked';
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('WORKDIR_MISSING', 'private fixture path'));
+    h.coordinator.enqueue(sid, makeItem('queued', 'queued input'));
+    await flush();
+
+    const result = await runSessionExecutionAction({
+      targetSessionId: sid, action: 'resume', beforeMutation: async () => {},
+    }, { coordinator: h.coordinator, persist: async () => {}, compact: async () => {} });
+    await flush();
+    expect(result).toEqual({ ok: true, result: {
+      executionPaused: false, queuePaused: false,
+      queueBlock: { code: 'WORKDIR_MISSING', queuedMessageId: 'queued', nextAction: 'retry',
+        message: 'Restore the working directory, then retry the queued message.' },
+    } });
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      recovery: { kind: 'queue-head', clientId: 'queued' },
+      errorRetryText: 'queued input',
+    });
+  });
   const orcaItem = (clientId: string, text: string) =>
     makeItem(clientId, text, {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
