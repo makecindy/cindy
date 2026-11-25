@@ -291,20 +291,23 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
-  it('软删除任务按 NOT_FOUND 处理且不调用标题模型', async () => {
+  it.each([
+    { label: '缺失', rows: [], code: 'NOT_FOUND' },
+    { label: '软删除 ACP', rows: [{ agentKind: 'acp', status: 'deleted' }], code: 'NOT_FOUND' },
+  ])('$label 任务返回 $code 且不调用标题模型', async ({ rows, code }) => {
     vi.mocked(getDbClient).mockReturnValue({
       drizzle: {
         select: () => ({
           from: () => ({
             where: () => ({
-              limit: async () => [{ agentKind: 'codex', status: 'deleted' }],
+              limit: async () => rows,
             }),
           }),
         }),
       },
     } as unknown as ReturnType<typeof getDbClient>);
 
-    await expect(invokeRegenerate('deleted')).rejects.toThrow(/\[NOT_FOUND\]/);
+    await expect(invokeRegenerate('s1')).rejects.toThrow(`[${code}]`);
     expect(h.generateTitleResult).not.toHaveBeenCalled();
   });
 
@@ -325,6 +328,8 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     } as unknown as ReturnType<typeof getDbClient>);
 
     await expect(invokeRegenerate('plugin-task')).resolves.toEqual({ title: '任务标题' });
+    h.generateTitleResult.mockResolvedValueOnce({ status: 'unsupported-provider' });
+    await expect(invokeRegenerate('plugin-task')).rejects.toThrow(/\[TITLE_PROVIDER_UNSUPPORTED\]/);
     expect(h.generateTitleResult).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'plugin-task', agentKind: null }),
       expect.anything(),

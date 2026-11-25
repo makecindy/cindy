@@ -385,6 +385,18 @@ describe('settings discoverability regressions', () => {
       .not.toContain('shortcuts.close-tab-or-window');
   });
 
+  // #8494: the English alias returned no shortcut row.
+  it.each([
+    ['zh-CN', '截屏'],
+    ['en', 'screen capture'],
+  ])('finds the region screenshot shortcut by its %s alias', (locale, query) => {
+    const translate = searchI18n.getFixedT(locale);
+    const documents = buildSettingsSearchDocuments(translate, TAB_IDS, { ...searchContext, platform: 'darwin' });
+    const results = searchSettings(documents, query).filter(({ entry }) =>
+      entry.targetId === 'settings-shortcut-region-screenshot');
+    expect(results.map(({ entry }) => entry.id)).toEqual(['shortcuts.region-screenshot']);
+  });
+
   it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
     const result = searchSettings(documents, shortcut).find(({ entry }) => entry.id === 'settings.composer.sendShortcut.label');

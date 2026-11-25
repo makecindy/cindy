@@ -293,6 +293,17 @@ describe('openAcpSession handshake', () => {
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
   });
+
+  // Idle runtime reclamation closes only runtimes the next send can reopen; an agent with neither
+  // method would fail that resume (above), so it must answer false and keep its runtime.
+  it.each([
+    { name: 'neither method', caps: {}, reopenable: false },
+    { name: 'session/load', caps: { loadSession: true }, reopenable: true },
+    { name: 'session/resume', caps: { sessionCapabilities: { resume: {} } }, reopenable: true },
+  ])('reports whether a closed session can be reopened with $name', async ({ caps, reopenable }) => {
+    const { session } = await open(createFakeAgent({ agentCapabilities: caps }));
+    expect(session.canResumeAfterClose()).toBe(reopenable);
+  });
 });
 
 describe('AcpSession turns', () => {
