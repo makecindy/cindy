@@ -47,6 +47,7 @@ export interface DesktopTaskDigestHost {
   listDevices?: () => Promise<HistoryDevice[]>;
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
+  readLocalQueuePaused?(sessionId: string): boolean | undefined;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
   /**
@@ -167,6 +168,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            pinnedAt: sessions.pinnedAt,
             clearedAt: sessions.clearedAt,
             activeTurnStartedAt: sessions.activeTurnStartedAt,
             status: sessions.status,
@@ -219,6 +221,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const result = await host.listSessionQueuedCounts([sessionId]);
         return result.ok ? (result.counts[sessionId] ?? 0) : null;
       },
+      queuePaused: (sessionId) => host.readLocalQueuePaused?.(sessionId),
       prStatus: async (sessionId) => formatPrStatuses(await host.readSessionPrStatuses(sessionId)),
       suggestRoute: async ({ callerSessionId, targetSessionId, current, failure }) => {
         if (!callerSessionId) return null;

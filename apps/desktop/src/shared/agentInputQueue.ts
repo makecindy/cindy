@@ -304,6 +304,7 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  waitingForRemoteAccount?: true;
   /** Rejection marker only. The positive authorization is a Main-only, non-persisted guard. */
   taskActionRequiresAuthorization?: true;
   /** Main-owned delegation receipt; stripped from renderer/device-link input. */

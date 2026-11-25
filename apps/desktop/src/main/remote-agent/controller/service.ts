@@ -30,6 +30,7 @@ import type {
 import {
   LOCAL_AGENT_CLIENT,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   isolatedBotProfile,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
@@ -714,6 +715,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const webFetch = deps.webFetch && shared ? deps.webFetch : undefined;
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
+    let preparedCleanup: Promise<void> | undefined;
     let restartedHistory = false;
     // The executor can stall before confirming startup. Feed changes into the
     // existing attempt cancellation so close/release/local cleanup do not wait for it.
@@ -846,12 +848,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       offStartupPermission?.();
       offStartupLink?.();
       offStandbyOwner?.();
-    }).then(handle => {
+    }).then(async handle => {
       // Keep cancellation attached until the service finishes its optional early renewal.
-      cancelPreparedHandle = () => { void handle.close({ reason: 'account-boundary' }).catch(() => undefined); };
+      const closePrepared = () => preparedCleanup ??= handle.close({ reason: 'account-boundary' });
+      cancelPreparedHandle = () => { void closePrepared().catch(() => undefined); };
       attempt.signal.addEventListener('abort', cancelPreparedHandle, { once: true });
       if (startupAbort.signal.aborted) {
-        cancelPreparedHandle();
+        await closePrepared();
         throw startupAbort.signal.reason;
       }
       return handle;
@@ -971,7 +974,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         directTasks.delete(shareId + ':' + sessionId);
         void releaseFailedDirectAllocation(openingDirectGeneration);
       }
-      void handle.close({ reason: 'account-boundary' }).catch(() => undefined);
+      await (preparedCleanup ?? handle.close({ reason: 'account-boundary' }));
       throw attempt.signal.reason;
     }
     // The recursive attempt already owns its lease and lifecycle. Wrapping it
@@ -1317,6 +1320,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             nextRenewAt = Date.now() + 60_000;
           } else {
             stop();
+            // Renewal can fail with a new "closed" error after cancellation.
+            // Preserve the prepared handle's actual cleanup proof, including failure.
+            if (attempt.signal.aborted && preparedCleanup) {
+              await preparedCleanup;
+              throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+            }
             await close().catch(() => undefined);
             throw error;
           }
@@ -1343,24 +1352,32 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
     }
     if (prepareStandby) void prepareStandby().catch(() => undefined);
+    if (preparedCleanup) await preparedCleanup;
     return handle;
   };
   return async (input: StartInput): Promise<AgentSessionHandle> => {
     if (!input.options.sessionId) throw new Error('remote agent sessions require a session id');
     liveDirectGuestSessions.get(input.options.sessionId)?.failedStartCleanup?.();
     const attempt = registerPendingRemoteStart(input.options.sessionId);
-    let ready: AgentSessionHandle | undefined;
+    let startup!: Promise<AgentSessionHandle>;
     let rejectCancelled!: (error: unknown) => void;
     const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
-    const closeCancelled = () => { void ready?.close({ reason: 'account-boundary' }).catch(() => undefined); };
-    const onCancel = () => { closeCancelled(); rejectCancelled(attempt.signal.reason); };
+    const onCancel = () => { rejectCancelled(attempt.cancellationError(Promise.resolve().then(() => startup))); };
     attempt.signal.addEventListener('abort', onCancel, { once: true });
     try {
-      return await Promise.race([startAttempt(input, false, attempt).then(handle => {
-        ready = handle;
-        if (attempt.signal.aborted) { closeCancelled(); throw attempt.signal.reason; }
+      startup = startAttempt(input, false, attempt).then(async handle => {
+        if (attempt.signal.aborted) {
+          await handle.close({ reason: 'account-boundary' });
+          throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+        }
         return handle;
-      }), cancelled]);
+      }, error => {
+        // Before the remote starter (or after awaited handle teardown), the
+        // attempt's own abort reason carries no remaining local resources.
+        if (attempt.signal.aborted && error === attempt.signal.reason) throw new AgentStartupResourcesReleasedError(error);
+        throw error;
+      });
+      return await Promise.race([startup, cancelled]);
     } catch (error) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as

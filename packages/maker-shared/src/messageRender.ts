@@ -1,7 +1,7 @@
 import { hasRichAnswer, richAnswerMediaSources } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isContinuationMessage } from './syntheticTrigger.js';
-export { groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
+export { collapseLegacyIdleGapCards, groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
@@ -140,6 +140,8 @@ export interface MessageRenderMessageItem<
   type: 'message';
   key: string;
   message: TMessage;
+  /** Source IDs of identical context cards replaced by this visible row. */
+  collapsedClientIds?: readonly string[];
 }
 
 export interface MessageRenderThinkingItem<

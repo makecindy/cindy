@@ -127,10 +127,16 @@ it('drops a relay connection whose pings are never answered, so the worker recon
 });
 
 it('reports whether its relay connection is open, and when that changes', async () => {
-  const { server, socket } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 } });
+  const { server, socket } = await openAgainstRelay({ autoPong: true, networkChangeProbeMs: 50, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 } });
   await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
   // 中转的往返时间（远程连接页显示）：连上就先测一次，不等第一次保活。
   await vi.waitFor(() => expect(socket.relayRttMs()).toEqual(expect.any(Number)));
+  // A single stalled peer must not disconnect an answering relay.
+  const ping = once(server, 'ping');
+  socket.relayStalled();
+  await ping;
+  await new Promise(resolve => setTimeout(resolve, 75));
+  expect(socket.relayConnected()).toBe(true);
   const changes: boolean[] = [];
   socket.on('relay', (up: boolean) => { changes.push(up); });
   server.close();
@@ -204,13 +210,14 @@ parentPort.on('message', (message) => {
   expect(socket.peerRoutes()).toEqual([{ deviceId: 'lan-peer', path: 'connecting', rttMs: null }]);
 });
 
-it('replaces a relay connection that does not answer right after a network change, before the keepalive would', async () => {
+it.each(['networkChanged', 'relayStalled'] as const)('probes a silent relay after %s before the keepalive would', async trigger => {
   const { server, warnings, socket } = await openAgainstRelay({ autoPong: false, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 }, networkChangeProbeMs: 30 });
   const closed = new Promise<void>((resolve) => { server.on('close', () => resolve()); });
   await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
-  socket.networkChanged();
+  socket[trigger]();
+  socket[trigger]();
   await closed;
-  expect(warnings).toEqual(['agent-net relay connection did not answer after a network change; reconnecting']);
+  expect(warnings).toEqual([expect.stringContaining('relay connection did not answer')]);
 });
 
 /** Turns each application frame `{ tag, count, size }` into that many relay datagrams; byte 0 is the tag. */

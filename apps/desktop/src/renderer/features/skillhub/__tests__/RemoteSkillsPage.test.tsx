@@ -112,13 +112,14 @@ const snapshot = (device: string) => ({
 });
 const requests = (action: string) =>
   mocks.invoke.mock.calls.filter((call) => call[2]?.[0]?.actionId === 'management:' + action);
-const page = (id = 'B', online = true, active = true) => (
+const page = (id = 'B', online = true, active = true, hideManagingNotice = false) => (
   <MemoryRouter initialEntries={['/skillhub/local']}>
     <RemoteSkillsPage
       key={id}
       device={{ deviceId: id, name: 'Computer ' + id }}
       online={online}
       active={active}
+      hideManagingNotice={hideManagingNotice}
     />
   </MemoryRouter>
 );
@@ -235,6 +236,15 @@ describe('full Skill Hub bound to the selected computer', () => {
     expect(screen.getByText('settings.ghosts.remote.managingDescription')).toBeTruthy();
     expect(requests('snapshot')[0][2][0].input).toEqual({ installedOnly: true });
     expect(mocks.localScan).not.toHaveBeenCalled();
+  });
+  // A page fixed to a computer it already names (cloud settings) leaves out only the
+  // plain 「正在管理」 notice; offline still shows here.
+  it('leaves the plain managing notice to the hosting page and keeps offline', async () => {
+    const ui = render(page('B', true, true, true));
+    await screen.findByText('Public skill');
+    expect(screen.queryByText('settings.ghosts.remote.managingDescription')).toBeNull();
+    ui.rerender(page('B', false, true, true));
+    expect(screen.getByText('settings.ghosts.remote.offlineNotice')).toBeTruthy();
   });
   it('paginates and sends category/search/organization filters to the selected Host', async () => {
     render(page());

@@ -21,10 +21,12 @@ import {
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { GoalController } from '../../goal-host/controller';
+import type { GoalState } from '../../goal-host/types';
 
 // ─── 连接池本身 ────────────────────────────────────────────────────
 
@@ -1457,30 +1459,198 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(2);
   });
 
-  it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
-    limits = { perDevice: 2, total: 64 };
-    const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
-    const a = await start(pool);
-    await ask(a, watch(a), 'hello');
-    await sleep(5);
-    const b = await start(pool);
-    await ask(b, watch(b), 'hello');
-    // 让出 a 时 close 第一次没送到对方。
-    let dropped = false;
-    intercept = (request) => {
-      if (request.op !== 'close' || dropped) return undefined;
-      dropped = true;
-      throw new Error('[DEVICE_LINK_TIMEOUT] link down');
+  // #11644 unit: the old handle-only tests did not exercise Session's ambiguous
+  // tail fence. Six real starter caps attempts must never dispatch this input or
+  // close its reusable Session. No production network, model, or real 30s wait.
+  it('retains the Session after six caps timeouts and resumes the same history on explicit retry', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const sending = session.send('not dispatched').catch(error => error);
+      await vi.advanceTimersByTimeAsync(190_000);
+      const result = await sending;
+      expect(caps).toBe(6);
+      expect(result).toMatchObject({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(session.getStatus()).not.toBe('closed');
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+      vi.useRealTimers();
+      intercept = null;
+      expect(await session.send('not dispatched')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(scenario.started).toHaveLength(2);
+      expect(scenario.started[1].options.resumeSessionId).toBe(handle.id);
+      expect(scenario.calls.filter(call => call.method === 'send').map(call =>
+        (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
+    } finally {
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: a real starter converts IPC startup quota into a local typed
+  // error. A bare proxy/startup-envelope test misses that conversion. The queue
+  // needs this type and reset metadata, with no second body dispatch.
+  it.each([null, 5_000_000])('preserves group quota metadata on reconnect (reset=%s)', async resetAtMs => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'quota-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      const remoteQuota = Object.assign(new Error(new ProviderGroupUsageLimitError({ resetAtMs }).message),
+        { code: 'IPC_ERROR' });
+      intercept = request => {
+        if (request.op === 'open') throw remoteQuota;
+        return undefined;
+      };
+      const result = await session.send('not dispatched').catch(error => error);
+      expect(result).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(result.limit).toEqual({ resetAtMs });
+      expect(opens).toBe(2);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: Goal's provider-rejection backoff starts after preparation
+  // finishes. Exercise the actual Goal -> Session -> remote starter boundary:
+  // a three-minute caps failure must block, not begin another six RPCs.
+  it('blocks a Goal after six preparation timeouts without automatically starting another handshake', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'goal-caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    // Session also supports EngineKinds outside Goal's AgentKind contract.
+    const goalSession = {
+      id: session.id,
+      agentKind: 'claude-code' as const,
+      send: session.send.bind(session),
+      onEvent: session.onEvent.bind(session),
+      getStatus: session.getStatus.bind(session),
+      getTurnGeneration: session.getTurnGeneration.bind(session),
+      isTurnRunning: session.isTurnRunning.bind(session),
+      abort: session.abort.bind(session),
     };
-    expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
-    expect(host.limitUsage().total).toBe(2);
-    await sleep(5);
-    opens = 0;
-    await start(pool);
-    // 本机仍按 a 占着算：打开前先让了 b，没有白开一次撞上限。
-    expect(opens).toBe(1);
-    // 再发的 close 送到后，对方结束 a。
-    await vi.waitFor(() => expect(host.limitUsage().total).toBe(1));
+    let goal: GoalState | null = null;
+    const controller = new GoalController({
+      storage: {
+        get: async () => goal,
+        upsert: async state => { goal = { ...state }; },
+        update: async (_id, patch) => goal ? (goal = { ...goal, ...patch }) : null,
+        clear: async () => { goal = null; },
+        listActive: async () => goal?.status === 'active' ? [goal] : [],
+        listUsageLimited: async () => [],
+      },
+      getSession: () => goalSession,
+      ensureSession: async () => goalSession,
+      isSessionInTurn: () => false,
+      stopActiveGoalTurn() {},
+      emitStatus() {},
+      getDefaults: () => ({ maxTurns: 20, budgetTokens: null, noProgressLimit: 3 }),
+      logger,
+    });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const setting = controller.setGoal({ sessionId: session.id, objective: 'continue the task' });
+      await vi.advanceTimersByTimeAsync(190_000);
+      await setting;
+      expect(goal).toMatchObject({ status: 'blocked', turnsUsed: 0 });
+      await vi.advanceTimersByTimeAsync(190_000);
+      expect(caps).toBe(6);
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const retryRequested = Promise.withResolvers<void>();
+    const deliverRetry = Promise.withResolvers<void>();
+    try {
+      limits = { perDevice: 2, total: 64 };
+      const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
+      const a = await start(pool);
+      await ask(a, watch(a), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+      const b = await start(pool);
+      await ask(b, watch(b), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+
+      const closeRunIds: unknown[] = [];
+      let usageBeforeOpen: number | undefined;
+      intercept = (request) => {
+        if (request.op === 'open') usageBeforeOpen = host.limitUsage().total;
+        if (request.op !== 'close') return undefined;
+        closeRunIds.push(request.runId);
+        if (closeRunIds.length === 1) throw new Error('[DEVICE_LINK_TIMEOUT] link down');
+        if (request.runId !== closeRunIds[0]) return undefined;
+        // #8097: hold the retry in transit until the new connection has opened.
+        retryRequested.resolve();
+        return deliverRetry.promise.then(() => host.handle(CONTROLLER, request));
+      };
+
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      await retryRequested.promise;
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      opens = 0;
+      await start(pool);
+      expect(opens).toBe(1);
+      expect(usageBeforeOpen).toBe(1);
+      expect(closeRunIds).toHaveLength(3);
+      expect(closeRunIds[2]).not.toBe(closeRunIds[0]);
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      deliverRetry.resolve();
+      await vi.waitFor(() => {
+        expect(host.limitUsage().total).toBe(1);
+        expect(pool.occupied()).toBe(1);
+      });
+      expect(closeRunIds).toHaveLength(3);
+    } finally {
+      deliverRetry.resolve();
+      vi.useRealTimers();
+    }
   });
 
   // PR #6483 review：连回后补发设置失败只记日志，消息照样在缺设置的 Agent 上执行。
@@ -1505,11 +1675,13 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(3);
   });
 
-  // PR #6483 第三轮：self 让出时 close 没送到，接回前本机不算自己的旧 run，对方按上限拒绝，且不会选 self 让出。
+  // #12552: real controller + host admission, unit. #6483 covered a lost
+  // close but expected the old host's limit rejection. A new host can finish
+  // this exact idle session before replacing it, even if every close RPC drops.
   it.each([
-    ['gets through', 1, 'ok:again'],
-    ['still fails', Infinity, '[DEVICE_LIMIT]'],
-  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops, outcome) => {
+    ['gets through', 1],
+    ['still fails', Infinity],
+  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops) => {
     const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 3_600_000 });
     const a = await start(pool);
     const events = watch(a);
@@ -1525,19 +1697,15 @@ describe('remote connection pool with a real host', () => {
     // 对方还开着 a 的旧 run(名额 1 已占满)。
     expect(host.limitUsage().total).toBe(1);
     opens = 0;
-    if (outcome.startsWith('ok:')) {
-      expect(await ask(a, events, 'again')).toBe(outcome);
-      // 先关掉了 a 的旧 run 再打开，没有撞上限。
-      expect(opens).toBe(1);
-      expect(dropped).toBe(1);
-      expect(host.limitUsage().total).toBe(1);
-      expect(scenario.started).toHaveLength(2);
-    } else {
-      // 旧 run 还是关不掉：照常按对方的上限报错，不死循环。
-      await expect(a.send({ type: 'user', content: 'again' })).rejects.toThrow(outcome);
-      expect(opens).toBe(1);
-      expect(dropped).toBeLessThanOrEqual(3);
-    }
+    expect(await ask(a, events, 'again')).toBe('ok:again');
+    // Either the close RPC or the host's same-session admission finishes the
+    // old idle instance. Never add a second slot or loop on a lost close.
+    expect(opens).toBe(1);
+    expect(dropped).toBeGreaterThanOrEqual(1);
+    expect(dropped).toBeLessThanOrEqual(3);
+    if (drops === 1) expect(dropped).toBe(1);
+    expect(host.limitUsage().total).toBe(1);
+    expect(scenario.started).toHaveLength(2);
   });
 
   it('still counts the old run of a task closed while its release close was undelivered, then drops it once closed', async () => {
