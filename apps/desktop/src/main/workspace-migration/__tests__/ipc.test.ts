@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createWorkspaceMigrationIpcHandlers } from '../ipc.js';
+import { provisionDecoupledWorkspace } from '../service.js';
 import * as processIdentity from '../../desktopProcessIdentity.js';
 
 let temporary: string;
@@ -66,6 +67,19 @@ function createHarness(overrides: Partial<Parameters<typeof createWorkspaceMigra
 }
 
 describe('workspace migration desktop IPC handlers', () => {
+  it('previews a return to the default path of the same buddy without a folder picker', async () => {
+    const { handlers, selectTargetParentDirectory } = createHarness();
+    const source = path.join(ownerRoot, 'bots', botId, 'workspace');
+    await expect(handlers.chooseTarget(botId, true)).resolves.toEqual({ selected: false });
+    await fs.rm(source, { recursive: true });
+    await provisionDecoupledWorkspace(ownerRoot, botId, targetParent);
+    const chosen = await handlers.chooseTarget(botId, true);
+    if (!chosen.selected || 'errorCode' in chosen) throw new Error('expected preview');
+    expect(chosen.preview.target).toBe(source);
+    expect(selectTargetParentDirectory).not.toHaveBeenCalled();
+    const { status } = await handlers.schedule({ botId, grantId: chosen.preview.grantId, restartNow: false });
+    expect(status).toMatchObject({ phase: 'pending', target: source, currentTarget: chosen.preview.source });
+  });
   it('derives a fresh target subfolder, mints a grant, schedules, and supports cancel & restart', async () => {
     const { handlers, relaunch } = createHarness();
     // Pre-create first candidate so collision suffix -2 is exercised.

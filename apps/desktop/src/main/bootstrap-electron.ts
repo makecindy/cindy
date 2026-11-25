@@ -10060,10 +10060,10 @@ const registerIpcHandlers = () => {
         workspaceMigrationHandlers.getStatus(botId),
       );
     });
-    ipcMain.handle('local-db:bots:workspace-migration:choose-target', (event, botId) => {
+    ipcMain.handle('local-db:bots:workspace-migration:choose-target', (event, botId, useDefault) => {
       assertTrustedAppRendererEvent(event);
       return invokeWorkspaceMigrationIpc('choose-target', () =>
-        workspaceMigrationHandlers.chooseTarget(botId),
+        workspaceMigrationHandlers.chooseTarget(botId, useDefault),
       );
     });
     ipcMain.handle('local-db:bots:workspace-migration:schedule', (event, input) => {

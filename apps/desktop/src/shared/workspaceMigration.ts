@@ -34,7 +34,10 @@ export interface WorkspaceMigrationStartupProgress {
 
 export interface WorkspaceMigrationStatus {
   botId: string;
+  /** Stable logical path, even when the files live on another disk. */
   source: string;
+  /** Current external location, distinct from the requested target. */
+  currentTarget?: string;
   workspaceAvailable: boolean;
   startupWarning?: string;
   phase: WorkspaceMigrationPhase;

@@ -5307,6 +5307,7 @@ interface ElectronAPI {
         ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus>;
         chooseTarget: (
           botId: string,
+          useDefault?: boolean,
         ) => Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult>;
         schedule: (
           input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,

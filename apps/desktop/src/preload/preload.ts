@@ -6415,8 +6415,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
           ipcRenderer.invoke('local-db:bots:workspace-migration:status', botId),
         chooseTarget: (
           botId: string,
+          useDefault?: boolean,
         ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult> =>
-          ipcRenderer.invoke('local-db:bots:workspace-migration:choose-target', botId),
+          ipcRenderer.invoke('local-db:bots:workspace-migration:choose-target', botId, useDefault),
         schedule: (
           input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,
         ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationScheduleResult> =>

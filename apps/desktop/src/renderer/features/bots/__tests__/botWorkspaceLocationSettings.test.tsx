@@ -178,13 +178,14 @@ describe('BotWorkspaceLocationSettings', () => {
   });
 
   it('shows moved target open button and alerts when a moved target is unavailable', async () => {
-    const { openPath } = installApi({
+    const { api, openPath } = installApi({
       status: {
         botId: 'bot-1',
         source: 'C:\\Cindy\\bots\\bot-1\\workspace',
         workspaceAvailable: true,
         phase: 'completed',
         target: 'D:\\CindyWorkspaces\\bot-1-workspace',
+        currentTarget: 'D:\\CindyWorkspaces\\bot-1-workspace',
         canSchedule: true,
       },
     });
@@ -197,6 +198,14 @@ describe('BotWorkspaceLocationSettings', () => {
     await waitFor(() =>
       expect(openPath).toHaveBeenCalledWith('D:\\CindyWorkspaces\\bot-1-workspace'),
     );
+    expect(
+      screen.getByRole('button', { name: 'bots.homeFolder.workspaceLocation.moveAction' }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'bots.homeFolder.workspaceLocation.moveBackAction' }),
+    );
+    await screen.findByTestId('workspace-migration-preview');
+    expect(api.chooseTarget).toHaveBeenCalledWith('bot-1', true);
 
     cleanup();
     installApi({
@@ -206,6 +215,7 @@ describe('BotWorkspaceLocationSettings', () => {
         workspaceAvailable: false,
         phase: 'completed',
         target: 'D:\\OfflineDrive\\bot-1-workspace',
+        currentTarget: 'D:\\OfflineDrive\\bot-1-workspace',
         canSchedule: true,
       },
     });

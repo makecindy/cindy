@@ -30,11 +30,31 @@ function relocatedLink(link: string, relativeFile: string, logicalRoot: string):
   return inside(logicalRoot, resolved) ? link : resolved;
 }
 
-function linkSemantic(root: string, logicalRoot: string, relative: string, raw: string): string {
+async function internalAbsoluteLink(
+  root: string,
+  realRoot: string,
+  logicalRoot: string,
+  raw: string,
+): Promise<string | undefined> {
+  if (!path.isAbsolute(raw)) return undefined;
+  if (inside(root, raw)) return path.relative(root, raw);
+  if (inside(realRoot, raw)) return path.relative(realRoot, raw);
+  if (inside(logicalRoot, raw)) return undefined;
+  // An absolute link may use a system alias for the parent of the workspace.
+  // Resolve the parent only, so a link to a link does not get flattened.
+  const parent = await fs.realpath(path.dirname(raw)).catch(() => null);
+  const physical = parent && path.join(parent, path.basename(raw));
+  return physical && inside(realRoot, physical) ? path.relative(realRoot, physical) : undefined;
+}
+
+async function linkSemantic(
+  root: string, realRoot: string, logicalRoot: string, relative: string, raw: string,
+): Promise<string> {
   const resolved = path.resolve(root, path.dirname(relative), raw);
-  const semantic = inside(root, resolved)
-    ? path.resolve(logicalRoot, path.relative(root, resolved))
-    : resolved;
+  const internal = path.isAbsolute(raw)
+    ? await internalAbsoluteLink(root, realRoot, logicalRoot, raw)
+    : inside(root, resolved) ? path.relative(root, resolved) : undefined;
+  const semantic = internal === undefined ? resolved : path.resolve(logicalRoot, internal);
   return process.platform === 'win32' ? path.toNamespacedPath(semantic).toLowerCase() : semantic;
 }
 
@@ -105,7 +125,7 @@ export async function inspectTree(
     if (!info) throw new Error('WORKSPACE_CHANGED');
     const mode = Number(info.mode & 0o777n);
     if (info.isSymbolicLink()) {
-      const link = linkSemantic(root, logicalRoot, relative, await fs.readlink(file));
+      const link = await linkSemantic(root, realRoot, logicalRoot, relative, await fs.readlink(file));
       hash.update(JSON.stringify([relative, 'link', link]));
       links += 1;
     } else if (info.isDirectory()) {
@@ -137,6 +157,8 @@ export async function copyTree(
   destination: string,
   resume = false,
   onCopiedBytes?: (copiedBytes: number) => void,
+  logicalRoot = source,
+  installedAt = destination,
 ): Promise<void> {
   const realSource = await fs.realpath(source);
   let realDestination = resume ? await fs.realpath(destination) : '';
@@ -156,14 +178,18 @@ export async function copyTree(
       if (existing) {
         if (
           !existing.isSymbolicLink() ||
-          linkSemantic(destination, source, relative, await fs.readlink(to)) !==
-            linkSemantic(source, source, relative, await fs.readlink(from))
+          (await linkSemantic(destination, realDestination, logicalRoot, relative, await fs.readlink(to))) !==
+            (await linkSemantic(source, realSource, logicalRoot, relative, await fs.readlink(from)))
         )
           throw new Error('TARGET_CONTENT_CHANGED');
         return;
       }
       const rawLink = await fs.readlink(from);
       let link = relocatedLink(rawLink, relative, source);
+      // In particular, Windows junctions made by an earlier move can still
+      // point inside the previous physical tree. That tree is not permanent.
+      const internal = await internalAbsoluteLink(source, realSource, logicalRoot, rawLink);
+      if (internal !== undefined) link = path.resolve(logicalRoot, internal);
       // NTFS directory junctions do not need Developer Mode. File symlinks do;
       // insufficient privilege fails before the original directory is moved.
       const directory = await fs.stat(from).then(
@@ -178,7 +204,7 @@ export async function copyTree(
       if (process.platform === 'win32' && directory) {
         // Internal relative links stay inside the moved workspace rather than
         // bouncing back through the old source junction.
-        const base = path.isAbsolute(link) ? path.dirname(from) : path.dirname(to);
+        const base = path.dirname(path.join(installedAt, relative));
         link = path.resolve(base, link);
       }
       await fs.symlink(

@@ -105,9 +105,93 @@ describe('offline workspace relocation', () => {
     },
   );
 
-  // #10568: preflight must explain an existing redirect before touching either
-  // tree. Existing successful-move tests did not attempt a second relocation.
-  it('rejects a redirected workspace explicitly without changing either directory', async () => {
+  async function moveTo(destination: string) {
+    await requestWorkspaceMove(owner, bot, destination, current);
+    await previousProcess();
+    await recoverWorkspaceMovesAtStartup(owner, true);
+  }
+
+  // An old absolute internal junction must not retain a dependency on a disk
+  // that can now be removed. Also verify later writes through the logical path.
+  it('moves a buddy to a second location, back to default, and away again', async () => {
+    await moveTo(target);
+    await fs.symlink(
+      path.join(target, '.cindy'),
+      path.join(target, 'internal'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    await fs.writeFile(path.join(source, 'later.txt'), 'after first move');
+    const nextTarget = path.join(path.dirname(target), 'second-move');
+    expect(await previewWorkspaceMove(owner, bot, nextTarget)).toMatchObject({
+      source: await fs.realpath(target),
+      target: path.join(await fs.realpath(path.dirname(target)), 'second-move'),
+    });
+    await moveTo(nextTarget);
+    expect(await fs.realpath(source)).toBe(await fs.realpath(nextTarget));
+    await expect(fs.lstat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(source, 'internal', 'memory', 'fts.db'), 'utf8')).toBe(
+      'database-and-wal-sample',
+    );
+    await moveTo(source);
+    expect((await fs.lstat(source)).isSymbolicLink()).toBe(false);
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+      phase: 'completed',
+      currentTarget: undefined,
+      workspaceAvailable: true,
+    });
+    await expect(fs.lstat(nextTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+    await assertWorkspaceMoveReady(owner, bot);
+    expect(await fs.readFile(path.join(source, 'later.txt'), 'utf8')).toBe('after first move');
+    await moveTo(target);
+    expect(await fs.realpath(source)).toBe(await fs.realpath(target));
+  });
+
+  // Losing the completion record must restore the latest committed workspace,
+  // including when the candidate was installed as a real directory.
+  it.each(['other', 'default'] as const)('restores the last committed location when committing %s fails', async (destination) => {
+    await moveTo(target);
+    const nextTarget = destination === 'default' ? source : path.join(path.dirname(target), 'second-move');
+    await requestWorkspaceMove(owner, bot, nextTarget, current);
+    await previousProcess();
+    const journal = await receipt();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === journal.file) {
+        const value = JSON.parse(await fs.readFile(from, 'utf8'));
+        if (value.phase === 'completed') throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }
+      return rename(from, to);
+    });
+    await recoverWorkspaceMovesAtStartup(owner, true);
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+      phase: 'failed',
+      currentTarget: await fs.realpath(target),
+      workspaceAvailable: true,
+    });
+    await assertWorkspaceMoveReady(owner, bot);
+    await fs.writeFile(path.join(source, 'recovered.txt'), 'still live');
+    expect(await fs.readFile(path.join(target, 'recovered.txt'), 'utf8')).toBe('still live');
+  });
+
+  it('keeps the prior location guarded across a cancelled repeat move', async () => {
+    await moveTo(target);
+    const nextTarget = path.join(path.dirname(target), 'second-move');
+    await requestWorkspaceMove(owner, bot, nextTarget, current);
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+      phase: 'pending',
+      currentTarget: await fs.realpath(target),
+    });
+    await cancelWorkspaceMove(owner, bot, current);
+    await fs.rename(target, `${target}-offline`);
+    await expect(assertWorkspaceMoveReady(owner, bot)).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+    await expect(previewWorkspaceMove(owner, bot, nextTarget)).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    await fs.rename(`${target}-offline`, target);
+    await moveTo(nextTarget);
+    expect(await fs.realpath(source)).toBe(await fs.realpath(nextTarget));
+  });
+
+  it('rejects an unrecorded redirect without changing its link or contents', async () => {
     await requestWorkspaceMove(owner, bot, target, current);
     await previousProcess();
     await recoverWorkspaceMovesAtStartup(owner, true);
@@ -115,7 +199,7 @@ describe('offline workspace relocation', () => {
     const before = await inspectTree(target);
     const originalLink = await fs.readlink(source);
     const journal = await receipt();
-    const beforeReceipt = await fs.readFile(journal.file, 'utf8');
+    await fs.unlink(journal.file);
     await expect(previewWorkspaceMove(owner, bot, nextTarget)).rejects.toThrow(
       'WORKSPACE_ALREADY_REDIRECTED',
     );
@@ -124,7 +208,7 @@ describe('offline workspace relocation', () => {
     );
     expect(await fs.readlink(source)).toBe(originalLink);
     expect((await inspectTree(target)).digest).toBe(before.digest);
-    expect(await fs.readFile(journal.file, 'utf8')).toBe(beforeReceipt);
+    await expect(fs.lstat(journal.file)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.lstat(nextTarget)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

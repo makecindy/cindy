@@ -40,6 +40,8 @@ function mapMigrationErrorKey(code: string | undefined): string {
       return 'bots.homeFolder.workspaceLocation.errors.unsupportedFileOrHardLink';
     case 'WORKSPACE_ALREADY_REDIRECTED':
       return 'bots.homeFolder.workspaceLocation.errors.alreadyRedirected';
+    case 'MOVED_WORKSPACE_UNAVAILABLE':
+      return 'bots.homeFolder.workspaceLocation.unavailableTitle';
     case 'BOT_HOME_IS_REDIRECTED':
       return 'bots.homeFolder.workspaceLocation.errors.botHomeRedirected';
     case 'TARGET_EXISTS':
@@ -74,7 +76,7 @@ function badgeMetaForStatus(status: WorkspaceMigrationStatus): {
   dotClass: string;
   textClass: string;
 } {
-  if (status.phase === 'completed') {
+  if (status.phase === 'completed' && (status.currentTarget || !status.workspaceAvailable)) {
     return status.workspaceAvailable
       ? {
           key: 'bots.homeFolder.workspaceLocation.status.moved',
@@ -171,12 +173,12 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
 
   if (!api) return null;
 
-  const chooseTarget = async () => {
+  const chooseTarget = async (useDefault = false) => {
     if (busy) return;
     setBusy(true);
     setErrorCode(null);
     try {
-      const result = await api.chooseTarget(botId);
+      const result = await api.chooseTarget(botId, useDefault);
       if (!result.selected) return;
       if ('errorCode' in result) {
         setPreview(null);
@@ -270,16 +272,16 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
 
   if (!status) return null;
 
-  const isMoved = status.phase === 'completed';
+  const isMoved = Boolean(status.currentTarget);
   const isPending = status.phase === 'pending';
   const isFailed = status.phase === 'failed';
   const isInterrupted = ['copying', 'prepared', 'switching', 'linked'].includes(status.phase);
   const canStartMove =
-    status.canSchedule && (status.phase === 'none' || status.phase === 'cancelled' || isFailed);
-  const displayedPath = isMoved && status.target ? status.target : status.source;
+    status.canSchedule && status.workspaceAvailable && !isPending && !isInterrupted;
+  const displayedPath = status.currentTarget ?? status.source;
   const warningKey = mapStartupWarningKey(status.startupWarning);
   const badge = badgeMetaForStatus(status);
-  const canOpenDisplayed = !(isMoved && !status.workspaceAvailable);
+  const canOpenDisplayed = status.workspaceAvailable;
 
   return (
     <SettingsCard>
@@ -351,7 +353,19 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
         </div>
 
         {canStartMove && !preview ? (
-          <div className="flex justify-end pt-0.5">
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
+            {isMoved ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={busy}
+                onClick={() => void chooseTarget(true)}
+              >
+                {t('bots.homeFolder.workspaceLocation.moveBackAction')}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="secondary"
@@ -507,13 +521,13 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
         </div>
       ) : null}
 
-      {isMoved && !status.workspaceAvailable ? (
+      {(isMoved || status.phase === 'completed') && !status.workspaceAvailable ? (
         <SettingsBlock>
           <ErrorNotice
             role="alert"
             message={t('bots.homeFolder.workspaceLocation.unavailableTitle')}
             description={t('bots.homeFolder.workspaceLocation.unavailableDescription', {
-              target: status.target ?? '',
+              target: displayedPath,
             })}
           />
         </SettingsBlock>
@@ -566,7 +580,7 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
         </SettingsBlock>
       ) : null}
 
-      {isMoved && status.backupRemaining && status.backup ? (
+      {status.phase === 'completed' && status.backupRemaining && status.backup ? (
         <SettingsBlock>
           <p className={cn('flex items-start gap-1.5', SETTINGS_HINT)} role="status">
             <Info size={13} className="mt-0.5 shrink-0" aria-hidden />

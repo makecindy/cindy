@@ -73,6 +73,7 @@ const KNOWN_PREVIEW_ERRORS = new Set([
   'TARGET_OVERLAPS_CINDY_DATA',
   'BOT_HOME_IS_REDIRECTED',
   'WORKSPACE_ALREADY_REDIRECTED',
+  'MOVED_WORKSPACE_UNAVAILABLE',
   'TARGET_EXISTS',
   'INSUFFICIENT_SPACE',
   'UNSUPPORTED_FILE_OR_HARD_LINK',
@@ -111,6 +112,7 @@ export function createWorkspaceMigrationIpcHandlers(deps: WorkspaceMigrationIpcD
     return {
       botId: raw.botId,
       source: raw.source,
+      currentTarget: raw.currentTarget,
       workspaceAvailable: raw.workspaceAvailable,
       startupWarning: raw.startupWarning,
       phase: raw.phase,
@@ -131,15 +133,28 @@ export function createWorkspaceMigrationIpcHandlers(deps: WorkspaceMigrationIpcD
       return toPublicStatus(owner, botId);
     },
 
-    async chooseTarget(rawBotId: unknown): Promise<WorkspaceMigrationChooseTargetResult> {
+    async chooseTarget(
+      rawBotId: unknown,
+      useDefault: unknown = false,
+    ): Promise<WorkspaceMigrationChooseTargetResult> {
       const botId = requireBotId(rawBotId);
+      if (typeof useDefault !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'useDefault must be a boolean');
+      }
       const owner = captureReadyOwner();
       await deps.assertLocalBuddy(botId);
       assertOwnerCurrent(owner);
-      const parentDir = await deps.selectTargetParentDirectory();
-      if (!parentDir) return { selected: false };
+      let candidateTarget: string;
+      if (useDefault) {
+        const status = await toPublicStatus(owner, botId);
+        if (!status.currentTarget) return { selected: false };
+        candidateTarget = status.source;
+      } else {
+        const parentDir = await deps.selectTargetParentDirectory();
+        if (!parentDir) return { selected: false };
+        candidateTarget = await deriveCandidateTarget(parentDir, botId);
+      }
       assertOwnerCurrent(owner);
-      const candidateTarget = await deriveCandidateTarget(parentDir, botId);
       try {
         const preview = await previewWorkspaceMove(owner.ownerRoot, botId, candidateTarget);
         assertOwnerCurrent(owner);
