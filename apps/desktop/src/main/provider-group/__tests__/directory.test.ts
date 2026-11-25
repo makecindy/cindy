@@ -2,7 +2,7 @@
  * 组内电脑的实时情况(provider-groups.md §3、§5)：可加入的电脑只列这台电脑已经能用的同一个供应商；
  * 组里每台按在线、远程调用、分享状态给出能不能用与原因。
  */
-import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareReceived, RemoteAgentCaps } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,8 @@ import { createProviderGroupRouter } from '../router';
 import { createProviderGroupRemoteClient } from '../remoteClient';
 import { handleProviderGroupRemote } from '../remoteHandler';
 import { createProviderGroupExternalLoad } from '../externalLoad';
+import { readSharedGroupStatus, SHARED_GROUP_STATUS_TIMEOUT_MS } from '../sharedStatus';
+import type { ProviderGroupOwnerScope } from '../runtime';
 
 // Isolate the catalog reader's local preference port; never read the test runner's owner profile.
 vi.mock('../../maker-host/model-disable-store.js', () => ({
@@ -531,6 +533,67 @@ describe('resolveMembers', () => {
     });
     expect(reads).toBe(3);
   });
+});
+
+// Anonymous status must retain confirmed members when another member is slow or
+// stale (provider-groups.md §10 and the bounded-snapshot contract). Existing
+// sharedStatus tests stubbed one whole router view, hiding partial directory
+// coverage. Unit: real directory -> router -> anonymous projection, fake clocks.
+describe('anonymous status with partial member reads', () => {
+  it.each(['stale', 'expired', 'catalog-timeout', 'quota-timeout'] as const)(
+    'keeps other computers confirmed when one has %s', async (failure) => {
+      vi.useFakeTimers();
+      try {
+        let recover!: () => void;
+        const delayed = new Promise<void>((resolve) => { recover = resolve; });
+        const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [
+          { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+          ...['mini', 'other'].map((id): ProviderGroupMember => ({
+            key: `device:${id}:anthropic`, kind: 'device', agentDeviceId: id, providerId: 'anthropic', limit: 4, weight: 1, paused: false,
+          })),
+        ] };
+        const listDevices = vi.fn(async () => [device('mini'), device('other')]);
+        const readDeviceProviderCatalog = vi.fn(async (id: string) => {
+          if (id === 'other' && failure === 'catalog-timeout') await delayed;
+          return { views: [view('anthropic', 'Claude')], stale: id === 'other' && failure === 'stale',
+            remainingMs: id === 'other' && failure === 'expired' ? 0 : 60_000 };
+        });
+        const directory = createProviderGroupDirectory(deps({ listDevices, readDeviceProviderCatalog,
+          now: () => Date.now(), localRunning: async () => 0,
+          readClaudeUsage: async (member) => {
+            if (member.agentDeviceId === 'other' && failure === 'quota-timeout') await delayed;
+            return null;
+          },
+        }));
+        const router = createProviderGroupRouter({ directory, readGroup: () => config,
+          listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+        const readCaps = vi.fn(async () => ({
+          version: 1, agents: [{ kind: 'claude-code', available: true }], maxRuns: 4, uploadChunkBytes: 1024, maxPayloadBytes: 4096,
+          virtualWorkspace: true, guestRelay: true,
+        } satisfies RemoteAgentCaps));
+        const statusDeps = {
+          scope: () => ({ router, isCurrent: () => true }) as ProviderGroupOwnerScope,
+          readGroup: () => config, readCaps, isIncapable: () => false,
+        };
+        const first = readSharedGroupStatus(statusDeps, 'anthropic');
+        await vi.advanceTimersByTimeAsync(SHARED_GROUP_STATUS_TIMEOUT_MS);
+        expect(await first).toEqual(['available', 'available', 'unknown']);
+        // Per-member reads must still share the physical catalog/device reads.
+        expect(listDevices).toHaveBeenCalledTimes(1);
+        expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(2);
+        expect(readCaps).toHaveBeenCalledTimes(1);
+        if (failure === 'catalog-timeout' || failure === 'quota-timeout') {
+          recover();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available', 'available', 'available']);
+          expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(2);
+          expect(readCaps).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe('probe (waiting for a computer to come back, §6.1)', () => {
