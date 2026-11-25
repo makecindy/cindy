@@ -43,8 +43,11 @@ describe('InputHandoffSession', () => {
   // `splitCode`: no phone; a visible first box of the code, then the shrunken focused one, for a field plan joining
   // them. `rejects`: confirming shows a code error and takes the focus off the code; `errorAbove` puts the error right
   // above the code, where it names it. `noIds`: the code fields have no page id, and with `twinDrop` the second frame
-  // loads another address.
-  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' | 'splitCode';
+  // loads another address. `twinSwap`: typing the phone swaps the two frames; `twinDropOther`: moving the focus off the
+  // code removes the second frame. `dupId`: no phone; next to the focused code, a never-focused 1x1 field reads with
+  // the same id (ids are read cut off at 64 characters) and fingerprint.
+  type PayLayout = 'focus' | 'insert' | 'trap' | 'frame' | 'fragment' | 'twoSteps' | 'sameFp' | 'twinFrames' | 'twinDrop' |
+    'twinSwap' | 'twinDropOther' | 'splitCode' | 'dupId';
   function payPage(options: { layout?: PayLayout; staleOnce?: boolean; rejects?: boolean; errorAbove?: boolean; noIds?: boolean } = {}) {
     const layout = options.layout ?? 'focus';
     const state = { focus: 'code', phoneTyped: false, stale: !!options.staleOnce, secondStep: false, rejected: false };
@@ -62,7 +65,9 @@ describe('InputHandoffSession', () => {
         out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
         return out;
       }
-      if (layout === 'splitCode') {
+      if (layout === 'dupId') {
+        // No phone.
+      } else if (layout === 'splitCode') {
         out.push(n(next(), 'AXTextField', { title: 'Code 1', frame: [460, 300, 40, 30], focused: state.focus === 'phone' }));
       } else if (layout === 'sameFp') {
         out.push(n(next(), 'AXStaticText', { value: 'Phone', frame: [460, 280, 60, 16] }));
@@ -73,23 +78,34 @@ describe('InputHandoffSession', () => {
       out.push(n(next(), 'AXStaticText', { value: '验证码已发送至186****0000', frame: [460, 410, 260, 18] }));
       const code = { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 440, 1, 1], focused: state.focus === 'code', ...(layout === 'splitCode' ? { title: 'Code 2' } : {}) };
       if (state.rejected) out.push(n(next(), 'AXStaticText', { value: '验证码错误', frame: [460, options.errorAbove ? 425 : 470, 200, 12] }));
-      if (layout === 'frame' || layout === 'fragment' || layout === 'twinFrames' || layout === 'twinDrop') {
+      const twins = ['twinFrames', 'twinDrop', 'twinSwap', 'twinDropOther'].includes(layout);
+      if (layout === 'frame' || layout === 'fragment' || twins) {
         const address = layout === 'fragment' && state.phoneTyped ? 'https://secure.example.test/sms#sent' : 'https://secure.example.test/sms';
-        if (!(layout === 'twinDrop' && state.phoneTyped)) {
+        // Except with `twinFrames`, each frame names its own field, so both read alike.
+        const named = twins && layout !== 'twinFrames';
+        const frameA = () => {
           const frameRef = next();
           out.push(n(frameRef, 'AXWebArea', { url: address, frame: [440, 400, 320, 120] }));
-          // With `twinDrop` each frame names its own field, so both read alike.
-          if (layout === 'twinDrop') out.push(n(`${frameRef}.0`, 'AXStaticText', { value: '验证码', frame: [460, 420, 60, 16] }));
+          if (named) out.push(n(`${frameRef}.0`, 'AXStaticText', { value: '验证码', frame: [460, 420, 60, 16] }));
           out.push(n(`${frameRef}.1`, 'AXTextField', code));
-        }
-        if (layout === 'twinFrames' || layout === 'twinDrop') {
+        };
+        const frameB = () => {
+          if (!twins) return;
           const twin = next();
           out.push(n(twin, 'AXWebArea', { url: options.noIds && layout === 'twinDrop' ? 'https://secure.example.test/sms-b' : address, frame: [440, 600, 320, 120] }));
-          if (layout === 'twinDrop') out.push(n(`${twin}.0`, 'AXStaticText', { value: '验证码', frame: [460, 620, 60, 16] }));
+          if (named) out.push(n(`${twin}.0`, 'AXStaticText', { value: '验证码', frame: [460, 620, 60, 16] }));
           out.push(n(`${twin}.1`, 'AXTextField', { ...(options.noIds ? {} : { domId: 'sms-code' }), frame: [460, 640, 1, 1] }));
+        };
+        if (layout === 'twinSwap' && state.phoneTyped) {
+          frameB();
+          frameA();
+        } else {
+          if (!(layout === 'twinDrop' && state.phoneTyped)) frameA();
+          if (!(layout === 'twinDropOther' && state.focus !== 'code')) frameB();
         }
       } else out.push(n(next(), 'AXTextField', code));
       if (layout === 'trap') out.push(n(next(), 'AXTextField', { domId: 'bot-trap', frame: [460, 460, 1, 1] }));
+      if (layout === 'dupId') out.push(n(next(), 'AXTextField', { domId: 'sms-code', frame: [460, 460, 1, 1] }));
       out.push(n(next(), 'AXButton', { title: '确定', frame: [460, 500, 290, 36] }));
       return out;
     };
@@ -131,7 +147,6 @@ describe('InputHandoffSession', () => {
     { name: 'the fill finds it stale once', layout: 'focus' as const, staleOnce: true, typed: ['0.1', '0.3', '0.3'] },
     { name: 'its frame rewrites the address fragment', layout: 'fragment' as const, typed: ['0.1', '0.3.1'] },
     { name: 'the phone shares its fingerprint', layout: 'sameFp' as const, typed: ['0.2', '0.4'] },
-    { name: 'another frame loads the same address', layout: 'twinFrames' as const, typed: ['0.1', '0.3.1'] },
   ])('types a hidden code field found focused after an earlier field ($name)', async ({ layout, staleOnce, typed }) => {
     const page = payPage({ layout, staleOnce });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
@@ -167,7 +182,9 @@ describe('InputHandoffSession', () => {
   // PR #12780 reviews (codex r4692228746, r4693191354): the owner clicks the phone field on the window while the card
   // waits; the window watch re-read dropped the unfocused code field and handed back as done outside (steps=0). With
   // `sameFp`, dropping it made the phone's fingerprint unique, so its identity no longer matched the card's.
-  it.each(['focus', 'sameFp'] as const)('keeps waiting when the owner moves the focus off a hidden code field on the window (%s)', async (layout) => {
+  // PR #12780 review (codex r4693957106, `twinDropOther`): the other frame at the code's address went, so the code's
+  // key no longer held; a read that cannot tell whose the code is is no evidence the owner finished.
+  it.each(['focus', 'sameFp', 'twinDropOther'] as const)('keeps waiting when the owner moves the focus off a hidden code field on the window (%s)', async (layout) => {
     const page = payPage({ layout });
     const { session, latest, finished } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' }, windowWatchMs: 2 });
     await session.start();
@@ -187,8 +204,16 @@ describe('InputHandoffSession', () => {
   // Entry: session.submit. Unit tier.
   // PR #12780 review (codex r4693715714): without page ids, the second frame (another address) took the removed frame's
   // tree place, and a key of tree place alone, without its document, handed it the code.
-  it.each([{ noIds: false }, { noIds: true }])('does not hand a hidden code field over to another frame once its own goes away (%o)', async ({ noIds }) => {
-    const page = payPage({ layout: 'twinDrop', noIds });
+  // PR #12780 review (codex r4693957096, `twinSwap`): swapping the frames swapped their order too, so the never-focused
+  // field took the code's key. Two frames at one address with alike fields (`twinFrames`) cannot tell whose the code
+  // is once the focus moves: the fill stops instead of guessing (codex r4693191365 had it take in both).
+  it.each([
+    { layout: 'twinFrames' as const, noIds: false },
+    { layout: 'twinDrop' as const, noIds: false },
+    { layout: 'twinDrop' as const, noIds: true },
+    { layout: 'twinSwap' as const, noIds: false },
+  ])('does not hand a hidden code field over to another frame once its own moves or goes away (%o)', async ({ layout, noIds }) => {
+    const page = payPage({ layout, noIds });
     const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
     await session.start();
     const step = latest();
@@ -197,6 +222,22 @@ describe('InputHandoffSession', () => {
     const values = Object.fromEntries(texts.map((control, i) => [control.id, i === 0 ? '18600000000' : '123456']));
     await session.submit({ expectedRevision: step.revision, values, action: { kind: 'submit' } });
     expect(page.acts.map((act) => act.ref ?? act.kind)).toEqual(['0.1']);
+    session.cancel();
+  });
+
+  // PR #12780 review (codex r4693957115): ids are read cut off at 64 characters, so another never-focused 1x1 field
+  // read with the code's id and fingerprint; re-reading by key took it in too, and the fill failed before typing.
+  // Entry: session.submit. Unit tier.
+  it('types a hidden code field when another field reads with the same cut-off id', async () => {
+    const page = payPage({ layout: 'dupId' });
+    const { session, latest } = harness(page.driver, { target: { app: 'Google Chrome', windowTitle: 'Pay' } });
+    await session.start();
+    const step = latest();
+    const texts = step.controls.filter((control) => control.kind === 'text');
+    expect(texts).toHaveLength(1);
+    await session.submit({ expectedRevision: step.revision, values: { [texts[0].id]: '123456' }, action: { kind: 'submit' } });
+    expect(page.acts.filter((act) => act.kind === 'text').map((act) => act.ref)).toEqual(['0.2']);
+    expect(['press', 'key']).toContain(page.acts.at(-1)?.kind);
     session.cancel();
   });
 

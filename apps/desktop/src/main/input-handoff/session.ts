@@ -281,6 +281,8 @@ export class InputHandoffSession {
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
   private unreadablePage: IncompleteFormError['page'] | null = null;
+  /** The last read lost the card's hidden code fields on the same page, which still lays out hidden ones. */
+  private hiddenUnsure = false;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -1150,6 +1152,8 @@ export class InputHandoffSession {
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
     const read = await this.read().catch(() => null);
     if (!read || read.pageMissing || !this.watching()) return;
+    // Not telling whose a hidden code field is now is no evidence of anything: the card stays as it is.
+    if (this.hiddenUnsure) return;
     const step = settledForm(read, this.step) ? askingNothing(read) : read;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
@@ -1297,11 +1301,16 @@ export class InputHandoffSession {
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
     this.unreadablePage = null;
     let step: ExtractedStep;
+    this.hiddenUnsure = false;
     try {
       step = extractStep(raw as NativeAxSnapshot);
       // The owner clicking another field moves the focus off a hidden code field of the step on the card; it is
       // still that step's while the page still shows the step's fields. Another form never inherits it.
-      step = this.keptHidden(raw as NativeAxSnapshot) ?? step;
+      const kept = this.keptHidden(raw as NativeAxSnapshot);
+      // Kept fields lost on the same page that still lays out hidden ones: whose they are can no longer be told.
+      this.hiddenUnsure = !kept && !!this.step?.hiddenFields?.length && !!step.hiddenCandidates &&
+        step.url?.split('#')[0] === this.step.url?.split('#')[0];
+      step = kept ?? step;
     } catch (error) {
       if (error instanceof IncompleteFormError) {
         this.unreadablePage = error.page;
