@@ -26,6 +26,7 @@ import {
 } from '../base-agent.js';
 import { buildAcpCapabilities } from './capabilities.js';
 import { renderPluginEngineCapabilityBriefing, type PluginEngineBriefingSkill } from './briefing.js';
+import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
 import {
@@ -279,6 +280,16 @@ export class AcpAgent extends BaseAgent {
       capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
+    // `/<skill>` from the composer: the Skill is read from the same list as the briefing, on every
+    // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
+    // an isolated companion keeps its frozen capability set, and a task of another computer has no
+    // Skill source here.
+    const expandSlashInvocation = isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
+      : (text: string) => expandPluginEngineSkillInvocation(
+          text,
+          () => this.readSessionSkills(opts.workingDir, logger),
+          (message) => logger.warn('acp: Skill invocation left unexpanded', { message }),
+        );
     // The host's account pool picked an account Cindy added (its own directory); the agent's
     // original login runs exactly as before.
     const account = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
@@ -307,6 +318,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
+          ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           logger,
           onEnded: disposeBridge,
         });

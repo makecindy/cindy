@@ -443,6 +443,17 @@ function loadPendingSkills(
 }
 
 /**
+ * A Skill as a plugin engine uses it. Pi package Skills only load inside Pi itself, so they are left
+ * out; the rest are plain SKILL.md files the engine reads by their human name, which drops Pi's
+ * `/skill:` alias and its "not loaded yet" state (that state is about the Pi runtime, not the file).
+ */
+function asPluginEngineSkill(command: UnifiedCommand): UnifiedCommand[] {
+  if (command.kind !== 'agent-skill' || command.origin === 'package') return [];
+  const { runtimeCommandName: _alias, runtimeStatus: _status, ...skill } = command;
+  return [skill];
+}
+
+/**
  * 拉三路 IPC, 合并成 UnifiedCommand[]。
  *
  * - 任何一路失败按空列表处理(已在 main 端做 try/catch + 返回 success:false), 不阻塞 palette。
@@ -462,6 +473,12 @@ export async function loadAllCommands(
      * read `/…` themselves, so offering Claude Code / Codex / Pi commands there would be wrong.
      */
     skipAgentCommands?: boolean;
+    /**
+     * List Cindy Skills the way a plugin engine on the listing computer can use them: the built-in
+     * Pi engine's Skill scope (Cindy-managed, approved plugin and Pi-directory Skills). The engine
+     * expands `/<name>` itself (maker-core `acp/skill-invocation.ts`), so the human name is sent.
+     */
+    pluginEngineSkills?: boolean;
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
@@ -469,6 +486,7 @@ export async function loadAllCommands(
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   if (opts?.contextReady === false) return [];
+  const skillAgentKind: AgentKind = opts?.pluginEngineSkills ? 'pi' : agentKind;
   const api = window.electronAPI.maker;
   // 用 unknown[] 收口三源的不同原生形状(隧道返 unknown、本地返各自命令/技能类型),
   // 末尾统一 `as UnifiedCommand[]`(与改造前同款收口)。
@@ -514,14 +532,14 @@ export async function loadAllCommands(
   };
   const skillP: Promise<SkillListResult> = shouldLoadSkills
     ? loadPendingSkills(
-        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        opts?.sessionId ? JSON.stringify([skillAgentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
-              agentKind,
+              skillAgentKind,
               skillParams,
             ]) as Promise<SkillListResult>)
-          : api.listAgentSkills(agentKind, skillParams),
+          : api.listAgentSkills(skillAgentKind, skillParams),
       )
     : Promise.resolve({ success: true, skills: [] });
 
@@ -531,7 +549,8 @@ export async function loadAllCommands(
   }
 
   const rawDesktop = (desktopRes.success && desktopRes.commands ? desktopRes.commands : []) as UnifiedCommand[];
-  const agentSkill = (skillRes.success && skillRes.skills ? skillRes.skills : []) as UnifiedCommand[];
+  const listedSkills = (skillRes.success && skillRes.skills ? skillRes.skills : []) as UnifiedCommand[];
+  const agentSkill = opts?.pluginEngineSkills ? listedSkills.flatMap(asPluginEngineSkill) : listedSkills;
   // Learn 已迁成可开关的官方 Skill。本地/Device Link 能读 Skill 清单时只展示
   // 实际可用的 agent-skill；SSH 显式跳过扫描、扫描失败或尚未发现 Skill 时，
   // 保留仍可路由 Learn host 的 Desktop 兼容入口。

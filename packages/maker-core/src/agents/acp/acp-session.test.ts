@@ -12,7 +12,9 @@
  * - tier：unit（进程内假对端，无真实等待；宽限期用 fake timers）。
  */
 
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
@@ -1145,6 +1147,12 @@ describe('AcpAgent (the acp engine)', () => {
     expect(skills).not.toHaveBeenCalled();
     const [briefing] = await firstPrompt(agent, handle);
     expect(briefing!.text).toBe('You are Mika.');
+    // A `/<skill>` message is not expanded either: the companion's Skills are its own frozen set.
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: '/cindy-plugin-github:pr go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: '/cindy-plugin-github:pr go' }]);
+    expect(skills).not.toHaveBeenCalled();
   });
 
   // Review (#12294)：V2 项目伙伴（projectContext）按普通任务装配，与内置 Pi 一致要收到花名册与 Skill；恢复的会话
@@ -1171,6 +1179,47 @@ describe('AcpAgent (the acp engine)', () => {
     expect(roster).not.toHaveBeenCalled();
     expect(skills).not.toHaveBeenCalled();
     expect(await firstPrompt(resumed, again)).toEqual([{ type: 'text', text: 'open a PR' }]);
+  });
+
+  // 用户要求（2026-11-25）：插件引擎任务的 `/` 也能调 Cindy Skill。插件引擎没有 Cindy 的 Skill 加载，`/pr` 原样到了
+  // 引擎只是一行字。覆盖缺口：此前插件引擎只在首轮说明里收到 Skill 清单，发送路径不认 `/<skill>`。
+  // 最小失败输入（unit，临时目录里的真实 SKILL.md）：恢复的会话发 `/<别名>:pr 参数`；不带参数；没有对应 Skill；
+  // 文件读不到；普通消息。
+  it('expands a `/<skill>` message into the Skill instructions, the way Pi expands `/skill:`', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cindy-acp-skill-'));
+    try {
+      const file = join(dir, 'pr', 'SKILL.md');
+      mkdirSync(join(dir, 'pr'));
+      writeFileSync(file, '---\nname: pr\ndescription: Carry a PR.\n---\n\nOpen the PR with the plugin.\n');
+      const list = [
+        { name: 'pr', description: 'Carry a PR.', path: file },
+        { name: 'gone', path: join(dir, 'gone', 'SKILL.md') },
+      ];
+      const skills = vi.fn(async () => list);
+      const agent = createFakeAgent({ agentCapabilities: { sessionCapabilities: { resume: {} } }, handlers: { 'session/resume': () => ({}) } });
+      const handle = await briefingEngine(agent, vi.fn(() => ''), skills).startSession({
+        workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', resumeSessionId: 'old-1',
+      });
+      const block = `<skill name="pr" location="${file}">\nReferences are relative to ${join(dir, 'pr')}.\n\nOpen the PR with the plugin.\n</skill>`;
+      const cases: Array<[string, string]> = [
+        ['/cindy-plugin-github:pr fix the build\nplease', `${block}\n\nfix the build\nplease`],
+        ['  /skill:PR', block],
+        ['/review this', '/review this'],
+        ['/gone now', '/gone now'],
+        ['open /pr', 'open /pr'],
+      ];
+      for (const [index, [sent, received]] of cases.entries()) {
+        await handle.send({ type: 'user', content: sent });
+        await vi.waitFor(() => expect(agent.prompts).toHaveLength(index + 1));
+        expect(agent.prompts[index]!.params.prompt).toEqual([{ type: 'text', text: received }]);
+        agent.prompts[index]!.settle.resolve({ stopReason: 'end_turn' });
+      }
+      // Only messages that start with `/` look the Skills up.
+      expect(skills).toHaveBeenCalledTimes(4);
+      expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
