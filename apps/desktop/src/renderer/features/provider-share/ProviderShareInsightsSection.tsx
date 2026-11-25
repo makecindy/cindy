@@ -22,6 +22,7 @@ import type {
 import { quotaWindowLabel } from '@/components/status/usageCardModel';
 import { ProviderUsageSection } from './ProviderUsageSection';
 import { useShareTimeFormat } from './useShareTimeFormat';
+import { useProviderShareSource } from './providerShareSource';
 
 /**
  * 「组成员」：供应商组里这台分享来的电脑展开后只显示获准的额度(与分享详情同一读取、权限与刷新)，不读用量历史；
@@ -86,6 +87,10 @@ function InsightsView({
   const valid = useRef(available);
   const expandedRef = useRef(false);
   const generation = useRef(0);
+  // On the cloud instance page the instance (the member) reads it; locally this computer.
+  const source = useProviderShareSource();
+  const command = useRef(source?.command ?? window.electronAPI.providerShare.command);
+  command.current = source?.command ?? window.electronAPI.providerShare.command;
   useEffect(() => {
     let alive = true;
     let reading = false;
@@ -107,7 +112,7 @@ function InsightsView({
       reading = true;
       const current = ++generation.current;
       try {
-        const view = await window.electronAPI.providerShare.command({
+        const view = await command.current({
           action: 'insights',
           shareId: share.shareId,
           includeUsage: expanded && expandedRef.current,

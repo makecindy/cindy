@@ -2837,6 +2837,14 @@
         "projectsRootReset": "추천 위치로 복원",
         "projectsRootDescription": "세션에서 프로젝트를 만들 때 프로젝트 폴더가 이곳에 생성됩니다. 설정하지 않으면 기존 프로젝트 위치를 바탕으로 추천합니다.",
         "projectsRootFailed": "새 프로젝트 저장 위치를 업데이트하지 못했습니다",
+        "taskExportDirectoryTitle": "세션 내보내기 위치",
+        "taskExportDirectoryUnset": "매번 선택",
+        "taskExportDirectoryMissing": "폴더를 찾을 수 없음",
+        "taskExportDirectoryUnreadable": "설정을 읽을 수 없음",
+        "taskExportDirectoryChoose": "폴더 선택",
+        "taskExportDirectoryReset": "매번 선택으로 되돌리기",
+        "taskExportDirectoryDescription": "설정하면 Agent가 내보내는 세션이 위치를 묻지 않고 이곳에 저장되며, 같은 이름의 파일은 덮어쓰지 않습니다. 설정하지 않으면 내보낼 때마다 위치를 선택합니다.",
+        "taskExportDirectoryFailed": "세션 내보내기 위치를 업데이트하지 못했습니다",
         "dialogueDirectoryOpen": "폴더 열기",
         "dialogueDirectoryChoose": "폴더 변경",
         "dialogueDirectoryReset": "기본 위치로 복원",
@@ -8655,6 +8663,8 @@
         "liveScreenDetail": "원격 데스크톱을 통해 휴대폰이나 다른 컴퓨터에서 이 플러그인이 제공하는 기기 화면(시뮬레이터 등)을 보고 터치, 버튼, 텍스트 입력으로 조작할 수 있습니다. 휴대폰이나 다른 컴퓨터에서 열 때만 연결되며 이 컴퓨터의 다른 내용은 보여 주지 않습니다.",
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
         "previewDetail": "아래에 나열된 사이트만 열 수 있으며, 페이지를 열 때마다 어떤 플러그인이 열었는지 표시됩니다.",
+        "fileOpener": "Cindy에서 아래 형식의 파일을 열 때 이 플러그인으로 엽니다",
+        "fileOpenerDetail": "플러그인이 파일의 전체 경로를 받아 기본 앱 대신 엽니다. 열 수 없으면 기본 앱으로 엽니다. 플러그인 세부 정보에서 끌 수 있습니다.",
         "browserExtension": "함께 제공되는 브라우저 확장을 Cindy에 연결할 수 있습니다",
         "browserNativeHost": "브라우저 연결 “{{name}}” 등록 가능",
         "browserNativeHostDetail": "등록된 프로그램은 샌드박스 밖에서 실행되며 사용자 계정과 시스템 권한으로 로컬에 접근합니다.",
@@ -8896,6 +8906,8 @@
         "configurationTitle": "설정",
         "sidebarEntryTitle": "내비게이션 항목",
         "showInSidebar": "왼쪽 내비게이션에 표시",
+        "fileOpenerTitle": "이 플러그인으로 파일 열기",
+        "fileOpenerDescription": "Cindy에서 {{extensions}} 파일을 열면 기본 앱 대신 {{name}}(으)로 엽니다. 다른 컴퓨터의 파일은 계속 기본 앱으로 엽니다.",
         "sidebarEntryDescription": "켜면 “{{title}}” 항목이 왼쪽 내비게이션에 “자동화”, “플러그인”과 나란히 표시됩니다. 맨 위에 둘지 “더 보기”에 넣을지는 “더 보기 → 사용자 지정”에서 바꿀 수 있습니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
@@ -9173,6 +9185,7 @@
         "enableBeforeConfigure": "이 플러그인은 비활성화되어 있습니다. 설정하려면 위의 스위치를 켜세요.",
         "settingsPageUnavailable": "{{device}}의 Cindy에서 이 플러그인의 설정 페이지를 열어 주세요. 대상 컴퓨터의 현재 버전은 원격 표시를 지원하지 않습니다.",
         "offlineNotice": "{{device}}이(가) 오프라인입니다. 연결이 복구되면 관리를 계속할 수 있습니다.",
+        "publishOnTarget": "{{device}}의 Cindy에서 플러그인을 게시하거나, 해당 컴퓨터의 Cindy를 업데이트한 후 원격으로 게시하세요.",
         "managingTarget": "관리 대상: {{device}}",
         "managingDescription": "변경 사항은 이 컴퓨터에 저장됩니다.",
         "viewingTarget": "{{device}}에 설치된 플러그인",
@@ -12786,6 +12799,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "시스템 음성",
+        "myVoices": "내 음성",
+        "refreshMyVoices": "내 음성 새로 고침",
+        "callMode": "통화 방식",
+        "messageReadAloud": "메시지 읽어주기",
+        "callVoice": "실시간 통화 목소리",
+        "readAloudVoice": "메시지를 읽어 줄 목소리",
+        "readAloudHint": "동반자의 텍스트 답변 아래에 있는 스피커를 누르면 이 목소리로 읽어 줍니다.",
+        "resetReadAloud": "읽어주기 설정 초기화",
+        "title": "실시간 음성",
+        "add": "실시간 음성 모델 추가",
+        "off": "음성 합성 사용"
+      },
       "openConversation": "대화 열기",
       "inCallWith": "{{name}}와(과) 통화 중",
       "showDetails": "통화 기록 펼치기",
@@ -12807,7 +12834,7 @@
       "settingsTitle": "음성",
       "openSettings": "음성 설정",
       "startConversation": "음성 대화 시작",
-      "settingsHint": "이 동반자의 읽어주기 모델과 음성을 선택한 후 입력창에서 음성 대화를 시작하세요.",
+      "settingsHint": "음성 합성으로 통화할 때는 통화와 메시지 읽어주기에 아래 모델과 목소리를 함께 사용합니다.",
       "previewNeedsChat": "동반자와 대화를 시작하면 음성을 미리 들을 수 있습니다.",
       "voiceId": "음성 ID",
       "manualVoice": "음성 ID 직접 입력",
@@ -14589,6 +14616,7 @@
       "missingDir": "폴더를 찾을 수 없음"
     },
     "pendingQueue": {
+      "waitingForDevice": "미전송 · 다른 컴퓨터가 다시 연결되면 보냅니다",
       "stopping": "중지 처리 중",
       "queued": "대기 중",
       "editingInComposer": "아래 입력창에서 편집 중…",
@@ -15063,6 +15091,7 @@
       "unavailable": "현재 앱에서는 자동 입력을 사용할 수 없습니다. 인식된 텍스트를 복사한 뒤 수동으로 입력하세요.",
       "unconfirmed": "자동 입력 성공 여부를 확인할 수 없습니다. 필요한 경우 인식된 텍스트를 복사하세요.",
       "permission": "현재 앱에 음성 입력을 자동으로 넣으려면 손쉬운 사용 권한이 필요합니다. 권한을 허용한 뒤 다시 시도하세요.",
+      "appNotAllowed": "{{app}}이(가) 현재 앱을 제어하도록 허용되지 않아 자동 입력하지 못했습니다. System & App Protection Override에서 {{app}}에 이 앱을 추가하거나, 텍스트를 복사해 직접 붙여넣으세요.",
       "failed": "자동 입력에 실패했습니다. 인식된 텍스트를 복사한 뒤 수동으로 입력하세요."
     },
     "permissionPrompts": {
@@ -15483,11 +15512,11 @@
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
       "text": "실패한 자동 실행이 있습니다.",
-      "prCheck_dns": "{{device}}에서 {{host}}의 주소를 찾을 수 없습니다. 문제가 계속되면 이 기기의 네트워크나 DNS를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
-      "prCheck_timeout": "{{device}}에서 GitHub 연결 시간이 초과되었습니다. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
-      "prCheck_auth": "{{device}}에서 GitHub에 다시 로그인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
-      "prCheck_rate-limit": "GitHub가 {{device}}의 요청 빈도를 제한했습니다. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
-      "prCheck_unknown": "{{device}}에서 PR 확인에 실패했습니다. 실행 세부 정보를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
+      "prCheck_dns": "{{device}}에서 {{host}}의 주소를 찾을 수 없습니다. 문제가 계속되면 이 기기의 네트워크나 DNS를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
+      "prCheck_timeout": "{{device}}에서 GitHub 연결 시간이 초과되었습니다. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
+      "prCheck_auth": "{{device}}에서 GitHub에 다시 로그인하세요. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
+      "prCheck_rate-limit": "GitHub가 {{device}}의 요청 빈도를 제한했습니다. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
+      "prCheck_unknown": "{{device}}에서 PR 확인에 실패했습니다. 실행 세부 정보를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
       "preRunBlocked": "실행 전 검사에 실패해 이번 실행이 시작되지 않았습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
@@ -17848,6 +17877,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "boundPluginEngineRecovery": "연결된 작업이 플러그인 엔진을 사용해 자동화가 실행되지 않았습니다. 작업을 내장 엔진으로 되돌리거나 내장 엔진을 사용하는 작업에 자동화를 다시 연결하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
@@ -18801,7 +18831,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요. Cindy에 일부 앱만 허용했다면 이 앱도 추가하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",
@@ -22566,6 +22596,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "문제가 생기면 소스 자동 전환",
+        "hint": "이 모드에서 사용 중인 소스에 문제가 생기면 다음 사용 가능한 소스로 자동 전환하고 해당 턴 아래에 기록합니다. 끄면 오류가 났을 때 전환만 제안합니다."
+      },
       "newRoute": "모드 만들기",
       "newRouteName": "새 모드",
       "routesEmpty": "아직 모드가 없습니다. 하나 만들고 소스를 넣어 보세요.",
@@ -22798,6 +22832,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "System & App Protection Override에서 {{app}} 오른쪽의 ⓘ를 누르세요. 목록에 없으면 ＋를 눌러 실행 중인 앱을 추가하세요.",
-    "review": "$t(macControlPermission.selectApp)\n앱 선택 옵션이 있으면 제어 대상을 지정한 앱으로 제한할 수 있습니다. Mac 전체 제어를 허용하면 모든 앱과 데이터에 접근할 수 있습니다. 동의한다면 각 항목을 읽고 확인한 뒤 창 하단에서 허용하세요."
+    "review": "$t(macControlPermission.selectApp)\n앱 선택 옵션이 있으면 제어 대상을 지정한 앱으로 제한할 수 있습니다. Mac 전체 제어를 허용하면 모든 앱과 데이터에 접근할 수 있습니다. 동의한다면 각 항목을 읽고 확인한 뒤 창 하단에서 허용하세요.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\n원격 키보드와 마우스는 Mac 전체를 조작하므로 Mac 전체 제어가 필요합니다. ＋로 추가할 때는 Override System Protections를 선택하고, 이미 목록에 있으면 ⓘ에서 Control Your Entire Mac and All Apps를 켜세요. 일부 앱만 허용하면 macOS가 원격 키보드와 마우스 입력을 모두 차단합니다. 허용하기 전에 macOS가 보여 주는 접근 범위를 확인하세요.",
+    "chosenAppsOnly": "{{app}}은(는) 선택한 앱만 제어할 수 있어 macOS가 원격 키보드와 마우스 입력을 모두 차단합니다. 원격으로 제어하려면 System & App Protection Override에서 {{app}} 오른쪽의 ⓘ를 누르고 Control Your Entire Mac and All Apps를 켜세요."
   }
 }

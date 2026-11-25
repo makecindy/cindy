@@ -1873,6 +1873,27 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(statusPatches).toEqual(['deleted']);
   });
 
+  // #12464, DB tier: IM owns this task's route lock while calling the helper.
+  // Retry the same pin with a later clock and clear the stored card via patch-meta.
+  it('pins the current IM task without reentering its lease or moving an existing pin', async () => {
+    const first = '2026-08-03T04:08:26.000Z';
+    h.routeLock.mockImplementation(async () => { throw new Error('reentered IM route lock'); });
+    await invokePatchMeta('codex-local', { pinnedAt: first });
+    await vi.dynamicImportSettled();
+    h.tapWindowBroadcast.mockClear();
+    h.summarizeSession.mockClear();
+    await expect(invokePatchMeta('codex-local', { pinnedAt: '2026-08-04T00:00:00.000Z' }))
+      .resolves.toMatchObject({ pinnedAt: first });
+    await vi.dynamicImportSettled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+    h.sqlite!.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run('card', 'codex-local');
+    await expect(invokePatchMeta('codex-local', { pinnedAt: null })).resolves.toMatchObject({ pinnedAt: null, summary: null });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local', patch: { pinnedAt: null, summary: null },
+    });
+  });
+
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
     const pinnedAt = '2026-08-03T04:08:26.000Z';
     await invokeUpdate('codex-local', { pinnedAt });

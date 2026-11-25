@@ -8,7 +8,7 @@ const portraits = vi.hoisted(() => ({ load: vi.fn(async (index: number) => `data
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: Record<string, string>) => options ? `${key} ${Object.values(options).join(' ')}` : key }) }));
 vi.mock('../botStore', () => ({ useBotProfiles: () => [] }));
-vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 17, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
+vi.mock('../BotPortraitPicker', () => ({ BOT_PORTRAIT_COUNT: 26, galleryPortrait: portraits.load, BotPortraitPicker: ({ onChange, disabled }: { onChange(value: string): void; disabled: boolean }) => <button disabled={disabled} onClick={() => onChange('data:image/png;base64,chosen')}>existing-portrait-picker</button> }));
 beforeEach(() => portraits.load.mockClear());
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -31,7 +31,7 @@ it('draws from the existing full gallery once per form and retains the choice th
   render(<BotImportForm {...props} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   await screen.findByRole('button', { name: 'existing-portrait-picker' });
-  expect(portraits.load).toHaveBeenLastCalledWith(16);
+  expect(portraits.load).toHaveBeenLastCalledWith(25);
 });
 
 it('preserves an imported portrait instead of replacing it with a gallery default', async () => {

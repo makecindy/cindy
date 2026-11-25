@@ -100,16 +100,16 @@ describe('live region capture recovery', () => {
   });
   // Unit: a custom-calibrated SDR display beside an HDR screen previously lost
   // its ICC. A single-monitor P3 case cannot expose that routing error.
-  it('keeps verified custom SDR pixels and uses Electron only for its HDR neighbour', async () => {
+  // Windows can expose HDR10 as P3/sRGB to Chromium. Trust the frame's DXGI result.
+  it.each([['BT2020', 'PQ'], ['P3', 'SRGB']])('keeps the SDR ICC and the HDR desktop rendition (%s/%s)', async (primaries, transfer) => {
     const custom = { ...sdr, colorSpace: '{primaries:CUSTOM, transfer:custom curve, matrix:RGB, range:FULL}' };
-    const hdr = { ...sdr, id: 2, colorSpace: '{primaries:BT2020, transfer:PQ, matrix:RGB, range:FULL}' };
+    const hdr = { ...sdr, id: 2, depthPerComponent: 10, colorSpace: `{primaries:${primaries}, transfer:${transfer}, matrix:RGB, range:FULL}` };
     const icc = Uint8Array.of(42);
-    mocks.capture.mockResolvedValue({ width: 100, height: 200, data: new Uint8Array(80000), icc });
-    const thumbnail = bitmap(100, 200);
-    mocks.sources.mockResolvedValue([{ display_id: '2', thumbnail }]);
+    const frame = { width: 100, height: 200, data: new Uint8Array(80000) };
+    mocks.capture.mockResolvedValueOnce({ ...frame, sdrFromHdr: true }).mockResolvedValueOnce({ ...frame, icc });
     const result = await captureScreenshotDisplays([hdr, custom], helper);
-    expect(result).toMatchObject({ backend: 'mixed', captures: [{ display: hdr, image: thumbnail }, { display: custom, previewProfile: icc }] });
-    expect(mocks.capture.mock.calls).toEqual([[custom.bounds, 32768, 'verify-sdr']]);
+    expect(result).toMatchObject({ backend: 'native', captures: [{ display: hdr, previewProfile: undefined }, { display: custom, previewProfile: icc }] });
+    expect(mocks.capture.mock.calls).toEqual([[hdr.bounds, 32768, 'verify-sdr'], [custom.bounds, 32768, 'verify-sdr']]);
   });
   // Unit: a Dell P3 desktop faded on opening the overlay. The previous
   // fallback-only coverage never checked whether device RGB kept its profile.
@@ -123,7 +123,7 @@ describe('live region capture recovery', () => {
   });
   it.each([
     ['darwin', sdr],
-    ['win32', { ...sdr, depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:PQ, matrix:RGB, range:FULL}' }],
+    ['win32', { ...sdr, depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:INVALID, matrix:RGB, range:FULL}' }],
     ['win32', { ...sdr, colorSpace: undefined }],
   ] as const)('preserves Electron capture for unsupported color/platform (%s, %j)', async (platform, monitor) => {
     vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));

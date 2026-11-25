@@ -1461,8 +1461,12 @@ export class GhostNodeRuntimeBroker {
     if (!ghost || !resolved) {
       return reject('This task engine is not enabled, approved and declared by the plugin');
     }
-    if (this.harnessProcessCount(ghostId) >= GHOST_HARNESS_MAX_PROCESSES_PER_GHOST) {
-      reject(`At most ${GHOST_HARNESS_MAX_PROCESSES_PER_GHOST} task engine processes can run per plugin`);
+    const occupied = this.harnessProcessCount(ghostId);
+    if (occupied >= GHOST_HARNESS_MAX_PROCESSES_PER_GHOST) {
+      reject(
+        `Plugin "${ghostId}" is using ${occupied}/${GHOST_HARNESS_MAX_PROCESSES_PER_GHOST} task engine slots. ` +
+        'Try again after an engine process for this plugin exits.',
+      );
     }
     const identity = harnessIdentity(ghost);
     const generation = this.stopGeneration.get(ghostId) ?? 0;
