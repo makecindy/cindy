@@ -1,3 +1,6 @@
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+import path from 'node:path';
 /**
  * Per-(provider instance, runtime, model id) local reference-price patches.
  *
@@ -22,7 +25,7 @@ import type {
   MoneyCurrency,
 } from '../../shared/regionalMoney.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings, type OverrideSettingsCommitOptions } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
@@ -440,6 +443,20 @@ function mergedQuote(
   };
 }
 
+/** Saved sparse patches, not a fresh provider quote or a billing request. */
+export function inspectModelPriceOverrides(root: string) {
+  return inspectSettingsJson(path.join(root, 'model-price-overrides.json'), raw => {
+    validateOptionalSettingsFields(raw, { version: value => value === STORE_VERSION, entries: isSettingsRecord });
+    if (isSettingsRecord(raw.entries)) for (const record of Object.values(raw.entries)) {
+      if (!isSettingsRecord(record) || !isSettingsRecord(record.values)) throw new Error('invalid price record');
+      validateOptionalSettingsFields(record.values, { currency: isCurrency, inputPerMtok: finiteNonNegative,
+        outputPerMtok: finiteNonNegative, cacheReadPerMtok: value => value === null || finiteNonNegative(value),
+        cacheCreatePerMtok: value => value === null || finiteNonNegative(value) });
+    }
+    return normalize(raw);
+  });
+}
+
 function readEntries(): Record<string, StoredModelPriceOverride> {
   store.invalidateIfChanged();
   return store.read().entries;
@@ -483,7 +500,7 @@ export function readModelPriceOverrideView(
     conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
     // Report the currencies accepted by the price override save handler.
-    allowedCurrencies: currentLedgerCurrency() === 'USD' ? ['USD'] : ['USD', 'CNY'],
+    allowedCurrencies: getHostModelPriceCurrencies(),
   };
 }
 
@@ -526,6 +543,36 @@ export function clearModelPriceOverride(target: ModelPriceOverrideTarget): void 
   if (!(key in entries)) return;
   delete entries[key];
   store.writePatch({ entries });
+}
+
+export const getHostModelPriceStore = () => store;
+export const getHostModelPriceCurrencies = (): MoneyCurrency[] =>
+  currentLedgerCurrency() === 'USD' ? ['USD'] : ['USD', 'CNY'];
+/** Explicit typed form choices, serialized by the native file lock. */
+export async function commitHostModelPrices(
+  entries: Array<ModelPriceOverrideTarget & ModelPriceOverrideDesiredQuote>,
+  registry: ModelRegistry | null | undefined,
+  options: OverrideSettingsCommitOptions,
+) {
+  return store.commitAtomic((current, rawOverrides) => {
+    if (inspectModelPriceOverrides(ownerScopedUserDataPath()).status !== 'ready') throw new Error('Unreadable model prices');
+    const next: Record<string, StoredModelPriceOverride> = {};
+    for (const { providerId, agent, modelId, ...values } of entries) {
+      if (providerId === 'xd' || !getHostModelPriceCurrencies().includes(values.currency)) throw new Error('Price override unavailable');
+      const target = { providerId, agent, modelId };
+      const key = overrideKey(target);
+      const previous = current.value.entries[key];
+      const reference = currentConnectionReference(target, registry);
+      const effective = previous && mergedQuote(previous, reference, previous.values, previous.baseReference);
+      // An unchanged row retains its sparse patch and original conflict baseline.
+      // Editing another row must not freeze current upstream prices into this one.
+      const unchanged = effective && (['currency', 'inputPerMtok', 'outputPerMtok', 'cacheReadPerMtok', 'cacheCreatePerMtok'] as const)
+        .every(field => (effective[field] ?? null) === values[field]);
+      next[key] = unchanged ? (rawOverrides.entries?.[key] ?? previous) : { ...target,
+        values, baseReference: comparable(reference), updatedAt: new Date().toISOString() };
+    }
+    return entries.length ? { set: { version: STORE_VERSION, entries: next } } : { clear: ['entries', 'version'] };
+  }, options);
 }
 
 /**

@@ -504,6 +504,15 @@ export interface InboundDispatchPorts {
   remoteWorkingDirRejectionToIpcError: typeof remoteWorkingDirRejectionToIpcError;
 }
 
+/**
+ * Private same-account channels registered only by a managed cloud runtime.
+ * Unregistered (every ordinary desktop), a channel answers CHANNEL_NOT_ALLOWED.
+ */
+export interface CloudPrivateInvokeHandler {
+  channel: string;
+  handle(controller: string, raw: unknown): Promise<unknown>;
+}
+
 export function createInboundDispatch(ports: InboundDispatchPorts) {
   const unavailable = (feature: string) => (..._args: unknown[]): never => {
     throw new Error(`[NOT_SUPPORTED] ${feature} is not available on this Host`);
@@ -842,6 +851,11 @@ let providerGroupRemoteHandler: ProviderGroupRemoteHandler | null = null;
 function setProviderGroupRemoteHandler(handler: ProviderGroupRemoteHandler | null): void {
   providerGroupRemoteHandler = handler;
 }
+
+/** The owner's browser reaches provider management through the settings relay. */
+function getProviderGroupRemoteHandler(): ProviderGroupRemoteHandler | null {
+  return providerGroupRemoteHandler;
+}
 let setupSnapshotRemoteHandler: SetupSnapshotRemoteHandler | null = null;
 
 function setSetupSnapshotRemoteHandler(handler: SetupSnapshotRemoteHandler | null): void {
@@ -856,6 +870,17 @@ let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
 
 function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
   agentNetSwitchRemoteHandler = handler;
+}
+
+const cloudPrivateInvokeHandlers = new Map<string, CloudPrivateInvokeHandler>();
+/** Registers one channel; null removes them all (runtime teardown). */
+function setCloudPrivateInvokeHandler(handler: CloudPrivateInvokeHandler | null): void {
+  if (handler) cloudPrivateInvokeHandlers.set(handler.channel, handler);
+  else cloudPrivateInvokeHandlers.clear();
+}
+/** The same handler for the owner's browser, which CIS relays instead of DeviceLink. */
+function getCloudPrivateInvokeHandler(channel: string): CloudPrivateInvokeHandler | undefined {
+  return cloudPrivateInvokeHandlers.get(channel);
 }
 
 /** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
@@ -5126,6 +5151,24 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   if (ordinaryPeer) noteControllerAccessAllowed(src);
+  const cloudPrivate = cloudPrivateInvokeHandlers.get(payload.channel);
+  if (cloudPrivate) {
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    try {
+      return {
+        ok: true,
+        result: await timing.measure('handler', () => runDeviceLinkInvokeContext(
+          { controllerDeviceId: src, channel: payload.channel },
+          () => cloudPrivate.handle(src, payload.args?.[0]),
+        )),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: { code: 'IPC_ERROR', message: /^\[[A-Z_]+\]/.test(message) ? message : '[INTERNAL] cloud request failed' } };
+    }
+  }
   // 双层校验之二:allowlist(权威)
   if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) {
     log.warn(`blocked non-allowlisted channel from ${shortId(src)}: ${payload.channel}`);
@@ -5638,6 +5681,7 @@ const __testing = {
     completedRemoteInvokeResults.clear();
     providerShareDenialLoggedAt.clear();
     providerGroupRemoteHandler = null;
+    cloudPrivateInvokeHandlers.clear();
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;
@@ -5739,6 +5783,10 @@ return {
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  getProviderGroupRemoteHandler,
+  setCloudPrivateInvokeHandler,
+  getCloudPrivateInvokeHandler,
+  projectRoutingForDisplay,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
