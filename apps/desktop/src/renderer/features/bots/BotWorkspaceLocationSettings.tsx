@@ -2,22 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowRightLeft,
-  HardDrive,
+  Clock,
+  Folder,
+  FolderCheck,
+  FolderX,
   Info,
-  Link2,
   RotateCw,
-  ShieldCheck,
+  TriangleAlert,
+  type LucideIcon,
 } from 'lucide-react';
 import { formatBytes } from '@/components/chat/formatBytes';
-import {
-  extractDriveBadge,
-  formatCompactPath,
-  WorkspacePathField,
-} from './WorkspacePathField';
+import { WorkspacePathField } from './WorkspacePathField';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -73,65 +71,51 @@ function mapStartupWarningKey(code: string | undefined): string | null {
 
 function badgeMetaForStatus(status: WorkspaceMigrationStatus): {
   key: string;
-  dotClass: string;
+  Icon: LucideIcon;
   textClass: string;
 } {
   if (status.phase === 'completed' && (status.currentTarget || !status.workspaceAvailable)) {
     return status.workspaceAvailable
       ? {
           key: 'bots.homeFolder.workspaceLocation.status.moved',
-          dotClass: 'bg-[var(--status-success)]',
+          Icon: FolderCheck,
           textClass: 'text-[var(--text-primary)]',
         }
       : {
           key: 'bots.homeFolder.workspaceLocation.status.unavailable',
-          dotClass: 'bg-[var(--error-fg)]',
+          Icon: FolderX,
           textClass: 'text-[var(--text-danger)]',
         };
   }
   if (status.phase === 'pending') {
     return {
       key: 'bots.homeFolder.workspaceLocation.status.pending',
-      dotClass: 'bg-[var(--warning-fg)]',
+      Icon: Clock,
       textClass: 'text-[var(--text-primary)]',
     };
   }
   if (status.phase === 'failed') {
     return {
       key: 'bots.homeFolder.workspaceLocation.status.failed',
-      dotClass: 'bg-[var(--error-fg)]',
+      Icon: TriangleAlert,
       textClass: 'text-[var(--text-danger)]',
     };
   }
   if (['copying', 'prepared', 'switching', 'linked'].includes(status.phase)) {
     return {
       key: 'bots.homeFolder.workspaceLocation.status.interrupted',
-      dotClass: 'bg-[var(--error-fg)]',
+      Icon: TriangleAlert,
       textClass: 'text-[var(--text-danger)]',
     };
   }
   return {
     key: 'bots.homeFolder.workspaceLocation.status.default',
-    dotClass: 'bg-[var(--text-tertiary)]',
+    Icon: Folder,
     textClass: 'text-[var(--text-secondary)]',
   };
 }
 
-function VolumeChip({ path, emphasized = false }: { path: string; emphasized?: boolean }) {
-  const drive = extractDriveBadge(path);
-  return (
-    <span
-      className={cn(
-        'inline-flex h-5 shrink-0 items-center gap-1 rounded bg-[var(--surface-chip)] px-1.5 font-mono text-11 font-medium',
-        emphasized ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]',
-      )}
-      aria-hidden
-    >
-      <HardDrive size={11} />
-      {drive ?? '/'}
-    </span>
-  );
-}
+type MoveAction = 'choose' | 'choose-default' | 'schedule' | 'schedule-restart' | 'cancel' | 'restart';
 
 export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
   const { t } = useBotTranslation();
@@ -139,7 +123,8 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
   const [status, setStatus] = useState<WorkspaceMigrationStatus | null>(null);
   const [preview, setPreview] = useState<WorkspaceMigrationPreview | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState<MoveAction | null>(null);
+  const busy = Boolean(action);
   const [loading, setLoading] = useState(true);
   const revision = useRef(0);
 
@@ -175,7 +160,7 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
 
   const chooseTarget = async (useDefault = false) => {
     if (busy) return;
-    setBusy(true);
+    setAction(useDefault ? 'choose-default' : 'choose');
     setErrorCode(null);
     try {
       const result = await api.chooseTarget(botId, useDefault);
@@ -189,13 +174,13 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
     } catch {
       setErrorCode('WORKSPACE_MIGRATION_FAILED');
     } finally {
-      setBusy(false);
+      setAction(null);
     }
   };
 
   const scheduleMove = async (restartNow: boolean) => {
     if (busy || !preview) return;
-    setBusy(true);
+    setAction(restartNow ? 'schedule-restart' : 'schedule');
     setErrorCode(null);
     try {
       const result = await api.schedule({
@@ -211,13 +196,13 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
     } catch (error) {
       setErrorCode(error instanceof Error ? error.message : 'WORKSPACE_MIGRATION_FAILED');
     } finally {
-      setBusy(false);
+      setAction(null);
     }
   };
 
   const cancelMove = async () => {
     if (busy) return;
-    setBusy(true);
+    setAction('cancel');
     setErrorCode(null);
     try {
       const next = await api.cancel(botId);
@@ -227,17 +212,21 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
     } catch {
       setErrorCode('MIGRATION_CANNOT_CANCEL');
     } finally {
-      setBusy(false);
+      setAction(null);
     }
   };
 
   const restartNow = async () => {
     if (busy) return;
-    setBusy(true);
+    setAction('restart');
     try {
-      await api.restart(botId);
+      const { relaunching } = await api.restart(botId);
+      if (!relaunching) {
+        setAction(null);
+        void loadStatus();
+      }
     } catch {
-      setBusy(false);
+      setAction(null);
       toast.error(t('bots.homeFolder.workspaceLocation.errors.generic'));
     }
   };
@@ -264,9 +253,16 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
 
   if (loading && !status) {
     return (
-      <div role="status" className="py-1">
-        <Spinner size={16} />
-      </div>
+      <SettingsCard
+        role="status"
+        aria-label={t('bots.homeFolder.workspaceLocation.title')}
+        aria-busy
+        className="flex flex-col gap-3 px-5 py-4"
+      >
+        <div aria-hidden="true" className="h-3 w-28 rounded-full bg-[var(--surface-chip)]" />
+        <div aria-hidden="true" className="h-9 rounded-lg bg-[var(--surface-chip)]" />
+        <div aria-hidden="true" className="h-7 w-28 self-end rounded-full bg-[var(--surface-chip)]" />
+      </SettingsCard>
     );
   }
 
@@ -282,161 +278,113 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
   const warningKey = mapStartupWarningKey(status.startupWarning);
   const badge = badgeMetaForStatus(status);
   const canOpenDisplayed = status.workspaceAvailable;
+  const currentPathLabel = t('bots.homeFolder.workspaceLocation.currentPathLabel');
+  const targetPathLabel = t('bots.homeFolder.workspaceLocation.targetPathLabel');
+  const defaultPathLabel = t('bots.homeFolder.workspaceLocation.defaultPathLabel');
+  const previewTargetLabel = preview?.target === status.source ? defaultPathLabel : targetPathLabel;
+  const pathFieldProps = {
+    fullPathLabel: t('bots.homeFolder.workspaceLocation.fullPath'),
+    copyLabel: t('bots.homeFolder.workspaceLocation.copyPath'),
+    onCopy: copyPath,
+    disabled: busy,
+  };
 
   return (
     <SettingsCard>
-      {/* Primary form header + full-width description + tactile path well */}
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span
-              role="heading"
-              aria-level={3}
-              className="min-w-0 truncate text-13 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-            >
-              {t('bots.homeFolder.workspaceLocation.title')}
-            </span>
-            <span
-              className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium',
-                badge.textClass,
+      {!preview ? (
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span
+                role="heading"
+                aria-level={3}
+                className="min-w-0 truncate text-13 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+              >
+                {t('bots.homeFolder.workspaceLocation.title')}
+              </span>
+              <span
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium',
+                  badge.textClass,
+                )}
+              >
+                <badge.Icon size={12} className="shrink-0" aria-hidden />
+                {t(badge.key)}
+              </span>
+            </div>
+            <p className="text-12 leading-[1.5] text-[var(--text-secondary)] [text-wrap:pretty]">
+              {t(
+                isMoved
+                  ? 'bots.homeFolder.workspaceLocation.movedDescription'
+                  : 'bots.homeFolder.workspaceLocation.description',
               )}
-            >
-              <span className={cn('size-1.5 shrink-0 rounded-full', badge.dotClass)} aria-hidden />
-              {t(badge.key)}
-            </span>
+            </p>
           </div>
-          <p className="text-12 leading-[1.5] text-[var(--text-secondary)] [text-wrap:pretty]">
-            {t(
-              isMoved
-                ? 'bots.homeFolder.workspaceLocation.movedDescription'
-                : 'bots.homeFolder.workspaceLocation.description',
-            )}
-          </p>
-        </div>
 
-        <div className="flex flex-col gap-2">
           <WorkspacePathField
+            {...pathFieldProps}
             path={displayedPath}
             linkedPath={isMoved ? status.source : undefined}
             linkedPathLabel={t('bots.homeFolder.workspaceLocation.logicalPathLabel')}
-            fullPathLabel={t('bots.homeFolder.workspaceLocation.fullPath')}
-            primaryPathLabel={
-              isMoved
-                ? t('bots.homeFolder.workspaceLocation.targetPathLabel')
-                : t('bots.homeFolder.workspaceLocation.fullPath')
-            }
-            copyLabel={t('bots.homeFolder.workspaceLocation.copyPath')}
+            primaryPathLabel={currentPathLabel}
             openLabel={
               canOpenDisplayed ? t('bots.homeFolder.workspaceLocation.openTarget') : undefined
             }
-            onCopy={copyPath}
             onOpen={canOpenDisplayed ? () => openFolder(displayedPath) : undefined}
-            disabled={busy}
           />
 
-          {isMoved ? (
-            <div className="flex min-w-0 items-center gap-1.5 pl-0.5 text-11 text-[var(--text-tertiary)]">
-              <Link2 size={12} className="shrink-0" aria-hidden />
-              <span className="shrink-0">
-                {t('bots.homeFolder.workspaceLocation.logicalPathLabel')}
-              </span>
-              <span aria-hidden>·</span>
-              <span
-                className="min-w-0 truncate font-mono text-[var(--text-secondary)]"
-                title={status.source}
-              >
-                {formatCompactPath(status.source)}
-              </span>
-            </div>
-          ) : null}
-        </div>
-
-        {canStartMove && !preview ? (
-          <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
-            {isMoved ? (
+          {canStartMove ? (
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
+              {isMoved ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  compact
+                  disabled={busy}
+                  loading={action === 'choose-default'}
+                  onClick={() => void chooseTarget(true)}
+                >
+                  {t('bots.homeFolder.workspaceLocation.moveBackAction')}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
                 compact
+                className="gap-1.5"
                 disabled={busy}
-                onClick={() => void chooseTarget(true)}
+                loading={action === 'choose'}
+                onClick={() => void chooseTarget()}
               >
-                {t('bots.homeFolder.workspaceLocation.moveBackAction')}
+                <ArrowRightLeft size={13} aria-hidden />
+                {t(
+                  isFailed
+                    ? 'bots.homeFolder.workspaceLocation.chooseAnother'
+                    : 'bots.homeFolder.workspaceLocation.moveAction',
+                )}
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              compact
-              className="gap-1.5"
-              disabled={busy}
-              onClick={() => void chooseTarget()}
-            >
-              {busy ? <Spinner size={13} /> : <ArrowRightLeft size={13} aria-hidden />}
-              {t(
-                isFailed
-                  ? 'bots.homeFolder.workspaceLocation.chooseAnother'
-                  : 'bots.homeFolder.workspaceLocation.moveAction',
-              )}
-            </Button>
-          </div>
-        ) : null}
-      </div>
-
-      {/* Inline migration plan — clean hairline band with From → To route & CTA hierarchy */}
-      {preview ? (
+            </div>
+          ) : null}
+        </div>
+      ) : (
         <div
           data-testid="workspace-migration-preview"
-          className="flex flex-col gap-3.5 border-t border-[var(--border-default)] bg-[var(--surface-on-card)] px-5 py-4"
+          className="flex min-w-0 flex-col gap-3 px-5 py-4"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-13 font-medium text-[var(--text-primary)]">
-              {t('bots.homeFolder.workspaceLocation.previewTitle')}
-            </p>
-            <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-0.5 text-11 font-medium tabular-nums text-[var(--text-secondary)]">
-              {t('bots.homeFolder.workspaceLocation.previewSummary', {
-                size: formatBytes(Number(preview.bytes)),
-                files: preview.files,
-                links: preview.links,
-              })}
-            </span>
-          </div>
-
-          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <VolumeChip path={preview.source} />
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-12 text-[var(--text-secondary)]"
-                title={preview.source}
-              >
-                {formatCompactPath(preview.source)}
-              </span>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+                {t('bots.homeFolder.workspaceLocation.previewTitle')}
+              </h3>
+              <p className="mt-1 text-11 tabular-nums text-[var(--text-secondary)]">
+                {t('bots.homeFolder.workspaceLocation.previewSummary', {
+                  size: formatBytes(Number(preview.bytes)),
+                })}
+              </p>
             </div>
-            <div className="flex items-center gap-2 pl-2">
-              <ArrowDown size={12} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-              <div className="h-px flex-1 bg-[var(--border-default)]/70" aria-hidden />
-            </div>
-            <div className="flex min-w-0 items-start gap-2">
-              <VolumeChip path={preview.target} emphasized />
-              <span className="min-w-0 flex-1 select-text break-all font-mono text-12 font-medium leading-[1.45] text-[var(--text-primary)]">
-                {preview.target}
-              </span>
-            </div>
-          </div>
-
-          <p className="flex items-start gap-2 text-12 leading-[1.45] text-[var(--text-secondary)] [text-wrap:pretty]">
-            <ShieldCheck
-              size={14}
-              className="mt-0.5 shrink-0 text-[var(--status-success)]"
-              aria-hidden
-            />
-            {t('bots.homeFolder.workspaceLocation.previewNotice')}
-          </p>
-
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
             <Button
               type="button"
               variant="secondary"
@@ -448,33 +396,65 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
             >
               {t('bots.homeFolder.workspaceLocation.cancel')}
             </Button>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                compact
-                disabled={busy}
-                onClick={() => void scheduleMove(false)}
-              >
-                {t('bots.homeFolder.workspaceLocation.scheduleNextRestart')}
-              </Button>
-              <Button
-                type="button"
-                variant="cta"
-                size="sm"
-                compact
-                className="gap-1.5"
-                disabled={busy}
-                onClick={() => void scheduleMove(true)}
-              >
-                {busy ? <Spinner size={13} /> : <RotateCw size={13} aria-hidden />}
-                {t('bots.homeFolder.workspaceLocation.restartAndMove')}
-              </Button>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <div role="group" aria-label={currentPathLabel} className="flex min-w-0 flex-col gap-1">
+              <p className={SETTINGS_HINT}>{currentPathLabel}</p>
+              <WorkspacePathField
+                {...pathFieldProps}
+                hideInlineCopy
+                path={preview.source}
+                primaryPathLabel={currentPathLabel}
+              />
+            </div>
+            <ArrowDown size={14} className="ml-3 text-[var(--text-secondary)]" aria-hidden />
+            <div role="group" aria-label={previewTargetLabel} className="flex min-w-0 flex-col gap-1">
+              <p className="text-12 font-medium text-[var(--text-primary)]">
+                {previewTargetLabel}
+              </p>
+              <WorkspacePathField
+                {...pathFieldProps}
+                hideInlineCopy
+                path={preview.target}
+                primaryPathLabel={previewTargetLabel}
+              />
             </div>
           </div>
+
+          <p className={SETTINGS_HINT}>
+            {t('bots.homeFolder.workspaceLocation.previewNotice')}
+          </p>
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-0.5">
+            <Button
+              type="button"
+              variant="secondary"
+              tone="quiet"
+              size="sm"
+              compact
+              disabled={busy}
+              loading={action === 'schedule'}
+              onClick={() => void scheduleMove(false)}
+            >
+              {t('bots.homeFolder.workspaceLocation.scheduleNextRestart')}
+            </Button>
+            <Button
+              type="button"
+              variant="cta"
+              size="sm"
+              compact
+              className="gap-1.5"
+              disabled={busy}
+              loading={action === 'schedule-restart'}
+              onClick={() => void scheduleMove(true)}
+            >
+              <RotateCw size={13} aria-hidden />
+              {t('bots.homeFolder.workspaceLocation.restartAndMove')}
+            </Button>
+          </div>
         </div>
-      ) : null}
+      )}
 
       {/* Pending restart banner — calm tinted footer band */}
       {isPending && status.target ? (
@@ -483,12 +463,15 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
           className="flex flex-col gap-3 border-t border-[var(--border-default)] bg-[var(--warning-bg-soft)]/45 px-5 py-4"
         >
           <div className="flex flex-col gap-1.5">
-            <div className="flex min-w-0 items-start gap-2">
-              <VolumeChip path={status.target} emphasized />
-              <p className="min-w-0 flex-1 select-text break-all font-mono text-12 font-medium leading-[1.45] text-[var(--text-primary)]">
-                {t('bots.homeFolder.workspaceLocation.pendingTarget', { target: status.target })}
-              </p>
-            </div>
+            <p className={SETTINGS_HINT}>
+              {status.target === status.source ? defaultPathLabel : targetPathLabel}
+            </p>
+            <WorkspacePathField
+              {...pathFieldProps}
+              hideInlineCopy
+              path={status.target}
+              primaryPathLabel={targetPathLabel}
+            />
             <p className={SETTINGS_HINT}>
               {t('bots.homeFolder.workspaceLocation.pendingHint')}
             </p>
@@ -501,6 +484,7 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
               size="sm"
               compact
               disabled={busy}
+              loading={action === 'cancel'}
               onClick={() => void cancelMove()}
             >
               {t('bots.homeFolder.workspaceLocation.cancel')}
@@ -512,9 +496,10 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
               compact
               className="gap-1.5"
               disabled={busy || !status.canSchedule}
+              loading={action === 'restart'}
               onClick={() => void restartNow()}
             >
-              {busy ? <Spinner size={13} /> : <RotateCw size={13} aria-hidden />}
+              <RotateCw size={13} aria-hidden />
               {t('bots.homeFolder.workspaceLocation.restartNow')}
             </Button>
           </div>
@@ -561,6 +546,7 @@ export function BotWorkspaceLocationSettings({ botId }: { botId: string }) {
                   size="sm"
                   compact
                   disabled={busy}
+                  loading={action === 'cancel'}
                   onClick={() => void cancelMove()}
                 >
                   {t('bots.homeFolder.workspaceLocation.dismissFailed')}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Check,
+  ChevronRight,
   Copy,
   Folder,
   FolderOpen,
@@ -56,6 +57,8 @@ export interface WorkspacePathFieldProps {
   primaryPathLabel?: string;
   detailsText?: string;
   copyLabel: string;
+  /** Keep copy available in the full-path popover, without a second inline action. */
+  hideInlineCopy?: boolean;
   openLabel?: string;
   onCopy: (value: string) => void | Promise<void>;
   onOpen?: () => void | Promise<void>;
@@ -77,6 +80,7 @@ export function WorkspacePathField({
   primaryPathLabel,
   detailsText,
   copyLabel,
+  hideInlineCopy = false,
   openLabel,
   onCopy,
   onOpen,
@@ -116,7 +120,13 @@ export function WorkspacePathField({
             type="button"
             aria-label={fullPathLabel}
             title={path}
-            className="flex h-7 min-w-0 flex-1 items-center gap-2 px-1 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            disabled={disabled}
+            className={cn(
+              'group/path flex h-7 min-w-0 flex-1 items-center gap-2 rounded px-1 text-left transition-colors',
+              'enabled:hover:bg-[var(--surface-hover)] data-[state=open]:bg-[var(--surface-hover)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+              hideInlineCopy && 'mr-1.5 pr-1.5',
+            )}
           >
             {driveBadge ? (
               <span
@@ -136,6 +146,13 @@ export function WorkspacePathField({
             <span className="min-w-0 flex-1 truncate font-mono text-12 text-[var(--text-primary)]">
               {compactDisplay}
             </span>
+            {hideInlineCopy ? (
+              <ChevronRight
+                size={13}
+                className="shrink-0 text-[var(--text-secondary)] group-data-[state=open]/path:rotate-90"
+                aria-hidden
+              />
+            ) : null}
           </button>
         </PopoverTrigger>
         <PopoverContent
@@ -178,6 +195,7 @@ export function WorkspacePathField({
                 size="sm"
                 compact
                 className="gap-1.5"
+                disabled={disabled}
                 onClick={() => void handleCopy()}
               >
                 {copied ? (
@@ -192,45 +210,50 @@ export function WorkspacePathField({
         </PopoverContent>
       </Popover>
 
-      <div className="h-4 w-px shrink-0 bg-[var(--border-default)]" aria-hidden />
+      {!hideInlineCopy || (onOpen && openLabel) ? (
+        <>
+          <div className="h-4 w-px shrink-0 bg-[var(--border-default)]" aria-hidden />
+          <div className="flex shrink-0 items-center gap-0.5">
+            {!hideInlineCopy ? (
+              <Tip text={copyLabel}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  className="w-7 px-0"
+                  disabled={disabled}
+                  aria-label={copyLabel}
+                  onClick={() => void handleCopy()}
+                >
+                  {copied ? (
+                    <Check size={14} className="text-[var(--status-success)]" aria-hidden />
+                  ) : (
+                    <Copy size={14} aria-hidden />
+                  )}
+                </Button>
+              </Tip>
+            ) : null}
 
-      <div className="flex shrink-0 items-center gap-0.5">
-        <Tip text={copyLabel}>
-          <Button
-            type="button"
-            variant="secondary"
-            tone="quiet"
-            size="sm"
-            className="w-7 px-0"
-            disabled={disabled}
-            aria-label={copyLabel}
-            onClick={() => void handleCopy()}
-          >
-            {copied ? (
-              <Check size={14} className="text-[var(--status-success)]" aria-hidden />
-            ) : (
-              <Copy size={14} aria-hidden />
-            )}
-          </Button>
-        </Tip>
-
-        {onOpen && openLabel ? (
-          <Tip text={openLabel}>
-            <Button
-              type="button"
-              variant="secondary"
-              tone="quiet"
-              size="sm"
-              className="w-7 px-0"
-              disabled={disabled}
-              aria-label={openLabel}
-              onClick={() => void onOpen()}
-            >
-              <FolderOpen size={14} aria-hidden />
-            </Button>
-          </Tip>
-        ) : null}
-      </div>
+            {onOpen && openLabel ? (
+              <Tip text={openLabel}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  tone="quiet"
+                  size="sm"
+                  className="w-7 px-0"
+                  disabled={disabled}
+                  aria-label={openLabel}
+                  onClick={() => void onOpen()}
+                >
+                  <FolderOpen size={14} aria-hidden />
+                </Button>
+              </Tip>
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

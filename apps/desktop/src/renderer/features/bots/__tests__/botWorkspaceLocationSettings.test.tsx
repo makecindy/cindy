@@ -4,7 +4,7 @@
  * preload API surface (choose folder -> preview -> schedule/restart, pending -> cancel/restart,
  * moved/unavailable error state, failed -> dismiss). Unit tier; jsdom, no Electron window.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   WorkspaceMigrationChooseTargetResult,
@@ -105,7 +105,8 @@ afterEach(() => {
 
 describe('BotWorkspaceLocationSettings', () => {
   it('previews a chosen folder and schedules workspace migration for the next restart', async () => {
-    const { api } = installApi();
+    const request = Promise.withResolvers<WorkspaceMigrationScheduleResult>();
+    const { api } = installApi({ schedule: () => request.promise });
     render(<BotWorkspaceLocationSettings botId="bot-1" />);
 
     const moveButton = await screen.findByRole('button', {
@@ -114,13 +115,32 @@ describe('BotWorkspaceLocationSettings', () => {
     fireEvent.click(moveButton);
 
     const preview = await screen.findByTestId('workspace-migration-preview');
-    expect(preview.textContent).toContain('D:\\CindyWorkspaces\\bot-1-workspace');
+    const targetPath = 'D:\\CindyWorkspaces\\bot-1-workspace';
+    const target = within(preview).getByRole('group', {
+      name: 'bots.homeFolder.workspaceLocation.targetPathLabel',
+    });
+    expect(within(preview).getByText(/previewSummary:.*"size":"12.0 MB"/)).toBeTruthy();
+    expect(preview.textContent).not.toContain(targetPath);
+    expect(screen.queryByText('bots.homeFolder.workspaceLocation.title')).toBeNull();
+    const pathButton = within(target).getByRole('button', {
+      name: 'bots.homeFolder.workspaceLocation.fullPath',
+    });
+    expect(pathButton.getAttribute('title')).toBe(targetPath);
+    fireEvent.click(pathButton);
+    expect(await screen.findByText(targetPath)).toBeTruthy();
+    expect(pathButton.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(pathButton, { key: 'Escape' });
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'bots.homeFolder.workspaceLocation.scheduleNextRestart',
-      }),
-    );
+    const scheduleButton = screen.getByRole('button', {
+      name: 'bots.homeFolder.workspaceLocation.scheduleNextRestart',
+    });
+    const restartButton = screen.getByRole('button', {
+      name: 'bots.homeFolder.workspaceLocation.restartAndMove',
+    });
+    fireEvent.click(scheduleButton);
+    expect(scheduleButton.getAttribute('aria-busy')).toBe('true');
+    expect(restartButton.getAttribute('aria-busy')).toBeNull();
+    expect((restartButton as HTMLButtonElement).disabled).toBe(true);
 
     await waitFor(() =>
       expect(api.schedule).toHaveBeenCalledWith({
@@ -129,6 +149,10 @@ describe('BotWorkspaceLocationSettings', () => {
         restartNow: false,
       }),
     );
+    request.resolve({
+      relaunching: false,
+      status: { ...(await api.getStatus()), phase: 'pending', target: targetPath },
+    });
     expect(await screen.findByTestId('workspace-migration-pending')).toBeTruthy();
     expect(toastMocks.success).toHaveBeenCalledWith(
       'bots.homeFolder.workspaceLocation.scheduledToast',
