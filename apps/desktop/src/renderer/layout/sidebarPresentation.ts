@@ -50,7 +50,7 @@ export function useSidebarPresentation(
     let active = true;
     let frame: number | null = null;
     let growth: number | null = null;
-    const started = performance.now();
+    let replyAt: number | null = null;
     const listener = new AbortController();
     const stopWaiting = () => {
       active = false;
@@ -73,12 +73,12 @@ export function useSidebarPresentation(
       if (!active) return;
       const observed = window.innerWidth - viewport;
       if (observed === 0) return;
-      if (collapsed ? observed > 0 : observed < 0) return;
       if (growth !== null) {
         if (!atViewport(viewport + growth)) return;
         settle(growth);
         return;
       }
+      if (collapsed ? observed > 0 : observed < 0) return;
       const expected = collapsed ? preExpandViewport.current : viewport + requested;
       if (expected === null || expected === undefined || !atViewport(expected)) return;
       settle(observed);
@@ -87,8 +87,8 @@ export function useSidebarPresentation(
       if (!active) return;
       tryViewport();
       if (!active) return;
-      // A hidden/closing window must not retain a frozen layout indefinitely.
-      if (performance.now() - started >= 1000) { settle(growth ?? window.innerWidth - viewport); return; }
+      // Once the reply arrives, bound the wait for a missing viewport update.
+      if (replyAt !== null && performance.now() - replyAt >= 1000) { settle(growth ?? 0); return; }
       frame = requestAnimationFrame(poll);
     };
     // Arm before the IPC call: the native bounds can land before the reply returns.
@@ -96,12 +96,15 @@ export function useSidebarPresentation(
     frame = requestAnimationFrame(poll);
     void resize(requested).then((delta) => {
       if (!active) return;
+      replyAt = performance.now();
       growth = typeof delta === 'number' ? delta : 0;
       // No native change → nothing to wait for; run the ordinary animation now.
       if (growth === 0) { settle(0); return; }
       tryViewport();
     }).catch(() => {
-      if (active) setPresentation({ collapsed, instant: false });
+      if (!active) return;
+      stopWaiting();
+      setPresentation({ collapsed, instant: false });
     });
     return stopWaiting;
   }, [collapsed, ready, root]);

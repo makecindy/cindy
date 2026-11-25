@@ -71,12 +71,46 @@ it('ignores a late open reply after the user has already closed', async () => {
   expect(result.current).toEqual({ collapsed: true, instant: false });
 });
 
+// #11561 review: a resize after rejection must not revive the waiter and
+// overwrite the fallback; the previous assertion covered only immediate failure. Unit tier.
 it('releases the frozen layout if the native request fails', async () => {
   window.electronAPI = { windowSidebarExpansion: vi.fn(async () => { throw new Error('unavailable'); }) } as never;
   const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
     { initialProps: { collapsed: true } });
   await act(async () => { rerender({ collapsed: false }); });
   expect(result.current).toEqual({ collapsed: false, instant: false });
+  act(() => { window.innerWidth = 1800; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: false });
+});
+
+// #11561 review: restored native window bounds can move opposite to the requested
+// direction. Existing tests only exercise positive open growth. Unit tier.
+it('accepts an authoritative negative growth when opening', async () => {
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: () => new Promise<number>((done) => { reply = done; }) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  await act(async () => { reply(-200); });
+  act(() => { window.innerWidth = 800; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 600 });
+});
+
+// #11561 review: a delayed IPC reply must retain the frozen layout and still
+// allow its authoritative resize; existing tests do not delay beyond one second. Unit tier.
+it('waits for a delayed reply before starting the resize timeout', async () => {
+  const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: () => new Promise<number>((done) => { reply = done; }) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  now.mockReturnValue(1500);
+  frame();
+  expect(result.current.frozenWidth).toBe(800);
+  await act(async () => { reply(400); });
+  act(() => { window.innerWidth = 1400; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1200 });
 });
 
 // Unit regression: startup must expand the saved standalone bounds instead of
