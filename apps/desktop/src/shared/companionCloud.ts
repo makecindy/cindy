@@ -70,6 +70,8 @@ export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
       oversizedSkill?: CompanionOversizedSkill;
+      /** The registered home's installation has no runnable copy to hand over. */
+      handOverFailure?: 'HOME_NOT_READY';
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;
       /** Optional detail of FAILED; older clients retain the existing generic failure. */

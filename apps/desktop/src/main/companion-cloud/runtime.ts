@@ -828,9 +828,11 @@ export function startCompanionCloud(input: {
     publish();
   }
 
+  class MissingRunnableCopy extends Error {}
+
   async function flush(botId: string, options: { preferencesOnly?: boolean; validateValues?: (values: CompanionPreferenceValue[]) => void } = {}) {
     const bot = pick(null).find(candidate => candidate.botId === botId);
-    if (!bot) throw new Error('NOT_HOME');
+    if (!bot) throw new MissingRunnableCopy('NOT_HOME');
     // Reject a known-incompatible target before cloud I/O. The upload checks again for edits during the drain.
     options.validateValues?.(await input.host.readValues(botId, 'skills'));
     // The whole conversation backlog first: the old copy stops mirroring once demoted, and a long
@@ -949,6 +951,9 @@ export function startCompanionCloud(input: {
     }
     catch (error) {
       input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
+      if (error instanceof MissingRunnableCopy && actorOf(actor.externalId)?.homeDeviceId === input.selfDeviceId) {
+        return { ok: false, code: 'FAILED', handOverFailure: 'HOME_NOT_READY' };
+      }
       if (error instanceof SkillTargetOutdated) return { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: error.skill };
       return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
     }

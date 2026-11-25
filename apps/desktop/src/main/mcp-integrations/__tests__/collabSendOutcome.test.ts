@@ -386,14 +386,21 @@ describe('collab send outcome semantics', () => {
   it('explains an incompatible skill when the owner moves the buddy from chat', async () => {
     const active = vi.spyOn(companionCloud, 'activeCompanionCloud');
     try {
-      vi.mocked(companionCloud.activeCompanionCloud, { partial: true }).mockReturnValue({ switchHome: vi.fn().mockResolvedValue({
+      const switchHome = vi.fn().mockResolvedValue({
         ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 },
-      }) });
+      });
+      vi.mocked(companionCloud.activeCompanionCloud, { partial: true }).mockReturnValue({ switchHome });
       createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
         pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn() });
       const tools = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).teammateHome!;
       const result = await tools.move({ callerSessionId: 'task', teammateId: 'bot', targetDeviceId: 'laptop' });
       expect(result).toMatchObject({ ok: false, errorCode: 'SKILL_TARGET_OUTDATED', message: expect.stringMatching(/research-paper-writing.*71560.*Update Cindy/) });
+      // #12842: a new home supplies the detail; an older home only reports FAILED.
+      switchHome.mockResolvedValueOnce({ ok: false, code: 'FAILED', handOverFailure: 'HOME_NOT_READY' });
+      const move = () => tools.move({ callerSessionId: 'task', teammateId: 'bot', targetDeviceId: 'laptop' });
+      expect(await move()).toMatchObject({ ok: false, errorCode: 'HOME_NOT_READY', message: expect.stringMatching(/main computer.*original chat/) });
+      switchHome.mockResolvedValueOnce({ ok: false, code: 'FAILED' });
+      expect(await move()).toMatchObject({ ok: false, errorCode: 'FAILED' });
     } finally { active.mockRestore(); }
   });
 
