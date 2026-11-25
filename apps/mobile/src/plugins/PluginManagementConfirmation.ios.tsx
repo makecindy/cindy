@@ -6,6 +6,7 @@ import {
   font,
   foregroundStyle,
   frame,
+  lineLimit,
   padding,
   tint,
 } from "@expo/ui/swift-ui/modifiers";
@@ -47,30 +48,28 @@ export function PluginManagementConfirmation(
         // The pinned high-risk text lives in the footer, which stays visible at the medium detent too.
         <VStack alignment="leading" spacing={spacing.sm}>
           {info?.highRisk ? (
+            // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
             <VStack testID="plugins.management.highRisk" alignment="leading" spacing={spacing.xs}>
-              {info.highRisk.map((item, index) => (
-                <VStack key={index} alignment="leading" spacing={spacing.xs}>
-                  <Text
-                    modifiers={[
-                      font({ textStyle: "footnote", weight: "medium" }),
-                      foregroundStyle(colors.textPrimary),
-                      fixedSize({ horizontal: false, vertical: true }),
-                    ]}
-                  >
-                    {item.title}
-                  </Text>
-                  {item.detail ? (
-                    <Text
-                      modifiers={[
-                        font({ textStyle: "footnote" }),
-                        foregroundStyle(colors.textPrimary),
-                        fixedSize({ horizontal: false, vertical: true }),
-                      ]}
-                    >
-                      {item.detail}
-                    </Text>
-                  ) : null}
-                </VStack>
+              <Text
+                modifiers={[
+                  font({ textStyle: "footnote", weight: "semibold" }),
+                  foregroundStyle(colors.textPrimary),
+                  lineLimit(1),
+                ]}
+              >
+                {info.highRisk.title}
+              </Text>
+              {info.highRisk.lines.map((line, index) => (
+                <Text
+                  key={index}
+                  modifiers={[
+                    font({ textStyle: "footnote" }),
+                    foregroundStyle(colors.textPrimary),
+                    lineLimit(2),
+                  ]}
+                >
+                  {line}
+                </Text>
               ))}
             </VStack>
           ) : null}

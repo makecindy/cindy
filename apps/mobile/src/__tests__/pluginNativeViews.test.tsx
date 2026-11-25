@@ -1258,40 +1258,62 @@ describe("pinned high-risk permission", () => {
     removed: [], unchangedCount: 2, builtinOauthClientChanged: false };
   const props = (facts: any) => { const state = consentState(facts);
     return { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: "Mac" }; };
-  // The maintainer's two cases plus the original Node case; each pinned explanation must sit next to the buttons.
+  const methods = Array.from({ length: 16 }, (_, index) => `call_${index}`);
+  const manyBindings = installOf([...Array.from({ length: 4 }, (_, index) => ({ key: `node:secret:t${index}:worker.cjs:all`, kind: "node",
+    labelKey: "nodeSecret", labelArgs: { name: `Token ${index}` }, detailKey: "nodeSecretDetail", detail: methods.join("\n") })), node]);
+  // [case, facts, short summary lines expected in the pinned area, full texts expected only in the scrolled list]
   const cases = [
-    ["a first install with Node", installOf([notify, node]), ["plugins.management.permissions.nodeRuntimeDetail"]],
-    ["an update that only adds a credential binding", secretOnlyUpdate, ["plugins.management.permissions.nodeSecretDetail", "upload_with_token"]],
+    ["a first install with Node", installOf([notify, node]), ["plugins.management.permissions.nodeRuntime"],
+      ["plugins.management.permissions.nodeRuntimeDetail"]],
+    ["an update that only adds a credential binding", secretOnlyUpdate, ["plugins.management.permissions.nodeSecret"],
+      ["plugins.management.permissions.nodeSecretDetail", "upload_with_token"]],
     ["a first install without Node but with Agent high-risk items", installOf([errand, background, notify]),
+      ["plugins.management.permissions.agentErrand", "plugins.management.permissions.agentBackground"],
       ["plugins.management.permissions.agentErrandDetail", "plugins.management.permissions.agentBackgroundDetail"]],
+    ["four credential bindings with sixteen methods each", manyBindings,
+      ["plugins.management.permissions.nodeSecretCount", "plugins.management.permissions.nodeRuntime"],
+      // Credential names are interpolated (checked in pluginManagement.test.ts); here every method stays reachable.
+      ["call_0", "call_15", "plugins.management.permissions.nodeRuntimeDetail"]],
   ] as const;
 
-  it.each(cases)("iOS shows %s in the footer beside the buttons, not in the scrolled content", (_name, facts, texts) => {
+  it.each(cases)("iOS pins a bounded summary of %s beside the buttons; full details stay in the scrolled list", (_name, facts, summary, details) => {
     const { container } = mount(PluginManagementConfirmation, props(facts));
     const pinned = container.querySelector('[data-testid="plugins.management.highRisk"]')!;
     expect(pinned.parentElement!.querySelector('[data-testid="plugins.management.allow"]')).not.toBeNull();
-    for (const text of texts) {
-      expect(pinned.textContent).toContain(text);
-      // Only once on the sheet: the scrolled row keeps its title only.
-      expect(container.textContent!.split(text).length - 1).toBe(1);
+    expect(pinned.textContent).toContain("plugins.management.highRiskTitle");
+    for (const line of summary) expect(pinned.textContent).toContain(line);
+    // A heading plus at most five lines, each capped to two lines.
+    const texts = pinned.querySelectorAll('[data-native="Text"]');
+    expect(texts.length).toBeLessThanOrEqual(6);
+    for (const detail of details) {
+      expect(pinned.textContent).not.toContain(detail);
+      expect(container.textContent).toContain(detail);
     }
   });
   it("iOS shows no pinned text when nothing is high risk", () => {
     const { container } = mount(PluginManagementConfirmation, props(installOf([notify])));
     expect(container.querySelector('[data-testid="plugins.management.highRisk"]')).toBeNull();
   });
-  it.each(cases)("Android keeps %s outside the scroll area, after the scrolled content and before the buttons", (_name, facts, texts) => {
+  it.each(cases)("Android pins a bounded summary of %s outside the scroll area; full details stay in the scrolled list", (_name, facts, summary, details) => {
     const { container } = mount(AndroidManagementConfirmation, props(facts));
     const sheet = container.querySelector('[data-testid="plugins.managementConfirmation"]')!;
     const scroll = sheet.firstElementChild!;
     const pinned = sheet.querySelector('[data-testid="plugins.management.highRisk"]')!;
     expect(scroll.contains(pinned)).toBe(false);
     const text = sheet.textContent!;
-    for (const value of texts) {
-      expect(scroll.textContent).not.toContain(value);
-      expect(text.indexOf(value)).toBeGreaterThanOrEqual(scroll.textContent!.length);
-      expect(text.indexOf(value)).toBeLessThan(text.indexOf("plugins.management.allow"));
+    expect(text.indexOf(pinned.textContent!)).toBeLessThan(text.indexOf("plugins.management.allow"));
+    for (const line of summary) expect(pinned.textContent).toContain(line);
+    for (const detail of details) {
+      expect(pinned.textContent).not.toContain(detail);
+      expect(scroll.textContent).toContain(detail);
     }
+  });
+  it("Android caps each pinned line so the area stays within its height", () => {
+    mount(AndroidManagementConfirmation, props(manyBindings));
+    const pinned = bridge.props.get("plugins.management.highRisk");
+    const children = (Array.isArray(pinned.children) ? pinned.children.flat() : [pinned.children]).filter(Boolean);
+    expect(children.length).toBeLessThanOrEqual(6);
+    for (const child of children) expect(child.props.numberOfLines).toBeGreaterThan(0);
   });
   it("Android shows no pinned area when nothing is high risk", () => {
     const { container } = mount(AndroidManagementConfirmation, props(installOf([notify])));

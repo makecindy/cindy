@@ -411,6 +411,10 @@ it('serves the market demo consents in the Host shape, including updates that ad
   expect(keys((secretSync.consent.facts as any).added)).toEqual(['node:secret:api-token:node/worker.cjs:sync']);
   expect(keys(((await consentOf('demo-market/demo-auto-agent')).consent.facts as any).permissions))
     .toEqual(['agent:errand', 'agent:background', 'agent:user-action', 'notify']);
+  // Layout check demo: the Host's upper bound of 4 bindings × 16 methods.
+  const vault = (await consentOf('demo-market/demo-vault-bridge')).consent.facts as any;
+  expect(vault.permissions.filter((entry: any) => entry.key.startsWith('node:secret:'))).toHaveLength(4);
+  expect(vault.permissions[1].detail.split('\n')).toHaveLength(16);
   const reading = await consentOf('demo-market/demo-reading-list', '_root__demo-reading-list');
   expect(keys((reading.consent.facts as any).added)).toEqual(['notify']);
   // Allowing the update commits the new version on the mock computer.

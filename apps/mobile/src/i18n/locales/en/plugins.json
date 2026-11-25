@@ -305,7 +305,8 @@
       "routineEvents": "Routine Events",
       "mcpUi": "Can display interactive pages in conversations",
       "mcpUiDomains": "Domains the pages can connect to: {{domains}}",
-      "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}"
+      "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}",
+      "nodeSecretCount": "Can provide stored credentials to the local Node program ({{count}})"
     },
     "releaseChanged": "The available version changed. Review the refreshed version before installing.",
     "settingsUnavailable": "Could not load the plugin settings. Reload settings to try again.",
@@ -317,7 +318,8 @@
       "reviewed": "Reviewed",
       "verified-publisher": "Verified publisher",
       "unverified": "Unverified"
-    }
+    },
+    "highRiskTitle": "High-risk permissions"
   },
   "notice": {
     "title": {

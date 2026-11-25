@@ -303,7 +303,8 @@
       "routineEvents": "例行差事之事",
       "mcpUi": "可於言談中示互動之頁",
       "mcpUiDomains": "頁可連之網域：{{domains}}",
-      "uiPageAccess": "頁：{{pages}}\n頁可連之網域：{{domains}}\n頁可喚之工具：{{tools}}"
+      "uiPageAccess": "頁：{{pages}}\n頁可連之網域：{{domains}}\n頁可喚之工具：{{tools}}",
+      "nodeSecretCount": "可將已存之憑證 {{count}} 件交予本機 Node 程式"
     },
     "releaseChanged": "可用之版已變，請觀更新後之版，再擇安裝。",
     "settingsUnavailable": "法器規制載入未成，請重載規制後再試。",
@@ -315,7 +316,8 @@
       "reviewed": "已審",
       "verified-publisher": "發佈者已驗",
       "unverified": "未驗"
-    }
+    },
+    "highRiskTitle": "險要之權"
   },
   "notice": {
     "title": {

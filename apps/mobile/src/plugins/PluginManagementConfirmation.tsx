@@ -59,12 +59,11 @@ export function PluginManagementConfirmation(
         </ScrollView>
         {/* Outside the scroll area: always visible above the buttons, even on short screens. */}
         {info?.highRisk ? (
+          // Bounded summary (a heading and at most five two-line items); full details are in the scrolled list.
           <View testID="plugins.management.highRisk" style={styles.highRisk}>
-            {info.highRisk.map((item, index) => (
-              <View key={index} style={styles.permission}>
-                <Text style={styles.highRiskTitle}>{item.title}</Text>
-                {item.detail ? <Text style={styles.highRiskBody}>{item.detail}</Text> : null}
-              </View>
+            <Text numberOfLines={1} style={styles.highRiskTitle}>{info.highRisk.title}</Text>
+            {info.highRisk.lines.map((line, index) => (
+              <Text key={index} numberOfLines={2} style={styles.highRiskBody}>{line}</Text>
             ))}
           </View>
         ) : null}
@@ -118,11 +117,11 @@ const makeStyles = (c: ThemeColors) =>
       lineHeight: lineHeight.caption,
       color: c.textSecondary,
     },
-    highRisk: { gap: spacing.sm, paddingBottom: spacing.md },
+    highRisk: { gap: spacing.xs, paddingBottom: spacing.md },
     highRiskTitle: {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
       color: c.textPrimary,
     },
     highRiskBody: {

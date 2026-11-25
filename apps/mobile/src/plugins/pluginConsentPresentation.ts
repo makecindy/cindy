@@ -65,7 +65,7 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     ]
       .filter(Boolean)
       .join("\n\n");
-  const permissions = (items: PluginPermissionItem[], prefix = "", pinned = true) =>
+  const permissions = (items: PluginPermissionItem[], prefix = "") =>
     items.map((item) => ({
       title:
         (prefix ? t("plugins.management.permissions." + prefix) + " · " : "") +
@@ -73,8 +73,8 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
           ...item.labelArgs,
           defaultValue: item.kind,
         }),
-      // A pinned item's explanation is shown above the buttons; the row keeps only its title.
-      detail: pinned && isPinnedHighRiskPermission(item) ? "" : detailOf(item),
+      // Full explanation stays in the scrolled list (credential names and every allowed method included).
+      detail: detailOf(item),
     }));
   // New installs list every declared permission; updates only the added ones (removed ones carry no risk).
   const granted = facts.kind === "install" ? facts.permissions : facts.added;
@@ -84,7 +84,21 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
     ...item.labelArgs,
     defaultValue: item.kind,
   });
-  const highRisk = granted.filter(isPinnedHighRiskPermission).map((item) => ({ title: titleOf(item), detail: detailOf(item) }));
+  // Pinned above the buttons: one short line per high-risk class, in the Host's order, so its height stays
+  // bounded however many bindings or methods a package declares. Several credential bindings collapse into one
+  // counted line; the full list is in the scrolled permissions.
+  const pinned = granted.filter(isPinnedHighRiskPermission);
+  const secretCount = pinned.filter((item) => item.key.startsWith("node:secret:")).length;
+  const highRiskLines: string[] = [];
+  const seenClasses = new Set<string>();
+  for (const item of pinned) {
+    const highRiskClass = item.key.startsWith("node:secret:") ? "node:secret" : item.key;
+    if (seenClasses.has(highRiskClass)) continue;
+    seenClasses.add(highRiskClass);
+    highRiskLines.push(highRiskClass === "node:secret" && secretCount > 1
+      ? t("plugins.management.permissions.nodeSecretCount", { count: secretCount })
+      : titleOf(item));
+  }
   return {
     title: facts.name + " · " + facts.version,
     /** New installs say where the plugin goes; updates keep the computer name only. */
@@ -113,10 +127,10 @@ export function pluginConsentPresentation(consent: Consent, t: Translate, device
         ? permissions(highRiskFirst(facts.permissions))
         : [
             ...permissions(highRiskFirst(facts.added), "added"),
-            ...permissions(facts.removed, "removed", false),
+            ...permissions(facts.removed, "removed"),
           ],
-    /** Pinned above the confirm buttons, outside the scroll area, so it is read before allowing. */
-    highRisk: highRisk.length ? highRisk : undefined,
+    /** Pinned above the confirm buttons, outside the scroll area, so it is read before allowing (at most five lines). */
+    highRisk: highRiskLines.length ? { title: t("plugins.management.highRiskTitle"), lines: highRiskLines } : undefined,
     unchanged:
       facts.kind === "update"
         ? t("plugins.management.permissions.unchanged", {

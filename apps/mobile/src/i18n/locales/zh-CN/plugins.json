@@ -305,7 +305,8 @@
       "routineEvents": "例行任务事件",
       "mcpUi": "可在对话中显示交互页面",
       "mcpUiDomains": "页面可连接域名：{{domains}}",
-      "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}"
+      "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}",
+      "nodeSecretCount": "可将 {{count}} 个已保存凭证提供给本机 Node 程序"
     },
     "releaseChanged": "可用版本已变化，请查看刷新后的版本，再选择安装。",
     "settingsUnavailable": "插件设置加载失败，请重新加载设置后重试。",
@@ -317,7 +318,8 @@
       "reviewed": "已审核",
       "verified-publisher": "发布者已验证",
       "unverified": "未验证"
-    }
+    },
+    "highRiskTitle": "高风险权限"
   },
   "notice": {
     "title": {

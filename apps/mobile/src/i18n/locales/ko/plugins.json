@@ -305,7 +305,8 @@
       "routineEvents": "루틴 이벤트",
       "mcpUi": "대화에 대화형 페이지를 표시할 수 있음",
       "mcpUiDomains": "페이지가 연결할 수 있는 도메인: {{domains}}",
-      "uiPageAccess": "페이지: {{pages}}\n페이지가 연결할 수 있는 도메인: {{domains}}\n페이지가 호출할 수 있는 도구: {{tools}}"
+      "uiPageAccess": "페이지: {{pages}}\n페이지가 연결할 수 있는 도메인: {{domains}}\n페이지가 호출할 수 있는 도구: {{tools}}",
+      "nodeSecretCount": "저장된 자격 증명 {{count}}개를 로컬 Node 프로그램에 제공할 수 있음"
     },
     "releaseChanged": "사용 가능한 버전이 변경되었습니다. 새 버전을 확인한 뒤 설치하세요.",
     "settingsUnavailable": "플러그인 설정을 불러오지 못했습니다. 설정을 다시 불러와 주세요.",
@@ -317,7 +318,8 @@
       "reviewed": "검토됨",
       "verified-publisher": "게시자 인증됨",
       "unverified": "미인증"
-    }
+    },
+    "highRiskTitle": "위험도가 높은 권한"
   },
   "notice": {
     "title": {

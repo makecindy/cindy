@@ -60,6 +60,13 @@ const nodeSecret: DemoPermission = { key: "node:secret:api-token:node/worker.cjs
 const agentUserAction: DemoPermission = { key: "agent:user-action", kind: "agent", labelKey: "agentUserAction", detailKey: "agentUserActionDetail" };
 const agentBackground: DemoPermission = { key: "agent:background", kind: "agent", labelKey: "agentBackground", detailKey: "agentBackgroundDetail" };
 const agentErrand: DemoPermission = { key: "agent:errand", kind: "agent", labelKey: "agentErrand", detailKey: "agentErrandDetail" };
+const nodeResident: DemoPermission = { key: "node:resident", kind: "node", labelKey: "nodeResident", detailKey: "nodeResidentDetail" };
+// The Host's upper bound: 4 credential bindings with 16 methods each (detail lists one method per line).
+const vaultMethods = Array.from({ length: 16 }, (_, index) => `vault_call_${String(index + 1).padStart(2, "0")}`);
+const vaultBindings: DemoPermission[] = ["Primary", "Backup", "Audit", "Archive"].map((name) => ({
+  key: `node:secret:${name.toLowerCase()}:node/worker.cjs:${vaultMethods.join(",")}`, kind: "node", labelKey: "nodeSecret",
+  labelArgs: { name: `Demo ${name} token` }, detailKey: "nodeSecretDetail", detail: vaultMethods.join("\n"),
+}));
 const RELEASE = "1.4.2";
 const DEMOS: DemoPlugin[] = [
   { ghostId: "demo-device-simulator", name: "Demo Device Simulator", publisher: "official", author: "Cindy",
@@ -101,6 +108,10 @@ const DEMOS: DemoPlugin[] = [
     description: "Sync notes with a service. Its update hands a saved API token to the bundled Node program.", tools: ["demo_sync_notes"],
     permissions: [nodeExecute(), nodeSecret, network("sync.example.com")], installedVersion: "1.3.0",
     update: { added: [nodeSecret], removed: [], unchangedCount: 2 } },
+  // Layout check for the pinned summary: many bindings and methods stay in the scrolled list.
+  { ghostId: "demo-vault-bridge", name: "Demo Vault Bridge", publisher: "official", author: "Cindy",
+    description: "Bridge several saved tokens into a bundled Node program. Shows the largest permission list.",
+    tools: ["demo_vault_sync"], permissions: [nodeResident, ...vaultBindings, nodeExecute(), network("vault.example.com")] },
   // A first install without Node that still asks for Agent high-risk permissions (pinned).
   { ghostId: "demo-auto-agent", name: "Demo Auto Agent", publisher: "official", author: "Cindy",
     description: "Start Agent work in the background and hand errands to an Agent.", tools: ["demo_start_errand"],

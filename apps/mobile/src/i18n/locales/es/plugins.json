@@ -307,7 +307,8 @@
       "routineEvents": "Eventos de rutina",
       "mcpUi": "Puede mostrar páginas interactivas en conversaciones.",
       "mcpUiDomains": "Dominios a los que se pueden conectar las páginas: {{domains}}",
-      "uiPageAccess": "Páginas: {{pages}}\nDominios a los que se pueden conectar las páginas: {{domains}}\nHerramientas que las páginas pueden llamar: {{tools}}"
+      "uiPageAccess": "Páginas: {{pages}}\nDominios a los que se pueden conectar las páginas: {{domains}}\nHerramientas que las páginas pueden llamar: {{tools}}",
+      "nodeSecretCount": "Puede proporcionar credenciales almacenadas al programa local Node ({{count}})"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
     "settingsUnavailable": "No se pudo cargar la configuración del complemento. Vuelve a cargar la configuración para intentarlo de nuevo.",
@@ -319,7 +320,8 @@
       "reviewed": "Revisado",
       "verified-publisher": "Editor verificado",
       "unverified": "No verificado"
-    }
+    },
+    "highRiskTitle": "Permisos de alto riesgo"
   },
   "notice": {
     "title": {

@@ -829,15 +829,13 @@ describe('confirmation sheet wording', () => {
       expect(isPinnedHighRiskPermission({ key })).toBe(false);
     const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
     const view = pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail'), secret, nodeExecute('nodeMcp')]), t, 'Mac');
-    // Pinned items show their title and full explanation (credential name and methods included) above the buttons.
-    expect(view.highRisk).toEqual([
-      { title: 'plugins.management.permissions.nodeSecret(name=API token)', detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' },
-      { title: 'plugins.management.permissions.nodeMcp', detail: 'plugins.management.permissions.nodeRuntimeDetail' },
-    ]);
-    // In the scrolled list pinned items move first and keep only their titles.
+    // Pinned above the buttons: a heading and one short line per high-risk class, in the Host's order.
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle',
+      lines: ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeMcp'] });
+    // The scrolled list keeps every full explanation (credential names and methods included), high-risk items first.
     expect(view.permissions.map((row) => [row.title, row.detail])).toEqual([
-      ['plugins.management.permissions.nodeSecret(name=API token)', ''],
-      ['plugins.management.permissions.nodeMcp', ''],
+      ['plugins.management.permissions.nodeSecret(name=API token)', 'plugins.management.permissions.nodeSecretDetail\n\nrun'],
+      ['plugins.management.permissions.nodeMcp', 'plugins.management.permissions.nodeRuntimeDetail'],
       ['plugins.management.permissions.notify', 'plugins.management.permissions.notifyDetail'],
     ]);
     expect(pluginConsentPresentation(install({}, [item('notify', 'notify', 'notify', 'notifyDetail')]), t).highRisk).toBeUndefined();
@@ -845,18 +843,35 @@ describe('confirmation sheet wording', () => {
 
   // Maintainer review (2026-11-25): an approved Node plugin whose update only adds a credential binding, and a
   // first install without Node that asks for Agent high-risk permissions, both had no summary above the buttons.
+  // Maintainer review 03:10 #2: the Host allows 4 credential bindings with up to 16 methods each; the pinned area
+  // must stay bounded while every credential name and method remains reachable in the scrolled list.
+  it('keeps the pinned summary bounded for many credential bindings and methods', () => {
+    const methods = Array.from({ length: 16 }, (_, index) => `method_${index}`);
+    const bindings = Array.from({ length: 4 }, (_, index) => ({ ...item(`node:secret:token${index}:worker.cjs:${methods.join(',')}`,
+      'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: `Token ${index}` }, detail: methods.join('\n') }));
+    const view = pluginConsentPresentation(install({}, [...bindings, item('node:resident', 'node', 'nodeResident', 'nodeResidentDetail'),
+      nodeExecute(), item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'),
+      item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail')]), t, 'Mac');
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.nodeSecretCount(count=4)', 'plugins.management.permissions.nodeResident',
+      'plugins.management.permissions.nodeRuntime', 'plugins.management.permissions.agentBackground', 'plugins.management.permissions.agentErrand']);
+    expect(JSON.stringify(view.highRisk)).not.toMatch(/method_|Token \d/);
+    const scrolled = view.permissions.map((row) => `${row.title}\n${row.detail}`).join('\n');
+    for (let index = 0; index < 4; index++) expect(scrolled).toContain(`Token ${index}`);
+    for (const method of methods) expect(scrolled.split(method).length - 1).toBeGreaterThanOrEqual(4);
+  });
   it('pins an update that only adds a credential binding to an approved Node plugin', () => {
     const secret = { ...item('node:secret:token:worker.cjs:run', 'node', 'nodeSecret', 'nodeSecretDetail'), labelArgs: { name: 'API token' }, detail: 'run' };
     const view = pluginConsentPresentation({ requestId: 'r', initiator: 'user', origin: 'market',
       facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [secret], removed: [],
         unchangedCount: 3, builtinOauthClientChanged: false } } as any, t, 'Mac');
-    expect(view.highRisk).toEqual([{ title: 'plugins.management.permissions.nodeSecret(name=API token)',
-      detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' }]);
+    expect(view.highRisk).toEqual({ title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeSecret(name=API token)'] });
+    expect(view.permissions[0]).toEqual({ title: 'plugins.management.permissions.added · plugins.management.permissions.nodeSecret(name=API token)',
+      detail: 'plugins.management.permissions.nodeSecretDetail\n\nrun' });
   });
   it('pins Agent high-risk permissions in a first install without Node', () => {
     const view = pluginConsentPresentation(install({}, [item('agent:errand', 'agent', 'agentErrand', 'agentErrandDetail'),
       item('agent:background', 'agent', 'agentBackground', 'agentBackgroundDetail'), item('agent:user-action', 'agent', 'agentUserAction', 'agentUserActionDetail')]), t, 'Mac');
-    expect(view.highRisk?.map((entry) => entry.title)).toEqual(['plugins.management.permissions.agentErrand', 'plugins.management.permissions.agentBackground']);
+    expect(view.highRisk?.lines).toEqual(['plugins.management.permissions.agentErrand', 'plugins.management.permissions.agentBackground']);
     expect(view.permissions[2]).toEqual({ title: 'plugins.management.permissions.agentUserAction', detail: 'plugins.management.permissions.agentUserActionDetail' });
   });
 
@@ -883,7 +898,7 @@ describe('confirmation sheet wording', () => {
         unchangedCount: 2, builtinOauthClientChanged: false } }) as any;
     const adds = pluginConsentPresentation(update([item('notify', 'notify', 'notify'), nodeExecute()], []), t, 'Mac');
     expect(adds).toMatchObject({ device: 'Mac', sourceNotice: undefined,
-      highRisk: [{ title: 'plugins.management.permissions.nodeRuntime', detail: 'plugins.management.permissions.nodeRuntimeDetail' }] });
+      highRisk: { title: 'plugins.management.highRiskTitle', lines: ['plugins.management.permissions.nodeRuntime'] } });
     expect(adds.permissions[0].title).toBe('plugins.management.permissions.added · plugins.management.permissions.nodeRuntime');
     const removes = pluginConsentPresentation(update([item('notify', 'notify', 'notify')], [nodeExecute()]), t, 'Mac');
     expect(removes.highRisk).toBeUndefined();
