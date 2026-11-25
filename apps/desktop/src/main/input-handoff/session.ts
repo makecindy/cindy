@@ -1190,6 +1190,8 @@ export class InputHandoffSession {
     if (this.signInMode && this.pageUnknown(step) && !hasSecretField(step)) return;
     if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
       this.fieldsGoneReads = 0;
+      // The fields are back: a holder may be typing in the form again, so stop watching on its behalf.
+      this.awaitingHint = false;
       // Whatever page the owner is on is covered, whoever is typing where.
       this.guardSignInPage(step);
       if (fieldShape(step) === fieldShape(this.step)) {
@@ -1211,7 +1213,8 @@ export class InputHandoffSession {
       // Waiting for the agent's hint repeats this look: only a passive one, and only at the target while it is the
       // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
       // before handing back raises the window, as before.
-      const waiting = this.hintsPending(step);
+      // A step the card can show by itself (a device code) is presented, not waited over.
+      const waiting = this.hintsPending(step) && !actionable(step);
       const scanning = !waiting
         ? await this.showQr()
         : list.frontmost === target.pid && window.focused && window.frame?.length === 4
@@ -1225,7 +1228,7 @@ export class InputHandoffSession {
       }
       // The agent said what the end looks like and this is not it: a sign-in page that swapped its fields for a
       // slider check or a scan tab is still mid-way. Keep the card as it was and keep watching the window.
-      if (this.hintsPending(step)) {
+      if (waiting) {
         this.step = asked;
         this.fieldsGoneReads = 0;
         this.awaitingHint = true;

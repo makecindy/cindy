@@ -612,6 +612,57 @@ describe('a waiting card watching its window', () => {
     expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0 });
   });
 
+  // PR #12766 review (codex r4692520499): the sign-in page turns into a device-code page before the hint shows.
+  // The wait kept the password step, so the code and its link never reached the card. Entry: window watch. Unit tier.
+  it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
+    const { driver, state } = desktop('password');
+    let deviceCode = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => deviceCode
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://login.example.com/device', [node('1.0', 'AXStaticText', { value: 'Open github.com/login/device and enter WDJB-MJHT' })]) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    deviceCode = true;
+    await vi.waitFor(() => expect(run.latest().deviceCode).toMatchObject({ code: 'WDJB-MJHT' }));
+    expect(run.finished).toEqual([]);
+    expect(state.screen).toBe('password');
+    run.session.cancel();
+  });
+
+  // PR #12766 review (codex r4692520509): after a held form's fields came back, the card kept watching for the hint
+  // and a later change of the page swapped the holder's form. Fields back = the holder's form is protected again.
+  it('stops watching a held form once its fields come back', async () => {
+    const { driver, state } = desktop('address');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    let moreFields = false;
+    const read = driver.snapshot.bind(driver);
+    driver.snapshot = async (pid, window) => moreFields
+      ? { pid, app: chrome.app, bundleId: chrome.bundleId, frontmost: true, window: { index: 1, title: 'Sign in', frame },
+        nodes: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Street' }), node('1.1', 'AXTextField', { title: 'City' })]) }
+      : read(pid, window);
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    state.screen = 'blank';
+    await run.session.afterLiveView();
+    state.screen = 'address';
+    await settle();
+    const revision = run.latest().revision;
+    // The page adds a field while the phone is typing: the card must not swap the holder's form.
+    moreFields = true;
+    await settle();
+    expect(run.latest().revision).toBe(revision);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+  });
+
   it('shows a code to scan when the fields go away because a second factor needs scanning', async () => {
     const { driver, state } = desktop('password');
     driver.qr = async () => ({
