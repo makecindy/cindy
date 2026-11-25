@@ -68,6 +68,8 @@ export interface ProviderListOptions extends ConnectionReadOptions {
     scope: 'available' | ProviderPickerModel;
     describe?: (providerOrder: string[], deferredProviderIds: string[]) => void;
   };
+  /** 设置默认值只需要聊天目录，跳过可选媒体运行时的额外读取；不来自 IPC 输入。 */
+  includeMediaReadiness?: boolean;
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -289,7 +291,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     let media: readonly { providerId: string; id: string }[] | undefined;
     try {
-      if (!picker) media = deps.getAvailableMediaModels?.();
+      if (!picker && opts?.includeMediaReadiness !== false) media = deps.getAvailableMediaModels?.();
     } catch (error) {
       // Media is optional enrichment; configuration and chat providers remain usable.
       media = [];

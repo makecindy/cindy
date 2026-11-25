@@ -1,0 +1,20 @@
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { extractArchive, flattenExtractedDir, ensurePiThemeAssets } from '/workspace/source/tools/pi/update.mjs';
+import { writeDirDistManifest, verifyDirDistManifest } from '/workspace/source/tools/shared/dir-dist-manifest.mjs';
+const sha=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+// Pi follows the application's own pin, the same one download-build-assets.mjs fetched.
+const piPin=JSON.parse(fs.readFileSync('/workspace/source/tools/pi/latest.json','utf8'));
+const pi='/workspace/pi-linux-x64.tar.gz', pd=piPin.runtimeAssets['linux-x64'].sha256, piVersion=piPin.version;
+if(!/^[0-9a-f]{64}$/.test(pd)||!/^\d+\.\d+\.\d+$/.test(piVersion))throw Error('invalid Pi pin');
+const rg='/workspace/ripgrep-linux-x64.tar.gz', rd='1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599';
+if(sha(pi)!==pd||sha(rg)!==rd)throw Error('asset digest mismatch');
+const dir='/workspace/source/apps/pi-bin/linux-x64';
+if(fs.existsSync(dir))throw Error('Pi destination already exists');
+fs.mkdirSync(dir,{recursive:true});await extractArchive(pi,dir);flattenExtractedDir(dir,'pi');ensurePiThemeAssets(dir);
+fs.writeFileSync(dir+'/pi.sha256.bin',sha(dir+'/pi')+'\n');fs.writeFileSync(dir+'/.asset-digest.bin',pd+'\n');fs.writeFileSync(dir+'/.version',piVersion+'\n');fs.chmodSync(dir+'/pi',0o755);writeDirDistManifest(dir);if(!verifyDirDistManifest(dir))throw Error('Pi manifest');
+const rdir='/workspace/source/apps/ripgrep-bin/linux-x64';fs.mkdirSync(rdir,{recursive:true});
+execFileSync('tar',['--no-same-owner','-xzf',rg,'-C',rdir,'--strip-components=1','ripgrep-15.1.0-x86_64-unknown-linux-musl/rg']);
+fs.chmodSync(rdir+'/rg',0o755);fs.writeFileSync(rdir+'/.version','15.1.0\n');fs.writeFileSync(rdir+'/rg.sha256.bin',sha(rdir+'/rg')+'\n');
+console.log('Pi and ripgrep verified and staged');
