@@ -12,8 +12,9 @@ import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/Plugi
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
-  parsePluginUiConsent, samePluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
-import { parsePluginMarketPage, pluginMarketIconUri, pluginMarketSourceUnverified } from '@/plugins/pluginMarketCatalog';
+  parsePluginUiConsent, samePluginMarketSourceIdentity, isPluginMarketSourceIdentity, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+import { parsePluginMarketPage, pluginMarketFacts, pluginMarketIconUri, pluginMarketShowsCommunityNotice, pluginMarketSourceUnverified,
+  pluginMarketSubtitle } from '@/plugins/pluginMarketCatalog';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -1860,9 +1861,81 @@ describe('confirmation sheet wording', () => {
     expect(read('zh-CN', 'plugins', 'market.sourceUnverified')).toBe('这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。');
     expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingInstall')).toBe(read('zh-CN', 'plugins', 'market.sourceUnverified'));
     expect(read('zh-CN', 'plugins', 'notice.consentSource.repositoryMissingUpdate')).toBe(read('zh-CN', 'plugins', 'management.sourceUnverified'));
-    expect(read('zh-CN', 'plugins', 'management.sourceUnverified')).toContain('若仍不行，请直接在电脑上升级');
+    expect(read('zh-CN', 'plugins', 'management.sourceUnverified')).toContain('若仍不行，请直接在电脑上更新这个插件');
     expect(read('zh-CN', 'plugins', 'market.sourceUnverifiedShort')).toBe('缺少仓库信息，不能从手机安装');
     expect(read('zh-CN', 'interaction', 'permission.installSourceUnverified')).toMatch(/这里只能拒绝，要安装请在电脑上确认。$/);
+  });
+  // Covers existing behavior; keeps the phone and the computer from drifting apart. The literals are the same as in the
+  // computer's apps/desktop/src/shared/__tests__/pluginMarket.test.ts (`isPluginMarketSourceIdentity` there, the
+  // repositories its generator produces there): what the computer accepts and generates, the phone accepts; what it
+  // rejects, the phone rejects. Change both together. Tier: unit.
+  it('accepts exactly the source identities the computer accepts and generates', () => {
+    const SOURCE_ID = 'AbCdEfGhIjKlMnOpQrStUv';
+    for (const valid of [
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 'main', sourceId: SOURCE_ID },
+      { kind: 'local', sourceId: SOURCE_ID },
+      // Generated there from real addresses (https / ssh / scp / nested groups / a fetched mirror with a ref).
+      { kind: 'git', repository: 'gitlab.example.com/group/sub/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'mirror.example.test/tenant/plugins', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'mirror.example.test/tenant/plugins', ref: 'release/2026', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(valid), JSON.stringify(valid)).toBe(true);
+    for (const invalid of [
+      null, 'github.com/acme/plugins', { kind: 'local' }, { kind: 'git', repository: 'github.com/acme/plugins' },
+      { kind: 'git', repository: 'github.com/acme', sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', sourceId: `${SOURCE_ID}=` },
+      { kind: 'git', repository: 'github.com/acme/plugins', url: 'https://github.com/acme/plugins', sourceId: SOURCE_ID },
+      // A ref that is not a valid one (or not a string): the computer now sends no identity at all, never one without it.
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: 7, sourceId: SOURCE_ID },
+      { kind: 'git', repository: 'github.com/acme/plugins', ref: '-x', sourceId: SOURCE_ID },
+      { kind: 'local', path: '/tmp/market', sourceId: SOURCE_ID },
+    ]) expect(isPluginMarketSourceIdentity(invalid), JSON.stringify(invalid)).toBe(false);
+  });
+  /* 测试价值（与桌面 5fd5f542c0 的市场详情对齐，调度 2026-11-25 决定，提案，待维护者确认）
+   * - 生产入口与可观察结果：市场条目经真实解析后，详情的资料行、名称下的副标题、社区声明是否出现。
+   * - 依据：桌面详情资料为「版本 v1.2 / 作者（显示时）/ 来源：公开市场、组织、自定义」，头部只放作者与徽标，公开的社区
+   *   作者插件有社区声明；这是安全提示，手机不能比电脑少。自定义市场在手机上保留市场名。
+   * - 缺口：手机来源一格对所有服务端插件都写「插件市场」，版本不带 v、没有作者，副标题重复徽标与版本，没有社区声明。
+   * - 最小失败输入：公开的官方插件（来源应为公开市场）；公开的社区插件（应有社区声明）。tier: unit。
+   */
+  it('shows the market detail facts, subtitle and community notice the way the computer does', () => {
+    const t = (key: string) => key;
+    const item = (extra: Record<string, unknown>) => parsePluginMarketPage({ items: [{ ...detail, installState: 'not-installed',
+      enabled: null, version: '1.4.2', author: 'Ada', ...extra }] }).items[0]!;
+    const facts = (extra: Record<string, unknown>) => Object.fromEntries(pluginMarketFacts(item(extra), t).map((fact) => [fact.key, fact.value]));
+    const official = { sourceType: 'server', scope: 'public', publisherKind: 'official' };
+    const community = { sourceType: 'server', scope: 'public', publisherKind: 'personal' };
+    const organization = { sourceType: 'server', scope: 'organization', publisherKind: null };
+    const custom = { sourceType: 'git-market', scope: 'public', publisherKind: null, sourceMarketName: 'Acme' };
+    expect(facts(official)).toEqual({ version: 'v1.4.2', author: 'Ada', source: 'plugins.market.publicInstall', identifier: 'demo' });
+    // Community authors stay anonymous, as on the computer.
+    expect(facts(community)).toEqual({ version: 'v1.4.2', source: 'plugins.market.publicInstall', identifier: 'demo' });
+    expect(facts(organization)).toMatchObject({ author: 'Ada', source: 'plugins.market.scope.organization' });
+    expect(facts(custom)).toMatchObject({ author: 'Ada', source: 'Acme' });
+    expect(pluginMarketFacts(item(official), t).map((fact) => fact.key)).toEqual(['version', 'author', 'source', 'identifier']);
+    // Under the name: the author only (no scope or version repeating the badge and the facts).
+    expect(pluginMarketSubtitle(item(official))).toBe('Ada');
+    expect(pluginMarketSubtitle(item(community))).toBe('');
+    // The community notice: public plugins by community authors only.
+    expect([official, community, organization, custom].map((extra) => pluginMarketShowsCommunityNotice(item(extra))))
+      .toEqual([false, true, false, false]);
+  });
+  // The update action uses the computer's own label in every language (desktop settings.ghosts.page.updateTo, copied
+  // verbatim; desktop 5fd5f542c0 made the computer say "update" throughout). Chinese no longer says 升级 for a plugin.
+  it('names a plugin update the way the computer does', () => {
+    const locales = resolve(process.cwd(), 'src/i18n/locales');
+    const plugins = (language: string) => JSON.parse(readFileSync(resolve(locales, language, 'plugins.json'), 'utf8'));
+    for (const language of readdirSync(locales)) {
+      const updateTo: string = plugins(language).management.updateTo;
+      expect(updateTo, language).toContain('v{{version}}');
+      expect(plugins(language).management, language).not.toHaveProperty('update');
+      expect(JSON.stringify(plugins(language)), language).not.toMatch(/升级|升級|升之|其升/);
+    }
+    expect(plugins('zh-CN').management.updateTo).toBe('更新到 v{{version}}');
+    expect(plugins('en').management.updateTo).toBe('Update to v{{version}}');
+    // Where updating Cindy and updating the plugin share a sentence, the plugin is named.
+    expect(plugins('zh-CN').management.sourceUnverified).toContain('请直接在电脑上更新这个插件');
+    expect(plugins('en').management.sourceUnverified).toContain('update the plugin on the computer');
   });
   // Covers existing behavior: the repository is what the person checks, so the longest allowed one (256 characters, no
   // spaces) reaches the confirmation line whole, from the Host receipt through parsing; the line itself wraps on screen.

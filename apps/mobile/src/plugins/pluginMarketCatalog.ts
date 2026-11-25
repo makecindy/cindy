@@ -246,11 +246,15 @@ export function pluginMarketOrganizationErrorKey(code: string | null | undefined
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 /** "Public · v1.4.2 · Cindy" under the name; community authors are omitted. */
-export function pluginMarketSubtitle(item: ManagedMarketItem, t: Translate): string {
-  const author = pluginMarketAuthor(item);
-  const origin = item.sourceType !== "server" ? "custom"
-    : item.scope === "public" || item.scope === "organization" ? item.scope : "local";
-  return [t("plugins.market.scope." + origin), "v" + item.version, author ?? ""].filter(Boolean).join(" · ");
+/** Under the name, as on the computer: the author only (the badge beside the name already says where it comes from,
+ *  the version is in the details). Empty when the author is not shown. */
+export function pluginMarketSubtitle(item: ManagedMarketItem): string {
+  return pluginMarketAuthor(item) ?? "";
+}
+
+/** The computer's community notice shows for public plugins by community authors; the phone shows it too. */
+export function pluginMarketShowsCommunityNotice(item: ManagedMarketItem): boolean {
+  return pluginMarketPublisher(item) === "community";
 }
 
 export function pluginMarketPublisherKey(item: ManagedMarketItem): string | null {
@@ -268,9 +272,14 @@ export function pluginMarketTools(manifest: Record<string, unknown> | undefined)
 
 export function pluginMarketFacts(item: ManagedMarketItem, t: Translate): Array<{ key: string; title: string; value: string }> {
   return [
-    { key: "version", title: t("plugins.detail.version"), value: item.version },
+    // Same facts and labels as the computer's market detail: version with v, author when shown, the source as public
+    // market or organization; a custom market keeps its own name (more telling than "Custom" on a small screen).
+    { key: "version", title: t("plugins.detail.version"), value: item.version ? "v" + item.version : "" },
+    { key: "author", title: t("plugins.detail.author"), value: pluginMarketAuthor(item) ?? "" },
     { key: "source", title: t("plugins.market.source"),
-      value: item.sourceType === "server" ? t("plugins.market.title") : item.sourceMarketName ?? t("plugins.market.filter.custom") },
+      value: item.sourceType !== "server" ? item.sourceMarketName ?? t("plugins.market.filter.custom")
+        : item.scope === "public" ? t("plugins.market.publicInstall")
+          : t("plugins.market.scope." + (item.scope === "organization" ? "organization" : "local")) },
     { key: "identifier", title: t("plugins.detail.identifier"), value: item.ghostId },
   ].filter((fact) => fact.value);
 }

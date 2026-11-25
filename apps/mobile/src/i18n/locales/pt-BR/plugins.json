@@ -164,7 +164,8 @@
     "version": "Versão",
     "showAll": "Mostrar tudo",
     "showLess": "Mostrar menos",
-    "identifier": "Identificador"
+    "identifier": "Identificador",
+    "author": "Autor"
   },
   "demo": {
     "hint": "Dados de demonstração · Nenhuma configuração real é alterada"
@@ -180,7 +181,7 @@
   "management": {
     "checkResult": "Verificar resultado",
     "manage": "Gerenciar plugin",
-    "update": "Atualizar",
+    "updateTo": "Atualizar para v{{version}}",
     "uninstall": "Desinstalar",
     "uninstallTitle": "Desinstalar {{name}}?",
     "uninstallBody": "Isso remove o plugin, suas credenciais e configurações privadas de {{device}}. Os itens da biblioteca e o conteúdo das tarefas existentes são mantidos.",
@@ -312,7 +313,7 @@
       "nodeSecretOne": "O programa Node local pode receber uma credencial armazenada"
     },
     "releaseChanged": "A versão disponível mudou. Revise a versão atualizada antes de instalar.",
-    "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize direto pelo computador.",
+    "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize o plugin direto pelo computador.",
     "sourceChanged": "A origem deste marketplace acabou de mudar e a atualização foi interrompida. Confira o marketplace no computador e tente de novo.",
     "settingsUnavailable": "Não foi possível carregar as configurações do plugin. Recarregue as configurações para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as configurações do computador antes de enviar novamente.",
@@ -359,7 +360,7 @@
       "sourceChangedIsolated": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; conecte suas contas novamente após atualizar.",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, instale direto pelo computador.",
-      "repositoryMissingUpdate": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize direto pelo computador.",
+      "repositoryMissingUpdate": "Este computador não informou o repositório deste marketplace personalizado, então não dá para atualizar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, atualize o plugin direto pelo computador.",
       "sourceChanged": "A origem desta solicitação é diferente da que você escolheu, então ela não pode ser permitida pelo celular. Recuse e escolha de novo."
     },
     "sourceNotice": {
@@ -471,7 +472,9 @@
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um arquivo local, de outra versão ou de outra origem. Confira no computador.",
     "sourceUnverified": "Este computador não informou o repositório deste marketplace personalizado, então não dá para instalar pelo celular. Primeiro atualize a Cindy nesse computador e atualize este marketplace; se não resolver, instale direto pelo computador.",
     "sourceUnverifiedShort": "Falta o repositório; não dá para instalar pelo celular",
-    "sourceChanged": "A origem deste marketplace acabou de mudar. Escolha de novo o plugin para instalar."
+    "sourceChanged": "A origem deste marketplace acabou de mudar. Escolha de novo o plugin para instalar.",
+    "publicInstall": "Mercado público",
+    "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy revisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de uso."
   },
   "gotIt": "Entendi"
 }

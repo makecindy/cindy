@@ -10,7 +10,7 @@ import { PluginMarketIcon } from "./PluginMarketIcon";
 import { PluginToolChips } from "./PluginToolChips";
 import { PluginToolsDisclosure } from "./PluginDetailView";
 import {
-  pluginMarketFacts, pluginMarketOrigin, pluginMarketPublisherKey, pluginMarketSubtitle, pluginMarketTools,
+  pluginMarketFacts, pluginMarketOrigin, pluginMarketPublisherKey, pluginMarketShowsCommunityNotice, pluginMarketSubtitle, pluginMarketTools,
 } from "./pluginMarketCatalog";
 import type { PluginMarketDetailState, PluginMarketModel } from "./usePluginMarket";
 
@@ -56,9 +56,12 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
             <Text style={[styles.title, styles.shrink]}>{item.name}</Text>
             {origin ? <Text style={styles.badge}>{t("plugins.market.filter." + origin)}</Text> : null}
           </View>
-          <Text style={styles.note}>{pluginMarketSubtitle(item, t)}</Text>
+          {pluginMarketSubtitle(item) ? <Text style={styles.note}>{pluginMarketSubtitle(item)}</Text> : null}
         </View>
       </View>
+      {pluginMarketShowsCommunityNotice(item) ? (
+        <Text testID="plugins.market.communityNotice" style={styles.note}>{t("plugins.market.communityDisclaimer")}</Text>
+      ) : null}
       {pending ? (
         <View style={[styles.button, styles.secondary, styles.inline]} testID="plugins.market.detailProgress">
           <ActivityIndicator color={colors.textSecondary} />

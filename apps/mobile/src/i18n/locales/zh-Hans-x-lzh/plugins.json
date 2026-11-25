@@ -162,7 +162,8 @@
     "version": "版本",
     "showAll": "示全",
     "showLess": "收",
-    "identifier": "标识"
+    "identifier": "标识",
+    "author": "作者"
   },
   "demo": {
     "hint": "示范之资 · 不改真实设置"
@@ -178,7 +179,7 @@
   "management": {
     "checkResult": "核实之果",
     "manage": "理法器",
-    "update": "更之",
+    "updateTo": "更新至 v{{version}}",
     "uninstall": "卸之",
     "uninstallTitle": "卸 {{name}} 乎？",
     "uninstallBody": "将自 {{device}} 除此法器、其凭证与私有设置。作品库及旧有差事之内容皆存。",
@@ -310,8 +311,8 @@
       "nodeSecretOne": "本机 Node 程序可得已存之凭证一件"
     },
     "releaseChanged": "可用之版已变，请观更新后之版，再择安装。",
-    "sourceUnverified": "此机未示此自订之坊之库，不能自手机升之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑升之。",
-    "sourceChanged": "此坊之源方易，已止其升。请于电脑核此坊再试。",
+    "sourceUnverified": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
+    "sourceChanged": "此坊之源方易，已止此番更新。请于电脑核此坊再试。",
     "settingsUnavailable": "法器规制加载未成，请重载规制后再试。",
     "settingsResultUnknown": "此举之果尚未确认。请先重读机上之设置，再决是否呈之。",
     "settingsOperationFailed": "设置之举未竟，请察连接后再试。",
@@ -357,7 +358,7 @@
       "sourceChangedIsolated": "此番更新所出之源，与已装之版不同。旧名籍与数据隔离保留，须重新连接名籍。",
       "localFolder": "本地之匣",
       "repositoryMissingInstall": "此机未示此自订之坊之库，不能自手机纳之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑纳之。",
-      "repositoryMissingUpdate": "此机未示此自订之坊之库，不能自手机升之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑升之。",
+      "repositoryMissingUpdate": "此机未示此自订之坊之库，不能自手机更之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑更之。",
       "sourceChanged": "所请之源与汝择时异，不能于手机许之。请却之而复择。"
     },
     "sourceNotice": {
@@ -469,7 +470,9 @@
     "unconfirmedMismatch": "此番纳器之果未能确认；此机同名之法器或出自本地之卷、他版或他源，请就机核之。",
     "sourceUnverified": "此机未示此自订之坊之库，不能自手机纳之。请先于彼机更新 Cindy 并刷新此坊；若仍不可，请径于电脑纳之。",
     "sourceUnverifiedShort": "缺库之讯，不能自手机纳之",
-    "sourceChanged": "此坊之源方易，请复择所欲纳之法器。"
+    "sourceChanged": "此坊之源方易，请复择所欲纳之法器。",
+    "publicInstall": "公开市场",
+    "communityDisclaimer": "此法器由社区作者开发与维护，Cindy 已审核此版本，但无法保证其在所有使用情境下皆安全。"
   },
   "gotIt": "知矣"
 }

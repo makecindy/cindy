@@ -15,7 +15,7 @@ import { PluginNativeNotice } from "./PluginNotice.ios";
 import { PluginMarketIcon } from "./PluginMarketIcon";
 import { PluginToolChips } from "./PluginToolChips";
 import {
-  pluginMarketFacts, pluginMarketOrigin, pluginMarketPublisherKey, pluginMarketSubtitle, pluginMarketTools,
+  pluginMarketFacts, pluginMarketOrigin, pluginMarketPublisherKey, pluginMarketShowsCommunityNotice, pluginMarketSubtitle, pluginMarketTools,
 } from "./pluginMarketCatalog";
 import type { PluginMarketDetailViewProps } from "./PluginMarketDetailView";
 
@@ -90,9 +90,11 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
                     </Text>
                   ) : null}
                 </HStack>
-                {text(pluginMarketSubtitle(item, t))}
+                {pluginMarketSubtitle(item) ? text(pluginMarketSubtitle(item)) : null}
               </VStack>
             </HStack>
+            {pluginMarketShowsCommunityNotice(item)
+              ? text(t("plugins.market.communityDisclaimer"), "footnote", "plugins.market.communityNotice") : null}
             {pending ? (
               <HStack spacing={spacing.sm} testID="plugins.market.detailProgress"
                 modifiers={[frame({ maxWidth: Infinity, minHeight: 44 })]}>

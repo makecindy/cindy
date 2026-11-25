@@ -164,7 +164,8 @@
     "version": "Versão",
     "showAll": "Mostrar tudo",
     "showLess": "Mostrar menos",
-    "identifier": "Identificador"
+    "identifier": "Identificador",
+    "author": "Autor"
   },
   "demo": {
     "hint": "Dados de demonstração · Nenhuma configuração real é alterada"
@@ -180,7 +181,7 @@
   "management": {
     "checkResult": "Verificar resultado",
     "manage": "Gerir plugin",
-    "update": "Atualizar",
+    "updateTo": "Atualizar para v{{version}}",
     "uninstall": "Desinstalar",
     "uninstallTitle": "Desinstalar {{name}}?",
     "uninstallBody": "Esta ação remove o plugin, as respetivas credenciais e definições privadas de {{device}}. Os itens da biblioteca e o conteúdo das tarefas existentes são mantidos.",
@@ -312,7 +313,7 @@
       "nodeSecretOne": "O programa Node local pode receber uma credencial guardada"
     },
     "releaseChanged": "A versão disponível mudou. Reveja a versão atualizada antes de instalar.",
-    "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize diretamente a partir do computador.",
+    "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize o plugin diretamente a partir do computador.",
     "sourceChanged": "A origem deste mercado acabou de mudar e a atualização foi interrompida. Verifique o mercado no computador e tente novamente.",
     "settingsUnavailable": "Não foi possível carregar as definições do plugin. Recarregue as definições para tentar novamente.",
     "settingsResultUnknown": "Não foi possível confirmar o resultado da operação. Recarregue as definições do computador antes de voltar a submeter.",
@@ -359,7 +360,7 @@
       "sourceChangedIsolated": "Esta atualização vem de uma origem diferente da versão instalada. As contas e os dados existentes são arquivados separadamente; ligue novamente as suas contas após a atualização.",
       "localFolder": "Pasta local",
       "repositoryMissingInstall": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
-      "repositoryMissingUpdate": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize diretamente a partir do computador.",
+      "repositoryMissingUpdate": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível atualizar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, atualize o plugin diretamente a partir do computador.",
       "sourceChanged": "A origem deste pedido é diferente da que escolheu, por isso não pode ser permitido a partir do telemóvel. Recuse e escolha novamente."
     },
     "sourceNotice": {
@@ -471,7 +472,9 @@
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem. Verifique no computador.",
     "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
     "sourceUnverifiedShort": "Falta o repositório; não é possível instalar a partir do telemóvel",
-    "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar."
+    "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar.",
+    "publicInstall": "Mercado público",
+    "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização."
   },
   "gotIt": "Compreendido"
 }

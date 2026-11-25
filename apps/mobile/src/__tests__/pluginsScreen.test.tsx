@@ -874,6 +874,8 @@ it("binds update and uninstall to the selected physical installation", async () 
   expect(menu.nativeToolbar).toBe(true);
   expect(fixture.props.get("header").right).toBeUndefined();
   expect(menu.actions.map((a: any) => a.id)).toEqual(["update", "uninstall"]);
+  // The computer's label for the action ("Update to v{{version}}").
+  expect(menu.actions[0].title).toBe("plugins.management.updateTo");
   await act(async () => menu.onAction("update"));
   expect(controller.install).toHaveBeenCalledWith(market, plugin);
   await act(async () => menu.onAction("uninstall"));

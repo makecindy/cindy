@@ -983,7 +983,8 @@ function PluginDirectory() {
       ? [
           {
             id: "update",
-            title: t("plugins.management.update") + " · " + marketItem.version,
+            // The computer's own label for this action ("Update to v1.4.2").
+            title: t("plugins.management.updateTo", { version: marketItem.version }),
             disabled: !managementAvailable,
           },
         ]

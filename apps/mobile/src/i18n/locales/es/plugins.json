@@ -164,7 +164,8 @@
     "version": "Versión",
     "showAll": "Mostrar todo",
     "showLess": "Mostrar menos",
-    "identifier": "Identificador"
+    "identifier": "Identificador",
+    "author": "Autor"
   },
   "demo": {
     "hint": "Datos de demostración · No se cambia ninguna configuración real"
@@ -180,7 +181,7 @@
   "management": {
     "checkResult": "Comprobar resultado",
     "manage": "Administrar complemento",
-    "update": "Actualizar",
+    "updateTo": "Actualizar a v{{version}}",
     "uninstall": "Desinstalar",
     "uninstallTitle": "¿Desinstalar {{name}}?",
     "uninstallBody": "Esto elimina el complemento, sus credenciales y configuraciones privadas de {{device}}. Se conservan los elementos de la biblioteca y el contenido de las tareas existentes.",
@@ -312,7 +313,7 @@
       "nodeSecretOne": "El programa local Node puede recibir una credencial almacenada"
     },
     "releaseChanged": "La versión disponible cambió. Revisa la versión actualizada antes de instalar.",
-    "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza directamente en el ordenador.",
+    "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
     "sourceChanged": "El origen de este mercado acaba de cambiar y la actualización se ha detenido. Revisa el mercado en el ordenador y vuelve a intentarlo.",
     "settingsUnavailable": "No se pudo cargar la configuración del complemento. Vuelve a cargar la configuración para intentarlo de nuevo.",
     "settingsResultUnknown": "No se pudo confirmar el resultado de la operación. Vuelve a cargar la configuración de la computadora antes de enviar de nuevo.",
@@ -359,7 +360,7 @@
       "sourceChangedIsolated": "Esta actualización procede de un origen distinto al de la versión instalada. Las cuentas y los datos existentes se archivan por separado; vuelve a conectar tus cuentas después de actualizar.",
       "localFolder": "Carpeta local",
       "repositoryMissingInstall": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
-      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza directamente en el ordenador.",
+      "repositoryMissingUpdate": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede actualizar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, actualiza el complemento directamente en el ordenador.",
       "sourceChanged": "El origen de esta solicitud no coincide con el que elegiste, así que no se puede permitir desde el teléfono. Recházala y vuelve a elegir."
     },
     "sourceNotice": {
@@ -471,7 +472,9 @@
     "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador.",
     "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
     "sourceUnverifiedShort": "Falta el repositorio; no se puede instalar desde el teléfono",
-    "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar."
+    "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar.",
+    "publicInstall": "Mercado público",
+    "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso."
   },
   "gotIt": "Entendido"
 }
