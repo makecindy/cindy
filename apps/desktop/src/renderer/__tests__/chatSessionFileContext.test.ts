@@ -782,14 +782,25 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
         );
       };
 
-      // Two component blocks with the identical image node: same text, different sections.
-      const imageBlock = (src: string) =>
+      // #11513: the existing same-address case checked selection only. Verify that
+      // the production viewer reads the selected component's caption (unit, in memory).
+      const imageBlock = (src: string, caption: string) =>
         '```cindy-ui\n' +
-        JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'pic', kind: 'image', props: { src, alt: 'same' } }) +
+        JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'pic', kind: 'image', props: { src, alt: 'same', caption } }) +
         '\n```';
-      const blocks = mount(`${imageBlock(a)}\n\nbetween\n\n${imageBlock(a)}`);
+      const before = imageBlock(a, 'Before <b>literal</b>');
+      const after = imageBlock(a, 'After');
+      const blocks = mount(`${before}\n\n${before}\n\n${after}\n\n![Control](${b})`);
       fireEvent.click(screen.getAllByRole('button', { name: 'same' })[1]!);
-      expect(screen.getByText('2 / 2')).toBeTruthy();
+      expect(screen.getByText('2 / 4')).toBeTruthy();
+      const viewerCaption = () => document.querySelector('[data-lightbox-layer] footer p');
+      expect(viewerCaption()?.textContent).toBe('Before <b>literal</b>');
+      expect(viewerCaption()?.childElementCount).toBe(0);
+      const next = screen.getByRole('button', { name: i18n.t('chat.media.nextImage') });
+      fireEvent.click(next);
+      expect(viewerCaption()?.textContent).toBe('After');
+      fireEvent.click(next);
+      expect(viewerCaption()).toBeNull();
       blocks.unmount();
 
       const first = mount(repeated);
