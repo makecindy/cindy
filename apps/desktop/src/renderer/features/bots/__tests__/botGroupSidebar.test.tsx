@@ -435,6 +435,30 @@ describe('TeammatesSection group chats', () => {
     expect(order()).toEqual(['小满', '周末出游', '咪咪']);
   });
 
+  // #10535 · unit: render the real sidebar and check the visible row order.
+  // The single-pin case above cannot expose reordering between two pins.
+  it.each([
+    { case: 'most recent pin', mimiPin: 1, xiaomanPin: 2, first: '小满', second: '咪咪' },
+    { case: 'teammate ID on a tie', mimiPin: 2, xiaomanPin: 2, first: '咪咪', second: '小满' },
+  ])('keeps two pinned teammates ordered by $case when activity changes', async ({ mimiPin, xiaomanPin, first, second }) => {
+    const mimi = { ...bot('mimi', '咪咪'), pinnedAt: mimiPin, lastMessageAt: second === '咪咪' ? 20 : 10 };
+    const xiaoman = { ...bot('xiaoman', '小满'), pinnedAt: xiaomanPin, lastMessageAt: second === '小满' ? 20 : 10 };
+    mocks.profiles = [xiaoman, mimi];
+    const view = await renderSidebar();
+    const expectPinnedOrder = () => {
+      const firstRow = screen.getByRole('button', { name: new RegExp(first) });
+      const secondRow = screen.getByRole('button', { name: new RegExp(second) });
+      expect(firstRow.compareDocumentPosition(secondRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    };
+    expectPinnedOrder();
+
+    mocks.profiles = [xiaoman, mimi].map(profile =>
+      profile.name === second ? { ...profile, lastMessageAt: 30, lastMessagePreview: 'New reply' } : profile);
+    view.rerender(<TeammatesSection />);
+    expect(screen.getByText('New reply')).toBeTruthy();
+    expectPinnedOrder();
+  });
+
   it('keeps joined groups visible when the account has no local teammates', async () => {
     mocks.profiles = [];
     mocks.groups = [group()];
