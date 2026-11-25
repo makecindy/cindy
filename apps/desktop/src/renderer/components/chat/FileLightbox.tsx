@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { PreviewHeader, PreviewFooter } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import { claimPreviewWindowEscape } from './previewWindowKeyOwnership';
 import { ActivePreviewCollection } from './AttachmentCollectionContext';
 import { useTranslation } from 'react-i18next';
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
@@ -74,15 +75,10 @@ export function FileLightbox({
   }, [onClose, triggerRef]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (
-        event.key === 'Escape' &&
-        !event.defaultPrevented &&
-        !document.fullscreenElement &&
-        !document.querySelector('[data-radix-popper-content-wrapper]')
-      ) {
-        event.preventDefault();
-        close();
-      }
+      if (event.key !== 'Escape' || document.fullscreenElement ||
+          document.querySelector('[data-radix-popper-content-wrapper]')) return;
+      // Only the foreground preview closes on this key.
+      if (claimPreviewWindowEscape(event, overlay.current)) close();
     };
     // Media viewers own their own keyboard scope.
     if (local && ['image', 'video', 'audio', 'model'].includes(kind)) return;

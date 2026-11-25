@@ -1,4 +1,3 @@
-import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 /**
  * MermaidLightbox
@@ -25,6 +24,7 @@ import {
   PreviewButton as ToolbarButton,
 } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import { claimPreviewWindowEscape } from './previewWindowKeyOwnership';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { Check, Copy, Minus, Pen, Plus, Maximize } from 'lucide-react';
@@ -129,10 +129,8 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   // Esc closes
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
-      const overlay = overlayRef.current;
-      if (!overlay || isLightboxCovered(overlay)) return;
-      e.preventDefault();
+      if (e.key !== 'Escape' || e.isComposing) return;
+      if (!claimPreviewWindowEscape(e, overlayRef.current)) return;
       e.stopPropagation();
       handleClose();
     };

@@ -1,5 +1,9 @@
 import { PreviewHeader, PreviewButton } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import {
+  claimPreviewWindowEscape,
+  previewWindowOwnsShortcut,
+} from './previewWindowKeyOwnership';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 /**
@@ -121,6 +125,7 @@ export function ToolPayloadLightbox({
   const [draftText, setDraftText] = useState(() => (payload.kind === 'text' ? payload.text : ''));
   const isClosingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const isEditingText = payload.kind === 'text' && textEdit !== undefined;
   const diffFiles = payload.kind === 'diff' ? payload.files : [];
   const singleDiffFile = diffFiles.length === 1 ? diffFiles[0] : null;
@@ -166,7 +171,8 @@ export function ToolPayloadLightbox({
       const primaryModifier = isMac ? event.metaKey : event.ctrlKey;
       const secondaryModifier = isMac ? event.ctrlKey : event.metaKey;
       if (!primaryModifier || secondaryModifier || event.isComposing) return;
-
+      // A non-modal preview must not pull focus back from the conversation.
+      if (!previewWindowOwnsShortcut(event, panelRef.current)) return;
       const textarea = textareaRef.current;
       if (!textarea) return;
       event.preventDefault();
@@ -184,10 +190,13 @@ export function ToolPayloadLightbox({
     handleClose();
   }, [draftText, handleClose, payload.kind, textEdit]);
 
-  // Esc key
+  // Esc key — only the foreground preview may consume it, and it marks the
+  // event so an older preview with unsaved edits stays open.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.key !== 'Escape') return;
+      if (!claimPreviewWindowEscape(e, panelRef.current)) return;
+      handleClose();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -273,6 +282,7 @@ export function ToolPayloadLightbox({
   const overlay = (
     <PreviewWindow
       ariaLabel={displayName}
+      panelRef={panelRef}
       onBackgroundClick={handleClose}
       layerAttrs={{ 'data-tool-payload-lightbox-overlay': '' }}
       panelAttrs={{ 'data-tool-payload-lightbox-card': '' }}

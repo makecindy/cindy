@@ -25,6 +25,15 @@ vi.mock('react-i18next', () => ({
 }));
 
 import {
+  getActivePreviewFindHost,
+} from '@/components/find-in-page/findInPageOwnership';
+import {
+  claimPreviewWindowEscape,
+  previewOwnsKeyboardFocus,
+  previewWindowOwnsEscape,
+  previewWindowOwnsShortcut,
+} from '../previewWindowKeyOwnership';
+import {
   clampPreviewWindowRect,
   initialPreviewWindowRect,
   movePreviewWindowRect,
@@ -109,6 +118,24 @@ describe('preview window geometry', () => {
       expect(rect.left + rect.width).toBeLessThanOrEqual(viewport.width);
       expect(rect.top + rect.height).toBeLessThanOrEqual(viewport.height);
       expect(rect.width).toBeGreaterThan(0);
+      expect(rect.height).toBeGreaterThan(0);
+    }
+  });
+
+  // Regression: shrinking the main window used to leave the footer and resize
+  // handle below the bottom edge, because height was capped to the full
+  // viewport while top was still pinned to the 40px title-bar strip.
+  it('keeps the whole window on screen after the viewport shrinks', () => {
+    const opened = initialPreviewWindowRect({ width: 1280, height: 800 });
+    for (const viewport of [
+      { width: 1280, height: 600 },
+      { width: 900, height: 420 },
+      { width: 400, height: 320 },
+    ]) {
+      const rect = clampPreviewWindowRect(opened, viewport);
+      expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.top + rect.height).toBeLessThanOrEqual(viewport.height);
+      expect(rect.left + rect.width).toBeLessThanOrEqual(viewport.width);
       expect(rect.height).toBeGreaterThan(0);
     }
   });
@@ -203,5 +230,45 @@ describe('PreviewWindow shell', () => {
     expect(onBackgroundClick).not.toHaveBeenCalled();
     fireEvent.click(panel);
     expect(onBackgroundClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('preview keyboard ownership', () => {
+  const key = (init: KeyboardEventInit = {}) =>
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...init });
+
+  it('gives Escape only to the foreground preview and marks it consumed', () => {
+    render(<PreviewWindow ariaLabel="older"><div>older</div></PreviewWindow>);
+    const older = document.querySelectorAll<HTMLElement>('[data-preview-window-panel]')[0];
+    render(<PreviewWindow ariaLabel="newer"><div>newer</div></PreviewWindow>);
+    const newer = document.querySelectorAll<HTMLElement>('[data-preview-window-panel]')[1];
+    const event = key();
+    expect(previewWindowOwnsEscape(event, older)).toBe(false);
+    expect(previewWindowOwnsEscape(event, newer)).toBe(true);
+    expect(claimPreviewWindowEscape(event, newer)).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+    expect(previewWindowOwnsEscape(event, newer)).toBe(false);
+  });
+
+  it('gives app shortcuts to the preview only while focus is inside it', () => {
+    const { panel } = renderShell();
+    const composer = screen.getByLabelText('composer') as HTMLInputElement;
+    panel.focus();
+    expect(previewOwnsKeyboardFocus(panel)).toBe(true);
+    expect(previewWindowOwnsShortcut(key({ key: 'f', ctrlKey: true }), panel)).toBe(true);
+    composer.focus();
+    expect(previewOwnsKeyboardFocus(panel)).toBe(false);
+    expect(previewWindowOwnsShortcut(key({ key: 'f', ctrlKey: true }), panel)).toBe(false);
+    // The foreground preview still owns Escape while focus is in the composer.
+    expect(previewWindowOwnsEscape(key(), panel)).toBe(true);
+  });
+
+  it('releases preview find ownership when focus moves to the conversation', () => {
+    const { panel } = renderShell();
+    panel.setAttribute('data-text-lightbox-search-host', '');
+    panel.focus();
+    expect(getActivePreviewFindHost()).toBe(panel);
+    (screen.getByLabelText('composer') as HTMLInputElement).focus();
+    expect(getActivePreviewFindHost()).toBeNull();
   });
 });

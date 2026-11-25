@@ -1,5 +1,6 @@
 import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import { claimPreviewWindowEscape } from './previewWindowKeyOwnership';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -148,8 +149,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
   // recently-closed context menu doesn't also dismiss the lightbox.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.key !== 'Escape' || document.fullscreenElement) return;
+      if (e.key !== 'Escape' || document.fullscreenElement) return;
       if (performance.now() - lastMenuCloseAt.current < 150) return;
+      // Only the foreground preview consumes Escape; older previews stay open.
+      if (!claimPreviewWindowEscape(e, overlayRef.current)) return;
       handleClose();
     };
     document.addEventListener('keydown', handler);

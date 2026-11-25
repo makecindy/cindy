@@ -173,6 +173,36 @@ describe('FindInPageBar', () => {
     vi.unstubAllGlobals();
   });
 
+  // Non-modal previews: Ctrl/Cmd+F from the conversation must search the page,
+  // not hijack the shortcut into the preview's own find bar (review P1).
+  it('keeps page find when the shortcut comes from behind a preview', async () => {
+    const page = document.createElement('main');
+    page.append('background apple');
+    const composer = document.createElement('input');
+    page.append(composer);
+    const card = document.createElement('section');
+    card.dataset.textLightboxCard = '';
+    card.dataset.textLightboxSearchHost = '';
+    card.dataset.lightboxLayer = '';
+    const content = document.createElement('article');
+    content.dataset.textLightboxSearchRoot = '';
+    content.textContent = 'document pear';
+    card.append(content);
+    page.append(card);
+    document.body.append(page);
+    composer.focus();
+
+    render(<FindInPageBar />);
+    await act(async () => {
+      expect(mocks.shortcutHandler?.(new KeyboardEvent('keydown'))).toBe(true);
+      await Promise.resolve();
+    });
+    const input = screen.getByRole('searchbox') as HTMLInputElement;
+    expect(card.contains(input)).toBe(false);
+    fireEvent.change(input, { target: { value: 'apple' } });
+    expect(screen.getByText('1/1')).toBeTruthy();
+  });
+
   it('searches visible page text without matching the query input or hidden content', async () => {
     const page = document.createElement('main');
     page.append('foo');

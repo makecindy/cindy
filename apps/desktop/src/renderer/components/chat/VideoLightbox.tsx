@@ -36,6 +36,7 @@ import { registerMedia } from '@/lib/mediaPlaybackBus';
 import { useVideoContextMenu } from './useVideoContextMenu';
 import { PreviewHeader, PreviewFooter } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import { claimPreviewWindowEscape } from './previewWindowKeyOwnership';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 interface VideoLightboxProps {
@@ -94,6 +95,7 @@ function VideoLightboxContent({
   const [failed, setFailed] = useState(false);
   const isClosingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
   const lastMenuCloseAt = useRef(0);
 
@@ -127,8 +129,10 @@ function VideoLightboxContent({
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.key !== 'Escape' || document.fullscreenElement) return;
+      if (e.key !== 'Escape' || document.fullscreenElement) return;
       if (performance.now() - lastMenuCloseAt.current < 150) return;
+      // Multiple non-modal previews can be open; only the foreground one closes.
+      if (!claimPreviewWindowEscape(e, panelRef.current)) return;
       handleClose();
     };
     document.addEventListener('keydown', handler);
@@ -159,6 +163,7 @@ function VideoLightboxContent({
     <PreviewWindow
       ariaLabel={filename ?? previewSourceName(src, t('attachmentPreview.video'))}
       initialFocusRef={videoRef}
+      panelRef={panelRef}
       onBackgroundClick={() => {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         handleClose();

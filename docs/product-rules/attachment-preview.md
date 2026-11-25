@@ -12,7 +12,8 @@ Desktop 非模态预览的 Tab 不圈禁在预览窗内（DESIGN.md §14.2）；
 再关闭查找，最后才关闭文档；同一次按键不能跨层关闭。Markdown 阅读态的 Ctrl/Cmd+F 查找正文，
 被全屏媒体或嵌套查看器覆盖时不切换为源码。源码和纯文本使用预览内的查找栏，查找快捷键跟随
 用户改绑；预览处于前景时背景编辑器、项目搜索和语音输入让路，焦点回到背景后由背景自己处理，
-不能抢焦点或被同一次 Esc 关闭。
+不能抢焦点或被同一次 Esc 关闭。一次 Esc 只关闭最上层那一个预览，旧预览（含未保存编辑）保持打开；
+查找、全选等快捷键与查找接管令牌跟随实际焦点，焦点在背景消息栏时归背景，不因预览仍挂载而被抢走。
 回归见 `TextLightboxInteraction.test.tsx` 与
 `apps/desktop/scripts/fixtures/markdown-preview-find/ui-page.mjs`。
 

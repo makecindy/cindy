@@ -1,5 +1,6 @@
 import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
 import { PreviewWindow } from './PreviewWindow';
+import { previewOwnsKeyboardFocus, previewWindowOwnsEscape } from './previewWindowKeyOwnership';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
 import { openHtmlFileByPreference } from './messageLinkActions';
 import { DocSearchBar } from '@/features/cc-agent/workdir-browse/DocSearchBar';
@@ -242,11 +243,14 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
 
   // Rendered Markdown delegates to the shared search host. Source/plain text
   // owns editor search; the claim makes global window-capture find yield first.
-  useEffect(acquireFindInPage, []);
+  // The claim follows actual focus: Ctrl/Cmd+F in the conversation behind an
+  // open preview still opens the ordinary page search.
+  useEffect(() => acquireFindInPage(() => previewOwnsKeyboardFocus(overlayRef.current)), []);
   const isCovered = useCallback(() => !overlayRef.current || isLightboxCovered(overlayRef.current) ||
     overlayRef.current.contains(document.fullscreenElement), []);
   useAppShortcut('find-in-page', (event) => {
     if (event.defaultPrevented || event.keyCode === 229 || isCovered() ||
+        !previewOwnsKeyboardFocus(overlayRef.current) ||
         (renderable.kind === 'markdown' && !showSource)) return false;
     setShowSource(true);
     setSearch(true);
@@ -276,7 +280,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     const onEscape = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       const overlay = overlayRef.current;
-      if (!overlay || isLightboxCovered(overlay)) return;
+      if (!overlay || !previewWindowOwnsEscape(e, overlay)) return;
       if (isPreviewPopupKeyEvent(e, overlay)) return;
       const ownsNativeFullscreen = overlay.contains(document.fullscreenElement);
       // Chromium may exit fullscreen before delivering this same keydown,
@@ -291,6 +295,8 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         setSearch(false);
         return;
       }
+      // One Escape closes only this (foreground) preview.
+      e.preventDefault();
       handleClose();
     };
     document.addEventListener('keydown', onEscape);

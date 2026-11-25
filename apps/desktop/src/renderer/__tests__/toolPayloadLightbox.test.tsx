@@ -119,6 +119,49 @@ describe('ToolPayloadLightbox editable text mode', () => {
     },
   );
 
+  // Regression (review P1): a non-modal preview must not pull focus back from
+  // the conversation when the user selects text in the message bar.
+  it('leaves Ctrl/Cmd+A to a focused background input', () => {
+    vi.useFakeTimers();
+    render(
+      <Tooltip.Provider>
+        <input aria-label="composer" />
+        <ToolPayloadLightbox
+          payload={{ kind: 'text', title: 'Pasted Text', text: 'preview text' }}
+          onClose={vi.fn()}
+        />
+      </Tooltip.Provider>,
+    );
+    const composer = screen.getByLabelText('composer') as HTMLInputElement;
+    composer.focus();
+    expect(fireEvent.keyDown(document, { key: 'a', metaKey: true })).toBe(true);
+    expect(document.activeElement).toBe(composer);
+
+    // Focus inside the preview still selects its own text.
+    const previewText = screen.getByRole('textbox', { name: 'Pasted Text' });
+    previewText.focus();
+    expect(fireEvent.keyDown(document, { key: 'a', metaKey: true })).toBe(false);
+    expect(document.activeElement).toBe(previewText);
+  });
+
+  // Regression (review P1): two non-modal previews can be open; one Escape must
+  // close only the foreground one, never an older one with unsaved edits.
+  it('closes only the foreground preview on one Escape', () => {
+    vi.useFakeTimers();
+    const older = vi.fn();
+    const newer = vi.fn();
+    render(
+      <Tooltip.Provider>
+        <ToolPayloadLightbox payload={{ kind: 'text', title: 'Older', text: 'one' }} onClose={older} />
+        <ToolPayloadLightbox payload={{ kind: 'text', title: 'Newer', text: 'two' }} onClose={newer} />
+      </Tooltip.Provider>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    act(() => vi.advanceTimersByTime(200));
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(older).not.toHaveBeenCalled();
+  });
+
   it('keeps ordinary text and JSON payloads read-only', () => {
     vi.useFakeTimers();
     const { unmount } = render(

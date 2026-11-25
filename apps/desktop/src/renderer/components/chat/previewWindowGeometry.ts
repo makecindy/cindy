@@ -57,16 +57,27 @@ export function clampPreviewWindowRect(
 ): PreviewWindowRect {
   const vw = Math.max(1, Math.round(viewport.width));
   const vh = Math.max(1, Math.round(viewport.height));
-  const width = Math.round(clamp(rect.width, Math.min(PREVIEW_WINDOW_MIN_WIDTH, vw), vw));
-  const height = Math.round(clamp(rect.height, Math.min(PREVIEW_WINDOW_MIN_HEIGHT, vh), vh));
   const side = gutter(vw);
-  const maxLeft = Math.max(side, vw - width - side);
-  const maxTop = Math.max(TOP_MARGIN, vh - height - side);
+  const topMargin = Math.min(TOP_MARGIN, Math.max(0, vh - side - 1));
+  const minWidth = Math.min(PREVIEW_WINDOW_MIN_WIDTH, vw);
+  const minHeight = Math.min(PREVIEW_WINDOW_MIN_HEIGHT, vh);
+
+  // Clamp the position first, still leaving room for the minimum window.
+  const maxLeft = Math.max(side, vw - minWidth - side);
+  const maxTop = Math.max(topMargin, vh - minHeight - side);
+  const left = Math.round(clamp(rect.left, side, maxLeft));
+  const top = Math.round(clamp(rect.top, topMargin, maxTop));
+
+  // Deduct the top strip and the far-side gutter before sizing. Limiting height
+  // to the full viewport while pinning top >= 40 pushed the footer and resize
+  // handle off the bottom edge after the main window shrank.
+  const maxWidth = Math.max(1, vw - left - side);
+  const maxHeight = Math.max(1, vh - top - side);
   return {
-    left: Math.round(clamp(rect.left, side, maxLeft)),
-    top: Math.round(clamp(rect.top, TOP_MARGIN, maxTop)),
-    width,
-    height,
+    left,
+    top,
+    width: Math.round(clamp(rect.width, Math.min(minWidth, maxWidth), maxWidth)),
+    height: Math.round(clamp(rect.height, Math.min(minHeight, maxHeight), maxHeight)),
   };
 }
 
