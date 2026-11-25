@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -58,6 +58,9 @@ import {
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsSubpageScroll } from './useSettingsSubpageScroll';
 
 const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -139,7 +142,7 @@ function WeightInput({ value, label, onCommit }: { value: number; label: string;
   );
 }
 
-export function ModelGroupsSection() {
+export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { confirm } = useConfirmDialog();
@@ -157,6 +160,14 @@ export function ModelGroupsSection() {
   // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const [view, setView] = useState<View>({ kind: 'list' });
+  const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
+  const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
+  const subpageOpen = !!(route ?? sourceRoute);
+  const { entry, activation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (entry?.tab === 'model-groups') setView({ kind: 'list' });
+  }, [entry, activation]);
+  const captureScroll = useSettingsSubpageScroll(scrollRef, subpageOpen ? 1 : 0, activation);
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -191,19 +202,22 @@ export function ModelGroupsSection() {
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
 
+  const openRoute = (id: string) => {
+    captureScroll();
+    setView({ kind: 'route', id });
+  };
   const addRoute = async () => {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
-    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
+    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) openRoute(route.id);
   };
   const back = () => setView({ kind: 'list' });
+  useSettingsSubpageBack(subpageOpen ? back : null);
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
-  const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
-  if (view.kind === 'source' && sourceRoute) {
+  if (sourceRoute) {
     return <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
   }
-  const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
-  if (view.kind === 'route' && route) {
+  if (route) {
     const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
       const candidates = [...current.candidates];
       const [item] = candidates.splice(index, 1);
@@ -492,7 +506,7 @@ export function ModelGroupsSection() {
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
       <ModelGroupsOverview config={shownConfig}
-        onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) setView({ kind: 'route', id }); }} />
+        onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) openRoute(id); }} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
@@ -517,11 +531,11 @@ export function ModelGroupsSection() {
               title={item.name}
               hint={routeSummary(item)}
               chevron
-              onClick={() => setView({ kind: 'route', id: item.id })}
+              onClick={() => openRoute(item.id)}
             />
           ))}
           {sourceRoutes.map((item) => (
-            <SourceRouteRow key={item.id} route={item} config={config} options={sourceOptions} onOpen={() => setView({ kind: 'source', id: item.id })} />
+            <SourceRouteRow key={item.id} route={item} config={config} options={sourceOptions} onOpen={() => { captureScroll(); setView({ kind: 'source', id: item.id }); }} />
           ))}
           <ProviderAllocationRows config={config} />
           {userRoutes.length === 0 && sourceRoutes.length === 0 && (

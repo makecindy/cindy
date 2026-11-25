@@ -535,6 +535,12 @@ export function buildPiSubscriptionNativeProviders(
         ];
       }),
     );
+    if (sourceProviderId === 'openai') {
+      // A saved ChatGPT selection may include the namespace even when the catalog uses wire IDs.
+      for (const model of models) {
+        if (!model.id.includes('/')) modelIdAliases[`chatgpt/${model.id}`] ??= model.id;
+      }
+    }
     providers.push({
       id: piProviderId,
       sourceProviderId,

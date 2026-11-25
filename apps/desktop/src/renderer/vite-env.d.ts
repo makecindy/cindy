@@ -1253,7 +1253,7 @@ interface ElectronAPI {
   windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
   onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
-  windowClose: () => void;
+  windowClose: (once?: 'quit' | 'tray' | 'minimize') => void;
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。renderer 侧统一经 useManualWindowDrag
@@ -1302,6 +1302,10 @@ interface ElectronAPI {
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
   setClassicalReplyStyle: (style: string) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
+  /** Main window only; the cloud login window has its own cloudLoginWindow. */
+  cloudSettings?: import('../shared/cloudSettingsClient').CloudSettingsRendererApi;
+  cloudLoginWindow?: import('../shared/cloudLoginWindow').CloudLoginWindowApi;
+  hostSettings?: import('../shared/hostSettings').HostSettingsRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
   // systemNetworkErrorToast.ts 负责节流 + 多语言 toast。
@@ -6417,7 +6421,8 @@ interface ElectronAPI {
     }>;
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      /** `acp`: a plugin-engine task's `/` menu (the Skills that engine expands). */
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       params: {
         workingDir?: string;
         remoteHostId?: string;
@@ -6579,6 +6584,7 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
         workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;

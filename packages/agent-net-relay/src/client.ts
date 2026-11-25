@@ -429,10 +429,20 @@ export class AgentNetUplink extends EventEmitter {
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')); }, 10_000);
       unrefTimer(timer);
       let established = false;
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); ws.terminate(); };
+      // Why this side ended an established connection (a frame it refused); goes with 'close' so the host log can say so.
+      let ended: string | undefined;
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        else ended ??= /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'AGENT_NET_UPLINK_FAILED';
+        ws.terminate();
+      };
       ws.on('error', fail);
       ws.once('unexpected-response', (_request, response) => { response.resume(); fail(new Error('AGENT_NET_UPGRADE_' + response.statusCode)); });
-      ws.on('close', (code) => { clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code)); uplink.emit('close', code); });
+      ws.on('close', (code) => {
+        clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code));
+        if (ended) uplink.emit('close', code, ended); else uplink.emit('close', code);
+      });
       ws.on('message', (raw, binary) => {
         const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
         if (binary) {

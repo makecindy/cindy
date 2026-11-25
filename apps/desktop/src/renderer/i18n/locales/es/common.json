@@ -1367,6 +1367,7 @@
     "openPermissionInNewWindow": "Abrir en otra ventana"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no permite cambiar de Harness. Elige un modelo en su Harness actual o crea otra tarea SSH con el Harness que necesitas.",
@@ -8842,6 +8843,7 @@
             "message_body": "cuerpo del mensaje",
             "tool_body": "resultado de la herramienta",
             "sidebar_navigation": "navegación lateral",
+            "workdir_menu": "menú del directorio de trabajo",
             "session_menu": "menú de la tarea",
             "settings_section": "página de ajustes",
             "composer_completion": "autocompletado de entrada",
@@ -12404,8 +12406,8 @@
       "footnote": "Esto se incorpora al contexto de identidad del amigo. Los ajustes rápidos de personalidad se guardan por separado y se conservan cuando cambia este texto."
     },
     "welcome": {
-      "generic": "Hola, soy {{name}}. Dime lo que necesites de ahora en adelante; mientras tanto, me iré ubicando.",
-      "withRole": "Hola, soy {{name}}: {{description}}. Solo dime qué necesitas."
+      "generic": "Hola, soy {{name}}. Dime lo que necesites.",
+      "withUser": "Hola, {{userName}}, soy {{name}}. Dime lo que necesites."
     },
     "invitation": {
       "title": "Preparándose para encontrarse",
@@ -12932,6 +12934,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Voces del sistema",
+        "myVoices": "Mis voces",
+        "refreshMyVoices": "Actualizar mis voces",
+        "callMode": "Modo de llamada",
+        "messageReadAloud": "Lectura de mensajes en voz alta",
+        "callVoice": "Voz para llamadas en tiempo real",
+        "readAloudVoice": "Voz de lectura",
+        "readAloudHint": "Pulsa el altavoz bajo una respuesta de texto para escucharla con esta voz.",
+        "resetReadAloud": "Restablecer los ajustes de lectura",
+        "title": "Audio en tiempo real",
+        "add": "Añadir modelos de audio en tiempo real",
+        "off": "Usar síntesis de voz"
+      },
       "openConversation": "Abrir conversación",
       "inCallWith": "En llamada con {{name}}",
       "showDetails": "Mostrar transcripción de la llamada",
@@ -12953,7 +12969,7 @@
       "settingsTitle": "Voz",
       "openSettings": "Configuración de voz",
       "startConversation": "Iniciar conversación de voz",
-      "settingsHint": "Elige el modelo de síntesis de voz y la voz de este amigo y luego inicia una conversación de voz desde el editor de mensajes.",
+      "settingsHint": "Cuando las llamadas usan síntesis de voz, comparten el modelo y la voz de abajo con la lectura de mensajes.",
       "previewNeedsChat": "Inicia una conversación con este amigo para escuchar una muestra de voz.",
       "voiceId": "ID de voz",
       "manualVoice": "Ingresa un ID de voz",
@@ -15437,6 +15453,7 @@
       "label_many": "{{count}} nuevos mensajes"
     },
     "messageNavRail": {
+      "you": "Tú",
       "aria": "Navegación de prompts",
       "jumpAria": "Ir al prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} archivo adjunto",
@@ -15594,6 +15611,7 @@
       "gatewayProxyTokenInvalid": "Las credenciales de Cindy AI ya no son válidas. Haz clic en Reintentar. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "gatewayProxyTokenInvalidNoRetry": "Las credenciales de Cindy AI ya no son válidas. Si vuelve a ocurrir, cierra sesión y vuelve a iniciarla",
       "modelAccessDenied": "La cuenta del proveedor no puede acceder a este modelo. Selecciona otro modelo o verifica el acceso con el proveedor",
+      "providerSafetyRefusal": "La política de seguridad del proveedor del modelo bloqueó esta respuesta. Ajusta tu solicitud antes de volver a enviarla",
       "silentStopContinue": "Continuar",
       "silentStopContinueTitle": "Continuar la tarea actual",
       "piTransportClosed": "Se interrumpió la conexión con Pi remoto (se cerró el canal SSH). La tarea remota sigue en ejecución: vuelve a conectarte para continuar.",
@@ -18090,6 +18108,7 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
+      "boundPluginEngineRecovery": "La automatización no se ejecutó porque la tarea vinculada usa un motor de complemento. Vuelve a usar un motor integrado en esa tarea o vincula la automatización a una tarea que lo utilice.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",

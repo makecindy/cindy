@@ -1053,6 +1053,20 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
       entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
   });
+
+  it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Lead', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [],
+    };
+    const result = await submit({ entry, modelGroupRoute, collab: { enabled: true, worker: 'codex' } });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ model: modelId, providerId });
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(
+      expect.any(String), { type: 'route', id: 'r1' }, entry === 'send' ? modelGroupRoute.route : modelGroupRoute,
+    );
+  });
+
   // model-groups.md §6.3 / unit：远程控制另一台电脑时由那台的模式选路；那台建成任务后，记录与说明都请那台写，
   // 不写进本机的撞配额记录。失效后果：本机记下一个不存在的任务，或那台的任务没有说明、撞配额不提议。
   it.each(['send', 'goal'] as const)('asks the controlled computer to record its model group pick for %s', async (entry) => {

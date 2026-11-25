@@ -1,4 +1,6 @@
 import { ipcMain, net } from 'electron';
+import { createHmac, randomBytes } from 'node:crypto';
+import { OverrideSettingsError, type OverrideSettingsCommitOptions } from './maker-host/override-settings-file.js';
 
 import {
   captureImAccountGeneration,
@@ -6,9 +8,10 @@ import {
   isImAccountGenerationCurrent,
   runInImAccountGeneration,
 } from './im/accountBoundary';
-import { ownerScopedImSecrets } from './im/ownerScopedStorage';
+import { ownerScopedImSecrets, removeOwnerScopedImSecretStrict } from './im/ownerScopedStorage';
 import { createLogger } from './logger';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
+import { registerCloudDomainCall } from './host-settings/managementCalls.js';
 
 const log = createLogger('wecom-group-notification');
 const WEBHOOK_SECRET_NAME = 'wecom-group-webhook-url';
@@ -19,6 +22,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const MAX_MARKDOWN_BYTES = 4_000;
 const TEST_MESSAGE_INVALID = 'WECOM_GROUP_TEST_MESSAGE_INVALID';
+const preferenceRevisionKey = randomBytes(32);
 
 export interface WecomGroupNotificationState {
   configured: boolean;
@@ -31,7 +35,7 @@ export interface WecomGroupNotificationPublisher {
 }
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type SecretStore = Pick<typeof ownerScopedImSecrets, 'read' | 'write' | 'remove'>;
+type SecretStore = Pick<typeof ownerScopedImSecrets, 'read' | 'write' | 'remove'> & Partial<Pick<typeof ownerScopedImSecrets, 'readResult'>>;
 
 function parseWebhookUrl(raw: string): URL {
   const trimmed = raw.trim();
@@ -130,6 +134,47 @@ export class WecomGroupNotificationService implements WecomGroupNotificationPubl
     private readonly fetchImpl: FetchLike = (input, init) => net.fetch(input, init),
     private readonly secrets: SecretStore = ownerScopedImSecrets,
   ) {}
+
+  private readPreferenceSecret(name: string): string | null {
+    if (!this.secrets.readResult) return this.secrets.read(name);
+    const result = this.secrets.readResult(name);
+    if (result.kind === 'error') throw new OverrideSettingsError('UNREADABLE');
+    return result.kind === 'value' ? result.value : null;
+  }
+
+  private enabledSnapshot(webhook: string | null, override: string | null) {
+    if (!webhook) return { status: 'unavailable' as const, revision: null };
+    try { parseWebhookUrl(webhook); } catch { return { status: 'unreadable' as const, revision: null }; }
+    if (override !== null && override !== 'true' && override !== 'false') return { status: 'unreadable' as const, revision: null };
+    return { status: 'ready' as const,
+      revision: createHmac('sha256', preferenceRevisionKey).update(JSON.stringify([this.configGeneration, webhook, override])).digest('base64url'),
+      value: { enabled: override !== 'false' }, defaults: { enabled: true }, customizedKeys: override === null ? [] : ['enabled'], isCustomized: override !== null };
+  }
+
+  /** Owner-scoped boolean only; webhook and masked credential never leave this service. */
+  inspectEnabledPreference() {
+    if (captureImAccountGeneration() === null) return { status: 'unavailable' as const, revision: null };
+    try { return this.enabledSnapshot(this.readPreferenceSecret(WEBHOOK_SECRET_NAME), this.readPreferenceSecret(ENABLED_SETTING_NAME)); }
+    catch { return { status: 'unreadable' as const, revision: null }; }
+  }
+
+  commitEnabledPreference(value: boolean | null, options: OverrideSettingsCommitOptions) {
+    const owner = captureImAccountGeneration();
+    if (owner === null) throw new ImAccountScopeClosedError();
+    options.assertCurrent?.();
+    const webhook = this.readPreferenceSecret(WEBHOOK_SECRET_NAME);
+    const before = this.enabledSnapshot(webhook, this.readPreferenceSecret(ENABLED_SETTING_NAME));
+    if (before.status !== 'ready') throw new OverrideSettingsError('UNREADABLE');
+    if (before.revision !== options.expectedRevision) throw new OverrideSettingsError('CONFLICT');
+    options.assertCurrent?.();
+    if (!isImAccountGenerationCurrent(owner)) throw new ImAccountScopeClosedError();
+    if (value === null) { this.configGeneration += 1;
+      if (this.secrets === ownerScopedImSecrets) removeOwnerScopedImSecretStrict(ENABLED_SETTING_NAME);
+      else this.secrets.remove(ENABLED_SETTING_NAME);
+    }
+    else this.setEnabled(value);
+    return this.enabledSnapshot(webhook, value === null ? null : String(value)) as ReturnType<typeof this.enabledSnapshot> & { status: 'ready' };
+  }
 
   getState(): WecomGroupNotificationState {
     const stored = this.secrets.read(WEBHOOK_SECRET_NAME);
@@ -292,14 +337,9 @@ export function initWecomGroupNotificationIpc(): void {
     return runInImAccountGeneration(accountGeneration, async () => operation(accountGeneration));
   };
 
-  ipcMain.handle('wecomGroupNotification:get-state', (event) => {
-    assertTrustedAppRendererEvent(event);
-    return wecomGroupNotificationService.getState();
-  });
-  ipcMain.handle(
-    'wecomGroupNotification:save-and-test',
-    async (event, webhookUrl: unknown, testMessage: unknown) => {
-      assertTrustedAppRendererEvent(event);
+  const handlers: Record<string, (...args: unknown[]) => unknown> = {
+    'wecomGroupNotification:get-state': () => wecomGroupNotificationService.getState(),
+    'wecomGroupNotification:save-and-test': async (webhookUrl, testMessage) => {
       if (typeof webhookUrl !== 'string') throw new TypeError('webhookUrl must be a string');
       const accountGeneration = captureImAccountGeneration();
       if (accountGeneration === null) throw new ImAccountScopeClosedError();
@@ -309,25 +349,29 @@ export function initWecomGroupNotificationIpc(): void {
         ),
       );
     },
-  );
-  ipcMain.handle('wecomGroupNotification:test', async (event, testMessage: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    return runAccountScoped(async (accountGeneration) => {
-      await wecomGroupNotificationService.test(parseTestMessage(testMessage), () =>
-        isImAccountGenerationCurrent(accountGeneration),
-      );
-      return { ok: true as const };
+    'wecomGroupNotification:test': async (testMessage) =>
+      runAccountScoped(async (accountGeneration) => {
+        await wecomGroupNotificationService.test(parseTestMessage(testMessage), () =>
+          isImAccountGenerationCurrent(accountGeneration),
+        );
+        return { ok: true as const };
+      }),
+    'wecomGroupNotification:set-enabled': (enabled) => {
+      if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
+      return runAccountScoped(() => wecomGroupNotificationService.setEnabled(enabled));
+    },
+    'wecomGroupNotification:clear': () =>
+      runAccountScoped(() => wecomGroupNotificationService.clear()),
+  };
+  for (const [channel, handler] of Object.entries(handlers)) {
+    // Cloud settings reach only the compiled management allowlist; set-enabled stays
+    // on the owner-scoped settings domain.
+    registerCloudDomainCall(channel, handler);
+    ipcMain.handle(channel, (event, ...args) => {
+      assertTrustedAppRendererEvent(event);
+      return handler(...args);
     });
-  });
-  ipcMain.handle('wecomGroupNotification:set-enabled', (event, enabled: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    if (typeof enabled !== 'boolean') throw new TypeError('enabled must be a boolean');
-    return runAccountScoped(() => wecomGroupNotificationService.setEnabled(enabled));
-  });
-  ipcMain.handle('wecomGroupNotification:clear', (event) => {
-    assertTrustedAppRendererEvent(event);
-    return runAccountScoped(() => wecomGroupNotificationService.clear());
-  });
+  }
 }
 
 export const __testing = {

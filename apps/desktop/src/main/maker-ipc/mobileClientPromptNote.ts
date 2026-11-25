@@ -100,7 +100,7 @@ function singleTextContent(message: unknown): string | null {
 
 /**
  * 原生命令必须位于消息开头；环境说明不能抢占这个位置。
- * Claude 旁路 /compact 和 Learn 技能调用；Pi 的 slash 输入交由运行时自己的命令发现处理。
+ * Claude 旁路 /compact 和 Learn 技能调用；Pi 与插件引擎的 slash 输入交由各自的命令发现处理。
  */
 export function shouldPrependMobileClientPromptNote(
   message: unknown,
@@ -108,8 +108,10 @@ export function shouldPrependMobileClientPromptNote(
 ): boolean {
   const text = singleTextContent(message);
   // Pi owns command discovery. Leave slash inputs intact so its runtime can
-  // execute installed commands (or treat unknown ones as literal text).
-  if (agentKind === 'pi') {
+  // execute installed commands (or treat unknown ones as literal text). A plugin
+  // engine's `/<skill>` is expanded by maker-core before the engine sees it
+  // (acp/skill-invocation.ts, same opening text), and the engine reads its own commands.
+  if (agentKind === 'pi' || agentKind === 'acp') {
     const content = message && typeof message === 'object'
       ? (message as { content?: unknown }).content : null;
     const parts = Array.isArray(content) ? content : [];

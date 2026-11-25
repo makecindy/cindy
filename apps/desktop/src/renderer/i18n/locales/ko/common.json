@@ -1336,6 +1336,7 @@
     "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
@@ -8725,6 +8726,7 @@
             "message_body": "메시지 본문",
             "tool_body": "도구 결과",
             "sidebar_navigation": "사이드바 탐색",
+            "workdir_menu": "작업 디렉터리 메뉴",
             "session_menu": "작업 메뉴",
             "settings_section": "설정 페이지",
             "composer_completion": "입력 자동 완성",
@@ -12258,8 +12260,8 @@
       "footnote": "이 내용은 동반자의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
     },
     "welcome": {
-      "generic": "안녕하세요, 저는 {{name}}입니다. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 여기부터 익혀 둘게요.",
-      "withRole": "안녕하세요, 저는 {{name}}입니다 — {{description}}. 필요한 게 있으면 바로 말씀하세요."
+      "generic": "안녕하세요, 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요.",
+      "withUser": "안녕하세요, {{userName}}님. 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요."
     },
     "invitation": {
       "title": "만날 준비 중",
@@ -12784,6 +12786,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "시스템 음성",
+        "myVoices": "내 음성",
+        "refreshMyVoices": "내 음성 새로 고침",
+        "callMode": "통화 방식",
+        "messageReadAloud": "메시지 읽어주기",
+        "callVoice": "실시간 통화 목소리",
+        "readAloudVoice": "메시지를 읽어 줄 목소리",
+        "readAloudHint": "동반자의 텍스트 답변 아래에 있는 스피커를 누르면 이 목소리로 읽어 줍니다.",
+        "resetReadAloud": "읽어주기 설정 초기화",
+        "title": "실시간 음성",
+        "add": "실시간 음성 모델 추가",
+        "off": "음성 합성 사용"
+      },
       "openConversation": "대화 열기",
       "inCallWith": "{{name}}와(과) 통화 중",
       "showDetails": "통화 기록 펼치기",
@@ -12805,7 +12821,7 @@
       "settingsTitle": "음성",
       "openSettings": "음성 설정",
       "startConversation": "음성 대화 시작",
-      "settingsHint": "이 동반자의 읽어주기 모델과 음성을 선택한 후 입력창에서 음성 대화를 시작하세요.",
+      "settingsHint": "음성 합성으로 통화할 때는 통화와 메시지 읽어주기에 아래 모델과 목소리를 함께 사용합니다.",
       "previewNeedsChat": "동반자와 대화를 시작하면 음성을 미리 들을 수 있습니다.",
       "voiceId": "음성 ID",
       "manualVoice": "음성 ID 직접 입력",
@@ -15284,6 +15300,7 @@
       "label_other": "새 메시지 {{count}}개"
     },
     "messageNavRail": {
+      "you": "나",
       "aria": "질문 탐색",
       "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
       "attachmentOnly_one": "첨부파일 {{count}}개",
@@ -15431,6 +15448,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
       "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
@@ -17848,6 +17866,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
+      "boundPluginEngineRecovery": "연결된 작업이 플러그인 엔진을 사용해 자동화가 실행되지 않았습니다. 작업을 내장 엔진으로 되돌리거나 내장 엔진을 사용하는 작업에 자동화를 다시 연결하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",

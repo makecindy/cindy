@@ -861,6 +861,51 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  // 与 Desktop 镜像同一组 fixture:设备码端点只在声明时出现并固定在 tokenUrl 之后
+  // (市场能力上限按归一化 JSON 逐字比较),越白名单或与 broker 同用即拒。
+  it('accepts the device authorization endpoint at a fixed position and rejects unsafe combinations', () => {
+    const manifestWith = (oauth: Record<string, unknown>) => ({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.example.com', 'api.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Example account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth,
+          },
+        ],
+      },
+    });
+    const base = {
+      authorizeUrl: 'https://accounts.example.com/authorize',
+      tokenUrl: 'https://accounts.example.com/token',
+      scopes: ['read.a'],
+    };
+    const legacy = validateGhostManifest(manifestWith(base));
+    expect(legacy.ok && JSON.stringify(legacy.manifest.network?.secrets?.[0]?.oauth)).toBe(JSON.stringify(base));
+    const device = validateGhostManifest(
+      manifestWith({ ...base, deviceAuthorizationUrl: 'https://api.example.com/device' }),
+    );
+    expect(device.ok && Object.keys(device.manifest.network?.secrets?.[0]?.oauth ?? {})).toEqual([
+      'authorizeUrl',
+      'tokenUrl',
+      'deviceAuthorizationUrl',
+      'scopes',
+    ]);
+    for (const bad of [
+      { ...base, deviceAuthorizationUrl: 'https://evil.example.net/device' },
+      { ...base, deviceAuthorizationUrl: 'https://accounts.example.com/device', tokenBroker: 'feishu', redirectPort: 53684 },
+    ]) {
+      expect(validateGhostManifest(manifestWith(bad)).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('accepts and normalizes Plugin locale resource declarations', () => {
     const locales = {
       en: 'locales/en.json',
@@ -2330,6 +2375,7 @@ describe('interactive page declarations', () => {
     { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'workdir.menu', kind: 'status' }] },
   ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
     const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
       commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
@@ -2342,7 +2388,7 @@ describe('interactive page declarations', () => {
     expect(projected).toMatchObject(legacy);
     expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
   });
-  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar', 'workdir.menu'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
       const entry = { id: 'extension', title: 'Extension', position,

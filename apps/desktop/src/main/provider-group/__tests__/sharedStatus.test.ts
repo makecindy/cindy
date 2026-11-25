@@ -20,7 +20,10 @@ function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooli
       ...member, label: member.label!, ownerName: 'private-owner', state: states[index], running: index === 1 ? 4 : 0,
     })),
   };
-  const router = { view: vi.fn(async () => view) };
+  const router = {
+    view: vi.fn(async () => view),
+    memberViews: () => new Map(config?.members.filter(member => !member.paused).map(member => [member.key, () => router.view()])),
+  };
   const readCaps = vi.fn<SharedGroupStatusDeps['readCaps']>(async () => ({ virtualWorkspace: true, guestRelay: true }) as RemoteAgentCaps);
   const isIncapable = vi.fn(() => false);
   const deps = {

@@ -807,6 +807,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.continueSession).not.toHaveBeenCalled();
   });
 
+  // Unit, PR #12569: both declined and exhausted/rearmed turn recovery must use
+  // the caller-owned fallback. The global fallback cannot carry a Schedule run.
+  it.each(['declined', 'rearmed'] as const)('retains the turn-owned quota fallback: %s', async mode => {
+    const h = harness({ members: mode === 'rearmed' ? [LOCAL] : [LOCAL, MINI], autoSwitch: mode === 'rearmed' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    if (mode === 'rearmed') {
+      h.deps.leaseRecovery.mockReturnValueOnce(LEASE).mockReturnValue(null);
+      h.deps.rearmContinue.mockReturnValue(42);
+    }
+    const service = createProviderGroupService({ ...h.deps, readAccountSwitch: async () => null });
+    const fallback = vi.fn();
+    await service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { fallback });
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(fallback.mock.calls[0][0]).toBe(mode === 'rearmed' ? 42 : 1);
+    expect(fallback.mock.calls[0][1]).toEqual(mode === 'rearmed' ? { accountSwitchChecked: true } : undefined);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   it('stops without blaming the target when the handoff fails for an unrelated reason', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });

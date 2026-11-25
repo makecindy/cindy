@@ -93,6 +93,7 @@ export function useModelGroups(enabled = true, options: { includeHidden?: boolea
   const config = useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     options.includeHidden ? currentConfig : currentVisible,
+    () => MODEL_GROUPS_DEFAULTS,
   );
   useEffect(() => {
     if (!enabled) return undefined;

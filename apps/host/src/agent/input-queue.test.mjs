@@ -3480,15 +3480,18 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {}, log = 
 }
 
 // #11352, DB tier. The phone's trusted selection origin must survive until the next
-// send or Pi prewarm. An unverified window may neither move the row nor dispatch.
+// send or Pi prewarm. Claude metadata gaps must still dispatch without losing
+// native history; known target pressure must hand off even without the old window.
 test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', async t => {
-  for (const [agent, target, finalWindow, rebuild] of [
+  for (const [agent, target, finalWindow, rebuild, missingOldWindow] of [
     ['claude-code', 'small', undefined, true],
     ['pi', 'big-alternate', 100_000, true],
     ['pi', 'small', 0, false],
     ['claude-code', 'display-only', undefined, false],
+    ['claude-code', 'display-only', undefined, false, true],
+    ['claude-code', 'small', undefined, true, true],
   ]) {
-    await t.test(`${agent} to ${target} (native window ${finalWindow})`, async t => {
+    await t.test(`${agent} to ${target} (native window ${finalWindow}, old metadata missing ${!!missingOldWindow})`, async t => {
       const r = await modelChangeRuntime(t, { agent });
       const id = 'owner-window';
       const handoffs = [];
@@ -3502,6 +3505,10 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
       const initial = await r.runTurn(id, 'owner-initial', { contextTokens: 95_000, contextWindow: 200_000 });
       let liveWindow = 200_000;
       initial.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: liveWindow });
+      if (missingOldWindow) {
+        const old = r.views.current[0].models[agent].find(model => model.id === 'big');
+        old.contextWindowVerified = false;
+      }
       if (agent === 'pi') {
         initial.previewModelSwitch = async () => ({ action: 'hot', windowVerified: false });
         const setModel = initial.setModel.bind(initial);
@@ -3529,6 +3536,13 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
         assert.ok(r.h.maker.getSession(id).sent[0].includes(handoff));
         assert.ok(handoff.length > 16_000, 'use the verified window instead of the unknown-window text limit');
         assert.ok(estimateHandoffTokens(handoff) <= 20_000, 'leave room for the next input');
+      } else if (agent === 'claude-code') {
+        assert.equal(saved.model, target);
+        assert.equal(saved.sdk_session_id, 'native-owner-initial');
+        assert.deepEqual(r.rebuilds(id), []);
+        assert.deepEqual(handoffs, []);
+        assert.ok(!r.h.queue.projection(id).error);
+        assert.ok(r.h.maker.getSession(id).sent.some(text => typeof text === 'string' && text.endsWith(next)));
       } else {
         assert.equal(saved.model, 'big');
         assert.equal(saved.sdk_session_id, 'native-owner-initial');

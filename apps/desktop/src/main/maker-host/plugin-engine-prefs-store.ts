@@ -11,6 +11,7 @@
  * - `suspended`: not offered for new work (new tasks, switching onto it, automations, Workers,
  *   other computers, shared friends). The plugin itself stays enabled, its tools and pages too.
  * - `disabledModels`: models of the engine the user turned off.
+ * - `modelEfforts`: reasoning defaults explicitly set by this user.
  *
  * Only explicit choices are stored; a missing entry means the engine is listed as its plugin
  * declares it. Entries survive turning the plugin off and on again; an entry whose plugin is gone
@@ -21,6 +22,7 @@
  * writes changes when a plugin engine is renamed, hidden or turned off. The engine's 「允许被远程调用」
  * switch stays where it was (remote-provider-access-store, keyed by the task `providerId`).
  */
+import { isPluginEngineEffort, type PluginEnginePrefsInput, type PluginEngineView } from '../../shared/pluginEngines.js';
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
@@ -30,6 +32,7 @@ export interface PluginEnginePrefs {
   hidden?: true;
   suspended?: true;
   disabledModels?: string[];
+  modelEfforts?: PluginEngineView['modelEfforts'];
 }
 
 export interface PluginEnginePrefsPatch {
@@ -39,6 +42,7 @@ export interface PluginEnginePrefsPatch {
   suspended?: boolean;
   /** Turns these models off or on again; other models keep their state. */
   models?: { ids: readonly string[]; disabled: boolean };
+  modelEffort?: PluginEnginePrefsInput['modelEffort'];
 }
 
 interface PluginEnginePrefsFile {
@@ -84,17 +88,26 @@ function normalizeModels(raw: unknown): string[] {
   return ids;
 }
 
+function normalizeModelEfforts(raw: unknown): NonNullable<PluginEnginePrefs['modelEfforts']> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw)
+    .filter(([id, effort]) => id.trim() && id.length <= PLUGIN_ENGINE_PREFS_MODEL_ID_MAX && isPluginEngineEffort(effort))
+    .slice(0, PLUGIN_ENGINE_PREFS_MODELS_MAX));
+}
+
 /** Keeps only explicit choices: an entry that says nothing is dropped. */
 function normalizeEntry(raw: unknown): PluginEnginePrefs | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   const name = normalizeName(value.name);
   const disabledModels = normalizeModels(value.disabledModels);
+  const modelEfforts = normalizeModelEfforts(value.modelEfforts);
   const entry: PluginEnginePrefs = {
     ...(name ? { name } : {}),
     ...(value.hidden === true ? { hidden: true as const } : {}),
     ...(value.suspended === true ? { suspended: true as const } : {}),
     ...(disabledModels.length > 0 ? { disabledModels } : {}),
+    ...(Object.keys(modelEfforts).length ? { modelEfforts } : {}),
   };
   return Object.keys(entry).length > 0 ? entry : null;
 }
@@ -157,6 +170,14 @@ function applyPatch(current: PluginEnginePrefs, patch: PluginEnginePrefsPatch): 
     }
     if (disabled.size > PLUGIN_ENGINE_PREFS_MODELS_MAX) throw new Error('Too many plugin engine models turned off');
     next.disabledModels = [...disabled];
+  }
+  if (patch.modelEffort) {
+    const { id, effort } = patch.modelEffort;
+    const entries = new Map(Object.entries(current.modelEfforts ?? {}));
+    if (effort === null) entries.delete(id);
+    else entries.set(id, effort);
+    if (entries.size > PLUGIN_ENGINE_PREFS_MODELS_MAX) throw new Error('Too many saved plugin model levels');
+    next.modelEfforts = Object.fromEntries(entries);
   }
   return normalizeEntry(next);
 }

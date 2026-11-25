@@ -143,6 +143,8 @@ export interface ProviderGroupRouter {
     resolved: readonly ResolvedProviderGroupMember[],
   ): { key: string; label: string; quota: ProviderGroupMemberQuota }[];
   view(providerId: string, options?: string | { model?: string; agentKind?: AgentKind; includeGuestSupport?: boolean; display?: ProviderGroupDisplayRead }): Promise<ProviderGroupView>;
+  /** Capture configuration once; lazy member reads keep independent completion/freshness. Internal, not a wire endpoint. */
+  memberViews(providerId: string): ReadonlyMap<string, () => Promise<ProviderGroupView>>;
   /** 经本组分到这台、正在运行的任务数。 */
   running(providerId: string, memberKey: string): number;
   markCooling(providerId: string, memberKey: string, until: number, model?: string): void;
@@ -506,77 +508,14 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     },
 
     async view(providerId, options) {
-      let config = deps.readGroup(providerId);
-      if (!config) return { providerId, config: null, members: [] };
-      const viewOptions = typeof options === 'string' ? { model: options } : options;
-      const display = viewOptions?.display;
-      if (display === 'roster') return { providerId, config, members: [], rosterOnly: true };
-      if (display) {
-        const member = config.members.find(entry => entry.key === display.memberKey);
-        if (!member) return { providerId, config: null, members: [] };
-        config = { ...config, members: [member] };
-      }
-      const basic = display !== undefined && !display.details;
-      const resolved = await deps.directory.resolveMembers(providerId, config, basic ? { skipUsage: true } : undefined);
-      const model = viewOptions?.model;
-      const readSupport = !basic && viewOptions?.includeGuestSupport ? guestSupportReader : null;
-      const providerContinuity = (() => {
-        const stamps = resolved.flatMap((entry) => entry.providerContinuity ? [entry.providerContinuity] : []);
-        if (!stamps.length) return undefined;
-        return { stale: stamps.some((stamp) => stamp.stale),
-          remainingMs: Math.min(...stamps.map((stamp) => stamp.remainingMs)) };
-      })();
-      return {
-        providerId,
-        config,
-        members: await Promise.all(resolved.map(async (r) => {
-          const guestSupport = readSupport
-            ? (r.member.kind === 'local' || r.state === 'ok' ? await readSupport(r.member) : 'unknown' as const)
-            : undefined;
-          const quota = providerGroupMemberUsageState(r, model, deps.now(), viewOptions?.agentKind);
-          const remembered = coolingUntil(providerId, r.member.key, model);
-          const until = quota.limited && quota.resetAtMs === null ? null
-            : remembered === null ? quota.resetAtMs
-            : quota.resetAtMs === null ? remembered : Math.max(remembered, quota.resetAtMs);
-          const count = memberRunning(providerId, r);
-          // 那台电脑上这个供应商现在的显示名，读不到时用加入时的快照：同一台电脑有几个账号时界面按它区分。
-          const providerName = r.view?.name || r.member.providerName;
-          const state = r.member.paused
-            ? 'paused' as const
-            : r.state !== 'ok'
-              ? r.state
-              : until !== null || quota.limited
-                ? 'cooling' as const
-                : count >= effectiveConcurrencyLimit(r.member)
-                  ? 'full' as const
-                  : 'available' as const;
-          return {
-            key: r.member.key,
-            kind: r.member.kind,
-            label: r.label,
-            ...(providerName ? { providerName } : {}),
-            ...(r.ownerName ? { ownerName: r.ownerName } : {}),
-            ...(r.appVersion ? { appVersion: r.appVersion } : {}),
-            ...(guestSupport ? { guestSupport } : {}),
-            state,
-            ...(r.reason ? { reason: r.reason } : {}),
-            running: count,
-            limit: r.member.limit,
-            ...(r.member.limitSet ? { limitSet: true as const } : {}),
-            weight: r.member.weight,
-            paused: r.member.paused,
-            ...(until !== null ? { coolingUntil: until } : {}),
-            // 展示确认的配额原因，不把登录/繁忙等普通冷却说成配额耗尽；不改分配与持久冷却。
-            ...(state === 'cooling' && quota.limited ? { usageLimit: { resetAtMs: quota.resetAtMs } } : {}),
-            // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)。分享来的电脑的额度
-            // 只在组所在电脑内部排先后，不随组状态外传(旧版同账号电脑也会丢弃)。
-            ...(quota.quota && r.member.kind !== 'share' ? { quota: quota.quota } : {}),
-            ...(quota.quota && r.member.kind !== 'share' && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
-          };
-        })),
-        ...(providerContinuity ? { providerContinuity } : {}),
-        ...(model ? { model } : {}),
-      };
+      return readView(providerId, deps.readGroup(providerId), options);
+    },
+
+    memberViews(providerId) {
+      const config = deps.readGroup(providerId);
+      return new Map(config?.members.filter(member => !member.paused).map(member => [member.key,
+        () => readView(providerId, { ...config, members: [member] }, { display: { memberKey: member.key, details: true } }),
+      ]));
     },
 
     running,
@@ -609,4 +548,78 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       tried.delete(sessionId);
     },
   };
+
+  async function readView(providerId: string, config: ProviderGroupConfig | null,
+    options?: Parameters<ProviderGroupRouter['view']>[1]): Promise<ProviderGroupView> {
+    if (!config) return { providerId, config: null, members: [] };
+    const viewOptions = typeof options === 'string' ? { model: options } : options;
+    const display = viewOptions?.display;
+    if (display === 'roster') return { providerId, config, members: [], rosterOnly: true };
+    if (display) {
+      const member = config.members.find(entry => entry.key === display.memberKey);
+      if (!member) return { providerId, config: null, members: [] };
+      config = { ...config, members: [member] };
+    }
+    const basic = display !== undefined && !display.details;
+    const resolved = await deps.directory.resolveMembers(providerId, config, basic ? { skipUsage: true } : undefined);
+    const model = viewOptions?.model;
+    const readSupport = !basic && viewOptions?.includeGuestSupport ? guestSupportReader : null;
+    const providerContinuity = (() => {
+      const stamps = resolved.flatMap((entry) => entry.providerContinuity ? [entry.providerContinuity] : []);
+      if (!stamps.length) return undefined;
+      return { stale: stamps.some((stamp) => stamp.stale),
+        remainingMs: Math.min(...stamps.map((stamp) => stamp.remainingMs)) };
+    })();
+    return {
+      providerId,
+      config,
+      members: await Promise.all(resolved.map(async (r) => {
+        const guestSupport = readSupport
+          ? (r.member.kind === 'local' || r.state === 'ok' ? await readSupport(r.member) : 'unknown' as const)
+          : undefined;
+        const quota = providerGroupMemberUsageState(r, model, deps.now(), viewOptions?.agentKind);
+        const remembered = coolingUntil(providerId, r.member.key, model);
+        const until = quota.limited && quota.resetAtMs === null ? null
+          : remembered === null ? quota.resetAtMs
+          : quota.resetAtMs === null ? remembered : Math.max(remembered, quota.resetAtMs);
+        const count = memberRunning(providerId, r);
+        // 那台电脑上这个供应商现在的显示名，读不到时用加入时的快照：同一台电脑有几个账号时界面按它区分。
+        const providerName = r.view?.name || r.member.providerName;
+        const state = r.member.paused
+          ? 'paused' as const
+          : r.state !== 'ok'
+            ? r.state
+            : until !== null || quota.limited
+              ? 'cooling' as const
+              : count >= effectiveConcurrencyLimit(r.member)
+                ? 'full' as const
+                : 'available' as const;
+        return {
+          key: r.member.key,
+          kind: r.member.kind,
+          label: r.label,
+          ...(providerName ? { providerName } : {}),
+          ...(r.ownerName ? { ownerName: r.ownerName } : {}),
+          ...(r.appVersion ? { appVersion: r.appVersion } : {}),
+          ...(guestSupport ? { guestSupport } : {}),
+          state,
+          ...(r.reason ? { reason: r.reason } : {}),
+          running: count,
+          limit: r.member.limit,
+          ...(r.member.limitSet ? { limitSet: true as const } : {}),
+          weight: r.member.weight,
+          paused: r.member.paused,
+          ...(until !== null ? { coolingUntil: until } : {}),
+          // 展示确认的配额原因，不把登录/繁忙等普通冷却说成配额耗尽；不改分配与持久冷却。
+          ...(state === 'cooling' && quota.limited ? { usageLimit: { resetAtMs: quota.resetAtMs } } : {}),
+          // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)。分享来的电脑的额度
+          // 只在组所在电脑内部排先后，不随组状态外传(旧版同账号电脑也会丢弃)。
+          ...(quota.quota && r.member.kind !== 'share' ? { quota: quota.quota } : {}),
+          ...(quota.quota && r.member.kind !== 'share' && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
+        };
+      })),
+      ...(providerContinuity ? { providerContinuity } : {}),
+      ...(model ? { model } : {}),
+    };
+  }
 }

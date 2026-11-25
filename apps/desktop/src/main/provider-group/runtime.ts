@@ -420,6 +420,14 @@ const routerFacade: ProviderGroupRouter = {
     const view = await runtime.router.view(providerId, options);
     return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
   },
+  memberViews: (providerId) => {
+    const runtime = runtimeForActiveOwner();
+    return new Map([...runtime.router.memberViews(providerId)].map(([key, read]) => [key, async () => {
+      if (activeOwnerScopeKey() !== runtime.owner) return { providerId, config: null, members: [] };
+      const view = await read();
+      return activeOwnerScopeKey() === runtime.owner ? view : { providerId, config: null, members: [] };
+    }]));
+  },
   running: (providerId, memberKey) => runtimeForActiveOwner().router.running(providerId, memberKey),
   markCooling: (providerId, memberKey, until, model) => runtimeForActiveOwner().router.markCooling(providerId, memberKey, until, model),
   coolingUntil: (providerId, memberKey, model) => runtimeForActiveOwner().router.coolingUntil(providerId, memberKey, model),

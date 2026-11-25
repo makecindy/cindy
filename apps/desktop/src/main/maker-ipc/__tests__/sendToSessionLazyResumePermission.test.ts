@@ -115,7 +115,7 @@ function botTaskDispatchSlice(): string {
   const sendWithBaseline = slice('async function sendUserMessageWithAwaitedGitBaseline(', '\n  /**\n   * 来源标签用的发送方身份快照');
   const dispatchBotSessionMessage = slice(
     'const dispatchBotSessionMessage = async (params: {',
-    '\n  setBotInvitationWelcomeDispatch(',
+    '\n  setVoiceTaskDispatch(',
   );
   const groupDispatch = slice(
     'dispatch: (',
@@ -123,7 +123,7 @@ function botTaskDispatchSlice(): string {
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
   const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
-  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+  const sendToSession = slice('sendToSession: async (params', ',\n    enableOrca: enableOrcaInternal,')
     .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}

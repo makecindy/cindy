@@ -315,6 +315,18 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
     expect(shouldPrependMobileClientPromptNote('/compact', 'pi')).toBe(false);
     expect(shouldPrependMobileClientPromptNote('/compact', 'codex')).toBe(true);
   });
+
+  // Review (#12732, Greptile P1)：插件引擎的 `/<skill>` 由 maker-core 在发给引擎前展开，只认消息开头的文字。
+  // 此前这里只放过 Pi，手机首发、切换引擎后首条或插话的 `/pr` 被说明顶到后面，引擎收到的是没展开的一行字。
+  // 覆盖缺口：maker-core 测试直接调 handle.send，不经过这道说明判定。最小失败输入：acp 的 '/pr'（unit）。
+  it('插件引擎的 slash 输入同 Pi 一样不带说明，普通消息照常带', () => {
+    expect(shouldPrependMobileClientPromptNote('/pr fix the build', 'acp')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote(
+      { type: 'user', content: [{ type: 'image', path: '/tmp/a.png' }, { type: 'text', text: ' /pr' }] },
+      'acp',
+    )).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('open /pr', 'acp')).toBe(true);
+  });
 });
 
 describe('stampMobileClientOrigin(IPC 边界盖章)', () => {

@@ -558,6 +558,9 @@ test('25b L1: /api/agent-skills drops a Skill the user switched off, and only li
   held = true;
   assert.deepEqual((await list({ agentKind: 'pi' })).skills.map((skill) => skill.name), ['kept']);
   assert.equal(refreshes, 1, 'held: listed without refreshing');
+  // #12732: a plugin-engine `/` menu asks for `acp`. Plugin engines do not run on this Host, so it must
+  // answer "not registered" rather than treat the unknown kind as Claude and list Claude's Skills.
+  assert.deepEqual(await list({ agentKind: 'acp' }), { success: false, error: "Agent 'acp' is not registered" });
 });
 
 // Review follow-ups (25b): the browser step can take minutes, so the desktop scan and serve's state are

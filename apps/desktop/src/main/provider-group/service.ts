@@ -363,6 +363,8 @@ export interface ProviderGroupTurnErrorHooks {
   notHandled?(): boolean;
   /** 不换了，马上交回原有处理(报错与额度重置后自动继续)：先把错误放出来。 */
   beforeFallback?(): void;
+  /** Per-turn fallback retains its caller's run identity even when the token is rearmed. */
+  fallback?(token: number, options?: UsageLimitRecoveryOptions): void;
   /** 已换到另一台电脑(或原电脑恢复后在原电脑)续上了这一轮。 */
   resumed?(): void;
   /** 原电脑连不上，先等它恢复：开始第 attempt 次重试(从 1 起)。 */
@@ -1309,7 +1311,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       hooks?.beforeFallback?.();
       const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
       if (fallbackToken !== null) {
-        if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
+        if (hooks?.fallback) hooks.fallback(fallbackToken, accountSwitchChecked ? { accountSwitchChecked: true } : undefined);
+        else if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
         else deps.fallback(sessionId, signals, fallbackToken);
       }
     };
@@ -2185,7 +2188,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (handled) return;
       if (hooks?.notHandled?.()) return;
       hooks?.beforeFallback?.();
-      deps.fallback(sessionId, signals, token);
+      if (hooks?.fallback) hooks.fallback(token);
+      else deps.fallback(sessionId, signals, token);
     },
 
     async beforeSend(sessionId, options) {
