@@ -39,5 +39,11 @@ export default {
     await page
       .getByText(await ui.t('issueAgent.confirm.identitySettings'), { exact: true })
       .click();
+    await page.getByRole('button', { name: await ui.t('issueAgent.confirm.publicSubmit'), exact: true }).click();
+    await page.getByText(await ui.t('newChat.permissionPrompt.submitting'), { exact: true }).waitFor();
+    for (const key of ['edit', 'cancel', 'publicSubmit']) {
+      assert.equal(await page.getByRole('button', { name: await ui.t('issueAgent.confirm.' + key), exact: true }).isDisabled(), true);
+    }
+    await ui.capture('awaiting-receipt');
   },
 };

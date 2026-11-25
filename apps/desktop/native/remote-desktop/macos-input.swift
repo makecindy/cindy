@@ -166,9 +166,32 @@ func makeKeyEvent(_ code: CGKeyCode, _ down: Bool) -> CGEvent? {
   if let event = event { configureKeyFlags(event, code, down) }
   return event
 }
+/// macOS 27.3 with control limited to chosen apps: system-wide (HID) input is
+/// dropped, even for a chosen app. Measured on 27.3 beta 2 (26C5047e): keys and
+/// text posted to a chosen app's process arrive; wheel events there are dropped;
+/// clicks posted there reach the app but no control (a button stays unpressed,
+/// with or without the window fields), and could land elsewhere in a large
+/// window. So only keys go to the process, and pointer input is not sent; button
+/// presses and focus use accessibility. Set only for a chosen target app; nil
+/// keeps the system-wide path used on whole-Mac control and earlier macOS.
+var inputTargetPid: pid_t?
+let pointerEventTypes: Set<CGEventType> = [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+  .otherMouseDown, .otherMouseUp, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+func deliver(_ event: CGEvent?) {
+  guard let event = event else { return }
+  guard let pid = inputTargetPid else { event.post(tap: .cghidEventTap); return }
+  if !pointerEventTypes.contains(event.type) { event.postToPid(pid) }
+}
+/// Whether the target app takes keys now, asked of the app itself: with chosen
+/// apps only, the system-wide focused-app query fails (-25204 on 27.3 beta 2).
+func targetIsFrontmost(_ pid: pid_t) -> Bool {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 0.3)
+  return handoffBool(app, kAXFrontmostAttribute) == true
+}
 func key(_ code: CGKeyCode, _ down: Bool) {
   if down { keys.insert(code) } else { keys.remove(code) }
-  makeKeyEvent(code, down)?.post(tap: .cghidEventTap)
+  deliver(makeKeyEvent(code, down))
   // Give WindowServer time to observe modifier transitions before the next key.
   usleep(8000)
 }
@@ -184,7 +207,7 @@ func mouse(_ button: Int, _ down: Bool) {
   let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location, mouseButton: b)
   event?.setIntegerValueField(.mouseEventClickState, value: clickCount)
   event?.flags = flags()
-  event?.post(tap: .cghidEventTap)
+  deliver(event)
 }
 func releaseAll() {
   for b in Array(buttons) { mouse(b, false) }
@@ -209,7 +232,9 @@ func confineFrame(_ c: HandoffConfine) -> CGRect? {
 func confineFocusedPid() -> Int32? {
   let system = AXUIElementCreateSystemWide()
   AXUIElementSetMessagingTimeout(system, 0.3)
-  guard let app = handoffElement(handoffAttr(system, kAXFocusedApplicationAttribute)) else { return nil }
+  guard let app = handoffElement(handoffAttr(system, kAXFocusedApplicationAttribute)) else {
+    return inputTargetPid.flatMap { targetIsFrontmost($0) ? $0 : nil }
+  }
   var pid: Int32 = 0
   return AXUIElementGetPid(app, &pid) == .success ? pid : nil
 }
@@ -275,12 +300,12 @@ func applyEvent(_ event: [String: Any]) {
       let b = buttons.contains(0) ? 0 : buttons.contains(2) ? 2 : buttons.contains(1) ? 1 : -1
       let type: CGEventType = b == 0 ? .leftMouseDragged : b == 2 ? .rightMouseDragged : b == 1 ? .otherMouseDragged : .mouseMoved
       let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: location, mouseButton: b == 2 ? .right : b == 1 ? .center : .left)
-      e?.flags = flags(); e?.post(tap: .cghidEventTap)
+      e?.flags = flags(); deliver(e)
     }
   } else if kind == "key", let code = event["code"] as? String, let native = keyCodes[code], let down = event["down"] as? Bool {
     key(native, down)
   } else if kind == "scroll", let dy = event["dy"] as? Double, let dx = event["dx"] as? Double {
-    CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: -Int32(dy), wheel2: -Int32(dx), wheel3: 0)?.post(tap: .cghidEventTap)
+    deliver(CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: -Int32(dy), wheel2: -Int32(dx), wheel3: 0))
   } else if kind == "text", let text = event["text"] as? String {
     // Character boundaries prevent splitting a UTF-16 surrogate pair.
     for character in text.prefix(4096) {
@@ -288,7 +313,7 @@ func applyEvent(_ event: [String: Any]) {
       for down in [true, false] {
         let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
         e?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-        e?.post(tap: .cghidEventTap)
+        deliver(e)
       }
     }
   }
@@ -448,12 +473,13 @@ func handoffExposePage(_ request: [String: Any]) -> [String: Any] {
   // Chrome takes the value yet answers with an error code: only reading it back tells.
   return ["changed": (handoffBool(app, attribute) ?? false) == on]
 }
-func handoffWindows(_ app: AXUIElement) -> [AXUIElement] {
-  guard let raw = handoffAttr(app, kAXWindowsAttribute), let windows = raw as? [AXUIElement] else { return [] }
-  return windows
+func handoffWindows(_ app: AXUIElement) -> (windows: [AXUIElement], error: AXError) {
+  var raw: CFTypeRef?
+  let error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
+  return (error == .success ? (raw as? [AXUIElement] ?? []) : [], error)
 }
 func handoffResolveWindow(_ app: AXUIElement, _ request: [String: Any]) -> (AXUIElement, Int)? {
-  let windows = handoffWindows(app)
+  let windows = handoffWindows(app).windows
   if let spec = request["window"] as? [String: Any] {
     let title = spec["title"] as? String
     if let index = spec["index"] as? Int, index >= 0, index < windows.count,
@@ -548,6 +574,7 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
   let (window, index) = resolved
   var nodes: [[String: Any]] = []
   var walked = 0
+  var depthTruncated = false
   var stack: [(AXUIElement, String, Int, Bool)] = handoffChildren(window).enumerated().reversed().map { ($0.element, String($0.offset), 1, false) }
   while case let (element, ref, depth, inAlert)? = stack.popLast() {
     walked += 1
@@ -557,7 +584,10 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
     let role = node?["role"] as? String
     // Interactive leaves: their children are presentation details or menu items read above.
     if ["AXButton", "AXTextField", "AXTextArea", "AXPopUpButton", "AXComboBox", "AXStaticText", "AXCheckBox", "AXRadioButton", "AXSearchField", "AXMenuItem"].contains(role ?? "") { continue }
-    if depth >= handoffMaxDepth { continue }
+    if depth >= handoffMaxDepth {
+      if !handoffChildren(element).isEmpty { depthTruncated = true }
+      continue
+    }
     let alert = inAlert || node?["alert"] as? Bool == true
     let children = handoffChildren(element)
     for (offset, child) in children.enumerated().reversed() { stack.append((child, "\(ref).\(offset)", depth + 1, alert)) }
@@ -567,7 +597,7 @@ func handoffSnapshot(_ request: [String: Any]) -> [String: Any] {
     "frontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
     "window": ["index": index, "title": handoffString(window, kAXTitleAttribute) ?? "",
                "frame": handoffFrame(window) ?? [], "modal": handoffBool(window, kAXModalAttribute) ?? false] as [String: Any],
-    "nodes": nodes, "truncated": walked > handoffMaxWalked || nodes.count >= handoffMaxEmitted,
+    "nodes": nodes, "truncated": depthTruncated || walked > handoffMaxWalked || nodes.count >= handoffMaxEmitted,
   ]
   if let focused = handoffElement(handoffAttr(app, kAXFocusedUIElementAttribute)), handoffIsSecure(focused) {
     result["secureFocused"] = true
@@ -603,7 +633,10 @@ func handoffSecureTarget(_ request: [String: Any]) -> [String: Any] {
 func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   var pids = Set<Int32>()
   if let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
-    for info in infos where (info[kCGWindowLayer as String] as? Int) == 0 {
+    // Native authentication panels and scripting dialogs can float above normal
+    // windows and belong to accessory processes. Their AX windows still identify
+    // the exact target; window layer / Dock presence are not eligibility rules.
+    for info in infos {
       if let pid = info[kCGWindowOwnerPID as String] as? Int32 { pids.insert(pid) }
     }
   }
@@ -614,22 +647,28 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
       pids.insert(running.processIdentifier)
     }
   }
+  let chosenAppsOnly = !CGPreflightPostEventAccess() && controlsAllApps() == false
   var apps: [[String: Any]] = []
   for pid in pids {
-    guard let running = NSRunningApplication(processIdentifier: pid), running.activationPolicy == .regular else { continue }
+    guard let running = NSRunningApplication(processIdentifier: pid) else { continue }
     let element = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(element, 0.3)
-    let focused = handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
-    let windows = handoffWindows(element).enumerated().map { offset, window -> [String: Any] in
+    let read = handoffWindows(element)
+    let controlDenied = chosenAppsOnly && read.error == .apiDisabled
+    let focused = read.windows.isEmpty ? nil : handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
+    let windows = read.windows.enumerated().map { offset, window -> [String: Any] in
       ["index": offset, "title": handoffString(window, kAXTitleAttribute) ?? "",
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
+    if running.activationPolicy != .regular && windows.isEmpty && !controlDenied { continue }
     // Without `background`, an app is listed only while it has something on screen. With it, every
     // app is, even with no window at all: that is how a closed last window is told from a hidden one.
     if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
-    apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
-                 "windows": windows])
+    var app: [String: Any] = ["pid": Int(pid), "app": running.localizedName ?? "",
+                              "bundleId": running.bundleIdentifier ?? "", "windows": windows]
+    if controlDenied { app["controlDenied"] = true }
+    apps.append(app)
   }
   // Read fresh (see handoffFrontPid): NSWorkspace can name another app in this short-lived process.
   return ["frontmost": Int(handoffFrontPid() ?? NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
@@ -639,7 +678,7 @@ func handoffKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
   for down in [true, false] {
     let event = CGEvent(keyboardEventSource: handoffSource, virtualKey: code, keyDown: down)
     event?.flags = flags
-    event?.post(tap: .cghidEventTap)
+    deliver(event)
     usleep(6000)
   }
 }
@@ -654,10 +693,12 @@ func handoffType(_ text: String) {
     var units = Array(String(character).utf16)
     for down in [true, false] {
       let event = CGEvent(keyboardEventSource: handoffSource, virtualKey: 0, keyDown: down)
+      event?.flags = []
       event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
-      event?.post(tap: .cghidEventTap)
+      deliver(event)
+      // Do not collapse successive Unicode key pairs in the target's input queue.
+      usleep(10000)
     }
-    usleep(4000)
   }
 }
 func handoffClick(_ frame: [Double]) {
@@ -666,7 +707,7 @@ func handoffClick(_ frame: [Double]) {
   for type in [CGEventType.leftMouseDown, .leftMouseUp] {
     let event = CGEvent(mouseEventSource: handoffSource, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
     event?.setIntegerValueField(.mouseEventClickState, value: 1)
-    event?.post(tap: .cghidEventTap)
+    deliver(event)
     usleep(20000)
   }
 }
@@ -677,6 +718,8 @@ func handoffFocused(_ app: AXUIElement, is element: AXUIElement) -> Bool {
 /// The app that takes typed keys right now, read fresh from accessibility: this short-lived
 /// process never runs its event loop, so NSWorkspace's frontmost app goes stale inside it.
 func handoffFrontPid() -> Int32? {
+  // The system-wide query always fails with chosen apps only; ask the target.
+  if let pid = inputTargetPid { return targetIsFrontmost(pid) ? pid : nil }
   let system = AXUIElementCreateSystemWide()
   for _ in 0..<3 {
     if let focused = handoffElement(handoffAttr(system, kAXFocusedApplicationAttribute)) {
@@ -720,7 +763,7 @@ func handoffActivate(_ pid: Int32, _ window: AXUIElement) -> Bool {
   guard let frame = handoffFrame(window), frame[2] > 60, frame[3] > 30 else { return false }
   let point = CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + 8)
   var hit: AXUIElement?
-  guard handoffOwnsPoint(pid, point),
+  guard inputTargetPid == nil, handoffOwnsPoint(pid, point),
     AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit) == .success,
     let spot = hit, ["AXWindow", "AXStaticText"].contains(handoffString(spot, kAXRoleAttribute) ?? "")
   else { return false }
@@ -729,7 +772,8 @@ func handoffActivate(_ pid: Int32, _ window: AXUIElement) -> Bool {
 }
 /// A synthesized click lands on whatever is on top there: only click where this app's window is.
 func handoffClickOwned(_ pid: Int32, _ frame: [Double]) -> Bool {
-  guard frame.count == 4, handoffOwnsPoint(pid, CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)) else { return false }
+  // No click reaches a control when only chosen apps may be controlled (see deliver).
+  guard inputTargetPid == nil, frame.count == 4, handoffOwnsPoint(pid, CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)) else { return false }
   handoffClick(frame)
   return true
 }
@@ -762,21 +806,50 @@ func handoffAct(_ request: [String: Any]) -> [String: Any] {
   case "text":
     guard let value = request["value"] as? String, value.utf16.count <= 4096 else { return ["error": "invalid"] }
     let secure = handoffIsSecure(element)
-    if !secure, AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString) == .success,
-      (handoffAttr(element, kAXValueAttribute) as? String) == value {
-      _ = handoffFocus(app, element)
-      return ["ok": true, "method": "set"]
+    let codeCell = !secure && value.unicodeScalars.count == 1 && request["allowFocusAdvance"] as? Bool == true
+    // Setting AXValue can submit and remove the last code cell before it can be read back.
+    // Use one real key delivery so that a failed read never causes a second write.
+    if !codeCell, AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString) == .success {
+      if secure {
+        // A supported native setter delivers the password atomically. Never
+        // read or return a secure field's value; only check its character count.
+        // Browsers update their accessibility cache asynchronously after AXSetValue.
+        // Wait for that acknowledgement without writing the password a second time.
+        for attempt in 0..<11 {
+          guard let count = handoffAttr(element, kAXNumberOfCharactersAttribute) as? NSNumber else {
+            return ["ok": true, "method": "set", "unverified": true]
+          }
+          if count.intValue == value.utf16.count { return ["ok": true, "method": "set"] }
+          if attempt < 10 { usleep(100000) }
+        }
+        return ["error": "verify_failed"]
+      }
+      if (handoffAttr(element, kAXValueAttribute) as? String) == value {
+        _ = handoffFocus(app, element)
+        return ["ok": true, "method": "set"]
+      }
     }
     // Keys go to whichever app is in front: never type unless it is this one.
     guard front, handoffFocus(app, element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffKey(0, flags: .maskCommand) // select all
-    handoffKey(51) // delete
+    // Empty code cells often use Backspace to focus the previous cell. Replace
+    // the selection directly instead, whether this cell is empty or already filled.
+    if !codeCell { handoffKey(51) } // delete
+    // Focus and selection changes are asynchronous in browsers. Let them
+    // settle before the first replacement character arrives.
+    usleep(100000)
     guard handoffFocused(app, is: element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffTypeAndSettle(value)
-    guard handoffFocused(app, is: element) else { return ["error": "focus_lost"] }
+    if !handoffFocused(app, is: element) {
+      // A one-character code cell can focus its neighbour or submit immediately. There are
+      // no remaining characters to leak into that new field. The host checks the page again
+      // before the next cell. Passwords and ordinary fields retain the strict focus check.
+      guard codeCell, handoffFrontPid() == pid else { return ["error": "focus_lost"] }
+      return ["ok": true, "method": "typed", "unverified": true]
+    }
     if secure {
       if let count = handoffAttr(element, kAXNumberOfCharactersAttribute) as? NSNumber {
-        return count.intValue == value.count ? ["ok": true, "method": "typed"] : ["error": "verify_failed"]
+        return count.intValue == value.utf16.count ? ["ok": true, "method": "typed"] : ["error": "verify_failed"]
       }
       return ["ok": true, "method": "typed", "unverified": true]
     }
@@ -881,6 +954,8 @@ func handoffPointer(_ request: [String: Any]) -> [String: Any] {
       CGRect(x: area[0], y: area[1], width: area[2], height: area[3]).contains(CGPoint(x: point[0], y: point[1]))
     else { return ["error": "invalid"] }
     let target = CGPoint(x: point[0], y: point[1])
+    // With chosen apps only, a click cannot be delivered (see deliver): say so.
+    guard inputTargetPid == nil else { return ["error": "action_failed"] }
     guard handoffOwnsPoint(pid, target) else { return ["error": "covered"] }
     handoffClick([target.x - 0.5, target.y - 0.5, 1, 1])
     return ["ok": true]
@@ -925,9 +1000,54 @@ func handoffDetectQr(_ data: Data) -> [[String: Any]] {
   return found
 }
 
+// macOS 27.3 lets the person allow control of chosen apps only. The per-target
+// trust keys exist only there, so they are looked up at run time (nil before).
+// Measured on 27.3 beta 2 (26C5047e) with one chosen app: AXIsProcessTrusted()
+// is already true while CGPreflightPostEventAccess() is false, and HID-tap
+// events are dropped even for the chosen app, so remote keyboard and mouse need
+// the whole Mac. Same lookup as macos-text-insertion-helper.swift.
+func appControlConstant(_ name: String) -> CFString? {
+  guard let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, name) else { return nil }
+  return symbol.assumingMemoryBound(to: Unmanaged<CFString>?.self).pointee?.takeUnretainedValue()
+}
+/// Whether this process may control `bundleId` (every app when nil); nil before
+/// macOS 27.3. Never prompts.
+func appControlAllowed(_ bundleId: String?) -> Bool? {
+  guard let key = appControlConstant("kAXTrustedCheckOptionTargetBundleIdentifier"),
+    let allApps = appControlConstant("kAXTrustedCheckTargetAllApplications") else { return nil }
+  let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false,
+    key as String: (bundleId ?? allApps as String)] as CFDictionary
+  return AXIsProcessTrustedWithOptions(options)
+}
+func controlsAllApps() -> Bool? { appControlAllowed(nil) }
+
 #if !DESKTOP_INPUT_TEST
+// AX may be scoped to a single app on macOS 27.3. Desktop input posts CGEvents.
+func desktopInputAuthorized() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
+var inputTargetBundle: String?
+/// Input handoff works in one app. With control limited to chosen apps, it may
+/// only act on a chosen app and must send that app's input to its process.
+/// False when the app is not chosen; true (and nothing set) everywhere else.
+func selectInputTarget(_ pid: Int32) -> Bool {
+  guard !CGPreflightPostEventAccess(), AXIsProcessTrusted(), controlsAllApps() == false else { return true }
+  guard let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+    appControlAllowed(bundle) == true else { return false }
+  inputTargetPid = pid
+  inputTargetBundle = bundle
+  return true
+}
 if CommandLine.arguments.contains("--check") {
-  print(AXIsProcessTrusted() ? "ready" : "permission"); exit(0)
+  let postEvents = CommandLine.arguments.contains("--post-events")
+  let granted = postEvents ? desktopInputAuthorized() : AXIsProcessTrusted()
+  // `--scope` is sent only by a Main that understands the extra word; the
+  // readiness answer itself is unchanged.
+  if !granted && postEvents && CommandLine.arguments.contains("--scope")
+    && AXIsProcessTrusted() && controlsAllApps() == false {
+    print("chosen-apps"); exit(0)
+  }
+  print(granted ? "ready" : "permission"); exit(0)
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
   // One photographed window (JPEG) on stdin: its byte length on a line, then the bytes. Main keeps
@@ -964,7 +1084,10 @@ if CommandLine.arguments.contains("--lock-state") {
 }
 if CommandLine.arguments.contains("--request-permission") {
   let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-  print(AXIsProcessTrustedWithOptions(options) ? "ready" : "permission"); exit(0)
+  // Request only the next missing capability on this explicit local action.
+  guard AXIsProcessTrustedWithOptions(options) else { print("permission"); exit(0) }
+  let granted = !CommandLine.arguments.contains("--post-events") || CGPreflightPostEventAccess() || CGRequestPostEventAccess()
+  print(granted ? "ready" : "permission"); exit(0)
 }
 func ownedConsoleSession() -> [String: Any]? {
   guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
@@ -1049,6 +1172,30 @@ if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-scree
   print("locked"); exit(0)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
+if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--editable-at" {
+  guard let session = ownedConsoleSession(), !(session["CGSSessionScreenIsLocked"] as? Bool ?? false),
+    let x = Float(CommandLine.arguments[2]), let y = Float(CommandLine.arguments[3]),
+    x.isFinite, y.isFinite else { exit(2) }
+  let system = AXUIElementCreateSystemWide()
+  AXUIElementSetMessagingTimeout(system, 0.25)
+  var hit: AXUIElement?
+  guard AXUIElementCopyElementAtPosition(system, x, y, &hit) == .success else { exit(2) }
+  // Web fields can expose an inner text node at the tapped point.
+  for _ in 0..<5 {
+    guard let element = hit, handoffBool(element, kAXEnabledAttribute) != false else { break }
+    let role = handoffString(element, kAXRoleAttribute) ?? ""
+    if handoffEditableRoles.contains(role) || handoffIsSecure(element) {
+      // Clicking a read-only preview can leave focus in the previous editor.
+      let focused = handoffElement(handoffAttr(system, kAXFocusedUIElementAttribute))
+      let editable = (handoffBool(element, "AXEditable") != false) &&
+        (focused.map { CFEqual($0, element) } == true || handoffBool(element, kAXFocusedAttribute) == true)
+      print(editable ? "editable" : "other"); exit(0)
+    }
+    if ["AXButton", "AXLink", "AXWindow", "AXWebArea"].contains(role) { break }
+    hit = handoffElement(handoffAttr(element, kAXParentAttribute))
+  }
+  print("other"); exit(0)
+}
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A single bounded request; values stay on stdin and are never echoed.
   var bytes: [UInt8] = []
@@ -1063,6 +1210,8 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   bytes.withUnsafeMutableBufferPointer { buffer in for i in buffer.indices { buffer[i] = 0 } }
   // A locked screen is never read or typed into; the owner unlocks the computer first.
   if session["CGSSessionScreenIsLocked"] as? Bool ?? false { handoffRespond(["error": "locked"]) }
+  // An app the person did not choose answers neither reads nor input (macOS 27.3+).
+  if let pid = handoffPid(request), !selectInputTarget(pid) { handoffRespond(["error": "permission"]) }
   switch request["op"] as? String {
   case "windows": handoffRespond(handoffWindowList(request))
   case "snapshot": handoffRespond(handoffSnapshot(request))
@@ -1249,13 +1398,21 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--window" {
     let pid = Int32(CommandLine.arguments[3]), pid > 0 else { exit(2) }
   confine = HandoffConfine(window: window, pid: pid)
 }
+// Other entrypoints above (e.g. reading a selection) do not post global events.
+// Remote control needs the whole Mac; a confined live view may still work in
+// its own app when the person chose that app (macOS 27.3+).
+guard CGPreflightPostEventAccess() || (confine.map { selectInputTarget($0.pid) } == true && inputTargetPid != nil) else {
+  print("permission"); fflush(stdout); exit(2)
+}
 print("ready"); fflush(stdout)
 let watchdog = DispatchSource.makeTimerSource(queue: .global())
 watchdog.schedule(deadline: .now() + 1, repeating: 1)
 watchdog.setEventHandler {
   lock.lock(); defer { lock.unlock() }
   if inputCaller.code() == nil { releaseAll(); exit(77) }
-  if !AXIsProcessTrusted() { releaseAll(); print("error"); fflush(stdout); exit(2) }
+  let authorized = inputTargetPid == nil ? desktopInputAuthorized()
+    : AXIsProcessTrusted() && appControlAllowed(inputTargetBundle) == true
+  if !authorized { releaseAll(); print("error"); fflush(stdout); exit(2) }
   if Date().timeIntervalSince(lastSeen) > 5 { releaseAll() }
 }
 watchdog.resume()

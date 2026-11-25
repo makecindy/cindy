@@ -29,6 +29,7 @@ import {
 import { createLogger } from '../../logger';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import { getMaker } from '../../maker-host';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   resolveLenientSessionRoute,
   resolveNewTaskDefaultModelRoute,
@@ -71,7 +72,7 @@ import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import { readImDefaultSettings } from '../defaultSettingsStore';
+import { feishuGroupPermissionMode } from '../feishu/groupOverrides';
 import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
@@ -108,6 +109,9 @@ import type { ImChannelAdapter } from './types';
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+/** 插件引擎任务第一期不接 IM 渠道(docs/plans/acp-plugin-bridge.md)。 */
+const IM_CHANNEL_FEATURE = 'IM channels';
 
 /** 桌面偏好还没推过来时的兜底;模型不写死,按新建任务口径实时解析。 */
 const DESKTOP_CC_DEFAULTS: Omit<DesktopCcPrefs, 'model' | 'providerId'> = {
@@ -353,6 +357,9 @@ export function createCardActionHandler(
       const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
       const sessionAgentKind = liveBeforePick?.agentKind ??
         (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      // 插件引擎任务不接 IM 渠道(docs/plans/acp-plugin-bridge.md):切模型卡明确失败,
+      // 不按内置引擎的路由去改。
+      if (sessionAgentKind === 'acp') return new PluginEngineUnsupportedError(IM_CHANNEL_FEATURE).message;
       const isPiSession = sessionAgentKind === 'pi';
       if (previousRoute?.agentDeviceId && sessionAgentKind) {
         try {
@@ -1003,11 +1010,15 @@ export function createCardActionHandler(
     // (群 oc_ / p2p 是对方 open_id)保留作兜底判据: 上面的 fail-closed 已经把
     // 「群卡 + 非 lane senderId」拦在建绑定之前, 这条兜底如今够不着, 留着是为了
     // 万一那道门被放宽时权限档不会静默退回私聊那档(宁可按群算)。
+    // 这个群在设置页「群聊」里单独设置过权限档时以它为准(同 permissionModeFor)。
+    const feishuControlLane = channel === 'feishu' ? decodeFeishuLaneUserId(event.senderId) : null;
     const isFeishuGroupControl =
-      channel === 'feishu' &&
-      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+      channel === 'feishu' && (feishuControlLane !== null || event.chatId.startsWith('oc_'));
     const controlNewPermissionMode = isFeishuGroupControl
-      ? readImDefaultSettings('feishu').groupPermissionMode
+      ? feishuGroupPermissionMode(
+          botContextId,
+          feishuControlLane?.chatId ?? (event.chatId.startsWith('oc_') ? event.chatId : null),
+        )
       : desktopPrefs.permissionMode;
     log.info(
       `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +

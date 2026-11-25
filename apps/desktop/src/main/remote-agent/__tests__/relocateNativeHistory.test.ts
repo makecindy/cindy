@@ -2,10 +2,11 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { providerShareHostPeer } from '@cindy/device-link';
 import { createNativeHistoryRelocator } from '../controller/relocateNativeHistory';
 
-const h = vi.hoisted(() => ({ generation: 1, caps: vi.fn(), remote: vi.fn(), transfer: vi.fn(), local: vi.fn() }));
+const h = vi.hoisted(() => ({ generation: 1, caps: vi.fn(), remote: vi.fn(), transfer: vi.fn(), local: vi.fn(), backup: vi.fn() }));
 vi.mock('../../appSessionState', () => ({ getActiveAppSession: () => ({ generation: h.generation }) }));
 vi.mock('../nativeHistoryStorage', () => ({ nativeHistoryStorage: () => ({}) }));
 vi.mock('../nativeHistoryTransfer', () => ({ createNativeHistoryTransfer: () => h.local, transferNativeHistory: h.transfer }));
+vi.mock('../controller/nativeHistoryBackup', () => ({ readNativeHistoryBackupEndpoint: h.backup }));
 vi.mock('../controller/runClient', () => ({
   remoteAgentInvoker: (device: string) => async (args: unknown[]) => h.remote(device, args),
   RemoteAgentRunClient: { caps: h.caps },
@@ -61,4 +62,32 @@ it('rejects a late capability result from a previous account', async () => {
   h.caps.mockImplementation(async () => { h.generation++; return { nativeHistoryTransfer: true }; });
   await expect(createNativeHistoryRelocator('/test-user-data', vi.fn())(input)).rejects.toThrow('REMOTE_AGENT_ACCOUNT_CHANGED');
   expect(h.transfer).not.toHaveBeenCalled();
+});
+
+// Unit, production relocator. The older tests cover live endpoint negotiation only.
+// One source link failure must select the task-host copy, while a target failure
+// must retain the existing transaction's fallback without importing a second copy.
+it.each(['source', 'target'] as const)('only uses the backup if the %s link failed at transfer time', async failure => {
+  const offline = Object.assign(new Error('DEVICE_OFFLINE'), { code: 'DEVICE_OFFLINE' });
+  h.caps.mockResolvedValue({ nativeHistoryTransfer: true });
+  h.remote.mockImplementation(async (device: string) => {
+    if (device === failure) throw offline;
+    return {};
+  });
+  const backup = vi.fn(async () => ({}));
+  h.backup.mockResolvedValue({ endpoint: backup, validate: vi.fn() });
+  h.transfer.mockImplementation(async (source, target) => {
+    await source({ action: 'export', kind: 'pi', nativeId: '/session.jsonl' });
+    await target({ action: 'restore', id: 'handle' });
+    return 'restored';
+  });
+  const relocate = createNativeHistoryRelocator('/test-user-data', vi.fn());
+  const result = relocate({ ...input, kind: 'pi', nativeId: '/session.jsonl', fromDevice: 'source', toDevice: 'target' });
+  if (failure === 'source') {
+    await expect(result).resolves.toBe('restored');
+    expect(backup).toHaveBeenCalledTimes(1);
+  } else {
+    await expect(result).rejects.toBe(offline);
+    expect(h.backup).not.toHaveBeenCalled();
+  }
 });

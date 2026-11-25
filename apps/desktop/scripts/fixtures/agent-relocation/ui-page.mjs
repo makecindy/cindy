@@ -3,7 +3,7 @@ export default {
   name: 'agent-relocation',
   entry: './agent-relocation-fixture.tsx',
   viewport: { width: 680, height: 340 },
-  real: 'SystemCard agent-switch branch and localized native-resume / summary-fallback badges',
+  real: 'SystemCard switch and rebuild dividers, including legacy and current handoff labels',
   notCovered: 'Actual device transport, Harness startup and native mobile rendering. Uses fixture history.',
   stubs: {
     'src/renderer/features/bots/useRemoteBots': 'export const useRemoteBots = () => [];',
@@ -13,13 +13,19 @@ export default {
   cases: {
     default: { about: 'Native history resumed on the target computer' },
     fallback: { about: 'Explicit summary fallback', data: { fallback: true } },
-    narrow: { about: 'Summary badge at 320px', data: { fallback: true }, viewport: { width: 320, height: 340 } },
+    complete: { about: 'Both dividers show complete carryover; it supersedes the legacy fallback badge', data: { fallback: true, coverage: 'complete' } },
+    narrow: { about: 'Both dividers show condensed carryover at 320px', data: { fallback: true, coverage: 'condensed' }, viewport: { width: 320, height: 340 } },
   },
-  async ready(page) { await page.getByRole('separator').waitFor(); },
+  async ready(page) { await page.getByRole('separator').first().waitFor(); },
   async check(page, ui) {
     const key = ui.data.fallback ? 'fallbackBadge' : 'resumedBadge';
-    assert.equal(await page.getByText(await ui.t(`chat.systemCard.agentSwitch.${key}`), { exact: true }).count(), 1);
-    await page.getByRole('button').click();
+    const legacyBadge = await ui.t(`chat.systemCard.agentSwitch.${key}`);
+    assert.equal(await page.getByText(legacyBadge, { exact: true }).count(), ui.data.coverage ? 0 : 1);
+    if (ui.data.coverage) {
+      const coverage = await ui.t(`chat.systemCard.handoffCoverage.${ui.data.coverage}`);
+      assert.equal(await page.getByText(coverage, { exact: true }).count(), 2);
+    }
+    await page.getByRole('button').first().click();
     await page.getByText(ui.data.fallback ? 'Earlier requirements and latest tool outcome.' : 'Native history restored; continue with the current environment.', { exact: true }).waitFor();
     await ui.capture('expanded');
   },

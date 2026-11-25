@@ -37,13 +37,10 @@ import { InteractionPromptSlot } from '@/components/interaction-portal';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from '../hooks/useConfirmTaskArchive';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
-import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
-import {
-  archiveScheduleWarning,
-  loadActiveBoundScheduleNames,
-} from '@/features/scheduler/lib/archiveScheduleWarning';
+import { resolveWorktreeRemovalPreflight } from '@/lib/worktreeRemovalWarning';
+import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -61,10 +58,8 @@ import {
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { OrcaSplitView } from '../OrcaSplitView';
 import { useFileContent } from './hooks/useFileContent';
-import {
-  getSessionDeviceId,
-  remoteProjectsStore,
-} from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { resolveDocModeFilesSession } from './lib/docModeSwitchProjects';
 import { useChatRailResize } from './hooks/useChatRailResize';
 import { useChatRailCollapsed } from './hooks/useChatRailCollapsed';
 import { FileBodyView, type FileBodyHandle } from './FileBodyView';
@@ -82,14 +77,16 @@ const log = createLogger('cc-agent.workdir-browse.route');
 
 export function WorkdirBrowseRoute() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedDeviceId = searchParams.get('device');
   return (
     <CindyMakeSessionGate sessionId={sessionId}>
-      <WorkdirBrowseContent />
+      <WorkdirBrowseContent key={requestedDeviceId} requestedDeviceId={requestedDeviceId} />
     </CindyMakeSessionGate>
   );
 }
 
-function WorkdirBrowseContent() {
+function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string | null }) {
   const { t } = useTranslation();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -98,7 +95,8 @@ function WorkdirBrowseContent() {
   // Resolve workdir from session list (already cached in this feature's
   // shared sessions hook — no extra IPC).
   const sessionsHook = useCCSessions({ includeArchived: 'all' });
-  const { confirm: confirmDialog, confirmThree } = useConfirmDialog();
+  const { confirmThree } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   // 当前 active 文件对应的 FileBodyView 命令式句柄。关 tab 前用它探测
   // dirty / 触发 save。非 active tab 不挂载 FileBodyView,因此天然只能拿到
   // 当前文件的状态 —— 这正是我们要拦截的范围(只有正在编辑的文件可能丢内容)。
@@ -111,20 +109,11 @@ function WorkdirBrowseContent() {
     remoteProjectsStore.getVisibleMergedRemoteSessions,
   );
   const currentSession = useMemo(
-    () =>
-      sessionId
-        ? sessionsHook.sessions.find((s) => s.id === sessionId) ??
-          remoteMirrorSessions.find((s) => s.id === sessionId) ??
-          null
-        : null,
-    [sessionId, sessionsHook.sessions, remoteMirrorSessions],
+    () => resolveDocModeFilesSession(sessionsHook.sessions, sessionId, remoteMirrorSessions, requestedDeviceId),
+    [sessionsHook.sessions, sessionId, remoteMirrorSessions, requestedDeviceId],
   );
   const workdir = currentSession?.workingDir ?? '';
-  // 会话归属三路(见 FileBrowserBody 同款注释):device-link 会话 deviceId 优先,
-  // 其自带的 remoteHostId 是被控端的 SSH host,由被控端 device-op 二跳处理。
-  const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
-    sessionId ? getSessionDeviceId(sessionId) ?? null : null,
-  );
+  const deviceId = currentSession?.deviceLinkDeviceId ?? requestedDeviceId;
   const remoteHostId = deviceId ? null : currentSession?.remoteHostId ?? null;
   const browsableWorkdir = workdir;
 
@@ -135,7 +124,7 @@ function WorkdirBrowseContent() {
   // handleBrowseFiles 直接拿 activeSessionId 跳到 /cc-agent/files/<workerId>, 此时
   // tab 不高亮 + chat 区落到 fallback CCAgentSessionView 看起来"什么都没选中"。
   useEffect(() => {
-    if (!currentSession || !isOrcaWorkerSession(currentSession)) return;
+    if (deviceId || !currentSession || !isOrcaWorkerSession(currentSession)) return;
     let cancelled = false;
     void window.electronAPI.localDb.orcaWorkflows
       .getByWorkerSession(currentSession.id)
@@ -149,7 +138,7 @@ function WorkdirBrowseContent() {
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [currentSession, navigate, searchParams]);
+  }, [currentSession, deviceId, navigate, searchParams]);
 
   // SessionTabsBar 的 tab 列表 = 当前 workdir 下所有 active 普通会话,按 sidebar
   // projects 内组内排序对齐
@@ -335,8 +324,8 @@ function WorkdirBrowseContent() {
   //   1. running / 远程接管中 → toast 阻断(同 sidebar 单条 archive 行为)。
   //   2. confirmDialog 二次确认。
   //   3. closeSessionQuery + sessionService.update(status:'archived', pinnedAt:null)
-  //      + purgeSession + clearComposerDraft + refreshSessions —— 与 sidebar
-  //      的归档副作用对齐,保证 doc 模式关 tab = sidebar 单条归档。
+  //      + purgeSession + refreshSessions —— 与 sidebar 的归档副作用对齐,保证
+  //      doc 模式关 tab = sidebar 单条归档。未发送草稿保留,恢复后照常回填。
   //   4. session 状态 → archived 后,sortedWorkdirSessions memo 重算自然剔除该 tab。
   //   5. 若关的是 active,navigate 到 neighbor;neighbor 也没有时回 /cc-agent。
   //      (上一轮约定「禁用关闭最后一个」由 bar 自身在 sessions.length<=1 时隐藏 ×
@@ -364,36 +353,33 @@ function WorkdirBrowseContent() {
         (await loadActiveBoundScheduleNames([
           { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
         ])).get(closingId) ?? [];
-      const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
-        closingId,
-        closing?.deviceLinkDeviceId,
+      const preflight = await resolveWorktreeRemovalPreflight(closingId, closing?.deviceLinkDeviceId);
+      const confirmed = await confirmTaskArchive(
+        preflight,
+        scheduleNames,
+        {
+          title: closingTitle,
+          description: t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+        },
       );
-      const ok = await confirmDialog({
-        title: t('ccAgent.workdirBrowse.archiveSession.title'),
-        description: [
-          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
-          dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
-          archiveScheduleWarning(t, scheduleNames),
-        ]
-          .filter(Boolean)
-          .join(' '),
-        confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
-        cancelText: t('ccAgent.workdirBrowse.archiveSession.cancel'),
-      });
-      if (!ok) return;
+      if (!confirmed) return;
 
       makerChatStore.closeSessionQuery(closingId);
 
       try {
-        await sessionService.setStatus(closingId, 'archived');
+        if (confirmed === 'discard') {
+          await sessionService.setStatus(closingId, 'archived', undefined, true);
+        } else {
+          await sessionService.setStatus(closingId, 'archived');
+        }
       } catch (err) {
         log.error('archive session in doc mode failed', err);
         toast.error(t('ccAgent.workdirBrowse.archiveSession.failed'));
         return;
       }
 
+      // 归档可恢复：未发送草稿保留在 composerDraftStore，恢复后输入框照常回填。
       makerChatStore.purgeSession(closingId);
-      discardComposerDraft(closingId);
       // 跨 bucket 同步:refreshSessions 只刷自己当前 filter 桶 ('all'),sidebar 的
       // 'active' 桶不会被刷,导致 sidebar 仍把已归档 session 当 active 渲染。
       // patchLocal 遍历所有桶就地合并字段,弥补单桶 refresh 的覆盖盲区。
@@ -409,7 +395,7 @@ function WorkdirBrowseContent() {
         }
       }
     },
-    [confirmDialog, navigate, searchParams, sessionId, sessionsHook, workdir, t],
+    [confirmTaskArchive, navigate, searchParams, sessionId, sessionsHook, t],
   );
 
   // 双击 SessionTabsBar 上的 tab 改 title。乐观先 patchLocal(列表顺序不变),
@@ -551,7 +537,7 @@ function WorkdirBrowseContent() {
             aria-label={t('ccAgent.workdirBrowse.chatRail.resizeAria')}
             onPointerDown={rail.handleDragStart}
             onDoubleClick={rail.resetWidth}
-            className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
+            className="absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize group/handle"
           >
             {/* 1px 视觉条 —— right-0 与 middle 的 border-r 同位,所以 hover 时
                 单纯把那 1px 由 border-r 灰色换成 sidebar-action-icon,不会增厚。 */}
@@ -608,23 +594,14 @@ function WorkdirBrowseContent() {
           {/* 当 active session 是 Orca Lead 时, 用 doc 专用 OrcaSplitView toggle 展示
               Lead/Worker。用户从 × 关协同后,disableOrca 会把 lead.orcaRole 清掉,
               activeSession 自然 fallback 到下面的单 CCAgentSessionView,不需要跳路由。 */}
-          {(() => {
-            // 用未过滤的 sessionsHook.sessions 查 active —— sortedWorkdirSessions
-            // 已剔除 Worker / 非 active, 但 active session 自身可能是 archived
-            // (用户直接通过 URL 进来),Lead 判断不该依赖那层过滤。
-            const activeSession = sessionId
-              ? sessionsHook.sessions.find((s) => s.id === sessionId) ?? null
-              : null;
-            if (activeSession && isOrcaLeadSession(activeSession)) {
-              return (
-                <OrcaSplitView
-                  leadSessionId={activeSession.id}
-                  reportAgentIslandVisibility={!railCollapse.collapsed}
-                />
-              );
-            }
-            return <CCAgentSessionView viewVisible={!railCollapse.collapsed} />;
-          })()}
+          {currentSession && !deviceId && isOrcaLeadSession(currentSession) ? (
+            <OrcaSplitView
+              leadSessionId={currentSession.id}
+              reportAgentIslandVisibility={!railCollapse.collapsed}
+            />
+          ) : (
+            <CCAgentSessionView viewVisible={!railCollapse.collapsed} />
+          )}
         </div>
       </div>
     </div>

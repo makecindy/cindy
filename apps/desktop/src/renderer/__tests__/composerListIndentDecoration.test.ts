@@ -373,7 +373,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     }
   });
 
-  it('suspends list decoration but keeps stable CJK punctuation during IME composition', () => {
+  it('keeps a single-line hanging indent and CJK punctuation stable during IME composition', () => {
     vi.useFakeTimers();
     editor = new Editor({
       element: document.createElement('div'),
@@ -396,9 +396,11 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       editor.view.dom.querySelectorAll('span[style*="font-family"]').length;
     expect(punctuationCount).toBeGreaterThan(0);
 
+    // The paragraph-level indent only sets attributes on <p>; it never wraps the
+    // composition text, so it stays put instead of jumping left while typing.
     editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
     expect(editor.view.composing).toBe(true);
-    expect(editor.view.dom.querySelector('.composer-list-block-indent')).toBeNull();
+    expect(editor.view.dom.querySelector('.composer-list-block-indent')).not.toBeNull();
     expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(
       punctuationCount,
     );
@@ -407,7 +409,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       editor.state.tr.insertText('中', editor.state.doc.content.size - 1).setMeta('composition', 1),
     );
     expect(editor.getText()).toBe('1. 《旧》中');
-    expect(editor.view.dom.querySelector('.composer-list-block-indent')).toBeNull();
+    expect(editor.view.dom.querySelector('.composer-list-block-indent')).not.toBeNull();
     expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(
       punctuationCount,
     );
@@ -422,6 +424,84 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.view.dom.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(
       0,
     );
+  });
+
+  /**
+   * User report (2026-11-17 video): typing a Chinese comment under a `> ` quote
+   * made the quote jump left on every IME composition, because compositionstart
+   * removed every list wrapper in the document. Only the composing row may lose
+   * its wrapper (#626 Microsoft Pinyin freeze); other rows keep their position.
+   * Minimal failure: `> 引用一` / `评论` / `> 引用二` in one paragraph, compose
+   * on the comment row. Unit tier: real editor, synthetic composition events.
+   */
+  it.each([
+    { name: 'a plain comment row', composeAfter: '评论', kept: ['> 引用一', '> 引用二'] },
+    { name: 'a quote row', composeAfter: '> 引用二', kept: ['> 引用一'] },
+  ])('keeps other rows indented while composing on $name', ({ composeAfter, kept }) => {
+    vi.useFakeTimers();
+    const ed = makeEditor(['> 引用一', '评论', '> 引用二']);
+    let composePos = -1;
+    ed.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === composeAfter) composePos = pos + node.nodeSize;
+    });
+    ed.commands.setTextSelection(composePos);
+    expect(indentSpans(ed)).toEqual(['> 引用一', '> 引用二']);
+
+    ed.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    expect(indentSpans(ed)).toEqual(kept);
+    ed.view.dispatch(ed.state.tr.insertText('中', composePos).setMeta('composition', 1));
+    expect(indentSpans(ed)).toEqual(kept);
+
+    ed.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    vi.runOnlyPendingTimers();
+    expect(indentSpans(ed)).toEqual(
+      composeAfter === '评论' ? ['> 引用一', '> 引用二'] : ['> 引用一', '> 引用二中'],
+    );
+  });
+
+  /**
+   * CSS contract (#11117 review): `.composer-list-quote` removes the list's 1em
+   * base indent from a quote row, `.composer-list-quote-container` does the
+   * same for a quote-only paragraph fallback. A layout branch without the hook
+   * makes the quote jump 1em mid-typing — on the 12th letter of
+   * `> abcdefghijkl`, or when a mention chip enters the quote. jsdom has no
+   * layout, so the hook on the element that renders `>` is the observable
+   * contract; ui:check `companion-composer/quote-comment` measures geometry.
+   */
+  it.each([
+    {
+      name: 'a long letter run',
+      content: [{ type: 'text', text: '> abcdefghijklmn' }],
+      quoteContainer: false,
+    },
+    {
+      name: 'an inline chip (paragraph fallback)',
+      content: [
+        { type: 'text', text: '> 看 ' },
+        { type: 'testAtom' },
+        { type: 'text', text: ' 这段' },
+      ],
+      quoteContainer: true,
+    },
+  ])('keeps the quote layout hook when $name switches the row layout', ({ content, quoteContainer }) => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, HardBreak, TestAtom, ComposerListIndentDecoration],
+      content: { type: 'doc', content: [{ type: 'paragraph', content }] },
+    });
+    const marker = Array.from(editor.view.dom.querySelectorAll('span')).find(
+      (element) => element.textContent?.startsWith('>') && element.childElementCount === 0,
+    );
+    expect(marker?.closest('.composer-list-quote')).not.toBeNull();
+    expect(editor.view.dom.querySelector('p.composer-list-quote-container') !== null).toBe(
+      quoteContainer,
+    );
+  });
+
+  it('keeps the list indent for a fallback paragraph that mixes quotes and list rows', () => {
+    const ed = makeEditor(['> 引用，内容', '1. 列表，内容']);
+    expect(ed.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
+    expect(ed.view.dom.querySelector('.composer-list-quote-container')).toBeNull();
   });
 
   it('keeps full-width parentheses from changing width across repeated IME composition', () => {

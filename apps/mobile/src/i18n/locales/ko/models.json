@@ -46,35 +46,22 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "이 모델에는 현재 대화가 모두 들어가지 않습니다",
+    "condensedToast": "새 모델에 맞게 이전 대화를 압축합니다. 전체 대화 기록은 계속 볼 수 있습니다.",
     "remoteTitle": "이 원격 작업에서는 모델을 안전하게 전환할 수 없습니다",
-    "description": "현재 대화에서 이미 {{used}}를 사용해 새 모델의 한도 {{total}}(약 {{pct}}%)를 초과했습니다. 전환하면 Cindy가 짧은 요약을 만든 후 계속합니다. 대화 기록은 유지되지만 모든 내용이 새 모델에 그대로 전달되지는 않습니다.",
     "remoteDescription": "이 원격 작업의 컨텍스트는 더 작은 모델의 {{total}} 중 {{used}}(약 {{pct}}%)를 사용 중이므로 안전하게 전환할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만든 뒤 이 모델을 선택하세요.",
-    "cancel": "현재 모델 유지",
-    "confirm": "전환하고 계속"
+    "cancel": "현재 모델 유지"
   },
   "switchOutcome": {
     "applied": "모델 제공자 전환이 적용되었습니다.",
-    "failed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요."
+    "failed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
+    "previousSettingsRetained": "전환이 완료되지 않았습니다. 작업에는 이전 설정이 계속 적용됩니다."
   },
   "agentSwitch": {
-    "browseAccessibility": "{{agent}} 모델 보기",
-    "confirmTitle": "{{agent}}(으)로 전환할까요?",
-    "confirmMessage": "다음 메시지를 보낼 때 {{appName}}이(가) 현재 세션을 {{agent}}에 인계합니다. 두 Agent는 컨텍스트와 도구에 대한 이해가 다를 수 있으니 확인 후 대상 모델을 선택하세요.",
-    "cancel": "취소",
-    "confirm": "계속 선택"
-  },
-  "agentRelocation": {
-    "titleOther": "Agent를 “{{device}}”에서 실행할까요?",
-    "titleHost": "Agent를 다시 “{{host}}”에서 실행할까요?",
-    "titleHostUnnamed": "Agent를 다시 세션이 있는 컴퓨터에서 실행할까요?",
-    "message": "원래 컴퓨터에 있는 대화 기록은 옮길 수 없어 인수인계 요약으로 이어집니다. 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
-    "messageNativeHistory": "전체 대화 기록을 복사해 이어서 진행합니다. 복원할 수 없으면 인수인계 요약으로 이어지며, 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
-    "confirm": "컴퓨터 전환",
-    "cancel": "그대로 두기"
+    "browseAccessibility": "{{agent}} 모델 보기"
   },
   "unified": {
-    "accountUnassigned": "계정 미배정",
+    "remoteCopyUnavailableOn": "‘{{device}}’의 {{provider}}을(를) 지금 사용할 수 없습니다.",
+    "remoteCopyUnavailableOnTaskComputer": "작업이 있는 컴퓨터의 {{provider}}을(를) 지금 사용할 수 없습니다.",
     "accountCount_other": "계정 {{count}}개",
     "accountFallback": "계정 {{index}}",
     "favoriteConfiguration": "이 설정을 즐겨찾기에 추가",
@@ -123,5 +110,52 @@
     "quotaResetIn": "{{duration}} 후 초기화",
     "quotaAverageHint": "주간 할당량 · 계정별 동일 가중 평균",
     "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
+  },
+  "modelGroups": {
+    "title": "모델 그룹",
+    "sourceCount_other": "소스 {{count}}개",
+    "strategy": {
+      "expiring": "곧 만료되는 것 먼저",
+      "order": "순서대로",
+      "rotate": "번갈아",
+      "cheapest": "가장 저렴하게",
+      "drain": "다 쓰고 다음으로",
+      "headroom": "남은 양이 많은 순",
+      "weighted": "가중치"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",
+      "expiring": "할당량 기준 첫 번째",
+      "order": "사용 가능한 첫 번째 소스",
+      "rotate": "이번에는 이 소스 차례",
+      "only": "지금 쓸 수 있는 유일한 소스",
+      "soonest": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다",
+      "soonestUntil": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다({{reset}})",
+      "cheapest": "표시 가격이 가장 낮음",
+      "cheapestFree": "구독 할당량이 남아 추가 비용 없음",
+      "drain": "할당량이 다 떨어질 때까지 계속 사용",
+      "drainNext": "이전 소스를 다 썼거나 쓸 수 없어 이 소스로 바꿈",
+      "headroom": "남은 할당량이 가장 많음",
+      "headroomQuota": "할당량이 {{left}}% 남아 다른 어떤 소스보다 많음",
+      "weighted": "가중치에 따라 이번 차례",
+      "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
+      "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
+      "exceptionHours": "이 시간대에는 '{{name}}' 사용",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
+      "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
+    },
+    "anotherDevice": "다른 컴퓨터"
+  },
+  "pluginEngines": {
+    "genericName": "플러그인 엔진",
+    "defaultModel": "기본 모델",
+    "unavailable": "{{engine}}을(를) 사용할 수 없음",
+    "unavailableWithHint": "{{engine}}을(를) 사용할 수 없음: {{hint}}",
+    "worktreeUnsupported": "플러그인 엔진은 아직 worktree에서 작업을 시작할 수 없습니다. worktree를 끈 뒤 보내세요"
   }
 }

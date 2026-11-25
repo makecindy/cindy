@@ -76,15 +76,26 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
-  it('exposes the recorded failure without marking or rerunning it', () => {
+  // PR #11319: the real banner's diagnose action must identify the failed run,
+  // including legacy records without a schedule ID. The old assertion only
+  // covered the error text. Minimal input is one failed run with an error;
+  // this remains a jsdom unit test with no external I/O.
+  it.each([undefined, 'schedule-1'])('exposes the recorded failure and run identity with schedule ID %s without marking or rerunning it', (scheduleId) => {
     const onDiagnose = vi.fn();
     render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
-      latestFailedRun={{ runId: 'failed', firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
+      latestFailedRun={{ runId: 'failed', scheduleId, firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
       onDiagnose={onDiagnose} />);
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.diagnose'));
-    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+    expect(onDiagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      details: [
+        ...(scheduleId ? [`scheduleId: ${scheduleId}`] : []),
+        'runId: failed',
+        'firedAt: 1970-01-01T00:00:00.001Z',
+        'provider mismatch api_key=private-test-value',
+      ].join('\n'),
+    }));
     expect(markRunRead).not.toHaveBeenCalled();
   });
   it('distinguishes precheck failures while preserving the warning', () => {
@@ -92,6 +103,16 @@ describe('historical failed schedule notice', () => {
       latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }} />);
     expect(screen.getByText('chat.unreadFailedScheduleBanner.rateLimited')).toBeTruthy();
     expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
+  // #10609: legacy error prefixes also classify as precheck, but only a
+  // structured block confirms that this run never reached execution.
+  it.each([
+    [true, 'preRunBlocked'],
+    [undefined, 'precheck'],
+  ] as const)('uses the confirmed stage only with a structured block (%s)', (preRunBlocked, key) => {
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck', preRunBlocked }} />);
+    expect(screen.getByText(`chat.unreadFailedScheduleBanner.${key}`)).toBeTruthy();
   });
   // Uninstalling a plugin removed its check script; the banner must say which plugin and
   // let the user install it (previously only "checks blocked" plus an exit code). Since

@@ -31,6 +31,7 @@ describe('createMemoryReviewOneShot', () => {
       'merge a into b',
     );
     expect(requestText).toHaveBeenCalledWith(maker, 'prompt', {
+      source: 'memory-review',
       maxTokens: 800,
       timeoutMs: 60_000,
       disableReasoning: true,

@@ -1,3 +1,4 @@
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { BotProfileSourceField } from './BotProfileSourceField';
@@ -7,13 +8,13 @@ import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { BotPortraitPicker } from './BotPortraitPicker';
 import { botSettingsIcons } from './botSettingsIcons';
 import {
   ArrowLeft,
   Bot,
   Camera,
-  Check,
   ChevronRight,
   FolderOpen,
 } from 'lucide-react';
@@ -23,6 +24,9 @@ import { useBotTranslation } from './botPronounContext';
 import { Spinner } from '@/components/ui/spinner';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { isPluginEngineSelectable } from '@/lib/pluginEngineSelection';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
@@ -33,6 +37,7 @@ import {
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
+  useBotProfilesLoadState,
   getEffectiveBotModelChain,
   subscribeBotGlobalModel,
   type BotCapabilities,
@@ -56,6 +61,7 @@ import { CindyMergeSetting } from './CindyMergeSetting';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
@@ -67,6 +73,7 @@ import {
   type BotSettingsPayload,
 } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
+import { BotSettingsSaveStatus } from './BotSettingsSaveStatus';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
 import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
@@ -185,6 +192,7 @@ export function BotSettings({
   const botIdentityRef = useRef(bot.id);
   const reconciledBotRef = useRef(bot);
   const savingProfileRef = useRef(false);
+  const saveOwner = useRef(getDataOwnerGeneration()).current;
   const savedSettingsRef = useRef(
     normalizeBotSettingsPayload(
       {
@@ -202,18 +210,23 @@ export function BotSettings({
   );
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload, modelSelection = false) => {
+      // A detached trailing save still belongs to the account that opened this
+      // page. Never let a late completion dispatch it into the next account.
+      if (!isDataOwnerIdCurrent(saveOwner)) throw new Error('Settings owner changed');
+      const operationOwner = getDataOwnerGeneration();
       savingProfileRef.current = true;
       try {
         await target.profile.update(bot.id, {
           ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
           ...(modelSelection ? { acceptModelSelection: true } : {}),
         });
+        if (!isDataOwnerGenerationCurrent(operationOwner)) throw new Error('Settings owner changed');
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
       }
     },
-    [bot.id, target],
+    [bot.id, target, saveOwner],
   );
 
   const autosave = useBotSettingsAutosave({
@@ -492,32 +505,7 @@ export function BotSettings({
             <p className="text-11 text-[var(--text-danger)]" role="alert">
               {t('bots.guided.duplicateName')}
             </p>
-          ) : autosave.status === 'saving' ? (
-            <span
-              role="status"
-              className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Spinner size={12} /> {t('bots.autosave.saving')}
-            </span>
-          ) : autosave.status === 'saved' ? (
-            <span
-              role="status"
-              className="inline-flex animate-fade-in items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Check size={12} /> {t('bots.autosave.saved')}
-            </span>
-          ) : autosave.status === 'error' ? (
-            <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
-              {!sourceTooLong && <button
-                type="button"
-                onClick={() => void autosave.retry()}
-                className="font-medium text-[var(--text-primary)]"
-              >
-                {t('bots.autosave.retry')}
-              </button>}
-            </p>
-          ) : null}
+          ) : <BotSettingsSaveStatus autosave={autosave} modelPage={page === 'model'} sourceTooLong={sourceTooLong} />}
         </div>
         {page === 'home' ? (
           <>
@@ -809,8 +797,15 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
+  const localPluginEngines = usePluginEngines(true);
+  const { pluginEngineDevices: sharedPluginEngineDevices = [] } = useProviderShareAgentDevices();
+  const { devices: selectableDevices } = useSelectableDevices();
+  const canChoosePluginEngine = localPluginEngines.some(isPluginEngineSelectable)
+    || sharedPluginEngineDevices.length > 0
+    || selectableDevices.some((device) => device.online);
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
@@ -840,7 +835,9 @@ export function BotsHomeView() {
   const needsCanonicalCreation =
     !currentCanonicalId || unavailableCanonicalId === currentCanonicalId;
   const needsModelSelection = needsCanonicalCreation && modelUnavailable;
-  const needsProviderConnection = needsCanonicalCreation && providerOnboarding.visible;
+  const requiresProvider = providerOnboarding.visible && !canChoosePluginEngine
+    && selectedBot?.capabilities.modelChain[0]?.harness !== 'acp';
+  const needsProviderConnection = needsCanonicalCreation && requiresProvider;
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
   // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
@@ -942,9 +939,26 @@ export function BotsHomeView() {
   );
   useRegisterContentHeader(headerContent);
 
+  // The hand-off below keys on the fields that decide it, not on the row's
+  // identity: a roster refresh that only moves previews or unread counts must
+  // not restart the main-chat validation. It reads the latest row via this ref,
+  // synced by the effect declared just before it.
+  const selectedBotRef = useRef(selectedBot);
   useEffect(() => {
+    selectedBotRef.current = selectedBot;
+  });
+  const selectedBotId = selectedBot?.id;
+  const selectedBotStatus = selectedBot?.status;
+  // A profile save (version bump) still re-runs it, so creation that lost its
+  // version check to a concurrent save retries with the new version.
+  const selectedBotVersion = selectedBot?.currentVersion;
+  const selectedInvitationPending =
+    !!selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId;
+
+  useEffect(() => {
+    const selectedBot = selectedBotRef.current;
     if (needsProviderConnection || needsModelSelection) return;
-    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId) return;
+    if (selectedInvitationPending) return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
     if (selectedBot.status !== 'active') {
@@ -953,10 +967,12 @@ export function BotsHomeView() {
     }
 
     const canonicalSessionId = canonicalBotSessionId(selectedBot);
+    // Creation's CAS needs the current profile version, which a later refresh may have advanced.
+    const latestBot = () => (selectedBotRef.current?.id === selectedBot.id ? selectedBotRef.current : selectedBot);
     let cancelled = false;
     // Read existing history even without a route; only reconstruction needs one.
     const deferReconstruction = () => {
-      if (!providerOnboarding.visible && !modelUnavailable) return false;
+      if (!requiresProvider && !modelUnavailable) return false;
       setUnavailableCanonicalId(canonicalSessionId ?? null);
       return true;
     };
@@ -968,7 +984,7 @@ export function BotsHomeView() {
           if (session.status !== 'active') {
             if (deferReconstruction()) return;
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -981,7 +997,7 @@ export function BotsHomeView() {
             // arbitrary existing Session. Preserve the existing task and create a
             // fresh Bot-owned Session instead.
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -1004,7 +1020,7 @@ export function BotsHomeView() {
           // row disappeared. Passing null can never repair that state because
           // main correctly sees a non-null canonical pointer. Preserve the
           // observed id so a concurrent recovery still loses the CAS safely.
-          const next = await createCanonicalSession(selectedBot, canonicalSessionId, true).catch(
+          const next = await createCanonicalSession(latestBot(), canonicalSessionId, true).catch(
             () => null,
           );
           if (!cancelled) {
@@ -1022,7 +1038,7 @@ export function BotsHomeView() {
     const attemptToken = Symbol('bot-canonical-create');
     creatingBotRef.current = { botId: selectedBot.id, token: attemptToken };
     setIsCreatingSession(true);
-    void createCanonicalSession(selectedBot)
+    void createCanonicalSession(latestBot())
       .then((session) => {
         if (cancelled) return;
         navigate(`/bots/${selectedBot.id}/session/${session.id}`, { replace: true });
@@ -1046,15 +1062,25 @@ export function BotsHomeView() {
   }, [
     addRequested,
     createCanonicalSession,
-    selectedBot,
+    selectedBotId,
+    selectedBotStatus,
+    selectedBotVersion,
+    currentCanonicalId,
+    selectedInvitationPending,
     sessionId,
     settingsOpen,
     navigate,
-    providerOnboarding.visible,
+    requiresProvider,
     needsModelSelection,
     needsProviderConnection,
     modelUnavailable,
   ]);
+
+  // Only an unknown roster needs full-page recovery; a refresh must not discard
+  // an already-open creation draft. Reading the roster also precedes onboarding.
+  if (!profilesLoaded && !selectedBot && !entryTarget && profileLoadState === 'error') {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
+  }
 
   if (needsProviderConnection && !settingsOpen) {
     return (

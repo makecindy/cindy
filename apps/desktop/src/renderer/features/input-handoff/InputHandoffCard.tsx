@@ -154,7 +154,9 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
   // Without a live view from another computer, the form stays the way to finish it.
   const onThisComputer = !getStickySessionDeviceId(sessionId);
   const canUseForm = snapshot.controls.length > 0 || snapshot.picture === true;
-  const directSignIn = snapshot.directSignIn === true && (onThisComputer || !!liveView) && formFor !== snapshot.requestId;
+  const directSignIn = snapshot.directSignIn === true
+    && (onThisComputer || (!!liveView && snapshot.preferRemoteForm !== true))
+    && formFor !== snapshot.requestId;
   const qrScan = snapshot.qr === 'scan' && snapshot.picture === true;
 
   const skip: StripAction = { label: t('inputHandoff.action.skip'), onClick: () => void decide('cancel') };
@@ -241,12 +243,12 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
       aria-label={snapshot.purpose}
       data-testid="input-handoff-strip"
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border px-3 py-2.5',
+        'w-full max-w-[914px] rounded-xl border px-3 py-2.5',
         'border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]',
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-chip)] text-[var(--text-primary)]">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-primary)]">
           <Icon size={18} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">

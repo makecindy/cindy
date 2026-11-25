@@ -44,7 +44,7 @@ function setup(
     resetTurn: vi.fn(),
   } as unknown as ProviderGroupRouter & { pick: ReturnType<typeof vi.fn>; markCooling: ReturnType<typeof vi.fn> };
   const externalLoad = createProviderGroupExternalLoad({ now: () => now });
-  const invoke = vi.fn(async () => ({}));
+  const invoke = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({}));
   const relay = createProviderGroupGuestRelay({
     scope: () => ({ router, externalLoad, isCurrent: () => current }),
     readGroup: (id) => (id === 'anthropic' ? config : null),
@@ -66,6 +66,87 @@ function setup(
 const PLAN = { kind: 'claude-code' as const, model: 'opus', providerId: 'anthropic', exclude: new Set<string>() };
 
 describe('provider group guest relay planner', () => {
+  // Unit: production guest planner after a real executor capacity rejection.
+  // Existing tests cover account cooldown, not idle instances filling DEVICE_LIMIT
+  // while runningTurns is zero. Probe capacity on demand and recover immediately.
+  it('avoids a confirmed full executor across guests and restores it on live capacity', async () => {
+    const env = setup([MINI, FRIEND]);
+    let available = false;
+    env.invoke.mockImplementation(async () => ({ version: 1, agents: [], maxRuns: 16,
+      uploadChunkBytes: 1024, maxPayloadBytes: 1024, runCapacityAvailable: available }));
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    available = true;
+    const recovered = await Promise.all([env.relay.plan(PLAN), env.relay.plan(PLAN)]);
+    expect(recovered).toEqual([expect.objectContaining({ memberKey: MINI.key }), expect.objectContaining({ memberKey: MINI.key })]);
+    expect(env.router.markCooling).not.toHaveBeenCalled();
+  });
+  it('rechecks a known full executor after the legacy evidence deadline', async () => {
+    const env = setup([MINI, FRIEND]);
+    env.invoke.mockResolvedValue({ version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024,
+      maxPayloadBytes: 1024, runCapacityAvailable: false });
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+    env.advance(120_001);
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    expect(env.invoke).toHaveBeenCalledOnce();
+  });
+  it('does not probe a paused member while assigning a new task', async () => {
+    const env = setup([FRIEND], { ...CONFIG, members: [{ ...MINI, paused: true }, FRIEND] });
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    expect(env.invoke).not.toHaveBeenCalled();
+  });
+  it('bounds legacy holds, isolates direct admission and discards capacity evidence on account change', async () => {
+    const env = setup([MINI, FRIEND]);
+    env.invoke.mockResolvedValue({ version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 1024 });
+    const failed = () => env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] full'));
+    failed();
+    expect(await env.relay.plan({ ...PLAN, direct: true })).toMatchObject({ memberKey: MINI.key });
+    expect(env.invoke).not.toHaveBeenCalled();
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    env.advance(120_001);
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: MINI.key });
+    failed();
+    env.switchAccount();
+    expect(await env.relay.plan(PLAN)).toEqual({ kind: 'unavailable' });
+  });
+  it('shares slow capacity reads without delaying allocation beyond its foreground budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const env = setup([MINI, FRIEND]);
+      let finish!: (value: unknown) => void;
+      env.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+        providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+      const pending = Promise.all(Array.from({ length: 10 }, () => env.relay.plan(PLAN)));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect((await pending).every(plan => plan?.kind === 'member' && plan.memberKey === FRIEND.key)).toBe(true);
+      expect(env.invoke).toHaveBeenCalledOnce();
+      finish({ version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024, maxPayloadBytes: 1024, runCapacityAvailable: true });
+      await Promise.resolve();
+      // A subsequent plan may perform a fresh read after the shared one ends.
+      env.invoke.mockResolvedValue({ version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024,
+        maxPayloadBytes: 1024, runCapacityAvailable: true });
+      expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: MINI.key });
+    } finally { vi.useRealTimers(); }
+  });
+  it('routes image generation through the same reshare consent check as a task', async () => {
+    const reshareAllows = vi.fn(() => false);
+    const { relay, router } = setup([FRIEND, MINI], CONFIG, { reshareAllows });
+    const plan = await relay.plan({ ...PLAN, capability: 'image.generate', reshareKey: 'approved-guest' });
+    expect(router.pick).toHaveBeenCalledWith(expect.objectContaining({
+      capability: 'image.generate',
+      exclude: new Set([FRIEND.key]),
+    }));
+    expect(reshareAllows).toHaveBeenCalledWith(FRIEND.agentDeviceId, 'approved-guest');
+    expect(plan).toMatchObject({ kind: 'member', memberKey: MINI.key });
+  });
+
   // PR #10910 / unit: real guest plan(reserve) → router → relay load. The local
   // reserveFor regression missed guests, whose pending handles live externally.
   it('balances concurrent guest reservations and retires pending load on state or release', async () => {

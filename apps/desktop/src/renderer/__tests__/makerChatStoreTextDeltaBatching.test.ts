@@ -11,6 +11,7 @@ import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared
 import type { Message, Session } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
+import { clearSessionStarting, hasStartingTerminal } from '@/lib/sessionStartingStore';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -555,6 +556,16 @@ describe('makerChatStore text delta batching', () => {
     } finally { unsubscribe(); }
   });
 
+  it('preserves provider guidance when a terminal event has the generic turn-failed reason', () => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      const message = JSON.stringify({ error: 'future_code', message: 'Choose a smaller file.' });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message, reason: 'turn-failed' } } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).error).toBe(message);
+    } finally { unsubscribe(); }
+  });
+
   // #8147 follow-up: a recreated renderer gets history + projection, not the old
   // terminal event. The exact row ID must reach light subscribers (unit).
   it('restores the active error row ID from a snapshot without replaying its terminal event', () => {
@@ -702,6 +713,52 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  // #11113 / unit: terminal events can arrive without a running render or text.
+  // Exercise sendMessage + the actual event subscription. Old coverage only checked
+  // arrival order: a prior turn's late terminal after the new send must not settle it.
+  it.each([
+    ['claude-code', 'done', 'sendMessage'], ['pi', 'done', 'sendMessage'],
+    ['codex', 'done', 'sendMessage'], ['pi', 'error', 'sendMessage'],
+    ['pi', 'done', 'steerMessage'],
+  ] as const)('records only the submitted input’s %s %s terminal after %s across view absence', async (source, type, method) => {
+    const terminal = { type, source, data: type === 'error' ? { message: 'Remote turn failed' } : {} };
+    const status = { type: 'status', source, data: { isRunning: false, status: 'Done', tokenUsage: 0 } };
+    try {
+      onEvent?.({ sessionId: SESSION_ID, event: terminal });
+      await makerChatStore[method](SESSION_ID, 'next input', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+      const clientId = method === 'sendMessage'
+        ? input.enqueue.mock.calls.at(-1)?.[1].clientId
+        : vi.mocked(window.electronAPI.maker.input.steer).mock.calls.at(-1)?.[1].clientId;
+      expect(clientId).toBeTruthy();
+      const event = { ...terminal, agentMeta: { replyToClientId: clientId } };
+      for (const replyToClientId of ['previous-input', undefined]) {
+        onEvent?.({ sessionId: SESSION_ID, event: { ...terminal, agentMeta: { replyToClientId } } });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      }
+      expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnScope: 'background' } });
+      if (type === 'done') onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });
+      expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      if (type === 'done') {
+        onEvent?.({ sessionId: SESSION_ID, event: status });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+        onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { silentStop: true } } });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+        onEvent?.({ sessionId: SESSION_ID, event: status });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      } else {
+        for (const recovery of [{ isTerminal: false }, { willRetry: true }]) {
+          onEvent?.({ sessionId: SESSION_ID, event: { ...event, data: { ...event.data, ...recovery } } });
+          expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+        }
+      }
+      onEvent?.({ sessionId: SESSION_ID, event });
+      expect(hasStartingTerminal(SESSION_ID)).toBe(true);
+    } finally {
+      clearSessionStarting(SESSION_ID);
+    }
   });
 
   it.each([false, true])('updates the SDK id mirror but persists only in the primary window (sidebar=%s)', async (sidebar) => {
@@ -4983,6 +5040,23 @@ describe('makerChatStore text delta batching', () => {
 
     resolveProbe(projection(SESSION_ID));
     await flushPromises();
+  });
+
+  // Unit: preserve the bubble shown during task creation through the real outbox.
+  it('uses the displayed first message identity in both the timeline and the remote enqueue', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const identity = { clientId: 'creation-preview-input', createdAt: '2026-11-18T00:00:00.000Z' };
+    let received: AgentInputQueuedMessage | undefined;
+    deviceLinkInvoke.mockImplementation(async (_device, channel, args) => {
+      if (channel === 'maker:input:enqueue') received = args[1] as AgentInputQueuedMessage;
+      return projection(SESSION_ID);
+    });
+    expect(await makerChatStore.sendMessage(SESSION_ID, 'first message', MODEL, EFFORT, PERMISSION_MODE,
+      WORKING_DIR, undefined, undefined, { firstMessageIdentity: identity })).toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.role === 'user'))
+      .toMatchObject([{ ...identity, content: 'first message' }]);
+    await flushPromises();
+    expect(received).toMatchObject({ clientId: identity.clientId, chatMessage: identity });
   });
 
   it('accepts a second remote send while the first enqueue invoke is still unresolved', async () => {

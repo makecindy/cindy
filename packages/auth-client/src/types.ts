@@ -7,6 +7,8 @@ export const socialProviderSchema = z.enum(["apple", "google", "wechat"]);
 export type SocialProvider = z.infer<typeof socialProviderSchema>;
 
 export const membershipSchema = z.object({
+  tapdbChargeAlias: z.string().optional(),
+  tapdbUsageAlias: z.string().optional(),
   id: z.string().min(1),
   passportId: z.string().min(1).optional(),
   kind: z.enum(["personal", "org"]),
@@ -239,7 +241,10 @@ export const accountMembershipSchema = membershipSchema.extend({
 export type AccountMembership = z.infer<typeof accountMembershipSchema>;
 
 export const meResponseSchema = z.object({
-  membership: membershipSchema,
+  membership: membershipSchema.extend({
+    // Only a fresh response for the active organization can grant this capability.
+    companyTokenReporting: z.object({ participating: z.boolean(), models: z.array(z.string()), orgRevision: z.number().int().nonnegative(), memberRevision: z.number().int().nonnegative() }).optional().catch(undefined),
+  }),
   passportId: z.string().min(1),
   identities: z.array(membershipSchema),
 });

@@ -8,10 +8,8 @@ import { Select } from '@/components/ui/select';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { subscribeDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviderBorrow, type BorrowedProviderCatalog } from '@/hooks/useProviderBorrow';
-import { useOwnComputerModelUse } from '@/hooks/useOwnComputerModelUse';
-import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
+import { useRemoteControlAllowed } from '@/hooks/useRemoteControlAllowed';
 import {
-  effectiveRunLocation,
   RUN_LOCATION_LOCAL,
   type RunLocationCandidate,
 } from '@/lib/providerRunLocation';
@@ -41,17 +39,15 @@ function ProviderRunLocationPicker({
   if (candidates.length === 0) return null;
   const localUsable = provider.connected && !provider.suspended;
   const remote = candidates.find((candidate) => candidate.deviceId === location);
-  const hint = !remote
-    ? t('settings.providers.detail.runLocation.local')
-    : standalone
-      ? t('settings.providers.detail.runLocation.autoBorrowing', { device: remote.name })
-      : t('settings.providers.detail.runLocation.pinned', { device: remote.name });
+  // Another computer runs this provider only because the user chose it here; never automatically.
+  const hint = remote
+    ? t('settings.providers.detail.runLocation.pinned', { device: remote.name })
+    : t('settings.providers.detail.runLocation.local');
   const choose = (next: string) => {
     if (next === location) return;
-    // 选回默认位置就删掉覆盖，以后跟着默认走(本机登录后自动回到本机)。
-    const fallback = effectiveRunLocation({ ...provider, runLocation: undefined }, candidates);
+    // 选回这台电脑就删掉覆盖：默认就是这台电脑。
     void window.electronAPI.maker
-      .setProviderRunLocation({ providerId: provider.id, location: next === fallback ? null : next })
+      .setProviderRunLocation({ providerId: provider.id, location: next === RUN_LOCATION_LOCAL ? null : next })
       .catch(() => toast.error(t('settings.providers.detail.runLocation.writeFailed')));
   };
   return (
@@ -63,7 +59,8 @@ function ProviderRunLocationPicker({
         label={t('settings.providers.detail.runLocation.label')}
         value={location}
         truncateOptions
-        className="-my-1 h-6 w-fit max-w-[200px] gap-1 rounded-lg px-1.5 text-13"
+        size="inline"
+        className="-my-1 max-w-[200px] text-13"
         contentClassName="w-72 max-w-[var(--radix-select-content-available-width)]"
         groups={[{
           label: hint,
@@ -71,7 +68,6 @@ function ProviderRunLocationPicker({
             {
               value: RUN_LOCATION_LOCAL,
               label: t('settings.providers.detail.runLocation.optionLocal'),
-              disabled: !localUsable,
               endAdornment: localUsable ? undefined : (
                 <span className="text-12 text-[var(--text-tertiary)]">
                   {t('settings.providers.detail.runLocation.notSignedIn')}
@@ -177,17 +173,13 @@ export function ProviderRunLocationSubtitle({ provider, subtitle }: { provider: 
 
 /**
  * 供应商详情头的第三行，只是状态：自己的其他电脑现在能用这个供应商——这台电脑允许同账号设备控制，
- * 且这个供应商单独打开了「允许被远程调用」，或「远程连接」里打开了「让我的其他电脑用本机模型」
- * (建了供应商组的不随这个开关打开)。这里没有开关。
+ * 且这个供应商打开了「允许被远程调用」(2026-11-18 起唯一的开关)。这里没有开关。
  */
 export function ProviderOwnComputersStatus({ provider }: { provider: ProviderView }) {
   const { t } = useTranslation();
   const { borrowed } = useProviderBorrow(provider);
-  const own = useOwnComputerModelUse();
-  const groups = useLocalProviderGroupsState();
-  const grouped = !groups.ready || Boolean(groups.groups[provider.id]);
-  const open = provider.remoteInvocationEnabled === true || (own.allProviders && !grouped);
-  if (!own.remoteControl || !open || borrowed || !provider.connected || provider.suspended || provider.agents.length === 0) return null;
+  const remoteControl = useRemoteControlAllowed();
+  if (!remoteControl || provider.remoteInvocationEnabled !== true || borrowed || !provider.connected || provider.suspended || provider.agents.length === 0) return null;
   return (
     <span data-testid="provider-own-computers" className="min-w-0 truncate text-12 leading-tight">
       {t('settings.providers.detail.ownComputersCanUse')}

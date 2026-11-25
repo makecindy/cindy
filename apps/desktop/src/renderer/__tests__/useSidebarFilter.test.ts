@@ -373,8 +373,8 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
   beforeEach(() => installMemoryLocalStorage());
   afterEach(() => uninstallLocalStorage());
 
-  it("defaults to ['time'] when storage is empty", () => {
-    expect(loadTaskInfoFields()).toEqual(['time']);
+  it("defaults to time and the row identifiers when storage is empty", () => {
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
   });
 
   it('空数组是合法状态（用户显式全不选），不回落默认', () => {
@@ -386,27 +386,27 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
     persistTaskInfoFields(['pr', 'worktree', 'tokens', 'cost', 'time']);
     expect(loadTaskInfoFields()).toEqual(['pr', 'worktree', 'tokens', 'cost', 'time']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
-    expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'cost', 'harness', 'project', 'teammate']);
   });
 
   it('标签不再是任务信息项：旧存储里的 tags 静默丢弃，其余选择与顺序保留', () => {
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['cost', 'time', 'pr']));
-    expect(loadTaskInfoFields()).toEqual(['cost', 'time', 'pr']);
+    expect(loadTaskInfoFields()).toEqual(['cost', 'time', 'pr', 'harness', 'project', 'teammate']);
     localStorage.setItem(TASK_INFO_KEY, '[]');
-    expect(loadTaskInfoFields()).toEqual([]);
+    expect(loadTaskInfoFields()).toEqual(['harness', 'project', 'teammate']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'tags']));
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags', 'time'] }));
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields: ['tags'] }));
-    expect(loadTaskInfoFields()).toEqual([]);
+    expect(loadTaskInfoFields()).toEqual(['harness', 'project', 'teammate']);
   });
 
   it('falls back to default on broken JSON or shape mismatch', () => {
     localStorage.setItem(TASK_INFO_KEY, '{not-json');
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ fields: ['cost'] }));
-    expect(loadTaskInfoFields()).toEqual(['time']);
+    expect(loadTaskInfoFields()).toEqual(['time', 'harness', 'project', 'teammate']);
   });
 
   it('nextTaskInfoAfterToggle toggles membership and allows empty', () => {

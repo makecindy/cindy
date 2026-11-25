@@ -22,6 +22,25 @@ export interface RemoteBot {
   hostReadAt?: number;
   followingSessionIds?: string[];
   delegatedSessionIds?: string[];
+  /** Inbox snooze of the main conversation. Absent: older host, or no conversation; no snooze offered. */
+  inboxSnooze?: TeammateInboxSnooze;
+}
+
+/** The Session snooze fields a host mirrors on a teammate row (ISO, null = unset). */
+export interface TeammateInboxSnooze {
+  snoozedUntil: string | null;
+  snoozedAt: string | null;
+  userSendAt: string | null;
+}
+
+/** A malformed snooze is no snooze: the row then offers none rather than hiding on a bad date. */
+export function parseTeammateInboxSnooze(value: unknown): TeammateInboxSnooze | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  const time = (field: unknown) => field === null || (typeof field === 'string' && Number.isFinite(Date.parse(field)));
+  if (!time(item.snoozedUntil) || !time(item.snoozedAt) || !time(item.userSendAt)) return undefined;
+  return { snoozedUntil: item.snoozedUntil as string | null, snoozedAt: item.snoozedAt as string | null,
+    userSendAt: item.userSendAt as string | null };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -104,6 +123,7 @@ export function parseRemoteBots(value: unknown, deviceId: string, deviceName: st
       teammateActivity: typeof record(display.teammateActivity).phase === 'string'
         ? { phase: record(display.teammateActivity).phase as string } : undefined,
       needsAttention: ['warning', 'critical'].includes(String(record(display.status).tone)),
+      ...(parseTeammateInboxSnooze(display.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(display.inboxSnooze) } : {}),
       online: true,
       connectionKnown: true,
       ...(typeof record(display.generation).phase === 'string' ? { generation: {

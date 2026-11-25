@@ -8,6 +8,8 @@
  * because a reset time here schedules an automatic continuation.
  */
 
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
+
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
   /** True only when upstream explicitly identifies account-cycle exhaustion, not a generic 429. */
@@ -313,7 +315,7 @@ function parseTextResetAt(
  * depletion and temporary upstream overload are intentionally excluded.
  */
 const BILLING_DEPLETION_PATTERN =
-  /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
+  /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low)|you have run out of credits or need a Grok subscription)\b/i;
 
 /**
  * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
@@ -340,7 +342,18 @@ export function extractUsageLimitRecoveryHint(
   const codexErrorInfo = typeof root.codexErrorInfo === 'string' ? root.codexErrorInfo : '';
   const status = finiteNumber(root.errorStatus ?? root.status);
 
+  const hasSafetyRefusal =
+    isProviderSafetyRefusalError(text, root.reason) ||
+    records.some((record) =>
+      Object.values(record).some(
+        (value) => typeof value === 'string' && isProviderSafetyRefusalError(value, root.reason),
+      ),
+    );
   if (
+    codexErrorInfo === 'cyberPolicy' ||
+    codexErrorInfo === 'misalignmentPolicyViolation' ||
+    sdkError === 'content_filter' ||
+    hasSafetyRefusal ||
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
@@ -353,6 +366,7 @@ export function extractUsageLimitRecoveryHint(
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
+    codexErrorInfo === 'rateLimitExceeded' ||
     isAccountUsageLimit ||
     root.usageLimit === true ||
     status === 429 ||

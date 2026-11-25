@@ -46,7 +46,7 @@ export interface ExecServerRelayDeps {
   cwd: string;
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
-  /** 凭证类操作在本机补问(供应商分享的受邀者任务)；允许后再 authorize 一次即放行。 */
+  /** 权限上限拦下的操作在本机补问(含供应商分享的受邀者任务里的凭证类操作)；允许后再 authorize 一次即放行。 */
   confirm?(action: ExecutorAction): Promise<boolean>;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -567,7 +567,7 @@ export class ExecServerRelay {
         this.reject(connId, id, decision);
         return;
       }
-      // 等本机用户确认(凭证类)：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
+      // 等本机用户确认：这一条与之后的消息都按顺序等它。已放行的操作不再检查(批准只能用一次)。
       const rest = actions.slice(index);
       this.enqueue(connection, () => this.deliver(connId, connection, id, line, rest));
       return;
@@ -659,7 +659,7 @@ export class ExecServerRelay {
     connection.child.stdout.pause();
     const next = (connection.output ?? Promise.resolve()).then(async () => {
       if (connection.closed) return;
-      const projected = await this.projectOutbound(line);
+      const projected = await this.projectOutbound(line, connId);
       if (!connection.closed) this.sendMessage(connId, projected);
     }).catch(() => {
       // 不发送未投影的本机路径；只结束这条连接，不能影响同一设备上的其它任务。
@@ -676,13 +676,21 @@ export class ExecServerRelay {
     });
   }
 
-  private async projectOutbound(line: string): Promise<string> {
+  private async projectOutbound(line: string, connId: string): Promise<string> {
     let value: unknown;
     try {
       value = JSON.parse(line);
     } catch {
       const projection = await this.deps.workspace.prepareAgentProjection();
       return projection.mapTextForAgent(line);
+    }
+    const reply = asJsonRecord(value);
+    const error = asJsonRecord(reply?.error);
+    if (error?.code === -32602 && error.message === 'sandbox intent cannot be enforced on this executor') {
+      this.deps.log?.warn('remote agent: exec-server cannot enforce sandbox', {
+        connId, platform: process.platform, code: error.code,
+      });
+      error.message += '. Check sandbox support and the Codex version on the executing computer before retrying with the requested restrictions.';
     }
     return JSON.stringify(await mapExecServerResult(value, this.deps.workspace));
   }

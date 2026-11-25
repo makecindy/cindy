@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { buildTaskDeepLink } from '@cindy/maker-shared/brand-identity';
 import {
   HOST_ONLY_AGENT_PREFIX,
   ANNOTATED_IMAGE_NOTE,
@@ -45,6 +47,43 @@ function queuedMessage(files: AgentInputQueuedMessage['files']): AgentInputQueue
 }
 
 describe('agentInputQueue', () => {
+  it('projects the send_to_session path only from the host-reconciled live session route', () => {
+    const href = 'cindy://session/target';
+    const queued = {
+      ...queuedMessage([]),
+      text: href,
+      persistedContent: href,
+      agentReferences: [{
+        kind: 'session' as const,
+        start: 0,
+        end: href.length,
+        href,
+        sessionId: 'target',
+        title: 'Target',
+      }],
+    };
+    // Review and plugin-engine tasks are queued as built-in claude-code and reconciled only at start
+    // (PR #11894 review). The queued snapshot alone must never advertise a tool the engine lacks.
+    expect(buildMakerUserMessage(queued)).toMatchObject({ content: expect.not.stringContaining('send_to_session') });
+    const local = { agentKind: 'claude-code' as const, supportsRemote: false };
+    expect(buildMakerUserMessage(queued, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cindy_helper\'s call_tool') });
+    // message-source.md「发给模型的说明」: auto titles and Ghost hooks share this projection,
+    // so the send route must stay out of it.
+    expect(getAgentFacingText(queued)).not.toContain('send_to_session');
+    const remoteHref = 'cindy://session/target?device=studio';
+    const remote = {
+      ...queued,
+      text: remoteHref,
+      persistedContent: remoteHref,
+      agentReferences: [{ ...queued.agentReferences[0], end: remoteHref.length, href: remoteHref }],
+    };
+    expect(buildMakerUserMessage(remote, [], { sendToSession: { ...local, supportsRemote: true } }))
+      .toMatchObject({ content: expect.stringContaining('target_session_id="studio::target"') });
+    expect(buildMakerUserMessage(remote, [], { sendToSession: local }))
+      .toMatchObject({ content: expect.stringContaining('cannot send messages to it directly') });
+  });
+
   it.each([false, true])('keeps synthetic text on disk and strips only host text-only model input (%s)', (toolsDisabled) => {
     const text = '[UI_ACTION_TRIGGER]Say hello with cached usage hints.';
     const queued = {
@@ -646,6 +685,18 @@ describe('agentInputQueue', () => {
     entry.chatMessage.content = entry.text;
 
     expect(getAgentFacingText(entry)).toBe(entry.text);
+  });
+
+  // Unit through Maker input, where a pasted chip used to discard the only route to the colleague's task.
+  it('keeps the copied guest link in model input when the composer presents it as a titled chip', () => {
+    const entry = queuedMessage(undefined);
+    const href = buildTaskDeepLink('task.1', sharedTaskHostPeer('shared', 'host (QA)'));
+    const chip = `[Build](${href})`;
+    entry.text = `查看进度 ${chip}`;
+    entry.agentReferences = [{ kind: 'session', sessionId: 'task.1', title: 'Build',
+      start: entry.text.indexOf(chip), end: entry.text.length, href }];
+    expect(reconcileSessionRefsForText(entry.text, undefined, () => 'another-device')).toEqual([]);
+    expect(buildMakerUserMessage(entry)).toMatchObject({ type: 'user', content: expect.stringContaining(href) });
   });
 
   it('expands a message chip to its full semantic body instead of sending only the deep link', () => {

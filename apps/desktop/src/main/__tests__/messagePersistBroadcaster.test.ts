@@ -4,6 +4,7 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
 ]) }));
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
 import type { PendingSamplingSettlement } from '../assistantSamplingSettlement.js';
+import type { Message } from '../../renderer/lib/ccAgent.types';
 const settlements = vi.hoisted(() => ({ entries: new Map<string, PendingSamplingSettlement>(), sequence: 0 }));
 vi.mock('../assistantSamplingSettlement.js', () => ({ assistantSamplingSettlements: {
   put(entry: Omit<PendingSamplingSettlement, 'file'>) {
@@ -27,6 +28,7 @@ import { readTaskResultsForReply } from '../botTaskReplyResults.js';
  *   - 返回的 { persistId, content } 与实际落库内容**同源同值**(Option C 不 diverge 的命门);
  *   - 两种到达顺序都最终落全文;buffer / eager-create / done-orphan 三条路径;
  *   - 幂等(内容未变不重复 update)、guard。
+ * ACP 补参回归（PR #11549）：待执行调用没有参数，稍后补参数时更新同一个持久化行并广播给控制端。
  *
  * createMessage / updateMessageContent(better-sqlite3 路径)被 mock 掉,只断言调用入参;
  * 落库走模块内 writeChain microtask,断言前先 flush 一个宏任务边界。
@@ -308,6 +310,77 @@ const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) =
     logicalSubagentId: taskId,
     ...(parentToolUseId ? { parentToolUseId } : {}),
   },
+});
+
+// Unit: a commentary-only turn may pause before the next tool or final. Exercise the
+// real stream assembler and writer: no draft, one complete row, while the turn is live.
+it('makes completed plugin progress readable before the next event without flushing a later draft', async () => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'codex' } as Args[1];
+  noteSessionAgentKind(SESSION, 'codex');
+  const emit = (id: string, text: string, phase: string, isFinal: boolean) =>
+    persistSessionStreamEventCore({
+      persistence, orcaTeamServiceForEvents: null, log: { warn: vi.fn() }, broadcastSubagentRunsChanged: vi.fn(),
+    }, session, { event: { type: 'text', source: 'codex', data: {
+      text, agentMessageId: id, phase, isFinal, isFullText: isFinal,
+    } }, eventAgentMeta: { replyToClientId: 'plugin-task:r' }, groupLaneInputClientId: 'plugin-task:r' });
+
+  emit('progress', '检查', 'commentary', false);
+  await drainPersistQueue();
+  expect(createMessage).not.toHaveBeenCalled();
+  emit('progress', '检查通过。', 'commentary', true);
+  emit('answer', '答案草稿', 'final_answer', false);
+  emit('progress', '检查通过。', 'commentary', true);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledTimes(1);
+  expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+    role: 'assistant', content: '检查通过。', agentMeta: expect.objectContaining({ pluginProgressInputId: 'plugin-task:r' }),
+  }), expect.anything());
+  expect(persistence.getSessionTextSnapshot(SESSION)?.event.data.text).toBe('答案草稿');
+});
+
+// Unit, PR #12557: the stream writer must persist one plugin progress row at
+// the Claude tool boundary. The Codex test above covers whole-item snapshots;
+// Claude can stream two text blocks and then confirm each separately.
+it('persists Claude multi-block plugin progress once at the tool boundary', async () => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'claude-code' } as Args[1];
+  const deps = {
+    persistence,
+    orcaTeamServiceForEvents: null,
+    log: { warn: vi.fn() },
+    broadcastSubagentRunsChanged: vi.fn(),
+  };
+  const inputId = 'plugin-task:r';
+  const emit = (event: Args[2]['event'], eventAgentMeta: Args[2]['eventAgentMeta']) =>
+    persistSessionStreamEventCore(deps, session, {
+      event, eventAgentMeta, groupLaneInputClientId: inputId,
+    });
+  const meta = { stopReason: 'tool_use', replyToClientId: inputId };
+  for (const text of ['First. ', 'Second.']) {
+    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: false } }, null);
+  }
+  for (const text of ['First. ', 'Second.']) {
+    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: true } }, meta);
+  }
+  emit({ type: 'tool_use', source: 'claude-code', data: {
+    toolUseId: 'progress-tool', toolName: 'Read', input: {},
+  } }, meta);
+  await drainPersistQueue();
+
+  const assistantRows = vi.mocked(createMessage).mock.calls
+    .map(([, row]) => row)
+    .filter((row) => row.role === 'assistant');
+  expect(assistantRows).toEqual([
+    expect.objectContaining({
+      content: 'First. Second.',
+      agentMeta: expect.objectContaining({ pluginProgressInputId: inputId }),
+    }),
+  ]);
 });
 
 describe('Codex done completion boundary', () => {
@@ -772,6 +845,23 @@ describe('update_plan tool_use persistence', () => {
         input: { text: '1. Read code\n2. Run tests' },
       },
     );
+  });
+
+  it('patches and republishes the existing ACP tool row when a pending call gains input', async () => {
+    const start = { toolUseId: 'acp-tool-1', toolName: 'Edit', input: {} };
+    const parameters = { ...start, input: { path: 'notes.txt' } };
+    const rowId = onToolUseEvent(SESSION, start, null, 'turn', undefined, undefined, true);
+    expect(rowId).toBeDefined();
+    const updated = { clientId: rowId!, role: 'tool_use' as const, content: parameters } as Message;
+    vi.mocked(updateMessageContent).mockResolvedValueOnce(updated);
+    const patchedId = onToolUseEvent(SESSION, { ...parameters, acpInputPatch: true }, null,
+      'background', undefined, undefined, true);
+
+    await flushWrites();
+    expect(patchedId).toBe(rowId);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, rowId, parameters);
+    expect(broadcastMessageRow).toHaveBeenCalledWith(SESSION, updated, ownerScopeState.scope);
   });
 
   it('updates the existing web_search row when completed carries authoritative input', async () => {
@@ -1830,6 +1920,51 @@ describe('background tool_result persistence', () => {
         content: FULL,
         agentMeta: oldMeta,
       }),
+      broadcastGuard(),
+    );
+  });
+
+  // PR #11776 review: a plugin engine (Antigravity) keeps a call it has not finished open past
+  // `end_turn` and reports the result between turns. Only collab calls kept their context, so the
+  // late result of an ordinary call (its `git commit`) was dropped and gone after reopening the task.
+  it('keeps a plugin engine call left running at the end of its answer, so its later result is saved', async () => {
+    const meta = { uuid: 'acp-turn' };
+    noteSessionAgentKind(SESSION, 'acp');
+    noteAgentMeta(SESSION, meta);
+    onToolUseEvent(SESSION, { toolUseId: 'commit', toolName: 'git commit', input: {} }, meta);
+    preserveTurnPersistStateForBackground(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const fullResult = onToolResultFullEvent(SESSION, { toolUseId: 'commit', fullText: FULL }, null, 'background');
+    const result = onToolResultEvent(SESSION, { summary: SUMMARY, toolUseIds: ['commit'] }, null, 'background');
+    await flushWrites();
+
+    expect(fullResult).toEqual({ persistId: expect.any(String), content: FULL });
+    expect(result).toEqual(fullResult);
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_result', content: FULL, agentMeta: meta }),
+      broadcastGuard(),
+    );
+  });
+
+  // Same review: a reply a plugin engine writes between turns has no done to commit it. Once its
+  // final segment is committed (sessionEventStreamCore) the whole reply is written as one row.
+  it('saves a plugin engine reply written between turns when its final segment is committed', async () => {
+    noteSessionAgentKind(SESSION, 'acp');
+    onAssistantTextEvent(SESSION, { text: 'The content is ', isFinal: false }, null, 'background');
+    onAssistantTextEvent(
+      SESSION,
+      { text: 'The content is `finished`', isFinal: true, isFullText: true },
+      null,
+      'background',
+    );
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'assistant', content: 'The content is `finished`' }),
       broadcastGuard(),
     );
   });

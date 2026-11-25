@@ -50,6 +50,7 @@ import {
   invalidatePiEnvironment,
   shutdownPiEnvironment,
 } from '../piEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from '../codexHttpBridge.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -105,6 +106,19 @@ function createTestServer(name: string): McpServer {
         {
           type: 'text' as const,
           text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
+        },
+      ],
+    }),
+  );
+  server.tool(
+    'current_remote_host',
+    'Return the SSH host of the active Session, or local.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.remoteHostId ?? 'local',
         },
       ],
     }),
@@ -277,6 +291,7 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
+    const baseline = countLiveBridgeMcpSessions();
     const config = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
       sessionId: 'pi-lead-1',
       sessionInstanceId: 'pi-instance-1',
@@ -303,6 +318,19 @@ describe('piEnvironment per-session identity', () => {
     const mcpSessionId = initResp.headers.get('mcp-session-id');
     expect(mcpSessionId).toBeTruthy();
     await initResp.text();
+    const secondConfig = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
+      sessionId: 'pi-lead-2', sessionInstanceId: 'pi-instance-2', workingDir: '/repo', vendorOptions: {},
+      mcpCallerKind: 'root', mcpCallerAttested: true,
+    });
+    const secondServer = secondConfig!.mcpBridge!.servers[0]!;
+    const secondInit = await fetch(secondServer.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secondConfig!.mcpBridge!.token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+      body: INIT_BODY(10),
+    });
+    expect(secondInit.status).toBe(200);
+    await secondInit.text();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(2);
 
     // 工具 handler 经 getLiziMcpSessionContext() 应拿到本 pi 会话身份。
     const callResp = await fetch(server.url, {
@@ -334,10 +362,14 @@ describe('piEnvironment per-session identity', () => {
     expect(await readRpcText(instanceResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'pi-instance-1' }] },
     });
+    expect(config!.closeSessionInstance).toBeTypeOf('function');
+    config!.closeSessionInstance!();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(1);
 
     // close 语义:注销后 ?session=pi-lead-1 未命中 → 401 fail-closed。
     expect(config!.disposeSessionCtx).toBeTypeOf('function');
     config!.disposeSessionCtx!();
+    secondConfig!.disposeSessionCtx!();
     const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
@@ -379,6 +411,47 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(await readRpcText(scopeResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'bot:bot-release-helper' }] },
+    });
+    config!.disposeSessionCtx!();
+  });
+
+  /**
+   * Ghost reads ctx.remoteHostId to refuse a remote task local image reads and
+   * local network egress. A Pi task running over SSH must reach tools as remote.
+   */
+  it.each([
+    ['ssh-host-1', 'ssh-host-1'],
+    [null, 'local'],
+  ] as const)('keeps the SSH host %s in the tool-side session ctx', async (remoteHostId, expected) => {
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: `pi-remote-host-${expected}`,
+      workingDir: '/home/dev/project',
+      remoteHostId,
+      vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    await initResp.text();
+    const hostResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_remote_host', arguments: {} },
+      }),
+    });
+    expect(await readRpcText(hostResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: expected }] },
     });
     config!.disposeSessionCtx!();
   });

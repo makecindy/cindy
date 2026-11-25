@@ -5,7 +5,7 @@ import {
 } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import type { AgentKind, EngineKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
   AgentInputCreateOpts,
@@ -41,8 +41,8 @@ export type DispatchOrcaInterAgentMessageResult =
   | {
       ok: true;
       mode: OrcaInterAgentDispatchMode;
-      /** Runtime that accepted the message; queued messages have not switched yet. */
-      agentKind?: AgentKind;
+      /** Runtime that accepted the message; queued messages have not switched yet. 'acp' = plugin-engine Worker. */
+      agentKind?: EngineKind;
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle?: string | null;
@@ -89,7 +89,7 @@ export interface DispatchOrcaInterAgentMessageParams {
 /** Orca dispatcher 只依赖 maker-core session 的最小发送接口，避免绑定完整 Maker 实例。 */
 interface PersistedUserMessageSession {
   id: string;
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   isTurnRunning?: () => boolean;
   getTurnGeneration?: () => number;
   capabilities?: { sameTurnSteer: { supported: boolean } };
@@ -114,7 +114,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
   | {
       ok: true;
       targetSessionId: string;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'resumed' | 'already-active' | 'created' | 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -179,6 +179,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
+  directWorkerRecovery?: {
+    getInputAbortSignal(sessionId: string): AbortSignal;
+    rememberDirectWorkerInput(runtime: object, generation: number, item: AgentInputQueuedMessage, signal: AbortSignal): () => void;
+  };
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
   /** Apply a deferred route while the per-session send lock is held. */
@@ -406,8 +410,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         category: 'image',
         mimeType: image.mimeType,
         // 图片只可能来自本机(SSH 远端在入口已拒):标记 desktop-host,
-        // 视觉桥才会桥接无视觉模型的 worker,否则原始 block 进 Pi 会抛
-        // PiImageInputUnsupportedError 整条任务失败。
+        // 原始图片按宿主附件交给 worker 的原生输入路径，由所选模型判定图片能力。
         pathOrigin: 'desktop-host',
       }));
     }
@@ -429,12 +432,26 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ],
       };
     };
+    let revokeDirectReceipt: (() => void) | undefined;
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
       acceptedDidRun = true;
+      const recovery = params.source === 'lead' ? deps.directWorkerRecovery : undefined;
+      const runtime = recovery && deps.getLiveSession(params.targetSessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      const signal = recovery?.getInputAbortSignal(params.targetSessionId);
       await params.onAccepted?.();
+      if (recovery && runtime && generation !== undefined && signal && !signal.aborted) {
+        const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+        const item = buildQueuedOrcaInterAgentMessage({
+          clientId, agentMessageText: await buildAgentMessageText(), persistedContent,
+          origin: await resolveOrigin(), createOpts, files: imageFiles,
+        });
+        revokeDirectReceipt = recovery.rememberDirectWorkerInput(runtime, generation, item, signal);
+      }
     };
     const rollbackAcceptedForRequeue = async (): Promise<void> => {
+      revokeDirectReceipt?.();
       if (!acceptedDidRun) return;
       await runAcceptedRollback(
         params.onAcceptedRollback,
@@ -445,6 +462,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       acceptedDidRun = false;
     };
     const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome, reportRejected = false): Promise<DispatchOrcaInterAgentMessageResult> => {
+      revokeDirectReceipt?.();
       if (acceptedDidRun) {
         await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);
       }

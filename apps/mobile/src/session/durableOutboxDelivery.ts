@@ -132,7 +132,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     const finishHistory = async () => {
       if (!current(record)) return;
       trace("send history confirmed", {
-        client: record.item.clientId.slice(0, 8),
+        client: record.item.clientId.slice(-8),
         clickToHistoryMs: Date.now() - record.createdAt,
       });
       if (deps.cacheHistory && !await deps.cacheHistory(record)) {
@@ -373,7 +373,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           });
           due.delete(id(record));
           rescan = true;
-          trace("send known boundary rejected", { client: record.item.clientId.slice(0, 8) });
+          trace("send known boundary rejected", { client: record.item.clientId.slice(-8) });
           return;
         }
         throw error;
@@ -390,7 +390,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       due.set(id(record), Date.now() + 1_000);
       stage('enqueue');
       trace("send accepted", {
-        client: record.item.clientId.slice(0, 8),
+        client: record.item.clientId.slice(-8),
         knownProjection: knownProjection !== undefined,
         durable: durableEnqueue,
         clickToAcceptedMs: Date.now() - record.createdAt,
@@ -401,6 +401,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (!current(record)) return;
       const count = (attempts.get(id(record)) ?? 0) + 1;
       attempts.set(id(record), count);
+      trace('send attempt failed', {
+        client: record.item.clientId.slice(-8),
+        attempt: count,
+        clickToAttemptMs: startedAt - record.createdAt,
+        elapsedMs: Date.now() - startedAt,
+        ...stagesMs,
+      });
       due.set(
         id(record),
         Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(count, 5)),

@@ -1,6 +1,6 @@
 import { ghostDeclaresHiddenTasks, type InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
-import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_IM_CONVERSATION_LABEL_MAX_CHARS } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval, hasPluginTargetApproval } from './taskCapability.js';
 import {
   PLUGIN_ATTACHMENT_KINDS,
@@ -17,6 +17,8 @@ export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
   'models',
   'imProjects',
+  'imProjectConfig',
+  'confirmImPermission',
   'followImProject',
   'setModel',
   'requestWriteAccess',
@@ -62,9 +64,11 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     capabilities: [],
     models: [],
     imProjects: [],
-    followImProject: ['taskId', 'expectedRevision', 'imProject'],
+    imProjectConfig: ['imProject'],
+    confirmImPermission: ['imProject', 'permissionMode', 'conversation'],
+    followImProject: ['taskId', 'expectedRevision', 'imProject', 'imOverride'],
     setModel: ['taskId', 'expectedRevision', 'route'],
-    create: ['requestKey', 'title', 'autoTitle', 'route', 'permissionMode', 'isolatedWorkspace', 'callId', 'hidden', 'imProject'],
+    create: ['requestKey', 'title', 'autoTitle', 'route', 'permissionMode', 'isolatedWorkspace', 'callId', 'hidden', 'imProject', 'imOverride'],
     list: ['after', 'limit'],
     get: ['taskId'],
     requestWriteAccess: ['taskId', 'mode'],
@@ -75,7 +79,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     send: ['taskId', 'requestKey', 'expectedRevision', 'text', 'context', 'attachments', 'contextAttachments', 'invocationId', 'relay'],
     getRun: ['runId'],
     listRuns: ['taskId', 'after', 'limit'],
-    readMessages: ['taskId', 'after', 'limit'],
+    readMessages: ['taskId', 'after', 'limit', 'progressForRun'],
     cancel: ['runId', 'requestKey'],
     setHidden: ['taskId', 'hidden'],
     archive: ['taskId'],
@@ -92,6 +96,23 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     ['route', 'permissionMode', 'callId', 'isolatedWorkspace'].some(key => value[key] !== undefined)) return false;
   if (kind === 'followImProject' && (!requires('taskId') || !text(value.imProject, 4096) ||
     !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
+  if ((kind === 'imProjectConfig' || kind === 'confirmImPermission') && !text(value.imProject, 4096)) return false;
+  if (value.imOverride !== undefined) {
+    const o = value.imOverride;
+    if (value.imProject === undefined || !object(o) ||
+      Object.keys(o).some(k => !['route', 'permissionMode', 'permissionGrant'].includes(k))) return false;
+    if (o.route !== undefined && (!object(o.route) ||
+      !validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'validate', title: 'validate', route: o.route }))) return false;
+    if (o.permissionMode !== undefined && !isPluginTaskPermissionMode(o.permissionMode)) return false;
+    if (o.permissionGrant !== undefined &&
+      (typeof o.permissionGrant !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(o.permissionGrant))) return false;
+  }
+  if (kind === 'confirmImPermission') {
+    const c = value.conversation;
+    if (!isPluginTaskPermissionMode(value.permissionMode) || !object(c) ||
+      Object.keys(c).some(k => !['label', 'kind'].includes(k)) || (c.kind !== 'group' && c.kind !== 'direct') ||
+      !text(c.label, PLUGIN_IM_CONVERSATION_LABEL_MAX_CHARS) || hasControlChar(c.label as string)) return false;
+  }
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
   if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'setHidden', 'archive'].includes(value.kind) && !requires('taskId'))
     return false;
@@ -120,6 +141,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   )
     return false;
   if (value.relay !== undefined && !validPluginTaskRelay(value.relay)) return false;
+  if (value.progressForRun !== undefined && !requires('progressForRun')) return false;
   if (value.after !== undefined && !text(value.after, 1024)) return false;
   if (
     value.limit !== undefined &&
@@ -191,6 +213,7 @@ export async function handlePluginTaskRequest(
   }
   if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
   const needsTargets = value.kind === 'imProjects' || value.kind === 'followImProject' ||
+    value.kind === 'imProjectConfig' || value.kind === 'confirmImPermission' ||
     (value.kind === 'create' && value.imProject !== undefined);
   if (needsTargets && !hasPluginTargetApproval(deps.getGhost(pluginId)) &&
     deps.getGhost(pluginId)?.manifest.agent?.targets === true && deps.ensureTargetsAuthorized) {
@@ -221,7 +244,12 @@ export async function handlePluginTaskRequest(
         messageRelay: true,
         autoTitle: true,
         createPermissionMode: true,
+        // getRun returns optional preview.text while the run's own execution is streaming.
+        runPreview: true,
+        runProgress: true,
         imProjects: true,
+        // imProjectConfig, confirmImPermission and imOverride on create/followImProject.
+        imProjectOverrides: true,
         messageAttachments: {
           kinds: PLUGIN_ATTACHMENT_KINDS, maxCount: PLUGIN_ATTACHMENT_MAX_COUNT, maxBytes: PLUGIN_ATTACHMENT_MAX_BYTES,
           maxItemBytes: PLUGIN_ATTACHMENT_MAX_ITEM_BYTES, attachmentOnly: true,

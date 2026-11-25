@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cacheHomeListSnapshot, getCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import type { RemoteSession } from '@/session/types';
 
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem,贴近真实 RN API(与 mobileSessionMessageCache.test 同套路)。
@@ -61,13 +62,27 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
-  it('retains lane ownership and creator avatars across cold starts', async () => {
+  it('retains lane ownership, creator avatars and snooze deadlines across cold starts', async () => {
     const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
     const companion = { id: 'cindy-default', role: 'routine' };
     const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
-    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) })]);
     const [cached] = await getCachedHomeListSnapshot(USER_ID);
-    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) });
+  });
+
+  // Unit: opening a cold-start list row must still identify the history cutoff
+  // before the detail sync arrives. Only the linked follow-up has the flag.
+  it('retains linked follow-up history metadata in cached task rows', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('follow-up', 'mac', { source: 'desktop', sideChatPromoted: true }),
+      makeSession('ordinary', 'mac', { source: 'desktop' }),
+    ]);
+    const [{ sessions }] = await getCachedHomeListSnapshot(USER_ID);
+    expect(sessions.find(row => row.id === 'follow-up')).toMatchObject({
+      source: 'desktop', sideChatPromoted: true, createdAt: isoAt(1),
+    });
+    expect(sessions.find(row => row.id === 'ordinary')).not.toHaveProperty('sideChatPromoted');
   });
 
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
@@ -236,6 +251,8 @@ describe('mobileHomeListCache', () => {
       makeSession('s-long', 'dev-a', {
         title: 'T'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         preview: 'P'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
+        pinnedAt: isoAt(1),
+        summary: 'S'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         workingDir: `/repo/${'d'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3)}`,
       }),
     ]);
@@ -243,6 +260,7 @@ describe('mobileHomeListCache', () => {
     const cached = (await getCachedHomeListSnapshot(USER_ID))[0].sessions[0];
     expect(cached.title).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.preview).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
+    expect(cached.summary).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.workingDir).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
   });
 

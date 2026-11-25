@@ -2,8 +2,9 @@ import { catalogModelMetadata, mergeDiscoveredRuntimeModels, isOpenRouterModelsU
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
- * 配置走 maker IPC（入 localDb）；密钥按 runtime 走通用 safeStorage IPC（`provider_key_<id>_<agent>`，
- * 本地加密，与内置 XD 网关 key 同机制；main 路由 resolve 时按 (id, agent) 读出注入鉴权头）。
+ * 配置走 maker IPC（入 localDb）；密钥按 runtime 存（`provider_key_<id>_<agent>`，本地加密），随配置一起
+ * 交给 main 写入或清除；renderer 只经通用 safeStorage IPC 读取，用于编辑态回填。main 路由 resolve 时按
+ * (id, agent) 读出注入鉴权头。
  *
  * 顺序约定：
  *   - create / update / delete：配置 + 密钥一次提交给 main，由 main 的 per-provider queue
@@ -188,12 +189,40 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
+  // #11298: remember which saved IDs this runtime's own catalog listed. Manual rows
+  // (nameExplicit) and routed extra-catalog rows are never marked, so they can never
+  // be offered as withdrawn later.
+  const listed = new Set(discovered.map((model) => model.id));
+  const models = mergeDiscoveredRuntimeModels(prior, discovered).map((model) => {
+    if (!listed.has(model.id)) return model;
+    // Listed again: any earlier absence receipt is void.
+    const { missingUpstream: _missing, ...rest } = model;
+    return !rest.nameExplicit && !rest.route ? { ...rest, listedUpstream: true as const } : rest;
+  });
   const known = new Set(existing.map((model) => model.id));
   return {
     models,
     addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
   };
+}
+
+/**
+ * Models an earlier Settings refresh saw in this runtime's own catalog (`listedUpstream`)
+ * that a complete, fresh catalog no longer lists (#11298). Only offered for
+ * user-confirmed removal; refresh itself never deletes. Unmarked rows (manual, preset,
+ * speech reference, import, pre-upgrade) and routed rows are never candidates.
+ * `suspicious`: an empty catalog, or at least half of the marked models missing.
+ */
+export function findWithdrawnCustomProviderModels(
+  models: readonly ProviderRuntimeModelConfig[],
+  discovered: readonly DiscoveredModel[],
+): { withdrawn: ProviderRuntimeModelConfig[]; suspicious: boolean } {
+  const current = new Set(discovered.map((model) => model.id));
+  const eligible = models.filter((model) => model.listedUpstream === true && !model.nameExplicit && !model.route);
+  const withdrawn = eligible.filter((model) => !current.has(model.id));
+  const suspicious = withdrawn.length > 0
+    && (current.size === 0 || withdrawn.length * 2 >= eligible.length);
+  return { withdrawn, suspicious };
 }
 
 /**
@@ -239,7 +268,7 @@ export async function fetchCustomProviderModelsForRefresh(
   })));
 }
 
-// 鉴权请求头是 main-only 密文(isRendererAccessibleSafeStorageKey 明确拒 provider_headers_
+// 鉴权请求头是 main-only 密文(通用 safe-storage 白名单不放行 provider_headers_
 // 前缀,与 API key 不同),renderer 不得回读明文。编辑时不再向 renderer 暴露头值:未在
 // 表单显式改动请求头,update 由 main 侧保留旧值(planProviderHeaderMutations 'update' 分支)。
 

@@ -53,9 +53,10 @@ export * from './browser/index.js';
 export * from './computer/index.js';
 
 
-export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
+export { type TeammateVoiceRequest, type TeammateGroupRequest, type TeammateGroupBinding, teammateProfilePatch, groupRequest as teammateGroupRequest, TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
 export { TEAMMATE_CORE_TOPICS } from './xdt-helper/teammate_skills.js';
 
 export type { AppModelsRequest } from './xdt-helper/app_models.js';
-export type { ProviderReadRequest, ProviderReadCallbacks } from './xdt-helper/provider_reads.js';
-export type { ProviderSharingRequest } from './xdt-helper/provider_sharing.js';
+export { providerReadInputSchema, projectProviderReadError, type ProviderReadRequest, type ProviderReadCallbacks } from './xdt-helper/provider_reads.js';
+export { providerShareMembersInputSchema, providerShareModelAccessInputSchema, projectProviderSharingError, type ProviderSharingRequest } from './xdt-helper/provider_sharing.js';
+export { subscriptionUsageInputSchema, projectSubscriptionUsageError } from './xdt-helper/subscription_usage.js';

@@ -201,7 +201,8 @@ describe('cindy_telegram_bot sends into the current lane', () => {
     });
   });
 
-  it('send_media goes through the transport; guests may only upload files inside the task directory', async () => {
+  // Unit regression: late question replies retain the same realpath boundary as guest turns.
+  it.each(['turn', 'late-answer'])('send_media enforces guest file limits for %s', async (mode) => {
     const t = fakeTransport();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-mcp-'));
     try {
@@ -218,8 +219,12 @@ describe('cindy_telegram_bot sends into the current lane', () => {
       // Windows junctions keep this regression runnable without symlink privileges.
       fs.symlinkSync(outsideDir, escapeDir, process.platform === 'win32' ? 'junction' : 'dir');
       const escapeLink = path.join(escapeDir, 'private.txt');
+      const releaseReply = mode === 'late-answer' ? beginTelegramReplyMediaScope({
+        sessionId: 's-1', sessionInstanceId: 'i-1',
+        scope: { im: t, laneUserId: 'g/-100/7', requesterIsOwner: false }, isActive: () => true,
+      }) : () => {};
       await withServer(
-        groupScope(t),
+        mode === 'turn' ? groupScope(t) : null,
         async (call) => {
           expect(await call('send_media', { kind: 'photo', path: inside, caption: 'c' })).toMatchObject({
             ok: true,
@@ -243,6 +248,7 @@ describe('cindy_telegram_bot sends into the current lane', () => {
         },
         { workingDir },
       );
+      releaseReply();
       // The owner may send any absolute path (same as the Feishu send_file_to_user tool).
       await withServer(ownerDmScope(t), async (call) => {
         expect(await call('send_media', { kind: 'document', path: outside })).toMatchObject({ ok: true });

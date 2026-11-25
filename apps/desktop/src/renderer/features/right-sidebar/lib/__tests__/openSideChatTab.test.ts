@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(), list: vi.fn(), pin: vi.fn(), merge: vi.fn(), add: vi.fn(), getWindow: vi.fn(),
   status: vi.fn(), save: vi.fn(), quote: vi.fn(), discard: vi.fn(), reveal: vi.fn(),
   close: vi.fn(), activate: vi.fn(), cache: vi.fn(), clear: vi.fn(), patch: vi.fn(), info: vi.fn(),
+  readBatch: vi.fn(),
   device: null as string | null, tabs: [] as Array<{ id: string; kind: string; state: unknown }>,
   created: new Set<(payload: any, stamp?: any) => void>(),
   patched: new Set<(payload: any, stamp?: any) => void>(),
@@ -21,6 +22,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsSto
 vi.mock('@/lib/composerDraftStore', () => ({ saveDraft: mocks.save, appendQuoteToDraft: mocks.quote, discardDraft: mocks.discard, clearDraft: mocks.clear }));
 vi.mock('@/components/chat/useForkAtMessage', () => ({ textToTiptapDoc: (text: string) => ({ type: 'doc', text }) }));
 vi.mock('@/lib/sessionService', () => ({ setStatus: mocks.status }));
+vi.mock('@/lib/sessionBatchRead', () => ({ readSessionBatch: mocks.readBatch }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), info: mocks.info } }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('../../store', () => ({
@@ -34,7 +36,7 @@ vi.mock('../mergeSidebarWindowBack', () => ({ mergeSidebarWindowBack: mocks.merg
 vi.mock('../sidebarCommands', () => ({ requestRightSidebarVisibility: mocks.reveal }));
 
 import type { Session } from '@/lib/ccAgent.types';
-import { openSideChatTab, restoreSideChatTabs, sideChatUnavailableKey, watchSideChatTabs } from '../openSideChatTab';
+import { openSideChatTab, reopenLinkedSideChat, restoreSideChatTabs, sideChatUnavailableKey, watchSideChatTabs } from '../openSideChatTab';
 
 // Unit: the user entry must not leave unreachable children or route a remote child locally.
 // Existing sidebar openers do not create task branches; minimal failures are a rejected tab write
@@ -51,6 +53,7 @@ describe('side chat task entry', () => {
     mocks.tabs = [];
     mocks.create.mockResolvedValue({ id: 'child' });
     mocks.list.mockResolvedValue([{ id: 'child' }]);
+    mocks.readBatch.mockImplementation(async (ids: string[]) => ids.map(sessionId => ({ sessionId, errorCode: 'NOT_FOUND' })));
     mocks.getWindow.mockResolvedValue({ detached: false });
     mocks.merge.mockResolvedValue(undefined);
     const subscribe = (listeners: Set<any>) => (listener: any) => {
@@ -120,7 +123,7 @@ describe('side chat task entry', () => {
     mocks.device = 'execution-host';
     mocks.add.mockRejectedValueOnce(new Error('disk full'));
     expect(await openSideChatTab('parent', { prompt: 'question' })).toBe(false);
-    expect(mocks.status).toHaveBeenCalledExactlyOnceWith('child', 'deleted', { kind: 'device-link', deviceId: 'execution-host' });
+    expect(mocks.status).toHaveBeenCalledExactlyOnceWith('child', 'deleted', { kind: 'device-link', deviceId: 'execution-host' }, undefined, 'side-chat');
     expect(mocks.patch).toHaveBeenCalledWith('execution-host', 'child', { status: 'deleted' });
     expect(mocks.clear).toHaveBeenCalledWith('child');
     expect(mocks.reveal).not.toHaveBeenCalled();
@@ -189,6 +192,50 @@ describe('side chat task entry', () => {
     expect(mocks.add).toHaveBeenCalledTimes(1);
   });
 
+  // Unit: restart reconciliation must distinguish a linked task omitted from the
+  // recovery list from a deleted task, and must respect a deliberately closed tab.
+  it('keeps an open linked tab after hydration and does not restore a closed one', async () => {
+    mocks.tabs = [{ id: 'linked-tab', kind: 'side-chat', state: { sessionId: 'child' } }];
+    mocks.list.mockResolvedValue([]);
+    mocks.readBatch.mockResolvedValueOnce([{ sessionId: 'child', value: { status: 'active', sideChatPromoted: true } }]);
+    await restoreSideChatTabs('parent');
+    expect(mocks.tabs.map(tab => tab.id)).toEqual(['linked-tab']);
+    mocks.tabs = [];
+    await restoreSideChatTabs('parent');
+    expect(mocks.tabs).toEqual([]);
+    expect(mocks.activate).not.toHaveBeenCalled();
+    expect(mocks.reveal).not.toHaveBeenCalled();
+  });
+
+  // Unit: the ordinary page must reopen the same hosted child on its parent,
+  // even when no renderer-local tab survives from the first visit.
+  it.each([null, 'execution-host'])('returns to the same parent and reuses the child on %s', async deviceId => {
+    mocks.readBatch.mockResolvedValue([
+      { sessionId: 'parent', value: { id: 'parent', status: 'active' } },
+      { sessionId: 'child', value: { id: 'child', status: 'active', sideChatPromoted: true, parentSessionId: 'parent' } },
+    ]);
+    const navigate = vi.fn();
+    await reopenLinkedSideChat('parent', 'child', deviceId, navigate);
+    await reopenLinkedSideChat('parent', 'child', deviceId, navigate);
+    expect(mocks.tabs).toEqual([{ id: 'tab-0', kind: 'side-chat', state: { sessionId: 'child', deviceId } }]);
+    expect(mocks.activate).toHaveBeenCalledWith('parent', 'tab-0');
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.readBatch).toHaveBeenCalledWith(['parent', 'child'], deviceId ?? undefined);
+    expect(mocks.reveal).toHaveBeenCalledWith('open', { sessionId: 'parent', userInitiated: false });
+    expect(navigate).toHaveBeenLastCalledWith(deviceId ? '/cc-agent/parent?device=execution-host' : '/cc-agent/parent');
+  });
+
+  it('does not recreate a tag for the archived task', async () => {
+    mocks.readBatch.mockResolvedValue([
+      { value: { id: 'parent', status: 'active' } },
+      { value: { id: 'child', status: 'archived', sideChatPromoted: true, parentSessionId: 'parent' } },
+    ]);
+    const navigate = vi.fn();
+    await expect(reopenLinkedSideChat('parent', 'child', null, navigate)).rejects.toThrow('no longer active');
+    expect(mocks.add).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('does not duplicate a detached window tab when the main window has an empty projection', async () => {
     mocks.device = 'execution-host';
     mocks.getWindow.mockResolvedValue({ detached: true });
@@ -239,6 +286,23 @@ describe('side chat task entry', () => {
     expect(mocks.tabs.map(tab => tab.id)).toEqual(['files']);
     expect(mocks.close).toHaveBeenCalledExactlyOnceWith('parent', 'gone', { skipBeforeClose: true });
     expect(mocks.status).not.toHaveBeenCalled();
+  });
+
+  // Renderer tier: the archived Lead is missing from the ordinary side-chat list.
+  // A previously saved tab is still available when it missed the archive push.
+  it.each([null, 'execution-host'])('keeps a saved tab for an archived Lead on reload (%s)', async deviceId => {
+    mocks.device = deviceId;
+    mocks.tabs = [{ id: 'saved', kind: 'side-chat', state: { sessionId: 'child', deviceId } }];
+    mocks.list.mockResolvedValue([]);
+    mocks.readBatch.mockResolvedValue([{
+      sessionId: 'child',
+      value: { id: 'child', status: 'archived', sideChatPromoted: true, orcaRole: 'lead' },
+    }]);
+    await restoreSideChatTabs('parent');
+    expect(mocks.readBatch).toHaveBeenCalledWith(['child'], deviceId ?? undefined);
+    expect(mocks.tabs.map(tab => tab.id)).toEqual(['saved']);
+    expect(mocks.close).not.toHaveBeenCalled();
+    expect(mocks.add).not.toHaveBeenCalled();
   });
 
   it('discards an older list and reads again when a deletion arrives during recovery', async () => {

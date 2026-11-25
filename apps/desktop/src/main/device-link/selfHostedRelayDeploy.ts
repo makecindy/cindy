@@ -252,13 +252,38 @@ if [ -f "$STATE" ]; then
     "$NODE" -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("STATE "+s.schema+" "+s.relayId+" "+s.ownerPublicKey)}catch(e){console.log("STATE invalid")}' "$STATE"
   else echo "STATE unknown"; fi
 fi
-OWN=$(systemctl show -p MainPID --value cindy-relay 2>/dev/null || echo 0)
+# A familiar unit name is not proof of ownership. Only exclude the PID of our
+# installed unit with the expected user, executable and relay/data arguments.
+own_pid() {
+  unit="$1"; bundle="$2"; data="$3"
+  [ "$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null)" = "/etc/systemd/system/$unit.service" ] || return 0
+  [ "$(systemctl show -p User --value "$unit" 2>/dev/null)" = cindy-relay ] || return 0
+  start=$(systemctl show -p ExecStart --value "$unit" 2>/dev/null)
+  case "$start" in
+    "{ path=$NODE ; argv[]=$NODE $bundle serve --data $data "*) ;;
+    *) return 0;;
+  esac
+  pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
+  case "$pid" in ''|0|*[!0-9]*) return 0;; esac
+  printf '%s' "$pid"
+}
+OWN=$(own_pid cindy-relay ${INSTALL_DIR}/relay.mjs ${DATA_DIR})
+OWN_AGENT=$(own_pid cindy-agent-net ${INSTALL_DIR}/agent-net.mjs ${DATA_DIR}/agent-net)
 if command -v ss >/dev/null 2>&1; then
   ss -Hltnp 2>/dev/null | awk '{print $4" "$6}' | while read -r addr proc; do
     port="\${addr##*:}"
     if [ "$port" = 80 ] || [ "$port" = 443 ]; then
+      # A shared socket may list several PIDs: all of them must be ours.
+      pids=$(echo "$proc" | grep -o 'pid=[0-9]*' | cut -d= -f2)
+      owned=""
+      if [ -n "$pids" ]; then
+        owned=1
+        for pid in $pids; do
+          if [ "$pid" != "$OWN" ] && [ "$pid" != "$OWN_AGENT" ]; then owned=""; break; fi
+        done
+      fi
+      [ "$owned" = 1 ] && continue
       case "$proc" in
-        *"pid=$OWN,"*) ;;
         *docker-proxy*) echo "BUSY $port docker:$(docker ps --filter "publish=$port" --format '{{.Names}}' 2>/dev/null | head -n 3 | tr '\\n' ',')";;
         *) echo "BUSY $port $(echo "$proc" | sed -n 's/.*(("\\([^"]*\\)".*/\\1/p')";;
       esac
@@ -310,7 +335,7 @@ echo "SHA $(sha256sum ${INSTALL_DIR}/relay.new.mjs | cut -d' ' -f1)"
 
 const CONFIGURE_SCRIPT = `
 set -e
-ADDRESS="$1"; LISTEN="$2"; PUBLIC_URL="$3"; REPLACE="$4"; ACME_DIRECTORY="$5"; MODE="$6"; PORT="$7"; CHALLENGE_PORT="$8"; AGENT_NET="$9"; shift 9
+ADDRESS="$1"; LISTEN="$2"; ACME_LISTEN="$2"; PUBLIC_URL="$3"; REPLACE="$4"; ACME_DIRECTORY="$5"; MODE="$6"; PORT="$7"; CHALLENGE_PORT="$8"; AGENT_NET="$9"; shift 9
 if [ "$AGENT_NET" = 1 ] && [ "$MODE" = direct ]; then MODE=ingress; LISTEN=127.0.0.1; PORT=47820; fi
 NODE=${INSTALL_DIR}/node/bin/node
 if ! id cindy-relay >/dev/null 2>&1; then
@@ -331,7 +356,7 @@ EXTRA=""
 if [ "$MODE" = ingress ]; then EXTRA=" --tls-at-ingress"; fi
 CAPS=""
 if [ "$MODE" != nginx-existing ]; then
-  EXTRA="$EXTRA --acme-identifier $ADDRESS --acme-http-port $CHALLENGE_PORT"
+  EXTRA="$EXTRA --acme-identifier $ADDRESS --acme-http-host $ACME_LISTEN --acme-http-port $CHALLENGE_PORT"
   if [ -n "$ACME_DIRECTORY" ]; then EXTRA="$EXTRA --acme-directory $ACME_DIRECTORY"; fi
 fi
 if [ "$MODE" != direct ]; then EXTRA="$EXTRA --trust-proxy"; fi
@@ -836,15 +861,6 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
       { timeoutMs: 180_000, label: 'relay-deploy-configure' },
     );
     const configureLines = expectOk(configured, 'DEPLOY_FAILED');
-    if (agentNetBundle && params.agentNetBootstrap) {
-      params.assertCurrent?.();
-      const bootstrap = params.agentNetBootstrap();
-      if (bootstrap.networkId !== 'private:' + init.relayId || bootstrap.rootPublicKey !== init.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
-      expectOk(await remote.root(AGENT_NET_CONFIGURE_SCRIPT, [useNginx ? '0' : '1', ipv6 ? '::' : '0.0.0.0', authIssuer,
-        authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? ''], {
-        input: Buffer.from(JSON.stringify(bootstrap)), timeoutMs: 120_000, label: 'relay-deploy-agent-net-configure',
-      }), 'AGENT_NET_START_FAILED');
-    }
     log.info('relay configured on server', {
       initialized: configureLines.has('INITIALIZED'),
       firewall: (configureLines.get('FIREWALL') ?? []).join(',') || 'none',
@@ -854,6 +870,17 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
     if (mode !== 'nginx-existing') {
       params.onProgress?.('certificate-wait');
       await waitForCertificate(remote, params.onProgress);
+    }
+    // The direct gateway loads TLS material at startup. Do not start it until
+    // certificate issuance (including cached material) has completed successfully.
+    if (agentNetBundle && params.agentNetBootstrap) {
+      params.assertCurrent?.();
+      const bootstrap = params.agentNetBootstrap();
+      if (bootstrap.networkId !== 'private:' + init.relayId || bootstrap.rootPublicKey !== init.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
+      expectOk(await remote.root(AGENT_NET_CONFIGURE_SCRIPT, [useNginx ? '0' : '1', ipv6 ? '::' : '0.0.0.0', authIssuer,
+        authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? ''], {
+        input: Buffer.from(JSON.stringify(bootstrap)), timeoutMs: 120_000, label: 'relay-deploy-agent-net-configure',
+      }), 'AGENT_NET_START_FAILED');
     }
     if (useNginx) await nginxAction(remote, 'activate');
 
