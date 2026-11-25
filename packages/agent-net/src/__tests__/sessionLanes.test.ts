@@ -291,6 +291,28 @@ it('lets Main see a session backlog drain without sending anything more', async 
   expect(announced!.bufferedAmount).toBe(0);
 });
 
+// Unit: Main can cancel by request id while the worker owns the wire timeout.
+it('forwards cancellation from Main to the worker session immediately', async () => {
+  const { caller, ran, arrive } = peers();
+  const main = new WorkerSessions((message) => worker(message), () => {});
+  let onSession: Parameters<Parameters<typeof serveWorkerSessions>[0]['onSession']>[0] | undefined;
+  const worker = serveWorkerSessions({
+    useSessions() {},
+    session: () => caller,
+    onSession(listener) { onSession = listener; },
+  }, (message) => main.receive(message));
+  main.use({ laneFor: () => 'normal', handlers: () => ({}) });
+  onSession!('peer', caller, 'peer');
+  const proxy = main.session('peer')!;
+  const result = proxy.request('test:read', [], { id: 'listing', timeoutMs: 10_000 });
+  proxy.cancelRequest('listing');
+  await expect(result).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  arrive('control');
+  arrive('normal');
+  await settle();
+  expect(ran).toEqual([]);
+});
+
 /** 测试价值（会话 v2：大消息走自己的流）
  * - 生产入口与可观察结果：`SessionLanes` 带 `openBody`（两端都宣告了 agent-net-session-v2，portableSocket.ts）。64 KiB 以上的消息
  *   走一条自己的流，通道上只留一个占位；业务拿到消息的先后和 v1 一模一样，接收方从结果的第一个字节起就知道它在来（`onProgress`）；
