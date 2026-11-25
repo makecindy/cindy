@@ -68,6 +68,9 @@ export interface PluginMarketDetailState {
   detail?: ManagedMarketDetail;
   loading: boolean;
   failed: boolean;
+  /** The read was cancelled (the market left the screen, the computer went away, the app went to the background):
+   *  not a failure; it is read again when the market is shown again. */
+  interrupted?: boolean;
 }
 export interface UsePluginMarketOptions {
   /** The market list or search results are visible on the focused screen. */
@@ -185,6 +188,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
    * the background goes out on the shared link.
    */
   const readsOpen = () => mounted.current && activeRef.current && foregroundRef.current;
+  /**
+   * A read that ended because its fence closed (left the market, lost the computer, went to the background, unmounted)
+   * is cancelled, not failed: it leaves no "failed" behind and is read again when the market is shown again. Used by
+   * every market read's error path (probe, pages, counts, detail).
+   */
+  const readCancelled = (error: unknown) => !readsOpen() || pluginManagementErrorCode(error) === "PLUGIN_MANAGEMENT_STALE";
   const client = useMemo<PluginManagementClient | null>(() => deviceId
     ? createPluginManagementClient({ invoke, deviceId, isCurrent: () => readsOpen() && liveScope.current === scope })
     : null, [deviceId, invoke, scope]);
@@ -204,8 +213,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       const status = (await client.capability(latest)) === "unsupported" ? "outdated"
         : (await client.catalogPaging(latest)) ? "supported" : "outdated";
       if (latest()) setProbe({ scope: probeScope, status });
-    } catch {
-      if (latest()) setProbe({ scope: probeScope, status: "failed" });
+    } catch (error) {
+      if (!latest()) return;
+      // Cancelled: forget it, so showing the market again probes again.
+      if (readCancelled(error)) setProbe((current) => current?.scope === probeScope && current.status === "loading" ? undefined : current);
+      else setProbe({ scope: probeScope, status: "failed" });
     }
   }, [client, scope]);
   // Leaving the market cancels an in-flight probe (its sends are fenced anyway); forget its "loading" so coming
@@ -218,6 +230,14 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   useEffect(() => {
     if (active && probe?.scope !== scope) void readProbe();
   }, [active, scope, probe?.scope, readProbe]);
+  // The computer came back (for example restarted after updating Cindy, as the "outdated" note asks): a result other
+  // than "supported" is probed again once, without waiting for a pull to refresh.
+  const wasOnline = useRef(online);
+  useEffect(() => {
+    const cameBack = online && !wasOnline.current;
+    wasOnline.current = online;
+    if (cameBack && active && probe?.scope === scope && (probe.status === "outdated" || probe.status === "failed")) void readProbe();
+  }, [online, active, scope, probe, readProbe]);
   const probeStatus = probe?.scope === scope ? probe.status : "loading";
   // An older Host rejects every non-empty snapshot input. If a catalog read says so after the probe
   // passed (e.g. the computer's Cindy changed), probe again — at most once per scope, so a request the
@@ -403,6 +423,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
 
   // ---- Market detail (market-detail returns the list item plus the full manifest; no README).
   const [detail, setDetail] = useState<PluginMarketDetailState | null>(null);
+  const liveDetail = useRef(detail);
+  liveDetail.current = detail;
   const detailRead = useRef(0);
   const readDetail = useCallback(async (item: ManagedMarketItem, host: RemoteResourceHostTarget) => {
     const generation = ++detailRead.current;
@@ -414,14 +436,20 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     try {
       const value = await client.detail(item.pluginId, () => generation === detailRead.current);
       if (generation === detailRead.current) setDetail({ item: value, target: host, detail: value, loading: false, failed: false });
-    } catch {
-      if (generation === detailRead.current) setDetail({ item, target: host, loading: false, failed: true });
+    } catch (error) {
+      if (generation !== detailRead.current) return;
+      setDetail(readCancelled(error) ? { item, target: host, loading: false, failed: false, interrupted: true }
+        : { item, target: host, loading: false, failed: true });
     }
   }, [client, isOnline]);
   const openDetail = useCallback((item: ManagedMarketItem) => {
     if (target) void readDetail(item, target);
   }, [readDetail, target]);
   const closeDetail = useCallback(() => { detailRead.current += 1; setDetail(null); }, []);
+  // A detail read cancelled while it was open is read again once the market is shown again.
+  useEffect(() => {
+    if (active && detail?.interrupted && detail.target.deviceId === deviceId) void readDetail(detail.item, detail.target);
+  }, [active, detail?.interrupted, deviceId, readDetail]);
   // The detail belongs to one computer and connection; drop it when either changes.
   useEffect(() => { detailRead.current += 1; setDetail(null); }, [scope]);
 
@@ -494,8 +522,15 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
     if (installRef.current?.id !== attempt.id) return;
     finish(attempt);
+    // The page is gone: nothing to open, and no read is sent for it.
+    if (!mounted.current) return;
     invalidateComputer(attempt.target.deviceId, attempt.item.pluginId);
-    setDetail((current) => current?.item.pluginId === attempt.item.pluginId ? null : current);
+    // Closing this plugin's market detail also fences a detail read still in flight for it (its reply must not open
+    // the detail again, whether or not the installed instance is known).
+    if (liveDetail.current?.item.pluginId === attempt.item.pluginId) {
+      detailRead.current += 1;
+      setDetail(null);
+    }
     onInstalled.current(attempt.target, instanceKey, attempt.item);
   }, [finish, invalidateComputer]);
   useEffect(() => {
@@ -514,7 +549,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     setInstall(started);
     // This attempt is still the one on screen; writing also needs the slot still held by it.
     const mine = () => installRef.current?.id === attempt.id;
-    const current = () => mine() && slot.holds(attempt.token);
+    // Sending also needs the page still mounted (the same fence as every market read).
+    const current = () => mounted.current && mine() && slot.holds(attempt.token);
     void (async () => {
       let value = attempt.detail;
       if (!value) {
@@ -565,7 +601,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const controller = management.controller;
     // Valid only while these facts are still the ones read by the newest installed read issued (derived by the
     // controller when asked), and no newer verification started.
-    const current = () => installRef.current?.id === attempt.id && verification.current === generation
+    const current = () => mounted.current && installRef.current?.id === attempt.id && verification.current === generation
       && !!controller && controller.currentMissingReceiptFacts() === facts;
     // The one exit for the three outcomes; it re-checks validity right before applying.
     const conclude = (verdict: { installed: string } | "notInstalled" | "mismatch") => {

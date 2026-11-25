@@ -3212,6 +3212,121 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(10);
     expect(sent.filter((request) => request.input?.read === "catalog")).toEqual([]);
   });
+  /* 测试价值（独立复核剩余项 1–5；自查发现的读取取消、卸载与重探问题）
+   * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client / controller，只替换传输；观察发出的请求、
+   *   探测与详情的状态、是否重新打开详情。
+   * - 依据：读取围栏关闭（离开市场、失焦、电脑离开、进后台、卸载）造成的结束是取消，不是失败；页面卸载后安装路径不再
+   *   发请求也不打开详情；电脑重新在线时重探一次；装好后旧详情回包不重新打开详情。
+   * - 最小失败输入：每条一次。tier: unit。
+   */
+  it("treats a market detail read cancelled by leaving the screen as interrupted, and reads it again on return", async () => {
+    fixture.width = 900; // the market list stays beside its detail
+    const item = marketItem("demo", "Demo");
+    const gate = deferred();
+    let held = true;
+    queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+      : request.actionId === "management:market-detail" ? { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }
+        : marketPage([item]),
+    (request) => request !== "manifest" && request.actionId === "management:market-detail" && held ? gate.promise : undefined);
+    await openMarket();
+    await act(async () => shownMarket().openDetail(item));
+    await settle(6);
+    // A notification or a deep link takes the screen away while the read is queued.
+    fixture.focused = false;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    held = false;
+    await act(async () => { gate.release(); });
+    await settle(10);
+    expect(shownMarket().detail).toMatchObject({ failed: false });
+    fixture.focused = true;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await settle(14);
+    expect(shownMarket().detail).toMatchObject({ failed: false, loading: false, detail: expect.objectContaining({ pluginId: item.pluginId }) });
+  });
+  it("forgets a probe cancelled by leaving the screen instead of recording it as failed", async () => {
+    fixture.width = 900;
+    const gate = deferred();
+    let held = true;
+    queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([marketItem("demo", "Demo")]),
+      (request) => request !== "manifest" && request.input?.read === "capabilities" && held ? gate.promise : undefined);
+    await openMarket();
+    fixture.focused = false;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    held = false;
+    await act(async () => { gate.release(); });
+    await settle(10);
+    fixture.focused = true;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await settle(14);
+    expect(shownMarket().status).not.toBe("failed");
+    expect(shownMarket().canInstall).toBe(true);
+  });
+  it("probes again when an outdated computer comes back online", async () => {
+    let paging = false;
+    const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: paging } : marketPage([marketItem("demo", "Demo")]), () => undefined);
+    await openMarket();
+    expect(shownMarket().canInstall).toBe(false);
+    // The person updates Cindy on that computer; it restarts and comes back.
+    paging = true;
+    fixture.offlineDevices.add("mac");
+    await act(async () => root.render(createElement(PluginsScreen)));
+    fixture.offlineDevices.delete("mac");
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await settle(14);
+    expect(sent.filter((request) => request.input?.read === "capabilities").length).toBeGreaterThanOrEqual(2);
+    expect(shownMarket().canInstall).toBe(true);
+  });
+  it("sends nothing for an install whose page was left while its detail read was queued", async () => {
+    const item = marketItem("demo", "Demo");
+    const gate = deferred();
+    let hold = false;
+    const sent = queuedWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+      : request.actionId === "management:market-detail" ? { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }
+        : request.actionId === "management:snapshot" && request.input?.read === "installed" ? managementSnapshot(false) : marketPage([item]),
+    (request) => request !== "manifest" && request.actionId === "management:market-detail" && hold ? gate.promise : undefined);
+    await openMarket();
+    hold = true;
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(10);
+    const before = sent.length;
+    await act(async () => root.render(null));
+    await act(async () => { gate.release(); });
+    await settle(14);
+    expect(sent.slice(before).filter((request) => request.actionId === "management:market-detail" || request.actionId === "management:begin")).toEqual([]);
+    expect(fixture.read).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ id: "_root__demo" }), expect.anything(), expect.anything());
+  });
+  it("does not reopen a market detail whose reply lands after the install completed", async () => {
+    const item = marketItem("demo", "Demo");
+    const gate = deferred();
+    let holdDetail = false, installed = false, details = 0;
+    queuedWire((request) => {
+      if (request.input?.read === "capabilities") return { catalogPaging: true };
+      if (request.actionId === "management:market-detail") return { ...item, installState: installed ? "installed" : "not-installed", manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+      // The read-back after the install fails, so there is no instance to open (the case with no instanceKey).
+      if (request.actionId === "management:snapshot" && request.input?.read === "installed") {
+        if (installed) throw new Error("[TIMEOUT] read-back timed out");
+        return managementSnapshot(false);
+      }
+      if (request.actionId === "management:begin") { installed = true; return { operationId: request.input.operationId, phase: "succeeded" }; }
+      return marketPage([item]);
+    }, (request) => {
+      if (request === "manifest" || request.actionId !== "management:market-detail") return undefined;
+      // Only the detail the person opened is held; the install's own reads go through.
+      details += 1;
+      return holdDetail && details === 1 ? gate.promise : undefined;
+    });
+    fixture.width = 900;
+    await openMarket();
+    // The person opened the plugin's detail (its read still in flight), then installed from the row.
+    holdDetail = true;
+    await act(async () => shownMarket().openDetail(item));
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(30);
+    expect(shownMarket().installBusy).toBe(false);
+    await act(async () => { gate.release(); });
+    await settle(20);
+    expect(shownMarket().detail).toBeNull();
+  });
   it("does not send the paging probe when the manifest read finishes after the page unmounted", async () => {
     const gate = deferred();
     const sent = queuedWire(() => ({ catalogPaging: true }), (request) => request === "manifest" ? gate.promise : undefined);
