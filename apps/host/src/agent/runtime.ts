@@ -802,7 +802,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: codexBinaryPath,
         logger: LOGGER,
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
-        registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+        registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy

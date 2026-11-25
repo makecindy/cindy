@@ -53,7 +53,7 @@ export function GhostCardPromptPanel({
     <>
       <BlockingScrim />
       <div
-        className="absolute z-50 w-72 rounded-md border p-2"
+        className="absolute z-50 w-72 rounded-xl border p-2"
         style={{
           top,
           left,
@@ -79,7 +79,7 @@ export function GhostCardPromptPanel({
             }
           }}
           placeholder={placeholder || t('chat.mivoAction.promptPlaceholder')}
-          className="w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-[var(--text-placeholder)]"
+          className="w-full resize-none rounded-lg border px-2 py-1.5 text-xs outline-none placeholder:text-[var(--text-placeholder)]"
           style={{
             backgroundColor: 'var(--msg-tool-card-bg)',
             borderColor: 'var(--msg-tool-card-border)',
@@ -87,32 +87,12 @@ export function GhostCardPromptPanel({
           }}
         />
         <div className="mt-1.5 flex items-center justify-end gap-1.5">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="h-6 cursor-pointer rounded-md px-2 text-xs transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-          >
+          <Button variant="secondary" tone="quiet" size="xs" compact onClick={onCancel}>
             {t('chat.mivoAction.promptCancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={!canSend}
-            className={
-              'h-6 rounded-md border px-2.5 text-xs font-medium transition-colors ' +
-              (canSend
-                ? 'cursor-pointer hover:bg-[var(--msg-table-header-bg)]'
-                : 'cursor-not-allowed opacity-40')
-            }
-            style={{
-              backgroundColor: 'var(--msg-tool-card-bg)',
-              borderColor: 'var(--msg-tool-card-border)',
-              color: 'var(--msg-tool-card-text)',
-            }}
-          >
+          </Button>
+          <Button variant="secondary" size="xs" compact onClick={onSubmit} disabled={!canSend}>
             {t('chat.mivoAction.promptSend')}
-          </button>
+          </Button>
         </div>
       </div>
     </>

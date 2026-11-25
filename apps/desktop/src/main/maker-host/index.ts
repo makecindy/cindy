@@ -1781,7 +1781,7 @@ export function getMaker(): Maker {
       get binaryPath() { return codexPath(); },
       logger: desktopMakerLogger,
       disableCodexPluginRuntime: true,
-      registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+      registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。

@@ -194,11 +194,36 @@ export const QUEUED_DISPATCH_SUSPEND_GAP_MS = 30_000;
 const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
 
 /**
- * Plugin engines (docs/plans/acp-plugin-bridge.md) run only as a new task each run on this
- * computer (phase 2). A bound plugin-engine target is still refused at fire entry; the narrowing
- * below keeps every built-in-only step refusing a plugin engine, never treating it as built-in.
+ * Plugin engines (docs/plans/acp-plugin-bridge.md) run a schedule either as a new task each run
+ * on this computer, or as a message in a linked plugin-engine task (see boundPluginEngineRefusal).
+ * The narrowing below keeps every built-in-only step refusing a plugin engine, never treating it
+ * as built-in.
  */
 const SCHEDULED_TASKS_FEATURE = 'Scheduled tasks';
+
+/**
+ * A schedule linked to a plugin-engine task runs as a message in that task, the way the user's
+ * own follow-up would: on the task's engine and model, on this computer, through the task's input
+ * queue. Returns the refusal for every other shape. Fast mode is not a plugin-engine setting and
+ * a saved standard-speed value is not a model choice.
+ */
+function boundPluginEngineRefusal(
+  schedule: Schedule,
+  target: { remoteHostId?: string | null; agentDeviceId?: string | null } | null,
+): PluginEngineUnsupportedError | null {
+  let reason: string | null = null;
+  if (schedule.source === 'bot') {
+    reason = 'Teammate routines cannot run on a plugin engine yet.';
+  } else if (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort) {
+    reason = 'An automation linked to a plugin engine task uses the task\'s own model; remove the model choice from the automation.';
+  } else if (target?.remoteHostId || target?.agentDeviceId) {
+    reason = 'The linked task must run on this computer.';
+  }
+  if (!reason) return null;
+  const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+  refusal.message += `. ${reason}`;
+  return refusal;
+}
 
 /** Refuses only the plugin engine; every other value is returned unchanged. */
 function scheduledBuiltinAgentKind(kind: EngineKind): AgentKind;
@@ -702,6 +727,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
   }
 
+  /**
+   * A run in a linked plugin-engine task is a new paid turn: admit the task's current engine and
+   * model by the same rule as a new task (engine provided and available, model not turned off).
+   * Only checks; the task keeps its own model selection.
+   */
+  private admitBoundPluginEngine(route: { providerId: string | null; model?: string; effort?: string | null }): void {
+    if (!this.deps.admitPluginEngine) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    try {
+      this.deps.admitPluginEngine({ providerId: route.providerId, model: route.model?.trim() || 'default', effort: route.effort ?? null });
+    } catch (error) {
+      throw new Error(`schedule route unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   /** Re-read the execution computer's catalog after dispatch preparation. */
   private async assertRemoteDispatchRoute(
     agentDeviceId: string | null | undefined,
@@ -1150,10 +1189,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
       }
-      // A plugin-engine target is refused before hooks, restore or any engine switch.
-      if (target && isPluginEngineKind(target.agentKind)) {
-        const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
-        refusal.message += '. Switch the linked task back to a built-in engine or link the automation to a task that uses one.';
+      // An unsupported plugin-engine target is refused before hooks, restore or any engine switch.
+      const refusal = target && isPluginEngineKind(target.agentKind)
+        ? boundPluginEngineRefusal(schedule, target) : null;
+      if (refusal) {
         await this.notifyFailureSilent(schedule, ctx, refusal.message);
         throw refusal;
       }
@@ -1420,8 +1459,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       } else {
         // The fire-entry row check covers ordinary targets; this covers the rest
-        // (e.g. a Bot routine) before the task's engine feeds any routing below.
-        if (meta?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+        // (e.g. a Bot routine, or a task switched engines meanwhile) before the
+        // task's engine feeds any routing below.
+        const pluginEngineTarget = meta?.agentKind === 'acp' || isPluginEngineKind(row.agentKind);
+        if (pluginEngineTarget) {
+          const refusal = boundPluginEngineRefusal(schedule, row)
+            ?? (resolvedSelection ? new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE) : null);
+          if (refusal) {
+            await this.notifyFailureSilent(schedule, ctx, refusal.message);
+            throw refusal;
+          }
+        }
         if (resolvedSelection) {
           schedule = {
             ...schedule,
@@ -1453,6 +1501,29 @@ export class MakerScheduleRunner implements ScheduleRunner {
           holder.releaseAgentSwitchLock?.();
           holder.releaseAgentSwitchLock = undefined;
           return this.deferFire(schedule, sessionId, 'user-active');
+        }
+        // A plugin-engine task takes the run as an ordinary queued message, busy or idle:
+        // the task's own send path starts its engine, and dispatch rechecks the route.
+        if (pluginEngineTarget) {
+          holder.releaseAgentSwitchLock?.();
+          holder.releaseAgentSwitchLock = undefined;
+          if (!this.deps.schedulerQueue) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+          try {
+            this.admitBoundPluginEngine({ providerId: row.providerId ?? null, model: meta?.model, effort: meta?.effort });
+          } catch (error) {
+            // The engine's ordinary failure path records the run without notifying; use the runner's outlet.
+            await this.notifyFailureSilent(schedule, ctx, error instanceof Error ? error.message : String(error));
+            throw error;
+          }
+          if (this.deps.schedulerQueue.hasQueuedPrompt(sessionId, schedule.id)) {
+            return await this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
+          }
+          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, {
+            agentKind: 'acp',
+            model: meta?.model,
+            effort: meta?.effort,
+            providerId: row.providerId ?? null,
+          }, { enqueuePrompt });
         }
         // B1.5 撞忙排队(替代旧的"盲发 → SESSION_RUNNING → 顺延"路径):会话忙
         // (turn 运行中 / 队列有积压)时把心跳作为排队消息入 coordinator 队列 ——
@@ -1572,7 +1643,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatWorkingDir = meta?.workDir;
         heartbeatModel = meta?.model;
         heartbeatEffort = meta?.effort;
-        heartbeatAgentKind = meta?.agentKind;
+        // Plugin-engine tasks returned through their queue above.
+        heartbeatAgentKind = scheduledBuiltinAgentKind(meta?.agentKind);
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
         // A resumed/rebuilt task keeps its current location, including relocation
@@ -2093,7 +2165,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
           // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
           throw new Error(
-            `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
+            `schedule model switch requires rebuilding the session before dispatch (model "${model}")` +
+            (!schedule.recurring ? '. The prompt was not sent. Use Run now to retry the automation.' : ''),
             { cause: err },
           );
         }
@@ -3119,14 +3192,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
         this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
-          const override = hasScheduledModelOverride(schedule);
-          await this.deps.prepareModelPreferences(sessionId, override);
+          // A plugin-engine task keeps its own model; it has no scheduled model scope.
+          if ((this.deps.maker.getSession(sessionId)?.agentKind ?? routingBaseline.agentKind) !== 'acp') {
+            await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
+          }
           // Preparation may settle a newer owner choice even when this run
           // overrides only effort/Fast. Refresh inherited axes at dispatch;
           // explicit schedule axes and resolved-selection fences still win.
+          // A task that moved to a plugin engine meanwhile is checked at dispatch.
           const meta = await this.deps.maker.getSessionMeta(sessionId);
           routingBaseline = {
-            ...routingBaseline, model: meta?.model, agentKind: scheduledBuiltinAgentKind(meta?.agentKind),
+            ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
             effort: meta?.effort, fastMode: schedule.fastMode ?? meta?.fastMode,
             providerId: getSessionProvider(sessionId) ?? null,
           };
@@ -3534,6 +3610,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
       }
+      if (err instanceof QueuedRouteDisabledError) {
+        // Refused before vendor dispatch (route or engine turned off, plugin-engine task no longer
+        // qualifies). A visible failure the user configured notifications for; the engine's
+        // ordinary failure path records it without notifying.
+        await this.notifyFailureSilent(schedule, ctx, err.message, holder.preRunHookResult);
+        throw err;
+      }
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
         if (this.canDefer(schedule, ctx)) {
           return this.deferFire(schedule, sessionId, 'queue-wait-timeout');
@@ -3714,6 +3797,24 @@ export class MakerScheduleRunner implements ScheduleRunner {
     },
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
+    if (schedule.targetSessionId && (baseline.agentKind === 'acp' || live.agentKind === 'acp')) {
+      // A linked plugin-engine task runs this message on its own engine and model,
+      // which its send path just started; recheck that it still qualifies and that the
+      // engine and model are still allowed (they may have been turned off while queued).
+      const refusal = live.agentKind === 'acp'
+        ? boundPluginEngineRefusal(schedule, live)
+        : new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+      if (refusal) throw new QueuedRouteDisabledError(refusal.message);
+      // The saved task row is the fallback when the in-memory provider store has no entry.
+      const providerId = getSessionProvider(live.id)
+        ?? (await this.runtime.getSessionRowSnapshot(live.id))?.providerId ?? baseline.providerId;
+      try {
+        this.admitBoundPluginEngine({ providerId, model: live.model ?? baseline.model, effort: baseline.effort });
+      } catch (error) {
+        throw new QueuedRouteDisabledError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
     if (baseline.agentKind === 'acp' || live.agentKind === 'acp') {
       // A fresh plugin task already started on its native route. Recheck it
       // under the send lock in case the engine was disabled while queued.

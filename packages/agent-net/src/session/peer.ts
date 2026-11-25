@@ -174,7 +174,15 @@ export class SessionPeer {
       const refused = (error: Error) => { onSettled?.({ error }); reject(error); };
       const timer = setTimeout(() => { this.opening.delete(id); refused(new SessionError('LINK_TIMEOUT', 'no answer to session open')); }, timeoutMs);
       this.opening.set(id, { resolve: accepted, reject: refused, timer });
-      this.send('control', 'control', { t: 'open', id, payload });
+      try {
+        this.send('control', 'control', { t: 'open', id, payload });
+      } catch (error) {
+        // The worker forwards onSettled to Main. A rejected promise alone
+        // would leave Main waiting for a handshake that could not be sent.
+        if (!this.opening.delete(id)) return;
+        clearTimeout(timer);
+        refused(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
   accept(id: string, payload: unknown): void { this.send('control', 'control', { t: 'accept', id, payload, at: performance.now() }); }
