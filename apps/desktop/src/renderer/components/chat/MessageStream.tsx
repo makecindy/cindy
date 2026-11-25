@@ -385,7 +385,7 @@ import {
   ImageGalleryScopeContext,
   type GalleryImage,
 } from './ImageGalleryContext';
-import { replyGalleryImages, type ReplyGalleryOptions } from './replyGalleryImages';
+import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
@@ -4357,7 +4357,7 @@ export function MessageStream({
   // Task image gallery: every image in the loaded history, across turns, in render
   // order. Reply images use the renderer's own parse and address derivation; the
   // per-message cache keeps rebuilds to messages whose content changed.
-  const replyGalleryTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
+  const replyGalleryTargetCacheRef = useRef<ReplyImageCache>(new Map());
   const sessionImageGallery = useMemo(() => {
     const localConfirmed = sessionFileValue.localConfirmed === true;
     const replyOptions: ReplyGalleryOptions = {

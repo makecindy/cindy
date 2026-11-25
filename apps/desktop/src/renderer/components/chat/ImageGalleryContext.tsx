@@ -29,6 +29,8 @@ export interface GalleryImage {
    * re-encoded or resolved asynchronously, so a click from a reply image matches on this.
    */
   target?: string;
+  /** Reply repeat identity: the text section rendering it and which repeat of `target` there. */
+  occurrence?: GalleryOccurrence;
   /**
    * Reply image written relative to the task folder. The folder search may settle
    * after the gallery is built, so the viewer resolves it when shown, as the reply
@@ -37,6 +39,11 @@ export interface GalleryImage {
   workspace?: GalleryWorkspacePath;
   /** Original attachment name when the message carries one. */
   name?: string;
+}
+
+export interface GalleryOccurrence {
+  section: string;
+  index: number;
 }
 
 export interface GalleryWorkspacePath {
@@ -55,6 +62,7 @@ export interface GalleryOpening {
   src: string;
   galleryId?: string;
   target?: string;
+  occurrence?: GalleryOccurrence;
   scope?: string | null;
 }
 
@@ -74,11 +82,21 @@ export function galleryOpeningIndex(
     if (keyed >= 0) return keyed;
   }
   if (opening.scope) {
-    return images.findIndex(
-      (image) =>
-        image.scope === opening.scope &&
-        (opening.target ? image.target === opening.target : image.src === opening.src),
-    );
+    const inScope = (image: GalleryImage) =>
+      image.scope === opening.scope &&
+      (opening.target ? image.target === opening.target : image.src === opening.src);
+    // A reply can show the same image twice; open at the repeat that was clicked.
+    const clicked = opening.occurrence;
+    if (clicked) {
+      const repeat = images.findIndex(
+        (image) =>
+          inScope(image) &&
+          image.occurrence?.index === clicked.index &&
+          image.occurrence.section === clicked.section,
+      );
+      if (repeat >= 0) return repeat;
+    }
+    return images.findIndex(inScope);
   }
   return images.findIndex((image) => image.src === opening.src);
 }

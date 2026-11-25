@@ -483,4 +483,83 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
       _clearSmartResolveCache();
     }
   });
+
+  // PR #12724 review：同一回复里重复出现的图要从点开的那一处开始；查看器里一张还没写出
+  // 的相对路径图，文件写到原位置后要重新加载，不能停在失败态。最小失败输入：回复依次
+  // 是 A、B、A，点最后的 A 显示「1 / 3」；`out/c.png` 加载失败后文件出现，失败提示不消失。
+  it('重复图从点开处开始，查看器里后写出的文件会重新加载', async () => {
+    const blob = (char: string) => `cindy-media://blobs/${char.repeat(64)}.png`;
+    const [a, b] = ['a', 'b'].map(blob);
+    const repeated = `![first](${a})\n\n![other](${b})\n\n![again](${a})`;
+    const later = `![shown](${b})\n\n![late](out/c.png)`;
+    const missing = { status: 'none', candidates: [] };
+    const resolvePathBatch = vi.fn(
+      async ({ hrefs }: { hrefs: string[] }): Promise<Record<string, unknown>> =>
+        Object.fromEntries(hrefs.map((href) => [href, missing])),
+    );
+    (window as unknown as { electronAPI?: unknown }).electronAPI = { resolvePathBatch };
+    try {
+      const options = {
+        cache: new Map(),
+        workingDir: '/work',
+        allowPrivilegedLinks: true,
+        remoteMediaOrigin: undefined,
+        ownershipPending: false,
+        resolveInWorkspace: true,
+      };
+      const session = { sessionId: 'task', workingDir: '/work', origin: LOCAL_FILE_ORIGIN, localConfirmed: true };
+      const mount = (content: string) => {
+        const item: RenderItem = { type: 'message', key: 'r', message: { clientId: 'r', role: 'assistant', content } };
+        const gallery = collectTaskImageGallery([item], new Map(), options);
+        return render(
+          React.createElement(ChatSessionFileProvider, {
+            value: session,
+            children: React.createElement(
+              ImageGalleryContext.Provider,
+              { value: gallery },
+              React.createElement(
+                ImageGalleryScopeContext.Provider,
+                { value: 'r' },
+                React.createElement(MarkdownRenderer, {
+                  renderRichAnswers: true,
+                  content,
+                  workingDir: '/work',
+                  currentSessionId: 'task',
+                }),
+              ),
+            ),
+          }),
+        );
+      };
+
+      const first = mount(repeated);
+      fireEvent.click(screen.getByRole('button', { name: 'again' }));
+      expect(screen.getByText('3 / 3')).toBeTruthy();
+      first.unmount();
+
+      mount(later);
+      fireEvent.click(await screen.findByRole('button', { name: 'shown' }));
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+      const viewerImage = () => document.querySelector('.modal-panel img')!;
+      await waitFor(() => expect(viewerImage().getAttribute('src')).toBe(toLocalFileUrl('/work/out/c.png')));
+      fireEvent.error(viewerImage());
+      expect(screen.getByText(i18n.t('chat.media.imageMissing'))).toBeTruthy();
+
+      // The file is written where the reply said; the next check finds it.
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockImplementation(() => now + 3_000);
+      resolvePathBatch.mockResolvedValue({
+        'out/c.png': { status: 'unique', candidates: ['/work/out/c.png'], kind: 'file' },
+      });
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await waitFor(() => expect(screen.queryByText(i18n.t('chat.media.imageMissing'))).toBeNull());
+      expect(viewerImage().getAttribute('src')).toBe(toLocalFileUrl('/work/out/c.png'));
+    } finally {
+      vi.restoreAllMocks();
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+      _clearSmartResolveCache();
+    }
+  });
 });

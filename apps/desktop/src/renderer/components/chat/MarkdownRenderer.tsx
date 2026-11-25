@@ -46,6 +46,8 @@ import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
+import type { GalleryOccurrence } from './ImageGalleryContext';
+import { markdownImageOccurrence } from './markdownImageTargets';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
@@ -1936,9 +1938,23 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : [{ start: 0, content: renderedContent }],
     [emitSourceLines, isStreaming, renderedContent],
   );
-  const [lightbox, setLightbox] = useState<{ src: string; galleryTarget?: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    galleryTarget?: string;
+    galleryOccurrence?: GalleryOccurrence;
+  } | null>(null);
   // Links and chips open a single image; only embedded reply images carry a gallery target.
   const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
+  // Which repeat of an image was clicked, in the section the gallery lists it under
+  // (this renderer's text). Read at click time: positions refer to the rendered text.
+  const occurrenceSourceRef = useRef({ section: content, rendered: repairedContent });
+  occurrenceSourceRef.current = { section: content, rendered: repairedContent };
+  const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
+    if (offset === undefined) return undefined;
+    const { section, rendered } = occurrenceSourceRef.current;
+    const index = markdownImageOccurrence(rendered, target, offset);
+    return index === undefined ? undefined : { section, index };
+  }, []);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
   // 会话 → undefined,改写为 no-op。origin 从 ChatSessionFileContext 取(provider
@@ -1990,6 +2006,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         // previews (no task id) keep the single-image viewer.
         const galleryTarget =
           currentSessionId && typeof rawTarget === 'string' && rawTarget ? rawTarget : undefined;
+        const sourceOffset = node?.position?.start.offset;
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
@@ -2028,7 +2045,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                   streaming={isStreaming}
                   src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
-                  onZoom={(clicked) => setLightbox({ src: clicked, galleryTarget })}
+                  onZoom={(clicked) =>
+                    setLightbox({
+                      src: clicked,
+                      galleryTarget,
+                      galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
+                    })}
                   {...imageProps}
                   allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
@@ -2214,6 +2236,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         <ImageLightbox
           src={lightbox.src}
           galleryTarget={lightbox.galleryTarget}
+          galleryOccurrence={lightbox.galleryOccurrence}
           enableGallery={lightbox.galleryTarget !== undefined}
           onClose={() => setLightbox(null)}
         />

@@ -120,6 +120,7 @@ import {
   ImageGalleryContext,
   ImageGalleryScopeContext,
   type GalleryImage,
+  type GalleryOccurrence,
 } from './ImageGalleryContext';
 import { containImageSize } from './imageDisplaySize';
 import { useWorkspaceMediaPath } from './useWorkspaceMediaPath';
@@ -203,6 +204,8 @@ interface ImageLightboxProps {
   /** Markdown destination of a reply image; matches the gallery entry when the
    * rendered address was resolved differently. */
   galleryTarget?: string;
+  /** Which repeat of `galleryTarget` was clicked when a reply shows it more than once. */
+  galleryOccurrence?: GalleryOccurrence;
   /**
    * 会话内翻图。开启后,lightbox 提供左右箭头 + ←/→ 键盘翻页 + "n / 总数" 计数,
    * 在当前会话已加载的所有图片间切换(不限于同一条消息或同一回合)。
@@ -332,11 +335,14 @@ function isDirectCacheable(src: string): boolean {
  * task folder is resolved here, with the reply's own lookup, since the gallery may
  * have been built before that lookup settled.
  */
-function useGalleryImageSrc(item: GalleryImage): string {
+function useGalleryImageSrc(item: GalleryImage): { src: string; revision: number } {
   const workspace = item.workspace;
   const resolved = useWorkspaceMediaPath(workspace?.path, workspace?.workingDir ?? '', Boolean(workspace));
-  if (!workspace || resolved.pending) return item.src;
-  return workspace.address(resolved.src) ?? item.src;
+  // `revision` moves when a file that was missing is found, even at the same
+  // address; the viewer reloads the image then, as the reply does.
+  const { revision } = resolved;
+  if (!workspace || resolved.pending) return { src: item.src, revision };
+  return { src: workspace.address(resolved.src) ?? item.src, revision };
 }
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
@@ -356,6 +362,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
         src: props.annotationFallbackSrc ?? props.src,
         galleryId: props.galleryId,
         target: props.galleryTarget,
+        occurrence: props.galleryOccurrence,
         scope,
       }) >= 0,
   );
@@ -378,6 +385,7 @@ function ImageLightboxContent({
   enableGallery = false,
   galleryId,
   galleryTarget,
+  galleryOccurrence,
   sessionId: sessionIdProp,
   annotationEdit,
   initialStrokes,
@@ -418,6 +426,7 @@ function ImageLightboxContent({
       src: single.src,
       galleryId,
       target: galleryTarget,
+      occurrence: galleryOccurrence,
       scope: galleryScope,
     };
     const start = galleryOpeningIndex(sessionImages, opening);
@@ -451,13 +460,15 @@ function ImageLightboxContent({
   );
   const failedAnnotationSourcesRef = useRef(failedAnnotationSources);
   failedAnnotationSourcesRef.current = failedAnnotationSources;
-  const itemSrc = useGalleryImageSrc(currentItem);
+  const itemImage = useGalleryImageSrc(currentItem);
   const currentSrc =
     currentItem.annotationSourceUrl &&
     currentItem.annotationStrokes?.length &&
     !failedAnnotationSources.has(currentItem.annotationSourceUrl)
       ? currentItem.annotationSourceUrl
-      : itemSrc;
+      : itemImage.src;
+  // A failure belongs to one load attempt: a found-later file (new revision) reloads.
+  const currentLoad = `${itemImage.revision}:${currentSrc}`;
   const isClosingRef = useRef(false);
   // 右键菜单位置；行为与 LightboxImage 缩略图保持一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -1547,7 +1558,7 @@ function ImageLightboxContent({
             </>
           }
         />
-        {loadFailed === currentSrc ? (
+        {loadFailed === currentLoad ? (
           <div
             className="absolute z-[2] flex flex-col items-center gap-3 rounded-xl bg-[var(--surface)] p-6 text-[var(--text-secondary)]"
             role="status"
@@ -1600,7 +1611,7 @@ function ImageLightboxContent({
         onDoubleClick={isAnnotating ? undefined : handleImageDoubleClick}
       >
         <img
-            key={retryVersion}
+            key={`${retryVersion}:${itemImage.revision}`}
             ref={imgRef}
           src={currentSrc}
           alt=""
@@ -1648,7 +1659,7 @@ function ImageLightboxContent({
               replaceStrokes([]);
               return;
             }
-              setLoadFailed(currentSrc);
+              setLoadFailed(currentLoad);
           }}
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
