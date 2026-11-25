@@ -1938,9 +1938,11 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
+  readonly diagnostic?: 'pi-retry-history-frame-too-large';
 
-  constructor(msg: string, options?: ErrorOptions) {
+  constructor(msg: string, options?: ErrorOptions & { diagnostic?: TurnDispatchRejectedError['diagnostic'] }) {
     super(msg, options);
+    this.diagnostic = options?.diagnostic;
     this.name = 'TurnDispatchRejectedError';
   }
 }

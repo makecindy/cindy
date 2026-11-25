@@ -7767,13 +7767,16 @@ describe("Pi provider-aware model routing", () => {
     }
   });
 
-  it('reports the oversized history response before retry accepts another prompt', async () => {
+  it.each([
+    ['RPC response exceeded 16 MiB and was discarded.', 'pi-retry-history-frame-too-large'],
+    ['550 status code (no body)', undefined],
+  ])('rejects a failed history read before retry accepts another prompt: %s', async (error, diagnostic) => {
     captured.requestHandler = async command => {
       if (command.type === 'get_state') return { success: true, data: {
         sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
       } };
       if (command.type === 'get_tree') return {
-        success: false, error: 'RPC response exceeded 16 MiB and was discarded.',
+        success: false, error,
       };
       return { success: true, data: {} };
     };
@@ -7782,7 +7785,10 @@ describe("Pi provider-aware model routing", () => {
     const retryStart = captured.requests.length;
     await expect(handle.send({ type: 'user', content: 'same input' }, {
       retryTranscriptUserEntryId: 'accepted',
-    })).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+    })).rejects.toMatchObject({
+      message: diagnostic ? `Pi retry history unavailable: ${error}` : 'Pi retry history unavailable',
+      diagnostic,
+    });
     expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
     await handle.close();
   });
