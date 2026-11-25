@@ -47,9 +47,19 @@ export async function readCodexThreadMcpServersTools(
   for (let page = 0; page < MAX_STATUS_PAGES; page++) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
+    const params: Record<string, unknown> = {
+      cursor,
+      limit: 100,
+      detail: 'toolsAndAuthOnly',
+      threadId,
+    };
+    // The native selector is only meaningful for the single-server reader.
+    // Multi-server recovery must traverse the thread status list once so it
+    // can observe independent gateway states on different pages.
+    if (serverNames.length === 1) params.serverName = serverNames[0];
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
+      params,
       { timeoutMs: remainingMs },
     );
     for (const server of status.data) {
