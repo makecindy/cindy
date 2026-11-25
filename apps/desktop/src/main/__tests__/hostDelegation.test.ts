@@ -523,6 +523,28 @@ it('delegates browser settings only from the trusted renderer and keeps Host aut
   expect(local).not.toHaveBeenCalled();
 });
 
+// Unit: the provider wizard also runs on the web, so a web-enabled contract must
+// still reject an untrusted Electron sender before forwarding model credentials.
+it('requires a trusted renderer for delegated provider creation and discovery', async () => {
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  const ipcMain = { removeHandler() {}, handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) { handlers.set(channel, fn); } };
+  const trusted = {} as IpcMainInvokeEvent;
+  const request = vi.fn(async () => ({ ok: true }));
+  registerHostDelegatedIpc({ client: { request }, ipcMain, assertTrusted: event => { if (event !== trusted) throw Error('UNTRUSTED'); } });
+  for (const [channel, path] of [
+    ['maker:provider:custom:create', '/api/providers/custom/create'],
+    ['maker:provider:models-fetch', '/api/providers/models-fetch'],
+  ]) {
+    request.mockClear();
+    const invoke = handlers.get(channel)!;
+    await expect(invoke({} as IpcMainInvokeEvent, {})).rejects.toThrow('UNTRUSTED');
+    expect(request).not.toHaveBeenCalled();
+    await expect(invoke(trusted, {})).resolves.toEqual({ ok: true });
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(path, expect.any(Object));
+  }
+});
+
 // Unit: the project channel must never forward Renderer input to the generic owner write route.
 it('routes a delegated project mutation through its window-bound authorization adapter', async () => {
   const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();

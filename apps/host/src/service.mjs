@@ -249,6 +249,15 @@ export function createHostService(deps) {
     if (url.pathname === '/api/providers') {
         return { status: 200, body: await deps.providers() };
     }
+    const providerChannel = {
+      '/api/providers/custom/create': 'maker:provider:custom:create',
+      '/api/providers/models-fetch': 'maker:provider:models-fetch',
+    }[pathname];
+    if (providerChannel) {
+        if (!context.caller) return { status: 403, body: { error: 'authenticated_controller_required' } };
+        return { status: 200, body: await deps.providerInvoke(providerChannel,
+          pathname === '/api/providers/custom/create' ? [body.config, body.keys, body.options] : [body.input], context.caller) };
+    }
     if (url.pathname === '/api/agents/auth-state') {
         return { status: 200, body: await deps.agentAuthState(body.agentKind) };
     }

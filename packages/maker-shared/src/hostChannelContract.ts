@@ -16,8 +16,10 @@ export interface HostChannelDef {
   readonly body?: (args: unknown[]) => unknown;
   /** How host response maps to client expected format */
   readonly map?: (response: unknown) => unknown;
-  /** Desktop-only settings: preserve trusted-renderer admission; no web shim. */
+  /** Require trusted-renderer admission for Desktop delegation. */
   readonly trustedRenderer?: boolean;
+  /** Explicitly expose a trusted-renderer channel to authenticated Host Web clients. */
+  readonly allowWeb?: boolean;
 }
 
 export const HOST_BROWSER_SETTINGS_ACTIONS = {
@@ -173,6 +175,22 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'maker.listProviders',
     hostPath: '/api/providers',
     body: () => null,
+  },
+  {
+    desktopChannel: 'maker:provider:custom:create',
+    webPath: 'maker.createCustomProvider',
+    hostPath: '/api/providers/custom/create',
+    trustedRenderer: true,
+    allowWeb: true,
+    body: ([config, keys, options]) => ({ config, keys, options }),
+  },
+  {
+    desktopChannel: 'maker:provider:models-fetch',
+    webPath: 'maker.fetchProviderModels',
+    hostPath: '/api/providers/models-fetch',
+    trustedRenderer: true,
+    allowWeb: true,
+    body: ([input]) => ({ input }),
   },
   {
     desktopChannel: 'maker:auth:get-state',
@@ -485,7 +503,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
 export function createHostChannelHandlers(
   request: (path: string, body: unknown, method: 'POST' | 'GET') => Promise<unknown>,
 ): Record<string, (args?: unknown[]) => Promise<unknown>> {
-  return Object.fromEntries(HOST_CONTRACT_CHANNELS.filter(def => !def.trustedRenderer).map(def => [
+  return Object.fromEntries(HOST_CONTRACT_CHANNELS.filter(def => !def.trustedRenderer || def.allowWeb).map(def => [
     def.webPath,
     async (args: unknown[] = []) => {
       const response = await request(def.hostPath, def.body?.(args) ?? null, def.method ?? 'POST');

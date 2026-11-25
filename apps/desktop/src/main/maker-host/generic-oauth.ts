@@ -103,6 +103,23 @@ export interface GenericOAuthLoginOptions {
 
 export { parseModelsListResponse } from "@cindy/model-providers";
 
+export function deriveModelsDiscoveryUrl(baseUrl: string, options?: { clientVersion?: string }): string {
+  const copilot = copilotModelsRequest(baseUrl);
+  if (copilot) return copilot.url;
+  const url = new URL(baseUrl);
+  url.hash = '';
+  let pathname = url.pathname;
+  while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
+  // Codex-compatible relays (including Sub2API) expose /models directly under
+  // /backend-api/codex; inserting /v1 makes discovery fail while inference works.
+  url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
+    ? `${pathname}/models`
+    : `${pathname === '/' ? '' : pathname}/v1/models`;
+  if (options?.clientVersion) url.searchParams.set('client_version', options.clientVersion);
+  return url.toString();
+}
+
+
 /** Shared OAuth state machine; the launcher supplies only transport and presentation. */
 export function createGenericOAuthService(ports: { fetchImpl: typeof fetch }) {
 
@@ -867,21 +884,6 @@ async function runGenericOAuthLogin(
  * 约定：Anthropic 兼容端点为 `{base}/v1/models`；OpenAI 兼容 baseUrl 常以 `/v1` 结尾，
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
-function deriveModelsDiscoveryUrl(baseUrl: string, options?: { clientVersion?: string }): string {
-  const copilot = copilotModelsRequest(baseUrl);
-  if (copilot) return copilot.url;
-  const url = new URL(baseUrl);
-  url.hash = '';
-  let pathname = url.pathname;
-  while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  // Codex-compatible relays (including Sub2API) expose /models directly under
-  // /backend-api/codex; inserting /v1 makes discovery fail while inference works.
-  url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
-    ? `${pathname}/models`
-    : `${pathname === '/' ? '' : pathname}/v1/models`;
-  if (options?.clientVersion) url.searchParams.set('client_version', options.clientVersion);
-  return url.toString();
-}
 
 /**
  * 拉取 models 发现端点（带 Bearer），解析 OpenAI / Anthropic `GET /models` 形状

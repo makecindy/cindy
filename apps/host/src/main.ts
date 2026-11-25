@@ -858,6 +858,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     // Coexistence plan A: the xAI login is neither renewed nor signed out while held (agent/xai-held-login.ts).
     isProfileHeld: () => inputQueue.isHeldForDesktop(),
+    withAvailabilityPolicyMutation: (id, work) => {
+      if (!availabilityPolicy) throw new Error('Provider availability policy is not initialized');
+      return availabilityPolicy.withAvailabilityPolicyMutation(id, work);
+    },
     gatewayConnected: () => Boolean(currentGateway()),
     getCodexBinary: () => harnessBinaryPaths.codex,
     getClaudeBinary: () => harnessBinaryPaths['claude-code'],
@@ -1963,6 +1967,10 @@ const serverDeps = {
     onBoundaryStop: ownerBoundary.onStop,
   }),
   providers: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
+  providerInvoke: (channel: string, args: unknown[], caller: string) => {
+    if (!providerConfig) throw new Error('Provider configuration is not initialized');
+    return providerConfig.invoke(channel, args, caller);
+  },
   // The agent's own capability descriptor; no second catalog is invented here.
   // Gateway credential state, reported from the same facts the runtime uses.
   // The renderer asks this synchronously at boot; the desktop proxies it from
