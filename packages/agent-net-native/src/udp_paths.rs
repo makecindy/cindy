@@ -146,6 +146,8 @@ const UDP_RELAY_REGISTER: u8 = 0xe1;
 const UDP_RELAY_REGISTER_ACK: u8 = 0xe2;
 const UDP_RELAY_UP: u8 = 0xe3;
 const UDP_RELAY_DOWN: u8 = 0xe4;
+const UDP_RELAY_PROBE: u8 = 0xe5;
+const UDP_RELAY_PROBE_ACK: u8 = 0xe6;
 pub(crate) const SESSION_BYTES: usize = 8;
 pub(crate) const KEY_BYTES: usize = 32;
 const COOKIE_BYTES: usize = 16;
@@ -156,6 +158,8 @@ const COUNTER_BYTES: usize = 8;
 pub(crate) const UP_OVERHEAD: usize = 1 + SESSION_BYTES + COUNTER_BYTES + HASH_BYTES + MAC_BYTES;
 /// The relay forwards on UDP up to 1350 bytes of payload; anything longer keeps the WebSocket.
 const MAX_UDP_PAYLOAD: usize = 1350;
+const PROBE_BYTES: usize = 1350;
+const PROBE_MIN_BYTES: usize = 1 + SESSION_BYTES + COUNTER_BYTES + MAC_BYTES;
 const MAX_DATAGRAM_BYTES: usize = 65_000;
 
 const REGISTER_RETRY_US: u64 = 1_000_000;
@@ -170,6 +174,13 @@ const RESOLVE_REFRESH_US: u64 = 300_000_000;
 const RESOLVE_RETRY_FIRST_US: u64 = 2_000_000;
 const RESOLVE_RETRY_MAX_US: u64 = 60_000_000;
 const RESOLVE_WHEN_DOWN_US: u64 = 30_000_000;
+const PROBE_RETRY_US: u64 = 1_000_000;
+const PROBE_TIMEOUT_US: u64 = 2_500_000;
+const PROBE_FRESH_US: u64 = 3_000_000;
+const DATA_SILENCE_US: u64 = 4_000_000;
+const DATA_SILENCE_MIN_RESENDS: u32 = 3;
+const DATA_SILENCE_MIN_SPAN_US: u64 = 1_000_000;
+const PROBE_COOLDOWNS_US: [u64; 4] = [15_000_000, 30_000_000, 60_000_000, 120_000_000];
 const MAX_PENDING_REGISTRATIONS: usize = 16;
 
 /// The device id's tag inside relay UDP packets (`udpRelayPeerHash`).
@@ -191,7 +202,7 @@ fn same(expected: &[u8], actual: &[u8]) -> bool {
 
 /// One relay WebSocket session's UDP credentials, from its hello.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Credentials { pub session: [u8; SESSION_BYTES], pub key: [u8; KEY_BYTES] }
+pub(crate) struct Credentials { pub session: [u8; SESSION_BYTES], pub key: [u8; KEY_BYTES], pub probe: bool }
 impl Drop for Credentials { fn drop(&mut self) { zeroize::Zeroize::zeroize(&mut self.key); } }
 
 pub(crate) fn encode_register(credentials: &Credentials, counter: u64, receiving: bool, cookie: Option<&[u8; COOKIE_BYTES]>) -> Vec<u8> {
@@ -235,6 +246,29 @@ fn verify_down<'a>(packet: &'a [u8], key: &[u8]) -> Option<([u8; HASH_BYTES], &'
     Some((packet[1..header_end].try_into().ok()?, datagram))
 }
 
+pub(crate) fn encode_probe(credentials: &Credentials, counter: u64, total_bytes: usize) -> Vec<u8> {
+    let size = total_bytes.clamp(PROBE_MIN_BYTES, MAX_UDP_PAYLOAD);
+    let pad_len = size - PROBE_MIN_BYTES;
+    let mut packet = Vec::with_capacity(size);
+    packet.push(UDP_RELAY_PROBE);
+    packet.extend_from_slice(&credentials.session);
+    packet.extend_from_slice(&counter.to_be_bytes());
+    let padding = vec![0u8; pad_len];
+    let tag = mac(&credentials.key, &[&packet, &padding]);
+    packet.extend_from_slice(&tag);
+    packet.extend_from_slice(&padding);
+    packet
+}
+
+fn verify_probe_ack(packet: &[u8], credentials: &Credentials) -> Option<u64> {
+    let header_end = 1 + COUNTER_BYTES;
+    let mac_end = header_end + MAC_BYTES;
+    if packet.first() != Some(&UDP_RELAY_PROBE_ACK) || packet.len() < mac_end || packet.len() > MAX_UDP_PAYLOAD { return None; }
+    let padding = &packet[mac_end..];
+    if !same(&mac(&credentials.key, &[&packet[..header_end], &credentials.session, padding]), &packet[header_end..mac_end]) { return None; }
+    Some(u64::from_be_bytes(packet[1..header_end].try_into().ok()?))
+}
+
 pub(crate) enum Intercepted<'a> { NotRelay, Consumed, Deliver([u8; HASH_BYTES], &'a [u8]) }
 
 pub(crate) struct RelayUdp {
@@ -246,13 +280,26 @@ pub(crate) struct RelayUdp {
     credentials: Option<Credentials>,
     counter: u64,
     up_counter: u64,
+    probe_counter: u64,
     cookie: Option<[u8; COOKIE_BYTES]>,
     /// Sent and not yet acknowledged registrations: counter → (sent at, cookie it carried).
     pending: BTreeMap<u64, (u64, Option<[u8; COOKIE_BYTES]>)>,
+    /// Sent and not yet acknowledged full-size probes: counter → sent at.
+    pending_probes: BTreeMap<u64, u64>,
     acked_at: Option<u64>,
+    proven_address: bool,
+    probe_verified: bool,
+    probe_acked_at: Option<u64>,
+    probe_started_at: Option<u64>,
+    probe_last_sent_at: Option<u64>,
     unacked_since: Option<u64>,
     registered_at: Option<u64>,
     sent_at: Option<u64>,
+    silent_since: Option<u64>,
+    silent_resends: u32,
+    silent_last_send: Option<u64>,
+    suspended_until: Option<u64>,
+    suspensions: usize,
     resolved_at: Option<u64>,
     next_resolve_at: u64,
     resolve_retry_us: u64,
@@ -262,9 +309,13 @@ impl RelayUdp {
     pub(crate) fn new(server_name: &str) -> Option<Self> {
         let (host, port) = split_host_port(server_name)?;
         Some(Self { server_name: server_name.to_owned(), host, port, lookup: None, server: None, credentials: None, counter: 0, up_counter: 0,
-            cookie: None, pending: BTreeMap::new(), acked_at: None, unacked_since: None, registered_at: None, sent_at: None,
+            probe_counter: 0, cookie: None, pending: BTreeMap::new(), pending_probes: BTreeMap::new(), acked_at: None, proven_address: false,
+            probe_verified: false, probe_acked_at: None, probe_started_at: None, probe_last_sent_at: None, unacked_since: None, registered_at: None,
+            sent_at: None, silent_since: None, silent_resends: 0, silent_last_send: None, suspended_until: None, suspensions: 0,
             resolved_at: None, next_resolve_at: 0, resolve_retry_us: RESOLVE_RETRY_FIRST_US })
     }
+
+    fn probe_supported(&self) -> bool { self.credentials.as_ref().is_some_and(|c| c.probe) }
 
     /// The relay WebSocket reconnected (another session) or this side has none: the old registration is void.
     pub(crate) fn set_credentials(&mut self, credentials: Option<Credentials>) {
@@ -272,22 +323,58 @@ impl RelayUdp {
         self.credentials = credentials;
         self.counter = 0;
         self.up_counter = 0;
+        self.probe_counter = 0;
         self.reset_registration();
+    }
+
+    /// Network changed (Wi-Fi ↔ cellular, VPN toggled): clear stale suspension and re-verify on the new route.
+    pub(crate) fn network_changed(&mut self, now: u64, socket: &UdpSocket) {
+        self.suspended_until = None;
+        self.suspensions = 0;
+        self.silent_since = None;
+        self.silent_resends = 0;
+        self.silent_last_send = None;
+        self.proven_address = false;
+        self.probe_verified = false;
+        self.probe_acked_at = None;
+        self.probe_started_at = None;
+        self.probe_last_sent_at = None;
+        self.pending_probes.clear();
+        self.cookie = None;
+        self.resolve_retry_us = RESOLVE_RETRY_FIRST_US;
+        self.next_resolve_at = now;
+        if self.server.is_some() && self.credentials.is_some() { self.register(now, socket); }
+    }
+
+    pub(crate) fn note_inbound(&mut self) {
+        self.silent_since = None;
+        self.silent_resends = 0;
     }
 
     fn reset_registration(&mut self) {
         self.cookie = None;
+        self.proven_address = false;
+        self.probe_verified = false;
+        self.probe_acked_at = None;
+        self.probe_started_at = None;
+        self.probe_last_sent_at = None;
+        self.pending_probes.clear();
         self.pending.clear();
         self.acked_at = None;
         self.unacked_since = None;
         self.registered_at = None;
+        self.silent_since = None;
+        self.silent_resends = 0;
+        self.silent_last_send = None;
     }
 
-    /// Both directions work: acknowledged recently and no registration stuck unacknowledged.
+    /// Both directions work: registration fresh, not suspended, and full-size probe verified when supported.
     pub(crate) fn up(&self, now: u64) -> bool {
         self.server.is_some() && self.credentials.is_some()
             && self.acked_at.is_some_and(|at| now.saturating_sub(at) < ACK_FRESH_US)
             && self.unacked_since.is_none_or(|at| now.saturating_sub(at) < UNACKED_DOWN_US)
+            && self.suspended_until.is_none_or(|until| now >= until)
+            && (!self.probe_supported() || self.probe_verified)
     }
 
     /// Sent over UDP: true. False: the caller sends it on the relay WebSocket.
@@ -297,17 +384,24 @@ impl RelayUdp {
         self.up_counter += 1;
         if socket.send_to(&encode_up(credentials, self.up_counter, destination, datagram), server).is_err() { return false; }
         self.sent_at = Some(now);
+        if self.silent_since.is_none() { self.silent_since = Some(now); self.silent_resends = 0; } else { self.silent_resends += 1; }
+        self.silent_last_send = Some(now);
         true
     }
 
     pub(crate) fn intercept<'a>(&mut self, now: u64, socket: &UdpSocket, packet: &'a [u8]) -> Intercepted<'a> {
-        if packet.is_empty() || !(UDP_RELAY_REGISTER..=UDP_RELAY_DOWN).contains(&packet[0]) { return Intercepted::NotRelay; }
+        if packet.is_empty() || !(UDP_RELAY_REGISTER..=UDP_RELAY_PROBE_ACK).contains(&packet[0]) { return Intercepted::NotRelay; }
         let Some(credentials) = self.credentials.as_ref() else { return Intercepted::Consumed; };
         if packet[0] == UDP_RELAY_REGISTER_ACK {
             if let Some((counter, proven, cookie)) = verify_register_ack(packet, credentials) { self.acknowledge(now, socket, counter, proven, cookie); }
             return Intercepted::Consumed;
         }
+        if packet[0] == UDP_RELAY_PROBE_ACK {
+            if let Some(counter) = verify_probe_ack(packet, credentials) { self.acknowledge_probe(now, socket, counter); }
+            return Intercepted::Consumed;
+        }
         if packet[0] == UDP_RELAY_DOWN && let Some((source, datagram)) = verify_down(packet, &credentials.key) {
+            self.note_inbound();
             return Intercepted::Deliver(source, datagram);
         }
         Intercepted::Consumed
@@ -323,8 +417,59 @@ impl RelayUdp {
         self.acked_at = Some(now);
         self.unacked_since = self.pending.values().map(|(at, _)| *at).min();
         self.cookie = Some(cookie);
-        // Just up: tell the relay at once that this side receives. Not proven with a new cookie: register again with it.
-        if !was_up || (!proven && sent_cookie != Some(cookie)) { self.register(now, socket); }
+        self.proven_address = proven;
+        let suspended = self.suspended_until.is_some_and(|until| now < until);
+        if self.probe_supported() && proven && !self.probe_verified && !suspended && self.probe_started_at.is_none() {
+            self.start_probe(now, socket);
+            return;
+        }
+        if !proven && sent_cookie != Some(cookie) { self.register(now, socket); }
+        else if !suspended && !was_up && self.up(now) { self.register(now, socket); }
+    }
+
+    fn acknowledge_probe(&mut self, now: u64, socket: &UdpSocket, counter: u64) {
+        let Some(&sent_at) = self.pending_probes.get(&counter) else { return; };
+        if now.saturating_sub(sent_at) >= PROBE_TIMEOUT_US { return; }
+        let was_up = self.up(now);
+        self.pending_probes.clear();
+        self.probe_started_at = None;
+        self.probe_acked_at = Some(now);
+        self.probe_verified = true;
+        self.suspended_until = None;
+        self.suspensions = 0;
+        self.silent_since = None;
+        self.silent_resends = 0;
+        if !was_up && self.up(now) { self.register(now, socket); }
+    }
+
+    fn start_probe(&mut self, now: u64, socket: &UdpSocket) {
+        if self.server.is_none() || !self.probe_supported() { return; }
+        self.probe_started_at = Some(now);
+        self.send_probe(now, socket);
+    }
+
+    fn send_probe(&mut self, now: u64, socket: &UdpSocket) {
+        let (Some(server), Some(credentials)) = (self.server, self.credentials.as_ref()) else { return; };
+        self.probe_last_sent_at = Some(now);
+        self.probe_counter += 1;
+        let packet = encode_probe(credentials, self.probe_counter, PROBE_BYTES);
+        self.pending_probes.insert(self.probe_counter, now);
+        if self.pending_probes.len() > MAX_PENDING_REGISTRATIONS && let Some(oldest) = self.pending_probes.keys().next().copied() {
+            self.pending_probes.remove(&oldest);
+        }
+        let _ = socket.send_to(&packet, server);
+    }
+
+    fn suspend(&mut self, now: u64, socket: &UdpSocket) {
+        let cooldown = PROBE_COOLDOWNS_US[self.suspensions.min(PROBE_COOLDOWNS_US.len() - 1)];
+        self.suspensions = self.suspensions.saturating_add(1);
+        self.suspended_until = Some(now.saturating_add(cooldown));
+        self.probe_verified = false;
+        self.probe_started_at = None;
+        self.pending_probes.clear();
+        self.silent_since = None;
+        self.silent_resends = 0;
+        self.register(now, socket);
     }
 
     pub(crate) fn tick(&mut self, now: u64, socket: &UdpSocket) {
@@ -335,7 +480,7 @@ impl RelayUdp {
                     self.resolved_at = Some(now);
                     self.next_resolve_at = now + RESOLVE_REFRESH_US;
                     self.resolve_retry_us = RESOLVE_RETRY_FIRST_US;
-                    // The relay moved: registrations, acknowledgements and cookies were for the old address.
+                    // The relay moved: registrations, acknowledgements, probes and cookies were for the old address.
                     if self.server != Some(address) { self.server = Some(address); self.reset_registration(); }
                 },
                 None => {
@@ -353,6 +498,42 @@ impl RelayUdp {
             self.lookup = Some(Lookup::start(&self.host, self.port));
         }
         if self.server.is_none() || self.credentials.is_none() { return; }
+        if let Some(started_at) = self.probe_started_at {
+            if now.saturating_sub(started_at) >= PROBE_TIMEOUT_US {
+                self.suspend(now, socket);
+                return;
+            }
+            if self.probe_last_sent_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_RETRY_US) {
+                self.send_probe(now, socket);
+            }
+        }
+        if self.probe_supported() && self.up(now)
+            && let Some(since) = self.silent_since
+            && let Some(last_send) = self.silent_last_send
+            && now.saturating_sub(since) >= DATA_SILENCE_US
+            && self.silent_resends >= DATA_SILENCE_MIN_RESENDS
+            && last_send.saturating_sub(since) >= DATA_SILENCE_MIN_SPAN_US
+        {
+            self.silent_since = None;
+            self.silent_resends = 0;
+            if self.probe_acked_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_FRESH_US) && self.probe_started_at.is_none() {
+                self.start_probe(now, socket);
+            }
+        }
+        if self.suspended_until.is_some_and(|until| now < until) {
+            if self.registered_at.is_none_or(|at| now.saturating_sub(at) >= KEEPALIVE_US) { self.register(now, socket); }
+            return;
+        }
+        if self.probe_supported() && !self.probe_verified {
+            let interval = if self.unacked_since.is_some() || !self.proven_address {
+                if self.unacked_since.is_some_and(|at| now.saturating_sub(at) >= SLOW_RETRY_AFTER_US) { REGISTER_SLOW_RETRY_US } else { REGISTER_RETRY_US }
+            } else { KEEPALIVE_US };
+            if self.registered_at.is_none_or(|at| now.saturating_sub(at) >= interval) { self.register(now, socket); }
+            if self.proven_address && self.acked_at.is_some_and(|at| now.saturating_sub(at) < KEEPALIVE_US) && self.probe_started_at.is_none() {
+                self.start_probe(now, socket);
+            }
+            return;
+        }
         let interval = if self.unacked_since.is_some() || !self.up(now) {
             if self.unacked_since.is_some_and(|at| now.saturating_sub(at) >= SLOW_RETRY_AFTER_US) { REGISTER_SLOW_RETRY_US } else { REGISTER_RETRY_US }
         } else if self.sent_at.is_some_and(|at| now.saturating_sub(at) < ACTIVE_WINDOW_US) { ACTIVE_REFRESH_US } else { KEEPALIVE_US };
@@ -369,5 +550,114 @@ impl RelayUdp {
         self.pending.insert(self.counter, (now, self.cookie));
         if self.pending.len() > MAX_PENDING_REGISTRATIONS && let Some(oldest) = self.pending.keys().next().copied() { self.pending.remove(&oldest); }
         let _ = socket.send_to(&packet, server);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode_register_ack_test(credentials: &Credentials, counter: u64, proven: bool, cookie: [u8; COOKIE_BYTES]) -> Vec<u8> {
+        let mut packet = Vec::with_capacity(1 + COUNTER_BYTES + 1 + COOKIE_BYTES + MAC_BYTES);
+        packet.push(UDP_RELAY_REGISTER_ACK);
+        packet.extend_from_slice(&counter.to_be_bytes());
+        packet.push(proven as u8);
+        packet.extend_from_slice(&cookie);
+        let tag = mac(&credentials.key, &[&packet, &credentials.session]);
+        packet.extend_from_slice(&tag);
+        packet
+    }
+
+    fn encode_probe_ack_test(credentials: &Credentials, counter: u64, probe_size: usize) -> Vec<u8> {
+        let min_ack = 1 + COUNTER_BYTES + MAC_BYTES;
+        let ack_size = probe_size.saturating_sub(SESSION_BYTES).max(min_ack);
+        let padding = vec![0u8; ack_size - min_ack];
+        let mut packet = Vec::with_capacity(ack_size);
+        packet.push(UDP_RELAY_PROBE_ACK);
+        packet.extend_from_slice(&counter.to_be_bytes());
+        let tag = mac(&credentials.key, &[&packet, &credentials.session, &padding]);
+        packet.extend_from_slice(&tag);
+        packet.extend_from_slice(&padding);
+        packet
+    }
+
+    // Regression (2026-11-25): Mobile native RelayUdp must gate admission on a full-size 1350B probe when the relay
+    // supports udp-relay-probe-v1, stay on UDP when data-silence is cleared by a passing hop-1 probe, and fall back
+    // to WebSocket when full-size probes drop (VPN/MTU blackhole), recovering immediately on network_changed.
+    #[test]
+    fn full_size_probe_gates_admission_handles_blackhole_and_recovers_on_network_change() {
+        let relay_sock = UdpSocket::bind("127.0.0.1:0").expect("bind relay");
+        relay_sock.set_nonblocking(true).expect("nonblocking");
+        let relay_addr = relay_sock.local_addr().expect("addr");
+        let client_sock = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+        client_sock.set_nonblocking(true).expect("nonblocking");
+
+        let creds = Credentials { session: [1; SESSION_BYTES], key: [2; KEY_BYTES], probe: true };
+        let cookie = [7; COOKIE_BYTES];
+        let mut relay = RelayUdp::new(&relay_addr.to_string()).expect("relay");
+        relay.set_credentials(Some(creds.clone()));
+
+        let mut now: u64 = 1_000_000;
+        let pump = |relay: &mut RelayUdp, now: u64, answer_probes: bool| -> Vec<(u8, usize)> {
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 2048];
+            while let Ok((len, _)) = relay_sock.recv_from(&mut buf) {
+                let pkt = &buf[..len];
+                seen.push((pkt[0], len));
+                if pkt[0] == UDP_RELAY_REGISTER && len == 1 + SESSION_BYTES + COUNTER_BYTES + 1 + COOKIE_BYTES + MAC_BYTES {
+                    let counter = u64::from_be_bytes(pkt[1 + SESSION_BYTES..1 + SESSION_BYTES + COUNTER_BYTES].try_into().unwrap());
+                    let sent_cookie: [u8; COOKIE_BYTES] = pkt[1 + SESSION_BYTES + COUNTER_BYTES + 1..1 + SESSION_BYTES + COUNTER_BYTES + 1 + COOKIE_BYTES].try_into().unwrap();
+                    let ack = encode_register_ack_test(&creds, counter, sent_cookie == cookie, cookie);
+                    let _ = relay.intercept(now, &client_sock, &ack);
+                } else if pkt[0] == UDP_RELAY_PROBE && answer_probes {
+                    let counter = u64::from_be_bytes(pkt[1 + SESSION_BYTES..1 + SESSION_BYTES + COUNTER_BYTES].try_into().unwrap());
+                    let ack = encode_probe_ack_test(&creds, counter, len);
+                    let _ = relay.intercept(now, &client_sock, &ack);
+                }
+            }
+            seen
+        };
+
+        // 1. Resolve + register: 50B register succeeds, 1350B probe is dropped -> never enters UDP, suspends after 2.5s.
+        relay.tick(now, &client_sock);
+        relay.tick(now, &client_sock);
+        let seen = pump(&mut relay, now, false);
+        assert!(seen.iter().any(|&(kind, len)| kind == UDP_RELAY_PROBE && len == PROBE_BYTES));
+        assert!(!relay.up(now));
+        now += PROBE_TIMEOUT_US + 100_000;
+        relay.tick(now, &client_sock);
+        let _ = pump(&mut relay, now, false);
+        assert!(!relay.up(now));
+        assert!(relay.suspended_until.is_some());
+
+        // 2. Network change clears suspension; now 1350B probe succeeds -> enters UDP immediately.
+        now += 500_000;
+        relay.network_changed(now, &client_sock);
+        let _ = pump(&mut relay, now, true);
+        let _ = pump(&mut relay, now, true);
+        assert!(relay.up(now));
+        assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
+
+        // 3. Data silence while hop-1 probe still succeeds -> stays on UDP.
+        now += PROBE_FRESH_US + 1_000_000;
+        for _ in 0..4 {
+            assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
+            now += 1_500_000;
+            relay.tick(now, &client_sock);
+            let _ = pump(&mut relay, now, true);
+        }
+        assert!(relay.up(now));
+
+        // 4. Data silence when hop-1 probe fails -> suspends back to WebSocket.
+        now += PROBE_FRESH_US + 1_000_000;
+        for _ in 0..4 {
+            let _ = relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]);
+            now += 1_500_000;
+            relay.tick(now, &client_sock);
+            let _ = pump(&mut relay, now, false);
+        }
+        now += PROBE_TIMEOUT_US + 100_000;
+        relay.tick(now, &client_sock);
+        assert!(!relay.up(now));
     }
 }

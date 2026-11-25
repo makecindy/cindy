@@ -662,8 +662,8 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
-      // 只算一直走中转的那段：直连的丢包、刚换到中转的连接的历史都与中转 UDP 无关（RelaySendCounters）。
-      relayedSendCounters: () => relaySends.sample(function* () {
+      // 只算一直走中转的那段，并按连接拆分：直连的历史重传不算进来，单一对端抖动/掉线也不连坐其他健康对端（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sampleDetailed(function* () {
         for (const channel of channels) {
           const stats = channel.stats();
           if (stats) yield {
@@ -731,9 +731,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     },
     networkChanged() {
       if (closed) return;
-      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集。
+      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集；
+      // 中转 UDP 清掉旧网络的冷却并重新登记、探测。
       endpoint.localAddressChanged();
       if (udp) gather();
+      relayUdp?.networkChanged();
     },
     relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {

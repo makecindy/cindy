@@ -313,7 +313,7 @@ export class NativeTransport implements Transport {
     if (credentials === this.relayCredentials) return;
     this.relayCredentials = credentials;
     await this.call({ op: 'relayUdp', server, ...(credentials
-      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
+      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key), ...(credentials.probe === true ? { probe: true } : {}) } : { session: null }) });
   }
   private noteRelayCredentials(credentials: object | null): void {
     if (credentials === this.relayUdpFor) return;

@@ -175,6 +175,7 @@ impl NativeEngine {
                 if !self.admitted.borrow().values().any(|id| *id == link) { return Err("PEER_NOT_ADMITTED"); }
                 let data = bytes(&command["data"])?;
                 if data.len() > IO_SIZE { return Err("DATAGRAM_TOO_LARGE"); }
+                if let Some(relay) = &mut self.relay_udp { relay.note_inbound(); }
                 self.endpoint.on_datagram(self.now, from, &data);
                 Ok(Value::Null)
             },
@@ -222,9 +223,10 @@ impl NativeEngine {
             },
             "probe" => Ok(json!(self.endpoint.probe(self.now, number(command, "id")?, address(&command["address"])?))),
             "migrate" => {
-                // A new network: connections send from the new address at once; ask STUN again for the new outside address.
+                // A new network: connections send from the new address at once; ask STUN again and re-probe relay UDP.
                 self.endpoint.on_local_address_change(self.now);
                 if let Some(stun) = &mut self.stun { stun.restart(); }
+                if let Some(relay) = &mut self.relay_udp && let Some(socket) = &self.udp { relay.network_changed(self.now, socket); }
                 Ok(Value::Null)
             },
             "stun" => {
@@ -249,7 +251,8 @@ impl NativeEngine {
             let session = bytes(&command["session"])?.try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
             let key = zeroize::Zeroizing::new(bytes(&command["key"])?);
             let key = key.as_slice().try_into().map_err(|_| "INVALID_RELAY_UDP_CREDENTIALS")?;
-            Some(Credentials { session, key })
+            let probe = command["probe"].as_bool().unwrap_or(false);
+            Some(Credentials { session, key, probe })
         };
         if self.relay_udp.as_ref().is_none_or(|current| current.server_name != server) {
             self.relay_udp = Some(RelayUdp::new(server).ok_or("INVALID_RELAY_UDP_SERVER")?);

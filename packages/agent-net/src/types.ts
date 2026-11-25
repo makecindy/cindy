@@ -111,7 +111,7 @@ export interface RelayRoute {
   via: 'udp' | 'websocket';
   rttMs: number | null;
   /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
-  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number };
+  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends' | 'probe-failed'; cooldownMs: number };
 }
 export interface Transport {
   readonly id: string;
@@ -135,7 +135,7 @@ export interface TransportOptions {
   onIncoming(channel: PeerChannel): void;
   relay?: { uplink: Pick<AgentNetUplink, 'kind' | 'send' | 'onDatagram' | 'close'>; deviceId: string;
     /** The current relay session's UDP credentials; changes when the relay WebSocket reconnects. */
-    udpCredentials?(): { session: Uint8Array; key: Uint8Array } | null };
+    udpCredentials?(): { session: Uint8Array; key: Uint8Array; probe?: boolean } | null };
   /** The relay's UDP address (`host:port`, the same port as its STUN). With credentials, relayed datagrams use UDP. */
   relayUdpServer?: string;
   relayIdOf?(remoteId: string): string | undefined;
