@@ -219,6 +219,28 @@ describe('gate trigger scope', () => {
     expect(requestUtilityText).not.toHaveBeenCalled();
   });
 
+  it('still judges a claim that names a worker the ledger never dispatched to', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
+    // 这个会话昨天真派过 research；今天说「已派给 developer2」而账本里没有
+    // 任何给 developer2 的凭据——这不是复述，宿主能核实。
+    noteLeadDispatchFact('lead-1', {
+      workerId: 'w-1',
+      workerLabel: 'research',
+      dispatchId: 'q-yesterday',
+      delivery: 'queued',
+      turnGeneration: 1,
+      at: Date.now() - 60_000,
+    });
+    await expect(
+      evaluateTurnGate({
+        ...base,
+        workerLabels: ['research', 'developer2'],
+        finalText: '已改派给 developer2 了。',
+      }),
+    ).resolves.toBeTruthy();
+    expect(requestUtilityText).toHaveBeenCalledTimes(1);
+  });
+
   it('tells the judge that a denial is not a claim', async () => {
     // 判定器是模型，唯一能固定下来的就是「否认」这条指令：没有它，
     // 一句「本轮没有派单」会被判成声称已派，同一个回合反复纠正。
