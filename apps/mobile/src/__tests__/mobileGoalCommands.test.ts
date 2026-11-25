@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { isScopedPeer } from '@cindy/device-link';
 import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/desktopSlashCommands';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
@@ -36,17 +37,22 @@ const goalCreate = callback('app/sessions/new.tsx', 'createGoalSession');
 const sessionSource = ts.createSourceFile('session.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let sendSource = '';
 let readRouteParamSource = '';
+let pendingPlainTextSendKeySource = '';
 function findSend(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'send') sendSource = node.getText(sessionSource);
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'readRouteParam') readRouteParamSource = node.getText(sessionSource);
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'pendingPlainTextSendKey') pendingPlainTextSendKeySource = node.getText(sessionSource);
   ts.forEachChild(node, findSend);
 }
 findSend(sessionSource);
 if (!sendSource) throw new Error('Missing complete SessionScreen.send entry');
 if (!readRouteParamSource) throw new Error('Missing SessionScreen.readRouteParam helper');
-// Keep page-local route parsing with send; missing closure dependencies would
-// otherwise be caught by send and surface only as a misleading outbox failure.
-const compiledExisting = ts.transpileModule(`${readRouteParamSource}\n${sendSource}\nreturn send;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+if (!pendingPlainTextSendKeySource) throw new Error('Missing SessionScreen.pendingPlainTextSendKey helper');
+// Unit fixture for #11665: keep the page helpers with send so /goal and
+// ordinary follow-ups reach their production checks.
+const compiledExisting = ts.transpileModule([
+  readRouteParamSource, pendingPlainTextSendKeySource, sendSource, 'return send;',
+].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function newHarness(text = '/goal target', overrides: (bindings: Record<string, unknown>) => void = () => {}) {
   setMobileAuthOwner('test-user');
@@ -90,16 +96,19 @@ function newHarness(text = '/goal target', overrides: (bindings: Record<string, 
 }
 
 function existingHarness(args = 'target') {
+  setMobileAuthOwner('test-user');
   const initial = textComposerDocument(`/goal ${args}`);
   const release = vi.fn();
   const noop = vi.fn();
-  const session = { id: 'existing-task', agentKind: 'pi', model: 'test-model', permissionMode: 'ask', workingDir: '/test-workdir' };
+  const session = { id: 'existing-task', agentKind: 'pi', model: 'test-model', permissionMode: 'ask', workingDir: '/test-workdir', source: 'desktop' };
   const bindings = {
     setError: vi.fn(), setGoalError: vi.fn(), t: (key: string) => key,
     isRemoteSessionMissing: () => false, readSessionRowNow: () => session, goalBusy: false, setGoalBusy: vi.fn(),
     executeMobileGoalCommand, unarchiveSessionAfterSend: vi.fn(), sessionId: 'existing-task', deviceId: 'host', deviceIdRef: { current: 'host' },
     params: {} as Record<string, string | string[] | undefined>,
-    outboxSessionAliveRef: { current: 'existing-task' }, getMobileAuthOwner: () => ({}), isMobileAuthOwnerCurrent: () => true,
+    outboxSessionAliveRef: { current: 'existing-task' }, getMobileAuthOwner, isMobileAuthOwnerCurrent,
+    pendingPlainTextSends: new Map<string, Promise<void>>(),
+    Platform: { OS: 'ios' }, AppState: { currentState: 'active' }, sessionManagedByHost: false, isScopedPeer,
     maker: { goal: { set: vi.fn(async () => {}), clear: vi.fn(async () => {}), getStatus: vi.fn(async () => ({ status: 'active', objective: 'target' })) } },
     remoteSessionStore: { setGoalStatus: vi.fn(), acquireSessionMessageWork: vi.fn(() => ({ release })), getSessionDeviceId: () => 'host' }, setContextSheetView: vi.fn(), setContextSheetOpen: vi.fn(),
     setGoalRestore: vi.fn(), router: { setParams: vi.fn() }, composerDocumentRef: { current: initial },
@@ -134,7 +143,8 @@ function existingHarness(args = 'target') {
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
   bindings.applyComposerDocument = vi.fn((doc: typeof initial) => { bindings.composerDocumentRef.current = doc; });
-  return { bindings, release, run: () => new Function(...Object.keys(bindings), compiledExisting)(...Object.values(bindings))() as Promise<void> };
+  const createSend = new Function(...Object.keys(bindings), compiledExisting);
+  return { bindings, release, run: () => createSend(...Object.values(bindings))() as Promise<void> };
 }
 
 describe('new task /goal page callback', () => {
