@@ -457,8 +457,11 @@ describe('model advanced editor', () => {
     'volcengine-coding-plan', 'volcengine-agent-plan', 'tencentcloud-coding-plan', 'opencode-go',
   ])('keeps public API specs out of the %s plan drawer', (id) => {
     const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const runtime = preset.runtimes.codex!;
+    const configuredModel = runtime.models.find(item => item.route &&
+      item.route.baseUrl !== runtime.baseUrl) ?? { id: 'test-model', name: 'Model' };
     const source = { ...buildUserProvider({ id: 'plan', name: 'Plan', runtimes: {
-      codex: { ...preset.runtimes.codex!, catalogPresetId: id, models: [{ id: 'test-model', name: 'Model' }] },
+      codex: { ...runtime, catalogPresetId: id, models: [configuredModel] },
     } }), connected: true } as ProviderView;
     const published = { ...source.models.codex![0], maxOutput: 987_654 };
     const rendered = render(drawer(published, published.defaultEffort, published.efforts, source));
@@ -468,7 +471,9 @@ describe('model advanced editor', () => {
     const apiRoute = { ...source, routing: {
       codex: { ...source.routing.codex!, upstream: 'https://example.test/v1' },
     } };
-    const apiModel = { ...published, route: { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const } };
+    const replacement = { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const };
+    const apiModel = { ...published, route: replacement,
+      userModelConfig: { ...published.userModelConfig!, route: replacement } };
     rendered.rerender(drawer(apiModel, apiModel.defaultEffort, apiModel.efforts, apiRoute));
     expect(screen.getByText('987,654')).toBeTruthy();
   });
@@ -510,6 +515,35 @@ describe('model advanced editor', () => {
       expect(read).toHaveBeenCalled();
       expect(input.value).toBe('');
       expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it('updates a saved sparse Kimi Code estimate without revealing the inherited API value', async () => {
+    mocks.realPricing = true;
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const previous = window.electronAPI;
+    const reference = { currency: 'USD', inputPerMtok: 1, outputPerMtok: 4 };
+    const estimate = (output: number) => ({ editable: true, reference, effective: { ...reference, outputPerMtok: output },
+      override: { outputPerMtok: output }, conflict: false, allowedCurrencies: ['USD'], registryUpdatedAt: null });
+    const write = vi.fn(async () => estimate(6));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      getModelPriceOverride: async () => estimate(5), setModelPriceOverride: write,
+    } } });
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      const output = screen.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+      await waitFor(() => expect(output.value).toBe('5'));
+      expect(input.value).toBe('');
+      fireEvent.change(output, { target: { value: '6' } });
+      fireEvent.blur(output);
+      await waitFor(() => expect(write).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        inputPerMtok: 1, outputPerMtok: 6,
+      })));
+      expect(input.value).toBe('');
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 

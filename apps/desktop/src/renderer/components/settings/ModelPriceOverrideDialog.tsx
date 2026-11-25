@@ -138,7 +138,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   useEffect(() => {
     mutationEpochRef.current += 1;
     if (inline) setPending(false);
-  }, [open, target]);
+  }, [open, target, manualOnly]);
   // UnifiedModelList 按行条件渲染本弹窗:换行会卸载重挂、换新实例,但旧实例的
   // 在途 save/reset 闭包仍握着共享的 onOpenChange。卸载时同样作废 epoch,
   // 迟到响应不得关掉新实例的弹窗或触发任何副作用。
@@ -181,10 +181,15 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
 
   const save = async () => {
     if (!target || !view || !canWriteCurrency || loading || (inline && (pendingRef.current || !view.editable))) return false;
-    const inputPerMtok = parseRequiredPrice(form.input);
-    const outputPerMtok = parseRequiredPrice(form.output);
-    const cacheReadPerMtok = parseOptionalPrice(form.cacheRead);
-    const cacheCreatePerMtok = parseOptionalPrice(form.cacheCreate);
+    // The host stores sparse differences. Keep an existing estimate's unchanged
+    // fields when editing it, without displaying API reference values as prices.
+    const inherited = manualOnly && view.override && view.effective?.currency === form.currency
+      ? view.effective : undefined;
+    const untouched = (field: keyof FormState) => form[field] === formFromView(view, manualOnly)[field];
+    const inputPerMtok = inherited && untouched('input') ? inherited.inputPerMtok : parseRequiredPrice(form.input);
+    const outputPerMtok = inherited && untouched('output') ? inherited.outputPerMtok : parseRequiredPrice(form.output);
+    const cacheReadPerMtok = inherited && untouched('cacheRead') ? inherited.cacheReadPerMtok ?? null : parseOptionalPrice(form.cacheRead);
+    const cacheCreatePerMtok = inherited && untouched('cacheCreate') ? inherited.cacheCreatePerMtok ?? null : parseOptionalPrice(form.cacheCreate);
     if (
       inputPerMtok === null ||
       outputPerMtok === null ||

@@ -32,10 +32,9 @@ const kimiCodeEndpoints = new Set(['https://api.kimi.com/coding', 'https://api.k
 export function subscriptionPlanModelDetails(provider: ProviderView, agent: AgentKind, model: CatalogModel) {
   const routing = provider.routing?.[agent];
   if (!routing?.upstream) return undefined;
-  // A verified preset may route a protocol through its own alternate endpoint.
-  // A user-specified model endpoint, however, is a different billing connection.
-  const configuredRoute = model.userModelConfig?.route?.baseUrl;
-  const endpoint = endpointKey(configuredRoute ?? model.route?.baseUrl ?? routing.upstream);
+  // Presets can seed explicit model routes through their provider catalog.
+  const configuredRoute = model.userModelConfig?.route;
+  const endpoint = endpointKey(configuredRoute?.baseUrl ?? model.route?.baseUrl ?? routing.upstream);
   const configuredPreset = routing.usagePresetId ?? model.catalogPresetId;
   const oauth = provider.auth?.method === 'oauth' ? provider.auth.oauth : undefined;
   const isMiniMaxSubscription = oauth !== undefined && providerOAuthContract(oauth) === 'minimax';
@@ -46,8 +45,13 @@ export function subscriptionPlanModelDetails(provider: ProviderView, agent: Agen
     const runtime = (miniMax ? providerPresetOAuthRuntimes(preset) : preset.runtimes)[agent];
     if (!runtime) return [];
     const presetEndpoint = endpointKey(runtime.baseUrl);
-    const followsPreset = configuredRoute === undefined && configuredPreset === preset.id
-      && presetEndpoint === endpointKey(routing.upstream);
+    const presetModelRoute = runtime.models.find(item => item.id === model.id)?.route;
+    const seededRoute = configuredRoute && presetModelRoute
+      && endpointKey(configuredRoute.baseUrl) === endpointKey(presetModelRoute.baseUrl)
+      && configuredRoute.wireProtocol === presetModelRoute.wireProtocol
+      && configuredRoute.requestPath === presetModelRoute.requestPath;
+    const followsPreset = configuredPreset === preset.id && presetEndpoint === endpointKey(routing.upstream)
+      && (configuredRoute === undefined || seededRoute);
     if (presetEndpoint !== endpoint && !followsPreset &&
         !(preset.id === 'moonshot-kimi-code' && kimiCodeEndpoints.has(endpoint))) return [];
     // GLM's Messages endpoint is also used by its metered API preset.
