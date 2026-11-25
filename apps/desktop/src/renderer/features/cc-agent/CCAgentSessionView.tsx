@@ -10,7 +10,7 @@ import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt
 import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { VoiceCallComposerSlot } from '../bots/voice/GlobalVoiceCall';
-import { resolveVoiceConfiguration } from '../bots/voice/voiceConfiguration';
+import { readVoiceCallConfiguration } from '../bots/voice/voiceConfiguration';
 import { sendVoiceCallCommand, useVoiceCallSummary } from '../bots/voice/voiceCallStore';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { useMessageReadAloud } from '../bots/voice/useMessageReadAloud';
@@ -92,12 +92,16 @@ import {
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
+import {
   connectedProvidersForAgent,
   EFFORT_VALUES,
   providerOffersModel,
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
-import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { STANDARD_CHAT_MESSAGE_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
@@ -925,6 +929,7 @@ function CCAgentSessionContent({
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
+  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     remoteProjectsStore.getCreationPreview(sessionId));
   const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
@@ -1080,7 +1085,9 @@ function CCAgentSessionContent({
     inputHalfWidth,
     isCompact,
     getMessageWidth,
-  } = useProportionalWidth(914, { compact: isCompactRail });
+  } = useProportionalWidth(STANDARD_CHAT_MESSAGE_WIDTH, {
+    compact: isCompactRail,
+  });
   const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
@@ -1144,7 +1151,6 @@ function CCAgentSessionContent({
   const voiceModeOpen = voiceCall.open && voiceCall.sessionId === sessionId;
   const activeVoiceCallId = voiceCall.sessionId === sessionId ? voiceCall.callId : null;
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
-  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);
@@ -2887,10 +2893,15 @@ function CCAgentSessionContent({
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
   const sessionModelPickRef = useRef<SessionModelPick | null>(null);
+  const isLiveSafetyRefusalError =
+    !!error &&
+    (errorReason === PROVIDER_SAFETY_REFUSAL_REASON ||
+      isProviderSafetyRefusalError(error, errorReason));
   const modelGroupSwitchOffer = useModelGroupSwitchOffer(
     sessionId,
-    !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
-      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error)),
+    !readOnly && !botChatIdentity && !!error && !isLiveSafetyRefusalError
+      && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error, undefined, errorReason)),
     errorPersistId ?? error,
     // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
     `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,
@@ -3704,6 +3715,7 @@ function CCAgentSessionContent({
           role: form.role,
           label: createWorkerLabel(form.role, []),
           model: form.model,
+          ...(form.modelGroup ? { modelGroup: form.modelGroup } : {}),
           effort: form.effort as
             'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined,
           fast: form.fast,
@@ -3895,6 +3907,16 @@ function CCAgentSessionContent({
       refreshAgentPluginCatalogue, agentDevicePluginEngines, t],
   );
 
+  const runningSessionPluginEngineChoice = useMemo<PluginEnginesPickerProps['active']>(() => {
+    if (!pluginEngineTask || !session?.providerId) return null;
+    return {
+      providerId: session.providerId,
+      ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
+      modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+      ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
+    };
+  }, [session, pluginEngineTask, pluginEngineAgentDeviceId]);
+
   const activeSessionPluginEngineChoice = useMemo<PluginEnginesPickerProps['active']>(() => {
     if (!session) return null;
     const intentDeviceId = pluginEngineSwitchIntent
@@ -3908,16 +3930,8 @@ function CCAgentSessionContent({
         ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
       };
     }
-    if (pluginEngineTask && !agentSwitchIntent && session.providerId) {
-      return {
-        providerId: session.providerId,
-        ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
-        modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
-        ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
-      };
-    }
-    return null;
-  }, [session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, pluginEngineAgentDeviceId]);
+    return agentSwitchIntent ? null : runningSessionPluginEngineChoice;
+  }, [session, pluginEngineSwitchIntent, agentSwitchIntent, runningSessionPluginEngineChoice]);
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
@@ -3930,6 +3944,7 @@ function CCAgentSessionContent({
     const resolvedEffort = resolvePluginEngineSessionSwitchEffort(
       selection,
       targetEngine,
+      runningSessionPluginEngineChoice,
       activeSessionPluginEngineChoice,
     );
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
@@ -3972,7 +3987,7 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
+    pluginEngineTask, runningSessionPluginEngineChoice, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
     pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
@@ -4003,11 +4018,13 @@ function CCAgentSessionContent({
     return {
       engines: switchablePluginEngines,
       active: activeSessionPluginEngineChoice,
+      running: runningSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
-    session, activeSessionPluginEngineChoice, pluginEngineTask, handlePluginEngineSwitchSelect, readSessionPluginEngines]);
+    session, activeSessionPluginEngineChoice, runningSessionPluginEngineChoice, pluginEngineTask,
+    handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
@@ -5110,11 +5127,8 @@ function CCAgentSessionContent({
       if (!current || !isCurrent() || !bot || !target) return;
       const voice = window.electronAPI.voiceConversation;
       // Missing configuration opens settings here, not in a possibly hidden main window.
-      const configured = await Promise.all([voice.models(), voice.preference(bot.id)]).then(
-        ([models, preference]) => {
-          const { selection, protocol } = resolveVoiceConfiguration(models, preference.selection);
-          return Boolean(selection && protocol);
-        },
+      const configured = await readVoiceCallConfiguration(voice, bot.id).then(
+        ({ selection }) => Boolean(selection),
         // The host re-reads these and reports a failed read on the toolbar.
         () => true,
       );
@@ -6657,8 +6671,11 @@ function CCAgentSessionContent({
             {/* worktree 恢复横幅(P1):worktree 已被回收(目录缺失、分支还在)时
               提供一键恢复。组件自查 restore-status,非 restorable 自渲染 null;
               与 error/streaming 互斥条件从轻——目录缺失是持续状态,不依赖错误出现。 */}
-            {!readOnly && sessionId && !isStreaming && !agentStatus.isRunning && (
+            {viewVisible && !readOnly && sessionId && rightSidebarDeviceLinkDeviceId !== undefined && !isStreaming && !agentStatus.isRunning && (
               <WorktreeRestoreBanner
+                key={JSON.stringify([rightSidebarDeviceLinkDeviceId, sessionId])}
+                deviceId={rightSidebarDeviceLinkDeviceId}
+                online={rightSidebarDeviceLinkDeviceId === null || remoteConn === 'connected'}
                 sessionId={sessionId}
                 style={{ width: inputWidth }}
               />

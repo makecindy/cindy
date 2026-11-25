@@ -138,6 +138,30 @@ it('hands a runNow trigger to the runner and leaves manual runs unmarked', async
   await h.scheduler.stop();
 });
 
+it('records the MR state that triggered the run alongside its eventual result', async () => {
+  const h = makeHarness();
+  await h.scheduler.start();
+  const url = 'https://git.example.test/team/repo/-/merge_requests/7';
+  const schedule = await h.scheduler.create({ ...baseInput, prTrigger: { url, change: 'any' } });
+  const mrObservation = { url, signature: 'open|abc||1' };
+  await h.scheduler.runNow(schedule.id, { trigger: { kind: 'watch', source: 'pr-status', detail: url }, mrObservation });
+  expect(await h.storage.listRuns(schedule.id)).toEqual([expect.objectContaining({ mrObservation, status: 'success' })]);
+  await h.scheduler.stop();
+});
+
+// #12168, unit: a manual GitLab MR has no event source once its task page is closed.
+// Exercise both writes, including a timing-only patch that omits the saved trigger.
+it('requires periodic checks when creating or updating a GitLab MR trigger', async () => {
+  const h = makeHarness();
+  const prTrigger = { url: 'https://git.example.test/team/repo/-/merge_requests/7', change: 'any' as const };
+  await expect(h.scheduler.create({ ...baseInput, prTrigger, manual: true })).rejects.toThrow(/recurring/i);
+  const schedule = await h.scheduler.create({ ...baseInput, prTrigger });
+  expect(schedule.nextFireAt).toBeDefined();
+  await expect(h.scheduler.update(schedule.id, { manual: true })).rejects.toThrow(/recurring/i);
+  await expect(h.scheduler.update(schedule.id, { recurring: false })).rejects.toThrow(/recurring/i);
+  expect(await h.storage.get(schedule.id)).toMatchObject({ nextFireAt: schedule.nextFireAt, recurring: true });
+});
+
 // Regression: quitting while a runner is active must preserve an interrupted run,
 // even when closing the provider produces a late rejection. Unit, in-memory I/O.
 it('preserves interrupted runs on app exit instead of recording a provider-close failure', async () => {
@@ -6522,6 +6546,259 @@ describe('Scheduler preRunHook results', () => {
     // runNow 不动 cron 排期(与 success 路径一致)
     const after = await h.storage.get(sch.id);
     expect(after?.nextFireAt).toBe(before?.nextFireAt);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.tick / runNow 在前置检查 skipped 时的事件广播、排期顺延与 PR 触发归因。
+  // - 规则依据：docs/dev-rules/server-channel-review.md 与 docs/dev-rules/engineering-conventions.md —— 周期性 skipped 不得重复广播 changed 触发整表/远端同步；自动事件触发（pr-status / webhook）完成后应重置 intervalMs 倒计时避免与 cron 紧邻双发。
+  // - 现有覆盖缺口：既有 skipped 用例未断言不发冗余 changed、未覆盖自动事件触发对 intervalMs / 到期 cron 的重排，也未覆盖旧式 hook URL 的 pr-check 归因。
+  // - 最小失败输入：一条带 intervalMs + 旧式 GitHub PR hook 的周期任务分别经 pr-status runNow 与到期 tick 执行跳过。
+  // - tier：unit（FakeClock + InMemoryStorage）。
+  it('suppresses redundant changed on recurring skipped runs, resets intervalMs after automatic watch runs, and tags legacy PR hooks as pr-check', async () => {
+    const url = 'https://github.com/makecindy/cindy-official-plugins/pull/324';
+    const h = makeHarness({
+      runnerImpl: async (_s, ctx) => {
+        await ctx.onPreRunHookCompleted?.({
+          status: 'skipped',
+          decision: 'skip',
+          checkSucceeded: true,
+          exitCode: 2,
+          durationMs: 40,
+          stdout: 'CINDY_PRECHECK_OK\n',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          timedOut: false,
+          aborted: false,
+        });
+        return { sessionId: '', skipped: true, resultText: 'not-due' };
+      },
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/5 * * * *',
+      intervalMs: 300_000,
+      preRunHook: { command: `node "/skills/pr-heartbeat-gate.mjs" ${url}` },
+    });
+
+    const changedEvents: string[] = [];
+    const skippedEvents: Array<Record<string, unknown>> = [];
+    h.scheduler.on('changed', (e) => changedEvents.push(e.scheduleId));
+    h.scheduler.on('skipped', (e) => skippedEvents.push(e as unknown as Record<string, unknown>));
+
+    // Automatic PR-status watch run at +240s (60s before initial 300s interval):
+    // resets nextFireAt to finishedAt + 300_000 instead of leaving the imminent +300s tick,
+    // and emits skipped (with timing + preRunCheckSucceeded) without emitting changed.
+    const watchAt = h.clock.now() + 240_000;
+    h.clock.setTo(watchAt);
+    await h.scheduler.runNow(sch.id, {
+      deferToCaller: true,
+      trigger: { kind: 'watch', source: 'pr-status', detail: url },
+    });
+
+    expect(changedEvents).toEqual([]);
+    expect(skippedEvents).toHaveLength(1);
+    expect(skippedEvents[0]).toMatchObject({
+      scheduleId: sch.id,
+      sessionId: '',
+      lastFiredAt: watchAt,
+      lastFinishedAt: watchAt,
+      nextFireAt: watchAt + 300_000,
+      preRunCheckSucceeded: true,
+    });
+
+    // At the original +300s mark, tick() must NOT duplicate-fire because pr-status already reset the 5m interval.
+    h.clock.setTo(watchAt + 60_000);
+    await h.scheduler.tick();
+    expect(await h.scheduler.listRuns(sch.id)).toHaveLength(1);
+
+    // At watchAt + 300s, the fallback timed check runs, records triggerSource='pr-check' even for legacy hook URLs,
+    // and still emits zero changed events while remaining active.
+    h.clock.setTo(watchAt + 300_000);
+    await h.scheduler.tick();
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(2);
+    expect(runs.map((r) => r.triggerSource)).toEqual(['pr-check', 'pr-status']);
+    expect(changedEvents).toEqual([]);
+
+    // One-shot skipped run transitions active -> expired, which DOES emit changed so UI sees status='expired'.
+    const once = await h.scheduler.create({ ...baseInput, recurring: false });
+    changedEvents.length = 0;
+    h.clock.setTo(once.nextFireAt!);
+    await h.scheduler.tick();
+    expect((await h.storage.get(once.id))?.status).toBe('expired');
+    expect(changedEvents).toEqual([once.id]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.runNow + tick 在普通 webhook+interval、多 PR 监听及不同 PR 事件下保持独立定时排期不被推后。
+  // - 规则依据：docs/product-rules/schedule-webhook-trigger.md —— 普通 webhook 触发与定时巡检相互独立，连续外部事件不得饿死独立 interval/cron。
+  // - 现有覆盖缺口：单 PR 合并测试未覆盖 webhook+interval 连续到达、带 webhookTrigger 的混合任务及多 PR 脚本不误合并。
+  // - 最小失败输入：intervalMs=300s 的 webhook 任务在到期前连续收到 3 次 webhook runNow。
+  // - tier：unit（FakeClock + InMemoryStorage）。
+  it('keeps independent intervalMs/cron schedules on time across continuous ordinary webhook or non-matching watch runs', async () => {
+    const h = makeHarness({
+      runnerImpl: async () => ({ sessionId: 'sess-webhook', resultText: 'handled' }),
+    });
+    const webhookSchedule = await h.scheduler.create({
+      ...baseInput,
+      cronExpr: '*/5 * * * *',
+      intervalMs: 300_000,
+      webhookTrigger: { endpointId: 'ep-independent', events: ['push'] },
+    });
+    const initialNextFireAt = (await h.storage.get(webhookSchedule.id))!.nextFireAt!;
+
+    // Continuous webhook arrivals at +60s, +120s, +240s must NEVER push back initialNextFireAt.
+    for (const offsetMs of [60_000, 120_000, 240_000]) {
+      h.clock.setTo(initialNextFireAt - 300_000 + offsetMs);
+      await h.scheduler.runNow(webhookSchedule.id, {
+        webhook: {
+          events: [{ deliveryId: `d-${offsetMs}`, event: 'push', receivedAt: h.clock.now() }],
+          omitted: 0,
+        },
+      });
+      expect((await h.storage.get(webhookSchedule.id))?.nextFireAt).toBe(initialNextFireAt);
+    }
+
+    // Independent timer still fires right on schedule at initialNextFireAt.
+    h.clock.setTo(initialNextFireAt);
+    await h.scheduler.tick();
+    expect(await h.scheduler.listRuns(webhookSchedule.id)).toHaveLength(4);
+
+    // Multi-PR hook or mismatched PR URL also keeps its independent timer untouched.
+    const urlA = 'https://github.com/example/project/pull/1';
+    const urlB = 'https://github.com/example/project/pull/2';
+    const multiPr = await h.scheduler.create({
+      ...baseInput,
+      intervalMs: 300_000,
+      preRunHook: { command: `node "/skills/multi-gate.mjs" ${urlA} ${urlB}` },
+    });
+    const multiInitialNext = (await h.storage.get(multiPr.id))!.nextFireAt!;
+    h.clock.setTo(multiInitialNext - 60_000);
+    await h.scheduler.runNow(multiPr.id, {
+      deferToCaller: true,
+      trigger: { kind: 'watch', source: 'pr-status', detail: urlA },
+    });
+    expect((await h.storage.get(multiPr.id))?.nextFireAt).toBe(multiInitialNext);
+  });
+
+  // Unit: once a skipped run is persisted, a schedule write failure still
+  // publishes exactly one terminal event, without claiming new timing.
+  it.each(['tick', 'runNow'] as const)('emits a bare skipped event if %s cannot persist the new schedule timing', async (source) => {
+    const h = makeHarness({ runnerImpl: async () => ({ sessionId: '', skipped: true }) });
+    const schedule = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+    const update = h.storage.update.bind(h.storage);
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (patch.lastFinishedAt !== undefined) throw new Error('schedule write failed');
+      return update(id, patch, expected);
+    });
+    const fired = vi.fn();
+    const skipped = vi.fn();
+    const changed = vi.fn();
+    h.scheduler.on('fired', fired).on('skipped', skipped).on('changed', changed);
+    h.clock.setTo(schedule.nextFireAt!);
+    const run = source === 'tick' ? h.scheduler.tick() : h.scheduler.runNow(schedule.id);
+    await expect(run).rejects.toThrow('schedule write failed');
+    expect(fired).toHaveBeenCalledTimes(1);
+    const [record] = await h.scheduler.listRuns(schedule.id);
+    expect(record?.status).toBe('skipped');
+    expect(skipped).toHaveBeenCalledExactlyOnceWith({
+      type: 'skipped', scheduleId: schedule.id, runId: record?.id, sessionId: '',
+    });
+    expect(changed).toHaveBeenLastCalledWith({ type: 'changed', scheduleId: schedule.id });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler 在失败后及冷启动后首次健康 skipped 时立即广播 changed，稳态连续 skipped 不再广播 changed。
+  // - 规则依据：docs/dev-rules/protocol-compatibility.md 与 docs/dev-rules/server-channel-review.md —— 失败恢复/未读清除对新旧客户端都必须零延迟生效，稳态空跳不产生整表广播风暴。
+  // - 现有覆盖缺口：此前仅测试新建任务稳态 skipped，未验证失败恢复与进程重启后的首次健康检查必须发 changed。
+  // - 最小失败输入：先跑出一次 failed run（含同实例与新实例 start() 两种路径），随后连续两次健康 skipped。
+  // - tier：unit（FakeClock + InMemoryStorage）。
+  it('emits immediate changed when a healthy skipped run recovers a failure or cold-start unknown check state', async () => {
+    let shouldFail = true;
+    const h = makeHarness({
+      runnerImpl: async (_s, ctx) => {
+        if (shouldFail) {
+          throw new Error('pre-run check failed');
+        }
+        await ctx.onPreRunHookCompleted?.({
+          status: 'skipped',
+          decision: 'skip',
+          checkSucceeded: true,
+          exitCode: 2,
+          durationMs: 20,
+          stdout: 'CINDY_PRECHECK_OK\n',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          timedOut: false,
+          aborted: false,
+        });
+        return { sessionId: '', skipped: true, resultText: 'unchanged' };
+      },
+    });
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+    const changedEvents: string[] = [];
+    h.scheduler.on('changed', (e) => changedEvents.push(e.scheduleId));
+
+    // 1) In-process failure clears known-clean state.
+    h.clock.setTo(sch.nextFireAt!);
+    await h.scheduler.tick();
+    expect((await h.scheduler.listRuns(sch.id))[0]?.status).toBe('failed');
+    changedEvents.length = 0;
+
+    // First healthy skip after failure MUST emit changed immediately; second steady-state skip omits changed.
+    shouldFail = false;
+    h.clock.advance(60_000);
+    await h.scheduler.tick();
+    expect(changedEvents).toEqual([sch.id]);
+
+    changedEvents.length = 0;
+    h.clock.advance(60_000);
+    await h.scheduler.tick();
+    expect(changedEvents).toEqual([]);
+
+    // 2) Cold-start Scheduler instance does not assume prior DB state was clean:
+    // first healthy skip after start() emits changed once, then enters steady state.
+    await h.scheduler.stop();
+    const coldScheduler = new Scheduler({
+      storage: h.storage,
+      clock: h.clock,
+      tickIntervalMs: 3_600_000,
+      runner: {
+        fire: async (_s, ctx) => {
+          await ctx.onPreRunHookCompleted?.({
+            status: 'skipped',
+            decision: 'skip',
+            checkSucceeded: true,
+            exitCode: 2,
+            durationMs: 20,
+            stdout: 'CINDY_PRECHECK_OK\n',
+            stderr: '',
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            timedOut: false,
+            aborted: false,
+          });
+          return { sessionId: '', skipped: true, resultText: 'unchanged' };
+        },
+      },
+    });
+    const coldChanged: string[] = [];
+    coldScheduler.on('changed', (e) => coldChanged.push(e.scheduleId));
+    await coldScheduler.start();
+    try {
+      h.clock.advance(60_000);
+      await coldScheduler.tick();
+      expect(coldChanged).toEqual([sch.id]);
+
+      coldChanged.length = 0;
+      h.clock.advance(60_000);
+      await coldScheduler.tick();
+      expect(coldChanged).toEqual([]);
+    } finally {
+      await coldScheduler.stop();
+    }
   });
 
   // #8351, unit: real tick/persistence/runNow. Existing once-skip coverage did

@@ -967,6 +967,8 @@
     "timeout": "\"{{device}}\" aún no está listo. Asegúrate de que Cindy esté abierto y en línea en esa computadora y vuelve a intentarlo.",
     "conflict": "{{name}} ya se mudó a “{{device}}”.",
     "switchFailed": "No se puede cambiar la computadora principal en este momento. Vuelve a intentarlo más tarde.",
+    "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
+    "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
     "unknownDevice": "otra computadora",
     "runsOn": "Se ejecuta en \"{{device}}\"",
     "homeTitle": "Computadora principal",

@@ -260,7 +260,7 @@ type VoiceInputState = import('@cindy/voice-input-core').VoiceInputState;
 type VoiceAudioTrace = import('@cindy/voice-input-core').AudioTrace;
 type VoiceSpeechSegment = import('@cindy/voice-input-core').SpeechSegment;
 type VoiceInputGlobalErrorCode =
-  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
 type VoiceInputGlobalResult =
   { ok: true } | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 type VoiceEditableRange = import('@cindy/voice-input-core').EditableRange;
@@ -1253,7 +1253,7 @@ interface ElectronAPI {
   windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
   onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
-  windowClose: () => void;
+  windowClose: (once?: 'quit' | 'tray' | 'minimize') => void;
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。renderer 侧统一经 useManualWindowDrag
@@ -1302,6 +1302,10 @@ interface ElectronAPI {
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
   setClassicalReplyStyle: (style: string) => Promise<{ ok: true }>;
   billing: import('../shared/billing').BillingRendererApi;
+  /** Main window only; the cloud login window has its own cloudLoginWindow. */
+  cloudSettings?: import('../shared/cloudSettingsClient').CloudSettingsRendererApi;
+  cloudLoginWindow?: import('../shared/cloudLoginWindow').CloudLoginWindowApi;
+  hostSettings?: import('../shared/hostSettings').HostSettingsRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
   // systemNetworkErrorToast.ts 负责节流 + 多语言 toast。
@@ -1467,6 +1471,9 @@ interface ElectronAPI {
       id: string,
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
+    /** 「用插件打开文件」开关(只对声明了 fileOpener 的插件有意义;默认开)。 */
+    fileOpener: (id: string) => Promise<{ declared: boolean; enabled: boolean }>;
+    setFileOpener: (id: string, enabled: boolean) => Promise<{ declared: boolean; enabled: boolean }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
@@ -1821,7 +1828,7 @@ interface ElectronAPI {
     officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
+    recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
@@ -2723,6 +2730,7 @@ interface ElectronAPI {
     appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -4156,6 +4164,11 @@ interface ElectronAPI {
     get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  taskExportDirectory?: {
+    get(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    choose(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    reset(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
   };
   createProjectFromTask: {
     prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
@@ -6570,6 +6583,7 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
         workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;

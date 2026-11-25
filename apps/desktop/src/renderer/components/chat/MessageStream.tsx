@@ -8,7 +8,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTimeGroupRows, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -1089,7 +1089,7 @@ export function restoreClientIdForItem(item: RenderItem): string | undefined {
   if (item.type === 'agent_plan') return item.sourceClientIds[0];
   if (item.type === 'turn_changes') return item.changeSet.anchorClientId ?? undefined;
   if (item.type === 'ghost_card') return item.toolCall.clientId;
-  if (item.type === 'work_group')
+  if (item.type === 'work_group' && !item.teammateJournal)
     return restoreClientIdFromKey(item.key) ?? collectDeleteAnchorClientIds([item])[0];
   return collectDeleteAnchorClientIds([item])[0] ?? restoreClientIdFromKey(item.key);
 }
@@ -1107,15 +1107,14 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
   const dashIdx = lostKey.indexOf('-');
   if (dashIdx < 0) return -1;
   // Completed groups have a compound prefix; the message id can itself contain dashes.
-  const lostCid = lostKey.startsWith('work-summary-')
-    ? lostKey.slice('work-summary-'.length)
-    : lostKey.slice(dashIdx + 1);
+  const groupPrefix = ['work-summary-', 'work-journal-'].find((prefix) => lostKey.startsWith(prefix));
+  const lostCid = lostKey.slice(groupPrefix?.length ?? dashIdx + 1);
   if (!lostCid) return -1;
 
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it.type === 'message') {
-      if (it.message.clientId === lostCid) return i;
+      if (renderItemContainsClientId(it, lostCid)) return i;
     } else if (it.type === 'tool_segment') {
       // segment 合并后,老的 toolCall 仍是新段内某条 toolCall
       if (it.toolCalls.some((tc) => tc.clientId === lostCid)) return i;
@@ -1199,16 +1198,23 @@ export function isVisibleDeleteCompensationElement(
  * 渲染顺序下所有可定位 clientId：message、tool_segment、agent_task、嵌套 work_group。
  * 删除补偿与 focus 落点都走这条序列，避免子消息删除时跳过中间的工具行。
  */
-export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): string[] {
+export function collectDeleteAnchorClientIds(
+  items: readonly RenderItem[],
+  includeCollapsed = false,
+): string[] {
   const ids: string[] = [];
   for (const item of items) {
-    if (item.type === 'message') ids.push(item.message.clientId);
-    else if (item.type === 'tool_segment') {
+    if (item.type === 'message') {
+      if (includeCollapsed && item.collapsedClientIds) {
+        for (const id of item.collapsedClientIds) ids.push(id);
+      }
+      ids.push(item.message.clientId);
+    } else if (item.type === 'tool_segment') {
       for (const toolCall of item.toolCalls) ids.push(toolCall.clientId);
     } else if (item.type === 'agent_task' && item.toolCall) {
       ids.push(item.toolCall.clientId);
     } else if (item.type === 'work_group') {
-      ids.push(...collectDeleteAnchorClientIds(item.children));
+      ids.push(...collectDeleteAnchorClientIds(item.children, includeCollapsed));
     }
   }
   return ids;
@@ -1222,10 +1228,45 @@ export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): stri
  */
 export function renderWindowFloorClientId(items: readonly RenderItem[]): string | undefined {
   for (let index = 0; index < items.length; index += 1) {
-    const anchors = collectDeleteAnchorClientIds([items[index]]);
+    const anchors = collectDeleteAnchorClientIds([items[index]], true);
     if (anchors.length > 0) return anchors[0];
   }
   return undefined;
+}
+
+/** Locate the visible representative without treating ordinary hidden children as duplicates. */
+function collapsedMessageRepresentative(item: RenderItem, clientId?: string): string | undefined {
+  if (item.type === 'message' && item.collapsedClientIds?.length
+    && (clientId === undefined || item.collapsedClientIds.includes(clientId))) {
+    return item.message.clientId;
+  }
+  if (item.type === 'work_group') {
+    for (const child of item.children) {
+      const representative = collapsedMessageRepresentative(child, clientId);
+      if (representative !== undefined) return representative;
+    }
+  }
+  return undefined;
+}
+
+export function resolveViewportRestoreMessage(
+  item: RenderItem,
+  snapshot: ViewportTopSnapshot,
+  itemHeight: number,
+) {
+  const representative = snapshot.messageClientId
+    ? collapsedMessageRepresentative(item, snapshot.messageClientId)
+    : undefined;
+  const oldOffsetOutOfBounds = itemHeight > 0 && snapshot.offset >= itemHeight
+    && collapsedMessageRepresentative(item) !== undefined;
+  return {
+    clientId: representative ?? snapshot.messageClientId,
+    // A replacement card may be shorter than the old card's expanded details.
+    messageOffset: representative !== undefined ? 0 : (snapshot.messageOffset ?? 0),
+    // A saved offset into the old journal can point below its replacement,
+    // including snapshots taken between cards without an exact child anchor.
+    itemOffset: representative !== undefined || oldOffsetOutOfBounds ? 0 : snapshot.offset,
+  };
 }
 
 function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
@@ -2763,12 +2804,14 @@ export function reuseGeneratedFilesRenderItems(
 
 /** 工作组容器回退锚点：与删除补偿同一条 clientId 序列。 */
 function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
-  return collectDeleteAnchorClientIds(children);
+  return collectDeleteAnchorClientIds(children, true);
 }
 
 export function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
-  if (item.type === 'message') return item.message.clientId === clientId;
+  if (item.type === 'message') {
+    return item.message.clientId === clientId || item.collapsedClientIds?.includes(clientId) === true;
+  }
   if (item.type === 'tool_segment')
     return item.toolCalls.some((toolCall) => toolCall.clientId === clientId);
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
@@ -3024,6 +3067,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   compact,
   companionAvatar,
   startsUnread = false,
+  groupTimestamp,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
@@ -3031,6 +3075,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
   startsUnread?: boolean;
+  groupTimestamp?: number;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -3097,7 +3142,9 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
-      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
+      {startsUnread || groupTimestamp !== undefined ? (
+        <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
+      ) : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3662,6 +3709,10 @@ export function MessageStream({
   // Resolve the owner inside the stable render window, not the viewport-mounted
   // subset. A cropped process falls back to its reply instead of losing NEW;
   // scrolling within the same window must not move the boundary.
+  const botTimeGroupsByRow = useMemo(
+    () => botTimeGroupRows(visibleRenderItems, botMessageTimeGroups, botContinuationKeys),
+    [visibleRenderItems, botMessageTimeGroups, botContinuationKeys],
+  );
   const botUnreadBoundaryKey = useMemo(
     () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
     [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
@@ -4433,14 +4484,16 @@ export function MessageStream({
     if (!snap || !container || !items) return false;
     const idx = findRestorableViewportItemIdx(visibleRenderItemsRef.current, snap.viewportTopKey);
     if (idx < 0) return false; // 锚点 item 不在当前窗口(消息被删 / clear)→ 放弃还原,停在默认位置
-    const child = findRenderItemElement(items, visibleRenderItemsRef.current[idx]?.key);
+    const item = visibleRenderItemsRef.current[idx];
+    if (!item) return false;
+    const child = findRenderItemElement(items, item.key);
     if (!child) return false;
-    const messageTarget = snap.messageClientId
-      ? queryMessageElement(container, snap.messageClientId)
-      : null;
+    const childRect = child.getBoundingClientRect();
+    const { clientId, itemOffset, messageOffset } = resolveViewportRestoreMessage(item, snap, childRect.height);
+    const messageTarget = clientId ? queryMessageElement(container, clientId) : null;
     const useMessageTarget = messageTarget && messageTarget.getBoundingClientRect().height > 0;
     const target = useMessageTarget ? messageTarget : child;
-    const offset = useMessageTarget ? (snap.messageOffset ?? 0) : snap.offset;
+    const offset = useMessageTarget ? messageOffset : itemOffset;
     const desiredScrollTop =
       container.scrollTop +
       viewportAnchorCorrection(
@@ -4472,8 +4525,8 @@ export function MessageStream({
     // A work group can remount collapsed or settle internally after its outer
     // row was positioned. Prefer the same visible child when it still exists.
     if (
-      snap.messageClientId &&
-      scrollMessageToViewportTop(snap.messageClientId, snap.messageOffset ?? 0)
+      clientId &&
+      scrollMessageToViewportTop(clientId, messageOffset)
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
@@ -4481,9 +4534,8 @@ export function MessageStream({
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
-    const rect = child.getBoundingClientRect();
-    // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
-    const delta = rect.top - (cTop - snap.offset);
+    // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 childRect.top 上移 delta。
+    const delta = childRect.top - (cTop - itemOffset);
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
@@ -6703,7 +6755,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
@@ -6891,6 +6943,7 @@ export function MessageStream({
                           item={item}
                           context={workGroupRenderContext}
                           startsUnread={botUnreadBoundaryKey === item.key}
+                          groupTimestamp={botTimeGroupsByRow.get(item.key)}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
@@ -7040,7 +7093,7 @@ export function MessageStream({
                       const groupTimestamp =
                         msg.systemCardType === 'voice-call'
                           ? undefined
-                          : botMessageTimeGroups.get(msg.clientId);
+                          : botTimeGroupsByRow.get(item.key);
                       const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div
@@ -7056,7 +7109,8 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                            {((msg.role === 'assistant' && msg.systemCardType === 'mcp-app') ||
+                              (msg.role === 'user' && !msg.systemCardType && msg.hookSource))
                               ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
                               : messageNode}
                           </div>
@@ -7127,6 +7181,7 @@ export function MessageStream({
                 bottomOffset={resolvedBottomPadding}
                 onJump={handleNavRailJump}
                 onNavCoverageChange={setNavRailCoversNav}
+                sessionId={sessionId}
                 resetKey={sessionId}
               />
             )}
