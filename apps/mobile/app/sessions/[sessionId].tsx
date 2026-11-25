@@ -1339,6 +1339,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     createComposerDraftSource(readImmediateComposerDraftScope(sessionId, routeDraft).document),
   );
   const [composerDraftHydrated, setComposerDraftHydrated] = useState(false);
+  const [pendingSendDraftScope, setPendingSendDraftScope] = useState<string | null>(null);
   const appliedRouteDraftRef = useRef<string | null>(null);
   const draftRef = useRef(composerDraftSource.getSnapshot().draft);
   const composerDocumentRef = useRef<ComposerDocument>(composerDraftSource.getSnapshot().document);
@@ -1841,6 +1842,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [sending, setSending] = useState(false);
+  const composerSendBusy = sending || messageEditSubmitting
+    || (!composerDraftHydrated && pendingSendDraftScope === activeComposerDraftScopeKey);
   // send() 的同步重入锁:sending state 要等 re-render 提交才可见,主线程卡顿时
   // 连点发送会在同一拍里多次穿过 state 守卫,把同一条消息重复 enqueue(issue #755)。
   // ref 在 send() 同步段立即置位,后续点击当场拦下(同 new.tsx creatingRef /
@@ -3760,6 +3763,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : hydrateQuotes(sessionId);
 
     const pendingSend = pendingPlainTextSends.get(pendingPlainTextSendKey(deviceIdRef.current, sessionId));
+    // The reopened editor can accept typing while its send control waits for
+    // the authoritative outbox/draft handoff to finish.
+    setPendingSendDraftScope(pendingSend ? key : null);
     const readDrafts = () => reconcileMobileOutboxDrafts(sessionId).then(() => Promise.all([
       quoteHydration,
       readComposerDocumentDraft(sessionId),
@@ -8124,6 +8130,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           nativeID={handheldSendTarget}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
+          busy={composerSendBusy}
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
@@ -8137,7 +8144,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           ]}
           testID="session.sendButton"
         >
-          {sending || messageEditSubmitting ? (
+          {composerSendBusy ? (
             <ActivityIndicator color={colors.textSecondary} size="small" />
           ) : (
             <PaperPlaneIcon
@@ -12055,7 +12062,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
                 permissionSheetOpen={permissionSheetOpen}
-                sending={sending || messageEditSubmitting}
+                sending={composerSendBusy}
                 queueBusy={queueBusy}
                 nativeShellLayout={nativeShellLayout}
                 composerTouchLayout={composerTouchLayout}
