@@ -3494,7 +3494,7 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
         break;
       }
     }
-    let signals = declaredEnvelopeSignals(schema, node);
+    let signals = declaredEnvelopeSignals(schema, node, surface);
     for (const keyword of SCHEMA_DYNAMIC_KEYWORDS) {
       const dynamic = node[keyword];
       if (dynamic === true || (typeof dynamic === 'object' && dynamic !== null)) {
@@ -3606,33 +3606,51 @@ interface EnvelopeGroup {
 const SCHEMA_PROPERTY_TYPE_MAX_NODES = 32;
 
 /**
+ * 属性类型判据的三态结论: 容得下(admits)、确认容不下(not)、看不完(exhausted)。
+ * 看完 ≠ 容不下: 预算用尽时类型证据没读全, 调用方按「表态不完整」处理(Codex P1 on d805bd345b)。
+ */
+type PropertyTypeVerdict = 'admits' | 'not' | 'exhausted';
+
+/**
  * 属性 schema 容不容得下某个基本类型: type 是它, 或 type 是含它的数组(可空的 args 常写成
  * ['object', 'null']), 或 enum / const 的值把它定死了(见 schemaAdmitsTypeByValues)。类型抽到
  * 组合声明里($ref 指向的定义、allOf / anyOf / oneOf 分支)时, 任一分支容得下就算 —— 指纹要认的
- * 是「这个字段像不像 string / object」, 不是替服务端做校验。看不到底(环、超出节点数)按看不出
- * 类型处理。
+ * 是「这个字段像不像 string / object」, 不是替服务端做校验。看不到底(环、超出节点数、解析不了
+ * 的引用)按「看不完」回传, 不与「确认容不下」混同。
  */
-function propertyAdmitsType(root: Record<string, unknown>, property: unknown, expected: 'string' | 'object'): boolean {
+function propertyAdmitsType(root: Record<string, unknown>, property: unknown, expected: 'string' | 'object'): PropertyTypeVerdict {
   let remaining = SCHEMA_PROPERTY_TYPE_MAX_NODES;
-  const visit = (node: unknown): boolean => {
-    if (!isPlainRecord(node) || remaining <= 0) return false;
+  const visit = (node: unknown): PropertyTypeVerdict => {
+    if (!isPlainRecord(node)) return 'not';
+    if (remaining <= 0) return 'exhausted';
     remaining--;
     const type = node.type;
-    if (type === expected || (Array.isArray(type) && type.includes(expected))) return true;
-    if (schemaAdmitsTypeByValues(node, expected)) return true;
+    if (type === expected || (Array.isArray(type) && type.includes(expected))) return 'admits';
+    if (schemaAdmitsTypeByValues(node, expected)) return 'admits';
+    // 任一分支容得下就是容得下; 只有「确认容不下」的分支才允许被别的分支翻案,
+    // 「看不完」记下来但不能掩盖后面可能存在的容得下。
+    let exhausted = false;
     if (typeof node.$ref === 'string') {
       const resolved = resolveLocalSchemaRef(root, node.$ref);
-      if (resolved && visit(resolved)) return true;
+      if (resolved) {
+        const verdict = visit(resolved);
+        if (verdict === 'admits') return 'admits';
+        exhausted = exhausted || verdict === 'exhausted';
+      } else {
+        // 解析不了的引用: 那边的类型证据看不到 —— 与预算用尽同类。
+        exhausted = true;
+      }
     }
     for (const keyword of SCHEMA_COMBINATORS) {
       const branches = node[keyword];
       if (!Array.isArray(branches)) continue;
       for (const branch of branches) {
-        if (remaining <= 0) return false;
-        if (visit(branch)) return true;
+        const verdict = visit(branch);
+        if (verdict === 'admits') return 'admits';
+        exhausted = exhausted || verdict === 'exhausted';
       }
     }
-    return false;
+    return exhausted ? 'exhausted' : 'not';
   };
   return visit(property);
 }
@@ -3662,12 +3680,21 @@ function schemaAdmitsTypeByValues(node: Record<string, unknown>, expected: 'stri
  * required), 所以先按组并起来, 遍历结束后再结算(见 settleEnvelope), 而不是要求单个节点
  * 自己凑齐(Codex P1 on #10908)。
  */
-function declaredEnvelopeSignals(root: Record<string, unknown>, node: Record<string, unknown>): number {
+function declaredEnvelopeSignals(
+  root: Record<string, unknown>,
+  node: Record<string, unknown>,
+  surface: SchemaParameterSurface,
+): number {
   const properties = isPlainRecord(node.properties) ? node.properties : null;
   let signals = 0;
   if (properties) {
-    if (propertyAdmitsType(root, properties.name, 'string')) signals |= ENVELOPE_NAME_IS_STRING;
-    if (propertyAdmitsType(root, properties.args, 'object')) signals |= ENVELOPE_ARGS_IS_OBJECT;
+    const nameVerdict = propertyAdmitsType(root, properties.name, 'string');
+    const argsVerdict = propertyAdmitsType(root, properties.args, 'object');
+    // 类型判据的节点预算用尽: 类型证据没看全, 这份表态不完整 —— 与信封结算无关,
+    // 截断本身就要让调用方按「判不了」处理(Codex P1 on d805bd345b)。
+    if (nameVerdict === 'exhausted' || argsVerdict === 'exhausted') surface.truncated = true;
+    if (nameVerdict === 'admits') signals |= ENVELOPE_NAME_IS_STRING;
+    if (argsVerdict === 'admits') signals |= ENVELOPE_ARGS_IS_OBJECT;
   }
   const required = node.required;
   if (Array.isArray(required) && required.includes('name')) signals |= ENVELOPE_NAME_REQUIRED;
@@ -4060,24 +4087,31 @@ function normalizeGatewayArgs(
     && typeof params.name === 'string'
     && Object.prototype.hasOwnProperty.call(params, 'args');
   const innerDeclaresArgs = containerLooksEnvelope && lookupInnerTool
-    ? schemaDeclaresArgs((lookupInnerTool(params.name as string)?.inputSchema ?? null) as {
-      properties?: Record<string, unknown>;
-    } | null) === true
+    ? schemaDeclaresArgs(lookupInnerTool(params.name as string)?.inputSchema) === true
     : false;
   const repeatsEnvelope = selector !== undefined
     && containerLooksEnvelope
     && ((params.name === selector && !innerDeclaresArgs) || selector === tool.name);
   const envelopeSchema = isNameEnvelopeSchema(schema, surface);
-  // 信封判不了: schema 看不全, 但已看到的部分就是信封的样子, 而顶层给了 name。它可能是信封层的
+  // 信封判不了: schema 看不全, 但已看到的表态仍与信封兼容, 而顶层给了 name。它可能是信封层的
   // 内层工具名 —— 按普通工具折进参数容器, 服务端拿到的是 {name, <内层参数>}: 没有 args 层, 内层
   // 工具被按空参数调用还返回成功(Codex P1 on #10908)。也可能就是这个工具自己的 name 参数,
   // 包一层同样是错的。两种都走得通的形状只有一个 —— 全部放进 args, 由 callInputError 拒收并指路。
   //
-  // 部分指纹也算(Codex P1 on 51c6ed253d): required 写在足够多的分支之后把节点预算耗尽时,
-  // required 信号本身被截掉, 信封结算失败(envelope=false) —— 不能因此就按普通工具转发。
-  // 已看到的就是信封的样子(names 恰好 name/args、没放开动态字段)就已经够判不了了。
+  // 「与信封兼容」比「恰好两个名字」宽(Codex P1 on 51c6ed253d / d805bd345b): 截断可能藏掉
+  // required 信号、藏掉 args 的声明本身, 甚至(类型判据预算用尽)藏掉类型证据 —— names 恰好
+  // {name, args} 只是兼容的一种。已看到的声明名不与信封矛盾(只有 name / args 或更少)、没放开
+  // 动态字段、没有模式, 这份表态就仍然可能是信封。但只给了选择器、没有载荷的调用不拦:
+  // 两种读法发出去的是同一份, 没有参数可以被发错层。
+  const envelopeCompatible = surface !== null
+    && !surface.additionalAllowed
+    && surface.patterns.length === 0
+    && [...surface.names].every((name) => name === 'name' || name === 'args');
+  const carriesPayload = provided
+    ? Object.keys(params).length > 0
+    : Object.entries(record).some(([key]) => !GATEWAY_OWN_KEYS.has(key) && key !== 'name');
   const indeterminateEnvelope = selector !== undefined && surface !== null
-    && surface.truncated && resemblesPartialNameEnvelope(surface);
+    && surface.truncated && envelopeCompatible && carriesPayload;
   if (indeterminateEnvelope) {
     return {
       args: params, provided, malformed, folded, shadowed, unmapped, parsedFromString, indeterminateEnvelope: true,
@@ -4140,18 +4174,22 @@ function normalizeGatewayArgs(
  * - null        无法判定 — properties 缺失/为空(参数可能靠 $ref/allOf 组合声明),
  *               调用方按「无可靠判据」处理, 宁漏不误拦
  */
-function schemaDeclaresArgs(schema: { properties?: Record<string, unknown> } | null | undefined): boolean | null {
-  const props = schema?.properties;
-  if (props == null || typeof props !== 'object') return null;
-  // 只判「非空」与「有没有 args」: 惰性枚举, 十万键的 properties 不全量物化(Codex P2 on #10908)。
-  let hasAnyKey = false;
-  for (const key in props) {
-    if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
-    hasAnyKey = true;
-    break;
-  }
-  if (!hasAnyKey) return null;
-  return Object.prototype.hasOwnProperty.call(props, 'args');
+/**
+ * 判断工具 schema 是否声明了名为 args 的参数。判据用有预算的声明面遍历(与归一化的其他
+ * 判据同源): 组合声明($ref / allOf / anyOf / oneOf / 条件 / 依赖子 schema)里的 properties
+ * 与 required 都算 —— 根层只读会把 allOf 分支里声明的 args 判成没有, 撞名裁决就折错一层
+ * (Codex P1 on d805bd345b)。返回:
+ * - true/false  声明面里明确声明/未声明 args
+ * - null        无法判定 — 声明面没看到任何 properties 或没看全(truncated / 遍历截断),
+ *               调用方按「无可靠判据」处理, 宁漏不误拦
+ */
+function schemaDeclaresArgs(schema: unknown): boolean | null {
+  const root = isPlainRecord(schema) ? schema : null;
+  if (!root) return null;
+  const surface = schemaParameterSurface(root);
+  if (surface.names.has('args')) return true;
+  if (surface.truncated || !surface.declaresProperties) return null;
+  return false;
 }
 
 class CindyMcpGateway {
@@ -4696,8 +4734,7 @@ class CindyMcpGateway {
     if (listing.kind === 'schemaless') return 'schemaless';
     const match = listing.tools.find((tool) => tool?.name === innerName);
     if (!match) return 'missing';
-    const declared = schemaDeclaresArgs((match.inputSchema ?? match.parameters ?? match.schema) as
-      { properties?: Record<string, unknown> } | undefined);
+    const declared = schemaDeclaresArgs(match.inputSchema ?? match.parameters ?? match.schema);
     if (declared === null) return 'schemaless';
     return { declaresArgs: declared };
   }
@@ -4973,7 +5010,7 @@ class CindyMcpGateway {
       const innerTool = entrySelf
         ? null
         : (this.tools.get(mcpGatewayKey(resolved.tool.serverName, innerName)) ?? null);
-      const innerSchema = innerTool?.inputSchema as { properties?: Record<string, unknown> } | null;
+      const innerSchema = innerTool?.inputSchema ?? null;
       const nestedArgsPlain = typeof nested.args === 'object' && nested.args !== null
         && !Array.isArray(nested.args);
       // 双包裁决: true=拦, false=放行, null=无可靠判据 → 两入口形状启发式兑底。

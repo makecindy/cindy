@@ -4816,3 +4816,139 @@ it('bounds schema name collection by a cap and keeps forwarding keys past it', a
   const note = result.content.map(block => block.text ?? '').join('\n');
   expect(note).toContain('Cindy moved these top-level parameters into args before forwarding: extra_note');
 });
+
+// 评审 P1(截断把 args 的声明本身藏掉): required 与 name 的类型信号在前、args 的声明在
+// 512 个分支之后时, 预算耗尽在 args 分支之前 —— names 只有 {name}, 上一轮的「恰好两个
+ // 名字」闸不触发, 平铺的 {name, args} 仍被按普通工具发出 {type, name}。截断下只要已
+ // 看到的声明不与信封矛盾(names ⊆ {name, args}、没放开动态字段), 调用又带真的参数载荷,
+ // 就按判不了拒收(Codex P1 on d805bd345b)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 在该 schema 下拒收并指路, 0 个请求发出。
+// - Bug 依据:codex 对 d805bd345b 的 P1。
+// - 覆盖缺口:上一轮的拒收用例 args 的声明都在预算耗尽前看到(names 恰好 {name, args})。
+// - 最小失败输入:branch1 声明并必填 string name + 510 个空分支 + args 的声明在最后
+//   + 平铺调用 {name, args}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('rejects a flattened call when truncation hid the args declaration itself', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  // 根 + branch1 + 510 个空分支 = 512, 预算恰好在 args 分支之前耗尽。
+  const branches: Record<string, unknown>[] = [
+    { properties: { name: { type: 'string' } }, required: ['name'] },
+    ...Array.from({ length: 510 }, () => ({})),
+    { properties: { args: { type: 'object' } } },
+  ];
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: { type: 'object', allOf: branches },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 平铺 + 载荷在容器里: 判不了, 拒收并指路。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  // 平铺 + 载荷在顶层(连容器都没给): 同样判不了, 拒收。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', type: 'project',
+  })).rejects.toThrow(/could not read the schema of this tool in full/);
+  // 只给了选择器、没有载荷: 两种读法发出去的是同一份, 不拦。
+  await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool', name: 'memory_write' });
+  // 容器形态(顶层没有 name): 不存在这层歧义, 照发。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests).toHaveLength(2);
+  expect(requests[0].params).toEqual({ name: 'call_tool', arguments: { name: 'memory_write' } });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool', arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P1(组合声明的内层 schema 被判成没有 args): 撞名裁决的 schemaDeclaresArgs 只读根层
+// properties。内层工具经 allOf / $ref 声明自己的 args 参数时判成 null, 归一化按「没声明」
+// 折叠一层 —— registry 剥掉信封后内层工具拿到 {cwd}, 自己声明的 name/args 没了。改用有预算的
+// 声明面遍历判(组合声明里的 properties / required 都算), 归一化与执行前双包裁决共用同一判据
+// (Codex P1 on d805bd345b)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 d805bd345b 的 P1。
+// - 覆盖缺口:上一轮的撞名用例内层 schema 在根层声明 name + args。
+// - 最小失败输入:内层工具根层声明 name、allOf 分支声明 args + 调用 {name:'run', args:{name:'run', args:{…}}}。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('judges composed inner schemas when adjudicating the name collision', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 内层工具根层只声明 name, args 声明在 allOf 分支里。
+    {
+      name: 'run',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        allOf: [{ properties: { args: { type: 'object' } } }],
+        required: ['name', 'args'],
+      },
+    },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 撞名, 但内层 schema(经组合)声明了 args: 不折叠, 两层都保留。
+  const result = await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'run', args: { name: 'run', args: { cwd: '/work' } },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool', arguments: { name: 'run', args: { name: 'run', args: { cwd: '/work' } } },
+  });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('Forwarded arguments: {"name":"run","args":{"name":"run","args":{"cwd":"/work"}}}');
+});
+
+// 评审 P1(属性类型判据预算用尽没有回传): properties.name 的类型写在 32 个 $ref / 组合节点
+// 之外时, propertyAdmitsType 返回 false 却不标 truncated —— 表态看起来完整, 类型信号缺失,
+// 信封结算失败, indeterminate 也不触发, 平铺调用丢了外层 args。类型判据预算用尽 ≠ 「确认不像」:
+// 回传三态, 用尽即标 truncated, 整份表态按不完整处理(Codex P1 on d805bd345b)。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 在该 schema 下拒收并指路, 0 个请求发出。
+// - Bug 依据:codex 对 d805bd345b 的 P1。
+// - 覆盖缺口:类型证据的用例都在 32 节点之内。
+// - 最小失败输入:properties.name 的 type 藏在 40 层 allOf 里 + properties.args 在根层
+//   + required ['name'] + 平铺调用。
+// - tier:unit(编译网关片段 + 假 client, 无真实等待)。
+it('marks the surface truncated when the property type walk runs out of budget', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new Gateway();
+  let deepName: Record<string, unknown> = { type: 'string' };
+  for (let layer = 0; layer < 40; layer++) deepName = { allOf: [deepName] };
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: { name: deepName, args: { type: 'object' } },
+      required: ['name'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 类型判据看不全 → 表态不完整 → 与信封兼容的平铺调用拒收并指路。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  })).rejects.toThrow(/could not read the schema of this tool in full .* Put everything in args/);
+  expect(requests).toHaveLength(0);
+});
