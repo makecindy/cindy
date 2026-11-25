@@ -2029,9 +2029,14 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       { ...TEST_INSTALL_CONTEXT, remoteOperation: { operationId: 'op-0000000000000003', controller: 'phone-a' } });
     const [item] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'phone-a');
     expect(item).toMatchObject({ installState: 'installed', installedOperationId: 'op-0000000000000003' });
-    // An operation id outside the contract shape is not recorded at all.
+    // Another controller never sees it.
     const [other] = await h.service.withInstalledOperationIds([await h.service.detail(PLUGIN_ID)], 'desktop-b');
     expect(other).not.toHaveProperty('installedOperationId');
+    // Codex P1 (e2fbe72a): the same plugin id installed under another namespace is another instance; the evidence of
+    // the root instance must not be projected onto it.
+    const [elsewhere] = await h.service.withInstalledOperationIds(
+      [{ ...(await h.service.detail(PLUGIN_ID)), namespace: 'other' }], 'phone-a');
+    expect(elsewhere).not.toHaveProperty('installedOperationId');
   });
 
   it('lets a selected custom source install when the server catalog declares the same ghostId', async () => {

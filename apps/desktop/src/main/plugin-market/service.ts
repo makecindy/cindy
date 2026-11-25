@@ -3666,7 +3666,11 @@ export class PluginMarketService {
     if (!tag || !keyId) return stripped;
     const local = await this.readLocalInstallSnapshot(owner);
     requireSameMarketOwner(owner);
-    const evidenceByPlugin = new Map<string, string>();
+    // 按完整实例身份关联（pluginId + ghostId + namespace，缺省 namespace 即根）：同一 pluginId 可在多个 namespace 各有
+    // 一份安装记录，一份记录的证据不能投影到另一个实例的条目上。
+    const instanceKey = (entry: { pluginId: string; ghostId: string; namespace?: string | null }) =>
+      JSON.stringify([entry.pluginId, entry.ghostId, entry.namespace ?? null]);
+    const evidenceByInstance = new Map<string, string>();
     for (const record of Object.values(local.installations)) {
       const binding: unknown = record.remoteOperationBinding;
       if (!record.installed || !binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
@@ -3678,11 +3682,11 @@ export class PluginMarketService {
       const ghost = snapshotGhost(local, record);
       const identity = ghost ? local.manifestIdentityByStoragePart.get(installedGhostStoragePart(ghost)) : null;
       if (!identity || !verifyInstalledMarketManifest(record, identity)) continue;
-      evidenceByPlugin.set(record.pluginId, value.operationId);
+      evidenceByInstance.set(instanceKey(record), value.operationId);
     }
     return stripped.map((item) => {
       const operationId = item.installState === 'installed' || item.installState === 'update-available'
-        ? evidenceByPlugin.get(item.pluginId)
+        ? evidenceByInstance.get(instanceKey(item))
         : undefined;
       return operationId ? { ...item, installedOperationId: operationId } : item;
     });
