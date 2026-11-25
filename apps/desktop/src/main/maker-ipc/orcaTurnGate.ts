@@ -273,15 +273,25 @@ export function forgetTurnGate(sessionId?: string): void {
   instanceOf.delete(sessionId);
 }
 
-function judgePrompt(workerLabels: string[] | undefined, finalText: string): string {
+function judgePrompt(
+  workerLabels: string[] | undefined,
+  priorDispatches: string[],
+  finalText: string,
+): string {
   const workers = workerLabels?.length ? workerLabels.join(', ') : '(none registered)';
+  const prior = priorDispatches.length
+    ? priorDispatches.map((line) => `  ${line}`).join('\n')
+    : '  (none)';
   return [
     'One assistant turn ended with no Orca tool call and no accepted dispatch.',
     `Workers that could receive work: ${workers}.`,
+    'Handoffs the host already accepted earlier in this session, most recent first:',
+    prior,
     "Decide whether this closing text asserts that work was already handed to a worker.",
-    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker.',
+    'Answer "claim" only for an explicit assertion that work was given, dispatched or queued to a worker and that this handoff is not one of the recorded handoffs above.',
+    'Text that reports or refers back to a recorded handoff (answering a question about it, or restating it) is a restatement, not a claim.',
     'Denials such as "this turn dispatched nothing" are not claims.',
-    'Answer "quiet" for summaries, plans, questions, status of user-facing work, restatements without a named worker, or anything that does not assert that a handoff already happened.',
+    'Answer "quiet" for summaries, plans, questions, status of user-facing work, restatements without a named worker, or anything that does not assert that a new handoff already happened.',
     'When unsure, answer "quiet".',
     'Reply with exactly one word: claim or quiet.',
     '',
@@ -300,6 +310,7 @@ export async function judgeDispatchClaim(params: {
   turnGeneration: number;
   finalText: string;
   workerLabels?: string[];
+  priorDispatches?: string[];
 }): Promise<DispatchClaimVerdict> {
   const text = params.finalText.trim();
   if (!text) return 'quiet';
@@ -319,7 +330,11 @@ export async function judgeDispatchClaim(params: {
       (signal) =>
         requestUtilityText(
           getMaker(),
-          judgePrompt(params.workerLabels, text.slice(-JUDGE_TEXT_CHARS)),
+          judgePrompt(
+            params.workerLabels,
+            params.priorDispatches ?? [],
+            text.slice(-JUDGE_TEXT_CHARS),
+          ),
           {
             source: 'orca-turn-gate',
             maxTokens: JUDGE_MAX_TOKENS,
@@ -359,6 +374,28 @@ function unbackedClaimReason(claim: UnbackedDispatchClaim): string {
     detail,
     'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
   ].join('\n');
+}
+
+const MAX_PRIOR_DISPATCH_LINES = 8;
+
+/** 把账本里已成立的派发写成判官能读的几行：判官靠它把「复述」与「新声称」分开。 */
+function describePriorDispatches(input: {
+  leadSessionId: string;
+  turnGeneration: number;
+  instance?: number;
+  workers: Array<{ label: string; status: string }>;
+}): string[] {
+  const statuses = new Map(input.workers.map((worker) => [worker.label, worker.status]));
+  return dispatchFactsForTurn(input.leadSessionId, input.turnGeneration)
+    .filter((fact) => input.instance === undefined || fact.instanceToken === input.instance)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, MAX_PRIOR_DISPATCH_LINES)
+    .map((fact) => {
+      const turnsAgo = input.turnGeneration - fact.turnGeneration;
+      const when = turnsAgo <= 0 ? 'this turn' : `${turnsAgo} turn(s) earlier`;
+      const status = statuses.get(fact.workerLabel) ?? 'unknown';
+      return `  ${fact.workerLabel} — accepted ${when}, delivery ${fact.delivery}, worker status ${status}`;
+    });
 }
 
 const JUDGED_CLAIM_REASON = [
@@ -422,6 +459,7 @@ export async function evaluateTurnGate(input: {
     turnGeneration: input.turnGeneration,
     finalText: text,
     workerLabels: input.workers.map((worker) => worker.label),
+    priorDispatches: describePriorDispatches(input),
   });
   if (verdict !== 'claim') return undefined;
   if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration)) {

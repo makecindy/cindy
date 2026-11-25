@@ -114,6 +114,23 @@ describe('dispatch claim judge', () => {
     );
   });
 
+  it('shows the judge the recorded handoffs so a restatement can stay quiet', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'quiet' });
+    await judgeDispatchClaim({ ...base, finalText: '本轮没有派单。' });
+    expect(String(requestUtilityText.mock.calls[0]?.[1] ?? '')).toContain('  (none)');
+
+    requestUtilityText.mockClear();
+    await judgeDispatchClaim({
+      ...base,
+      finalText: '上一轮已经派给 research 了。',
+      priorDispatches: ['  research — accepted 1 turn(s) earlier, delivery direct, worker status running'],
+    });
+    const prompt = String(requestUtilityText.mock.calls[0]?.[1] ?? '');
+    expect(prompt).toContain('research — accepted 1 turn(s) earlier');
+    // 判官只能靠「有账 / 没账」分辨复述与新声称；没账时它必须看到明确的 none。
+    expect(prompt).not.toContain('  (none)');
+  });
+
   it('treats an ambiguous answer as unavailable instead of guessing', async () => {
     requestUtilityText.mockResolvedValue({ ok: true, text: 'no claim' });
     await expect(judgeDispatchClaim({ ...base, finalText: '修完了。' })).resolves.toBe(
@@ -238,8 +255,8 @@ describe('gate trigger scope', () => {
     expect(requestUtilityText).toHaveBeenCalledTimes(1);
   });
 
-  it('gives the judge the worker list without ledger details', async () => {
-    requestUtilityText.mockResolvedValue({ ok: true, text: 'restatement' });
+  it('tells the judge which handoffs the host already recorded', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'quiet' });
     noteLeadDispatchFact('lead-1', {
       workerId: 'w-1',
       workerLabel: 'research',
@@ -248,6 +265,8 @@ describe('gate trigger scope', () => {
       turnGeneration: 1,
       at: Date.now() - 3 * 60 * 60 * 1000,
     });
+    // 上一轮真派过 research，这一轮只是复述那条派单。不给判官看这笔账，
+    // 「我上一轮派过了」与「我刚派了」在它眼里一模一样，真话会被当成假话纠正。
     await expect(
       evaluateTurnGate({
         ...base,
@@ -256,10 +275,8 @@ describe('gate trigger scope', () => {
       }),
     ).resolves.toBeUndefined();
     const prompt = String(requestUtilityText.mock.calls[0]?.[1] ?? '');
-    // 「谁能接活」是判定需要的事实；账本细节不进 prompt，免得判定器把
-    // 「账本里有这一笔」当放行理由——那正是要收掉的口子。
-    expect(prompt).toContain('research');
-    expect(prompt).not.toContain('delivery=');
+    expect(prompt).toContain('research — accepted 1 turn(s) earlier');
+    expect(prompt).toContain('worker status running');
   });
 
   it('judges a claim made after dispatch attempts that all failed', async () => {
