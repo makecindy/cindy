@@ -3093,6 +3093,142 @@ describe("market read fences and lost-receipt facts", () => {
       else expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     });
   });
+  // Shuffled release (dispatcher request after the 03:54 review): instead of hand-picked orders, each small scenario
+  // holds 2–3 requests in flight and runs every order in which they could return, checking the invariants after each
+  // step. The 03:54 orders are among them: second "Check result" while round 1's detail is in flight (#1), the probe
+  // queued while leaving the market (#3), and a next page queued by scrolling before a new search (#3).
+  describe("shuffled release of in-flight requests", () => {
+    const orderings = <T,>(items: T[]): T[][] => items.length <= 1 ? [items]
+      : items.flatMap((first, index) => orderings([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
+    const gates = () => {
+      const map = new Map<string, { promise: Promise<void>; release: () => void; released: boolean }>();
+      const get = (label: string) => {
+        if (!map.has(label)) { let release!: () => void; const promise = new Promise<void>((resolve) => { release = resolve; });
+          map.set(label, { promise, release, released: false }); }
+        return map.get(label)!;
+      };
+      return { hold: (label: string) => get(label).promise, release: (label: string) => { const g = get(label); g.released = true; g.release(); } };
+    };
+    const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+
+    // Group 1 (03:54 #1): round 1's market detail D1 ("installed") is in flight when "Check result" starts round 2,
+    // whose operation query Q2 is held. Round 2's facts either still show the plugin or show it gone.
+    describe.each([["round 2 still finds the plugin", true], ["round 2 finds it gone", false]])("check result twice: %s", (_c, presentInRound2) => {
+      it.each(orderings(["D1", "Q2"]).map((order) => [order.join(" → "), order] as const))("%s", async (_label, order) => {
+        const g = gates();
+        let began = false, round = 0, queries = 0, details = 0;
+        queuedWire((request) => {
+          switch (request.actionId) {
+            case "management:snapshot":
+              if (request.input?.read === "capabilities") return { catalogPaging: true };
+              if (request.input?.read === "catalog") return marketPage([item]);
+              return managementSnapshot(began && (round < 2 || presentInRound2));
+            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", manifest: demoManifest };
+            case "management:begin": return demoConsent(request);
+            case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
+            case "management:operation": throw hostError("NOT_FOUND");
+            default: throw new Error("unexpected " + request.actionId);
+          }
+        }, (request) => {
+          if (request === "manifest" || !began) return undefined;
+          if (request.actionId === "management:operation" && ++queries === 2) return g.hold("Q2");
+          if (request.actionId === "management:market-detail" && ++details === 1) return g.hold("D1");
+          return undefined;
+        });
+        await openMarket();
+        await act(async () => shownMarket().install(shownMarket().items[0]));
+        await settle(14);
+        await approveOnPhone();
+        round = 1;
+        await act(async () => { void shownMarket().checkResult(); });
+        await settle(14);
+        round = 2;
+        await act(async () => { void shownMarket().checkResult(); });
+        await settle(6);
+        let q2Returned = false;
+        for (const step of order) {
+          g.release(step);
+          if (step === "Q2") q2Returned = true;
+          await settle(14);
+          // Invariant ①/②: until round 2 has its own facts, round 1's detail gives no result.
+          if (!q2Returned) { expect(opened()).toBe(false); expect(shownMarket()).toMatchObject({ installBusy: true }); }
+        }
+        if (presentInRound2) expect(opened()).toBe(true);
+        else {
+          expect(opened()).toBe(false);
+          expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
+        }
+      });
+    });
+
+    // Group 2 (03:54 #3): the first probe P1 is held while the person leaves the market and comes back, which starts
+    // probe P2 (held too). P1 either times out or succeeds late.
+    describe.each([["the first probe times out", true], ["the first probe succeeds late", false]])("probe while leaving and returning: %s", (_c, p1Fails) => {
+      it.each(orderings(["P1", "P2"]).map((order) => [order.join(" → "), order] as const))("%s", async (_label, order) => {
+        const g = gates();
+        let manifests = 0;
+        const probeOf = new Map<unknown, string>();
+        queuedWire((request) => {
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          return marketPage([marketItem("demo", "Demo")]);
+        }, (request, device) => {
+          if (request !== "manifest") return undefined;
+          const label = ++manifests === 1 ? "P1" : manifests === 2 ? "P2" : null;
+          if (!label) return undefined;
+          return g.hold(label).then(() => { if (label === "P1" && p1Fails) throw new Error("[TIMEOUT] remote invoke timed out"); });
+        });
+        await openMarket();
+        await act(async () => fixture.props.get("directory").onSegmentChange("installed"));
+        await settle(6);
+        await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+        await settle(6);
+        for (const step of order) {
+          g.release(step);
+          await settle(14);
+          // Invariant ③: never "failed" on an online computer while the newer probe can still answer.
+          if (!order.slice(0, order.indexOf(step) + 1).includes("P2")) expect(shownMarket().status).not.toBe("failed");
+        }
+        expect(shownMarket()).toMatchObject({ status: "ready", items: [expect.objectContaining({ name: "Demo" })] });
+        void probeOf;
+      });
+    });
+
+    // Group 3 (03:54 #3): a next page N is queued by scrolling, then a new search is typed and settles; its first
+    // page S and count C are held too. Every request that leaves must match the list and search on screen then.
+    it.each(orderings(["N", "S", "C"]).map((order) => [order.join(" → "), order] as const))("scroll queued, then a new search: %s", async (_label, order) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const g = gates();
+        let typed = "";
+        const leftWith: Array<{ query: string; cursor: unknown; screen: string }> = [];
+        queuedWire((request) => {
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          const query = request.input?.query?.query ?? "";
+          leftWith.push({ query, cursor: request.input?.query?.cursor, screen: typed });
+          return { ...marketPage([marketItem(query ? "found" : "demo", query ? "Found" : "Demo")]), nextCursor: query ? null : "cursor-1",
+            counts: request.input?.query?.counts ? { public: 1, organization: 0, personal: 0, custom: 0, official: 1, community: 0, all: 1 } : null };
+        }, (request) => {
+          if (request === "manifest" || request.input?.read !== "catalog") return undefined;
+          const q = request.input.query;
+          if (q.cursor) return g.hold("N");
+          if (q.query === "rota") return g.hold(q.counts ? "C" : "S");
+          return undefined;
+        });
+        await openMarket();
+        await act(async () => shownMarket().loadMore());
+        await settle(6);
+        typed = "rota";
+        await act(async () => fixture.props.get("stack").headerSearchBarOptions.onChangeText({ nativeEvent: { text: "rota" } }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        await settle(6);
+        for (const step of order) { g.release(step); await settle(10); }
+        // Invariant ④: nothing left for a list or search no longer on screen.
+        for (const sent of leftWith.filter((entry) => entry.query || entry.cursor)) expect(sent.query).toBe(sent.screen);
+        expect(leftWith.filter((entry) => entry.cursor)).toEqual([]);
+        expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Found"]);
+      } finally { vi.useRealTimers(); }
+    });
+  });
   it("ignores a market detail from an earlier verification that arrives late", async () => {
     let verifying = false;
     const details: Array<{ release: () => void; promise: Promise<void> }> = [];
