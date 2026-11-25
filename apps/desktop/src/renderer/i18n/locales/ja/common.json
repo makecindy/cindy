@@ -17841,7 +17841,18 @@
         "demote": "削除して個人用コピーを保持",
         "demoteSuccess": "プロジェクトから削除し、個人用として保持しました"
       },
-      "resizeAria": "タスクリストの幅を調整"
+      "resizeAria": "タスクリストの幅を調整",
+      "batch": {
+        "toggle": "複数選択",
+        "toggleAria": "自動化を複数選択",
+        "selectAll": "すべて選択",
+        "clearAll": "クリア",
+        "selectedCount": "{{count}} 件選択中",
+        "cancel": "キャンセル",
+        "delete": "削除",
+        "itemAria": "「{{name}}」を選択",
+        "projectHint": "プロジェクトの自動化は schedules.json で管理されます"
+      }
     },
     "cell": {
       "subtitlePaused": "一時停止中",
@@ -18296,7 +18307,8 @@
       "renameFailed": "名前の変更に失敗しました: {{error}}",
       "deleteFailed": "削除に失敗しました: {{error}}",
       "restartFailed": "再実行に失敗しました: {{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」が自動化の作成を求めましたが、編集中のフォームが開いています。入力内容はそのまま保持しました。保存または閉じたあと、もう一度実行してください。"
+      "pluginDraftIgnoredFormOpen": "「{{name}}」が自動化の作成を求めましたが、編集中のフォームが開いています。入力内容はそのまま保持しました。保存または閉じたあと、もう一度実行してください。",
+      "batchDeleted": "{{count}} 件の自動化を削除しました"
     },
     "deleteDialog": {
       "title": "自動化「{{name}}」を削除しますか？",
@@ -18322,7 +18334,9 @@
       },
       "confirm": "自動化を削除",
       "confirmDeleteSessions": "自動化とセッションを削除",
-      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件のセッションを処理できませんでした"
+      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件のセッションを処理できませんでした",
+      "batchTitle": "{{count}} 件の自動化を削除しますか？",
+      "batchPartial": "{{ok}} 件を削除、{{fail}} 件失敗：{{error}}"
     },
     "confirm": {
       "delete": {

@@ -18083,7 +18083,18 @@
         "demote": "Quitar y conservar una copia personal",
         "demoteSuccess": "Se quitó del proyecto y se conservó como personal"
       },
-      "resizeAria": "Cambiar el tamaño del panel de lista de tareas"
+      "resizeAria": "Cambiar el tamaño del panel de lista de tareas",
+      "batch": {
+        "toggle": "Selección múltiple",
+        "toggleAria": "Seleccionar varias automatizaciones",
+        "selectAll": "Seleccionar todo",
+        "clearAll": "Borrar",
+        "selectedCount": "{{count}} seleccionadas",
+        "cancel": "Cancelar",
+        "delete": "Eliminar",
+        "itemAria": "Seleccionar {{name}}",
+        "projectHint": "Las automatizaciones de proyecto se gestionan en schedules.json"
+      }
     },
     "cell": {
       "subtitlePaused": "En pausa",
@@ -18538,7 +18549,8 @@
       "renameFailed": "Error al cambiar el nombre: {{error}}",
       "deleteFailed": "Error al eliminar: {{error}}",
       "restartFailed": "Error al reiniciar: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\" solicitó crear una automatización, pero ya hay un formulario abierto. Tus cambios se conservaron: guárdalo o ciérralo y vuelve a activar la solicitud."
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\" solicitó crear una automatización, pero ya hay un formulario abierto. Tus cambios se conservaron: guárdalo o ciérralo y vuelve a activar la solicitud.",
+      "batchDeleted": "Se eliminaron {{count}} automatizaciones"
     },
     "deleteDialog": {
       "title": "¿Eliminar la automatización \"{{name}}\"?",
@@ -18564,7 +18576,9 @@
       },
       "confirm": "Eliminar automatización",
       "confirmDeleteSessions": "Eliminar automatización y sesiones",
-      "sessionUpdatePartial": "Automatización eliminada, pero no se pudieron actualizar {{fail}} sesión(es)"
+      "sessionUpdatePartial": "Automatización eliminada, pero no se pudieron actualizar {{fail}} sesión(es)",
+      "batchTitle": "¿Eliminar {{count}} automatizaciones?",
+      "batchPartial": "Se eliminaron {{ok}} automatizaciones; {{fail}} fallaron: {{error}}"
     },
     "confirm": {
       "delete": {

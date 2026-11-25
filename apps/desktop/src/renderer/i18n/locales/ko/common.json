@@ -17841,7 +17841,18 @@
         "demote": "제거하고 개인 복사본 유지",
         "demoteSuccess": "프로젝트에서 제거하고 개인 자동화로 유지했습니다"
       },
-      "resizeAria": "작업 목록 너비 조정"
+      "resizeAria": "작업 목록 너비 조정",
+      "batch": {
+        "toggle": "여러 개 선택",
+        "toggleAria": "자동화 여러 개 선택",
+        "selectAll": "모두 선택",
+        "clearAll": "선택 해제",
+        "selectedCount": "{{count}}개 선택됨",
+        "cancel": "취소",
+        "delete": "삭제",
+        "itemAria": "{{name}} 선택",
+        "projectHint": "프로젝트 자동화는 schedules.json에서 관리됩니다"
+      }
     },
     "cell": {
       "subtitlePaused": "일시 중지됨",
@@ -18296,7 +18307,8 @@
       "renameFailed": "이름 변경 실패: {{error}}",
       "deleteFailed": "삭제 실패: {{error}}",
       "restartFailed": "재시작 실패: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\"에서 자동화 만들기를 요청했지만 편집 중인 양식이 열려 있습니다. 입력한 내용은 그대로 유지했습니다. 저장하거나 닫은 뒤 다시 요청하세요."
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\"에서 자동화 만들기를 요청했지만 편집 중인 양식이 열려 있습니다. 입력한 내용은 그대로 유지했습니다. 저장하거나 닫은 뒤 다시 요청하세요.",
+      "batchDeleted": "자동화 {{count}}개를 삭제했습니다"
     },
     "deleteDialog": {
       "title": "자동화 \"{{name}}\"을(를) 삭제하시겠습니까?",
@@ -18322,7 +18334,9 @@
       },
       "confirm": "자동화 삭제",
       "confirmDeleteSessions": "자동화와 세션 삭제",
-      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 세션을 처리하지 못했습니다"
+      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 세션을 처리하지 못했습니다",
+      "batchTitle": "자동화 {{count}}개를 삭제할까요?",
+      "batchPartial": "{{ok}}개 삭제, {{fail}}개 실패: {{error}}"
     },
     "confirm": {
       "delete": {

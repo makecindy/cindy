@@ -17915,7 +17915,18 @@
         "demote": "Entfernen und persönliche Kopie behalten",
         "demoteSuccess": "Aus Projekt entfernt, als persönliche Kopie behalten"
       },
-      "resizeAria": "Größe des Aufgabenlistenbereichs ändern"
+      "resizeAria": "Größe des Aufgabenlistenbereichs ändern",
+      "batch": {
+        "toggle": "Mehrfachauswahl",
+        "toggleAria": "Mehrere Automationen auswählen",
+        "selectAll": "Alle auswählen",
+        "clearAll": "Leeren",
+        "selectedCount": "{{count}} ausgewählt",
+        "cancel": "Abbrechen",
+        "delete": "Löschen",
+        "itemAria": "{{name}} auswählen",
+        "projectHint": "Projektautomationen werden in schedules.json verwaltet"
+      }
     },
     "cell": {
       "subtitlePaused": "Pausiert",
@@ -18370,7 +18381,8 @@
       "renameFailed": "Umbenennen fehlgeschlagen: {{error}}",
       "deleteFailed": "Löschen fehlgeschlagen: {{error}}",
       "restartFailed": "Neustart fehlgeschlagen: {{error}}",
-      "pluginDraftIgnoredFormOpen": "„{{name}}“ hat angefragt, eine Automatisierung zu erstellen, aber ein Formular ist bereits geöffnet. Deine Änderungen bleiben erhalten — speichere oder schließe es und löse die Anfrage dann erneut aus."
+      "pluginDraftIgnoredFormOpen": "„{{name}}“ hat angefragt, eine Automatisierung zu erstellen, aber ein Formular ist bereits geöffnet. Deine Änderungen bleiben erhalten — speichere oder schließe es und löse die Anfrage dann erneut aus.",
+      "batchDeleted": "{{count}} Automationen gelöscht"
     },
     "deleteDialog": {
       "title": "Automatisierung „{{name}}“ löschen?",
@@ -18396,7 +18408,9 @@
       },
       "confirm": "Automatisierung löschen",
       "confirmDeleteSessions": "Automatisierung und Sitzungen löschen",
-      "sessionUpdatePartial": "Automatisierung gelöscht, aber {{fail}} Sitzung(en) konnten nicht aktualisiert werden"
+      "sessionUpdatePartial": "Automatisierung gelöscht, aber {{fail}} Sitzung(en) konnten nicht aktualisiert werden",
+      "batchTitle": "{{count}} Automationen löschen?",
+      "batchPartial": "{{ok}} Automationen gelöscht, {{fail}} fehlgeschlagen: {{error}}"
     },
     "confirm": {
       "delete": {

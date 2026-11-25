@@ -17841,7 +17841,18 @@
         "demote": "去而留私本",
         "demoteSuccess": "已去案之自运，留为私差"
       },
-      "resizeAria": "调差事录之宽"
+      "resizeAria": "调差事录之宽",
+      "batch": {
+        "toggle": "多择",
+        "toggleAria": "多择自动之务",
+        "selectAll": "尽择",
+        "clearAll": "尽去",
+        "selectedCount": "已择 {{count}}",
+        "cancel": "罢",
+        "delete": "删",
+        "itemAria": "择「{{name}}」",
+        "projectHint": "项目之自动，于 schedules.json 治之"
+      }
     },
     "cell": {
       "subtitlePaused": "已暂止",
@@ -18296,7 +18307,8 @@
       "renameFailed": "易名未成：{{error}}",
       "deleteFailed": "删之未成：{{error}}",
       "restartFailed": "重启未成：{{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」请君立自运，然今有自运之表方修。君所填者已留；存之或阖之后，请再点一次。"
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请君立自运，然今有自运之表方修。君所填者已留；存之或阖之后，请再点一次。",
+      "batchDeleted": "已删 {{count}} 自动之务"
     },
     "deleteDialog": {
       "title": "删自运「{{name}}」？",
@@ -18322,7 +18334,9 @@
       },
       "confirm": "确删自运",
       "confirmDeleteSessions": "删自运与差事",
-      "sessionUpdatePartial": "自运已删，然 {{fail}} 差事处置未成"
+      "sessionUpdatePartial": "自运已删，然 {{fail}} 差事处置未成",
+      "batchTitle": "删 {{count}} 自动之务乎？",
+      "batchPartial": "已删 {{ok}}，{{fail}} 未成：{{error}}"
     },
     "confirm": {
       "delete": {

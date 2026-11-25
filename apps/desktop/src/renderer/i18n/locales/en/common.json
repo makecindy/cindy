@@ -17915,7 +17915,18 @@
         "demote": "Remove and keep personal copy",
         "demoteSuccess": "Removed from project, kept as personal"
       },
-      "resizeAria": "Resize task list pane"
+      "resizeAria": "Resize task list pane",
+      "batch": {
+        "toggle": "Select multiple",
+        "toggleAria": "Select multiple automations",
+        "selectAll": "Select all",
+        "clearAll": "Clear",
+        "selectedCount": "{{count}} selected",
+        "cancel": "Cancel",
+        "delete": "Delete",
+        "itemAria": "Select {{name}}",
+        "projectHint": "Project automations are managed in schedules.json"
+      }
     },
     "cell": {
       "subtitlePaused": "Paused",
@@ -18370,7 +18381,8 @@
       "renameFailed": "Rename failed: {{error}}",
       "deleteFailed": "Failed to delete: {{error}}",
       "restartFailed": "Failed to restart: {{error}}",
-      "pluginDraftIgnoredFormOpen": "“{{name}}” asked to create an automation, but a form is already open. Your edits were kept — save or close it, then trigger the request again."
+      "pluginDraftIgnoredFormOpen": "“{{name}}” asked to create an automation, but a form is already open. Your edits were kept — save or close it, then trigger the request again.",
+      "batchDeleted": "Deleted {{count}} automations"
     },
     "deleteDialog": {
       "title": "Delete automation “{{name}}”?",
@@ -18396,7 +18408,9 @@
       },
       "confirm": "Delete automation",
       "confirmDeleteSessions": "Delete automation and sessions",
-      "sessionUpdatePartial": "Automation deleted, but {{fail}} session(s) could not be updated"
+      "sessionUpdatePartial": "Automation deleted, but {{fail}} session(s) could not be updated",
+      "batchTitle": "Delete {{count}} automations?",
+      "batchPartial": "Deleted {{ok}} automations; {{fail}} failed: {{error}}"
     },
     "confirm": {
       "delete": {

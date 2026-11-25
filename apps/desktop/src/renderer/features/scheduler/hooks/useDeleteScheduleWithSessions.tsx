@@ -45,12 +45,14 @@ export interface DeletedScheduleGeneratedSessionResult {
 
 export interface UseDeleteScheduleWithSessionsOptions {
   onDeleted?: (result: DeletedScheduleGeneratedSessionResult) => void | Promise<void>;
+  /** 批量删除结束后调用一次（无论部分成功与否）。 */
+  onBatchFinished?: (deletedIds: readonly string[]) => void | Promise<void>;
 }
 
 export function useDeleteScheduleWithSessions(options: UseDeleteScheduleWithSessionsOptions = {}) {
   const { t } = useTranslation();
-  const { onDeleted } = options;
-  const [target, setTarget] = useState<DeleteScheduleTarget | null>(null);
+  const { onDeleted, onBatchFinished } = options;
+  const [targets, setTargets] = useState<readonly DeleteScheduleTarget[] | null>(null);
   const [disposition, setDisposition] = useState<ScheduleGeneratedSessionDisposition>('keep');
   const [loading, setLoading] = useState(false);
   const [sessionCount, setSessionCount] = useState<number | null>(null);
@@ -58,76 +60,110 @@ export function useDeleteScheduleWithSessions(options: UseDeleteScheduleWithSess
 
   const close = useCallback(() => {
     if (loading) return;
-    setTarget(null);
+    setTargets(null);
   }, [loading]);
 
-  const requestDeleteSchedule = useCallback((schedule: DeleteScheduleTarget) => {
+  const requestDeleteSchedules = useCallback((schedules: readonly DeleteScheduleTarget[]) => {
+    if (schedules.length === 0) return;
     setDisposition('keep');
     setSessionCount(null);
     setInflightCount(null);
-    setTarget(schedule);
+    setTargets([...schedules]);
   }, []);
 
+  const requestDeleteSchedule = useCallback(
+    (schedule: DeleteScheduleTarget) => requestDeleteSchedules([schedule]),
+    [requestDeleteSchedules],
+  );
+
   useEffect(() => {
-    if (!target) return;
+    if (!targets) return;
     let cancelled = false;
     void (async () => {
-      const [sessionIds, inflight] = await Promise.all([
-        collectGeneratedSessionIds(target),
-        window.electronAPI.maker.schedule.getInflightCount(target.id).catch(() => 0),
-      ]);
+      const counts = await Promise.all(
+        targets.map(async (target) => {
+          const [sessionIds, inflight] = await Promise.all([
+            collectGeneratedSessionIds(target).catch(() => [] as string[]),
+            window.electronAPI.maker.schedule.getInflightCount(target.id).catch(() => 0),
+          ]);
+          return { sessions: sessionIds.length, inflight };
+        }),
+      );
       if (cancelled) return;
-      setSessionCount(sessionIds.length);
-      setInflightCount(inflight);
+      setSessionCount(counts.reduce((sum, c) => sum + c.sessions, 0));
+      setInflightCount(counts.reduce((sum, c) => sum + c.inflight, 0));
     })();
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [targets]);
 
   const confirmDelete = useCallback(async () => {
-    if (!target || loading) return;
+    if (!targets || loading) return;
     setLoading(true);
+    const deletedIds: string[] = [];
+    let sessionOk = 0;
+    let sessionFail = 0;
+    let firstError: unknown = null;
+    let scheduleFail = 0;
     try {
-      const sessionIds = await collectGeneratedSessionIds(target);
-      await deleteScheduleRecord(target);
-      const failedSessionIds = await applyGeneratedSessionDisposition(sessionIds, disposition);
-      const failed = new Set(failedSessionIds);
-      const affectedSessionIds =
-        disposition === 'keep' ? [] : sessionIds.filter((sessionId) => !failed.has(sessionId));
-      await onDeleted?.({
-        target,
-        disposition,
-        sessionIds,
-        affectedSessionIds,
-        failedSessionIds,
-      });
-      setTarget(null);
-      if (failedSessionIds.length > 0) {
+      // 逐个串行删除：每个自动化独立收集/排除手绑会话，单个失败不影响其余。
+      for (const target of targets) {
+        try {
+          const sessionIds = await collectGeneratedSessionIds(target);
+          await deleteScheduleRecord(target);
+          deletedIds.push(target.id);
+          const failedSessionIds = await applyGeneratedSessionDisposition(sessionIds, disposition);
+          const failed = new Set(failedSessionIds);
+          const affectedSessionIds =
+            disposition === 'keep' ? [] : sessionIds.filter((sessionId) => !failed.has(sessionId));
+          sessionFail += failedSessionIds.length;
+          sessionOk += sessionIds.length - failedSessionIds.length;
+          await onDeleted?.({
+            target,
+            disposition,
+            sessionIds,
+            affectedSessionIds,
+            failedSessionIds,
+          });
+        } catch (error) {
+          scheduleFail += 1;
+          firstError ??= error;
+        }
+      }
+      await onBatchFinished?.(deletedIds);
+      setTargets(null);
+      if (scheduleFail > 0) {
+        const message = firstError instanceof Error ? firstError.message : String(firstError);
         toast.error(
-          t('scheduler.deleteDialog.sessionUpdatePartial', {
-            ok: sessionIds.length - failedSessionIds.length,
-            fail: failedSessionIds.length,
-          }),
+          targets.length > 1
+            ? t('scheduler.deleteDialog.batchPartial', {
+                ok: deletedIds.length,
+                fail: scheduleFail,
+                error: message,
+              })
+            : t('scheduler.toast.deleteFailed', { error: message }),
+        );
+      } else if (sessionFail > 0) {
+        toast.error(
+          t('scheduler.deleteDialog.sessionUpdatePartial', { ok: sessionOk, fail: sessionFail }),
         );
       } else {
-        toast.success(t('scheduler.toast.deleted'));
+        toast.success(
+          targets.length > 1
+            ? t('scheduler.toast.batchDeleted', { count: deletedIds.length })
+            : t('scheduler.toast.deleted'),
+        );
       }
-    } catch (error) {
-      toast.error(
-        t('scheduler.toast.deleteFailed', {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
     } finally {
       setLoading(false);
     }
-  }, [disposition, loading, onDeleted, target, t]);
+  }, [disposition, loading, onBatchFinished, onDeleted, targets, t]);
 
   const dialog = (
     <DeleteScheduleWithSessionsDialog
-      open={target !== null}
-      target={target}
+      open={targets !== null}
+      targets={targets}
       disposition={disposition}
       sessionCount={sessionCount}
       inflightCount={inflightCount}
@@ -138,7 +174,7 @@ export function useDeleteScheduleWithSessions(options: UseDeleteScheduleWithSess
     />
   );
 
-  return { requestDeleteSchedule, deleteScheduleDialog: dialog };
+  return { requestDeleteSchedule, requestDeleteSchedules, deleteScheduleDialog: dialog };
 }
 
 async function resolveBoundSessionId(target: DeleteScheduleTarget): Promise<string | undefined> {
@@ -213,7 +249,7 @@ async function applyGeneratedSessionDisposition(
 
 interface DeleteScheduleWithSessionsDialogProps {
   open: boolean;
-  target: DeleteScheduleTarget | null;
+  targets: readonly DeleteScheduleTarget[] | null;
   disposition: ScheduleGeneratedSessionDisposition;
   sessionCount: number | null;
   inflightCount: number | null;
@@ -225,7 +261,7 @@ interface DeleteScheduleWithSessionsDialogProps {
 
 function DeleteScheduleWithSessionsDialog({
   open,
-  target,
+  targets,
   disposition,
   sessionCount,
   inflightCount,
@@ -284,9 +320,11 @@ function DeleteScheduleWithSessionsDialog({
           }}
         >
           <AlertDialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
-            {target
-              ? t('scheduler.deleteDialog.title', { name: target.name })
-              : t('scheduler.deleteDialog.titleFallback')}
+            {targets && targets.length > 1
+              ? t('scheduler.deleteDialog.batchTitle', { count: targets.length })
+              : targets?.[0]
+                ? t('scheduler.deleteDialog.title', { name: targets[0].name })
+                : t('scheduler.deleteDialog.titleFallback')}
           </AlertDialog.Title>
           <AlertDialog.Description className="mt-2 text-sm leading-relaxed text-[var(--confirm-desc)]">
             {t('scheduler.deleteDialog.description')}

@@ -17841,7 +17841,18 @@
         "demote": "移除並保留個人副本",
         "demoteSuccess": "已從專案移除，並保留為個人自動化"
       },
-      "resizeAria": "調整任務列表寬度"
+      "resizeAria": "調整任務列表寬度",
+      "batch": {
+        "toggle": "多選",
+        "toggleAria": "多選自動化",
+        "selectAll": "全選",
+        "clearAll": "清除",
+        "selectedCount": "已選 {{count}} 個",
+        "cancel": "取消",
+        "delete": "刪除",
+        "itemAria": "選擇「{{name}}」",
+        "projectHint": "專案自動化在 schedules.json 中管理"
+      }
     },
     "cell": {
       "subtitlePaused": "已暫停",
@@ -18296,7 +18307,8 @@
       "renameFailed": "重新命名失敗：{{error}}",
       "deleteFailed": "刪除失敗：{{error}}",
       "restartFailed": "重啟失敗：{{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」請你新建自動化，但當前有正在編輯的自動化表單。已保留你填寫的內容；儲存或關閉後請再點一次。"
+      "pluginDraftIgnoredFormOpen": "「{{name}}」請你新建自動化，但當前有正在編輯的自動化表單。已保留你填寫的內容；儲存或關閉後請再點一次。",
+      "batchDeleted": "已刪除 {{count}} 個自動化"
     },
     "deleteDialog": {
       "title": "刪除自動化「{{name}}」？",
@@ -18322,7 +18334,9 @@
       },
       "confirm": "確認刪除自動化",
       "confirmDeleteSessions": "刪除自動化和任務",
-      "sessionUpdatePartial": "自動化已刪除，但 {{fail}} 個任務處理失敗"
+      "sessionUpdatePartial": "自動化已刪除，但 {{fail}} 個任務處理失敗",
+      "batchTitle": "刪除 {{count}} 個自動化？",
+      "batchPartial": "已刪除 {{ok}} 個自動化，{{fail}} 個失敗：{{error}}"
     },
     "confirm": {
       "delete": {
