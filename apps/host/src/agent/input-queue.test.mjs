@@ -709,6 +709,36 @@ test('a queued App message loses authority before dispatch when its view is revo
   await h.queue.dispose();
 });
 
+// Test value (engineering-conventions §3.2): the guarded in-process handoff
+// enters the same durable queue as any task input. Existing App cases do not
+// cover cross-computer receipts. A busy task with a receipt revoked after
+// enqueue must settle that receipt without a user history row or an Agent turn.
+// Tier: unit, synthetic engine and in-memory persistence.
+test('a remote task handoff expires while queued and is discarded before execution', async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'handoff-task', { clientId: 'first', text: 'keep running' });
+  let revoked = false;
+  let settled = false;
+  const guard = Object.assign(async () => {
+    if (revoked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  }, { onSettled: async () => { settled = true; } });
+  const clientId = 'remote-task-action:revoked-while-queued';
+  await h.queue.enqueue('handoff-task', { clientId, text: 'delegated follow-up' }, {
+    taskActionDeliveryGuard: guard,
+    origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: 'delegated follow-up' },
+    autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
+  });
+  assert.equal(h.queue.projection('handoff-task').pendingQueue[0]?.clientId, clientId);
+  revoked = true;
+  const session = h.maker.getSession('handoff-task');
+  session.emit({ type: 'done' });
+  await waitFor(() => settled);
+  assert.equal(h.queue.projection('handoff-task').pendingQueue.length, 0);
+  assert.equal(session.sent.length, 1);
+  assert.equal(h.persisted.some(row => row.clientId === clientId), false);
+});
+
 test('valid App messages keep source metadata and escape native commands', async () => {
   const owner = {};
   const h = createHarness({ getOwner: () => owner, loadClearBoundary: async () => null });

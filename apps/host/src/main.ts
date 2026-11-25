@@ -33,6 +33,7 @@ import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
+import { createHostSessionHandoff } from './agent/session-handoff.js';
 import { createHostService } from './service.mjs';
 import { holdError } from './agent/profile-hold.js';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
@@ -2320,7 +2321,15 @@ function startDeviceLink(): void {
     void worktree.reconcilePendingSafeDirectoryCleanups().catch(error =>
       hostLog.warn('deferred Worktree safe.directory cleanup failed', { error }));
   }
+  const sessionHandoff = (isSelfDeviceId: (id: string) => boolean) => createHostSessionHandoff({
+    input: inputQueue, worktree, isSelfDeviceId, assertProviderExecutionSupported,
+    readProviders: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+    agents: () => agentGraph?.agents ?? [],
+    hasCindyAiApiKey: () => currentGateway() !== null,
+    broadcastCreated: sessionDraftPorts.emitSessionCreated,
+  });
   deviceLink = createHostDeviceLink({
+    sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
