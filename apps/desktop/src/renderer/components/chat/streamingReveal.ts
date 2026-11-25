@@ -21,7 +21,6 @@
  * `useStreamingReveal`。复制、搜索、导航仍使用完整原文，不读这里的前缀。
  */
 import { useLayoutEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 
 import { isComposerTypingRecently } from '@/lib/composerTypingActivity';
 
@@ -250,6 +249,9 @@ interface RevealController {
   timer: ReturnType<typeof setTimeout> | null;
   lastPublishAt: number;
   costMs: number;
+  /** 一次发布到它的 render 开始之间为 true；render 开始时刻记在 renderStartedAt。 */
+  renderPending: boolean;
+  renderStartedAt: number | null;
   /** 请求动画帧到回调执行的平滑延迟（主线程繁忙信号）。 */
   frameDelayMs: number;
   frameRequestedAt: number;
@@ -320,16 +322,15 @@ function runFrame(controller: RevealController, viaFrame = false): void {
   if (finished) controller.drainUntil = null;
   controller.lastPublishAt = now;
   if (next !== before) {
-    // 在本帧内同步提交，绘制前 DOM 就已更新；测得的耗时就是这棵子树的
-    // render + commit，作为下一次退避的依据。收尾的最后一批仍按流式渲染。
-    const started = performance.now();
-    flushSync(() => controller.publish(next, draining));
-    const cost = performance.now() - started;
-    controller.costMs += (cost - controller.costMs) * STREAM_REVEAL.costSmoothing;
+    // 不在动画帧里 flushSync：同步提交会把这棵子树的 render 叠进本帧的布局与绘制，
+    // 以及同帧的其它刷新，合成一个更长的长任务（2026-11-25 合并 main 后黑盒实测
+    // 最长单个长任务 +40~70ms）。交给 React 作为独立任务渲染，最多晚一帧可见；
+    // 退避用的耗时由 hook 在 render 开始到 layout effect 之间测量。收尾的最后一批
+    // 仍按流式渲染。
+    controller.publish(next, draining);
   }
   if (finished) {
-    // 切到终版要整篇解析并替换流式 DOM，是整条流里最重的一次提交：不放进本帧的
-    // flushSync，交给 React 在下一个任务里做，本帧先正常绘制已完整显示的流式版本。
+    // 切到终版要整篇解析并替换流式 DOM，是整条流里最重的一次提交，同样作为独立任务。
     controller.publish(next, false);
   }
   if (controller.buffer.pending) scheduleReveal(controller);
@@ -374,14 +375,23 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
       timer: null,
       lastPublishAt: 0,
       costMs: 0,
+      renderPending: false,
+      renderStartedAt: null,
       frameDelayMs: 0,
       frameRequestedAt: 0,
       pace,
       drainUntil: null,
-      publish: (text, draining) => setState({ text, draining }),
+      publish: (text, draining) => {
+        controllerRef.current!.renderPending = true;
+        setState({ text, draining });
+      },
     };
   }
   const controller = controllerRef.current;
+  // 发布引起的这次 render 从这里开始计时，到下面的 layout effect（子树已提交）结束。
+  if (controller.renderPending && controller.renderStartedAt === null) {
+    controller.renderStartedAt = performance.now();
+  }
   const wasStreamingRef = useRef(streaming);
 
   useLayoutEffect(() => {
@@ -419,6 +429,14 @@ export function useStreamingReveal(content: string, streaming: boolean, pace: bo
     // `state` 只用来判断是否已同步；把它放进依赖会让每次发布再排一帧。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, streaming, pace, controller]);
+
+  useLayoutEffect(() => {
+    if (controller.renderStartedAt === null) return;
+    const cost = performance.now() - controller.renderStartedAt;
+    controller.renderStartedAt = null;
+    controller.renderPending = false;
+    controller.costMs += (cost - controller.costMs) * STREAM_REVEAL.costSmoothing;
+  }, [state, controller]);
 
   useLayoutEffect(() => () => cancelScheduled(controller), [controller]);
 
