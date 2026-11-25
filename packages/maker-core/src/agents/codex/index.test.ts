@@ -33667,6 +33667,157 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  // Codex 0.166+ moves "Selected model is at capacity" into internal responses_retry
+  // with 300s+ backoff and omits any app-server error event on retry 1/5.
+  // Existing reconnect tests only cover app-server-emitted Reconnecting... notices (unit, fake clock).
+  it('surfaces upstream-overload early on proxy capacity push even when Codex suppresses retry 1/5', async () => {
+    vi.useFakeTimers();
+    try {
+      let pushCapacity: ((event: { threadId: string; signal: { code: 'server_is_overloaded'; status?: number; retryAfterMs?: number; observedAt: number } }) => void) | null = null;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        subscribeCodexUpstreamCapacity: (_sessionId, listener) => {
+          pushCapacity = listener;
+          return () => { pushCapacity = null; };
+        },
+      });
+      const { host, handle, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-silent-retry-1',
+      );
+      expect(pushCapacity).not.toBeNull();
+      pushCapacity!({
+        threadId: 'start-thread-id',
+        signal: { code: 'server_is_overloaded', status: 503, observedAt: Date.now() },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Immediately surfaces non-terminal overload notice instead of waiting 6 minutes silently.
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: false,
+          willRetry: true,
+        }),
+      }));
+
+      // Interrupts after 30s capacity budget (not 120s generic stall) as upstream-overload.
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: true,
+          willRetry: false,
+          message: 'Selected model is at capacity. Please try a different model.',
+        }),
+      }));
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ reason: 'codex_reconnect_stalled' }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(host.request.mock.calls).toContainEqual([
+        Method.TurnInterrupt,
+        expect.objectContaining({ turnId: 'turn-1' }),
+      ]);
+      await handle.close();
+      expect(pushCapacity).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // When upstream explicitly reports retryAfterMs > 120s (e.g. 368s), waiting 30s or 120s
+  // is guaranteed to fail; verify fail-fast grace interruption into upstream-overload (unit, fake clock).
+  it('fails fast into upstream-overload when proxy observes explicit retryAfterMs exceeding 120s', async () => {
+    vi.useFakeTimers();
+    try {
+      let pushCapacity: ((event: { threadId: string; signal: { code: 'server_is_overloaded'; status?: number; retryAfterMs?: number; observedAt: number } }) => void) | null = null;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        subscribeCodexUpstreamCapacity: (_sessionId, listener) => {
+          pushCapacity = listener;
+          return () => { pushCapacity = null; };
+        },
+      });
+      const { handle, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-long-retry-after',
+      );
+      pushCapacity!({
+        threadId: 'start-thread-id',
+        signal: { code: 'server_is_overloaded', status: 503, retryAfterMs: 368_000, observedAt: Date.now() },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_501);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          errorStatus: 503,
+          isTerminal: true,
+        }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Bare "Reconnecting... 2/5" from Codex 0.166 drops the underlying capacity cause;
+  // pull-based proxy observation must classify both the retry notice and watchdog settlement
+  // as upstream-overload and clear on real progress (unit, fake clock).
+  it('maps bare Reconnecting... 2/5 to upstream-overload via proxy pull fallback and clears on recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      let observed: { code: 'server_is_overloaded'; status?: number; observedAt: number } | undefined;
+      const agent = new CodexAgent({
+        ...createDeps(),
+        getObservedCodexUpstreamCapacity: () => observed,
+      });
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-capacity-pull-fallback',
+      );
+      observed = { code: 'server_is_overloaded', status: 503, observedAt: Date.now() };
+      emitReconnect(handlers, 2);
+
+      // Visible progress before 30s clears the capacity stall cleanly.
+      await vi.advanceTimersByTimeAsync(10_000);
+      handlers.agentMessageDelta?.({ threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'm1', delta: 'Recovered' });
+      observed = undefined;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(seen).not.toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true }),
+      }));
+
+      // A later capacity episode without recovery settles as upstream-overload within 30s.
+      observed = { code: 'server_is_overloaded', status: 503, observedAt: Date.now() };
+      emitReconnect(handlers, 2);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'upstream-overload',
+          codexErrorInfo: 'serverOverloaded',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
   // Existing watchdog cases omit native structured gateway status (unit, fake clock).
   it('retains the latest safe upstream status through watchdog settlement and clears it for the next turn', async () => {
