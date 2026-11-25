@@ -95,7 +95,8 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 算法：`HMAC-SHA256(K, input)` 的前 16 字节，base64url。`input` 是带域名与版本的 JSON 数组：
     - 本地：`["cindy.plugin-market.source-id", 2, "local", marketSourceKey]`；
     - Git：`["cindy.plugin-market.source-id", 2, "git", marketSourceKey, scheme, user, host, port, path]`，后五项是
-      **实际取包地址**的白名单部件，不含密码、令牌、查询串、片段。
+      **实际取包地址**的白名单部件，不含密码、令牌。URL 形式的地址带 `?` 或 `#` 时不生成：URL 解析器会把它们当作
+      查询串、片段截掉，git 却把它们当作仓库路径的一部分（ssh、git）或拼进请求（http），截掉会把不同仓库认成同一个。
   - 用户名的取舍：`ssh://` 与 scp 形式（`user@host:path`）的登录用户算身份。普通 SSH 服务上，同主机同路径（尤其
     scp 相对路径）可随登录用户解析到不同家目录和仓库；`ssh://` 带绝对路径时也一律纳入，结果只会更保守。
     https / http / git 的 userinfo（含 `https://TOKEN@host` 单段令牌）算凭证，一律不读取，轮换凭证不改变标识。
@@ -105,12 +106,18 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     注入的令牌不同）时不变。
   - 用 HMAC 而不是裸哈希，是因为本地路径与仓库地址可被穷举反推。
   - 密钥 K 每个数据所有者一把，见[凭证与本地存储](../credentials-and-local-storage.md)的路径表。
+  - 密钥与取包记录的读写都是异步的（市场列表、详情、远程目录这些 IPC 读路径会读到），同步计算只用已读好的
+    密钥，没读好时标识缺省，不回退到同步读盘。
   - 实现：`apps/desktop/src/main/plugin-market/sources/sourceId.ts`。
 - **实际取包地址**：`url.*.insteadOf` 可以把配置地址改写到另一个仓库，按仓库路径加载的
   `includeIf "gitdir:…"` / `includeIf "onbranch:…"` 也可以只在缓存仓库或某个分支状态下生效。所以地址在取包实际发生的仓库上下文里用
   `git ls-remote --get-url` 采集（与取包同一执行环境，不联网）：
   - clone：克隆前（无仓库）、`git clone` 刚完成时与检出完成后（都在 staging 仓库里，前者覆盖 `includeIf "onbranch:…"`
     这类随检出状态失效的规则）、克隆后（无仓库）各解析一次，全部一致才算核实。
+  - `git clone` 在初始分支（`init.defaultBranch`）上取包，返回前已切到远端默认分支；两者不同时，只在初始分支上
+    生效的 `includeIf "onbranch:…"` 事后的任何采样都看不到。所以克隆前（无仓库）与克隆刚完成时（staging 仓库里）
+    只要配置里有按分支生效的条件包含（`git config --list --name-only` 里出现 `includeif.onbranch:` 键，只列键名
+    不含值），或读不到配置，就不核实这次克隆。
   - 快进刷新：在 fetch 发生的暂存仓库里前后各解析一次。若这次地址对应的 `sourceId` 与上一版本记录的不同，
     不在旧来源的历史上快进，改走全新克隆。
   - 落位前确认检出的 HEAD 就是本次获取的目标提交（无 ref 与 `@{u}` 比，有 ref 与 `FETCH_HEAD` 比），对不上即
@@ -142,7 +149,7 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
 - **白名单与缺省**：
   - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
-    令牌、端口、查询串与片段一律不读取。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
+    令牌、端口一律不读取。URL 形式带 `?` 或 `#` 的地址不生成（见上）。含空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始
     `.` / `..` 路径段或多个 `@` 的地址不生成。
   - 未配置 ref（缺省键、null、空串）时不给 `ref`；配置了但不合法时整个身份不生成。
   - 以下情况整个身份缺省，不给部分值：密钥不可用；版本目录没有可核实的取包记录（升级前取的旧缓存，下次刷新

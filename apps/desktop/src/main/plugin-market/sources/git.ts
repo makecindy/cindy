@@ -243,9 +243,9 @@ export async function cloneMarketplace(
   executor: GitExecutor = defaultExecutor,
   /**
    * 在 git 实际取包的那个仓库（staging 目录）里执行，用来采集实际取包地址（见 fetchIdentity.ts）：
-   * `'cloned'` 紧接 `git clone` 之后、任何 checkout 之前（取包时的分支状态，`includeIf "onbranch:…"` 这类
-   * 规则与取包时一致）；`'checked-out'` 在检出完成、落位之前（`includeIf "gitdir:…"` 与之后刷新的状态）。
-   * 调用方要求各次采集一致才记下地址。
+   * `'cloned'` 紧接 `git clone` 之后、显式 checkout 之前；`'checked-out'` 在检出完成、落位之前
+   * （`includeIf "gitdir:…"` 与之后刷新的状态）。调用方要求各次采集一致才记下地址。注意 `'cloned'` 时 git
+   * 可能已从取包时的初始分支切到远端默认分支，`includeIf "onbranch:…"` 只能靠 hasBranchConditionalConfig 排除。
    */
   inspect?: (repoDir: string, phase: 'cloned' | 'checked-out') => Promise<void>,
 ): Promise<string> {
@@ -346,6 +346,26 @@ export async function currentRevision(
     timeoutMs: 10_000,
   });
   return stdout.trim();
+}
+
+/**
+ * 当前配置上下文里有没有按分支生效的条件包含（`includeIf "onbranch:…"`）。`git clone` 在返回前会从初始分支
+ * （`init.defaultBranch`）切到远端默认分支或检出目标，这类规则在取包当时与事后可能不同，事后解析还原不了
+ * 取包时的上下文；有这类规则时调用方不核实来源。只列键名（不含值），不联网；读不到配置也按「有」处理。
+ */
+export async function hasBranchConditionalConfig(
+  executor: GitExecutor = defaultExecutor,
+  cwd?: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await executor(['config', '--list', '--name-only'], {
+      ...(cwd ? { cwd } : {}),
+      timeoutMs: 10_000,
+    });
+    return stdout.split('\n').some((line) => /^includeif\.onbranch:/i.test(line.trim()));
+  } catch {
+    return true;
+  }
 }
 
 /**

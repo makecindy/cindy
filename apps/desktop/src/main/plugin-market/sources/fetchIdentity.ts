@@ -12,6 +12,7 @@
  *   时抛错，让调用方放弃这份暂存目录，绝不让新版本带着上一次的记录落位。
  * - 读不到记录（升级前取的旧版本、解析失败、两次不一致）即「无法核实」，身份整体缺省；下次刷新
  *   自动补上，不在读取路径写文件。
+ * - 读写都是异步的：市场列表、详情、远程目录这些 IPC 读路径会读它，不能阻塞主线程。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,7 +23,7 @@ import {
   pluginMarketFetchAddress,
   pluginMarketRepositoryFromUrl,
 } from '../../../shared/pluginMarket.js';
-import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
+import { isDirectory, readPrivateFile, writePrivateFileAtomic } from './privateFile.js';
 import type { MarketSourceIdOf } from './sourceId.js';
 
 const FETCH_IDENTITY_FILE = 'cindy-fetch-identity.json';
@@ -50,30 +51,33 @@ export function fetchedSourceId(
  * 前后各解析一次且一致的实际取包地址（不一致或解析失败时为 null），只在这里用一次：分别白名单生成展示用
  * repository 与核实用 sourceId，记录里只存这两个去敏结果；两者都生成不出时清掉记录。
  */
-export function writeFetchIdentity(
+export async function writeFetchIdentity(
   repoDir: string,
   facts: { resolved: string | null; revision: string; sourceKey: string; sourceIdOf?: MarketSourceIdOf },
-): void {
+): Promise<void> {
   const file = recordPath(repoDir);
   const repository = pluginMarketRepositoryFromUrl(facts.resolved);
   const sourceId = fetchedSourceId(facts.resolved, facts.sourceKey, facts.sourceIdOf);
-  if ((repository || sourceId) && fs.existsSync(path.dirname(file))) {
-    atomicWriteFileSync(
+  if ((repository || sourceId) && await isDirectory(path.dirname(file))) {
+    await writePrivateFileAtomic(
       file,
       `${JSON.stringify({ version: FETCH_IDENTITY_VERSION, revision: facts.revision, repository, sourceId })}\n`,
+      { createDir: false },
     );
     return;
   }
   // 无法核实：必须确保目录里没有从上一个版本复制来的旧记录。
-  fs.rmSync(file, { force: true });
+  await fs.promises.rm(file, { force: true });
 }
 
 /** 读版本目录的取包记录；没有记录或格式不对返回 null，两项各自可缺省。 */
-export function readFetchIdentity(repoDir: string): { repository: string | null; sourceId: string | null } | null {
-  const file = recordPath(repoDir);
+export async function readFetchIdentity(
+  repoDir: string,
+): Promise<{ repository: string | null; sourceId: string | null } | null> {
+  const read = await readPrivateFile(recordPath(repoDir));
+  if (typeof read === 'string') return null;
   try {
-    if (!fs.lstatSync(file).isFile()) return null;
-    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    const value = JSON.parse(read.text) as Record<string, unknown>;
     if (!value || typeof value !== 'object' || value.version !== FETCH_IDENTITY_VERSION) return null;
     if (typeof value.revision !== 'string' || !value.revision) return null;
     const repository = typeof value.repository === 'string' && value.repository.length <= 256 &&

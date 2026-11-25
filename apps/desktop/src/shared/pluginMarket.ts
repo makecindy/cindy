@@ -277,7 +277,9 @@ export interface PluginMarketFetchAddress {
  * 把一个 Git 地址（配置地址，或 git 解析出的实际取包地址）白名单拆成部件，解析不了返回 null：
  * - 只接受 `https` / `http` / `ssh` / `git` 与 `user@host:path` 的 scp 形式；
  * - 只读取协议、SSH 登录用户（仅 ssh / scp）、host、端口、路径；https / http / git 的用户名与密码（含
- *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）、任何密码、查询串、片段一律不读取；
+ *   `https://TOKEN@host` 这类单段令牌，例如 `insteadOf` 改写注入的）与任何密码一律不读取；
+ * - URL 形式里带 `?` 或 `#` 时不生成：URL 解析器会把它们当成查询串、片段截掉，git 却把它们当成仓库路径
+ *   的一部分（ssh / git）或拼进请求（http），截掉会把不同仓库认成同一个；
  * - 含不安全字符、原始 `.` / `..` 路径段、多个 `@`、空路径时不生成。
  * 输入按不可信处理（手工改过的配置、git 解析出的改写地址）。结果不写日志。
  */
@@ -291,6 +293,7 @@ export function pluginMarketFetchAddress(value: unknown): PluginMarketFetchAddre
     const authority = rest.split('/', 1)[0] ?? '';
     // 多个 `@` 时各解析器对 host 的认定可能不同；`.`/`..` 段会被 URL 归一掉。
     if (authority.split('@').length > 2 || /\/\.{1,2}(?=[/?#]|$)/.test(rest.slice(authority.length))) return null;
+    if (/[?#]/.test(rest)) return null;
     let parsed: URL;
     try {
       parsed = new URL(url);
