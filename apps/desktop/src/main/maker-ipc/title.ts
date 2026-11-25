@@ -15,7 +15,11 @@
 
 import { ipcMain } from 'electron';
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  dbToMakerEngineKind,
+  type MakerEngineKindWire,
+} from '../../shared/agentKindConversion.js';
 import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
@@ -133,8 +137,8 @@ export async function generateMakerSessionTitle(
 
 /** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
 export interface RegenerateTitleDeps {
-  /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
-  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
+  /** 读会话引擎；会话不存在或已删除时返回 null。 */
+  readSessionAgentKind: (sessionId: string) => Promise<MakerEngineKindWire | null>;
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
   collectMaterial: (
     sessionId: string,
@@ -149,15 +153,14 @@ export interface RegenerateTitleDeps {
   ) => Promise<TitleOneShotResult>;
 }
 
-async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
+async function readSessionAgentKindFromDb(sessionId: string): Promise<MakerEngineKindWire | null> {
   const [row] = await getDbClient()
     .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  // Plugin-engine tasks have no built-in engine to generate titles with.
-  if (!row || row.status === 'deleted' || row.agentKind === 'acp') return null;
-  return dbToMakerAgentKind(row.agentKind);
+  if (!row || row.status === 'deleted') return null;
+  return dbToMakerEngineKind(row.agentKind);
 }
 
 const defaultRegenerateDeps: RegenerateTitleDeps = {
@@ -199,6 +202,9 @@ export async function regenerateMakerSessionTitle(
         reason: 'session-not-found',
       });
       throwIpcError('NOT_FOUND', 'Session not found');
+    }
+    if (agentKind === 'acp') {
+      throwIpcError('TITLE_PROVIDER_UNSUPPORTED', 'The current engine does not support AI naming');
     }
     // 空会话(草稿)没有素材,起不出有意义的标题
     if (recent.length === 0) {

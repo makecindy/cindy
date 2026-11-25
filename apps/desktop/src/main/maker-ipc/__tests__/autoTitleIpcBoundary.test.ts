@@ -291,20 +291,33 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
-  it('软删除任务按 NOT_FOUND 处理且不调用标题模型', async () => {
+  it.each([
+    {
+      sessionId: 'active-acp',
+      rows: [{ agentKind: 'acp', status: 'active' }],
+      code: 'TITLE_PROVIDER_UNSUPPORTED',
+    },
+    {
+      sessionId: 'deleted-acp',
+      rows: [{ agentKind: 'acp', status: 'deleted' }],
+      code: 'NOT_FOUND',
+    },
+    { sessionId: 'deleted', rows: [{ agentKind: 'codex', status: 'deleted' }], code: 'NOT_FOUND' },
+    { sessionId: 'missing', rows: [], code: 'NOT_FOUND' },
+  ])('手动命名 $sessionId 返回 $code 且不调用标题模型', async ({ sessionId, rows, code }) => {
     vi.mocked(getDbClient).mockReturnValue({
       drizzle: {
         select: () => ({
           from: () => ({
             where: () => ({
-              limit: async () => [{ agentKind: 'codex', status: 'deleted' }],
+              limit: async () => rows,
             }),
           }),
         }),
       },
     } as unknown as ReturnType<typeof getDbClient>);
 
-    await expect(invokeRegenerate('deleted')).rejects.toThrow(/\[NOT_FOUND\]/);
+    await expect(invokeRegenerate(sessionId)).rejects.toThrow(`[${code}]`);
     expect(h.generateTitleResult).not.toHaveBeenCalled();
   });
 
