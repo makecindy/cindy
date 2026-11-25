@@ -24,7 +24,7 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
   } as unknown as RemoteAgentPoller, {
     onEvent: event => controller.onEvent(event), onState: state => controller.onState(state),
     onClosed: (reason, error) => {
-      if (reason === 'provider-restarting') controller.onInterrupted({ reason, message: error?.message, runId: client.runId }, restartRecovery);
+      if (reason === 'provider-restarting') controller.onInterrupted({ reason, runId: client.runId }, restartRecovery);
       else controller.onClosed(reason, error?.message, client.runId);
     },
     onRequest: async () => ({ type: 'callback' }), onWs() {},

@@ -295,7 +295,7 @@ export interface RemoteAgentHandleController {
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string, runId?: string): void;
   /** Supplier run disappeared; keep the local executor and let host recovery own the next send. */
-  onInterrupted(close: { reason: string; message?: string; runId: string }, onUnsettled?: () => void): void;
+  onInterrupted(close: { reason: string; runId: string }, onUnsettled?: () => void): void;
   /** Decide idle reclaim only after the owning Session consumes queued events. */
   onIdleReclaimed(onDrained: (unfinished: boolean) => void): void;
   hasActiveTurn(): boolean;
@@ -803,7 +803,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return [];
       });
     },
-    onInterrupted({ reason, message, runId }, onUnsettled) {
+    onInterrupted({ reason, runId }, onUnsettled) {
       if (disposed) return;
       const ownerOptions = sendOwnerOptions;
       const wasActive = activeTurn;
@@ -828,8 +828,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
         // Keep the iterator/executor live: the coordinator owns continuation.
         return [markSessionSendTerminal(ownerOptions, { type: 'error', source: eventSource, data: {
-          // This is a recoverable run loss, not evidence of an OS process exit.
-          message: message || '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
+          // Close details must not select another recovery owner through message
+          // or sdkError classifiers. Run loss is not evidence of an OS process exit.
+          message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
           reason: 'remote_agent_restarted', isTerminal: true,
           remoteCloseReason: reason, remoteRunId: runId,
           // The existing error persistence keeps sdkError alongside message/reason.

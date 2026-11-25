@@ -265,9 +265,6 @@ export function decideProviderGroupFailure(
   if (!signals) return { action: 'stay', why: 'no-signal' };
   const message = typeof signals.message === 'string' ? signals.message : '';
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
-  // The proxy already classified an interrupted run. Its close detail is
-  // diagnostic, not a new tool/user/account failure; recovery still checks its lease.
-  if (reason === 'remote_agent_restarted') return switchTo('unavailable', 'lost');
   if (!message && !reason && !signals.sdkError && signals.errorStatus === undefined
     && !signals.usageLimit && !signals.codexErrorInfo) {
     return { action: 'stay', why: 'no-signal' };
@@ -331,6 +328,7 @@ export function decideProviderGroupFailure(
   if (code && CONNECTION_LOST_CODES.has(code)) return switchTo('unavailable', 'lost');
   if (code && MEMBER_UNAVAILABLE_CODES.has(code)) return switchTo('unavailable', null);
   // 连续拉不到那台(remote-agent/controller/proxyHandle)：只说明连接断了。
+  if (reason === 'remote_agent_restarted') return switchTo('unavailable', 'lost');
   if (reason === REMOTE_AGENT_LOST_REASON) return switchTo('unavailable', 'lost');
   if ((code && CONNECTION_CHECK_CODES.has(code)) || reason === REMOTE_AGENT_CLOSED_REASON) return switchTo('unavailable', 'check');
 

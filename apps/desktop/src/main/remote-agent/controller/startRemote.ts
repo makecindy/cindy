@@ -900,7 +900,7 @@ async function prepareAndStartRemoteAgentSession(
           if (restart) {
             // A first turn may already have changed local files before its first done.
             // Resume the native conversation, never replay the original request.
-            controller.onInterrupted({ reason, message: error?.message, runId: client.runId }, () => {
+            controller.onInterrupted({ reason, runId: client.runId }, () => {
               hasHistory = true;
               restartResumeRequired = true;
             });

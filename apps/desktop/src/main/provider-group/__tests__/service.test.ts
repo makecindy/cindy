@@ -2258,21 +2258,16 @@ describe('supplier process restart', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
     expect(h.probe).toHaveBeenCalledTimes(outcome === 'offline' ? PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1 : 1);
   });
-  // Unit regression (#12605): close details are diagnostic, not a new tool/user
-  // failure. The former reason-only fixture missed policy vetoes before reconnect.
-  it.each([undefined, 'tool execution failed', 'user rejected the request'])(
-    'continues on the original computer without relocation (close detail: %s)', async message => {
-      const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
-      const closeSignals = { ...signals, message };
-      expect(h.service.mayHandleTurnError('task', closeSignals)).toBe(true);
-      await h.service.onTurnError('task', closeSignals, 1);
-      expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('task', 99, expect.objectContaining({
-        attempt: 1, maxAttempts: 1, agentReconnect: { computer: '' },
-      }));
-      expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
-      expect(h.deps.fallback).not.toHaveBeenCalled();
-    },
-  );
+  it('continues on the original computer without a group binding or relocation', async () => {
+    const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    expect(h.service.mayHandleTurnError('task', signals)).toBe(true);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.deps.continueSession).toHaveBeenCalledExactlyOnceWith('task', 99, expect.objectContaining({
+      attempt: 1, maxAttempts: 1, agentReconnect: { computer: '' },
+    }));
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
 
   it.each(['stop', 'close', 'disabled'] as const)('does not relocate a bound restarted task after %s', async outcome => {
     const h = harness({ members: [MINI, STUDIO], autoSwitch: outcome !== 'disabled',

@@ -1088,7 +1088,9 @@ Session 准备期柔性停止的 `SendOptions.signal` 由本机代理传到同�
 
 `remote_agent_restarted` 是以上三类关闭的恢复分类，不证明操作系统进程退出。未完成轮次的合成
 错误保留收到的 `remoteCloseReason` 与原 `remoteRunId`，并经现有持久化字段 `sdkError` 保存同一关联；
-收到关闭错误详情时保留原说明，否则只说明远端运行不可用。不从这些信号推断崩溃、OOM 或退出时刻。
+合成错误只说明远端运行不可用，不把关闭详情放进参与恢复判定的 `message` / `sdkError`，避免上下文
+重建、工具或账号错误判定抢占原线程恢复。此前已收到的真实业务错误仍由原终态归属保留，不从这些
+关闭信号推断崩溃、OOM 或退出时刻。
 仅修改当前 run 的本地错误投影，不增加请求、恢复次数或副作用重放，不影响其他 peer；沿用已有
 wire 字段，旧执行端和官方／自建中转无需升级。回归见 `connectionPool.test.ts` 的 first-turn restart 场景。
 

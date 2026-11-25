@@ -22,6 +22,7 @@ import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDep
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { holdsContextRecoveryBroadcast, isContextOverflowErrorData } from '../../maker-ipc/contextOverflowRollover';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -938,6 +939,9 @@ describe('remote connection pool with a real host', () => {
     { reason: 'provider-restarting' },
     { reason: 'provider-restarting', message: 'provider is shutting down' },
     { reason: 'provider-restarting', message: '' },
+    { reason: 'provider-restarting', message: 'prompt is too long' },
+    { reason: 'provider-restarting', message: 'tool execution failed' },
+    { reason: 'aborted', message: 'user rejected the request' },
   ])('settles $reason ($message) during the first turn once and reconnects the live Session', async ({ reason, message }) => {
     const clients: RemoteAgentRunClient[] = [];
     const onData = RemoteAgentRunClient.prototype.onData;
@@ -972,13 +976,19 @@ describe('remote connection pool with a real host', () => {
       await vi.waitFor(() => expect(seen.some(e => e.type === 'done')).toBe(true));
       expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
       const closedRunId = clients[0].runId;
-      expect(seen.find(e => e.type === 'error')?.data).toMatchObject({
+      const interruption = seen.find(e => e.type === 'error')!;
+      // #12605: a close detail must not select a second recovery owner. Exercise
+      // the actual projection plus the group's and context delivery's predicates.
+      expect(isContextOverflowErrorData(interruption.data)).toBe(false);
+      expect(holdsContextRecoveryBroadcast({ remoteHostId: null }, interruption)).toBe(false);
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(interruption.data), 'run')).toMatchObject({
+        action: 'switch', connection: 'lost', cool: false,
+      });
+      expect(interruption.data).toMatchObject({
         reason: 'remote_agent_restarted', isTerminal: true,
         remoteCloseReason: reason, remoteRunId: closedRunId,
         sdkError: `Remote agent stream closed (${reason}); runId: ${closedRunId}`,
-        message: message || (reason === 'missing'
-          ? '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.'
-          : '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.'),
+        message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
       });
       expect(session.isTurnRunning()).toBe(false);
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
