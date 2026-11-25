@@ -473,7 +473,20 @@ export function AgentTaskCard({
       className="flex w-full justify-start"
       {...(toolCall?.clientId ? { 'data-message-client-id': toolCall.clientId } : {})}
     >
-      <div className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2">
+      <div
+        className={cn(
+          'w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2',
+          isWorkflow && canOpenInPanel && 'cursor-pointer',
+        )}
+        onClick={isWorkflow && canOpenInPanel ? (event) => {
+          // The primary button remains the keyboard entry. Passive card areas
+          // share its pointer action without intercepting independent controls.
+          const target = event.target;
+          if (target instanceof Element && !target.closest('button, a[href], [role="button"]')) {
+            openInPanel();
+          }
+        } : undefined}
+      >
         {/* 头部按钮:普通卡 = 展开 toggle;workflow 卡 = 打开后台任务面板入口。
             button 不能嵌套,停止按钮以兄弟节点挂在右侧(仅 running 时出现)。 */}
         <div className="flex w-full items-start gap-2">

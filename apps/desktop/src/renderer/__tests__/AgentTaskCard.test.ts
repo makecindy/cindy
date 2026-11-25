@@ -673,6 +673,19 @@ describe('AgentTaskCard', () => {
     await act(async () => { await Promise.resolve(); });
   });
 
+  // Unit regression for PR #12825: the visible status is outside the primary button.
+  it.each(['running', 'completed'] as const)('opens Workflow details when its %s status is clicked', (status) => {
+    openBackgroundTasksTabMock.mockClear();
+    const { getByText } = render(
+      withPanelHost('session-1', React.createElement(AgentTaskCard, {
+        sessionId: 'session-1',
+        update: { provider: 'claude-code', taskId: 'wf-1', status, taskType: 'local_workflow' },
+      })),
+    );
+    act(() => getByText(status === 'running' ? 'Running' : 'Completed').click());
+    expect(openBackgroundTasksTabMock).toHaveBeenCalledExactlyOnceWith('session-1', { focusTaskId: 'wf-1' });
+  });
+
   it('opens the background tasks panel on the first click from a split pane', () => {
     openBackgroundTasksTabMock.mockClear();
     const { container } = render(
@@ -698,7 +711,7 @@ describe('AgentTaskCard', () => {
     act(() => {
       btn!.click();
     });
-    expect(openBackgroundTasksTabMock).toHaveBeenCalledWith('session-b', {
+    expect(openBackgroundTasksTabMock).toHaveBeenCalledExactlyOnceWith('session-b', {
       focusTaskId: 'wf-split',
     });
   });
