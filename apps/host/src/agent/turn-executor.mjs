@@ -505,7 +505,7 @@ export function createTurnExecutor(deps) {
     if (successfulReply && !recoveryOwns && !resumeHeld
       && deps.getAutoResume?.()?.autoResumeBookkeeping.hasSuppressedError(sessionId) !== true) {
       if (event.turnScope !== 'background' && event.data?.silentStop !== true
-        && (event.source !== 'codex' || history.isSuccessfulCodexDoneEventData(event.data))
+        && (event.source !== 'codex' || historyFor(sessionId).isSuccessfulCodexDoneEventData(event.data))
         && typeof event.data?.result === 'string' && event.data.result.trim()) {
         deps.getAutoResume?.()?.silentStopAutoResumeGuard?.noteProgress(sessionId);
       }

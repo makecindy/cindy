@@ -9342,7 +9342,7 @@ async function silentStopHarness(t, { disabled = false, failBanner = false, queu
 // #12759, unit: the real Host queue, terminal pipeline and silent-stop handler must
 // carry the breaker across separate inputs, suppress repeated errors, and re-arm only
 // after a completed visible reply. The old single-done test cannot catch this.
-test('silent stop: repeated breaker ends once per incident and a completed reply re-arms recovery', async t => {
+for (const source of ['claude', 'codex']) test(`silent stop: repeated breaker ends once and a completed ${source} reply re-arms recovery`, async t => {
   const r = await silentStopHarness(t);
   let sends = 1;
   const send = async clientId => {
@@ -9372,7 +9372,9 @@ test('silent stop: repeated breaker ends once per incident and a completed reply
   await settled();
   assert.equal(breakerRows().length, 1, 'another turn does not persist a duplicate error');
   await send('productive');
-  await r.turn('done', { type: 'done', data: { status: 'completed', result: 'done' } });
+  // #12834 review: Codex done must also clear the breaker; previously this
+  // event reached an out-of-scope history variable and silently skipped finish.
+  await r.turn('done', { type: 'done', source, data: { raw: { status: 'completed' }, result: 'done' } });
   await settled();
   await send('new-request');
   await stop();
