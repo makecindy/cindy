@@ -18,11 +18,6 @@ function visibilityKey(target: { agent: string; providerId: string; modelId: str
 }
 
 /**
- * Whether this target is the only catalog entry whose parts spell `visibilityKey(target)`.
- * The flat key is ambiguous when an id contains `:`, so a typo could otherwise clear
- * another model's stored preference.
- */
-/**
  * Agents whose visibility override a media entry can be stored under. `isCatalogMediaModelVisible`
  * (cindy-brain/mediaDisplayVisibility.ts) reads the explicit source when there is one, while the
  * mirror's legacy projection writes every media entry under the provider's first agent
@@ -39,12 +34,22 @@ function mediaEntryAgents(
   return [...agents];
 }
 
+/**
+ * Whether this target is the only catalog entry whose parts spell `visibilityKey(target)`.
+ * The flat key is ambiguous when an id contains `:`, so a typo could otherwise clear
+ * another model's stored preference.
+ */
 function visibilityKeyIsUnambiguous(
   providers: CatalogProviders,
   target: { agent: string; providerId: string; modelId: string },
 ): boolean {
   const wanted = visibilityKey(target);
+  const prefix = `${target.agent}:`;
   for (const provider of providers) {
+    // Entry scans miss retired models: `pi:custom:xai:foo` is spelled both by the live
+    // provider `custom:xai` (model `foo`) and by `(pi, custom, xai:foo)`. Any live provider
+    // id that fits the rest of the key makes the split ambiguous on its own.
+    if (provider.id !== target.providerId && wanted.startsWith(`${prefix}${provider.id}:`)) return false;
     for (const [agent, list] of Object.entries(provider.models)) {
       for (const entry of list ?? []) {
         if (`${agent}:${provider.id}:${entry.id}` !== wanted) continue;

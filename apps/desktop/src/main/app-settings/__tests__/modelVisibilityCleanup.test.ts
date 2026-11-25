@@ -116,10 +116,24 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
-  it('still clears an orphan key no media entry spells', async () => {
+  it('refuses an orphan key a live colon provider spells without the retired model', async () => {
     configureModelSettingsActions({
       owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
-      list: async () => ({ providers: [{ id: 'custom:xai', agents: ['pi'], models: { pi: [] },
+      list: async () => ({ providers: [{ id: 'custom:xai', agents: ['pi'], models: { pi: [] } }],
+        modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+
+    // `custom:xai` still exists but `foo` was retired, so no entry scan can see the key.
+    await expect(manageAppModels({ operation: 'set',
+      target: { providerId: 'custom', agent: 'pi', modelId: 'xai:foo' },
+      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it('still clears an orphan key no live entry or provider spells', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'relay', agents: ['pi'], models: { pi: [] },
         imageModels: [{ id: 'bar', name: 'Bar Image', defaultEnabled: true, sourceAgent: 'pi' }] }],
         modelVisibilityOverrides: { 'pi:custom:xai:foo': false } }),
     } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
