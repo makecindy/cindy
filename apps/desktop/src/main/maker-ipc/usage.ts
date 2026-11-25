@@ -15,6 +15,7 @@ import { subscriptionAccountKind } from '../maker-host/subscription-account-auth
 import { setClaudeRateLimitInfoListener, type Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { cloudManagementProviderRegistry } from '../host-settings/managementCalls.js';
 import {
   readClaudeAccountUsageSnapshot,
   readClaudeAccountQuotaClear,
@@ -405,7 +406,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   const usageTaskDeltaCache = createUsageTaskDeltaCache();
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
-  registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
+  registerMakerUsageHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
     readCodexRateLimits,

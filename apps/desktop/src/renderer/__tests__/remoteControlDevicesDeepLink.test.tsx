@@ -309,3 +309,37 @@ describe('RemoteControlSection with Agent-Net on', () => {
     expect(card.textContent).toContain('Pixel');
   });
 });
+
+// Cloud instances are device cards in "My devices"; the retired category's deep
+// link and search entry open that list and focus the instance. Admission and the card's own
+// controls are covered in features/cloud-settings/__tests__/device-directory.test.tsx.
+describe('RemoteControlSection cloud instance deep link', () => {
+  it('opens My devices and focuses the instance from the cloud instances link', () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          '/settings?tab=remote-control&section=remoteControl.cloudInstances&device=cloud-1',
+        ]}
+      >
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe(
+      'cloud-1',
+    );
+  });
+
+  it('restores the expanded list without focusing anything when coming back from instance settings', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control&devices=open']}>
+        <LocationProbe />
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe('');
+    fireEvent.click(devicesHeader());
+    await waitFor(() => expect(currentSearch()).not.toContain('devices=open'));
+  });
+});
