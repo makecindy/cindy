@@ -86,6 +86,7 @@ import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
   hasLinuxPkexec,
+  isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
   recognizeLinuxUserInstallation,
   type LinuxUserInstallation,
@@ -360,31 +361,49 @@ function ensureWindowsUpdaterPrerequisites(options?: {
 const LINUX_INSTALLATION_UNSUPPORTED_ERROR_CODE = 'linux_installation_unsupported';
 
 /**
+ * A system `.deb` normally needs someone to enter a pkexec password. It can
+ * install unattended only when polkit already authorizes pkexec for this user
+ * without a prompt (for example a cloud desktop image that grants it to its
+ * desktop user) and the executable belongs to the Cindy package.
+ */
+function systemDebSupportsUnattendedUpdate(exePath: string): boolean {
+  return hasLinuxPkexec()
+    && isLinuxPkexecPreauthorized(process.pid)
+    && checkDebianManagedInstallation(exePath).status === 'managed';
+}
+
+/**
  * Whether a staged update may be applied without anyone at the computer (idle
- * or startup install). Linux system `.deb` installs need a pkexec password, so
- * only Cindy's marked user-directory installation qualifies there. This is the
- * cheap layout recognition; the strict preflight in executeRelaunch still runs
- * before quitting and reports `linux_installation_unsupported` on failure.
+ * or startup install). On Linux this is Cindy's marked user-directory
+ * installation, or a system `.deb` whose pkexec needs no password. The strict
+ * preflight in executeRelaunch still runs before quitting and reports
+ * `linux_installation_unsupported` on failure.
  */
 function supportsUnattendedAppUpdate(): boolean {
   if (process.platform !== 'linux') return true;
-  const installation = recognizeLinuxUserInstallation(
-    app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1,
-  );
-  return installation?.region === CURRENT_CINDY_REGION;
+  const exePath = app.getPath('exe');
+  const installation = recognizeLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+  if (installation) return installation.region === CURRENT_CINDY_REGION;
+  return systemDebSupportsUnattendedUpdate(exePath);
 }
 
 /**
  * Strict form used before a startup install: the splash waits for a relaunch
  * once one is accepted, so a preflight failure after acceptance would strand
- * it. Check the same user-install conditions as executeRelaunch up front.
+ * it. Check the same conditions as executeRelaunch up front.
  */
 function canApplyUnattendedAppUpdateNow(): boolean {
   if (process.platform !== 'linux') return true;
-  const installation = findLinuxUserInstallation(
-    app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1,
-  );
-  return installation?.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0;
+  const exePath = app.getPath('exe');
+  const uid = process.getuid?.() ?? -1;
+  const installation = findLinuxUserInstallation(exePath, os.homedir(), uid);
+  if (installation) {
+    return installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0;
+  }
+  // A recognized user install that fails the strict check must not fall back
+  // to the system package path.
+  if (recognizeLinuxUserInstallation(exePath, os.homedir(), uid)) return false;
+  return systemDebSupportsUnattendedUpdate(exePath);
 }
 
 /** Install blockers that only the user can clear; retrying unattended cannot help. */
@@ -484,7 +503,7 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
   if (currentStatus !== 'ready') return 'not-ready';
   if (hasUserActionInstallBlocker()) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
-  // Linux 系统 .deb 要用户在场输入 pkexec 密码，启动时不能自己装；用户目录安装不需要。
+  // Linux 系统 .deb 通常要用户在场输入 pkexec 密码；用户目录安装和已免密授权的 .deb 可以自己装。
   if (!canApplyUnattendedAppUpdateNow()) return 'interactive-auth';
   return null;
 }
@@ -677,7 +696,7 @@ export function isUpdateRelaunchImminent(): boolean {
   // act. Treating that indefinite wait as imminent would keep startup
   // side-effects disabled.
   if (hasUserActionInstallBlocker()) return false;
-  // Linux 系统 .deb 要 pkexec 密码，不会在空闲/启动时自己装。
+  // 需要 pkexec 密码的 Linux 系统 .deb 不会在空闲/启动时自己装。
   if (!supportsUnattendedAppUpdate()) return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".

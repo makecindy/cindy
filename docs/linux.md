@@ -158,7 +158,12 @@ Managed user installs need no system password, so they behave like macOS:
 Settings → About offers "Install updates automatically when idle", and a staged
 update is also applied at the next launch. System `.deb` installs request
 pkexec authorization, so they only install when you choose to restart and the
-switch is not shown. Unknown/package-manager-owned layouts, and system `.deb`
+switch is not shown. An administrator can make a system `.deb` install
+unattended as well by letting polkit grant `org.freedesktop.policykit.exec`
+to the desktop user without a prompt (Cindy checks this with `pkcheck`); the
+switch then appears and idle/startup installs proceed. Only do this where that
+user already has equivalent passwordless root, such as a single-user cloud
+desktop. Unknown/package-manager-owned layouts, and system `.deb`
 installs on a computer without `pkexec`, are rejected **before Cindy quits or
 stops active work** with a guide prompt. The downloaded package remains
 available; switching to a managed user install (above) enables unattended

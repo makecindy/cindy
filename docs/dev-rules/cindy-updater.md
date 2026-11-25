@@ -64,9 +64,11 @@ arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进�
 
 ## Linux 无人值守安装
 
-空闲自动安装与启动时安装只对 Cindy 标记的用户目录安装开放（`supportsUnattendedAppUpdate`；启动时
-另用 `canApplyUnattendedAppUpdateNow` 先核对安装工具，避免启动画面接受重启后才在预检失败）。
-系统 `.deb` 安装要 pkexec 密码，两条路径都返回 `interactive-auth`，设置页不显示开关。`executeRelaunch`
+空闲自动安装与启动时安装只对不需要人输密码的安装开放（`supportsUnattendedAppUpdate`）：Cindy
+标记的用户目录安装，或 polkit 已对当前用户免密放行 pkexec 的系统 `.deb`（`isLinuxPkexecPreauthorized`
+用不带交互的 `pkcheck` 判定，云桌面镜像会给桌面用户加这条规则）。启动时另用
+`canApplyUnattendedAppUpdateNow` 先核对与预检相同的条件，避免启动画面接受重启后才在预检失败。
+其余系统 `.deb` 安装要 pkexec 密码，两条路径都返回 `interactive-auth`，设置页不显示开关。`executeRelaunch`
 在退出前的严格预检对系统 `.deb` 还要求 `hasLinuxPkexec()`：缺 pkexec 时脚本只能拉起旧版本，曾让
 没有 polkit 的云主机每次点更新都白白重启。预检失败记 `linux_installation_unsupported`，空闲与启动
 路径见到该错误码不再重试，直到用户在提示里重新检查。

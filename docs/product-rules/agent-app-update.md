@@ -14,7 +14,7 @@ Agent 只能反复引导用户去点「检查更新」；那次收紧的起因�
   同账号手机远控与 IM 渠道卡共用 interaction router 的同一决定，旧版手机无需升级。
   安装卡写明从哪个版本到哪个版本、Cindy 会重启、另有几个任务正在运行会被中断（重启后在任务里点
   「继续」恢复）、是否还有后台工作（后台命令、媒体生成、Subagent、自动化运行等，口径同
-  `relaunchBusyActivity.ts`，读不出按有）会被中断、本任务在这轮回复后重启、远程连接会短暂断开；Linux 系统 .deb 安装另提示需要输入系统密码（用户目录安装不需要，不提示）。
+  `relaunchBusyActivity.ts`，读不出按有）会被中断、本任务在这轮回复后重启、远程连接会短暂断开；Linux 需要输入系统密码时另作提示（用户目录安装、已免密授权的系统 .deb 不提示）。
 - 确认后走「设置 → 关于」同一条更新状态机：`checkForUpdate()` 下载（单飞，重复调用不重复下载），
   等调用任务这轮回复结束（最多 2 分钟）后 `executeRelaunch()` 重启；Windows / Linux 会等更新器真正启动
   （5 秒内成功即退出、失败即写回原因）再收尾。确认卡总是写明具体目标版本（后台正在下载时用实际下载的版本；读不到就不弹卡），安装只认卡片上确认的版本：
@@ -32,9 +32,9 @@ Agent 只能反复引导用户去点「检查更新」；那次收紧的起因�
     这类通知不阻止发起新的更新；进程退出时未写回的会丢失（可接受，不为此新增持久化）。
 - 自动更新开关写入既有 `auto-update-settings-store`（用户显式 override），与设置页同一开关。
   `check_app_update` 在有可安装更新且开关未开时返回一次 `autoUpdateHint`，同一任务内只提示一次。
-  Linux 系统 .deb 安装要输入系统密码，空闲时装不了：设置页不显示开关，`check_app_update` 不给
+  需要输入系统密码的 Linux 系统 .deb 安装空闲时装不了：设置页不显示开关，`check_app_update` 不给
   `autoUpdateHint`，`set_app_auto_update` 开启时直接返回 `unsupported`（关闭仍可执行）。判据与设置页
-  同为 `supportsUnattendedAppUpdate`（是否 Cindy 标记的用户目录安装）。
+  同为 `supportsUnattendedAppUpdate`（Cindy 标记的用户目录安装，或 polkit 已免密放行 pkexec 的系统 .deb）。
 - 不支持的构建与安装环境（开发版、个人版、版本无关包、未移入「应用程序」、Linux 非受管安装、
   Linux 系统 .deb 但没有 `pkexec`、Windows 缺运行库等）沿用 `agentUpdateApplyBlockReason`，明确返回原因。
 

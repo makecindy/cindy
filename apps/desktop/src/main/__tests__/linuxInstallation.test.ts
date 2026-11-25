@@ -10,6 +10,7 @@ import {
   findLinuxUserInstallation,
   hasLinuxPkexec,
   isDebianManagedInstallation,
+  isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
   linuxUserDesktopName,
 } from '../linuxInstallation';
@@ -79,6 +80,15 @@ describe('Linux install routing', () => {
       (file) => fixed && file === '/usr/bin/pkexec',
       (command) => onPath && command === 'pkexec',
     )).toBe(expected);
+  });
+
+  // Unattended .deb installs rely on polkit granting pkexec outright; a
+  // challenge (exit 2), denial or missing pkcheck must keep the explicit restart.
+  it('treats only a non-interactive pkcheck success as preauthorized', () => {
+    const calls: string[][] = [];
+    expect(isLinuxPkexecPreauthorized(42, (file, args) => { calls.push([file, ...args]); })).toBe(true);
+    expect(calls).toEqual([['/usr/bin/pkcheck', '--action-id', 'org.freedesktop.policykit.exec', '--process', '42']]);
+    expect(isLinuxPkexecPreauthorized(42, () => { throw Object.assign(new Error('challenge'), { status: 2 }); })).toBe(false);
   });
 });
 

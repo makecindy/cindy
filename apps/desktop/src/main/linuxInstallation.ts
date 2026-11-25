@@ -153,3 +153,21 @@ export function hasLinuxPkexec(
 ): boolean {
   return isExecutable('/usr/bin/pkexec') || probe('pkexec');
 }
+
+/** Whether polkit already grants this user `pkexec` without an authentication
+ * prompt, e.g. a cloud desktop whose administrator added a rule for the
+ * desktop user. pkcheck without --allow-user-interaction exits 0 only when
+ * authorized outright; any challenge, denial, timeout or missing binary is
+ * treated as "a person must be present".
+ */
+export function isLinuxPkexecPreauthorized(
+  pid: number,
+  run: (file: string, args: string[]) => void = (file, args) => {
+    execFileSync(file, args, { timeout: 2000, stdio: 'ignore' });
+  },
+): boolean {
+  try {
+    run('/usr/bin/pkcheck', ['--action-id', 'org.freedesktop.policykit.exec', '--process', String(pid)]);
+    return true;
+  } catch { return false; }
+}
