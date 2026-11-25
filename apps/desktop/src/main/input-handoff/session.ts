@@ -827,8 +827,9 @@ export class InputHandoffSession {
    * `frame`: the target's place from a window list, read while it is the focused window in front. Looking there
    * neither brings it forward nor takes the desktop from other tasks, as `checkQr` does; a card that keeps watching
    * must do neither. Without a frame the window is raised once, under the desktop turn, to be looked at.
+   * `read`: the screen the code is looked for on, when the card keeps showing an earlier step meanwhile.
    */
-  private async showQr(frame: number[] | null = null): Promise<boolean> {
+  private async showQr(frame: number[] | null = null, read: ExtractedStep | null = this.step): Promise<boolean> {
     const driver = this.options.driver;
     const target = this.target;
     if (!target || !driver.qr || this.pictureChosen) return false;
@@ -848,7 +849,7 @@ export class InputHandoffSession {
       pid: current.pid,
       windowIndex: current.window.index,
       windowTitle: current.window.title,
-      ...(this.step?.url ? { url: this.step.url } : {}),
+      ...(read?.url ? { url: read.url } : {}),
     };
     if (this.stepNumber === 0) this.stepNumber = 1;
     this.watchQr();
@@ -1213,29 +1214,29 @@ export class InputHandoffSession {
     if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
     // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
     if (!this.hintsMet(step)) {
-      const asked = this.step;
-      this.step = step;
       // Waiting for the agent's hint repeats this look: only a passive one, and only at the target while it is the
       // focused window in front (another window of the same app may sit at the same place). Otherwise the one look
       // before handing back raises the window, as before.
       // A step the card can show by itself (a device code) is presented, not waited over.
       // Judged on what the card would show, as present() does: a reply box on a page past the sign-in is no step.
       const waiting = this.hintsPending(step) && !actionable(this.shownStep(step));
+      // While waiting the card keeps its step during the look: an owner claiming it meanwhile gets that step.
+      if (!waiting) this.step = step;
       const scanning = !waiting
         ? await this.showQr()
         : list.frontmost === target.pid && window.focused && window.frame?.length === 4
-          ? await this.showQr(window.frame)
+          ? await this.showQr(window.frame, step)
           : false;
       // The owner may have ended it or started answering meanwhile.
       if (this.ended || this.busy || this.phase !== 'ready') return;
       if (scanning) {
+        this.step = step;
         this.publish('ready');
         return;
       }
       // The agent said what the end looks like and this is not it: a sign-in page that swapped its fields for a
       // slider check or a scan tab is still mid-way. Keep the card as it was and keep watching the window.
       if (waiting) {
-        this.step = asked;
         this.fieldsGoneReads = 0;
         this.awaitingHint = true;
         return;

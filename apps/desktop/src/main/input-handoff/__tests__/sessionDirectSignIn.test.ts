@@ -637,6 +637,35 @@ describe('a waiting card watching its window', () => {
     run.session.cancel();
   });
 
+  // PR #12766 review (codex r4692976207): during the passive look the card's step was the fieldless read, so an owner
+  // claiming the card then was published an empty step, and restoring it afterwards published nothing.
+  // Entry: window watch + claim while driver.qr is pending. Unit tier.
+  it('keeps the asked step on the card while a passive look for a code is pending', async () => {
+    const { driver, state } = desktop('password');
+    const list = driver.windows.bind(driver);
+    driver.windows = async (options) => {
+      const windows = await list(options);
+      for (const app of windows.apps) for (const w of app.windows) w.focused = w.title === 'Sign in';
+      return windows;
+    };
+    const releases: Array<() => void> = [];
+    const qr = vi.fn(() => new Promise<null>((resolve) => { releases.push(() => resolve(null)); }));
+    driver.qr = qr;
+    const run = start(driver, undefined, undefined, { urlContains: 'app.example.com' });
+    await run.session.start();
+    state.screen = 'blank';
+    await vi.waitFor(() => expect(qr).toHaveBeenCalled());
+    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    const passwordShown = () => run.latest().controls.map((c) => c.kind === 'text' && c.contentType).includes('password');
+    expect(passwordShown()).toBe(true);
+    releases.splice(0).forEach((release) => release());
+    await settle();
+    expect(passwordShown()).toBe(true);
+    expect(run.finished).toEqual([]);
+    run.session.cancel();
+    releases.splice(0).forEach((release) => release());
+  });
+
   it('shows a device code that replaces the sign-in fields while the completion hint is pending', async () => {
     const { driver, state } = desktop('password');
     let deviceCode = false;
