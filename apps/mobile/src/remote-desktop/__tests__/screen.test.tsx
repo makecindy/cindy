@@ -181,6 +181,7 @@ const fixture = vi.hoisted(() => ({
   platform: "ios",
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
   views: {} as Record<string, any>,
+  viewStyles: new WeakMap<HTMLElement, unknown>(),
   invoke: vi.fn(),
   finishBackgroundTransition: vi.fn(),
   beginBackgroundTransition: vi.fn(),
@@ -211,6 +212,9 @@ vi.mock("react-native", async () => {
     return createElement(
       tag,
       {
+        ref: (node: HTMLElement | null) => {
+          if (node && p.style) fixture.viewStyles.set(node, p.style);
+        },
         onClick: p.onPress,
         disabled: p.disabled,
         "aria-label": p.accessibilityLabel,
@@ -4616,12 +4620,21 @@ describe("remote desktop controls", () => {
     ).toMatchObject({ audio: true });
     expect(host.textContent).not.toContain("remoteDesktop.audioUnavailable");
   });
-  it("keeps the Android landscape toolbar outside the system navigation area", async () => {
+  // #4671 unit regression: the mounted Controls panel must clear both the
+  // measured toolbar and system navigation. Toolbar-only checks miss panel offsets.
+  it("keeps the Android landscape toolbar and Controls outside the system navigation area", async () => {
     fixture.platform = "android";
     fixture.size = { width: 914, height: 411 };
     fixture.safe = { top: 0, bottom: 0, left: 50, right: 48 };
     await act(async () => root.render(<RemoteDesktopScreen />));
     await connect();
+    const toolbarWidth = 68;
+    act(() => {
+      fixture.views["remoteDesktop.toolbarPosition"].onLayout({
+        nativeEvent: { layout: { width: toolbarWidth, height: 411 } },
+      });
+      button("operations").click();
+    });
 
     for (const { left, right, bottom } of [
       { left: 50, right: 48, bottom: 0 },
@@ -4637,6 +4650,15 @@ describe("remote desktop controls", () => {
           .filter(Boolean),
       );
       expect(style).toMatchObject({ right, bottom, paddingBottom: 0 });
+      const panelWrapper = host.querySelector(
+        '[data-testid="remoteDesktop.operationsPanel"]',
+      )?.parentElement;
+      expect(panelWrapper).toBeTruthy();
+      const panelStyle = Object.assign(
+        {},
+        ...[fixture.viewStyles.get(panelWrapper!)].flat(Infinity).filter(Boolean),
+      );
+      expect(panelStyle).toMatchObject({ right: toolbarWidth + right, bottom });
     }
   });
   it("moves the centered rail opposite the island in both landscape directions", async () => {
