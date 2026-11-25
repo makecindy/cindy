@@ -19,6 +19,7 @@ import {
   type GhostPermissionItem,
   type InstalledGhost,
 } from './ghost.js';
+import { isPluginMarketSourceIdentity, type PluginMarketSourceIdentity } from './pluginMarket.js';
 
 /**
  * Agent 发起安装时投给任务的宿主权限确认卡的工具名。桌面卡片据此把首行作为说明、
@@ -37,6 +38,26 @@ export function ghostInstallSourceNoticeKey(origin: GhostInstallConsentOrigin | 
   if (origin === 'custom-market') return 'settings.ghosts.installConsent.customMarketSourceNotice';
   if (origin === 'local-file') return 'settings.ghosts.installConsent.localFileSourceNotice';
   return undefined;
+}
+
+/**
+ * 自定义市场确认里的仓库说明（「仓库 host/owner/repo」「本地文件夹」）。桌面确认框、电脑作远程端
+ * 时的确认与任务卡共用。只认 custom-market 且形状合法的 `originSource`；远程 Host 发来的
+ * 请求同样经过这里，形状不对就不展示，回到只显示市场名。
+ */
+export function ghostInstallConsentOriginSourceText(
+  request: Pick<GhostInstallConsentRequest, 'origin' | 'originSource'>,
+  text: (
+    key: 'originRepository' | 'originRepositoryRef' | 'originLocalFolder',
+    args?: Record<string, string>,
+  ) => string,
+): string | null {
+  const source = request.origin === 'custom-market' ? request.originSource : undefined;
+  if (!isPluginMarketSourceIdentity(source)) return null;
+  if (source.kind === 'local') return text('originLocalFolder');
+  return source.ref
+    ? text('originRepositoryRef', { repository: source.repository, ref: source.ref })
+    : text('originRepository', { repository: source.repository });
 }
 
 export type GhostInstallConsentFacts =
@@ -76,8 +97,14 @@ export interface GhostInstallConsentRequest {
   origin: GhostInstallConsentOrigin;
   /** Host-verified public community publisher, used for installation copy. */
   communityMarket?: true;
-  /** 自定义市场名称（用户添加来源时起的名字，按原样展示）。 */
+  /** 自定义市场名称（取自来源仓库 marketplace.json 的 name，按原样展示）。 */
   originLabel?: string;
+  /**
+   * 仅 custom-market：Main 在打包所在的来源租约内、用打包所用的那份来源配置生成的去敏来源身份
+   * （见 pluginMarketSourceIdentity）。提交前 Main 复核来源指纹，来源被换即拒绝安装，所以确认时
+   * 展示的就是随后安装的来源。生成不出时缺省。
+   */
+  originSource?: PluginMarketSourceIdentity;
   /** Host-generated installation identity and account impact, never package-provided. */
   target?: { namespace: string | null; sourceChanged: boolean; otherCopies: number; organizationIdentityUnavailable?: true };
   facts: GhostInstallConsentFacts;

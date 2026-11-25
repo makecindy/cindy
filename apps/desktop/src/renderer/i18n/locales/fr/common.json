@@ -8560,7 +8560,10 @@
         "localOidcUnavailable": "Cette copie de développement ne peut pas utiliser l’identité de l’organisation. Pour la tester, installez-la explicitement dans votre organisation actuelle via Forge.",
         "personalTarget": "Personnel",
         "sourceChanged": "Cette mise à jour passe à une source locale. Les comptes et données existants sont archivés séparément. Reconnectez vos comptes après la mise à jour.",
-        "otherCopies": "Il existe {{count}} autres copies de ce plugin. Elles resteront installées et conserveront leur état d'activation actuel. Une copie distincte nécessite ses propres connexions de compte."
+        "otherCopies": "Il existe {{count}} autres copies de ce plugin. Elles resteront installées et conserveront leur état d'activation actuel. Une copie distincte nécessite ses propres connexions de compte.",
+        "originRepository": "Dépôt {{repository}}",
+        "originRepositoryRef": "Dépôt {{repository}} ({{ref}})",
+        "originLocalFolder": "Dossier local"
       },
       "trust": {
         "official": "Plugin Cindy officiel",

@@ -8486,7 +8486,10 @@
         "localOidcUnavailable": "This development copy cannot use organization identity. For testing, explicitly install it into your current organization through Forge.",
         "personalTarget": "Personal",
         "sourceChanged": "This update switches to a local source. Existing accounts and data are archived separately. Connect your accounts again after updating.",
-        "otherCopies": "There are {{count}} other copies of this plugin. They will stay installed and keep their current enabled state. A separate copy needs its own account connections."
+        "otherCopies": "There are {{count}} other copies of this plugin. They will stay installed and keep their current enabled state. A separate copy needs its own account connections.",
+        "originRepository": "Repository {{repository}}",
+        "originRepositoryRef": "Repository {{repository}} ({{ref}})",
+        "originLocalFolder": "Local folder"
       },
       "trust": {
         "official": "Official Cindy plugin",

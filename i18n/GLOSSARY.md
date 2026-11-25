@@ -958,6 +958,10 @@ Explicit user action that replaces the current remote desktop viewer; never used
 
 远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
 
+### Repository
+
+Git 等版本库（GitHub / GitLab 仓库、Hugging Face 仓库）。插件安装确认里自定义市场的来源行写「仓库 host/owner/repo」。现有文案以表中译法为主；zh-TW 与 zh-Hant-x-lzh 的插件市场来源说明里另有「倉庫」，ko 的插件市场说明里另有「리포지토리」。先按现有多数译法登记为 proposed，待术语评审后统一。
+
 ### Request Refund
 
 订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。

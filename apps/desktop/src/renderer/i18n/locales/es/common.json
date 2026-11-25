@@ -8560,7 +8560,10 @@
         "localOidcUnavailable": "Esta copia de desarrollo no puede usar la identidad de la organización. Para probarla, instálala explícitamente en tu organización actual mediante Forge.",
         "personalTarget": "Personal",
         "sourceChanged": "Esta actualización cambia a una fuente local. Las cuentas y los datos existentes se archivan por separado. Vuelve a conectar tus cuentas después de actualizar.",
-        "otherCopies": "Hay otras {{count}} copias de este complemento. Seguirán instaladas y conservarán su estado de activación actual. Cada copia necesita sus propias conexiones de cuentas."
+        "otherCopies": "Hay otras {{count}} copias de este complemento. Seguirán instaladas y conservarán su estado de activación actual. Cada copia necesita sus propias conexiones de cuentas.",
+        "originRepository": "Repositorio {{repository}}",
+        "originRepositoryRef": "Repositorio {{repository}} ({{ref}})",
+        "originLocalFolder": "Carpeta local"
       },
       "trust": {
         "official": "Complemento oficial de Cindy",

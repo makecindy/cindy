@@ -313,6 +313,7 @@ describe('GhostInstallConsentHost', () => {
         initiator: 'user',
         origin: 'custom-market',
         originLabel: 'Team market',
+        originSource: { kind: 'git', repository: 'github.com/acme/plugins', sourceId: 'AbCdEfGhIjKlMnOpQrStUv' },
         facts: {
           kind: 'update', ghostId: 'weather-chip', name: 'Weather', version: '2.0.0',
           previousVersion: '1.0.0', added: [HOST], removed: [], unchangedCount: 1,
@@ -331,6 +332,9 @@ describe('GhostInstallConsentHost', () => {
     expect(options.title).toBe('settings.ghosts.installConsent.updateTitle:{"name":"Weather"}');
     expect(options.description).toContain('"from":"1.0.0"');
     expect(options.description).toContain('originCustomMarket');
+    // PR #12684 maintainer review (2026-11-25): the desktop dialog also names the repository the package
+    // comes from; before this change only the market name was shown.
+    expect(options.description).toMatch(/originCustomMarket.* · settings\.ghosts\.installConsent\.originRepository:.*github\.com\/acme\/plugins/);
     expect(options.confirmText).toBe('settings.ghosts.installConsent.confirmUpdate');
     render(<>{options.content}</>);
     expect(screen.getByText('settings.ghosts.perm.networkHost:{"host":"upload.weather.test"}')).toBeTruthy();

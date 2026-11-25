@@ -8443,7 +8443,10 @@
         "localOidcUnavailable": "この開発用コピーでは組織の認証を利用できません。テストする場合は、Forge で現在の組織を明示してインストールしてください。",
         "personalTarget": "個人",
         "sourceChanged": "この更新でローカルソースに切り替わります。既存のアカウントとデータは別に保管されます。更新後にアカウントを接続し直してください。",
-        "otherCopies": "同名のプラグインがほかに {{count}} 個あります。上書きや無効化はされません。別のコピーには個別のアカウント接続が必要です。"
+        "otherCopies": "同名のプラグインがほかに {{count}} 個あります。上書きや無効化はされません。別のコピーには個別のアカウント接続が必要です。",
+        "originRepository": "リポジトリ {{repository}}",
+        "originRepositoryRef": "リポジトリ {{repository}}（{{ref}}）",
+        "originLocalFolder": "ローカルフォルダー"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",

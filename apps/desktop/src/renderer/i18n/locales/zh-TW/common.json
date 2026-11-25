@@ -8443,7 +8443,10 @@
         "localOidcUnavailable": "此開發副本不會取得企業身分。需要自測時，請透過 Forge 明確安裝到目前企業。",
         "personalTarget": "個人",
         "sourceChanged": "這次更新會改為本機來源。舊帳號和資料會隔離保留，需要重新連接帳號。",
-        "otherCopies": "已有 {{count}} 份同名插件；它們不會被覆蓋或停用。另裝的插件需要單獨連接帳號。"
+        "otherCopies": "已有 {{count}} 份同名插件；它們不會被覆蓋或停用。另裝的插件需要單獨連接帳號。",
+        "originRepository": "儲存庫 {{repository}}",
+        "originRepositoryRef": "儲存庫 {{repository}}（{{ref}}）",
+        "originLocalFolder": "本機資料夾"
       },
       "trust": {
         "official": "Cindy 官方插件",

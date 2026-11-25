@@ -50,6 +50,8 @@ export type GhostInstallConsentPolicy =
       origin: GhostInstallConsentOrigin;
       communityMarket?: GhostInstallConsentRequest['communityMarket'];
       originLabel?: string;
+      /** 仅 custom-market 生效；必须由打包所用的那份来源配置生成（见 PluginMarketService.customInstall）。 */
+      originSource?: GhostInstallConsentRequest['originSource'];
       trust?: GhostInstallConsentRequest['trust'];
       target?: GhostInstallConsentRequest['target'];
       force?: boolean;
@@ -221,6 +223,7 @@ export async function obtainGhostInstallConsent(
         : { kind: policy.trust === 'cindy-official' ? 'official' : 'market' },
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
+      ...(policy.origin === 'custom-market' && policy.originSource ? { originSource: policy.originSource } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),
       facts,
     });

@@ -849,6 +849,7 @@ describe('PluginMarketService 自定义市场图标', () => {
       source: { type: 'local' as const, path: root },
     };
     const discovered = {
+      sourceIdentity: null,
       config,
       result: {
         ok: true as const,
@@ -1237,6 +1238,7 @@ describe('PluginMarketService 自定义市场图标', () => {
       .spyOn(MarketSourceManager.prototype, 'withDiscoveredSource')
       .mockImplementationOnce(async (_name, consume) =>
         consume({
+          sourceIdentity: null,
           config: {
             name: 'team-lib',
             source: { type: 'local', path: dir },
@@ -2171,6 +2173,87 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       version: '2.0.0',
       installed: true,
     });
+  });
+
+  /* 测试价值（PR #12684 维护者评审，2026-11-25：确认展示的仓库必须是随后真正安装的来源）
+   * - 生产入口与可观察结果：PluginMarketService.detail / install（真实来源管理器、打包与提交复核），
+   *   观察市场详情的 sourceIdentity、确认请求的 originSource 与安装结果。
+   * - 缺口：此前确认请求与条目只带市场名；同名换源只有提交点指纹复核，没有用例覆盖「确认等待期间换源」。
+   * - 最小失败输入：确认弹出后把同名市场换成另一个目录。身份字段在改动前不存在（前两条断言改前失败）；
+   *   换源拒绝属于覆盖既有提交点复核，改前即通过，用来锁住这条保证不被后续改动绕开。
+   * - tier：unit（临时目录 + 本地来源，不起 git）。
+   */
+  it('shows the identity of the packed source and rejects a same-name source swap during the confirmation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dirA = writeLocalMarket(path.join(root, 'a'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const dirB = writeLocalMarket(path.join(root, 'b'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir: dirA }]);
+    runtime.install.mockResolvedValue(installedGhost(root, 'alpha'));
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const detail = await h.service.detail(pluginId);
+    // A local folder market is identified by kind and an opaque source id; its path never leaves Main.
+    expect(detail.sourceIdentity).toEqual({ kind: 'local', sourceId: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/) });
+    expect(JSON.stringify(detail)).not.toContain(root);
+    // Same market name, plugin id, release and manifest: only the source differs.
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => {
+      h.sourceStore.remove('team-lib');
+      h.sourceStore.add({ name: 'team-lib', addedAt: '2026-07-30T00:00:00.000Z', lastSyncedAt: '2026-07-30T01:00:00.000Z',
+        lastRevision: null, source: { type: 'local', path: dirB } });
+      return true;
+    });
+    await expect(h.service.install(pluginId, { expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      expectedManifest: detail.manifest }, { consent: { prompt, initiator: 'user' } })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    // The confirmation names the packed source A, not the B that replaced it while the prompt was open.
+    expect(prompt.mock.calls[0]?.[0]).toMatchObject({ origin: 'custom-market', originLabel: 'team-lib', originSource: detail.sourceIdentity });
+    expect(JSON.stringify(prompt.mock.calls[0]?.[0])).not.toContain(root);
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  /* 测试价值（PR #12731 维护者评审 2026-11-25 第 1 条：回执过期后不能把另一来源的安装认作原尝试的结果）
+   * - 生产入口与可观察结果：PluginMarketService.install / detail；确认请求的 originSource.sourceId 与
+   *   之后 detail 的 installedSourceId。控制端核实要求二者完全相等。
+   * - 缺口：本地目录 A、B 原先都投影为 {kind:'local'}，同名市场换成 B 并装了同 id、同版本后，控制端
+   *   无法分辨。
+   * - 最小失败输入：从 A 安装；同名市场换成 B；从 B 装同一个 release。改前 installedSourceId 不存在。
+   * - tier：unit（临时目录，本地来源）。
+   */
+  it('reports which source the installed copy came from so a lost receipt for A never matches B', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dirA = writeLocalMarket(path.join(root, 'a'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const dirB = writeLocalMarket(path.join(root, 'b'), 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir: dirA }]);
+    runtime.install.mockImplementation(async () => {
+      const ghost = installedGhost(root, 'alpha');
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const releaseId = customMarketReleaseId('team-lib', 'alpha', '1.0.0');
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => true);
+    await h.service.install(pluginId, { expectedReleaseId: releaseId, expectedManifest: (await h.service.detail(pluginId)).manifest },
+      { consent: { prompt, initiator: 'user' } });
+    const attemptA = (prompt.mock.calls[0]?.[0] as { originSource?: { sourceId?: string } }).originSource?.sourceId;
+    expect(attemptA).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(await h.service.detail(pluginId)).toMatchObject({ installState: 'installed', installedSourceId: attemptA });
+
+    // The same-name market now points at folder B, and the same plugin id and release are installed from it.
+    h.sourceStore.remove('team-lib');
+    h.sourceStore.add({ name: 'team-lib', addedAt: '2026-07-30T00:00:00.000Z', lastSyncedAt: '2026-07-30T01:00:00.000Z',
+      lastRevision: null, source: { type: 'local', path: dirB } });
+    const beforeB = await h.service.detail(pluginId);
+    expect(beforeB.sourceIdentity?.sourceId).not.toBe(attemptA);
+    expect(beforeB).toMatchObject({ installState: 'conflict', installedSourceId: attemptA });
+    await h.service.install(pluginId, { expectedReleaseId: releaseId, expectedManifest: beforeB.manifest,
+      expectedInstalledApproval: APPROVED_INSTALL_TOKEN, allowSourceReplacement: true }, TEST_INSTALL_CONTEXT);
+
+    const afterB = await h.service.detail(pluginId);
+    expect(afterB).toMatchObject({ installState: 'installed', releaseId, installedSourceId: beforeB.sourceIdentity?.sourceId });
+    // What a controller compares after A's receipt expired: B's copy is not A's result.
+    expect(afterB.installedSourceId).not.toBe(attemptA);
+    expect(JSON.stringify(afterB)).not.toContain(root);
   });
 
   it('rejects the install when the source vanishes before the commit point', async () => {
