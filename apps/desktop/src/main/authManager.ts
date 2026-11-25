@@ -875,7 +875,11 @@ function logUnreadableEncryptedRecord(
   log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
-function writeAtomicSafe(key: string, value: string): boolean {
+function writeAtomicSafe(
+  key: string,
+  value: string,
+  preserveExistingBackup = false,
+): boolean {
   if (!isCredentialEncryptionAvailable()) {
     logSafeStorageIssueOnce('encryption unavailable (atomic write)', key, undefined, {
       stage: 'backend',
@@ -897,7 +901,9 @@ function writeAtomicSafe(key: string, value: string): boolean {
     return false;
   }
   try {
-    atomicWriteFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), encoded);
+    atomicWriteFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), encoded, {
+      preserveExistingBackup,
+    });
     return true;
   } catch (err) {
     logSafeStorageIssueOnce('atomic persist failed', key, err, { stage: 'io' });
@@ -1262,7 +1268,7 @@ function readAuthAccountVault(
 
 function writeAuthAccountVault(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): boolean {
   const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   const previousLogoutWasAbsent =
@@ -1286,7 +1292,13 @@ function writeAuthAccountVault(
   // accounts. New clients continue to read the optional logout tombstones,
   // while logout removes the signed-out membership from the stored Passport
   // projection so older clients cannot enumerate it from local data.
-  if (writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }))) {
+  if (
+    writeAtomicSafe(
+      AUTH_ACCOUNT_VAULT_KEY,
+      JSON.stringify({ ...vault, version: 1 }),
+      options.preserveExistingBackup,
+    )
+  ) {
     return true;
   }
   try {
@@ -1312,7 +1324,7 @@ function writeAuthAccountVault(
 
 function writeAuthAccountVaultOrThrow(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): void {
   if (writeAuthAccountVault(vault, options)) return;
   throw new AuthApiError(
@@ -1402,6 +1414,8 @@ async function transactAuthAccountVault<T>(
         });
         const result = await operation(vault);
         writeAuthAccountVaultOrThrow(vault, {
+          preserveExistingBackup:
+            previousVaultRead.status === 'ok' && previousVaultRead.recoveredFromBackup === true,
           replaceUnreadableLogoutTombstones:
             options.replaceUnreadableLogoutTombstones || options.recoverInvalidForExplicitLogin,
         });

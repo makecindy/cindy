@@ -24,7 +24,7 @@ export type SafeStorageProbeResult =
   | { ok: false; reason: 'unavailable' | 'round-trip-failed'; error?: unknown };
 
 export type AtomicSafeReadResult =
-  | { status: 'ok'; value: string }
+  | { status: 'ok'; value: string; recoveredFromBackup?: true }
   | { status: 'absent' }
   | { status: 'backend-unavailable' }
   | { status: 'io-error'; error: unknown }
@@ -100,7 +100,8 @@ export function readAtomicSafeRecord(deps: {
   if (primary.status === 'absent') return readOne(`${deps.filepath}.bak`);
   if (primary.status === 'decrypt-failed' && deps.recoverFromBackup) {
     const backup = readOne(`${deps.filepath}.bak`);
-    if (backup.status === 'ok' || backup.status === 'io-error') return backup;
+    if (backup.status === 'ok') return { ...backup, recoveredFromBackup: true };
+    if (backup.status === 'io-error') return backup;
   }
   return primary;
 }

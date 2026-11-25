@@ -301,7 +301,7 @@ describe('auth login-flow reset', () => {
     expect(writeBody).toContain('older client can');
     expect(writeBody).toContain('writeAuthAccountLogoutTombstones(vault)');
     expect(writeBody.indexOf('writeAuthAccountLogoutTombstones(vault)')).toBeLessThan(
-      writeBody.indexOf('writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY'),
+      writeBody.search(/writeAtomicSafe\(\s*AUTH_ACCOUNT_VAULT_KEY/),
     );
 
     const logoutTombstoneReadStart = source.indexOf('function readAuthAccountLogoutTombstones(');

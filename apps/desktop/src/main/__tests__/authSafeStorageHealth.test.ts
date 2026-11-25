@@ -126,7 +126,11 @@ describe('authSafeStorageHealth', () => {
       expect(read()).toEqual({ status: 'ok', value: '{"version":1,"main":true}' });
       files.set('/virtual/cindy_auth_accounts_v1.enc', 'broken');
       expect(read().status).toBe('decrypt-failed');
-      expect(read(true)).toEqual({ status: 'ok', value: '{"version":1,"bak":true}' });
+      expect(read(true)).toEqual({
+        status: 'ok',
+        value: '{"version":1,"bak":true}',
+        recoveredFromBackup: true,
+      });
     });
 
     it('separates backend-unavailable, fs io-error, and decrypt-failed with exact ciphertext', () => {
