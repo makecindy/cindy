@@ -1434,6 +1434,10 @@ function ModelSelectorContentView({
   // 选着供应商路由下的模型时同理：合并后的条目列在任务所在电脑的目录里，从那里开始，不跳到某个成员所在的电脑。
   const activeSourceRouteAtOpen = !!modelGroupsProp?.onAttach && !!modelGroupsProp.active
     && modelGroupsProp.config.routes.some((route) => route.id === modelGroupsProp.active?.id && !!route.parent && !route.hidden);
+  // 面板里「当前选择」显示在哪份目录里。选着合并条目下的模型时是任务所在电脑的目录(合并后的那一格)：草稿里记的那个
+  // 成员可以在别的电脑上或是分享来的，按它算的话，面板会认为当前选择不在眼前这份目录里——不显示选中的行。
+  // 只管显示；引擎集合、档位记忆这些仍按草稿实际的运行位置(remoteAgentDeviceId)。
+  const selectionCatalogDeviceId = activeSourceRouteAtOpen ? null : remoteAgentDeviceId;
   const preferredBrowseDeviceId = pluginEngines?.active || activeSourceRouteAtOpen ? null : remoteAgentDeviceId;
   const [remoteBrowse, setRemoteBrowse] = useState<{
     deviceId: string;
@@ -1470,6 +1474,9 @@ function ModelSelectorContentView({
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
+  /** 当前选择就显示在正在浏览的这份目录里(见 selectionCatalogDeviceId)：选中的行按它判断。 */
+  const browsingSelectionCatalog =
+    !remoteAgent || (remoteBrowse?.deviceId ?? null) === selectionCatalogDeviceId;
   const modelMemory = preferenceStore?.memoryForLocation
     ? preferenceStore.memoryForLocation(remoteBrowse?.deviceId ?? null)
     : !remoteAgent || browsingSelectedCatalog
@@ -1611,7 +1618,10 @@ function ModelSelectorContentView({
       ...selection, providerId: hit.candidate.providerId, modelId: hit.candidate.model,
       ...(location ? { agentDevice: { deviceId: location, name: deviceDisplayName(location, undefined, remoteAgent?.devices ?? []) } } : {}),
     });
-    void Promise.resolve(applied).then((ok) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); });
+    // 草稿当场改完(绝大多数情况)就在同一次点击里补记路由：两处改动合成一次界面更新。隔一拍再记的话，中间那一帧
+    // 草稿是「选着某个成员、没有路由」，面板会先跳到那个成员所在的位置再跳回来。
+    const attach = (ok: void | boolean) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); };
+    if (applied instanceof Promise) void applied.then(attach); else attach(applied);
     return applied;
   }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute, remoteAgent?.devices]);
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
@@ -1954,7 +1964,7 @@ function ModelSelectorContentView({
         ? remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, providerId))
         : !!localProviderGroups[providerId],
       others,
-      current: currentProviderId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId } : null,
+      current: currentProviderId ? { deviceId: selectionCatalogDeviceId, providerId: currentProviderId } : null,
       honorRunLocation: true,
     });
     for (const id of folds.hiddenBase) hiddenLocal.add(id);
@@ -3745,7 +3755,7 @@ function ModelSelectorContentView({
       : null;
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
-    const panelSelection = browsingSelectedCatalog
+    const panelSelection = browsingSelectionCatalog
       ? { providerId: activeSourceId, modelId }
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
@@ -4040,7 +4050,7 @@ function ModelSelectorContentView({
             readableRows={readableRows}
             // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
             selected={pluginModels?.active || (modelGroups?.active && !activeSourceRoute) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute) && !pluginEngines?.active
+            selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind

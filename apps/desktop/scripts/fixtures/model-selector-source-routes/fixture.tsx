@@ -35,31 +35,63 @@ const config = (hidden: boolean): ModelGroupsConfig => ({
   ],
 });
 
-const calls: { unified: unknown[]; attached: ModelGroupSelection[]; cleared: number } = { unified: [], attached: [], cleared: 0 };
+// Two people share a provider of one brand: every member of the merged entry lives somewhere else.
+const SHARES = ['share:11111111-1111-4111-8111-111111111111', 'share:22222222-2222-4222-8222-222222222222'];
+const shared = () => ({ ...provider('anthropic', 'Anthropic', ['claude-opus', 'claude-sonnet']), agents: ['claude-code'],
+  routing: { 'claude-code': {} }, models: { 'claude-code': provider('anthropic', 'Anthropic', ['claude-opus', 'claude-sonnet']).models!.codex },
+  remoteInvocationEnabled: true }) as unknown as ProviderView;
+const sharedConfig: ModelGroupsConfig = {
+  sourceRoutes: [{ id: 'auto:anthropic', name: 'Anthropic', strategy: 'expiring', auto: true,
+    sources: SHARES.map((agentDeviceId) => ({ providerId: 'anthropic', agentDeviceId })) }],
+  routes: [['src:opus', 'claude-opus'], ['src:sonnet', 'claude-sonnet']].map(([id, model]) => ({
+    id, name: model.toUpperCase(), strategy: 'expiring' as const, parent: { id: 'auto:anthropic', name: 'Anthropic' },
+    candidates: SHARES.map((agentDeviceId) => ({ agentKind: 'cc' as const, providerId: 'anthropic', model, agentDeviceId })),
+  })),
+};
+
+const calls: { unified: unknown[]; attached: ModelGroupSelection[]; cleared: number; attachedInSameClick: boolean[] } =
+  { unified: [], attached: [], cleared: 0, attachedInSameClick: [] };
+let choosing = false;
+const catalog = (providers: ProviderView[]) => ({ providers, providerOrder: providers.map(item => item.id), loading: false, error: null,
+  unsupported: false, refetch: async () => {}, ownerGeneration: 1 });
 Object.assign(window, { sourceRoutesFixture: {
   calls,
+  remote: Object.fromEntries(SHARES.map((id) => [id, catalog([shared()])])),
   local: { providers: local, providerOrder: local.map(item => item.id), loading: false, error: null, unsupported: false,
     refetch: async () => {}, ownerGeneration: 1 },
   empty: { providers: [], providerOrder: [], loading: false, error: null, unsupported: false, refetch: async () => {}, ownerGeneration: 1 },
 } });
 
 // Stands in for the new-task draft: it keeps the chosen model, effort and Fast, and separately which route decides the member.
-function Draft({ hidden }: { hidden: boolean }) {
-  const [draft, setDraft] = useState({ providerId: 'xd', modelId: 'gpt-5.5', effort: 'medium', route: null as ModelGroupSelection | null });
+function Draft({ hidden, sharedMembers }: { hidden: boolean; sharedMembers: boolean }) {
+  const [draft, setDraft] = useState({ providerId: 'xd', modelId: 'gpt-5.5', effort: 'medium', route: null as ModelGroupSelection | null,
+    agentDeviceId: null as string | null });
   return (
     <div data-source-routes-trigger>
-      <ModelSelector modelId={draft.modelId} currentProviderId={draft.providerId} agentKind="codex" effort={draft.effort as never}
-        onModelChange={() => {}} onEffortChange={() => {}} useMorphPopover
+      <ModelSelector modelId={draft.modelId} currentProviderId={draft.providerId} agentKind={draft.agentDeviceId ? 'claude-code' : 'codex'}
+        effort={draft.effort as never} onModelChange={() => {}} onEffortChange={() => {}} useMorphPopover
+        // As the composer does: the engines registered where the draft's Agent runs. A share only offers Claude Code.
+        {...(draft.agentDeviceId ? { unifiedAgents: ['claude-code' as const] } : {})}
+        remoteAgent={sharedMembers ? { devices: SHARES.map((deviceId, index) => ({ deviceId, name: `Anthropic · ${index + 1}` })),
+          selectedDeviceId: draft.agentDeviceId } : undefined}
         onUnifiedSelect={(selection) => {
-          calls.unified.push({ providerId: selection.providerId, modelId: selection.modelId, effort: selection.effort ?? null });
+          calls.unified.push({ providerId: selection.providerId, modelId: selection.modelId, effort: selection.effort ?? null,
+            ...(selection.agentDevice ? { agentDeviceId: selection.agentDevice.deviceId } : {}) });
           // The draft drops a route whenever an ordinary model is chosen, as the real draft does.
           calls.cleared += draft.route ? 1 : 0;
-          setDraft({ providerId: selection.providerId ?? '', modelId: selection.modelId, effort: selection.effort ?? draft.effort, route: null });
+          choosing = true;
+          queueMicrotask(() => { choosing = false; });
+          setDraft({ providerId: selection.providerId ?? '', modelId: selection.modelId, effort: selection.effort ?? draft.effort, route: null,
+            agentDeviceId: selection.agentDevice?.deviceId ?? null });
         }}
         modelGroups={{
-          config: config(hidden), active: draft.route,
+          config: sharedMembers ? sharedConfig : config(hidden), active: draft.route,
           onSelect: (route) => setDraft((current) => ({ ...current, route })),
-          onAttach: (route) => { calls.attached.push(route); setDraft((current) => ({ ...current, route })); },
+          onAttach: (route) => {
+            calls.attached.push(route);
+            calls.attachedInSameClick.push(choosing);
+            setDraft((current) => ({ ...current, route }));
+          },
         }} />
     </div>
   );
@@ -72,5 +104,5 @@ void mountPage({
     getCapabilities: async () => ({ hasFastMode: true, availableModels: [],
       effortLevels: EFFORTS.map(id => ({ id, displayName: id })), permissionModes: [{ id: 'default', displayName: 'Default' }] }),
   } },
-  render: ctx => <main className="flex h-screen items-end justify-end p-6"><Draft hidden={ctx.data.hidden === true} /></main>,
+  render: ctx => <main className="flex h-screen items-end justify-end p-6"><Draft hidden={ctx.data.hidden === true} sharedMembers={ctx.data.shared === true} /></main>,
 });

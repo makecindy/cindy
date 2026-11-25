@@ -6,6 +6,10 @@ import assert from 'node:assert/strict';
 // decides the member. No other fixture mounts the picker with provider routes.
 // Minimal failing input: members still listed next to the merged entry; choosing a row hands the
 // draft the merged entry's made-up provider id; the chosen row is not shown as selected afterwards.
+// Case `shared` (2026-11-25 user report: choosing a model under the merged entry made the panel jump and
+// lose the selection): every member is shared by someone else, so the draft's Agent location is a share.
+// Minimal failing input: the route is recorded a beat after the model, the reopened panel shows no selected
+// row under the merged entry, or the task computer's other providers lose their rows.
 export default {
   name: 'model-selector-source-routes', entry: './fixture.tsx', viewport: { width: 860, height: 660 },
   real: 'Production ModelSelector, rail, rows and its selection callbacks',
@@ -14,11 +18,13 @@ export default {
     'src/renderer/hooks/useAgentCapabilities': { partial: 'const state = { capabilities: { hasFastMode: true, availableModels: [], effortLevels: [{ id: "low", displayName: "Low" }, { id: "medium", displayName: "Medium" }, { id: "high", displayName: "High" }], permissionModes: [] }, loading: false, error: null }; export const useAgentCapabilities = () => state;' },
     'src/renderer/hooks/useProviders': { partial: 'export const useProviders = () => window.sourceRoutesFixture.local;' },
     'src/renderer/hooks/useDeviceProviders': { partial: 'export const useDeviceProviders = () => window.sourceRoutesFixture.empty;' },
+    'src/renderer/hooks/useDevicesProviders': { partial: 'export const useDevicesProviders = (ids) => new Map(ids.map((id) => [id, window.sourceRoutesFixture.remote[id] ?? window.sourceRoutesFixture.empty]));' },
     'src/renderer/features/provider-group/useLocalProviderGroups': { partial: 'export const useLocalProviderGroups = () => ({});' },
   },
   cases: {
     default: { about: 'Two providers of one brand: one merged entry, members not listed, a chosen row records member and route' },
     hidden: { about: 'The user hid the provider route: members are listed as before', data: { hidden: true } },
+    shared: { about: 'Every member is a provider shared by someone else: choosing a model keeps the merged entry and the selection', data: { shared: true } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -30,6 +36,32 @@ export default {
     if (ui.case === 'hidden') {
       assert.deepEqual((await rail()).filter(key => key.startsWith('provider:')), ['provider:xd', 'provider:openai', 'provider:byok-1']);
       await ui.capture('members-listed');
+      return;
+    }
+    if (ui.case === 'shared') {
+      // The two shares are one entry; neither is listed on its own.
+      assert.deepEqual((await rail()).filter(key => key.includes('anthropic') || key.includes('share:')), ['provider:sroute:auto:anthropic']);
+      await page.locator('[data-rail-item="provider:sroute:auto:anthropic"]').click();
+      const shared = page.getByRole('option');
+      await shared.filter({ hasText: 'CLAUDE-SONNET' }).first().getByText('CLAUDE-SONNET', { exact: true }).click();
+      await page.waitForFunction(() => window.sourceRoutesFixture.calls.attached.length === 1);
+      const chosen = await calls();
+      // The draft gets the first share's model together with where it runs, and the route in the same click:
+      // recorded a beat later, the panel first jumps to that share's own list and then back.
+      assert.deepEqual(chosen.unified, [{ providerId: 'anthropic', modelId: 'claude-sonnet', effort: chosen.unified[0].effort,
+        agentDeviceId: 'share:11111111-1111-4111-8111-111111111111' }]);
+      assert.deepEqual(chosen.attached, [{ type: 'route', id: 'src:sonnet' }]);
+      assert.deepEqual(chosen.attachedInSameClick, [true]);
+      await page.getByRole('listbox').waitFor({ state: 'hidden' });
+      await trigger.click();
+      await page.getByRole('listbox').waitFor();
+      // Reopened: the chosen row is the selected one under the merged entry, not under a share and not nowhere.
+      await page.locator('[data-rail-item="provider:sroute:auto:anthropic"]').click();
+      await page.getByRole('option', { selected: true }).filter({ hasText: 'CLAUDE-SONNET' }).waitFor();
+      await ui.capture('shared-chosen-row');
+      // The task computer's own providers keep their rows although the draft's Agent now runs on a share.
+      await page.locator('[data-rail-item="provider:xd"]').click();
+      await page.getByRole('option').filter({ hasText: 'GPT-5.5' }).first().waitFor();
       return;
     }
     // One entry for the merged route, in the first member's place; the members themselves are gone.
