@@ -5,6 +5,7 @@ import {
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteComposerBlockingError,
+  describeAgentBinaryNotReadyError,
   describeRemoteError,
   formatRemoteError,
   humanizeRemoteError,
@@ -78,6 +79,17 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  // Production create-failure formatter, unit: maker:create-session refuses
+  // with binary_not_ready inside the existing precondition envelope. Other
+  // preconditions must still use their original copy.
+  it('shows the existing Agent component notice after a no-engine create refusal', () => {
+    const error = new DeviceLinkError('IPC_ERROR' as never, '[PRECONDITION_FAILED] binary_not_ready: No Agent engine is available');
+    const description = i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' });
+    expect(describeAgentBinaryNotReadyError(formatRemoteError(error))).toBe(description);
+    expect(humanizeRemoteError(error)).toBe(description);
+    expect(describeAgentBinaryNotReadyError('[PRECONDITION_FAILED] another precondition')).toBeNull();
   });
 
   it('recognizes a host refusal because the task is still running', () => {

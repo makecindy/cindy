@@ -142,7 +142,7 @@ import type {
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
-import { describeAgentAuthError, formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
+import { describeAgentAuthError, describeAgentBinaryNotReadyError, formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -653,7 +653,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const waitForLeaveDecision = useConfirmLeaveWhileUploading(creating && createPhase === 'uploading');
   const [error, setError] = useState<string | null>(() => {
     const creationError = readRouteString(params.creationError);
-    return creationError ? t('session.screen.createFailedNotice', { message: creationError }) : null;
+    return creationError ? t('session.screen.createFailedNotice', {
+      message: describeAgentBinaryNotReadyError(creationError) ?? creationError,
+    }) : null;
   });
   const [capabilities, setCapabilities] = useState<MobileAgentCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
@@ -5774,7 +5776,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             ) : null}
 
             {error ? (
-              <ErrorNotice message={describeAgentAuthError(error) ?? error} />
+              <ErrorNotice message={describeAgentAuthError(error) ?? describeAgentBinaryNotReadyError(error) ?? error} />
             ) : null}
             {/* 发送前鉴权提示:选中 agent 在被控端无已连接供应商时提前告知;
                 error 已展示(含被门禁拦截的同款文案)时不重复出现。 */}

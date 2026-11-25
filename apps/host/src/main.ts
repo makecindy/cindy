@@ -11,6 +11,7 @@ import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
+import { readHostMachineStatus } from './platform/machine-status.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
 import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
@@ -35,7 +36,7 @@ import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
 import { holdError } from './agent/profile-hold.js';
-import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
+import { createHostRuntimeSession, throwAgentBinaryNotReady, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
   createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
   type CoexistenceMonitor, type CoexistenceState,
@@ -403,6 +404,11 @@ const harnessBinaries = createHostHarnessBinaries({
   harnessRoot: () => hostRuntimeLayout().harnessRoot,
   onUnavailable: (kind, error) => hostLog.warn('harness binary unavailable', { kind, error }),
 });
+
+function warnIfNoAgentBinaries(binaries: Record<string, string | boolean | null>) {
+  if (Object.values(binaries).some(Boolean)) return;
+  hostLog.warn('No Agent engines are available. Install an engine and restart Cindy.', { missing: Object.keys(binaries) });
+}
 
 /** The refusal a new send gets while a desktop uses this profile, in the system language. */
 const profileInUseMessage = () => `${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${
@@ -855,6 +861,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
   // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
   const harnessBinaryPaths = await harnessBinaries.resolve();
+  warnIfNoAgentBinaries(harnessBinaryPaths);
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
     // Coexistence plan A: the xAI login is neither renewed nor signed out while held (agent/xai-held-login.ts).
     isProfileHeld: () => inputQueue.isHeldForDesktop(),
@@ -1924,6 +1931,7 @@ const serverDeps = {
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),
   createSession: async (input: Record<string, unknown>) => {
+    if (!agentGraph && sessionStorage && runtime.state === 'ready') throwAgentBinaryNotReady();
     if (!agentGraph || !sessionStorage) throw new Error('agent runtime is not ready');
     const allowed: Record<string, true> = {
       id: true, title: true, workingDir: true, model: true, effort: true, permissionMode: true,
@@ -2332,6 +2340,8 @@ function startDeviceLink(): void {
     // 「重新加入」 (`cindy-host remote rejoin`): the same official Device Link service and account token as the device list.
     officialDeviceLinkFetch: (route, opts) => serverApi(route, { ...opts, baseUrl: endpoint, cache: 'no-store', redactErrorDetails: true }),
     invoke: service, subscribe: eventHub.subscribe,
+    readMachineStatus: () => readHostMachineStatus(() =>
+      agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()).length ?? 0),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
@@ -2442,7 +2452,11 @@ server.listen(PORT, '127.0.0.1', () => {
         const state = await readAdoptedSessionState({ userDataDir: resolveHostDataDir() });
         account = { authenticated: false, realm: state.realm };
         if (state.authenticated) initialUser = await resolveAccountUser();
-        if (!initialUser) { runtime.detail = discovered.reason ?? 'owner is unknown'; return; }
+        if (!initialUser) {
+          warnIfNoAgentBinaries(harnessBinaries.status());
+          runtime.detail = discovered.reason ?? 'owner is unknown';
+          return;
+        }
         owner = initialUser.id;
       }
     }

@@ -230,6 +230,8 @@ export function describeRemoteError(error: string | null): string | null {
 }
 
 function localizedStableRemoteError(error: string): string | null {
+  const binaryNotReady = describeAgentBinaryNotReadyError(error);
+  if (binaryNotReady) return binaryNotReady;
   const simpleMarkers: Array<[string, string]> = [
     ['MODEL_VISIBILITY_NOT_READY', 'transient'],
     ['REMOTE_DISABLED', 'remoteDisabled'],
@@ -258,6 +260,13 @@ function localizedStableRemoteError(error: string): string | null {
     return i18n.t('deviceLink.remoteError.callFailed', { error });
   }
   return null;
+}
+
+/** A task can't start until the Agent components on the computer are available. */
+export function describeAgentBinaryNotReadyError(error: string): string | null {
+  return error.includes('[PRECONDITION_FAILED] binary_not_ready:')
+    ? i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' })
+    : null;
 }
 
 /**

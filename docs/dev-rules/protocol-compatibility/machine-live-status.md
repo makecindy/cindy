@@ -5,3 +5,5 @@
 新增只读 invoke `maker:machine:status`（`packages/device-link/src/machineStatus.ts`），同账号远控可用，不进共享任务访客白名单。
 没有新帧、能力位或 relay 行为，中转（含自建）只转发，不需要适配。旧被控端返回 `CHANNEL_NOT_ALLOWED`，控制端显示 `update_required`；
 解析按字段容错，新版本多报的字段被忽略，缺的字段是 `null`，只有 CPU 核数与内存总量缺失才视为无效。
+
+Node Host 装配该读取后，也在普通中转的同账号链路声明已有的 `background-link-v1`。查询沿用原通道、响应结构和授权；仅有活动状态缺失时，控制端仍可显示其余资源。已部署的官方和自建中转继续透明转发原有帧。手机设备列表沿用在线状态，无需发起资源查询。

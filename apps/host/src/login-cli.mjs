@@ -13,7 +13,7 @@ import path from 'node:path';
 
 
 
-import { CindyAuthClient, parseAuthSessionRecord } from '@cindy/auth-client';
+import { CindyAuthClient, discoverSsoOrgRealm, parseAuthSessionRecord } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
@@ -81,9 +81,13 @@ function openInSystemBrowser(url) {
 }
 
 export function parseLoginArgs(argv) {
-  const regionArg = argv.find((arg) => arg.startsWith('--region='))?.split('=')[1];
+  const regionArg = argv.find((arg) => arg === '--region' || arg.startsWith('--region='));
+  const region = regionArg?.slice('--region='.length);
+  if (region !== undefined && region !== 'cn' && region !== 'global') {
+    throw new Error('Use --region=cn or --region=global.');
+  }
   const methodArg = argv.find((arg) => arg.startsWith('--method='))?.split('=')[1];
-  return { region: regionArg ?? resolveHostRegion(), method: methodArg };
+  return { region, method: methodArg };
 }
 
 /**
@@ -93,14 +97,13 @@ export function parseLoginArgs(argv) {
 export async function runLoginCommand(argv, io = {}) {
   const out = io.stdout ?? ((line) => console.log(line));
   const err = io.stderr ?? ((line) => console.error(line));
-  const { region, method } = parseLoginArgs(argv);
+  const { region: explicitRegion, method } = parseLoginArgs(argv);
   const orgArg = argv.find(arg => arg.startsWith('--org='));
   const organization = orgArg?.slice('--org='.length).trim();
   if (orgArg && (!organization || argv.includes('--cloud-guest'))) {
     throw new Error('Use --org=<organization> with an interactive login.');
   }
 
-  const endpoints = readAuthEndpoints(region);
   const userDataDir = resolveHostDataDir();
   const deps = io.deps ?? {};
   const running = await (deps.readStatus ?? readHostProcessStatus)(userDataDir);
@@ -116,15 +119,31 @@ export async function runLoginCommand(argv, io = {}) {
   });
 
   const deviceId = getOrCreateHostDeviceId(userDataDir);
-  const clientOptions = {
-    baseUrl: endpoints.authApiBaseUrl,
-    region,
-    deviceId,
-    clientType: 'desktop',
-    fetch: (input, init) => hostAuthFetch(input, init),
+  const createRealm = (region) => {
+    const endpoints = readAuthEndpoints(region);
+    const options = {
+      baseUrl: endpoints.authApiBaseUrl,
+      region,
+      deviceId,
+      clientType: 'desktop',
+      fetch: (input, init) => hostAuthFetch(input, init),
+    };
+    return { endpoints, client: deps.createAuthClient ? deps.createAuthClient(options) : new CindyAuthClient(options) };
   };
-  // Tests replace the transport only (their fake auth servers listen on plain loopback HTTP).
-  const client = deps.createAuthClient ? deps.createAuthClient(clientOptions) : new CindyAuthClient(clientOptions);
+  let region = explicitRegion ?? resolveHostRegion();
+  let realm;
+  let organizationDiscovery;
+  if (organization && explicitRegion === undefined) {
+    const cn = createRealm('cn');
+    const global = createRealm('global');
+    const selected = await discoverSsoOrgRealm(organization, { cn: cn.client, global: global.client }, { allowPartialSuccess: true });
+    region = selected.region;
+    realm = region === 'cn' ? cn : global;
+    organizationDiscovery = selected.discovery;
+  } else {
+    realm = createRealm(region);
+  }
+  const { endpoints, client } = realm;
 
   const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
 
@@ -159,6 +178,7 @@ export async function runLoginCommand(argv, io = {}) {
   const result = await runHostLogin({
     cloudGuest,
     organization,
+    organizationDiscovery,
     client,
     deviceId,
     store,

@@ -43,8 +43,13 @@ export interface HostRuntimeSessionCreatePorts {
   readStoredSession(id: string): Promise<StoredTaskRow | null>;
 }
 
+export function throwAgentBinaryNotReady(): never {
+  throwIpcError('PRECONDITION_FAILED', 'binary_not_ready: No Agent engine is available on this computer. Install an engine and restart Cindy.');
+}
+
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
   const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute, readStoredSession } = ports;
+  if (!getAgentGraph()) throwAgentBinaryNotReady();
   const scope = activeOwnerScopeKey();
   const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
   // These routes need separate execution services; never reinterpret a remote

@@ -4,7 +4,7 @@ import { holdError, type ProfileHold } from './agent/profile-hold.js';
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MACHINE_STATUS_CHANNEL, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRejoin.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -155,6 +155,7 @@ export interface HostDeviceLinkPorts {
   canRegister(): boolean;
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
+  readMachineStatus?(): Promise<MachineStatus>;
   releaseAuthCaller?(caller: string): void;
   isBusyForProjectArchive(sessionId: string): boolean;
   sessionInTurn(sessionId: string): boolean;
@@ -256,6 +257,11 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  const readMachineStatus = deps.readMachineStatus;
+  if (readMachineStatus) registry.register(MACHINE_STATUS_CHANNEL, () => {
+    if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('PERMISSION_DENIED', 'not available to shared task guests');
+    return readMachineStatus();
+  });
   // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
   // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
   // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
@@ -629,11 +635,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const interactions = createInteractionProjection(supportsRemotePluginOauth);
   const dispatchPorts = explicitPorts<InboundDispatchPorts>({
     ...(unboundPorts as Record<UnboundDispatchPort, undefined>),
-    // Platform capabilities are added only when their backing services are wired. Background links need none: this
-    // dispatch already keeps a link that declares no subscriptions out of the controlled state. Without it a desktop
-    // closes every background link it opens here (backgroundLink.ts) and opens the next one for its next read; on
-    // Agent-Net that is a session link reopened per read. Only while Agent-Net is on: off, the Host answers as before.
-    sameAccountCapabilities: () => (agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
+    // A machine status read opens a background link even on the ordinary relay.
+    // The shared dispatcher already keeps this link out of the controlled state.
+    sameAccountCapabilities: () => (readMachineStatus || agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
     app: { getVersion: () => deps.version },
     ...tags, TASK_TAG_CHANNEL,
     readDeviceLinkSettings: () => ({ ...settings.readDeviceLinkSettings(), remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled }),

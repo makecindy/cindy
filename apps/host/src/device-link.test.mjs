@@ -10,6 +10,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
@@ -644,6 +645,16 @@ test('Host device-link refuses provider-share guests and the platform features i
   const sockets = new Map();
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const reached = [];
+  // list_machines opens a background link with no subscriptions. Keep the
+  // fixture's status reader explicit so a guest cannot reach the OS probes.
+  let machineReads = 0;
+  const machineStatus = {
+    capturedAt: '2026-11-01T00:00:00.000Z',
+    cpu: { logicalCores: 8, busyPercent: 2, loadAverage1m: 1 },
+    memory: { totalBytes: 256, availableBytes: 128 },
+    disk: { freeBytes: 512, totalBytes: 1024 },
+    idleSeconds: 25, onBattery: false, runningTasks: 1,
+  };
   let host, desktop, guest;
   t.after(async () => {
     desktop?.stop(); guest?.stop();
@@ -681,6 +692,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
+    readMachineStatus: async () => { machineReads++; return machineStatus; },
     subscribe: () => () => {},
     createRuntimeSession: async () => { throw new Error('Not part of this test'); },
     closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
@@ -699,7 +711,16 @@ test('Host device-link refuses provider-share guests and the platform features i
   desktop = client('desktop');
   guest = client('guest');
   await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
-  await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  // Production loopback entry and regression for cindy-machines §3: a desktop
+  // opens a regular relay background link and reads a valid status. Without the
+  // capability or handler, the directory reports update_required.
+  const accepted = await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION,
+    appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+  const status = await desktop.invoke('host', { channel: MACHINE_STATUS_CHANNEL, args: [] });
+  assert.deepEqual(status, { ok: true, result: machineStatus });
+  assert.deepEqual(parseMachineStatus(status.result), machineStatus);
+  assert.deepEqual(host.state().controllers, [], 'background probe does not control the computer');
 
   // The genuine relay invoke path used to report IPC_ERROR when an allowlisted handler was absent.
   // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
@@ -722,11 +743,12 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
-  for (const channel of [REMOTE_AGENT_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
+  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
+  assert.equal(machineReads, 1, 'only the same-account machine status request reached the reader');
   assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 
