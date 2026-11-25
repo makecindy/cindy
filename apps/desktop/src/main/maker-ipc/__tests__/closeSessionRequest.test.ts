@@ -89,7 +89,17 @@ describe('local Pi context clear and close', () => {
   function setup() {
     const { deps, order } = makeDeps();
     let generation = 1;
-    let live = { instanceId: 'first', agentKind: 'pi', getTurnGeneration: () => generation };
+    let live = {
+      instanceId: 'first',
+      agentKind: 'pi',
+      captureContextClearTurn() {
+        const captured = generation;
+        return {
+          confirmCancellation: () => {},
+          resolveGeneration: () => captured === generation ? generation : null,
+        };
+      },
+    };
     const original = live;
     const closeSessionIfCurrent = vi.fn(async () => { order.push('clear-close'); });
     const handlers = createContextClearSessionClose({

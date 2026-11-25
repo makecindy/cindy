@@ -1,3 +1,5 @@
+import type { Session } from '@cindy/maker-core';
+
 /**
  * CLOSE_SESSION IPC 的业务体（依赖注入、可单测），register.ts 里的 ipcMain.handle
  * 只做 adapter（模式对齐 runtimeSetModel.ts）。
@@ -53,24 +55,24 @@ interface ContextClearSession {
   agentKind: string;
   remoteHostId?: string | null;
   agentDeviceId?: string | null;
-  getTurnGeneration(): number;
+  captureContextClearTurn: Session['captureContextClearTurn'];
 }
 
 /** Connect the two Desktop clear IPCs using the origin and live turn captured by Main. */
-export function createContextClearSessionClose<Session extends ContextClearSession>(
+export function createContextClearSessionClose<LiveSession extends ContextClearSession>(
   deps: CloseSessionRequestDeps & {
-    getSession(sessionId: string): Session | null;
-    closeSessionIfCurrent(session: Session, generation: number): Promise<void>;
+    getSession(sessionId: string): LiveSession | null;
+    closeSessionIfCurrent(session: LiveSession, generation: number): Promise<void>;
   },
 ) {
   const localPiContextClears = new WeakMap<object, Map<string, {
     instanceId: string;
     clearedAt: string;
-    generation: number;
+    turn: ReturnType<Session['captureContextClearTurn']>;
   }>>();
 
   return {
-    noteClear(sender: object | undefined, sessionId: string, clearedAt: unknown, remoteInvoke: boolean): void {
+    noteClear(sender: object | undefined, sessionId: string, clearedAt: unknown, remoteInvoke: boolean): (() => void) | undefined {
       if (remoteInvoke || !sender || typeof clearedAt !== 'string') return;
       const live = deps.getSession(sessionId);
       if (live?.agentKind !== 'pi' || live.remoteHostId || live.agentDeviceId) return;
@@ -79,11 +81,13 @@ export function createContextClearSessionClose<Session extends ContextClearSessi
         clears = new Map();
         localPiContextClears.set(sender, clears);
       }
+      const turn = live.captureContextClearTurn();
       clears.set(sessionId, {
         instanceId: live.instanceId,
         clearedAt,
-        generation: live.getTurnGeneration(),
+        turn,
       });
+      return turn.confirmCancellation;
     },
 
     async close(sender: object | undefined, sessionId: string, rawOpts: unknown, remoteInvoke: boolean): Promise<void> {
@@ -96,14 +100,14 @@ export function createContextClearSessionClose<Session extends ContextClearSessi
       if (clear) {
         if (clear.clearedAt !== contextClearedAt) return;
         clears?.delete(sessionId);
-        if (!live || live.instanceId !== clear.instanceId || live.getTurnGeneration() !== clear.generation) {
-          return;
-        }
+        if (!live || live.instanceId !== clear.instanceId) return;
       }
+      const generation = clear ? clear.turn.resolveGeneration() : null;
+      if (clear && generation === null) return;
       await handleCloseSessionRequest({
         ...deps,
-        closeSession: live && clear
-          ? () => deps.closeSessionIfCurrent(live, clear.generation)
+        closeSession: live && generation !== null
+          ? () => deps.closeSessionIfCurrent(live, generation)
           : deps.closeSession,
       }, sessionId, rawOpts);
     },

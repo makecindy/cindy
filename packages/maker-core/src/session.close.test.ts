@@ -181,6 +181,52 @@ describe('Session close lifecycle', () => {
     },
   );
 
+  // #12516: onAccepted can hold a reservation while Desktop clears its input boundary.
+  // The numeric generation is reused after rollback, so it cannot prove cancellation by itself.
+  it.each(['clear', 'unrelated cancellation', 'failed preparation', 'reused generation'] as const)(
+    'attributes reservation rollback only to the captured clear (%s)',
+    async (scenario) => {
+      const { session, handle, queue, seen, idle } = liveTurn(false);
+      await session.send('previous work');
+      idle();
+      queue.push({ type: 'done', source: 'pi', data: { status: 'completed' } });
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      const prior = session.getTurnGeneration();
+
+      const entered = createDeferred();
+      const gate = createDeferred();
+      const controller = new AbortController();
+      const sending = session.send('reserved work', {
+        signal: controller.signal,
+        onAccepted: async () => {
+          entered.resolve();
+          await gate.promise;
+          if (scenario === 'failed preparation') throw new Error('preparation failed');
+        },
+      });
+      await entered.promise;
+      expect(session.getTurnGeneration()).toBe(prior + 1);
+      const clear = session.captureContextClearTurn();
+      if (scenario === 'unrelated cancellation') clear.confirmCancellation();
+      controller.abort();
+      if (scenario !== 'unrelated cancellation') clear.confirmCancellation();
+      gate.resolve();
+      if (scenario === 'failed preparation') {
+        await expect(sending).rejects.toThrow('preparation failed');
+      } else {
+        await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      }
+      expect(session.getTurnGeneration()).toBe(prior);
+      expect(handle.send).toHaveBeenCalledOnce();
+      if (scenario === 'reused generation') {
+        await session.send('next work');
+        expect(session.getTurnGeneration()).toBe(prior + 1);
+      }
+      expect(clear.resolveGeneration()).toBe(scenario === 'clear' ? prior : null);
+      await session.close();
+    },
+  );
+
   it('preserves Stop as cancellation when retirement races a missing terminal', async () => {
     const { session, handle, seen } = liveTurn();
     await session.send('work', { turnAttemptToken: 9 });

@@ -22105,8 +22105,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           clearedAt: typeof clearedAt === 'string' ? clearedAt : undefined,
           isRemoteInvoke: remoteInvoke,
         });
-        contextClearSessionClose.noteClear(event.sender, sid, clearedAt, remoteInvoke);
+        const confirmCancellation = contextClearSessionClose.noteClear(event.sender, sid, clearedAt, remoteInvoke);
         const projection = inputCoordinator.clearSession(sid, clearBoundary);
+        confirmCancellation?.();
         cindyMakeManager.cancelTasksForSession(sid);
         workingDirectoryRecovery.discard(sid);
         resetAutomaticRecoveryForExplicitStop(sid);

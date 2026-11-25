@@ -451,6 +451,7 @@ type SendReservation = {
   /** handle.send() has resolved as accepted. Until then, late N terminals stay off N+1. */
   accepted: boolean;
   cancelled: boolean;
+  cancelledBeforeDispatch: boolean;
   abortController: AbortController;
   settled: Promise<SendReservationOutcome>;
   settle(outcome: SendReservationOutcome): void;
@@ -469,6 +470,7 @@ function createSendReservation(generation: number): SendReservation {
     phase: 'accepting',
     accepted: false,
     cancelled: false,
+    cancelledBeforeDispatch: false,
     abortController: new AbortController(),
     settled,
     settle: resolveSettled,
@@ -583,6 +585,7 @@ export class Session {
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private sendReservation: SendReservation | null = null;
+  private sendReservationVersion = 0;
   /**
    * N+1 send that has reserved a generation but not yet accepted.
    * Survives `releaseSendReservationIfObserved()` clearing the reservation
@@ -744,6 +747,36 @@ export class Session {
   /** 当前/最近一次已建立 reservation 的 turn 代号；只用于跨 await 识别是否仍是同一轮。 */
   getTurnGeneration(): number {
     return this.turnGeneration;
+  }
+
+  /**
+   * Capture the generation before an explicit context clear cancels input.
+   * The host confirms cancellation in the same synchronous clear operation.
+   */
+  captureContextClearTurn(): {
+    confirmCancellation(): void;
+    resolveGeneration(): number | null;
+  } {
+    const generation = this.turnGeneration;
+    const version = this.sendReservationVersion;
+    const session = new WeakRef(this);
+    const pending = this.sendReservation;
+    const reservation = pending?.phase === 'accepting' && !pending.cancelled ? pending : null;
+    let cancelledByClear = false;
+    return {
+      confirmCancellation: () => {
+        cancelledByClear = reservation?.cancelled === true;
+      },
+      resolveGeneration: () => {
+        // Failed reservations can reuse their numeric generation on the next send.
+        const live = session.deref();
+        if (!live || live.sendReservationVersion !== version) return null;
+        const current = live.turnGeneration;
+        if (current === generation) return generation;
+        if (cancelledByClear && reservation?.cancelledBeforeDispatch && current === generation - 1) return current;
+        return null;
+      },
+    };
   }
 
   /**
@@ -1038,6 +1071,7 @@ export class Session {
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
+    this.sendReservationVersion += 1;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
     let releaseReservation: ((dispatched: boolean) => void) | void = undefined;
@@ -1058,6 +1092,7 @@ export class Session {
       if (this.unacceptedSendGeneration === reservedTurnGeneration) {
         this.unacceptedSendGeneration = null;
       }
+      reservation.cancelledBeforeDispatch = reservation.cancelled;
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
