@@ -75,6 +75,41 @@ it('scans and reads messages across appended DeepSeek frames', async () => {
   }
 });
 
+// Regression: reading a prefix must not read the whole frame, or the scan pays
+// the full history size just to see a first line or a 512 KiB summary.
+it('stops reading a large frame once the consumer stops', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-zstd-prefix-'));
+  const file = path.join(dir, 'sample.zstd');
+  const block = 64 * 1024;
+  const blocks = 64; // 4 MiB of raw blocks in one frame
+  try {
+    // Single-segment frame declaring its 4 MiB content size in four bytes.
+    const contentSize = Buffer.alloc(4);
+    contentSize.writeUInt32LE(block * blocks);
+    const parts: Buffer[] = [Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0xa0]), contentSize];
+    for (let i = 0; i < blocks; i += 1) {
+      const header = (block << 3) | (i === blocks - 1 ? 1 : 0);
+      parts.push(Buffer.from([header & 0xff, (header >>> 8) & 0xff, (header >>> 16) & 0xff]));
+      parts.push(Buffer.alloc(block, 0x61 + (i % 26)));
+    }
+    const bytes = Buffer.concat(parts);
+    await writeFile(file, bytes);
+
+    let read = 0;
+    for await (const chunk of readZstdFrames(file, (n) => { read += n; })) {
+      expect((chunk as Buffer).length).toBeGreaterThan(0);
+      break;
+    }
+    // The whole frame is 4 MiB; a prefix read must stay near one block plus
+    // decoder buffering instead of walking every block header first.
+    expect(read).toBeLessThan(1024 * 1024);
+
+    const all = [];
+    for await (const chunk of readZstdFrames(file)) all.push(chunk as Buffer);
+    expect(Buffer.concat(all).length).toBe(block * blocks);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 10000);
+
 // Regression: a small frame with many empty blocks must not stall session discovery.
 it('reads a frame with many tiny blocks within the scan budget', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-zstd-blocks-'));
