@@ -33,6 +33,7 @@ import {
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
 import { errorReasonI18nKey } from './errorReasonI18n';
@@ -92,6 +93,8 @@ export function ErrorMessageCard({
   const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
   const geminiGuidance = parseGeminiInputRateLimit(message) === null ? null :
     t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
+  // 历史错误行与实时横幅同一口径：上游 5xx（无正文）时点名状态，不落到通用兜底。
+  const upstreamStatusError = parseUpstreamStatusError(decoded);
   const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
     ? t('chat.errorBanner.requestFormatError')
     : isStreamInterrupted
@@ -99,6 +102,9 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? (upstreamStatusError
+            ? t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status })
+            : undefined)
           ?? localizedReasonError ?? remoteGuidance
           ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'

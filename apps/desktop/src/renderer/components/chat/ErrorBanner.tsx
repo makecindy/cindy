@@ -68,6 +68,7 @@ import {
   isStreamInterruptedErrorMessage,
 } from '@/utils/streamInterruptError';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
@@ -428,6 +429,8 @@ export function ErrorBanner({
     !isProviderSafetyRefusal && isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted =
     !isProviderSafetyRefusal && isStreamInterruptedErrorMessage(error, errorReason);
+  // 上游 5xx 但没带错误正文:兜底文案只会说「回复未完成」,看不出是上游拒了。
+  const upstreamStatusError = !isProviderSafetyRefusal ? parseUpstreamStatusError(error) : null;
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
   const toolLoopI18nKey =
@@ -723,6 +726,11 @@ export function ErrorBanner({
             ? 'chat.errorBanner.networkUnreachable'
             : 'chat.errorBanner.networkUnreachableNoRetry',
         );
+  } else if (upstreamStatusError) {
+    // 上游 5xx(无正文):标题直接点名状态,原始报错折叠可查。
+    // 放在网络分支之后 —— 502/503/504 仍走「服务暂时不可达」那套更贴近恢复动作的文案。
+    displayError = t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status });
+    hasSpecialGuidance = false;
   } else {
     // Keep the raw message available to every specialized gate above. Only
     // the final fallback uses the stable reason map, so auth/network/overload

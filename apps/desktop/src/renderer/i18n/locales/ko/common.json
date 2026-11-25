@@ -15583,6 +15583,8 @@
       "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "piRetryHistoryTooLarge": "메시지를 보내지 못했습니다. Pi가 재시도에 필요한 기록을 읽는 동안 데이터 프레임이 로컬 한도인 16 MiB를 초과했습니다. 새 작업에서 계속할 수 있습니다.",
+      "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
+      "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",

@@ -114,6 +114,34 @@ it.each(['live', 'history', 'unclassified'] as const)('attributes a send prepara
   }
 });
 
+// #12924, unit: an upstream 5xx without a body must name the status in both
+// error surfaces. The generic "reply failed" copy hides that the upstream
+// refused the request.
+it.each(['live', 'history'] as const)('names the upstream status in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '550 status code (no body)';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText('上游返回 550，本次回复未完成。')).toBeTruthy();
+});
+
+// #12924, unit: a Pi history read the upstream refused never reached the
+// provider. Both surfaces must say "not sent" and name that reason instead of
+// the generic "reply failed".
+it.each(['live', 'history'] as const)('explains a refused Pi history read in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = 'provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status 550). You can retry, or continue in a new task.';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
+});
+
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
 it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {

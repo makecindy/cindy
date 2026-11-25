@@ -15649,6 +15649,8 @@
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
+      "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
+      "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",
       "messageNotSent": "Your message was not sent.",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",

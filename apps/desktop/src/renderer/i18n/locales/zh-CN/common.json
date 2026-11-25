@@ -15583,6 +15583,8 @@
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
+      "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
+      "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
