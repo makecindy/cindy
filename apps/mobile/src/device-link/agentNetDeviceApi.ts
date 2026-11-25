@@ -18,6 +18,7 @@ interface MobileLegacyCustomNameBackfill {
 
 let mobileMutationSeq = 0;
 const activeMobileMutations = new Map<string, number>();
+const inflightMobileBackfillPromises = new Map<string, Promise<void>>();
 let mobileBackfillScopeKey: string | null = null;
 const attemptedMobileBackfills = new Map<string, string>();
 const inflightMobileBackfills = new Set<string>();
@@ -27,6 +28,22 @@ export function __resetMobileAgentNetNameBackfillForTests(): void {
   mobileBackfillScopeKey = null;
   attemptedMobileBackfills.clear();
   inflightMobileBackfills.clear();
+  inflightMobileBackfillPromises.clear();
+}
+
+function trackMobileBackfill(deviceId: string, request: Promise<unknown>): void {
+  const previous = inflightMobileBackfillPromises.get(deviceId);
+  const settled = request.then(() => undefined, () => undefined);
+  const chained = previous ? previous.then(() => settled, () => settled) : settled;
+  inflightMobileBackfillPromises.set(deviceId, chained);
+  void chained.finally(() => {
+    if (inflightMobileBackfillPromises.get(deviceId) === chained) inflightMobileBackfillPromises.delete(deviceId);
+  });
+}
+
+async function waitForMobileBackfill(deviceId: string): Promise<void> {
+  const pending = inflightMobileBackfillPromises.get(deviceId);
+  if (pending) await pending;
 }
 
 function beginMobileMutation(deviceId: string): () => void {
@@ -71,7 +88,9 @@ function scheduleMobileLegacyCustomNameBackfill(options: {
       attemptedMobileBackfills.set(item.deviceId, signature);
       inflightMobileBackfills.add(item.deviceId);
       try {
-        await api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        const request = api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        trackMobileBackfill(item.deviceId, request);
+        await request;
       } catch {
         // Best-effort sync; merged hybrid directory already preserves the V1 custom name.
       } finally {
@@ -179,20 +198,23 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
       const target = decodeURIComponent(match[1]);
       const endMutation = beginMobileMutation(target);
       try {
-      const relay = getActiveSelfHostedRelay(), synchronizeLegacy = !!relay && !isAgentNetOnlyRoute(relay);
-      if (!mobileAgentNetRequiresEncryption() || synchronizeLegacy) {
+      const relay = getActiveSelfHostedRelay();
+      const synchronizePrivateLegacy = !!relay && !isAgentNetOnlyRoute(relay);
+      const synchronizeLegacyWrite = synchronizePrivateLegacy || (!relay && method === 'PATCH');
+      if (!mobileAgentNetRequiresEncryption() || synchronizePrivateLegacy) {
         const directory = await identity.api.directory(); guard();
         if (!directory.some(view => view.certificate.deviceId === target)) {
-          if (!synchronizeLegacy) return { handled: false };
+          if (!synchronizePrivateLegacy) return { handled: false };
           const value = await readLegacy(); guard();
           return { handled: true, value };
         }
       }
+      await waitForMobileBackfill(target); guard();
       const response = await identity.api.request<{ name?: string }>(method, '/devices/' + encodeURIComponent(target), method === 'PATCH' ? opts.body : undefined, { signal: opts.signal });
       guard();
-      if (synchronizeLegacy) {
-        // The private relay has independent V1/V2 membership stores. This is a
-        // management write, matching Desktop even when business traffic is V2-only.
+      if (synchronizeLegacyWrite) {
+        // V1 and V2 keep independent management records on both official and private relays.
+        // Keep legacy display names synchronized on PATCH (and private DELETE), matching Desktop.
         try { await readLegacy(); }
         catch (error) {
           const legacy = error as { status?: unknown; code?: unknown };

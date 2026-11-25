@@ -935,8 +935,9 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.v2Request).toHaveBeenCalledTimes(3);
   });
 
-  // 部分目录(仅 V2 腿成功)合入上次完整目录时,不能用未自定义的主机名覆盖记住的 V1 自定义名。
-  it('keeps remembered custom names when a partial V2-only directory read falls back to the last complete union', async () => {
+  // 部分目录(仅 V2 腿成功)合入上次完整目录时,不能用未自定义的主机名覆盖记住的 V1 自定义名;
+  // 反过来仅 V1 腿成功时,新鲜 V1 读到的名称(如另一台设备已清空名称)必须生效,不能被旧快照自定义名盖回。
+  it('preserves remembered custom names only for a surviving V2 leg, not over a fresh V1 partial read', async () => {
     mocks.v2Active = true;
     mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
       devices: [{ deviceId: 'win-box', name: '编译机', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }],
@@ -945,11 +946,65 @@ describe('deviceLinkApiFetch', () => {
       { certificate: { deviceId: 'win-box' }, name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', online: true, remoteControlEnabled: true, capabilities: [] },
     ]);
     await deviceLinkApiFetch('/api/device-link/devices');
-    mocks.netFetch.mockRejectedValueOnce(new TypeError('network down'));
 
-    const partial = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; name: string }>; partial?: boolean }>('/api/device-link/devices');
-    expect(partial.partial).toBe(true);
-    expect(partial.devices).toEqual([expect.objectContaining({ deviceId: 'win-box', name: '编译机' })]);
+    // Only V2 answers -> keep remembered V1 custom name.
+    mocks.netFetch.mockRejectedValueOnce(new TypeError('network down'));
+    const partialV2 = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; name: string }>; partial?: boolean }>('/api/device-link/devices');
+    expect(partialV2.partial).toBe(true);
+    expect(partialV2.devices).toEqual([expect.objectContaining({ deviceId: 'win-box', name: '编译机' })]);
+
+    // Only V1 answers with a remote reset to hostname -> fresh V1 name wins over remembered custom name.
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      devices: [{ deviceId: 'win-box', name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }],
+    }), { status: 200 }));
+    mocks.v2Directory.mockRejectedValueOnce(Object.assign(new Error('relay busy'), { status: 503 }));
+    const partialV1 = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; name: string }>; partial?: boolean }>('/api/device-link/devices');
+    expect(partialV1.partial).toBe(true);
+    expect(partialV1.devices).toEqual([expect.objectContaining({ deviceId: 'win-box', name: 'WIN-HOST' })]);
+  });
+
+  // 已经在途的后台回填必须排在用户显式改名/清空之前完成,防止晚到的旧回填把用户刚保存的名字改回去。
+  it('waits for an in-flight backfill on the same device before sending an explicit PATCH', async () => {
+    mocks.v2Active = true;
+    const events: string[] = [];
+    let finishBackfill!: () => void;
+    mocks.v2Request
+      .mockImplementationOnce((_method, _path, body) => new Promise((resolve) => {
+        events.push(`start:${JSON.stringify(body)}`);
+        finishBackfill = () => {
+          events.push(`end:${JSON.stringify(body)}`);
+          resolve({});
+        };
+      }))
+      .mockImplementationOnce(async (_method, _path, body) => {
+        events.push(`start:${JSON.stringify(body)}`);
+        return {};
+      });
+    mocks.netFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        devices: [{ deviceId: 'win-box', name: '旧自定义名', selfName: 'WIN-HOST', platform: 'win32', appVersion: '1', lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true, isSelf: false }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ deviceId: 'win-box', name: '新名称' }), { status: 200 }));
+    mocks.v2Directory.mockResolvedValue([
+      { certificate: { deviceId: 'win-box' }, name: 'WIN-HOST', selfName: 'WIN-HOST', platform: 'win32', online: true, remoteControlEnabled: true, capabilities: [] },
+    ]);
+
+    await deviceLinkApiFetch('/api/device-link/devices');
+    await vi.waitFor(() => expect(events).toEqual(['start:{"name":"旧自定义名"}']));
+
+    const explicitRename = deviceLinkApiFetch('/api/device-link/devices/win-box', { method: 'PATCH', body: { name: '新名称' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    // Explicit PATCH must not have been sent while the backfill is still in flight.
+    expect(events).toEqual(['start:{"name":"旧自定义名"}']);
+
+    finishBackfill();
+    await explicitRename;
+    expect(events).toEqual([
+      'start:{"name":"旧自定义名"}',
+      'end:{"name":"旧自定义名"}',
+      'start:{"name":"新名称"}',
+    ]);
   });
 
   // 在途目录读发起之后、完成之前若本地发起了改名/清空(PATCH name: null),不得用旧读结果把名字回填回去。

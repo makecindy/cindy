@@ -179,3 +179,46 @@ it('preserves V1 custom names over uncustomized V2 hostnames and backfills V2 on
   await Promise.resolve();
   expect(fake.mutation).toHaveBeenCalledTimes(1);
 });
+
+// Official mobile PATCH must drain any in-flight backfill for the same device and
+// also update V1 so clearing or renaming a device cannot be undone by the next read.
+it('drains in-flight backfill and synchronizes official V1 on mobile PATCH', async () => {
+  const events: string[] = [];
+  let finishBackfill!: () => void;
+  fake.legacy
+    .mockResolvedValueOnce({ devices: [{ ...legacyDevice('work-pc'), name: '办公机', selfName: 'WORK-HOST' }] })
+    .mockImplementationOnce(async () => {
+      events.push('legacy-patch');
+      return { deviceId: 'work-pc', name: 'WORK-HOST' };
+    });
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' }]);
+  fake.mutation
+    .mockImplementationOnce((_method, _path, body) => new Promise((resolve) => {
+      events.push(`start:${JSON.stringify(body)}`);
+      finishBackfill = () => {
+        events.push(`end:${JSON.stringify(body)}`);
+        resolve({ name: '办公机' });
+      };
+    }))
+    .mockImplementationOnce(async (_method, _path, body) => {
+      events.push(`start:${JSON.stringify(body)}`);
+      return { name: 'WORK-HOST' };
+    });
+
+  await request();
+  await vi.waitFor(() => expect(events).toEqual(['start:{"name":"办公机"}']));
+
+  const explicitClear = request('/api/device-link/devices/work-pc', { method: 'PATCH', body: { name: null } });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(events).toEqual(['start:{"name":"办公机"}']);
+
+  finishBackfill();
+  await explicitClear;
+  expect(events).toEqual([
+    'start:{"name":"办公机"}',
+    'end:{"name":"办公机"}',
+    'start:{"name":null}',
+    'legacy-patch',
+  ]);
+});

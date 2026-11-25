@@ -1,14 +1,16 @@
 /**
  * Electron-agnostic fence tracking in-flight device management mutations
- * (`PATCH` / `DELETE /api/device-link/devices/:id`).
+ * (`PATCH` / `DELETE /api/device-link/devices/:id`) and per-device legacy
+ * custom-name backfills.
  *
- * Background legacy-to-Agent-Net custom-name backfills capture the generation
- * before reading the hybrid directory and abort if any local rename/delete
- * starts before the backfill executes — preventing a stale read from
- * resurrecting a custom name that the user just cleared or changed.
+ * Background backfills capture the generation before reading the hybrid
+ * directory and abort if a local rename/delete starts before the backfill
+ * sends; explicit mutations also await any backfill already in flight for
+ * the same device so the user's write is guaranteed to land last.
  */
 let mutationSequence = 0;
 const activeMutations = new Map<string, number>();
+const inflightBackfills = new Map<string, Promise<void>>();
 
 export function deviceDirectoryMutationGeneration(): number {
   return mutationSequence;
@@ -29,4 +31,19 @@ export function beginDeviceDirectoryMutation(deviceId: string): () => void {
     if (count <= 0) activeMutations.delete(deviceId);
     else activeMutations.set(deviceId, count);
   };
+}
+
+export function trackDeviceDirectoryBackfill(deviceId: string, request: Promise<unknown>): void {
+  const previous = inflightBackfills.get(deviceId);
+  const settled = request.then(() => undefined, () => undefined);
+  const chained = previous ? previous.then(() => settled, () => settled) : settled;
+  inflightBackfills.set(deviceId, chained);
+  void chained.finally(() => {
+    if (inflightBackfills.get(deviceId) === chained) inflightBackfills.delete(deviceId);
+  });
+}
+
+export async function waitForDeviceDirectoryBackfill(deviceId: string): Promise<void> {
+  const pending = inflightBackfills.get(deviceId);
+  if (pending) await pending;
 }

@@ -13,7 +13,7 @@ import {
   directoryRetryDeadline,
   recordDirectoryRetryDeadline,
 } from './directoryThrottle.js';
-import { beginDeviceDirectoryMutation } from './deviceDirectoryMutationFence.js';
+import { beginDeviceDirectoryMutation, waitForDeviceDirectoryBackfill } from './deviceDirectoryMutationFence.js';
 
 export interface DeviceLinkApiPorts {
   getClientEndpoint(key: 'deviceLinkApiBaseUrl'): string;
@@ -206,6 +206,8 @@ async function deviceLinkApiFetch<T>(
             // that before the legacy service has accepted the deletion.
             deleteEncryptedMember = true;
           } else {
+            await waitForDeviceDirectoryBackfill(target);
+            assertCurrent();
             await api.request('PATCH', '/devices/' + encodeURIComponent(target), opts.body);
             assertCurrent();
           }
@@ -227,6 +229,8 @@ async function deviceLinkApiFetch<T>(
         // and unavailable legacy services must still stop before revocation.
         if (!api || !deleteEncryptedMember || !(error instanceof ServerApiError)
           || error.statusCode !== 404 || error.code !== 'NOT_FOUND') throw error;
+        await waitForDeviceDirectoryBackfill(target);
+        assertCurrent();
         const removed = await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
         assertCurrent();
         return removed as T;
@@ -234,6 +238,8 @@ async function deviceLinkApiFetch<T>(
       assertCurrent();
       const deletion = result as { deviceId?: unknown; deleted?: unknown } | null;
       if (api && deleteEncryptedMember && deletion?.deleted === true && deletion.deviceId === target) {
+        await waitForDeviceDirectoryBackfill(target);
+        assertCurrent();
         await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
         assertCurrent();
       }
@@ -282,6 +288,8 @@ async function deviceLinkApiFetch<T>(
     const directory = await api.directory();
     assertCurrent();
     if (directory.some((d) => d.certificate.deviceId === target)) {
+      await waitForDeviceDirectoryBackfill(target);
+      assertCurrent();
       await api.request(opts.method!, '/devices/' + encodeURIComponent(target), opts.method === 'PATCH' ? opts.body : undefined);
       assertCurrent();
     }

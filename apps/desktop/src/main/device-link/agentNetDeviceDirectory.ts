@@ -8,7 +8,11 @@ import {
 import type { DeviceView as AgentNetDeviceView } from '@cindy/agent-net-protocol';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isTemporaryProviderMetadataFailure, providerDirectoryGeneration } from './providerMetadataContinuity.js';
-import { deviceDirectoryMutationGeneration, hasActiveDeviceDirectoryMutation } from './deviceDirectoryMutationFence.js';
+import {
+  deviceDirectoryMutationGeneration,
+  hasActiveDeviceDirectoryMutation,
+  trackDeviceDirectoryBackfill,
+} from './deviceDirectoryMutationFence.js';
 import * as runtime from './agentNetRuntime.js';
 
 /** V2 名册里的一台设备,写成旧版设备目录的样子(界面与设备列表共用一套)。 */
@@ -120,7 +124,9 @@ function scheduleLegacyCustomNameBackfill(options: {
       attemptedBackfills.set(item.deviceId, signature);
       inflightBackfills.add(item.deviceId);
       try {
-        await api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        const request = api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        trackDeviceDirectoryBackfill(item.deviceId, request);
+        await request;
       } catch {
         // Best-effort sync; merged hybrid directory already preserves the V1 custom name.
       } finally {
@@ -185,6 +191,7 @@ function partialDirectory(
   scope: string,
   selection: string,
   devices: DeviceView[],
+  source: 'legacy' | 'encrypted',
 ): { devices: DeviceView[]; partial: true; rememberedUntilMs?: number } {
   const remembered = rememberedUnion(scope, selection);
   if (!remembered || remembered.devices.length === 0) return { devices, partial: true };
@@ -194,7 +201,9 @@ function partialDirectory(
     // 活下来的那条腿说不了另一条路的账:它可能只是因为对端关掉了 V2 才把对方列成离线。
     // 没有当前数据通路的权威证据时,不要用「离线」覆盖「活着」(与完整合并同一道护栏)。
     if (!device.online && old?.online) continue;
-    const preserved = preservedLegacyCustomName(old, device);
+    // 仅在本次只有 V2 腿成功时保留上次完整目录记住的自定义名;
+    // 若本次 V1 腿成功(source === 'legacy'),新鲜 V1 名称(含远端清空恢复默认)应直接生效。
+    const preserved = source === 'encrypted' ? preservedLegacyCustomName(old, device) : null;
     const mergedSelfName = device.selfName ?? old?.selfName ?? null;
     merged.set(device.deviceId, old
       ? {
@@ -277,9 +286,9 @@ export async function readCurrentDeviceDirectory(
   if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {
     if (legacy.status === 'rejected') throw encrypted.reason;
-    return withoutRefused(partialDirectory(scope, selection, legacy.value.devices));
+    return withoutRefused(partialDirectory(scope, selection, legacy.value.devices, 'legacy'));
   }
-  if (legacy.status === 'rejected') return withoutRefused(partialDirectory(scope, selection, encrypted.value.devices));
+  if (legacy.status === 'rejected') return withoutRefused(partialDirectory(scope, selection, encrypted.value.devices, 'encrypted'));
   const devices = new Map(legacy.value.devices.map(device => [device.deviceId, device]));
   const backfills: LegacyCustomNameBackfill[] = [];
   for (const device of encrypted.value.devices) {
