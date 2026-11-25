@@ -477,7 +477,7 @@ describe('BotHomeComputerSetting', () => {
       ? { homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] }
       : { homeDeviceId: 'laptop', mode: 'remote', targets: [here] });
     maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean }) =>
-      options?.force ? { ok: true } : { ok: false, code: 'HOME_UNRESPONSIVE' });
+      options?.force ? { ok: true } : { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
     show(snapshot('laptop'));
     openMenu();
     if (found === 'menu') {
@@ -489,14 +489,14 @@ describe('BotHomeComputerSetting', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' }));
     }
     await screen.findByText('bots.cloud.forceDescription:{"name":"Mia","device":"Laptop"}');
-    expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true });
+    expect(maker.switchCompanionHome).not.toHaveBeenCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
     h.ensureLoaded.mockImplementation(async () => {
       resetCompanionCloudStoreForTests(snapshot('desk'));
       return [{ id: 'mia', status: 'active' }];
     });
     fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
-    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true });
+    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
   });
 
   // Merge with the missing-profile confirmation (2026-11-25): a forced take-over that then meets a missing
@@ -506,7 +506,7 @@ describe('BotHomeComputerSetting', () => {
     const here = { deviceId: 'desk', name: 'Desk', online: true, isSelf: true };
     maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE', targets: [here] });
     maker.switchCompanionHome.mockImplementation(async (_bot: string, _target: string, options?: { force?: boolean; allowMissingProfile?: boolean }) =>
-      !options?.force ? { ok: false, code: 'HOME_UNRESPONSIVE' }
+      !options?.force ? { ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' }
         : !options.allowMissingProfile ? { ok: false, code: 'PROFILE_SNAPSHOT_MISSING' } : { ok: true });
     show(snapshot('laptop'));
     openMenu();
@@ -519,7 +519,8 @@ describe('BotHomeComputerSetting', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
-    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { allowMissingProfile: true, force: true });
+    // Still bound to the home the force was confirmed for (the runtime refuses it if the home changed).
+    expect(maker.switchCompanionHome).toHaveBeenLastCalledWith('mia', 'desk', { allowMissingProfile: true, force: true, forceHomeDeviceId: 'laptop' });
   });
 
   it('explains when the main computer runs an older Cindy', async () => {

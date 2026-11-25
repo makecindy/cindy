@@ -199,7 +199,7 @@ describe('BotGlanceButton', () => {
     expect(switchCompanionHome).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.forceAction' }));
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/bot-1'));
-    expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true });
+    expect(switchCompanionHome).toHaveBeenCalledWith('bot-1', 'desk', { force: true, forceHomeDeviceId: 'laptop' });
   });
 
   // PR + file entries share one chronology and one fold; separate lists hid newer files below older PRs.

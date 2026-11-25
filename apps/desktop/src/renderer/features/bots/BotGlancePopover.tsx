@@ -246,7 +246,7 @@ function CloudComputers({
         onSelect: () => {
           onClose();
           state.setError(null);
-          if (unresponsive) state.setForceTarget(target);
+          if (unresponsive) state.askForce(target, state.choices?.homeDeviceId ?? null);
           else state.setPending(target);
         },
       })),

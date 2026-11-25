@@ -100,10 +100,16 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
   const [busyTarget, setBusyTarget] = useState<CompanionTransferTarget | null>(null);
   /** The home is listed online but did not answer: the owner may take it over here anyway. */
   const [forceTarget, setForceTarget] = useState<CompanionTransferTarget | null>(null);
+  /** The home that force dialog is about: a confirmed force applies to this home only. */
+  const [forceHome, setForceHome] = useState<string | null>(null);
+  const askForce = (target: CompanionTransferTarget, forHome: string | null) => { setForceHome(forHome); setForceTarget(target); };
   /** Another computer never uploaded a profile snapshot: ask before starting fresh here. */
   const [missingProfileTarget, setMissingProfileTarget] = useState<CompanionTransferTarget | null>(null);
-  /** The missing-profile confirmation follows a forced take-over: confirming it must keep the force. */
-  const missingProfileForced = useRef(false);
+  /**
+   * The missing-profile confirmation follows a forced take-over: confirming it keeps the force, still
+   * bound to the home the owner confirmed (a home changed in between is refused as HOME_CONFLICT).
+   */
+  const missingProfileForceHome = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repairOpen, setRepairOpen] = useState(false);
@@ -155,7 +161,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       setMissingProfileTarget(null);
       // The home did not answer (not offline): never a silent take-over, the owner decides.
       if (!result.ok && result.code === 'HOME_UNRESPONSIVE' && !options?.force) {
-        setForceTarget({ deviceId: cloud.selfDeviceId ?? target.deviceId, name: '', online: true, isSelf: true });
+        askForce({ deviceId: cloud.selfDeviceId ?? target.deviceId, name: '', online: true, isSelf: true }, result.homeDeviceId ?? null);
         return;
       }
       // Still working and nothing chosen yet: offer to wait for the turn or stop it.
@@ -164,7 +170,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
         return;
       }
       if (!result.ok && result.code === 'PROFILE_SNAPSHOT_MISSING' && !options?.allowMissingProfile) {
-        missingProfileForced.current = options?.force === true;
+        missingProfileForceHome.current = options?.force ? options.forceHomeDeviceId ?? null : null;
         setMissingProfileTarget(target);
         return;
       }
@@ -221,7 +227,7 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
     ? t('bots.cloud.thisComputer')
     : actor?.homeDevice?.name?.trim() || t('bots.cloud.unknownDevice');
   return { actor, home, homeHere, homeName, movable, choices, choicesFailed, pending, setPending, busyTarget, setBusyTarget,
-    forceTarget, setForceTarget, missingProfileTarget, setMissingProfileTarget, missingProfileForced, busy,
+    forceTarget, setForceTarget, forceHome, askForce, missingProfileTarget, setMissingProfileTarget, missingProfileForceHome, busy,
     error, setError, inFlight, load, confirm, targetName, conflictAction: conflict.action, repairOpen, setRepairOpen, repairAvailable };
 }
 
@@ -251,7 +257,7 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
         </DropdownMenuItem>
         {/* May lose what that computer has not synced: a destructive row (DESIGN.md §4 Destructive actions). */}
         {choices.targets.filter((target) => target.isSelf).map((target) => (
-          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.setForceTarget(target); }}>
+          <DropdownMenuItem key={target.deviceId} variant="danger" onSelect={() => { state.setError(null); state.askForce(target, choices.homeDeviceId); }}>
             <span className="min-w-0 truncate">{t('bots.cloud.forceHere')}</span>
           </DropdownMenuItem>
         ))}
@@ -305,7 +311,7 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       confirmVariant="destructive"
       cancelText={t('bots.cloud.forceLater')}
       loading={state.busy}
-      onConfirm={() => void state.confirm(state.forceTarget, { force: true })}
+      onConfirm={() => void state.confirm(state.forceTarget, state.forceHome ? { force: true, forceHomeDeviceId: state.forceHome } : undefined)}
     />
     <ConfirmDialog
       open={state.missingProfileTarget !== null}
@@ -316,7 +322,10 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       cancelText={t('bots.cancel')}
       loading={state.busy}
       // After a forced take-over (home listed online but not answering) keep the force, or the move asks again.
-      onConfirm={() => void state.confirm(state.missingProfileTarget, { allowMissingProfile: true, ...(state.missingProfileForced.current ? { force: true } : {}) })}
+      onConfirm={() => {
+        const forcedHome = state.missingProfileForceHome.current;
+        void state.confirm(state.missingProfileTarget, { allowMissingProfile: true, ...(forcedHome ? { force: true, forceHomeDeviceId: forcedHome } : {}) });
+      }}
     />
     <ConfirmDialog
       open={state.pending !== null}

@@ -104,8 +104,15 @@ export interface CompanionSwitchOptions {
   /**
    * Take the companion over here although its home is listed online but does not answer
    * (`HOME_UNRESPONSIVE`); what it has not synced yet may stay on that computer. Local UI only.
+   * Only counts together with `forceHomeDeviceId`.
    */
   force?: boolean;
+  /**
+   * The home the owner confirmed forcing past. A force applies to that home only: if the home has
+   * changed meanwhile the move fails with `HOME_CONFLICT` (nothing written), and the final write
+   * compares-and-sets against this home.
+   */
+  forceHomeDeviceId?: string;
 }
 
 export interface CompanionTranscriptMessage {

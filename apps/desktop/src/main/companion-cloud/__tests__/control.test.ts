@@ -1293,10 +1293,12 @@ describe('switch home from any computer', () => {
     expect(await t.runtime.homeChoices('bot_mia')).toEqual({ homeDeviceId: 'laptop', homeName: 'laptop', mode: 'takeOver', reason: 'HOME_UNRESPONSIVE',
       targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }] });
     // Chosen from a menu read while the home still answered (here or another computer): not moved, not taken over.
-    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
-    expect(await t.runtime.switchHome('bot_mia', 'tablet', { force: true })).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+    expect(await t.runtime.switchHome('bot_mia', 'tablet', { force: true, forceHomeDeviceId: 'laptop' })).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
+    // A force without the home it was confirmed for does not count.
+    expect(await t.runtime.switchHome('bot_mia', 'desk', { force: true })).toEqual({ ok: false, code: 'HOME_CONFLICT', homeDeviceId: 'laptop' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
-    expect(await t.runtime.switchHome('bot_mia', 'desk', { force: true })).toEqual({ ok: true });
+    expect(await t.runtime.switchHome('bot_mia', 'desk', { force: true, forceHomeDeviceId: 'laptop' })).toEqual({ ok: true });
     expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
     expect(homeLink.handOver).not.toHaveBeenCalled();
   });
@@ -1344,9 +1346,37 @@ describe('switch home from any computer', () => {
   ] as const)('writes no main computer change when the probe fails with %s', async (_, steps) => {
     const homeLink = { ...link(2), homeVersion: vi.fn(() => askCompanionHomeVersion(scripted(steps))) };
     const t = setup({ home: 'laptop', devices: [device('laptop'), device('desk', { isSelf: true, name: 'Desk' })], homeLink });
-    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE' });
+    expect(await t.runtime.switchHome('bot_mia', 'desk')).toEqual({ ok: false, code: 'HOME_UNRESPONSIVE', homeDeviceId: 'laptop' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(homeLink.handOver).not.toHaveBeenCalled();
+  });
+
+  // #11999 review (zqchris, 11-25): a force confirmed for home A must not take over home C when the home
+  // changes between the force and the missing-profile confirmations (C also listed online, not answering).
+  it('applies a confirmed force only to the home it was confirmed for', async () => {
+    const homeLink = { ...link(2), homeVersion: vi.fn(async (): Promise<number> => { throw new Error('HOME_UNRESPONSIVE'); }) };
+    const t = setup({ home: 'laptop', homeLink,
+      devices: [device('laptop'), device('carbon'), device('desk', { isSelf: true, name: 'Desk' })],
+      handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') return [];
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+    const forcedForLaptop = { force: true, forceHomeDeviceId: 'laptop' };
+    expect(await t.runtime.switchHome('bot_mia', 'desk', forcedForLaptop)).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
+    // Before the owner accepts the missing-profile confirmation, the home moves to another computer.
+    t.actors[0]!.homeDeviceId = 'carbon';
+    expect(await t.runtime.switchHome('bot_mia', 'desk', { ...forcedForLaptop, allowMissingProfile: true }))
+      .toEqual({ ok: false, code: 'HOME_CONFLICT', homeDeviceId: 'carbon' });
+    // The final write is bound too: a take-over expecting the confirmed home refuses another one.
+    expect(await t.runtime.takeOver('bot_mia', { allowMissingProfile: true, expectedHomeDeviceId: 'laptop' }))
+      .toEqual({ ok: false, code: 'HOME_CONFLICT', homeDeviceId: 'carbon' });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
+    // Unchanged home: the same confirmation goes through, compared against the confirmed home.
+    t.actors[0]!.homeDeviceId = 'laptop';
+    expect(await t.runtime.switchHome('bot_mia', 'desk', { ...forcedForLaptop, allowMissingProfile: true })).toEqual({ ok: true });
+    expect(t.calls.find(call => call.method === 'PATCH')).toMatchObject({ data: { homeDeviceId: 'desk', expectedHomeDeviceId: 'laptop' } });
   });
 
   it('does not offer a move when the home runs an older Cindy', async () => {

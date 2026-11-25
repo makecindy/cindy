@@ -14288,10 +14288,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const id = companionBotId(botId);
     if (typeof targetDeviceId !== 'string' || !targetDeviceId || targetDeviceId.length > 200) throwIpcError('INVALID_PARAMS', 'targetDeviceId required');
     currentCompanionHomes();
-    // `force` (take over a home that looks online but does not answer) only comes from this computer's own UI.
-    const force = !!options && typeof options === 'object' && (options as { force?: unknown }).force === true;
+    // `force` (take over a home that looks online but does not answer) only comes from this computer's own UI,
+    // and only together with the home the owner confirmed it for (`forceHomeDeviceId`).
+    const record = options && typeof options === 'object' ? options as { force?: unknown; forceHomeDeviceId?: unknown } : {};
+    const forceHomeDeviceId = record.force === true && typeof record.forceHomeDeviceId === 'string'
+      && record.forceHomeDeviceId && record.forceHomeDeviceId.length <= 200 ? record.forceHomeDeviceId : undefined;
     const parsed = companionSwitchOptions(options);
-    return activeCompanionCloud()?.switchHome(id, targetDeviceId, force ? { ...parsed, force } : parsed) ?? companionNotEnabled;
+    return activeCompanionCloud()?.switchHome(id, targetDeviceId, forceHomeDeviceId ? { ...parsed, force: true, forceHomeDeviceId } : parsed)
+      ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TRANSCRIPT, async (event, botId: unknown, before: unknown) => {
     assertTrustedAppRendererEvent(event);

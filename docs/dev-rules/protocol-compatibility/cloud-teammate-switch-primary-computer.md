@@ -20,7 +20,7 @@ Mobile 仍通过既有换主力流程发起请求，不改原生指纹。
 `CHANNEL_NOT_ALLOWED`、没有错误码的异常、不认识或新增的错误码、没带版本的回包——放宽等待重试一次，仍不可确认
 则给本机界面 `HOME_UNRESPONSIVE`，不自动接管。为区分「对端答复的错误」与「本机 / 中转抛出的错误」，这条探测直接读
 `remoteInvoke` 的回包，不经把两者合并成 `[CODE]` 文本的 `invokeDeviceValue`。设备列表说离线时不探测，照旧直接接管。
-不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force`
+不新增错误码，不改变发给对端的内容。`HOME_UNRESPONSIVE` 与 `CompanionSwitchOptions.force` / `forceHomeDeviceId`
 只在同一 Desktop 的 `:home-choices` / `:switch-home` 本机 IPC 中使用；`maker:companion-cloud:hand-over` 仍只转发
 `whenBusy`，`force` 不进 device-link，也不进远程交出的选项解析。不新增 channel、帧或服务端接口，手机与旧版对端不受影响。
 
