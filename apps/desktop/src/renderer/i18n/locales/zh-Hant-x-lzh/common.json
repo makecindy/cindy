@@ -8706,6 +8706,7 @@
             "message_body": "訊息正文",
             "tool_body": "工具結果",
             "sidebar_navigation": "側邊導覽列",
+            "workdir_menu": "工作目錄選單",
             "session_menu": "任務選單",
             "settings_section": "設定頁面",
             "composer_completion": "輸入補全入口",

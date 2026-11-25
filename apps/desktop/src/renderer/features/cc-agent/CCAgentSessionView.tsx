@@ -127,7 +127,7 @@ import { shortSessionId } from '@/lib/sessionId';
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { isOverloadErrorMessage } from '@/utils/overloadError';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
-import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, PluginUiWorkdirButton, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
@@ -926,6 +926,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasWorkdirMenu = usePluginUiHas('workdir.menu');
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
@@ -7144,6 +7145,11 @@ function CCAgentSessionContent({
                         </button>
                       </div>
                     </Tip>
+                  ) : hasWorkdirMenu && sessionId && composerDir && !isRemoteWorktreeSession && !remoteDeviceId ? (
+                    <PluginUiWorkdirButton key={JSON.stringify([sessionId, composerDir])}
+                      sessionId={sessionId} path={composerDir} onOpenDirectory={handleOpenWorkingDir}>
+                      {workingDirChipContent}
+                    </PluginUiWorkdirButton>
                   ) : (
                     <WorkingDirectoryTip
                       path={composerDir}
