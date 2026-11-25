@@ -4064,6 +4064,7 @@ export class DeviceLinkClient {
         assembly.chunks.set(segment.index, parsed.data);
         assembly.bytes += bytes;
         stream.bufferedBytes += bytes;
+        if (isBusinessTraffic(env)) peer.lastBusinessReceivedAt = this.monotonicNow();
       }
       stream.assemblies.set(meta.seq, assembly);
       if (assembly.chunks.size === assembly.total) {

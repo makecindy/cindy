@@ -1350,6 +1350,7 @@
     "openPermissionInNewWindow": "새 윈도우에서 열기"
   },
   "ipcError": {
+    "DEVICE_LINK_STANDBY": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
@@ -8739,6 +8740,7 @@
             "message_body": "메시지 본문",
             "tool_body": "도구 결과",
             "sidebar_navigation": "사이드바 탐색",
+            "workdir_menu": "작업 디렉터리 메뉴",
             "session_menu": "작업 메뉴",
             "settings_section": "설정 페이지",
             "composer_completion": "입력 자동 완성",
@@ -12272,8 +12274,8 @@
       "footnote": "이 내용은 동반자의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
     },
     "welcome": {
-      "generic": "안녕하세요, 저는 {{name}}입니다. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 여기부터 익혀 둘게요.",
-      "withRole": "안녕하세요, 저는 {{name}}입니다 — {{description}}. 필요한 게 있으면 바로 말씀하세요."
+      "generic": "안녕하세요, 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요.",
+      "withUser": "안녕하세요, {{userName}}님. 저는 {{name}}입니다. 필요한 게 있으면 바로 말씀하세요."
     },
     "invitation": {
       "title": "만날 준비 중",
@@ -15312,6 +15314,7 @@
       "label_other": "새 메시지 {{count}}개"
     },
     "messageNavRail": {
+      "you": "나",
       "aria": "질문 탐색",
       "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
       "attachmentOnly_one": "첨부파일 {{count}}개",
@@ -15459,6 +15462,7 @@
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
       "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
       "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",

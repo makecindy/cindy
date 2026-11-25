@@ -33,7 +33,9 @@ import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
 import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
 import type { PeerChannel } from '../types.js';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -643,6 +645,47 @@ it('tells a directly connected peer right away when its worker socket is termina
   expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 连真实中转。连上以后中转
+ *   发来一帧本机不认的消息，本机自己关掉这条连接：随后要自己连回中转（中转看到第二条连接、`relayConnected` 又为真），日志写明
+ *   是本机关的、为什么。
+ * - Bug 依据：2026-11-25 一台 Mac 04:26 的中转连接被本机关掉后再没有重连，只经中转能到的设备全部离线 4.5 小时，重启 App 才恢复。
+ *   worker 里代替 WebSocket 的对象 terminate() 后不发 'close'，Main 随后报的关闭又因它已被删掉而被丢弃，上面一层一直把这条死掉的
+ *   连接当成中转连接，从不重连。
+ * - 现有覆盖缺口：中转断开的用例都是中转或网络关的（Main 收到 close 再转给 worker），没有本机自己关的。
+ * - 最小失败输入：连上后中转发来一帧未知类型的控制消息（经本机回环转发注入）。
+ * - tier：integration，真实 worker、真实中转与证书，本机回环转发；约 1 秒。 */
+it('reconnects its relay after ending that relay connection itself over a frame it refused', async () => {
+  const f = await network(false, undefined, true);
+  f.host.stop();
+  // Between this device and the relay, so a test can send this device a frame the relay itself never would.
+  const forwarder = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(forwarder, 'listening');
+  const toDevice: WebSocket[] = [];
+  forwarder.on('connection', (device, request) => {
+    toDevice.push(device);
+    const relay = new WebSocket(f.relay.url.replace(/^http/, 'ws') + request.url, { headers: { authorization: request.headers.authorization! } });
+    relay.on('message', (data, binary) => { if (device.readyState === WebSocket.OPEN) device.send(data, { binary }); });
+    device.on('message', (data, binary) => { if (relay.readyState === WebSocket.OPEN) relay.send(data, { binary }); });
+    relay.on('close', () => device.terminate()); relay.on('error', () => device.terminate());
+    device.on('close', () => relay.terminate()); device.on('error', () => relay.terminate());
+  });
+  cleanup.push(() => { for (const device of forwarder.clients) device.terminate(); forwarder.close(); });
+  const forwarderUrl = 'ws://127.0.0.1:' + (forwarder.address() as AddressInfo).port;
+  f.a.transport.createWebSocket = (url, options) => new WebSocket(forwarderUrl + new URL(url).pathname, options);
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    log: { info() {}, warn: (line: string) => { warnings.push(line); } } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice).toHaveLength(1);
+  toDevice[0].send(JSON.stringify({ type: 'not-a-relay-message' }));
+  await vi.waitFor(() => expect(toDevice).toHaveLength(2), { timeout: 5_000 });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice[0].readyState).toBe(WebSocket.CLOSED);
+  expect(warnings).toEqual(['agent-net relay connection was ended by this device (INVALID_CONTROL); reconnecting']);
 });
 /** 测试价值
  * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。

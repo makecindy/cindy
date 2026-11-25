@@ -78,6 +78,7 @@ export const CLIENT_ENDPOINT_KEYS = [
   'deviceLinkApiBaseUrl',
   // Independent V2 service. Empty keeps official V2 unconfigured; never guess a host or borrow V1.
   'agentNetApiBaseUrl',
+  'cloudInstanceApiBaseUrl',
   'oauthBrokerApiBaseUrl',
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
   'ossApiBaseUrl',
@@ -170,6 +171,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   chatApiBaseUrl: ['https:'],
   deviceLinkApiBaseUrl: ['https:'],
   agentNetApiBaseUrl: ['https:'],
+  cloudInstanceApiBaseUrl: ['https:'],
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],
   heartbeatUrl: ['https:'],
@@ -211,7 +213,7 @@ function allowedProtocols(
   allowHttp: boolean,
 ): readonly string[] {
   const base = FIELD_PROTOCOLS[key];
-  if (!allowHttp) return base;
+  if (!allowHttp || key === 'cloudInstanceApiBaseUrl') return base;
   const relaxed = [...base];
   if (base.includes('https:') && !base.includes('http:')) relaxed.push('http:');
   if (base.includes('wss:') && !base.includes('ws:')) relaxed.push('ws:');
@@ -286,6 +288,7 @@ export function parseClientEndpointManifest(
     if (url.username || url.password) {
       return { ok: false, reason: `credentials-in-url:${key}` };
     }
+    if (key === 'cloudInstanceApiBaseUrl' && (normalized.includes('?') || normalized.includes('#'))) return { ok: false, reason: `invalid-field:${key}` };
     endpoints[key] = normalized;
   }
 
