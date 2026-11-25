@@ -6684,6 +6684,20 @@
         "ssh": "SSH remote hosts",
         "hook": "Cindy IM bots"
       },
+      "cloudComputer": {
+        "title": "Cloud computer",
+        "hint": {
+          "addCloud": "Set up a cloud computer with Cindy installed. Once ready, it appears in your device list.",
+          "preparingCloud": "Your cloud computer is being prepared. It appears in your device list when ready.",
+          "manageCloud": "Start, stop, renew, reinstall and delete it on the web."
+        },
+        "actions": {
+          "addCloud": "Add cloud computer",
+          "preparingCloud": "View progress",
+          "manageCloud": "Manage cloud computer"
+        },
+        "openFailed": "Could not open the cloud computer page. Check your default browser settings."
+      },
       "hook": {
         "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",

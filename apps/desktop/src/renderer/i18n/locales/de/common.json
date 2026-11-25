@@ -6684,6 +6684,20 @@
         "ssh": "SSH-Remote-Hosts",
         "hook": "Cindy-IM-Bots"
       },
+      "cloudComputer": {
+        "title": "Cloud-Computer",
+        "hint": {
+          "addCloud": "Richte einen Cloud-Computer mit vorinstalliertem Cindy ein. Sobald er bereit ist, erscheint er in deiner Geräteliste.",
+          "preparingCloud": "Dein Cloud-Computer wird vorbereitet. Sobald er bereit ist, erscheint er in deiner Geräteliste.",
+          "manageCloud": "Starten, Stoppen, Verlängern, Neuinstallieren und Löschen erledigst du im Web."
+        },
+        "actions": {
+          "addCloud": "Cloud-Computer hinzufügen",
+          "preparingCloud": "Fortschritt ansehen",
+          "manageCloud": "Cloud-Computer verwalten"
+        },
+        "openFailed": "Die Cloud-Computer-Seite konnte nicht geöffnet werden. Prüfe die Einstellungen deines Standardbrowsers."
+      },
       "hook": {
         "description": "Verbinde Slack, Telegram, Feishu / Lark und weitere Kanäle mit derselben Cindy. Nachrichten werden an dieses Gerät weitergeleitet und nutzen dessen Projektliste und Sitzungsausführung; Modell und Berechtigungen eines Projekts gelten für alle Kanäle gemeinsam, nur die Kontoverknüpfung bleibt je Kanal getrennt.",
         "slackDescription": "Verknüpfe Slack-Workspaces und übergib Cindy Aufgaben aus Slack.",
