@@ -22857,7 +22857,9 @@
       "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» cambió esta tarea a {{model}}",
       "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
-      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."
+      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó.",
+      "mergedLabel": "{{name}} · modo ({{count}} fuentes)",
+      "routeDecides": "El modo «{{name}}» decide qué fuente usa esta tarea"
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",

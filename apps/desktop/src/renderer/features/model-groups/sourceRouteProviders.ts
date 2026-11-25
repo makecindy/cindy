@@ -13,6 +13,11 @@ import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig, ModelGrou
 
 export const SOURCE_ROUTE_PROVIDER_PREFIX = 'sroute:';
 
+/** 面板里这一格是不是合并了整个供应商的路由(不是一个真实的供应商)。 */
+export function isSourceRouteProviderId(providerId: string | null | undefined): boolean {
+  return !!providerId && providerId.startsWith(SOURCE_ROUTE_PROVIDER_PREFIX);
+}
+
 export interface SourceRouteHit {
   /** 这个模型对应的那条展开的路由：选中后记到草稿的 modelGroup。 */
   route: ModelGroupRoute;
@@ -43,6 +48,11 @@ export function withSourceRouteProviders(
   current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null },
   /** 其他电脑与分享来的位置上的供应商(成员可以在那里)；没读到的位置不在里面，那里的成员这次不算。 */
   remote?: ReadonlyMap<string, readonly ProviderView[]>,
+  /**
+   * 合并后的条目在面板里叫什么(2026-11-25 用户反馈：与普通供应商混在一起分不出来)：调用方给出带「路由、几个来源」
+   * 的写法，侧栏提示、模型行下面那一行、「全部」里的分组标题都用它。不给就用路由自己的名字。
+   */
+  label?: (name: string, members: number) => string,
 ): SourceRouteProviders {
   const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
   const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null, hidesRemote: () => false };
@@ -51,8 +61,7 @@ export function withSourceRouteProviders(
   const hits = new Map<string, SourceRouteHit>();
   const memberOf = new Map<string, string>();
   const byRoute = new Map<string, string>();
-  /** 合并后的条目，连同它排在哪个本机成员的位置(成员都不在本机时排在最后)。 */
-  const virtual: { entry: ProviderView; at: string | null }[] = [];
+  const virtual: { entry: ProviderView }[] = [];
   for (const route of routes) {
     const members = route.sources.flatMap((source) => viewsAt(source.agentDeviceId)
       .filter((provider) => provider.id === source.providerId)
@@ -79,10 +88,9 @@ export function withSourceRouteProviders(
     const base = members[0].provider;
     // 以第一个成员为底：品牌、接入方式、图标都沿用它；模型与各引擎的路由信息取全部成员的。
     virtual.push({
-      at: members.find((member) => !member.agentDeviceId)?.provider.id ?? null,
       entry: {
         ...base,
-        id, name: route.name, agents,
+        id, name: label ? label(route.name, members.length) : route.name, agents,
         // 合并后的条目自己的 id 认不出品牌：明确沿用第一个成员的品牌图标。
         logoKind: base.logoKind ?? resolveProviderLogoKind(base.id, base.routing) ?? undefined,
         models: models as ProviderView['models'],
@@ -101,13 +109,10 @@ export function withSourceRouteProviders(
   }
   if (virtual.length === 0) return none;
   return {
-    // 合并后的条目放在它第一个本机成员原来的位置(成员都在别处时排在最后)，成员不再单列。
+    // 合并后的条目排在普通供应商前面(侧栏里紧跟「智能路由」那一格，自成一组)，成员不再单列。
     providers: [
-      ...providers.flatMap((provider) => [
-        ...virtual.filter((item) => item.at === provider.id).map((item) => item.entry),
-        ...(memberOf.has(memberKey(null, provider.id)) ? [] : [provider]),
-      ]),
-      ...virtual.filter((item) => item.at === null).map((item) => item.entry),
+      ...virtual.map((item) => item.entry),
+      ...providers.filter((provider) => !memberOf.has(memberKey(null, provider.id))),
     ],
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
     shownAs: (providerId, activeRouteId, agentDeviceId) =>

@@ -36,7 +36,8 @@ const config = (hidden = false): ModelGroupsConfig => ({
 describe('provider routes in the model picker', () => {
   it('lists one merged entry in the first member\'s place and maps a chosen row to a real member and its route', () => {
     const listed = withSourceRouteProviders(PROVIDERS, config());
-    expect(listed.providers.map((item) => item.id)).toEqual(['xd', 'sroute:auto:openai']);
+    // 合并后的条目排在普通供应商前面：侧栏里它与「智能路由」那一格是一组。
+    expect(listed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'xd']);
     expect(listed.hit('sroute:auto:openai', 'gpt-6-luna')).toMatchObject({ route: { id: 'src:luna' }, candidate: { providerId: 'openai', model: 'gpt-6-luna' } });
     expect(listed.hit('xd', 'gpt-5.5')).toBeNull();
     // 草稿里记着的成员、或选着的那条路由，在面板里都显示为合并后的条目。
@@ -46,7 +47,7 @@ describe('provider routes in the model picker', () => {
 
   it('keeps a member listed while the draft holds a model only that member writes this way', () => {
     const listed = withSourceRouteProviders(PROVIDERS, config(), { providerId: 'byok-1', modelId: 'byok/only-here' });
-    expect(listed.providers.map((item) => item.id)).toEqual(['xd', 'sroute:auto:openai', 'byok-1']);
+    expect(listed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'xd', 'byok-1']);
     expect(listed.shownAs('byok-1')).toBeNull();
   });
 

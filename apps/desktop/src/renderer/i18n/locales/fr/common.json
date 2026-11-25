@@ -22857,7 +22857,9 @@
       "deviceTitle": "Groupes de modèles · {{device}}",
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
-      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi.",
+      "mergedLabel": "{{name}} · mode ({{count}} sources)",
+      "routeDecides": "Le mode « {{name}} » décide de la source utilisée par cette tâche"
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",

@@ -22553,7 +22553,9 @@
       "deviceTitle": "モデルグループ · {{device}}",
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
-      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
+      "mergedLabel": "{{name}} · モード（ソース {{count}} 件）",
+      "routeDecides": "このタスクで使うソースはモード「{{name}}」が決めます"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",

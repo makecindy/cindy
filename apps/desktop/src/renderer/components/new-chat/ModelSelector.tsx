@@ -1599,9 +1599,14 @@ function ModelSelectorContentView({
     () => ({ providerId: currentProviderIdProp, modelId, agentDeviceId: remoteAgentDeviceId }),
     [currentProviderIdProp, modelId, remoteAgentDeviceId],
   );
+  // 合并后的条目在面板里的名字：写明是路由、合并了几个来源。
+  const sourceRouteLabel = useCallback(
+    (name: string, count: number) => t('modelGroups.picker.mergedLabel', { name, count }),
+    [t],
+  );
   const sourceRoutes = useMemo(
-    () => withSourceRouteProviders(listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote),
-    [listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote],
+    () => withSourceRouteProviders(listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
+    [listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
   );
   const providers = sourceRoutes.providers;
   // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
@@ -2067,8 +2072,8 @@ function ModelSelectorContentView({
   const hasRemoteAgent = remoteAgent !== undefined;
   // 有其他电脑可选时，本机那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
   const homeSourceRoutes = useMemo(
-    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote),
-    [localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote],
+    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
+    [localProviders.providers, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
   );
   const homeProviders = homeDeviceId ? homeDeviceProviders.providers : homeSourceRoutes.providers;
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
@@ -5096,7 +5101,13 @@ export function ModelSelector({
       })
     : null;
   // Agent 在另一台电脑运行:图标上的信号波纹之外,悬停 / 读屏也要说出是哪台。
-  const agentDeviceLabel = agentDevice
+  // 选着合并条目下的模型时，这次在哪里运行由路由决定：不写草稿里暂记的那个成员所在的位置。
+  const activeSourceRouteName = modelGroups?.onAttach && modelGroups.active
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id && !route.hidden)?.parent?.name ?? null
+    : null;
+  const agentDeviceLabel = activeSourceRouteName
+    ? t('modelGroups.picker.routeDecides', { name: activeSourceRouteName })
+    : agentDevice
     ? agentDevice.name
       ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDevice.name })
       : t('newChat.modelSelector.trigger.agentDeviceUnnamed')

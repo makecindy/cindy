@@ -22857,7 +22857,9 @@
       "deviceTitle": "Grupos de modelos · {{device}}",
       "switched": "«{{name}}» mudou esta tarefa para {{model}}",
       "switchUnavailable": "«{{name}}» não tem agora nenhuma fonte que esta tarefa possa usar. O modelo não foi alterado.",
-      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado."
+      "chooseUnavailable": "«{{name}}» não tem agora nenhuma fonte utilizável, por isso não foi selecionado.",
+      "mergedLabel": "{{name}} · modo ({{count}} fontes)",
+      "routeDecides": "O modo “{{name}}” decide que fonte esta tarefa usa"
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da quota, reposta a {{reset}}, por isso vai primeiro",

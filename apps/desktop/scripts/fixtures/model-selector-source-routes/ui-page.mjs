@@ -65,7 +65,11 @@ export default {
       return;
     }
     // One entry for the merged route, in the first member's place; the members themselves are gone.
-    assert.deepEqual((await rail()).filter(key => key.startsWith('provider:')), ['provider:xd', 'provider:sroute:auto:openai']);
+    // The merged entry comes before ordinary providers, right after the routing cell, and is marked as a route
+    // (2026-11-25 user feedback: it looked like any other provider in the rail).
+    assert.deepEqual((await rail()).filter(key => key.startsWith('provider:')), ['provider:sroute:auto:openai', 'provider:xd']);
+    assert.equal(await page.locator('[data-rail-item="provider:sroute:auto:openai"] [data-route-source-mark]').count(), 1);
+    assert.equal(await page.locator('[data-rail-item="provider:xd"] [data-route-source-mark]').count(), 0);
     // It keeps the brand mark of its first member instead of falling back to a letter.
     assert.equal(await page.locator('[data-rail-item="provider:sroute:auto:openai"] svg').count() > 0, true);
     await page.locator('[data-rail-item="provider:sroute:auto:openai"]').click();

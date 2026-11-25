@@ -256,7 +256,7 @@ import {
 } from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { ChevronDown, MessageSquare, MonitorSmartphone } from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone, Waypoints } from 'lucide-react';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
@@ -1538,6 +1538,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
   }, [modelGroupsAllowed, activePluginModel, activePluginEngine, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
+  /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
+  const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
+    ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
+    : null;
   // 本机草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务。
   const sourceRoutesImplicit = modelGroupsAllowed && !isDeviceLinkDraft && !activePluginModel && !activePluginEngine && !dlPluginEngine;
   const modelGroupsProps = useMemo(
@@ -8382,19 +8386,26 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 {isAgentDeviceDraft && (
                   <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
                     {/* 与侧栏同一标识:Agent 图标 + 右上信号波纹。 */}
-                    <VendorIcon
-                      vendor={persistedAgentKind}
-                      size={persistedAgentKind === 'cc' ? 14 : 13}
-                      remote
-                      colorClassName="text-[var(--folder-item-icon)]"
-                    />
+                    {activeSourceRouteName ? (
+                      <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
+                    ) : (
+                      <VendorIcon
+                        vendor={persistedAgentKind}
+                        size={persistedAgentKind === 'cc' ? 14 : 13}
+                        remote
+                        colorClassName="text-[var(--folder-item-icon)]"
+                      />
+                    )}
                     <span className="min-w-0 truncate">
-                      {t(
-                        isDeviceLinkDraft
-                          ? 'ccAgent.draft.agentDeviceElsewhereBanner'
-                          : 'ccAgent.draft.agentDeviceBanner',
-                        { device: deviceDisplayName(effectiveAgentDeviceId ?? '', draft.agentDeviceName) },
-                      )}
+                      {/* 选着合并条目下的模型时，草稿里暂记的那个成员不一定是这次真正用的：由路由决定，照实写。 */}
+                      {activeSourceRouteName
+                        ? t('modelGroups.picker.routeDecides', { name: activeSourceRouteName })
+                        : t(
+                          isDeviceLinkDraft
+                            ? 'ccAgent.draft.agentDeviceElsewhereBanner'
+                            : 'ccAgent.draft.agentDeviceBanner',
+                          { device: deviceDisplayName(effectiveAgentDeviceId ?? '', draft.agentDeviceName) },
+                        )}
                     </span>
                   </div>
                 )}

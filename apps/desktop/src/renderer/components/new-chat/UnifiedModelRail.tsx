@@ -35,6 +35,8 @@ import {
   type UnifiedRailItem,
 } from './unifiedModelSelection';
 import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -106,9 +108,15 @@ export function UnifiedModelRail({
         const previous = index > 0 ? items[index - 1] : undefined;
         // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
         const itemDeviceId = railItemDeviceId(item);
+        // 路由一组(「智能路由」那一格 + 合并了整个供应商的路由)与后面的普通供应商之间也画一条：
+        // 混在一排品牌图标里分不出哪些是路由(2026-11-25 用户反馈)。
+        const routeItem = (candidate: UnifiedRailItem | undefined) => !!candidate && (
+          (candidate.kind === 'model-groups' && !candidate.deviceId)
+          || (candidate.kind === 'provider' && isSourceRouteProviderId(candidate.providerId)));
         const separatorBefore =
           item.kind === 'all' ||
-          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId)) ||
+          (itemDeviceId === null && routeItem(previous) && !routeItem(item));
         const engineTab = item.kind === 'plugin-engine'
           ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
           : undefined;
@@ -239,6 +247,11 @@ export function UnifiedModelRail({
                   iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
+              ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
+                <RouteSourceMark markSize={16}>
+                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                </RouteSourceMark>
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (

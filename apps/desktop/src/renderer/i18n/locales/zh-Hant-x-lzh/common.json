@@ -22553,7 +22553,9 @@
       "deviceTitle": "模型組 · {{device}}",
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
-      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。",
+      "mergedLabel": "{{name}} · 模式（{{count}} 源）",
+      "routeDecides": "此番用何源，由模式「{{name}}」定之"
     },
     "why": {
       "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",
