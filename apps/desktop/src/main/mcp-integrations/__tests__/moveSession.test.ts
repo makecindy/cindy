@@ -157,6 +157,16 @@ describe('moveSession host', () => {
     });
     expect(h.saved).toHaveBeenLastCalledWith({ workspaceKind: 'dialogue' });
   });
+
+  it('moves a worktree task by changing project membership while preserving its execution cwd', async () => {
+    const worktree = path.join(directory, '.cindy-worktrees', 'task-1');
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', source: null, orcaRole: null, remoteHostId: null, workingDir: worktree },
+    ]);
+
+    expect(await run(directory)).toMatchObject({ ok: true });
+    expect(h.saved).toHaveBeenCalledWith({ workspaceKind: 'project', projectDir: directory.replaceAll('\\', '/') });
+  });
   it.each([false, true])(
     'rechecks running state after acquiring the route lock (%s)',
     async (target) => {

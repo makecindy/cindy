@@ -1,5 +1,5 @@
 import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
-import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { managedWorktreeBaseRepo, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
@@ -396,13 +396,16 @@ export function SessionContentHeader({
       // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
       const nextPatch =
         target.kind === 'dialogue'
           ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
+          : managedWorktreeBaseRepo(session.workingDir ?? '')
+            ? { projectDir: targetWorkingDir, workspaceKind: 'project' as const }
+            : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
       patchLocal(session.id, nextPatch);
       try {
         await sessionService.update(session.id, nextPatch);

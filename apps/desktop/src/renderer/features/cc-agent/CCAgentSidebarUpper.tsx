@@ -1,4 +1,5 @@
 import { projectKeyForDeepLink } from '../../../shared/projectKeys';
+import { managedWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
@@ -3103,13 +3104,16 @@ function ExpandedView({
       // 目录，不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
       const nextPatch =
         target.kind === 'dialogue'
           ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
+          : managedWorktreeBaseRepo(session.workingDir ?? '')
+            ? { projectDir: targetWorkingDir, workspaceKind: 'project' as const }
+            : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
       patchLocal(sessionId, nextPatch);
       let expandedProjectKey: string | null = null;
       let wasExpandedProjectCollapsed = false;

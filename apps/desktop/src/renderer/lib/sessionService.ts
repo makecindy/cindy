@@ -194,6 +194,7 @@ export async function update(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string;

@@ -131,12 +131,9 @@ export async function prepareSessionWorkingDirMove({
             .where(eq(sessions.id, sid))
         )[0]
       : undefined;
-  // worktree-handoff:worktree 会话的工作区边界就是它绑定的 worktree。只改 workingDir
-  // 会留下「半移动」—— 侧栏按新项目归组,而聊天框底部路径、Git 上下文、worktree
-  // store 归属与回收义务仍留在旧 worktree。完整的 worktree → Local Handoff 是独立
-  // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
-  // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
-  // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
+  // worktree-handoff: worktree 会话的执行目录边界就是它绑定的 worktree。移动到项目时
+  // 只更新显式 projectDir 归属并保留 workingDir。这里继续拦截真正改变执行目录的请求，
+  // 避免绕过 worktree handoff 的未提交改动与归属处置流程。
   //
   // 归属以 worktreeStore(组合层注入)为真源:旧版允许过的「半移动」会给会话留下
   // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
