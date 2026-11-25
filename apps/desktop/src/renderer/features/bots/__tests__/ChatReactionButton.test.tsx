@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
-import { act, cleanup, fireEvent, render as renderUI, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUI, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { ChatReactionReads } from '../useChatReactions';
+import { ChatReactionReads, useChatReactions } from '../useChatReactions';
 import { GroupReactionFixture } from './GroupReactionFixture';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../../shared/botGroupChat';
 
@@ -64,6 +64,27 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it('puts the latest addition first and keeps that order through timeline echoes', async () => {
+  const initial = ['👍', '❤️'].map(emoji => ({ emoji, count: 1, me: false }));
+  const reads = new ChatReactionReads();
+  const { result, rerender } = renderHook(({ row }) => useChatReactions('room', row, vi.fn(), reads),
+    { initialProps: { row: message(initial) } });
+  const order = () => result.current.reactions.map(r => r.emoji);
+  await act(() => result.current.toggle('🎉'));
+  await act(() => result.current.toggle('😂'));
+  expect(order()).toEqual(['😂', '🎉', '👍', '❤️']);
+  const synced = message([...initial, ...['🎉', '😂'].map(emoji => ({ emoji, count: 1, me: true }))]);
+  act(() => { rerender({ row: synced }); reads.beginRead()([synced]); });
+  expect(order()).toEqual(['😂', '🎉', '👍', '❤️']);
+  await act(() => result.current.toggle('❤️'));
+  expect(order()).toEqual(['❤️', '😂', '🎉', '👍']);
+  await act(() => result.current.toggle('😂'));
+  expect(order()).toEqual(['❤️', '🎉', '👍']);
+  rerender({ row: message([...synced.reactions!, { emoji: '🔥', count: 1, me: false }]) });
+  expect(order()).toEqual(['🔥', '❤️', '🎉', '👍']);
+  expect(mocks.react).toHaveBeenCalledTimes(4);
+});
 
 describe('reaction avatars', () => {
   it('shows a few reactors as avatars without hovering, matched to members by actor ID', async () => {

@@ -40,6 +40,7 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
   const messageId = message.id;
   const server = message.reactions ?? empty;
   const edits = useMemo(() => new Map<string, Edit>(), [groupId, messageId, owner, reads]);
+  const displayOrder = useMemo(() => ({ emojis: [] as string[] }), [edits]);
   const [version, redraw] = useReducer((version: number) => version + 1, 0);
 
   const [gesture, setGesture] = useState<(ReactionGesture & { scope: typeof edits }) | null>(null);
@@ -80,6 +81,7 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     edit.stopWaiting = undefined;
     edit.expiresAt = undefined;
     edit.desired = !mine;
+    if (edit.desired) displayOrder.emojis = [emoji, ...displayOrder.emojis.filter(item => item !== emoji)];
     setGesture(mine ? null : { emoji, from, scope: edits });
     edits.set(emoji, edit);
     redraw();
@@ -127,5 +129,13 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     else if (count === 0) reactions.splice(index, 1);
     else reactions[index] = next;
   }
+  // Snapshots carry counts and ownership, but no reaction timestamps.
+  if (reactions.length > 1 && displayOrder.emojis.length && reactions.some((r, i) => r.emoji !== displayOrder.emojis[i])) {
+    const positions = new Map(displayOrder.emojis.map((emoji, i) => [emoji, i]));
+    reactions = [...reactions].sort((a, b) => (positions.get(a.emoji) ?? -1) - (positions.get(b.emoji) ?? -1));
+  }
+  useLayoutEffect(() => {
+    displayOrder.emojis = reactions.map(r => r.emoji);
+  }, [displayOrder, reactions]);
   return { owner, reactions, toggle, gesture: gesture?.scope === edits ? gesture : null, finishGesture };
 }
