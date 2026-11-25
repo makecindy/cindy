@@ -9182,6 +9182,7 @@
         "taskWorkdirBoundary": "작업 디렉터리는 대상 컴퓨터의 설정을 유지합니다. 대상 컴퓨터에서 변경하세요.",
         "configurationLoading": "설정을 불러오는 중…",
         "configurationReadFailed": "설정을 불러오지 못했습니다.",
+        "settingsWriteUnconfirmed": "저장 결과를 확인할 수 없습니다. 다시 시도하기 전에 설정을 새로고침하여 확인하세요.",
         "refreshConfiguration": "설정 새로고침",
         "enableBeforeConfigure": "이 플러그인은 비활성화되어 있습니다. 설정하려면 위의 스위치를 켜세요.",
         "settingsPageUnavailable": "{{device}}의 Cindy에서 이 플러그인의 설정 페이지를 열어 주세요. 대상 컴퓨터의 현재 버전은 원격 표시를 지원하지 않습니다.",
@@ -15513,6 +15514,7 @@
       "modelCatalogUnconfirmed": "모델 목록을 확인할 수 없습니다. 선택한 모델은 유지됩니다. 모델 목록을 새로 고친 후 다시 시도하세요.",
       "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
       "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
+      "modelRebuildRetry": "지시가 전송되지 않았습니다. 컴퓨터에서 자동화를 열고 ‘지금 실행’을 선택해 다시 시도하세요.",
       "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
       "text": "실패한 자동 실행이 있습니다.",
       "prCheck_dns": "{{device}}에서 {{host}}의 주소를 찾을 수 없습니다. 문제가 계속되면 이 기기의 네트워크나 DNS를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. {{retry}}부터 정기 확인을 다시 시도할 수 있습니다.",
@@ -17880,7 +17882,7 @@
       "openWorkdirFailed": "폴더를 열지 못했습니다"
     },
     "runs": {
-      "boundPluginEngineRecovery": "연결된 작업이 플러그인 엔진을 사용해 자동화가 실행되지 않았습니다. 작업을 내장 엔진으로 되돌리거나 내장 엔진을 사용하는 작업에 자동화를 다시 연결하세요.",
+      "boundPluginEngineRecovery": "자동화가 실행되지 않았습니다. 플러그인 엔진 작업에 연결된 자동화는 작업 자체의 모델을 사용하며 이 컴퓨터에서 실행됩니다. 자동화에서 모델을 지정했다면 제거한 뒤 다시 실행하세요.",
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
       "status": {
         "running": "실행 중",
@@ -18232,6 +18234,7 @@
       "timingMode": {
         "cron": "Cron 일정",
         "interval": "상대 간격",
+        "label": "타이밍 방식",
         "cronHint": "달력 시계의 고정 시간대에 실행합니다.",
         "intervalHint": "이전 실행이 끝난 뒤 지정된 시간만큼 기다립니다.",
         "intervalUnsupportedHint": "현재 정확한 간격은 그대로 유지됩니다. 분 또는 시간 프리셋을 선택하면 대체됩니다.",

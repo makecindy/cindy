@@ -358,8 +358,8 @@ interface QueuedRemoteInvokeResult {
   queuedAt: number;
 }
 
-/** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
-type SessionsSubscribedListener = (controllerDeviceId: string) => void;
+/** 列表或共享任务订阅恢复时通知 host 定向补发活动状态。 */
+type SessionsSubscribedListener = (controllerDeviceId: string, sessionId?: string) => void;
 
 /**
  * 一个待发批段。按 ownerStamp 分段:ownerStamp 是数据归属水印、批内必须一致,
@@ -1649,9 +1649,9 @@ function shouldAcquireRemoteInvokeBusyLease(
   return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
 }
 
-function notifySessionsSubscribed(controllerDeviceId: string): void {
+function notifySessionsSubscribed(controllerDeviceId: string, sessionId?: string): void {
   try {
-    onSessionsSubscribed?.(controllerDeviceId);
+    onSessionsSubscribed?.(controllerDeviceId, sessionId);
   } catch (err) {
     log.warn(`sessions subscribe replay failed for ${shortId(controllerDeviceId)}: ${String(err)}`);
   }
@@ -2441,7 +2441,7 @@ function publishHostTaskActivity(read: () => ForegroundHostTaskActivity | null, 
 }
 
 /**
- * 会话活动 replay 的**定向**投递:只发给刚完成 sessions 订阅的那一台控制端。
+ * 会话活动 replay 的**定向**投递:只发给刚完成列表或共享任务订阅的控制端。
  * 走同一条 latest-wins 暂存链路(与 tap 路径同 key 合并),不经 topic 扇出——
  * 一台控制端 subscribe 不应把全量活动快照重复灌给其它所有控制端
  * (v0.1.26 线上:两台手机互相被对方的 subscribe 风暴灌爆窗口)。
@@ -2451,7 +2451,9 @@ function pushSessionActivityToController(
   payload: unknown,
 ): void {
   if (!activeClient) return;
-  if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
+  const sessionId = sessionActivityKey(payload);
+  const topic: Topic = isSharedTaskPeer(controllerDeviceId) && sessionId ? `session:${sessionId}` : 'sessions';
+  if (!subscriptions.getControllersForTopic(topic).includes(controllerDeviceId)) return;
   stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
 }
 
@@ -4747,6 +4749,13 @@ function handleSubscriptionFrame(
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
     flushMakerEventBatchesFor(src);
     drainOfflinePushQueueTo(src, topics);
+    // Replay after the backlog so an old running frame cannot overwrite the
+    // current terminal state. Shared guests subscribe to their task, not lists.
+    if (isSharedTaskPeer(src)) {
+      for (const topic of topics) {
+        if (topic.startsWith('session:')) notifySessionsSubscribed(src, topic.slice('session:'.length));
+      }
+    }
     if (subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) {
       // Capture and enqueue synchronously: old batches/backlog precede this
       // snapshot and subsequent live deltas follow it through the same DB gate.

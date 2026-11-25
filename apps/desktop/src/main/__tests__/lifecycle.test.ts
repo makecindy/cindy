@@ -723,6 +723,28 @@ describe('installQuitHandler render-process-gone', () => {
     }
   });
 
+  it('ignores a late renderer exit notification after its window has closed (#12758)', async () => {
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(
+        undefined,
+        {
+          id: 41,
+          isDestroyed: () => true,
+          getType: () => {
+            throw new TypeError('Object has been destroyed');
+          },
+        },
+        { reason: 'crashed', exitCode: 5 },
+      );
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
   it('webview guest crash (e.g. OOM) does NOT shut the app down', async () => {
     const { handler, app, restore } = await installAndGrabHandler();
     try {
