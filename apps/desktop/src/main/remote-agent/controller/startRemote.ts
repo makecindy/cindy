@@ -914,6 +914,9 @@ async function prepareAndStartRemoteAgentSession(
               linkState = unfinished ? 'closed' : 'released';
               idleReclaimedByHost = !unfinished;
               if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
+              // Reclaim is a live idle observation. The host stops its state
+              // timer before closing, so its last snapshot may still be busy.
+              else controller?.onState({ turnRunning: false, preparing: false });
             }
             if (releasing === pendingRelease) releasing = null;
             finishRelease();
@@ -925,6 +928,7 @@ async function prepareAndStartRemoteAgentSession(
           relay?.reset();
           linkState = 'released';
           idleReclaimedByHost = !restart;
+          if (!restart) controller.onState({ turnRunning: false, preparing: false });
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.

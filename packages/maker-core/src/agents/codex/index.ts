@@ -2021,7 +2021,7 @@ export class CodexAgent extends BaseAgent {
             ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
             '-c', 'cli_auth_credentials_store="ephemeral"',
           ],
-          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+          onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({ pid, child, role: 'control-plane-service' }),
         }),
         requireEphemeralAuth: true,
         logger: this.deps.logger,
@@ -3402,8 +3402,8 @@ assertRouteCurrent();
           : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
-        onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
-          pid,
+        onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({
+          pid, child,
           role:
             hostPurpose === 'control-plane'
               ? 'control-plane-service'
@@ -5433,7 +5433,7 @@ assertRouteCurrent();
         ...(reviewMode
           ? {
               hostPurpose: 'review' as const,
-              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+              ...(opts.fastMode && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
                 ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
                 : {}),
             }
@@ -10933,7 +10933,7 @@ assertRouteCurrent();
       publishedLiveRate = Boolean(usage.tokenSpeed?.streaming && usage.tokenSpeed.rate > 0);
       eventQueue.push({
         type: 'status',
-        data: { status: text, ...usage, isRunning: true },
+        data: { status: text, ...usage, isRunning: true, ...(manualCompact ? { manualCompact: true } : {}) },
         source: 'codex',
       });
     }
@@ -15807,7 +15807,11 @@ assertRouteCurrent();
           };
         });
         const operation = manualCompact;
-        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true, manualCompact: true },
+          source: 'codex',
+        });
         void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
           if (manualCompact !== operation) return; // A native terminal may precede the ACK.
           // Admission may have timed out after the server accepted it. Unsubscribe

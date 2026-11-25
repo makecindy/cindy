@@ -6935,6 +6935,7 @@
           "guide": {
             "usageLabel": "Como usar",
             "usageBody": "Publique no X mencionando @askmycindy e a tarefa será encaminhada a este dispositivo para execução aqui; o resultado será enviado como resposta.",
+            "usageBodyOnDevice": "Publique no X mencionando @askmycindy e a tarefa será encaminhada a {{device}} para execução lá; o resultado será enviado como resposta.",
             "riskLabel": "As respostas são públicas",
             "riskPublicBody": "As respostas são públicas e visíveis para qualquer pessoa. Use este recurso para perguntas e problemas públicos, não para assuntos particulares que possam expor sua privacidade.",
             "riskWorkdirBody": "Todas as tarefas do X são executadas no projeto padrão definido nas configurações de conexão com o X. O Agent pode ler e gravar arquivos nele, e sua conclusão é tornada pública — se esse projeto apontar para um repositório privado, o conteúdo dos arquivos também poderá se tornar público.",
@@ -9299,6 +9300,7 @@
         "taskWorkdirBoundary": "O diretório de trabalho permanece no computador de destino. Altere-o lá.",
         "configurationLoading": "Carregando configurações…",
         "configurationReadFailed": "Não foi possível carregar as configurações.",
+        "settingsWriteUnconfirmed": "Não foi possível confirmar o salvamento. Atualize as configurações para verificar antes de tentar novamente.",
         "refreshConfiguration": "Atualizar configurações",
         "enableBeforeConfigure": "Este plugin está desativado. Ative-o com o botão acima antes de configurar.",
         "settingsPageUnavailable": "Abra o Cindy em {{device}} para usar a página de configurações deste plugin. Esta versão do computador de destino não pode exibi-la remotamente.",
@@ -12676,6 +12678,12 @@
       "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus amigos",
       "arrivalPermissions": "{{name}} agora usa as permissões padrão deste computador.",
       "arrivalModel": "O modelo salvo de {{name}} não está disponível neste computador, por isso ele segue o modelo padrão deste computador.",
+      "arrivalModelSetup": "{{name}} está neste computador, mas ainda não há um modelo disponível. Conecte um provedor de modelos ou escolha um modelo nas configurações deste amigo, em Modelo.",
+      "arrivalPartialContent": "{{name}} agora roda neste computador, mas alguns itens sincronizados não puderam ser restaurados. As cópias na nuvem continuam intactas.",
+      "missingProfileTitle": "Continuar {{name}} com o perfil padrão?",
+      "missingProfileDescription": "O computador principal original ainda não enviou o perfil de {{name}}. Se esse computador foi reinstalado ou não pode ser recuperado, você pode continuar aqui com o perfil padrão mantendo as conversas e os conteúdos já sincronizados.",
+      "missingProfileConfirm": "Continuar com perfil padrão",
+      "missingProfileFailed": "O perfil de {{name}} ainda não foi enviado para a nuvem",
       "busyTitle": "{{name}} ainda está respondendo",
       "busyDescription": "Mova para “{{device}}” quando esta resposta terminar, ou interrompa a resposta e mova agora.",
       "busyWait": "Mover ao terminar",
@@ -15681,6 +15689,7 @@
       "modelCatalogUnconfirmed": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
       "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
       "actionExpired": "A autorização da sessão para esta ação expirou. Confira a execução mais recente da automação.",
+      "modelRebuildRetry": "A instrução não foi enviada. Abra a automação no computador e selecione “Executar agora” para tentar novamente.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automação foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS desse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas poderão ser retomadas a partir de {{retry}}.",
@@ -18122,7 +18131,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automação não foi executada porque a tarefa vinculada usa um mecanismo de plug-in. Volte a usar um mecanismo integrado nessa tarefa ou vincule a automação a uma tarefa que use um mecanismo integrado.",
+      "boundPluginEngineRecovery": "A automação não foi executada. Uma automação vinculada a uma tarefa com mecanismo de plug-in usa o modelo da própria tarefa e é executada neste computador. Se a automação escolher um modelo, remova-o e execute-a novamente.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
@@ -18474,6 +18483,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de agendamento",
         "cronHint": "Executa nos horários definidos no calendário.",
         "intervalHint": "Aguarda este intervalo após o término da execução anterior.",
         "intervalUnsupportedHint": "Este intervalo exato é preservado. Escolher uma predefinição de minutos ou horas irá substituí-lo.",

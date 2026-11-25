@@ -33,7 +33,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
-import { companionTurnContinuations } from './companionConversationPresentation';
+import { companionTimeGroupRows, companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
@@ -1826,16 +1826,20 @@ export function MessageRenderer({
   // confirmation. Outbox rows carry the time across restarts.
   const pendingSentAtRef = useRef(new Map<string, number>());
   const companionTimeGroups = useStableValue(
-    useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
-      if (item.type === 'pending_send') {
-        const sentAt = item.sentAt ?? localSendStartedAt(item.key);
-        if (sentAt === null) return [];
-        pendingSentAtRef.current.set(item.key, sentAt);
-        return [{ clientId: item.key, createdAt: sentAt }];
-      }
-      return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-        ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
-    })) : undefined, [companion, items]),
+    useMemo(() => {
+      if (!companion) return undefined;
+      const groups = collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+        if (item.type === 'pending_send') {
+          const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+          if (sentAt === null) return [];
+          pendingSentAtRef.current.set(item.key, sentAt);
+          return [{ clientId: item.key, createdAt: sentAt }];
+        }
+        return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+          ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+      }));
+      return companionTimeGroupRows(items, groups, companionContinuationKeys);
+    }, [companion, items, companionContinuationKeys]),
     (previous, next) => sameMapEntries(previous, next, (a, b) => a === b),
   );
   const quoteItemsRef = useRef(items);
@@ -3163,10 +3167,12 @@ export function MessageRenderer({
 
 const RenderItemView = memo(function RenderItemView({
   item,
+  groupTimestamp,
   actions,
   focused = false,
 }: {
   item: MobileMessageRenderItem | MobileWorkChildItem;
+  groupTimestamp?: number;
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused?: boolean;
 }) {
@@ -3327,8 +3333,6 @@ const RenderItemView = memo(function RenderItemView({
       logUnhandledRenderItem(item);
       break;
   }
-  const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
-    ? actions.companionTimeGroups?.get(item.key) : undefined;
   // Only the first top-level row owns the turn's portrait. Nested details clear
   // companionAvatar, so expanding them cannot repeat it.
   const processAvatar = actions.companion && item.type === 'work_group' && !actions.companionTurnContinuation
@@ -3398,7 +3402,7 @@ const RenderListItemView = memo(function RenderListItemView({
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
     <TableDocumentRow rowKey={item.key}>
-      <RenderItemView actions={itemActions} focused={focused} item={item} />
+      <RenderItemView actions={itemActions} focused={focused} item={item} groupTimestamp={actions.companionTimeGroups?.get(item.key)} />
     </TableDocumentRow>
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>
@@ -7562,13 +7566,16 @@ function MediaPreview({
   }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
-  // decode SVG. Reuse the decoded dimensions without a second image request.
+  // decode SVG. On Android, resizing can decode the same thumbnail at slightly
+  // different dimensions. Only its first load should size the frame.
+  const measuredThumbUri = useRef<string | null>(null);
   const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
     }) => {
-    if (!(width > 0 && height > 0)) return;
+    if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
+    measuredThumbUri.current = thumbUri;
     rememberAttachmentIntrinsicSize({ width, height }, media.url);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize]);
+  }, [media.url, setIntrinsicSize, thumbUri]);
 
   if (media.kind === 'video' && !presentationOnly) {
     return (

@@ -260,9 +260,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (via === this.relayVia) return;
     this.relayVia = via;
     const suspension = via === 'websocket' ? reported?.udpSuspension : undefined;
-    const cause = suspension?.reason === 'data-silence' ? 'carried no data back'
-      : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
-        : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
+    const cause = suspension?.reason === 'probe-failed' ? 'failed full-size UDP probe'
+      : suspension?.reason === 'data-silence' ? 'carried no data back'
+        : suspension?.reason === 'request-timeouts' ? 'session requests over it timed out'
+          : suspension?.reason === 'unacked-sends' ? 'packets sent over it went unacknowledged' : null;
     const why = cause && typeof suspension?.cooldownMs === 'number'
       ? ` (relay UDP answered registrations but ${cause}; retrying UDP in ${Math.round(suspension.cooldownMs / 1000)}s)`
       : '';

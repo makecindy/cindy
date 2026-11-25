@@ -44,6 +44,7 @@ import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch
 import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
   type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
 import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
@@ -3052,7 +3053,12 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+  // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim
+  // sweep reads live activity and cancels its state timer without a final idle
+  // snapshot. Existing coverage started from {}, hiding a stale busy snapshot.
+  // Minimal input: busy snapshot -> done -> confirmed idle reclaim. Cover both
+  // terminal-consumption orders; Session must admit exactly one new send.
+  it.each([false, true])('reconnects after idle reclaim with a stale busy snapshot (done drained=%s)', async drained => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
@@ -3060,17 +3066,94 @@ describe('shared startup lease budget', () => {
     try {
       expect(await session.send('first')).toMatchObject({ accepted: true });
       const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      if (drained) {
+        f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
       run.onData(Buffer.from([
-        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        ...(!drained ? [JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } })] : []),
         JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
       ].join('\n')), false);
       await flush();
       expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(session.isTurnRunning()).toBe(false);
       expect(f.disposed).toEqual([]);
       expect(await session.send('second')).toMatchObject({ accepted: true });
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // Unit: real input coordinator + shared starter + Session. Prior tests sent
+  // directly to the handle and could not see queued inputs trapped behind its
+  // stale busy state. Two session-origin inputs cover FIFO and one dispatch per
+  // clientId; Stop must still require the existing explicit resume entrance.
+  it.each([false, true])('drains session messages after idle reclaim without releasing Stop (stopped=%s)', async stopped => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    const accepted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_id, message, _create, options) => {
+        options.persistUserMessage?.onPersisting?.();
+        await options.persistUserMessage?.onPersisted?.();
+        const content = typeof message === 'string' ? message : message.content;
+        if (typeof content !== 'string') throw new Error('Expected text fixture input');
+        await session.send(content, options);
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      },
+      steerToAgent: async () => {}, abortSession: () => session.abort(),
+      isTurnRunning: () => session.isTurnRunning(),
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => handle.id,
+      createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+      onDispatchedUserTurn: accepted, emitProjection: () => {},
+    });
+    session.onEvent(event => {
+      if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+    });
+    try {
+      await session.send('first');
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      const inputs = ['reply-1', 'reply-2'].map(clientId => ({
+        clientId, text: clientId, persistedContent: clientId,
+        model: 'm', effort: 'medium', permissionMode: 'default', workingDir: project,
+        chatMessage: { clientId, role: 'user' as const, content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+        createOpts: { agentKind: 'codex' as const, workingDir: project, model: 'm' },
+        origin: { kind: 'session' as const, senderSessionId: 'sender', displayText: clientId },
+      }));
+      for (const item of inputs) coordinator.enqueue(session.id, item);
+      if (stopped) coordinator.stop(session.id, { keepQueue: true, pauseQueue: true });
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(coordinator.getProjection(session.id).error).toBeNull();
+      if (stopped) {
+        expect(accepted).not.toHaveBeenCalled();
+        expect(coordinator.getProjection(session.id)).toMatchObject({ queuePaused: true, pendingQueue: inputs });
+        coordinator.resume(session.id);
+        await flush();
+      }
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item.clientId)).toEqual(['reply-1']));
+      const resumedRun = [...f.runs.values()].at(-1)!;
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item)).toMatchObject(inputs));
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(coordinator.getProjection(session.id).pendingQueue).toEqual([]);
+      expect(accepted).toHaveBeenCalledTimes(2);
+      expect(f.calls.filter(call => call.method === 'send')).toHaveLength(3);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      coordinator.onSessionClosed(session.id);
+      await session.close();
+    }
   });
 
   // 测试价值

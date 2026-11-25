@@ -7334,7 +7334,7 @@ function CCAgentSessionContent({
                             e.stopPropagation();
                             if (sessionId) worktreeCreationStore.clear(sessionId);
                           }}
-                          className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
+                          className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
                           <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
