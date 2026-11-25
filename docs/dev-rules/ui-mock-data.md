@@ -132,8 +132,8 @@ pnpm mobile:sim:whoami -- --mock --json
   Demo Notes 是同标识冲突。整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
   `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复）、`twoComputers`（多一台在线的
   CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态），
-  `normal` 回到默认。后两个场景改的是电脑列表，若列表没变，下拉刷新一次。Android 上插件页已打开时
-  再发带不同 `market` 参数的深链不会切换场景，先退回首页再打开链接。
+  `normal` 回到默认。插件页已打开时再发带不同 `market` 参数的深链，场景已经切换，但要在插件页下拉刷新一次
+  才会重新读取（twoComputers / offline 改的是电脑列表，同样下拉刷新）。
   装好的 Demo 插件只在本次进程内出现在已安装列表，可在详情里卸载；不连接真实电脑或市场。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。

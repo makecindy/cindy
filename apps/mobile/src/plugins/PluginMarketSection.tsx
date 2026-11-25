@@ -52,6 +52,8 @@ export function PluginMarketSection({ market, onConnectComputer }: {
           <NewTaskSelectionRow key={option.value} testID={`plugins.market.filter.${option.value}`}
             title={t("plugins.market.filter." + option.value)}
             value={option.count !== undefined ? String(option.count) : undefined} selected={option.value === market.filter}
+            // Unselected rows reserve the check mark's width so the counts line up in one column.
+            trailing={option.value === market.filter ? undefined : <View style={styles.checkSpace} />}
             onPress={() => { close(); market.setFilter(option.value); }} />
         )) : null}
       </SheetSurface>
@@ -126,8 +128,15 @@ export function PluginMarketSection({ market, onConnectComputer }: {
               {origin ? <Text style={styles.badge}>{t("plugins.market.filter." + origin)}</Text> : null}
             </View>
             {/* Every state keeps the same two-line description slot, so rows never change height. */}
-            {line ? <Text numberOfLines={2}
-              style={state.kind === "idle" ? styles.preview : styles.note}>{line}</Text> : null}
+            <View testID={`plugins.market.line.${item.pluginId}`}>
+              {/* Two invisible lines of the taller description style reserve the height at any font scale. */}
+              <View style={styles.reserve} pointerEvents="none" accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants">
+                <Text style={styles.preview}>{"\u00a0\n\u00a0"}</Text>
+              </View>
+              {line ? <Text numberOfLines={2}
+                style={[state.kind === "idle" ? styles.preview : styles.note, styles.lineOverlay]}>{line}</Text> : null}
+            </View>
           </View>
         </Pressable>
         {trailing(item)}
@@ -200,6 +209,9 @@ const makeStyles = (c: ThemeColors) =>
       paddingHorizontal: spacing.md, paddingVertical: spacing.lg,
     },
     rowText: { flex: 1, gap: spacing.xs },
+    reserve: { opacity: 0 },
+    lineOverlay: { position: "absolute", top: 0, left: 0, right: 0 },
+    checkSpace: { width: iconSize.lg },
     titleRow: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
     rowTitle: {
       flexShrink: 1, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium, color: c.textPrimary,
