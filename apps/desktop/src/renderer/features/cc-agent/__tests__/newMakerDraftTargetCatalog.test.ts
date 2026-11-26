@@ -163,10 +163,13 @@ function harness(options: {
   });
   const patchDraft = vi.fn();
   const setRemoteDraftState = vi.fn();
+  const recordRecentDeviceUsage = vi.fn();
   const dlSeedKeyRef = { current: null as string | null };
   const bindings = {
     // These are target-machine POSIX paths, not local filesystem paths.
     draft: { vendor: 'pi', workingDir: options.initialWorkingDir ?? '/remote/project' },
+    dataOwnerId: 'owner-test',
+    recordRecentDeviceUsage,
     effectiveDeviceLinkDeviceId: 'sourceDeviceId' in options
       ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
@@ -203,7 +206,7 @@ function harness(options: {
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
-    invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
+    invoke, patchDraft, setRemoteDraftState, recordRecentDeviceUsage, defaults, dlSeedKeyRef,
     current: () => current,
     add: () => add({ kind: 'device-link', deviceId: 'target-device', deviceName: 'Target', path: '/remote/project' }),
   };
@@ -216,6 +219,7 @@ describe('remote project draft catalog ownership', () => {
     expect(h.current()).toEqual(selection('medium'));
     expect(h.dlSeedKeyRef.current).toBe('target-device:pi');
     expect(h.patchDraft).toHaveBeenCalledWith(expect.objectContaining({ deviceLinkDeviceId: 'target-device' }));
+    expect(h.recordRecentDeviceUsage).toHaveBeenCalledWith('owner-test', 'target-device');
   });
 
   it.each([false, true])('clears effort when the target source explicitly has no efforts (same device: %s)', async (sameDevice) => {
