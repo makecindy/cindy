@@ -5,6 +5,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import {
   DropdownMenu,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -30,6 +31,7 @@ export {
   useHydratedSearchSession,
   type SearchResultTaskMenuActions,
   type SearchResultTaskMenuProps,
+  type SearchSessionHydrationStatus,
 } from './searchResultTaskMenuModel';
 
 const log = createLogger('SearchResultTaskMenu');
@@ -46,6 +48,8 @@ export function createSearchResultTaskMenuActions(
 export function SearchResultTaskMenu({
   session,
   isLiveInStore,
+  hydrationStatus = 'ready',
+  onRetryHydration,
   menuPos,
   isEditing,
   actions,
@@ -62,6 +66,8 @@ export function SearchResultTaskMenu({
   const isEmpty = isEmptyDraftSession(session);
   const remoteWritesBlocked =
     isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
+  const hydrationBlocked = hydrationStatus !== 'ready';
+  const menuWritesBlocked = remoteWritesBlocked || hydrationBlocked;
 
   const ensureRemoteOriginPinned = useCallback(() => {
     if (session.deviceLinkDeviceId) {
@@ -70,15 +76,17 @@ export function SearchResultTaskMenu({
   }, [session.deviceLinkDeviceId, session.id]);
 
   const handleRenameSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     ensureRemoteOriginPinned();
     onStartRename();
-  }, [ensureRemoteOriginPinned, onStartRename, remoteWritesBlocked, t]);
+  }, [ensureRemoteOriginPinned, hydrationBlocked, onStartRename, remoteWritesBlocked, t]);
 
   const handlePinSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
@@ -97,6 +105,7 @@ export function SearchResultTaskMenu({
   }, [
     actions,
     ensureRemoteOriginPinned,
+    hydrationBlocked,
     isLiveInStore,
     isPinned,
     onOutOfWindowPatch,
@@ -106,39 +115,43 @@ export function SearchResultTaskMenu({
   ]);
 
   const handleArchiveSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     ensureRemoteOriginPinned();
     void actions.onAction(session.id, 'archive', session);
-  }, [actions, ensureRemoteOriginPinned, remoteWritesBlocked, session, t]);
+  }, [actions, ensureRemoteOriginPinned, hydrationBlocked, remoteWritesBlocked, session, t]);
 
   const handleUnarchiveSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     ensureRemoteOriginPinned();
     void actions.onAction(session.id, 'unarchive', session);
-  }, [actions, ensureRemoteOriginPinned, remoteWritesBlocked, session, t]);
+  }, [actions, ensureRemoteOriginPinned, hydrationBlocked, remoteWritesBlocked, session, t]);
 
   const handleDeleteSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     ensureRemoteOriginPinned();
     void actions.onAction(session.id, 'delete', session);
-  }, [actions, ensureRemoteOriginPinned, remoteWritesBlocked, session, t]);
+  }, [actions, ensureRemoteOriginPinned, hydrationBlocked, remoteWritesBlocked, session, t]);
 
   const handleOpenInNewWindowSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
-  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
+  }, [hydrationBlocked, remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   const handleCopyDeepLinkSelect = useCallback(async () => {
     const link = buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId });
@@ -171,10 +184,12 @@ export function SearchResultTaskMenu({
   }, [actions, session]);
 
   const handleExportShareSelect = useCallback(() => {
+    if (hydrationBlocked) return;
     setShareExportOpen(true);
-  }, []);
+  }, [hydrationBlocked]);
 
   const canMoveToProject =
+    !hydrationBlocked &&
     Boolean(actions.onMoveSession) &&
     !isEmpty &&
     !session.remoteHostId &&
@@ -182,12 +197,36 @@ export function SearchResultTaskMenu({
     session.status !== 'archived';
 
   const canExportShare =
+    !hydrationBlocked &&
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
     !session.deviceLinkDeviceId;
 
-  const tagMenu = (
+  const statusNotice =
+    hydrationStatus === 'loading' ? (
+      <>
+        <div role="status" className="px-2 py-1 text-xs text-[var(--cmd-palette-item-meta)]">
+          {t('taskMove.loading')}
+        </div>
+        <DropdownMenuSeparator />
+      </>
+    ) : hydrationStatus === 'failed' ? (
+      <>
+        <DropdownMenuItem
+          className={MENU_ITEM_CLASS}
+          onSelect={(event) => {
+            event.preventDefault();
+            onRetryHydration?.();
+          }}
+        >
+          {t('taskMove.retry')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+      </>
+    ) : null;
+
+  const tagMenu = hydrationBlocked ? null : (
     <TaskTagMenuSection
       session={session}
       onMore={() => {
@@ -248,7 +287,8 @@ export function SearchResultTaskMenu({
             session={session}
             open={menuPos !== null}
             sideOffset={2}
-            writeBlocked={remoteWritesBlocked}
+            writeBlocked={menuWritesBlocked}
+            statusNotice={statusNotice}
             returnFocus={returnFocus}
             onRename={handleRenameSelect}
             onPin={handlePinSelect}

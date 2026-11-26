@@ -20,9 +20,13 @@ import type { SessionMoveTarget } from './sessionMoveTarget';
 export const CONVERSATION_SEARCH_KEEPALIVE_SELECTOR =
   '[data-conversation-search-surface],[data-radix-popper-content-wrapper],[role="dialog"],[role="alertdialog"],.modal-scrim';
 
+export type SearchSessionHydrationStatus = 'ready' | 'loading' | 'failed';
+
 export interface SearchResultTaskMenuProps {
   session: Session;
   isLiveInStore: boolean;
+  hydrationStatus?: SearchSessionHydrationStatus;
+  onRetryHydration?: () => void;
   menuPos: { x: number; y: number } | null;
   isEditing: boolean;
   actions: SearchResultTaskMenuActions;
@@ -120,49 +124,68 @@ export function buildFallbackSessionFromSearchSummary(
  * On-demand authoritative session fetch for search hits absent from live stores
  * so pinnedAt, notificationsMuted, remoteHostId, runtimePluginsSelected, etc.
  * match the sidebar task menu even for out-of-window tasks.
+ *
+ * Until authoritative data arrives, `hydrationStatus` stays `'loading'` (or
+ * `'failed'` on error/missing row) so callers can gate mutations that depend on
+ * fields absent from the search summary and offer an explicit retry.
  */
 export function useHydratedSearchSession({
   summary,
   liveSession,
-  localPatch,
+  sessionPatch,
   menuOpen,
   remoteConnectionStatus,
 }: {
   summary: ConversationSearchSessionSummary;
   liveSession: Session | null;
-  localPatch?: Partial<Session> | null;
+  sessionPatch?: Partial<Session> | null;
   menuOpen: boolean;
   remoteConnectionStatus?: DeviceLinkConnectionStatus | null;
 }): {
   session: Session;
+  hydrationStatus: SearchSessionHydrationStatus;
+  retryHydration: () => void;
   applyOutOfWindowPatch: (patch: Partial<Session>) => void;
 } {
   const identityKey = `${summary.deviceLinkDeviceId ?? ''}:${summary.id}`;
-  const [hydratedState, setHydratedState] = useState<{
+  const [hydrationState, setHydrationState] = useState<{
     key: string;
-    session: Session;
+    status: SearchSessionHydrationStatus;
+    session: Session | null;
   } | null>(null);
   const [outOfWindowPatch, setOutOfWindowPatch] = useState<{
     key: string;
     patch: Partial<Session>;
   } | null>(null);
+  const [retrySeq, setRetrySeq] = useState(0);
 
-  const hydrated = hydratedState?.key === identityKey ? hydratedState.session : null;
-  const activePatch = outOfWindowPatch?.key === identityKey ? outOfWindowPatch.patch : null;
-
-  useEffect(() => {
-    if (!menuOpen || liveSession !== null) return;
-    const remoteDeviceId = summary.deviceLinkDeviceId ?? null;
-    if (
-      remoteDeviceId &&
+  const remoteDeviceId = summary.deviceLinkDeviceId ?? null;
+  const skipHydration =
+    liveSession !== null ||
+    (remoteDeviceId !== null &&
       (isSharedTaskPeer(remoteDeviceId) ||
         remoteConnectionStatus === 'disconnected' ||
-        remoteConnectionStatus === 'connecting')
-    ) {
-      return;
-    }
+        remoteConnectionStatus === 'connecting'));
+
+  const hydrated =
+    hydrationState?.key === identityKey && hydrationState.status === 'ready'
+      ? hydrationState.session
+      : null;
+  const activePatch = outOfWindowPatch?.key === identityKey ? outOfWindowPatch.patch : null;
+
+  const hydrationStatus: SearchSessionHydrationStatus = skipHydration
+    ? 'ready'
+    : hydrated !== null
+      ? 'ready'
+      : hydrationState?.key === identityKey
+        ? hydrationState.status
+        : 'loading';
+
+  useEffect(() => {
+    if (!menuOpen || skipHydration || hydrated !== null) return;
     let disposed = false;
     const owner = getDataOwnerGeneration();
+    setHydrationState({ key: identityKey, status: 'loading', session: null });
     const fetchSession = async () => {
       try {
         const fetched = remoteDeviceId
@@ -170,7 +193,9 @@ export function useHydratedSearchSession({
               summary.id,
             ])) as Session | null | undefined)
           : await sessionService.get(summary.id);
-        if (disposed || !isDataOwnerGenerationCurrent(owner) || !fetched || fetched.id !== summary.id) {
+        if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
+        if (!fetched || fetched.id !== summary.id) {
+          setHydrationState({ key: identityKey, status: 'failed', session: null });
           return;
         }
         const stamped: Session = remoteDeviceId
@@ -182,10 +207,12 @@ export function useHydratedSearchSession({
               deviceLinkConnectionStatus: remoteConnectionStatus ?? 'connected',
             }
           : fetched;
-        setHydratedState({ key: identityKey, session: stamped });
+        setHydrationState({ key: identityKey, status: 'ready', session: stamped });
         setOutOfWindowPatch((prev) => (prev?.key === identityKey ? null : prev));
       } catch {
-        /* Fallback summary remains usable when on-demand hydration fails. */
+        if (!disposed && isDataOwnerGenerationCurrent(owner)) {
+          setHydrationState({ key: identityKey, status: 'failed', session: null });
+        }
       }
     };
     void fetchSession();
@@ -193,14 +220,20 @@ export function useHydratedSearchSession({
       disposed = true;
     };
   }, [
+    hydrated,
     identityKey,
-    liveSession,
     menuOpen,
     remoteConnectionStatus,
-    summary.deviceLinkDeviceId,
+    remoteDeviceId,
+    retrySeq,
+    skipHydration,
     summary.deviceLinkDeviceName,
     summary.id,
   ]);
+
+  const retryHydration = useCallback(() => {
+    setRetrySeq((seq) => seq + 1);
+  }, []);
 
   const applyOutOfWindowPatch = useCallback(
     (patch: Partial<Session>) => {
@@ -218,10 +251,10 @@ export function useHydratedSearchSession({
     buildFallbackSessionFromSearchSummary(summary, remoteConnectionStatus);
 
   const mergedOutOfWindowPatch =
-    liveSession === null && (localPatch || activePatch)
+    liveSession === null && (sessionPatch || activePatch)
       ? {
           ...(activePatch ?? {}),
-          ...(localPatch ?? {}),
+          ...(sessionPatch ?? {}),
         }
       : null;
 
@@ -240,5 +273,5 @@ export function useHydratedSearchSession({
           ? { ...base, deviceLinkConnectionStatus: remoteConnectionStatus }
           : base;
 
-  return { session, applyOutOfWindowPatch };
+  return { session, hydrationStatus, retryHydration, applyOutOfWindowPatch };
 }

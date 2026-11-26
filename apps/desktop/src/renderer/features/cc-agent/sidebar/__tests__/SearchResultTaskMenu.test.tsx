@@ -476,24 +476,155 @@ describe('SearchResultTaskMenu', () => {
     expect(mocks.worktreeRemovalPreview).not.toHaveBeenCalled();
   });
 
-  it('hydrates out-of-window search hits on menu open so pinned, mute, and SSH capabilities match DB', async () => {
+  it('blocks mutations while out-of-window hydration is pending and unlocks with authoritative state', async () => {
     const outOfWindow = makeResult({ id: 'old-local', title: 'Deploy legacy task' });
-    mocks.getSession.mockResolvedValue({
-      ...buildFallbackSessionFromSearchSummary(outOfWindow.session),
-      pinnedAt: '2026-09-01T12:00:00.000Z',
-      notificationsMuted: true,
-      remoteHostId: 'ssh-prod',
-    });
+    let resolveSession!: (session: Session | null) => void;
+    mocks.getSession.mockReturnValueOnce(
+      new Promise<Session | null>((resolve) => {
+        resolveSession = resolve;
+      }),
+    );
 
-    renderSearchResults({ results: [outOfWindow], liveSessions: [] });
+    const { onTogglePin, onAction } = renderSearchResults({ results: [outOfWindow], liveSessions: [] });
     const row = document.querySelector('[data-session-id="old-local"]') as HTMLElement;
     fireEvent.contextMenu(row, { clientX: 50, clientY: 50 });
 
-    await screen.findByRole('menuitem', { name: 'unpin' });
+    await screen.findByRole('status');
+    expect(screen.getByRole('status').textContent).toBe('loading');
+    for (const name of [
+      'pin',
+      'rename',
+      'muteNotifications',
+      'moveToProject',
+      'openInNewWindow',
+      'archived',
+      'delete',
+    ]) {
+      expect(screen.getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBe('true');
+    }
+    expect(screen.queryByRole('menuitem', { name: 'exportShare' })).toBeNull();
+    expect(
+      screen.getByRole('menuitem', { name: 'copySessionLink' }).getAttribute('aria-disabled'),
+    ).not.toBe('true');
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'pin' }));
+    expect(onTogglePin).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSession({
+        ...buildFallbackSessionFromSearchSummary(outOfWindow.session),
+        pinnedAt: '2026-09-01T12:00:00.000Z',
+        notificationsMuted: true,
+        remoteHostId: 'ssh-prod',
+      });
+    });
+
+    const unpinItem = await screen.findByRole('menuitem', { name: 'unpin' });
+    expect(unpinItem.getAttribute('aria-disabled')).not.toBe('true');
     expect(mocks.getSession).toHaveBeenCalledWith('old-local');
-    expect(screen.getByRole('menuitem', { name: 'unmuteNotifications' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'unmuteNotifications' }).getAttribute('aria-disabled')).not.toBe('true');
     expect(screen.queryByRole('menuitem', { name: 'moveToProject' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'exportShare' })).toBeNull();
+  });
+
+  it('keeps out-of-window mutations disabled after hydration failure and recovers via retry', async () => {
+    const outOfWindow = makeResult({ id: 'old-retry', title: 'Deploy flaky task' });
+    mocks.getSession
+      .mockRejectedValueOnce(new Error('db busy'))
+      .mockResolvedValueOnce({
+        ...buildFallbackSessionFromSearchSummary(outOfWindow.session),
+        pinnedAt: '2026-09-02T00:00:00.000Z',
+      });
+
+    renderSearchResults({ results: [outOfWindow], liveSessions: [] });
+    const row = document.querySelector('[data-session-id="old-retry"]') as HTMLElement;
+    fireEvent.contextMenu(row, { clientX: 50, clientY: 50 });
+
+    const retryItem = await screen.findByRole('menuitem', { name: 'retry' });
+    expect(screen.getByRole('menuitem', { name: 'pin' }).getAttribute('aria-disabled')).toBe('true');
+    expect(
+      screen.getByRole('menuitem', { name: 'copySessionLink' }).getAttribute('aria-disabled'),
+    ).not.toBe('true');
+
+    fireEvent.click(retryItem);
+    const unpinItem = await screen.findByRole('menuitem', { name: 'unpin' });
+    expect(unpinItem.getAttribute('aria-disabled')).not.toBe('true');
+    expect(mocks.getSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('syncs out-of-window remote archive/unarchive outcomes into results and leaves cancelled transitions intact', async () => {
+    const remoteActive = makeResult({
+      id: 'remote-oow-active',
+      title: 'Deploy remote archive',
+      status: 'active',
+      deviceLinkDeviceId: 'dev-oow',
+      deviceLinkDeviceName: 'Studio',
+    });
+    const remoteArchived = makeResult({
+      id: 'remote-oow-archived',
+      title: 'Deploy remote restore',
+      status: 'archived',
+      deviceLinkDeviceId: 'dev-oow',
+      deviceLinkDeviceName: 'Studio',
+    });
+    mocks.deviceLinkInvoke.mockImplementation(async (_device, channel, [id]) => {
+      if (channel !== 'local-db:sessions:get') return null;
+      const target = id === remoteActive.session.id ? remoteActive.session : remoteArchived.session;
+      return buildFallbackSessionFromSearchSummary(target, 'connected');
+    });
+
+    // 1. statusFilter="active": cancelled archive stays visible, confirmed archive removes row.
+    const activeView = renderSearchResults({
+      results: [remoteActive],
+      liveSessions: [],
+      remoteStatuses: { 'dev-oow': 'connected' },
+      statusFilter: 'active',
+    });
+    expect(document.querySelector('[data-session-id="remote-oow-active"]')).not.toBeNull();
+    act(() => {
+      const cancelled = remoteProjectsStore.beginPendingStatus('dev-oow', 'remote-oow-active', 'archived');
+      remoteProjectsStore.rollbackPendingStatus(cancelled);
+    });
+    expect(document.querySelector('[data-session-id="remote-oow-active"]')).not.toBeNull();
+    act(() => {
+      const confirmed = remoteProjectsStore.beginPendingStatus('dev-oow', 'remote-oow-active', 'archived');
+      remoteProjectsStore.completePendingStatus(confirmed, { status: 'archived', pinnedAt: null });
+    });
+    expect(document.querySelector('[data-session-id="remote-oow-active"]')).toBeNull();
+    activeView.view.unmount();
+
+    // 2. statusFilter="all": confirmed archive updates row status so reopening the menu offers unarchive.
+    const allView = renderSearchResults({
+      results: [remoteActive],
+      liveSessions: [],
+      remoteStatuses: { 'dev-oow': 'connected' },
+      statusFilter: 'all',
+    });
+    act(() => {
+      const confirmed = remoteProjectsStore.beginPendingStatus('dev-oow', 'remote-oow-active', 'archived');
+      remoteProjectsStore.completePendingStatus(confirmed, { status: 'archived', pinnedAt: null });
+    });
+    const stayedRow = document.querySelector('[data-session-id="remote-oow-active"]') as HTMLElement;
+    expect(stayedRow).not.toBeNull();
+    fireEvent.contextMenu(stayedRow, { clientX: 50, clientY: 50 });
+    expect(await screen.findByRole('menuitem', { name: 'unarchive' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'archived' })).toBeNull();
+    allView.view.unmount();
+
+    // 3. statusFilter="archived": confirmed unarchive removes row immediately.
+    renderSearchResults({
+      results: [remoteArchived],
+      liveSessions: [],
+      remoteStatuses: { 'dev-oow': 'connected' },
+      statusFilter: 'archived',
+    });
+    expect(document.querySelector('[data-session-id="remote-oow-archived"]')).not.toBeNull();
+    act(() => {
+      const restored = remoteProjectsStore.beginPendingStatus('dev-oow', 'remote-oow-archived', 'active');
+      remoteProjectsStore.completePendingStatus(restored, { status: 'active' });
+    });
+    expect(document.querySelector('[data-session-id="remote-oow-archived"]')).toBeNull();
   });
 
   it('removes deleted local/remote rows immediately and filters archived rows when statusFilter is active', () => {

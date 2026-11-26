@@ -3287,9 +3287,6 @@ function ExpandedView({
       sessionOverride?: Session,
     ) => {
       const session = sessionOverride ?? sessionsByIdRef.current.get(sessionId);
-      if (session?.deviceLinkDeviceId) {
-        remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
-      }
       const offlineDeviceId = session?.deviceLinkDeviceId;
       const canHandleOfflineInbox =
         Boolean(offlineDeviceId) &&
@@ -3450,10 +3447,14 @@ function ExpandedView({
         const dirtyWorktree =
           isDirtyWorktree(await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId));
         // Keep the existing confirm-state shape for the normal delete flow, then attach
-        // the shared-task scope in a functional update so cancellation still leaves it open.
-        setConfirm({ open: true, sessionId, action, dirtyWorktree, session });
-        if (sharedTaskId) {
-          setConfirm((previous) => ({ ...previous, sharedTaskId }));
+        // optional shared-task or out-of-window session scope in a functional update.
+        setConfirm({ open: true, sessionId, action, dirtyWorktree });
+        if (sharedTaskId || sessionOverride) {
+          setConfirm((previous) => ({
+            ...previous,
+            ...(sharedTaskId ? { sharedTaskId } : {}),
+            ...(sessionOverride ? { session: sessionOverride } : {}),
+          }));
         }
         return;
       }
@@ -3473,15 +3474,28 @@ function ExpandedView({
   );
 
   useLayoutEffect(() => {
+    const pinIfRemote = (session?: Session) => {
+      if (session?.deviceLinkDeviceId) {
+        remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
+      }
+    };
     searchTaskMenuHandlersRef.current = {
-      onAction: (sessionId, action, session) =>
-        handleActionClick(sessionId, action, undefined, session),
-      onRename: (sessionId, newTitle, session) =>
-        handleRename(sessionId, newTitle, session),
-      onTogglePin: (sessionId, currentlyPinned, session) =>
-        handleTogglePin(sessionId, currentlyPinned, session),
-      onMoveSession: (sessionId, target, session) =>
-        handleMoveSession(sessionId, target, session),
+      onAction: (sessionId, action, session) => {
+        pinIfRemote(session);
+        return handleActionClick(sessionId, action, undefined, session);
+      },
+      onRename: (sessionId, newTitle, session) => {
+        pinIfRemote(session);
+        return handleRename(sessionId, newTitle, session);
+      },
+      onTogglePin: (sessionId, currentlyPinned, session) => {
+        pinIfRemote(session);
+        return handleTogglePin(sessionId, currentlyPinned, session);
+      },
+      onMoveSession: (sessionId, target, session) => {
+        pinIfRemote(session);
+        return handleMoveSession(sessionId, target, session);
+      },
     };
   }, [handleActionClick, handleMoveSession, handleRename, handleTogglePin, searchTaskMenuHandlersRef]);
 
@@ -3492,9 +3506,6 @@ function ExpandedView({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       setConfirm(CONFIRM_INITIAL);
       return;
-    }
-    if (session?.deviceLinkDeviceId) {
-      remoteProjectsStore.pinSessionOrigin(session.deviceLinkDeviceId, session.id);
     }
     if (!(await closeOwnedSharedTask(sharedTaskId))) {
       return;

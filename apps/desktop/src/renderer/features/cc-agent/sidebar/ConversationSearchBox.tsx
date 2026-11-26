@@ -683,11 +683,13 @@ export function SearchResultsBody({
   const [mutationState, setMutationState] = useState<{
     resultsRef: ConversationSearchResultItem[];
     localPatches: ReadonlyMap<string, Partial<Session>>;
+    remotePatches: ReadonlyMap<string, Partial<Session>>;
     localDeletedIds: ReadonlySet<string>;
     remoteDeletedIds: ReadonlySet<string>;
   }>(() => ({
     resultsRef: results,
     localPatches: new Map(),
+    remotePatches: new Map(),
     localDeletedIds: new Set(),
     remoteDeletedIds: new Set(),
   }));
@@ -697,23 +699,27 @@ export function SearchResultsBody({
     const localIds = new Set(
       results.filter((item) => !item.session.deviceLinkDeviceId).map((item) => item.session.id),
     );
+    const remoteKeys = new Set(
+      results
+        .filter((item) => Boolean(item.session.deviceLinkDeviceId))
+        .map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`),
+    );
     const remoteIds = new Set(
       results.filter((item) => Boolean(item.session.deviceLinkDeviceId)).map((item) => item.session.id),
     );
+    const resetBase = () => ({
+      resultsRef: results,
+      localPatches: new Map<string, Partial<Session>>(),
+      remotePatches: new Map<string, Partial<Session>>(),
+      localDeletedIds: new Set<string>(),
+      remoteDeletedIds: new Set<string>(),
+    });
     const unsubLocal =
       localIds.size > 0
-        ? sessionsStore.subscribePatches((sessionId, patch) => {
+        ? sessionsStore.subscribePatches?.((sessionId, patch) => {
             if (!localIds.has(sessionId)) return;
             setMutationState((prev) => {
-              const base =
-                prev.resultsRef === results
-                  ? prev
-                  : {
-                      resultsRef: results,
-                      localPatches: new Map<string, Partial<Session>>(),
-                      localDeletedIds: new Set<string>(),
-                      remoteDeletedIds: new Set<string>(),
-                    };
+              const base = prev.resultsRef === results ? prev : resetBase();
               const nextPatches = new Map(base.localPatches);
               const existing = nextPatches.get(sessionId);
               nextPatches.set(sessionId, existing ? { ...existing, ...patch } : patch);
@@ -727,20 +733,32 @@ export function SearchResultsBody({
             });
           })
         : undefined;
-    const unsubRemote =
+    const unsubRemotePatch =
+      remoteKeys.size > 0
+        ? remoteProjectsStore.subscribePatches?.((deviceId, sessionId, patch) => {
+            const key = `${deviceId}:${sessionId}`;
+            if (!remoteKeys.has(key)) return;
+            setMutationState((prev) => {
+              const base = prev.resultsRef === results ? prev : resetBase();
+              const nextPatches = new Map(base.remotePatches);
+              const existing = nextPatches.get(key);
+              nextPatches.set(key, existing ? { ...existing, ...patch } : patch);
+              const nextDeleted = new Set(base.remoteDeletedIds);
+              if (patch.status === 'deleted') nextDeleted.add(sessionId);
+              return {
+                ...base,
+                remotePatches: nextPatches,
+                remoteDeletedIds: nextDeleted,
+              };
+            });
+          })
+        : undefined;
+    const unsubRemoteRemoved =
       remoteIds.size > 0
-        ? remoteProjectsStore.subscribeRemoved((sessionId) => {
+        ? remoteProjectsStore.subscribeRemoved?.((sessionId) => {
             if (!remoteIds.has(sessionId)) return;
             setMutationState((prev) => {
-              const base =
-                prev.resultsRef === results
-                  ? prev
-                  : {
-                      resultsRef: results,
-                      localPatches: new Map<string, Partial<Session>>(),
-                      localDeletedIds: new Set<string>(),
-                      remoteDeletedIds: new Set<string>(),
-                    };
+              const base = prev.resultsRef === results ? prev : resetBase();
               if (base.remoteDeletedIds.has(sessionId)) return base;
               const nextDeleted = new Set(base.remoteDeletedIds);
               nextDeleted.add(sessionId);
@@ -750,16 +768,24 @@ export function SearchResultsBody({
         : undefined;
     return () => {
       unsubLocal?.();
-      unsubRemote?.();
+      unsubRemotePatch?.();
+      unsubRemoteRemoved?.();
     };
   }, [results]);
 
   const activeLocalPatches =
     mutationState.resultsRef === results ? mutationState.localPatches : null;
+  const activeRemotePatches =
+    mutationState.resultsRef === results ? mutationState.remotePatches : null;
   const activeLocalDeletedIds =
     mutationState.resultsRef === results ? mutationState.localDeletedIds : null;
   const activeRemoteDeletedIds =
     mutationState.resultsRef === results ? mutationState.remoteDeletedIds : null;
+
+  const patchForItem = (item: ConversationSearchResultItem): Partial<Session> | undefined =>
+    item.session.deviceLinkDeviceId
+      ? activeRemotePatches?.get(`${item.session.deviceLinkDeviceId}:${item.session.id}`)
+      : activeLocalPatches?.get(item.session.id);
 
   const visibleResults = useMemo(() => {
     if (results.length === 0) return results;
@@ -773,8 +799,10 @@ export function SearchResultsBody({
         return false;
       }
       const live = taskMenu?.resolveSession(item.session) ?? null;
-      const localPatch = !isRemote ? activeLocalPatches?.get(item.session.id) : undefined;
-      const effectiveStatus = live?.status ?? localPatch?.status ?? item.session.status;
+      const patch = isRemote
+        ? activeRemotePatches?.get(`${item.session.deviceLinkDeviceId}:${item.session.id}`)
+        : activeLocalPatches?.get(item.session.id);
+      const effectiveStatus = live?.status ?? patch?.status ?? item.session.status;
       if (effectiveStatus === 'deleted') return false;
       if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
       return true;
@@ -783,6 +811,7 @@ export function SearchResultsBody({
     activeLocalDeletedIds,
     activeLocalPatches,
     activeRemoteDeletedIds,
+    activeRemotePatches,
     results,
     statusFilter,
     taskMenu,
@@ -808,11 +837,7 @@ export function SearchResultsBody({
               query={trimmed}
               onSelect={onSelect}
               taskMenu={taskMenu}
-              localPatch={
-                item.session.deviceLinkDeviceId
-                  ? undefined
-                  : activeLocalPatches?.get(item.session.id)
-              }
+              sessionPatch={patchForItem(item)}
             />
           ))
         )}
@@ -856,9 +881,7 @@ export function SearchResultsBody({
           query={trimmed}
           onSelect={onSelect}
           taskMenu={taskMenu}
-          localPatch={
-            item.session.deviceLinkDeviceId ? undefined : activeLocalPatches?.get(item.session.id)
-          }
+          sessionPatch={patchForItem(item)}
         />
       ))}
     </div>
@@ -1454,13 +1477,13 @@ function SearchResultRow({
   query,
   onSelect,
   taskMenu,
-  localPatch,
+  sessionPatch,
 }: {
   item: ConversationSearchResultItem;
   query: string;
   onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
   taskMenu?: SearchResultTaskMenuActions;
-  localPatch?: Partial<Session>;
+  sessionPatch?: Partial<Session>;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1476,10 +1499,15 @@ function SearchResultRow({
     item.session.deviceLinkDeviceId && liveSession === null
       ? (taskMenu?.getRemoteConnectionStatus?.(item.session.deviceLinkDeviceId) ?? null)
       : null;
-  const { session: resolvedSession, applyOutOfWindowPatch } = useHydratedSearchSession({
+  const {
+    session: resolvedSession,
+    hydrationStatus,
+    retryHydration,
+    applyOutOfWindowPatch,
+  } = useHydratedSearchSession({
     summary: item.session,
     liveSession,
-    localPatch,
+    sessionPatch,
     menuOpen: menuPos !== null,
     remoteConnectionStatus,
   });
@@ -1706,6 +1734,8 @@ function SearchResultRow({
         <taskMenu.MenuComponent
           session={resolvedSession}
           isLiveInStore={liveSession !== null}
+          hydrationStatus={hydrationStatus}
+          onRetryHydration={retryHydration}
           menuPos={menuPos}
           isEditing={isEditing}
           actions={taskMenu}

@@ -65,6 +65,8 @@ interface Props {
   tags: ReactNode;
   copy: ReactNode;
   exportShare: ReactNode;
+  /** Optional top notice (e.g. out-of-window hydration loading/retry) rendered only when present. */
+  statusNotice?: ReactNode;
 }
 
 type TaskMenuDialog =
@@ -100,6 +102,7 @@ function ActiveSessionTaskMenu({
   tags,
   copy,
   exportShare,
+  statusNotice,
   dialog,
   setDialog,
 }: Props & {
@@ -248,6 +251,7 @@ function ActiveSessionTaskMenu({
           if (dialog) event.preventDefault();
         }}
       >
+        {statusNotice}
         {!guest && (
           <>
             {!archived &&
