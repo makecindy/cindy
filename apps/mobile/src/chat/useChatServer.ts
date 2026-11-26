@@ -311,13 +311,12 @@ export function useChatServerRoster(enabled: boolean) {
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(poll); } });
     return () => { stop?.(); clearInterval(poll); foreground.remove(); };
   }, [api, enabled, read]));
-  useEffect(() => api.client.personalList.subscribe(() => {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
     if (!api.current()) return;
-    for (const id of api.client.personalList.ids()) known.current.ids.add(id);
-    const hiddenIds = api.client.personalList.ids().filter(id => api.client.personalList.hidden(id));
-    for (const id of hiddenIds) forgetChatServerMediaRoom(id);
+    known.current.ids.add(conversationId);
+    if (hidden) forgetChatServerMediaRoom(conversationId);
     setState(old => old.owner !== api.owner ? old : { ...old, rooms: old.rooms.filter(row => !api.client.personalList.hidden(row.item.ref.id)) });
-    void hideCachedChatRooms(api.userId, api.realm, hiddenIds);
+    if (hidden) void hideCachedChatRooms(api.userId, api.realm, [conversationId]);
   }), [api]);
   const own = state.owner === api.owner;
   return { items: own ? state.rooms : [], serverIds: known.current.ids, loading: api.enabled && (!own || state.loading),
@@ -501,7 +500,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
               if (change.entityId === groupId && !applied) reads = false;
             } else personalOnly = false;
           }
-          if (personalOnly && reads) { void request({ reason: 'reads' }); return; }
+          if (personalOnly && reads) {
+            if (!api.client.personalList.hidden(groupId)) void request({ reason: 'reads' });
+            return;
+          }
           try { await api.client.refreshHistory(groupId, !reads); }
           finally { void request({ reason: 'changed' }); }
         }, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; api.client.invalidateHistory(groupId); } });
@@ -659,8 +661,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   }, [api, groupId, valid, loseAccess]);
-  useEffect(() => api.client.personalList.subscribe(() => {
-    if (valid() && api.client.personalList.hidden(groupId)) {
+  useEffect(() => api.client.personalList.subscribe(({ conversationId, hidden }) => {
+    if (valid() && conversationId === groupId && hidden) {
       loseAccess();
       void forgetRemoteResource(api.userId, groupId);
     }

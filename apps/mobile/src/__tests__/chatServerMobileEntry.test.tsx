@@ -954,6 +954,12 @@ it('exposes an actor-scope personal hide to the current screen and clears it aft
   ] }) }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.listHidden).toBe(true);
+  const { chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  const hiddenEpoch = chatServerMediaRoomEpoch(id);
+  await act(async () => { sockets[0].onmessage({ data: JSON.stringify({ type: 'changes', scope: `actor:${self}`, cursor: '12', changes: [
+    { type: 'conversation.list.changed', data: { conversationId: '00000000-0000-4000-8000-000000000003', hidden: false, revision: 2 } },
+  ] }) }); });
+  expect(chatServerMediaRoomEpoch(id)).toBe(hiddenEpoch);
   expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.endsWith('/list-state') && options.method === 'POST')).toBe(false);
   h.auth.accountGeneration++;
   await render();

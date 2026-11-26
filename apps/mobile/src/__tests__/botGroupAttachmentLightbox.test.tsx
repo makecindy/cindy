@@ -179,6 +179,7 @@ import { BotGroupMessageAttachments } from '@/session/BotGroupMessageAttachments
 import { MessageListVisibility, MessageListVisibilityContext } from '@/session/messageListVisibility';
 import {
   __testing as mediaCacheTesting,
+  setCachedServerMedia,
   forgetChatServerMediaRoom,
 } from '@/chat/chatServerMediaCache';
 import {
@@ -585,6 +586,38 @@ describe('Chat Server group image attachments (#5875)', () => {
     // Intrinsic dimensions were restored immediately from cache before any new onLoad.
     expect(remountedImg.parentElement?.style.height).not.toBe('180px');
     expect(Number(remountedImg.parentElement?.getAttribute('data-width') ?? 0) || attachmentIntrinsicSizeCache.get(stableCacheKey!)?.width).toBe(800);
+  });
+
+  // A recycled row may mount offscreen even when the session already knows its signed URL.
+  it('waits for visibility before mounting a cached image', async () => {
+    const cached = { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
+    setCachedServerMedia('gen:1', 'room-1', cached);
+    const visibility = new MessageListVisibility();
+    const resolveServerMedia = vi.fn(async () => cached);
+    const container = await render({ roomId: 'room-1', resolveServerMedia }, visibility);
+    expect(container.querySelector('img')).toBeNull();
+    await act(async () => visibility.update([{ key: 'message-1', isViewable: true }]));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(signedImageUrl);
+    expect(resolveServerMedia).not.toHaveBeenCalled();
+  });
+
+  // Background renewal and the retry after a native error can settle in either order.
+  it.each(['pending', 'failed'])('recovers a failed stale thumbnail when its renewal succeeds (retry %s)', async (retryState) => {
+    const cached = { ...serverAttachment, category: 'image' as const, url: signedImageUrl };
+    const renewed = { ...cached, url: signedImageUrl + '&renewed=1' };
+    setCachedServerMedia('gen:1', 'room-1', cached, Date.now() - 10 * 60_000);
+    let finishRenewal!: (value: BotGroupAttachment) => void;
+    let failRetry!: (reason: Error) => void;
+    const resolveServerMedia = vi.fn<() => Promise<BotGroupAttachment>>()
+      .mockImplementationOnce(() => new Promise(resolve => { finishRenewal = resolve; }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { failRetry = reject; }));
+    const container = await render({ roomId: 'room-1', resolveServerMedia });
+    await act(async () => runtime.imageEvents.get(signedImageUrl)!.onError?.());
+    expect(container.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+    if (retryState === 'failed') await act(async () => failRetry(new Error('offline')));
+    await act(async () => finishRenewal(renewed));
+    if (retryState === 'pending') await act(async () => failRetry(new Error('offline')));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(renewed.url);
   });
 
   it('renews an expired presigned URL on remount while preserving the stable cacheKey and intrinsic size', async () => {

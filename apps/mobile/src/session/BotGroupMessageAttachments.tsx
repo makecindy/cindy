@@ -380,7 +380,7 @@ function ServerAttachments({
   const previewExpiresAtRef = useRef<Record<string, number>>({});
   const [previews, setPreviews] = useState<Record<string, BotGroupAttachment>>(
     () => {
-      if (!canUseCache || !roomId || !mediaOwner) return {};
+      if (!visible || !canUseCache || !roomId || !mediaOwner) return {};
       const initial: Record<string, BotGroupAttachment> = {};
       for (const run of runs) {
         if (run.kind !== "ready") continue;
@@ -402,7 +402,8 @@ function ServerAttachments({
     },
   );
   const failedPreviewIds = useRef(new Set<string>());
-  const retriedPreviewIds = useRef(new Set<string>());
+  // Keep the failed preview identity across retries so a concurrent renewal can repair it.
+  const retriedPreviews = useRef(new Map<string, BotGroupAttachment>());
   const retryPreview = useRef<((id: string) => void) | null>(null);
   const [previewVersions, setPreviewVersions] = useState<
     Record<string, number>
@@ -422,7 +423,7 @@ function ServerAttachments({
       if (invalidatedRoomId !== null && invalidatedRoomId !== roomId) return;
       previewExpiresAtRef.current = {};
       failedPreviewIds.current.clear();
-      retriedPreviewIds.current.clear();
+      retriedPreviews.current.clear();
       previewsRef.current = {};
       setPreviews({});
     });
@@ -476,7 +477,7 @@ function ServerAttachments({
               failedPreviewIds.current.delete(id);
               // A renewed authorization can return the same URL after a transient CDN failure.
               // Remount only the failed image too, resetting its native error state.
-              if (refreshing)
+              if (previousPreview && retriedPreviews.current.get(id) === previousPreview)
                 setPreviewVersions((versions) => ({
                   ...versions,
                   [id]: (versions[id] ?? 0) + 1,
@@ -589,12 +590,12 @@ function ServerAttachments({
               }}
               onImageError={(index) => {
                 const attachment = run.attachments[index];
-                if (
-                  !attachment ||
-                  retriedPreviewIds.current.has(attachment.id) ||
-                  previewsRef.current[attachment.id]?.url !== attachment.url
-                )
-                  return;
+                if (!attachment) return;
+                const currentPreview = previewsRef.current[attachment.id];
+                if (!currentPreview || currentPreview.url !== attachment.url) return;
+                const alreadyRetried = retriedPreviews.current.has(attachment.id);
+                retriedPreviews.current.set(attachment.id, currentPreview);
+                if (alreadyRetried) return;
                 if (canUseCache && roomId && mediaOwner) {
                   invalidateCachedServerMedia(
                     mediaOwner,
@@ -603,7 +604,6 @@ function ServerAttachments({
                   );
                 }
                 delete previewExpiresAtRef.current[attachment.id];
-                retriedPreviewIds.current.add(attachment.id);
                 failedPreviewIds.current.add(attachment.id);
                 retryPreview.current?.(attachment.id);
               }}
@@ -647,14 +647,14 @@ function ServerAttachments({
               }
               const hadFailure =
                 failedPreviewIds.current.has(filePreview.id) ||
-                retriedPreviewIds.current.has(filePreview.id);
+                retriedPreviews.current.has(filePreview.id);
               previewsRef.current = {
                 ...previewsRef.current,
                 [filePreview.id]: value,
               };
               setPreviews(previewsRef.current);
               failedPreviewIds.current.delete(filePreview.id);
-              retriedPreviewIds.current.delete(filePreview.id);
+              retriedPreviews.current.delete(filePreview.id);
               if (hadFailure) {
                 setPreviewVersions((versions) => ({
                   ...versions,
