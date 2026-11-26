@@ -103,9 +103,15 @@ owner 的目录；旧 owner 的缺失路径沿用目录不可用结果，不自�
 worktree 建成空目录或自动切到项目根继续修改代码。
 
 恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受
-之后才消费说明。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
-实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
-回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
+之后才消费说明。绑定到该任务的定时触发（含前置检查脚本 cwd 与会话启动）共用同一套
+恢复登记与回落边界：`gone` 时在备用目录继续运行并遵循同一运行期不自动切回，`retry`
+仍保持阻断；仅脚本自动化自身 `workingDir` 落在缺失 worktree 内时保持失败，不在空
+备用目录里跑仓库脚本。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
+实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts`、
+`workingDirectoryRecovery.desktop.ts`、`register.ts` 与
+`apps/desktop/src/main/scheduler-host/{restore-target,runner,script-runner}.ts`，
+回归见 `workingDirectoryRecovery.test.ts`、`makerSendTransaction.test.ts`、
+`runnerPreRunHookCwd.test.ts` 和 `scriptRunner.test.ts`。
 
 ### 提交门禁
 

@@ -23,6 +23,7 @@
  * （schema migration 时生成,较陈旧）作为最后保障。
  */
 
+import { installDeletedTaskVectorCleanup } from './deletedTaskVectors.js';
 import type Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { localDbHostUi } from './hostUi.js';
@@ -505,6 +506,8 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       }),
     );
   }
+
+  if (vecResult.loaded) installDeletedTaskVectorCleanup(db);
 
   // F-COLLAB:每次启动幂等修复「悬空 Lead」——orca_role='lead' 但已无 active team 的会话
   // (上一次关闭协同被中途打断遗留)。不修的话会被永久困在空 split view 且点 X 也关不掉,

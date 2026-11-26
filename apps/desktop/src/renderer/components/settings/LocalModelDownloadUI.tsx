@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pause, Play, X } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DownloadMeter } from '@/components/ui/download-meter';
 import type { DownloadProgress } from '../../../shared/downloadProgress';
@@ -138,12 +139,9 @@ export function LocalModelCard({
 }
 export function LocalModelTag({ children }: { children: ReactNode }) {
   return (
-    <span
-      className="rounded-full px-2 py-0.5 text-11 font-medium"
-      style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-    >
+    <Badge>
       {children}
-    </span>
+    </Badge>
   );
 }
 export function LocalModelDownloadButton({

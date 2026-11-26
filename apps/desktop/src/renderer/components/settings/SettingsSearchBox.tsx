@@ -1,9 +1,9 @@
 import type { SettingsSearchContext, SettingsSearchEntry } from './settingsSearchTypes';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { Tip } from '@/components/ui/tooltip';
 import { currentSelectedOption } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -72,21 +72,13 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
 
   return (
     <div className="mb-3 px-1">
-      <div className="relative">
-        <Search
-          aria-hidden="true"
-          size={15}
-          className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-[var(--settings-section-sublabel)]"
-        />
-        <Input
+        <SearchInput
           inputRef={inputRef}
           value={query}
           onChange={(value) => {
             setQuery(value);
             setActiveIndex(0);
           }}
-          size="sm"
-          surface="ivory"
           ariaLabel={t('settings.search.ariaLabel')}
           placeholder={t('settings.search.placeholder')}
           role="combobox"
@@ -94,7 +86,6 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
           aria-controls={hasQuery ? 'settings-search-results' : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeResult ? 'settings-search-result-' + activeResult.entry.id : undefined}
-          inputClassName="pl-9 pr-9"
           onKeyDown={(event) => {
             if (!hasQuery) return;
             if (event.nativeEvent.isComposing) return;
@@ -132,7 +123,6 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
             ) : undefined
           }
         />
-      </div>
 
       {hasQuery ? (
         <div

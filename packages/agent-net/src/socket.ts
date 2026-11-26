@@ -75,7 +75,11 @@ export class AgentNetSocket extends PortableSocket {
       createDiscovery: request => {
         const lan = new LanDiscovery({ ...request, identity: options.client.identity, interfaceAddress: options.bindAddress });
         const bonjour = new BonjourDiscovery(lan, request.port);
-        return { start() { lan.start(); bonjour.start(); }, close() { lan.close(); bonjour.close(); } };
+        return {
+          start() { lan.start(); bonjour.start(); },
+          updatePort(port: number) { lan.updatePort(port); bonjour.updatePort(port); },
+          close() { lan.close(); bonjour.close(); },
+        };
       },
     } }) as Promise<AgentNetSocket>;
   }

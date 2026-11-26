@@ -12,7 +12,7 @@ export function AutoReviewRecoveryActions() {
       {t('settings.tabs.providers')}
     </Button>
     <Button size="sm" compact type="button" data-split-pane-route-action=""
-      onClick={() => navigate('/settings?tab=personalization&section=personalization.auxiliaryModels')}>
+      onClick={() => navigate('/settings?tab=model-groups&section=personalization.auxiliaryModels')}>
       {t('settings.sections.auxiliaryModels')}
     </Button>
   </>;

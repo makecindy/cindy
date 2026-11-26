@@ -196,6 +196,8 @@ export interface Transport {
   /** Current non-sensitive NAT/candidate diagnostics summary for troubleshooting direct-connect failures. */
   diagnostics?(): TransportDiagnostics;
 }
+/** Why the transport rebound its local UDP socket to a fresh ephemeral port. */
+export type UdpRebindReason = 'network-changed' | 'send-errors' | 'udp-blackhole';
 export interface TransportOptions {
   admit(remoteId: string): boolean;
   onIncoming(channel: PeerChannel): void;
@@ -209,6 +211,12 @@ export interface TransportOptions {
   admittedPeers?(): { id: string; relayId: string }[];
   /** Invalidates remembered handshake refusals when a verified roster/grant changes. */
   admissionVersion?(): number;
+  /** Fired after the local UDP socket is rebound to a new port so discovery beacons and diagnostics stay in sync. */
+  onLocalPortChanged?(port: number, reason: UdpRebindReason): void;
+  /** Minimum interval between explicit network-change UDP rebinds (ms); only tests shorten it. */
+  udpRebindCooldownMs?: number;
+  /** How long direct collapse / unacked relay UDP must persist without UDP replies before rebinding (ms); only tests shorten it. */
+  udpBlackholeTimeoutMs?: number;
   udp?: boolean;
   reprobeMs?: number;
   bindAddress?: string;
