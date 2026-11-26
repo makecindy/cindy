@@ -809,11 +809,16 @@ export interface GhostSecretDecl {
  * 范围恒等于各连接自身地址(结构上钉死"token 只流向它自己的实例"),因此
  * inject 不允许声明 hosts 子集(写了拒装)。
  */
+export const GHOST_CONNECTION_SOURCES = ['user', 'glab-cli'] as const;
+export type GhostConnectionSource = (typeof GHOST_CONNECTION_SOURCES)[number];
+
 export interface GhostConnectionDecl {
   /** 连接声明键(意识内唯一,与 secrets[].key 共用命名空间不得撞名):小写字母开头,1–32。 */
   key: string;
   /** 给人看的连接类型名(如「GitLab 实例」;确认框与设置页展示)。 */
   label: string;
+  /** 连接来源;缺省 'user'(归一化省略);'glab-cli' 在插件未添加同域名连接时回退读取本机 glab 登录。 */
+  source?: GhostConnectionSource;
   /** 可选提示(≤200 字,设置页展示,如"填实例域名与 Personal Access Token")。 */
   hint?: string;
   /**
@@ -1071,7 +1076,7 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
-  /** Autonomous publishing of declared events into user-configured routines. */
+  /** Autonomous publishing of declared events; they wake automations whose trigger chose this plugin. */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;
@@ -3224,6 +3229,32 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
               'network.connections[].inject.hosts 不允许声明(连接凭证只注入对应连接自身的地址)',
           };
         }
+        let connSource: GhostConnectionSource | undefined;
+        if (c.source !== undefined) {
+          if (
+            typeof c.source !== 'string' ||
+            !(GHOST_CONNECTION_SOURCES as readonly string[]).includes(c.source)
+          ) {
+            return {
+              ok: false,
+              reason: `network.connections[].source 仅支持 ${GHOST_CONNECTION_SOURCES.join(' / ')}(缺省 user)`,
+            };
+          }
+          if (c.source === 'glab-cli') connSource = 'glab-cli';
+        }
+        if (
+          connSource === 'glab-cli' &&
+          !(
+            (cinj.header === 'PRIVATE-TOKEN' && cinj.format === '{value}') ||
+            (cinj.header === 'Authorization' && cinj.format === 'Bearer {value}')
+          )
+        ) {
+          return {
+            ok: false,
+            reason:
+              'network.connections[].source 为 glab-cli 时 inject 必须是 PRIVATE-TOKEN: {value} 或 Authorization: Bearer {value}',
+          };
+        }
         if (c.maxConnections !== undefined) {
           if (
             typeof c.maxConnections !== 'number' ||
@@ -3240,6 +3271,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         connections.push({
           key: c.key,
           label: c.label,
+          ...(connSource !== undefined ? { source: connSource } : {}),
           ...(c.hint !== undefined ? { hint: c.hint as string } : {}),
           inject: { header: cinj.header, format: cinj.format },
           ...(c.maxConnections !== undefined ? { maxConnections: c.maxConnections as number } : {}),
@@ -3942,7 +3974,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         (secret) => [secret.key, { hostDerivedSource: null }] as const,
       ),
     ]);
-    const connectionKeys = new Set((network?.connections ?? []).map((connection) => connection.key));
+    const connectionByKey = new Map(
+      (network?.connections ?? []).map((connection) => [connection.key, connection] as const),
+    );
     const groups: GhostSetupGroup[] = [];
     for (const group of setupRaw.requires) {
       if (
@@ -3985,10 +4019,17 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
             }
             item = { kind: 'secret', key };
           } else {
-            if (!connectionKeys.has(key)) {
+            const connDecl = connectionByKey.get(key);
+            if (!connDecl) {
               return {
                 ok: false,
                 reason: `setup 引用了未声明的连接 ${JSON.stringify(key)}(必须逐字取自 network.connections[].key)`,
+              };
+            }
+            if (connDecl.source === 'glab-cli') {
+              return {
+                ok: false,
+                reason: `setup 不允许引用 glab-cli 源连接 ${JSON.stringify(key)}(优先复用本机 glab 登录时没有同步前置动作可拦)`,
               };
             }
             item = { kind: 'connection', key };

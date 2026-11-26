@@ -253,6 +253,11 @@ function unregisterCodexMcpThreadContext(
   activeBridge?.unregisterThreadContext(threadId, expectedSessionInstanceId);
 }
 
+/** Thread replacement retains the instance; only its terminal lifecycle releases transports. */
+function closeCodexMcpSessionInstance(sessionInstanceId: string): void {
+  activeBridge?.closeSessionInstance(sessionInstanceId);
+}
+
 const TELEGRAM_BOT_MCP_SERVER_NAME = 'cindy_telegram_bot';
 
 async function doStart(
@@ -487,5 +492,5 @@ function withCodexMcpDiscoveryContext<T>(
 ): Promise<T> {
   return activeBridge ? activeBridge.withDiscoveryContext(ctx, run) : run();
 }
-return { getCodexExtraSpawnConfig, setCodexEnvironmentShutdownHook, getActiveCodexBridgeInstanceId, getActiveCodexBridgeServerNames, shutdownCodexEnvironment, registerCodexMcpThreadContext, prepareCodexMcpToolCancellation, unregisterCodexMcpThreadContext, withCodexMcpDiscoveryContext };
+return { getCodexExtraSpawnConfig, setCodexEnvironmentShutdownHook, getActiveCodexBridgeInstanceId, getActiveCodexBridgeServerNames, shutdownCodexEnvironment, registerCodexMcpThreadContext, prepareCodexMcpToolCancellation, unregisterCodexMcpThreadContext, closeCodexMcpSessionInstance, withCodexMcpDiscoveryContext };
 }

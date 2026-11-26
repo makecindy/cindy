@@ -129,6 +129,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     const snapshotSequenceRef = useRef(0);
     const pendingSnapshotRef = useRef<{
       requestId: number;
+      startedAt: number;
       documentId: number;
       isCurrent?: () => boolean;
       resolve(document: ComposerDocument): void;
@@ -246,7 +247,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
           rejectSnapshot();
           return new Promise<ComposerDocument>((resolve, reject) => {
             const requestId = ++snapshotSequenceRef.current;
-            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+            pendingSnapshotRef.current = { requestId, startedAt: Date.now(), documentId: webDocumentRef.current.id, isCurrent,
               resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
             inject(`window.cindyComposer.snapshot(${requestId});`);
           });
@@ -454,10 +455,13 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
-      if (message.type === 'change' || message.type === 'snapshot') {
-        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
-        if (message.type === 'snapshot') {
-          if (!pending || pending.requestId !== message.requestId) return;
+      if (message.type === 'change' || message.type === 'snapshot' || message.type === 'hidden-snapshot') {
+        const pending = message.type === 'change' ? null : pendingSnapshotRef.current;
+        if (message.type !== 'change') {
+          if (!pending) return;
+          if (message.type === 'snapshot' && pending.requestId !== message.requestId) return;
+          if (message.type === 'hidden-snapshot' && (message.capturedAt < pending.startedAt
+            || message.documentId !== pending.documentId)) return;
           // Cancellation can restore the caller's draft before its next render.
           // Reject before touching editor state or invoking the persistence callback.
           if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }

@@ -4,7 +4,7 @@ import { createCatalogCache } from './catalogCache.js';
 import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
-import { readProviderPresentation } from './provider-presentation-store.js';
+import { readProviderPresentation, readProviderConnectionIcons } from './provider-presentation-store.js';
 import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
@@ -984,6 +984,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       const pool = resolveSubscriptionPoolProvider(provider.id);
       return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
     },
+    getProviderConnectionIcons: readProviderConnectionIcons,
     getOrganizationProviderLogoKind: (provider) => {
       const state = getAuthState();
       return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);

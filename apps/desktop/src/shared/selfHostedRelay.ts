@@ -2,7 +2,8 @@
  * 自建中转服务:main / preload / renderer 共用的 IPC 契约。
  * 方案见 docs/self-hosted-relay-plan.md。只接受本机应用窗口调用,不经设备互联代理。
  */
-import type { AgentNetSwitchDisableBlock, RelayJoinErrorCode } from '@cindy/device-link';
+import type { AgentNetSwitchDisableBlock, PeerAppUpdateRequest, RelayJoinErrorCode } from '@cindy/device-link';
+export type { PeerAppUpdateRequest };
 
 export const SELF_HOSTED_RELAY_IPC = {
   COMMAND: 'self-hosted-relay:command',
@@ -20,6 +21,15 @@ export type SelfHostedRelayCommand =
    * 只转发给那台电脑，不改这台电脑的任何设置；结果在命令返回的 `peer` 里。
    */
   | { type: 'peer-agent-net'; deviceId: string; request: PeerAgentNetRequest }
+  /**
+   * 查询 / 触发同账号另一台电脑的应用更新(2026-11-26 用户确认)。
+   * 只转发给那台电脑，走对方内置更新链路；结果在命令返回的 `peerUpdate` 里。
+   */
+  | { type: 'peer-app-update'; deviceId: string; request: PeerAppUpdateRequest }
+  /**
+   * 拓扑里「这台电脑」卡片查询 / 触发本机应用更新，复用同一条更新处理器。
+   */
+  | { type: 'self-app-update'; request: PeerAppUpdateRequest }
   /** 在这台电脑上开启中转;已开启时按新设置重启。 */
   | { type: 'enable-host'; port: number; listenAll: boolean; externalUrl: string | null }
   /** 停用本机中转,并切回官方中转。 */
@@ -358,6 +368,19 @@ function parsePeerAgentNetRequest(raw: unknown): PeerAgentNetRequest | null {
   return null;
 }
 
+function parseLocalPeerAppUpdateRequest(raw: unknown): PeerAppUpdateRequest | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.action === 'status') return { action: 'status' };
+  if (r.action === 'install') {
+    const expectedVersion = typeof r.expectedVersion === 'string' ? r.expectedVersion.trim() : '';
+    if (!expectedVersion || expectedVersion.length > 64) return null;
+    if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(expectedVersion)) return null;
+    return { action: 'install', expectedVersion };
+  }
+  return null;
+}
+
 export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayCommand | null {
   if (!isRecord(raw) || typeof raw.type !== 'string') return null;
   switch (raw.type) {
@@ -378,6 +401,15 @@ export function parseSelfHostedRelayCommand(raw: unknown): SelfHostedRelayComman
       const deviceId = typeof raw.deviceId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(raw.deviceId) ? raw.deviceId : null;
       const request = parsePeerAgentNetRequest(raw.request);
       return deviceId && request ? { type: 'peer-agent-net', deviceId, request } : null;
+    }
+    case 'peer-app-update': {
+      const deviceId = typeof raw.deviceId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(raw.deviceId) ? raw.deviceId : null;
+      const request = parseLocalPeerAppUpdateRequest(raw.request);
+      return deviceId && request ? { type: 'peer-app-update', deviceId, request } : null;
+    }
+    case 'self-app-update': {
+      const request = parseLocalPeerAppUpdateRequest(raw.request);
+      return request ? { type: 'self-app-update', request } : null;
     }
     case 'join-account-relay': {
       const relayId = relayIdOf(raw);
@@ -446,11 +478,16 @@ export type PeerAgentNetRequest =
 /** 那台电脑的回答;`code` 是 device-link 错误码(旧版本是 CHANNEL_NOT_ALLOWED),`message` 里带 [AGENT_NET_SWITCH_*]。 */
 export type PeerAgentNetReply = { ok: true; result: unknown; controllerBlock?: AgentNetSwitchDisableBlock | null } | { ok: false; code: string; message: string };
 
+/** 对端或本机应用更新查询/触发的回答;`code` 是 device-link 错误码(旧版本是 CHANNEL_NOT_ALLOWED),`message` 里带 [PEER_APP_UPDATE_*]。 */
+export type PeerAppUpdateReply = { ok: true; result: unknown } | { ok: false; code: string; message: string };
+
 export interface SelfHostedRelayCommandResult {
   state: SelfHostedRelayState;
   error?: SelfHostedRelayErrorCode;
   /** 只有 `peer-agent-net` 返回。 */
   peer?: PeerAgentNetReply;
+  /** 只有 `peer-app-update` / `self-app-update` 返回。 */
+  peerUpdate?: PeerAppUpdateReply;
   /** 只有 `check-server` 返回。 */
   check?: SelfHostedRelayServerCheck;
   /** 只有 `deployment-status` 返回。 */

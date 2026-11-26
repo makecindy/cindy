@@ -134,6 +134,8 @@ export interface Transport {
    */
   relayRoute?(): RelayRoute | null;
 }
+/** Why the transport rebound its local UDP socket to a fresh ephemeral port. */
+export type UdpRebindReason = 'network-changed' | 'send-errors' | 'udp-blackhole';
 export interface TransportOptions {
   admit(remoteId: string): boolean;
   onIncoming(channel: PeerChannel): void;
@@ -147,6 +149,12 @@ export interface TransportOptions {
   admittedPeers?(): { id: string; relayId: string }[];
   /** Invalidates remembered handshake refusals when a verified roster/grant changes. */
   admissionVersion?(): number;
+  /** Fired after the local UDP socket is rebound to a new port so discovery beacons and diagnostics stay in sync. */
+  onLocalPortChanged?(port: number, reason: UdpRebindReason): void;
+  /** Minimum interval between explicit network-change UDP rebinds (ms); only tests shorten it. */
+  udpRebindCooldownMs?: number;
+  /** How long direct collapse / unacked relay UDP must persist without UDP replies before rebinding (ms); only tests shorten it. */
+  udpBlackholeTimeoutMs?: number;
   udp?: boolean;
   reprobeMs?: number;
   bindAddress?: string;
@@ -158,6 +166,12 @@ export interface TransportOptions {
   module?: WebAssembly.Module;
   tap?(datagram: Uint8Array, via: 'udp' | 'relay'): void;
   udpTraffic?: BigUint64Array;
+  /**
+   * The native engine's transport (Desktop): turn a `host:port` for STUN or relay UDP into the address to use, before the
+   * engine resolves it itself. The Desktop avoids proxies' Fake-IP answers this way (stun.ts `resolveUdpHost`), as the WASM
+   * transport does on its own; the phones pass none and the engine resolves names as before.
+   */
+  resolveUdpServer?(server: string): Promise<string>;
   /** Optional plain-text transport lifecycle/fallback logger (no addresses, keys or payloads). */
   onLog?(level: 'info' | 'warn', message: string): void;
 }
