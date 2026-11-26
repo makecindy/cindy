@@ -52,3 +52,38 @@ export function hasOutboxBackgroundSend(record: DurableOutboxRecord): boolean {
 export function endOutboxBackgroundSend(record: DurableOutboxRecord) {
   pending.get(keyFor(record))?.end();
 }
+
+// Foreground sends already show progress and connection waits. "Pending
+// delivery" is only for text the user left behind before the computer got it.
+// Kept in memory: after a restart the row falls back to the ordinary states.
+const leftInBackground = new Set<string>();
+const leftListeners = new Set<() => void>();
+let leftVersion = 0;
+
+/** Marks pending text while the app is in background and forgets settled rows. */
+export function syncOutboxLeftInBackground(records: readonly DurableOutboxRecord[], inBackground: boolean) {
+  const live = new Set(records.filter(isPendingPlainText).map(keyFor));
+  let changed = false;
+  for (const key of leftInBackground) {
+    if (!live.has(key)) { leftInBackground.delete(key); changed = true; }
+  }
+  if (inBackground) {
+    for (const key of live) {
+      if (!leftInBackground.has(key)) { leftInBackground.add(key); changed = true; }
+    }
+  }
+  if (!changed) return;
+  leftVersion += 1;
+  for (const listener of leftListeners) listener();
+}
+
+export function isPendingDeliveryAfterLeaving(record: DurableOutboxRecord): boolean {
+  return leftInBackground.has(keyFor(record)) && isPendingPlainText(record);
+}
+
+export function subscribeOutboxLeftInBackground(listener: () => void) {
+  leftListeners.add(listener);
+  return () => { leftListeners.delete(listener); };
+}
+
+export const getOutboxLeftInBackgroundVersion = () => leftVersion;

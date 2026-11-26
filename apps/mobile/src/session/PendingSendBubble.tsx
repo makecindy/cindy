@@ -268,16 +268,16 @@ function AttachmentThumbStrip({
  * 本机刚发出的条目延后 LOCAL_SEND_STATUS_DELAY_MS 才显示状态:false = 还在延迟内,
  * 'revealed' = 延迟后才出现(淡入),true = 一开始就该显示(别处来的条目 / 早已过了延迟)。
  */
-function useLocalSendStatusShown(key: string, delayMs: number): boolean | 'revealed' {
+function useLocalSendStatusShown(key: string): boolean | 'revealed' {
   const sentAt = localSendStartedAt(key);
-  const remaining = sentAt === null ? 0 : sentAt + delayMs - Date.now();
+  const remaining = sentAt === null ? 0 : sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now();
   const waiting = remaining > 0;
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   useEffect(() => {
     if (!waiting || sentAt === null) return undefined;
-    const timer = setTimeout(() => setRevealedKey(key), Math.max(0, sentAt + delayMs - Date.now()));
+    const timer = setTimeout(() => setRevealedKey(key), Math.max(0, sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now()));
     return () => clearTimeout(timer);
-  }, [key, sentAt, waiting, delayMs]);
+  }, [key, sentAt, waiting]);
   if (revealedKey === key) return 'revealed';
   return !waiting;
 }
@@ -349,7 +349,7 @@ export function PendingSendBubble({
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
-  const statusShown = useLocalSendStatusShown(item.key, item.pendingDelivery ? 1_000 : LOCAL_SEND_STATUS_DELAY_MS);
+  const statusShown = useLocalSendStatusShown(item.key);
   const waiting = item.phase === 'waiting';
   const pendingText = item.pendingDelivery && item.phase === 'sending';
   const queued = item.phase === 'queued' && !!item.actions;
@@ -660,6 +660,7 @@ export function PendingSendBubble({
               : statusLabel} />
           </CompanionFadeIn>
         ) : pendingText && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
           <View style={styles.statusActions}>
             <Text accessibilityRole="button" style={styles.statusText} onPress={() => actions.onSelect(selected ? null : item.clientId)}>
               {t('message.queue.pendingDelivery')}
@@ -669,6 +670,7 @@ export function PendingSendBubble({
                 onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
             ) : null}
           </View>
+          </CompanionFadeIn>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
           <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>

@@ -497,7 +497,10 @@ import {
   type MobilePendingSendWaitingFor,
 } from '@/session/pendingSendItems';
 import { beginBackgroundWork } from '@/notifications/backgroundWork';
-import { beginOutboxBackgroundSend, isPendingPlainText } from '@/session/outboxBackgroundSend';
+import {
+  beginOutboxBackgroundSend, getOutboxLeftInBackgroundVersion, isPendingDeliveryAfterLeaving, isPendingPlainText,
+  subscribeOutboxLeftInBackground,
+} from '@/session/outboxBackgroundSend';
 import { noteLocalSend } from '@/session/localSendMotion';
 import { isSourceDeviceRemoved } from '@/session/messageSourceLabels';
 import {
@@ -6347,14 +6350,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
+  const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
   const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
     const record = findDurableOutboxRecord(item.clientId);
     return {
       ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingPlainText(record) } : {}),
+      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
       canCancel: !(record?.creation && !record.prepared && !record.template),
     };
-  }), [outboxItems, deviceId, sessionId]);
+  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.

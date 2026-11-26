@@ -26,6 +26,7 @@ import {
 } from "./durableOutboxDelivery";
 import {
   mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
   isDurableOutboxCreationHeld,
   discardOutboxUploads,
   cleanupOutboxResources,
@@ -53,7 +54,7 @@ import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveA
 import { cacheOutboxHistory } from "./outboxHistoryCache";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
-import { endOutboxBackgroundSend, hasOutboxBackgroundSend } from './outboxBackgroundSend';
+import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
 import type { DurableOutboxRecord } from "./durableOutbox";
 import {
   canConnectOutboxPeer,
@@ -407,6 +408,18 @@ export function MobileOutboxBridge() {
       clearInterval(timer);
       appState.remove();
       messageLeases.dispose();
+    };
+  }, [accountId, owner]);
+  // Remember texts still on the way when the user leaves, including one saved
+  // just after Home from the editor's hidden snapshot.
+  useEffect(() => {
+    const sync = () => syncOutboxLeftInBackground(getCurrentMobileOutboxRecords(), AppState.currentState === "background");
+    sync();
+    const off = mobileDurableOutbox.subscribe(sync);
+    const appState = AppState.addEventListener("change", sync);
+    return () => {
+      off();
+      appState.remove();
     };
   }, [accountId, owner]);
   useEffect(() => {
