@@ -313,6 +313,7 @@ export function BotGroupComposer({
       setText(value);
     },
     members,
+    conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
     allowMentionAll,

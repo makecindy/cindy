@@ -25,7 +25,7 @@ import {
   lazy,
   Suspense,
   useCallback,
-  useContext, useEffect, useMemo, useRef, useState } from 'react';
+  useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { acquireFindInPage, isPreviewPopupKeyEvent } from '@/components/find-in-page/findInPageOwnership';
@@ -69,6 +69,20 @@ interface TextLightboxProps {
    */
   triggerRef?: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  /**
+   * 「文件已变更」提示(issue #12851):预览期间文件被 Agent 改动时给出,
+   * 用户点一下才按 refreshToken 重新读内容。渲染在预览窗右上角。
+   */
+  changedBadge?: ReactNode;
+  /**
+   * 递增即重新读一次文件内容。0 = 不额外触发。
+   */
+  refreshToken?: number;
+  /**
+   * 刷新结果回报:真的换成了最新内容时回调 true;只拿到历史副本(远端不可达)或读取
+   * 失败时回调 false —— 调用方据此决定要不要收起「文件已变更」提示(issue #12851)。
+   */
+  onRefreshed?: (fresh: boolean) => void;
 }
 
 // Renderer-side bytes cap. Mirrors the main-process MAX_PREVIEW_MB; the
@@ -149,7 +163,7 @@ export function TextLightbox(props: TextLightboxProps) {
   );
 }
 
-function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose }: TextLightboxProps) {
+function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onClose, changedBadge, refreshToken = 0, onRefreshed }: TextLightboxProps) {
   const { t } = useTranslation();
   const restorePreviewFocus = usePreviewFocusReturn();
   const collection = useContext(ActivePreviewCollection);
@@ -183,6 +197,9 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   }, [filePath]);
 
   const [showSpinner, setShowSpinner] = useState(false);
+  // onRefreshed 用 ref 往下传:调用方给的是内联函数时不会把取回流程重跑一遍。
+  const onRefreshedRef = useRef(onRefreshed);
+  onRefreshedRef.current = onRefreshed;
 
   const [showSource, setShowSource] = useState(false);
   const [wordWrap, setWordWrap] = useState(true);
@@ -346,6 +363,10 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     setLoadState({ phase: 'loading' });
     setFetchProgressText(null);
     const progress = remoteOrigin ? observeFileTransferProgressText(setFetchProgressText) : null;
+    // 只有刷新才回报结果:首次打开时提示本来就没出现,回报没有意义。
+    const reportRefresh = (fresh: boolean) => {
+      if (refreshToken > 0) onRefreshedRef.current?.(fresh);
+    };
     (async () => {
       try {
         // 远程:先取回缓存副本(同 identity 与侧边栏共享,命中秒回),再读副本。
@@ -357,11 +378,13 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
           if (cancelled) return;
           if (!fetched.ok) {
             setLoadState({ phase: 'error', message: chatFileErrorText(fetched.code) });
+            reportRefresh(false);
             return;
           }
           setRemoteCopy({ cachePath: fetched.cachePath, stale: fetched.stale });
           if (fetched.size > OVERSIZE_LIMIT) {
             setLoadState({ phase: 'oversize', size: fetched.size, limitMb: OVERSIZE_LIMIT_MB });
+            reportRefresh(false);
             return;
           }
           const read = await window.electronAPI.fileBrowser.readCached({ cachePath: fetched.cachePath });
@@ -370,18 +393,22 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
             // stale 兜底副本 size 未知(-1):以内容长度近似,只影响工具栏展示。
             const size = fetched.size >= 0 ? fetched.size : read.content.length;
             setLoadState({ phase: 'ready', content: read.content, size });
+            // stale = 远端不可达,手上只有历史副本:不算刷新成功。
+            reportRefresh(!fetched.stale);
             return;
           }
           setLoadState({
             phase: 'error',
             message: read.ok ? t('chat.textLightbox.unreadable') : read.message,
           });
+          reportRefresh(false);
           return;
         }
         const res = await window.electronAPI.readTextFilePreview({ filePath });
         if (cancelled) return;
         if (res.success && typeof res.data === 'string') {
           setLoadState({ phase: 'ready', content: res.data, size: res.size });
+          reportRefresh(true);
           return;
         }
         if (res.reason === 'oversize') {
@@ -390,18 +417,21 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
             size: res.size,
             limitMb: res.limitMb ?? OVERSIZE_LIMIT_MB,
           });
+          reportRefresh(false);
           return;
         }
         setLoadState({
           phase: 'error',
           message: res.error || t('chat.textLightbox.unreadable'),
         });
+        reportRefresh(false);
       } catch (err) {
         if (cancelled) return;
         setLoadState({
           phase: 'error',
           message: err instanceof Error ? err.message : String(err),
         });
+        reportRefresh(false);
       } finally {
         progress?.dispose();
       }
@@ -410,7 +440,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       cancelled = true;
       progress?.dispose();
     };
-  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t, retry]);
+  }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t, retry, refreshToken]);
 
 
   useEffect(() => {
@@ -553,6 +583,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
           }
           actions={
             <>
+              {changedBadge}
               <PreviewButton
                 label={t('attachmentPreview.find')}
                 onClick={openSearch}

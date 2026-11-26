@@ -53,7 +53,7 @@ import {
   type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
-import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupActivityAt, chatGroupMembership, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -347,6 +347,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     supportsMemberRemoval: detail.serverBacked === true,
     supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
+    ...(detail.serverBacked && detail.supportsGroupAssistant ? { supportsAssistantManagement: true } : {}),
   };
 }
 
@@ -578,6 +579,19 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();
           return { result: receipt, effects: [] };
+        }
+        case 'set-assistant': {
+          if (!visibleGroup.serverBacked || !visibleGroup.supportsGroupAssistant || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          if (visibleGroup.archived || visibleGroup.dissolvedAt || !chatGroupMembership(visibleGroup).manager)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          if (typeof input.assistant !== 'boolean' || typeof input.expectedRevision !== 'number')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'update', assistant: input.assistant,
+            expectedRevision: input.expectedRevision, name: visibleGroup.name, topic: visibleGroup.topic ?? '', description: visibleGroup.description ?? '' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          result = { ok: true };
+          break;
         }
         case 'notifications': {
           if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))

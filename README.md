@@ -77,7 +77,7 @@ controls and rich HTML**, not just a wall of text.
 
 Build a recurring routine with **automations**, or hand over work through
 connected chat channels such as Slack and Telegram. Connect more tools through
-**Skills, plugins and MCP**.
+**Skills, plugins and [MCP](docs/mcp-apps.md#接入)**.
 
 ## Ready from day one. Yours to shape over time.
 

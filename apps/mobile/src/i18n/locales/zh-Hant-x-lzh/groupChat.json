@@ -548,6 +548,8 @@
     "accessTools": "可用工具與資料",
     "memberPermissions": "群員權柄",
     "replies": "同伴如何接話",
+    "assistant": "群中 Cindy",
+    "assistantHint": "誰 @ 之，即於其人之電腦行事。",
     "replyModeMentionedNote": "無人被 @ 時，同伴不接話。",
     "work": "分職",
     "organizerHint": "排定誰為何步；預設為首位同伴。",

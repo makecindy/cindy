@@ -68,6 +68,7 @@ export interface TaskMigrationView {
   projectMove?: {
     sessionId: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
   };
   stage?:

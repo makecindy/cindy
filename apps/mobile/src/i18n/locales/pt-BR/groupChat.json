@@ -510,7 +510,7 @@
       "tools": "Ferramentas e informações autorizadas pelo proprietário",
       "authorizeTitle": "Permitir que este grupo use as ferramentas e informações de {{name}}?",
       "toolsHint": "Os membros poderão usar as ferramentas existentes e as informações privadas deste amigo. Os resultados ficam visíveis para todos. As regras de aprovação existentes continuam em vigor. A revogação interrompe solicitações ativas, mas não pode desfazer ações concluídas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir ferramentas"
     }
   },
   "groupSettings": {
@@ -556,6 +556,8 @@
     "accessTools": "Pode usar ferramentas e informações",
     "memberPermissions": "Permissões dos membros",
     "replies": "Como os amigos respondem",
+    "assistant": "Cindy do grupo",
+    "assistantHint": "Trabalha no computador de quem a @menciona.",
     "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
     "work": "Divisão do trabalho",
     "organizerHint": "Decide quem executa cada etapa. Por padrão, essa função fica com o primeiro amigo.",
@@ -600,7 +602,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de “{{group}}”. O histórico será mantido; outros grupos e conversas privadas não serão afetados.",
     "removeOwnActiveHint": "As solicitações ativas neste grupo serão interrompidas. Tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Confirmar",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Uso único · Expira em {{date}}",

@@ -44,7 +44,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     }
   }, [api, binding, groupId, valid]);
   // The parent already subscribes to server changes. Recheck only settings/membership changes.
-  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode,
+  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode, source.notificationModeInherited,
     source.members.map(member => [member.actorId, member.role, member.status])]);
   useEffect(() => { void refresh(); }, [refresh, sourceVersion]);
 

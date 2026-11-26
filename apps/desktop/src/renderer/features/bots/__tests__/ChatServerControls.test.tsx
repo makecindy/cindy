@@ -1150,7 +1150,7 @@ describe('chat interaction controls', () => {
       const view = render(<ChatThreadPanel group={restricted('member')} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@');
-      expect(labels()).toEqual(['Ann', 'Ann', 'Bo']);
+      expect(labels()).toEqual(['Me', 'Ann', 'Ann', 'Bo']);
       for (const role of ['admin', 'owner'] as const) {
         view.rerender(<Tooltip.Provider><ChatThreadPanel group={restricted(role)} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
         expect(labels()[0]).toBe('bots.groupChat.mention.allbots.groupChat.mention.allHint');
@@ -1298,20 +1298,19 @@ describe('chat interaction controls', () => {
       expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['all-bot'] });
     });
 
-    it('never offers or resolves the current user, as on mobile', async () => {
+    it('offers the current user and sends a typed self mention in a topic', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
       const members = [{ botId: 'me', name: 'Dash', status: 'active', isSelf: true }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];
       render(<ChatThreadPanel group={{ ...group, members } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@');
-      expect(labels()).toEqual(['bots.groupChat.mention.allbots.groupChat.mention.allHint', 'Bo']);
+      expect(labels()).toEqual(['bots.groupChat.mention.allbots.groupChat.mention.allHint', 'Dash', 'Bo']);
       type(input, '@Da');
-      expect(screen.queryByRole('listbox')).toBeNull();
-      // A typed own name is plain text, not a target the host would drop to nothing.
+      expect(labels()).toEqual(['Dash']);
       type(input, '@Dash @Bo 看下');
       fireEvent.keyDown(input, { key: 'Enter' });
       await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
-      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['bo'] });
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['me', 'bo'] });
     });
 
     // One retry rule (bot-group-chat.md): a failed reply is retried with the same clientId only when the
