@@ -670,6 +670,19 @@ describe('subscription management boundary', () => {
       }
     },
   );
+  // Existing logins, unit: native history must resolve the attached folder after reload.
+  // Default-only coverage misses the new saved directory and a provider-sharing guest probing it.
+  it('keeps linked native history in its chosen directory and hides discovery from guests', async () => {
+    const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
+    const directory = path.join(homedir(), '.claude-person');
+    h.pools = normalizePoolFile({ pools: { anthropic: { accounts: [
+      { id, linkedLogin: { directory, identity: 'personal@example.test' } },
+    ] } } }).pools;
+    h.bindings = { 'anthropic:native:linked': { providerId: 'anthropic', accountId: id } };
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(invoke({ action: 'discover-logins', providerId: 'anthropic' })).rejects.toThrow('PERMISSION_DENIED');
+  });
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);

@@ -22609,6 +22609,16 @@
     "refresh": "更新额度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录之法",
       "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",

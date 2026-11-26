@@ -22609,6 +22609,16 @@
     "refresh": "利用枠を更新"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "アカウントの追加方法",
+      "connect": "既存のログインを接続…",
+      "found": "接続可能 {{count}} 件",
+      "title": "{{device}} のログイン",
+      "note": "Cindy は選択したアカウントの設定を CLI と共有します。",
+      "attach": "接続",
+      "choose": "別のフォルダを選択…",
+      "unverified": "このフォルダのサブスクリプションを確認できませんでした。"
+    },
     "pluginSignIn": {
       "method": "ログイン方法",
       "secretHint": "キーはプラグインにだけ渡され、このアカウント専用のフォルダーに保存されます。Cindy は保存せず、ほかのコンピューターにも送信しません。",

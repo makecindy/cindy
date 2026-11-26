@@ -5366,6 +5366,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
   subscriptionAccounts: {
     onChanged: fanOutSubscriptionAccountsChanged,
+    existingLogins: (request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult> =>
+      ipcRenderer.invoke('maker:subscription-accounts', request),
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
       ipcRenderer.invoke('maker:subscription-accounts', command),
     // 已建立任务实际在用的账号(只读，用量显示用)。

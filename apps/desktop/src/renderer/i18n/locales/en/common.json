@@ -22698,6 +22698,16 @@
     "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "More ways to add an account",
+      "connect": "Connect an existing login…",
+      "found": "{{count}} available",
+      "title": "Logins on {{device}}",
+      "note": "Cindy and your CLI will use the same configuration.",
+      "attach": "Connect",
+      "choose": "Choose another folder…",
+      "unverified": "Could not verify this subscription login."
+    },
     "pluginSignIn": {
       "method": "Sign-in method",
       "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",

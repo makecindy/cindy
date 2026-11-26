@@ -11,6 +11,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
   MAX_SUBSCRIPTION_ACCOUNTS,
+  type LinkedLogin,
   type SubscriptionPoolConfig,
   type SubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
@@ -63,12 +64,20 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         ? { legacyCodexDefault: true }
         : {}),
       ...(legacyAccounts ? { legacyCodexAccounts: legacyAccounts } : {}),
+      ...(Array.isArray(pool.dismissedLogins) ? { dismissedLogins: pool.dismissedLogins.filter(
+        key => typeof key === 'string' && /^[a-f0-9]{64}$/.test(key),
+      ) } : {}),
       strategy: PROVIDER_GROUP_STRATEGIES.includes(pool.strategy) ? pool.strategy : 'least',
       accounts: pool.accounts
         .filter((a) => a && accountIdValid(a.id) && !seen.has(a.id) && seen.add(a.id))
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
+          ...(a.id !== 'default' && a.linkedLogin && typeof a.linkedLogin.directory === 'string'
+            && path.isAbsolute(a.linkedLogin.directory) && typeof a.linkedLogin.identity === 'string'
+            && a.linkedLogin.identity.trim() && (provider === 'anthropic' || /^[a-f0-9]{64}$/.test(a.linkedLogin.accountKey ?? ''))
+            ? { linkedLogin: { directory: a.linkedLogin.directory, identity: a.linkedLogin.identity,
+              ...(provider === 'openai' ? { accountKey: a.linkedLogin.accountKey } : {}) } } : {}),
           ...(provider === 'anthropic' && typeof a.lastConfirmedIdentity === 'string' && a.lastConfirmedIdentity.trim()
             && a.lastConfirmedIdentity.length <= 320
             ? { lastConfirmedIdentity: a.lastConfirmedIdentity.trim() } : {}),
@@ -113,6 +122,8 @@ export const accountOwnerPrefix = () => {
 export function accountDirectory(provider: SubscriptionProvider, id: string): string {
   if (!accountIdValid(id) || (id !== 'default' && !id.startsWith(`cindy-${accountOwnerPrefix()}-`)))
     throw new Error('Subscription account is unavailable');
+  const linked = id !== 'default' && readPool(provider)?.accounts.find(account => account.id === id)?.linkedLogin;
+  if (linked) return linked.directory;
   const legacy = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
   if (legacy) return legacyCodexAccountHome(getUserDataDir(), getActiveAppSession().dataOwnerId, legacy);
   return path.join(
@@ -120,6 +131,9 @@ export function accountDirectory(provider: SubscriptionProvider, id: string): st
     `.${provider === 'anthropic' ? 'claude' : 'codex'}${id === 'default' ? '' : `-${id}`}`,
   );
 }
+export const loginDirectoryKey = (directory: string) => createHash('sha256').update(directory).digest('hex');
+export const loginIdentityKey = (login: LinkedLogin) =>
+  createHash('sha256').update(JSON.stringify(['identity', login.accountKey ?? login.identity.toLowerCase()])).digest('hex');
 export function readPool(provider: SubscriptionProvider): SubscriptionPoolConfig | null {
   store.invalidateIfChanged();
   return store.read().pools[provider] ?? null;
@@ -180,9 +194,15 @@ export async function updatePool(
   provider: SubscriptionProvider,
   edit: (value: SubscriptionPoolConfig) => SubscriptionPoolConfig,
 ): Promise<void> {
-  await store.updateAtomic(({ value }) => ({
-    pools: { ...value.pools, [provider]: edit(value.pools[provider] ?? defaultPool()) },
-  }));
+  await store.updateAtomic(({ value }) => {
+    const previous = value.pools[provider] ?? defaultPool();
+    const next = edit(previous);
+    const retained = new Set(next.accounts.map(account => account.id));
+    const removed = previous.accounts.flatMap(account => account.linkedLogin && !retained.has(account.id)
+      ? [loginDirectoryKey(account.linkedLogin.directory), loginIdentityKey(account.linkedLogin)] : []);
+    return { pools: { ...value.pools, [provider]: removed.length
+      ? { ...next, dismissedLogins: [...new Set([...(next.dismissedLogins ?? []), ...removed])] } : next } };
+  });
 }
 export function readAccountBinding(key: string, provider: SubscriptionProvider) {
   const bindings = store.read().bindings;
