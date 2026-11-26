@@ -406,7 +406,7 @@
       "progress": "Participação atual {{used}}% · limite {{limit}}%",
       "paused": "Este modelo está pausado. Escolha outro modelo disponível.",
       "recommendation": "Recomendado: {{model}}",
-      "unsupported": "Os limites de participação por modelo ainda não são compatíveis com este grupo de provedores.",
+      "unsupported": "Os limites de participação por modelo ainda não são compatíveis com este grupo de computadores.",
       "basis": "Últimos 7 dias corridos · tokens de entrada + saída, excluindo cache",
       "maxPercent": "Participação máxima no uso pessoal",
       "empty": "Nenhum uso registrado",
@@ -505,14 +505,14 @@
         "confirm": "Remover compartilhamento"
       },
       "reshare": {
-        "applying": "quer usar pelo grupo de provedores de {{owner}}",
+        "applying": "quer usar pelo grupo de computadores de {{owner}}",
         "requestedAt": "Solicitado {{time}}",
         "usageHint": "Se você concordar, as sessões de {{name}} poderão ser executadas neste computador, e o uso será contabilizado em nome de {{owner}}",
         "approve": "Aceitar",
         "reject": "Recusar",
         "summaryUsing_one": "{{count}} pessoa usa pelo grupo de provedores de {{owner}}",
-        "summaryUsing_other": "{{count}} pessoas usam pelo grupo de provedores de {{owner}}",
-        "summaryOwner": "Pelo grupo de provedores de {{owner}}",
+        "summaryUsing_other": "{{count}} pessoas usam pelo grupo de computadores de {{owner}}",
+        "summaryOwner": "Pelo grupo de computadores de {{owner}}",
         "summaryDeclined_one": "{{count}} recusou",
         "summaryDeclined_other": "{{count}} recusaram",
         "stateApproved": "Autorizado",
@@ -520,10 +520,10 @@
         "revoke": "Revogar",
         "revokeAria": "Revogar autorização de {{name}}",
         "approveAria": "Autorizar o uso por {{name}}",
-        "toastApproved": "{{name}} agora pode usar {{provider}} pelo grupo de provedores de {{owner}}",
+        "toastApproved": "{{name}} agora pode usar {{provider}} pelo grupo de computadores de {{owner}}",
         "toastRejected": "Solicitação de {{name}} recusada",
         "toastRevoked": "Autorização de {{name}} revogada. As sessões em execução foram interrompidas.",
-        "listTitle": "Em uso pelo grupo de provedores de {{owner}}",
+        "listTitle": "Em uso pelo grupo de computadores de {{owner}}",
         "summaryUsing_many": "{{count}} pessoas usam pelo grupo de provedores de {{owner}}",
         "summaryDeclined_many": "{{count}} recusaram"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Solicitado {{time}} com seu link de compartilhamento",
       "pairingHint": "Antes de aprovar, você pode perguntar pelo canal em que enviou o link: “Qual código de pareamento aparece para você?” Aprove se o código for igual.",
       "callout": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O Agent é executado neste computador e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
-      "calloutGroup": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O grupo de provedores escolhe o computador que executa o Agent, e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
+      "calloutGroup": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O grupo de computadores escolhe o computador que executa o Agent, e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
       "calloutRemote": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O Agent é executado no computador que hospeda este provedor e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
       "calloutClaudeEmail": "Enquanto {{name}} usa o provedor, o Agent pode ver o endereço de e-mail que você usa para entrar no Claude.",
       "calloutUnknown": "Se você não reconhece esta pessoa, recuse; o link para de funcionar após a recusa.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Solicitação de compartilhamento recusada",
       "rejectedBody": "{{name}} recusou compartilhar {{provider}}",
       "reshareTitle": "Nova solicitação de uso",
-      "reshareBody": "{{name}} quer usar seu {{provider}} compartilhado pelo grupo de provedores de {{owner}}"
+      "reshareBody": "{{name}} quer usar seu {{provider}} compartilhado pelo grupo de computadores de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessões remotas",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Gerenciando o grupo de provedores em {{device}}. As alterações são salvas nesse computador; mantenha-o online.",
+      "note": "Gerenciando o grupo de computadores em {{device}}. As alterações são salvas nesse computador; mantenha-o online.",
       "unsupported": "A versão do Cindy no computador com este grupo ainda não oferece gerenciamento remoto. Atualize o Cindy nesse computador primeiro."
     },
     "page": {
@@ -839,12 +839,12 @@
       "computerCount_many": "{{count}} computadores"
     },
     "section": {
-      "title": "Grupo de provedores",
+      "title": "Grupo de computadores",
       "addComputer": "Adicionar computador",
       "delete": "Excluir grupo",
       "empty": "Adicione {{provider}} dos seus outros computadores e as tarefas escolherão um automaticamente",
-      "loading": "Carregando grupo de provedores…",
-      "loadFailed": "Não foi possível carregar o grupo de provedores",
+      "loading": "Carregando grupo de computadores…",
+      "loadFailed": "Não foi possível carregar o grupo de computadores",
       "note": "Nas sessões deste computador e nas sessões das pessoas com quem você compartilha, o grupo escolhe o computador que executa o Agent"
     },
     "autoSwitch": {
@@ -905,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remover {{name}} do grupo de provedores?",
+        "title": "Remover {{name}} do grupo de computadores?",
         "description": "Ele não receberá novas tarefas. As tarefas já em execução nele permanecerão nesse computador.",
-        "lastDescription": "Este é o último computador do grupo, então removê-lo exclui o grupo de provedores {{provider}}.",
+        "lastDescription": "Este é o último computador do grupo, então removê-lo exclui o grupo de computadores {{provider}}.",
         "confirm": "Remover do grupo"
       },
       "sourceGroupOwner": "Hospeda o grupo",
@@ -950,12 +950,12 @@
       "send": "Enviar mensagem"
     },
     "deleteConfirm": {
-      "title": "Excluir o grupo de provedores {{provider}}?",
+      "title": "Excluir o grupo de computadores {{provider}}?",
       "description": "Novas tarefas neste computador serão executadas aqui. As tarefas que já estão em outros computadores permanecerão onde estão.",
       "confirm": "Excluir grupo"
     },
     "add": {
-      "title": "Adicionar computadores ao grupo de provedores {{provider}}",
+      "title": "Adicionar computadores ao grupo de computadores {{provider}}",
       "sourceAria": "Origem do computador",
       "tabAvailable": "Já disponíveis",
       "tabLink": "Link de compartilhamento",
@@ -972,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} computador adicionado ao grupo de provedores {{provider}}",
-      "added_other": "{{count}} computadores adicionados ao grupo de provedores {{provider}}",
+      "added_other": "{{count}} computadores adicionados ao grupo de computadores {{provider}}",
       "addedAccounts_one": "{{count}} conta adicionada ao grupo de provedores {{provider}}",
-      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de provedores {{provider}}",
-      "removed": "{{name}} removido do grupo de provedores",
-      "deleted": "Grupo de provedores {{provider}} excluído",
+      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de contas {{provider}}",
+      "removed": "{{name}} removido do grupo de computadores",
+      "deleted": "Grupo de computadores {{provider}} excluído",
       "added_many": "{{count}} computadores adicionados ao grupo de provedores {{provider}}",
       "addedAccounts_many": "{{count}} contas adicionadas ao grupo de provedores {{provider}}"
     }
@@ -1377,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
     "PRECONDITION_FAILED": "Esta ação está indisponível no estado atual. Tente novamente.",
-    "PROVIDER_GROUP_CHANGED": "O grupo de provedores foi alterado em outro lugar, então esta ação não foi aplicada. Revise as configurações mais recentes e tente novamente.",
+    "PROVIDER_GROUP_CHANGED": "O grupo de computadores foi alterado em outro lugar, então esta ação não foi aplicada. Revise as configurações mais recentes e tente novamente.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar quanto contexto esta tarefa usa. Mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo atual. Verifique a configuração da janela de um modelo personalizado. Se não for possível alterá-la, mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo de destino. Verifique a configuração da janela de um modelo personalizado. Se não for possível alterá-la, escolha outro modelo ou inicie uma nova tarefa.",
@@ -4457,10 +4457,10 @@
         "detailNote": "O Agent é executado em {{device}}, usando o login e a cota desse computador. Para usá-lo, selecione-o na lista de modelos ao iniciar uma tarefa. Para alterar este provedor, acesse Configurações → Provedores nesse computador.",
         "modelsTitle": "Modelos disponíveis",
         "modelsEmpty": "Este provedor ainda não tem modelos disponíveis nesse computador.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de provedores",
+        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de computadores",
         "groupBadge_one": "Grupo de provedores · {{count}} computador",
-        "groupBadge_other": "Grupo de provedores · {{count}} computadores",
-        "groupNote": "{{device}} transformou este provedor em um grupo de provedores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
+        "groupBadge_other": "Grupo de computadores · {{count}} computadores",
+        "groupNote": "{{device}} transformou este provedor em um grupo de computadores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o status dos computadores do grupo agora.",
         "groupBadge_many": "Grupo de provedores · {{count}} computadores",
@@ -4513,7 +4513,7 @@
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
-          "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de provedores escolhe o computador que executa o Agent.",
+          "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de computadores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
           "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente.",
           "followsPool": "Esta conexão foi mesclada a “{{pool}}” e segue o “Permitir uso remoto” dele. Altere lá."
@@ -14819,7 +14819,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Em execução em {{device}}",
         "providerGroupRunningHere": "Em execução neste computador",
-        "providerGroupUnassigned": "O Grupo de provedores escolhe um computador quando a tarefa começa; o uso passa a ser exibido para esse computador"
+        "providerGroupUnassigned": "O Grupo de computadores escolhe um computador quando a tarefa começa; o uso passa a ser exibido para esse computador"
       },
       "speed": {
         "label": "Velocidade",
@@ -16598,7 +16598,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "O provedor compartilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou o compartilhamento está desativado no momento. Tente novamente mais tarde ou troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de provedores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de computadores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
       "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo atingiu o limite de sessões remotas. Arquive sessões não utilizadas ou peça ao proprietário do provedor para aumentar o limite em Acesso remoto e compartilhamento.",

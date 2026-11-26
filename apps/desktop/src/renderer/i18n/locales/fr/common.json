@@ -406,7 +406,7 @@
       "progress": "Part actuelle {{used}} % · limite {{limit}} %",
       "paused": "Ce modèle est en pause. Choisissez un autre modèle disponible.",
       "recommendation": "Recommandé : {{model}}",
-      "unsupported": "Les limites de part par modèle ne sont pas encore prises en charge pour ce groupe de fournisseurs.",
+      "unsupported": "Les limites de part par modèle ne sont pas encore prises en charge pour ce groupe d'ordinateurs.",
       "basis": "7 derniers jours calendaires · jetons d'entrée + de sortie, hors cache",
       "maxPercent": "Part maximale de la consommation personnelle",
       "empty": "Aucune consommation enregistrée",
@@ -505,14 +505,14 @@
         "confirm": "Retirer le partage"
       },
       "reshare": {
-        "applying": "souhaite l'utiliser via le groupe de fournisseurs de {{owner}}",
+        "applying": "souhaite l'utiliser via le groupe d'ordinateurs de {{owner}}",
         "requestedAt": "Demandé {{time}}",
         "usageHint": "Si vous acceptez, les sessions de {{name}} pourront s'exécuter sur cet ordinateur, et la consommation sera comptabilisée pour {{owner}}",
         "approve": "Accepter",
         "reject": "Refuser",
         "summaryUsing_one": "{{count}} personne l'utilise via le groupe de fournisseurs de {{owner}}",
-        "summaryUsing_other": "{{count}} personnes l'utilisent via le groupe de fournisseurs de {{owner}}",
-        "summaryOwner": "Via le groupe de fournisseurs de {{owner}}",
+        "summaryUsing_other": "{{count}} personnes l'utilisent via le groupe d'ordinateurs de {{owner}}",
+        "summaryOwner": "Via le groupe d'ordinateurs de {{owner}}",
         "summaryDeclined_one": "{{count}} refusée",
         "summaryDeclined_other": "{{count}} refusées",
         "stateApproved": "Accepté",
@@ -520,10 +520,10 @@
         "revoke": "Retirer l'accord",
         "revokeAria": "Retirer l'accord donné à {{name}}",
         "approveAria": "Accepter que {{name}} l'utilise",
-        "toastApproved": "{{name}} peut désormais utiliser {{provider}} via le groupe de fournisseurs de {{owner}}",
+        "toastApproved": "{{name}} peut désormais utiliser {{provider}} via le groupe d'ordinateurs de {{owner}}",
         "toastRejected": "Demande de {{name}} refusée",
         "toastRevoked": "Accord retiré pour {{name}}. Les sessions en cours d'exécution ont été arrêtées.",
-        "listTitle": "L'utilisent via le groupe de fournisseurs de {{owner}}",
+        "listTitle": "L'utilisent via le groupe d'ordinateurs de {{owner}}",
         "summaryUsing_many": "{{count}} personnes l'utilisent via le groupe de fournisseurs de {{owner}}",
         "summaryDeclined_many": "{{count}} refusées"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Demandé {{time}} via votre lien de partage",
       "pairingHint": "Avant d'approuver, vous pouvez lui demander via le canal par lequel vous avez envoyé le lien : « Quel code d'appairage voyez-vous ? » Approuvez s'il correspond.",
       "callout": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. L'Agent s'exécute sur cet ordinateur et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
-      "calloutGroup": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent, et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
+      "calloutGroup": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. Le groupe d'ordinateurs choisit l'ordinateur qui exécute l'Agent, et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
       "calloutRemote": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. L'Agent s'exécute sur l'ordinateur qui héberge ce fournisseur et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
       "calloutClaudeEmail": "Pendant que {{name}} l'utilise, l'Agent peut voir l'adresse e-mail avec laquelle vous vous connectez à Claude.",
       "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Demande de partage refusée",
       "rejectedBody": "{{name}} a refusé de partager {{provider}}",
       "reshareTitle": "Nouvelle demande d'utilisation",
-      "reshareBody": "{{name}} souhaite utiliser votre {{provider}} partagé via le groupe de fournisseurs de {{owner}}"
+      "reshareBody": "{{name}} souhaite utiliser votre {{provider}} partagé via le groupe d'ordinateurs de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessions à distance",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Gestion du groupe de fournisseurs sur {{device}}. Les modifications sont enregistrées sur cet ordinateur ; gardez-le en ligne.",
+      "note": "Gestion du groupe d'ordinateurs sur {{device}}. Les modifications sont enregistrées sur cet ordinateur ; gardez-le en ligne.",
       "unsupported": "La version de Cindy sur l'ordinateur qui héberge ce groupe ne prend pas encore en charge la gestion à distance. Mettez d'abord à jour Cindy sur cet ordinateur."
     },
     "page": {
@@ -839,12 +839,12 @@
       "computerCount_many": "{{count}} ordinateurs"
     },
     "section": {
-      "title": "Groupe de fournisseurs",
+      "title": "Groupe d'ordinateurs",
       "addComputer": "Ajouter un ordinateur",
       "delete": "Supprimer le groupe",
       "empty": "Ajoutez {{provider}} depuis vos autres ordinateurs : les tâches en choisiront un automatiquement",
-      "loading": "Chargement du groupe de fournisseurs…",
-      "loadFailed": "Impossible de charger le groupe de fournisseurs",
+      "loading": "Chargement du groupe d'ordinateurs…",
+      "loadFailed": "Impossible de charger le groupe d'ordinateurs",
       "note": "Pour les sessions de cet ordinateur et celles des personnes avec qui vous partagez, le groupe choisit l'ordinateur qui exécute l'Agent"
     },
     "autoSwitch": {
@@ -905,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Retirer {{name}} du groupe de fournisseurs ?",
+        "title": "Retirer {{name}} du groupe d'ordinateurs ?",
         "description": "Il ne recevra plus de nouvelles tâches. Les tâches déjà en cours d'exécution sur cet ordinateur y restent.",
-        "lastDescription": "C'est le dernier ordinateur du groupe : le retirer supprime le groupe de fournisseurs {{provider}}.",
+        "lastDescription": "C'est le dernier ordinateur du groupe : le retirer supprime le groupe d'ordinateurs {{provider}}.",
         "confirm": "Retirer du groupe"
       },
       "sourceGroupOwner": "Héberge le groupe",
@@ -950,12 +950,12 @@
       "send": "Envoyer le message"
     },
     "deleteConfirm": {
-      "title": "Supprimer le groupe de fournisseurs {{provider}} ?",
+      "title": "Supprimer le groupe d'ordinateurs {{provider}} ?",
       "description": "Les nouvelles tâches de cet ordinateur s'exécuteront ici. Les tâches déjà présentes sur d'autres ordinateurs y restent.",
       "confirm": "Supprimer le groupe"
     },
     "add": {
-      "title": "Ajouter des ordinateurs au groupe de fournisseurs {{provider}}",
+      "title": "Ajouter des ordinateurs au groupe d'ordinateurs {{provider}}",
       "sourceAria": "Source de l'ordinateur",
       "tabAvailable": "Déjà disponibles",
       "tabLink": "Lien de partage",
@@ -972,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} ordinateur ajouté au groupe de fournisseurs {{provider}}",
-      "added_other": "{{count}} ordinateurs ajoutés au groupe de fournisseurs {{provider}}",
+      "added_other": "{{count}} ordinateurs ajoutés au groupe d'ordinateurs {{provider}}",
       "addedAccounts_one": "{{count}} compte ajouté au groupe de fournisseurs {{provider}}",
-      "addedAccounts_other": "{{count}} comptes ajoutés au groupe de fournisseurs {{provider}}",
-      "removed": "{{name}} retiré du groupe de fournisseurs",
-      "deleted": "Groupe de fournisseurs {{provider}} supprimé",
+      "addedAccounts_other": "{{count}} comptes ajoutés au groupe de comptes {{provider}}",
+      "removed": "{{name}} retiré du groupe d'ordinateurs",
+      "deleted": "Groupe d'ordinateurs {{provider}} supprimé",
       "added_many": "{{count}} ordinateurs ajoutés au groupe de fournisseurs {{provider}}",
       "addedAccounts_many": "{{count}} comptes ajoutés au groupe de fournisseurs {{provider}}"
     }
@@ -1377,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Réessayez dans un instant.",
     "INVALID_PARAMS": "Saisie invalide. Vérifiez et réessayez.",
     "PRECONDITION_FAILED": "Cette action n'est pas disponible dans l'état actuel. Réessayez.",
-    "PROVIDER_GROUP_CHANGED": "Le groupe de fournisseurs a été modifié ailleurs ; cette action n'a donc pas été appliquée. Consultez les derniers paramètres et réessayez.",
+    "PROVIDER_GROUP_CHANGED": "Le groupe d'ordinateurs a été modifié ailleurs ; cette action n'a donc pas été appliquée. Consultez les derniers paramètres et réessayez.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la quantité de contexte utilisée par cette tâche. Conservez le modèle actuel ou démarrez une nouvelle tâche.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la fenêtre de contexte du modèle actuel. Vérifiez le paramètre de fenêtre d'un modèle personnalisé. S'il ne peut pas être modifié, conservez le modèle actuel ou démarrez une nouvelle tâche.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la fenêtre de contexte du modèle cible. Vérifiez le paramètre de fenêtre d'un modèle personnalisé. S'il ne peut pas être modifié, choisissez un autre modèle ou démarrez une nouvelle tâche.",
@@ -4457,10 +4457,10 @@
         "detailNote": "L'Agent s'exécute sur {{device}}, avec la connexion et le quota de cet ordinateur. Pour l'utiliser, choisissez-le dans la liste des modèles au lancement d'une tâche. Pour modifier ce fournisseur, allez dans Paramètres → Fournisseurs sur cet ordinateur.",
         "modelsTitle": "Modèles disponibles",
         "modelsEmpty": "Ce fournisseur n'a encore aucun modèle disponible sur cet ordinateur.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Groupe de fournisseurs",
+        "rowLabelGroup": "{{provider}} · {{device}} · Groupe d'ordinateurs",
         "groupBadge_one": "Groupe de fournisseurs · {{count}} ordinateur",
-        "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
-        "groupNote": "{{device}} a fait de ce fournisseur un groupe de fournisseurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
+        "groupBadge_other": "Groupe d'ordinateurs · {{count}} ordinateurs",
+        "groupNote": "{{device}} a fait de ce fournisseur un groupe d'ordinateurs. Lorsque vous lancez une tâche avec celui-ci, {{device}} l'attribue à l'un des ordinateurs ci-dessous selon la stratégie du groupe, et la déplace vers un autre si cet ordinateur rencontre un problème. Tant que {{device}} est en ligne, utilisez Accès distant et partage ici pour gérer le groupe et ses partages.",
         "groupMembersTitle": "Ordinateurs du groupe",
         "groupMembersFailed": "Impossible d'obtenir pour le moment l'état des ordinateurs du groupe.",
         "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
@@ -4513,7 +4513,7 @@
         "remoteAccess": {
           "label": "Autoriser l'utilisation à distance",
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
-          "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent.",
+          "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe d'ordinateurs choisit l'ordinateur qui exécute l'Agent.",
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
           "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer.",
           "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » et suit son réglage « Autoriser l'utilisation à distance ». Modifiez-le là-bas."
@@ -8709,8 +8709,8 @@
         "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
-        "hostTools_usage": "Lire l’utilisation et l’état des groupes de fournisseurs",
-        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages. Lire aussi le quota des tâches accessibles, y compris sur un ordinateur autorisé du même compte ou via un fournisseur partagé qui autorise l’affichage du quota.",
+        "hostTools_usage": "Lire l’utilisation et l’état des groupes d'ordinateurs",
+        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes d'ordinateurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages. Lire aussi le quota des tâches accessibles, y compris sur un ordinateur autorisé du même compte ou via un fournisseur partagé qui autorise l’affichage du quota.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -14819,7 +14819,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "S'exécute sur {{device}}",
         "providerGroupRunningHere": "S'exécute sur cet ordinateur",
-        "providerGroupUnassigned": "Le groupe de fournisseurs choisit un ordinateur au démarrage de la tâche ; la consommation s'affiche ensuite pour cet ordinateur"
+        "providerGroupUnassigned": "Le groupe d'ordinateurs choisit un ordinateur au démarrage de la tâche ; la consommation s'affiche ensuite pour cet ordinateur"
       },
       "speed": {
         "label": "Vitesse",
@@ -16598,7 +16598,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "Le fournisseur partagé est temporairement indisponible. L'ordinateur du propriétaire est peut-être hors ligne, ou le partage est désactivé pour le moment. Réessayez plus tard ou passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Les comptes disponibles pour ce modèle ont atteint leur limite d'utilisation. Changez de modèle ou continuez lorsque le quota sera réinitialisé.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe de fournisseurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe d'ordinateurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
       "REMOTE_AGENT_GROUP_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Cet appareil a atteint sa limite de sessions distantes. Archivez les sessions inutilisées ou demandez au propriétaire du fournisseur de relever la limite dans Accès distant et partage.",
@@ -18394,7 +18394,7 @@
           "sessions_dispatch": "Répartir des sessions",
           "feishu_read": "Lire les messages Feishu",
           "settings_read": "Lire les membres des partages",
-          "usage_read": "Lire l’utilisation et l’état des groupes de fournisseurs"
+          "usage_read": "Lire l’utilisation et l’état des groupes d'ordinateurs"
         },
         "project": "Répertoire du projet",
         "capabilitiesLabel": "Capacités autorisées",
@@ -18408,7 +18408,7 @@
           "sessions_dispatch": "Créer ou réveiller des sessions {{appName}} et leur transmettre des messages",
           "feishu_read": "Lister les conversations récemment actives ; récupérer les messages récents d'une conversation (groupe ou message privé)",
           "settings_read": "Lire les membres de vos partages et leurs modèles autorisés sur cet ordinateur ou d’autres ordinateurs autorisés du même compte ; aucune modification",
-          "usage_read": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages."
+          "usage_read": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes d'ordinateurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages."
         },
         "capabilityWarn": {
           "ghostMissing": "Nécessite le plugin « {{name}} », qui n'est pas installé : cette capacité échouera à l'exécution",

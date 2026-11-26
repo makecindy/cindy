@@ -401,7 +401,7 @@
       "progress": "今占 {{used}}% · 上限 {{limit}}%",
       "paused": "此模型已暂停，请另择可用之模型。",
       "recommendation": "荐用 {{model}}",
-      "unsupported": "此供方群组暂不支持模型占比之限。",
+      "unsupported": "此机组暂不支持模型占比之限。",
       "basis": "近 7 个自然日 · 输入＋输出 token，不计缓存",
       "maxPercent": "占个人耗用之上限",
       "empty": "尚无耗用数据",
@@ -496,23 +496,23 @@
         "confirm": "删分享"
       },
       "reshare": {
-        "applying": "欲经 {{owner}} 之供方组使用",
+        "applying": "欲经 {{owner}} 之机组使用",
         "requestedAt": "{{time}}所请",
         "usageHint": "许之，则 {{name}} 之差事可于此机运行，耗用计于 {{owner}} 名下",
         "approve": "许",
         "reject": "拒",
-        "summaryUsing_other": "{{count}} 人经 {{owner}} 之供方组使用",
-        "summaryOwner": "经 {{owner}} 之供方组",
+        "summaryUsing_other": "{{count}} 人经 {{owner}} 之机组使用",
+        "summaryOwner": "经 {{owner}} 之机组",
         "summaryDeclined_other": "{{count}} 人未许",
         "stateApproved": "已许",
         "stateRejected": "未许",
         "revoke": "撤许",
         "revokeAria": "撤对 {{name}} 之许",
         "approveAria": "许 {{name}} 使用",
-        "toastApproved": "已许 {{name}} 经 {{owner}} 之供方组用 {{provider}}",
+        "toastApproved": "已许 {{name}} 经 {{owner}} 之机组用 {{provider}}",
         "toastRejected": "已拒 {{name}} 之请",
         "toastRevoked": "已撤对 {{name}} 之许，方行之差事已止",
-        "listTitle": "经 {{owner}} 之供方组使用"
+        "listTitle": "经 {{owner}} 之机组使用"
       },
       "memberNote": {
         "add": "添备注",
@@ -558,7 +558,7 @@
       "requestedAt": "{{time}}经君之分享链接所请",
       "pairingHint": "许之前，可经遣链接之管道问彼一句：「君所见之配对码为何？」相符乃许。",
       "callout": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。Agent 于此机运行，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
-      "calloutGroup": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。由供方组择一机运行 Agent，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
+      "calloutGroup": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。由机组择一机运行 Agent，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
       "calloutRemote": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。Agent 于供方所在之机运行，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
       "calloutClaudeEmail": "{{name}} 用之时，Agent 可见君登录 Claude 所用之电子邮件地址。",
       "calloutUnknown": "若君不识申请之人，请拒之；拒后此链接即废。",
@@ -698,7 +698,7 @@
       "rejectedTitle": "分享之请未准",
       "rejectedBody": "{{name}} 未许分享 {{provider}}",
       "reshareTitle": "新使用之请",
-      "reshareBody": "{{name}} 欲经 {{owner}} 之供方组，用君所分享之 {{provider}}"
+      "reshareBody": "{{name}} 欲经 {{owner}} 之机组，用君所分享之 {{provider}}"
     },
     "runLimits": {
       "title": "远程差事之数",
@@ -710,7 +710,7 @@
       "idleHint": "差事闲置满此时长，此机即终其 Agent，名额随释；彼再遣讯时，将自动接回原言谈。方行之差事不收回。填 0 则永不收回。",
       "idleInvalid": "请填 0～{{max}} 之整数。",
       "usage": "今占 {{used}} / {{total}}，出自 {{devices}} 台设备；单台设备至多占 {{largest}} 个。",
-      "applyHint": "存后即生效。调低上限不断既有差事，仅限添加。供方组转送，按直接连接之设备计数。",
+      "applyHint": "存后即生效。调低上限不断既有差事，仅限添加。机组转送，按直接连接之设备计数。",
       "save": "存之",
       "reset": "复预设",
       "saved": "远程差事之数已存",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "方理 {{device}} 上之供方组。所改将存于彼机，请保其在线。",
+      "note": "方理 {{device}} 上之机组。所改将存于彼机，请保其在线。",
       "unsupported": "立组之机上之 Cindy 版本，暂不支持远程管理。请先更新彼机之 Cindy。"
     },
     "page": {
@@ -824,12 +824,12 @@
       "emptyRange": "此间无耗用，风平浪静。"
     },
     "section": {
-      "title": "供方组",
+      "title": "机组",
       "addComputer": "增机",
       "delete": "删组",
       "empty": "纳他机上之 {{provider}}，千帆并济，差事自择一机而行",
-      "loading": "方读供方组…",
-      "loadFailed": "供方组未能读",
+      "loading": "方读机组…",
+      "loadFailed": "机组未能读",
       "note": "此机上之差事，及受君分享者之差事，皆由组择一机运行 Agent"
     },
     "autoSwitch": {
@@ -887,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "移 {{name}} 出供方组乎？",
+        "title": "移 {{name}} 出机组乎？",
         "description": "此后不再分新差事予之；已于其上方行之差事，仍留彼机。",
-        "lastDescription": "此乃组中末一机，移出则 {{provider}} 之供方组将删。",
+        "lastDescription": "此乃组中末一机，移出则 {{provider}} 之机组将删。",
         "confirm": "出组"
       },
       "sourceGroupOwner": "组所在之机",
@@ -925,12 +925,12 @@
       "send": "续发此讯"
     },
     "deleteConfirm": {
-      "title": "删 {{provider}} 之供方组乎？",
+      "title": "删 {{provider}} 之机组乎？",
       "description": "此后此机之新差事皆于此机运行；已分至他机之差事，仍留彼机。",
-      "confirm": "删供方组"
+      "confirm": "删机组"
     },
     "add": {
-      "title": "纳机入 {{provider}} 之供方组",
+      "title": "纳机入 {{provider}} 之机组",
       "sourceAria": "机之来源",
       "tabAvailable": "已可用者",
       "tabLink": "分享之链",
@@ -939,17 +939,17 @@
       "loadFailed": "可纳之机未能读",
       "empty": "无可纳之机。请于他机上对 {{provider}} 启「允许远程调用」，或以他人之分享链接申请。",
       "alreadyMember": "已在组中",
-      "confirm": "纳入供方组",
+      "confirm": "纳入机组",
       "cancel": "罢",
       "linkDescription": "贴他人所分享之 {{provider}} 链接，彼许之后，归「已可用者」勾选纳之。",
       "remoteLinkDescription": "请于供方组所在机上之「模型供方」设置中入分享链接。彼许之后，再归「已可用者」勾选纳之。",
       "pasteLink": "贴分享链接"
     },
     "toast": {
-      "added_other": "已纳 {{count}} 台机入 {{provider}} 之供方组",
-      "addedAccounts_other": "已纳 {{count}} 个名籍入 {{provider}} 之供方组",
-      "removed": "已移 {{name}} 出供方组",
-      "deleted": "已删 {{provider}} 之供方组"
+      "added_other": "已纳 {{count}} 台机入 {{provider}} 之机组",
+      "addedAccounts_other": "已纳 {{count}} 个名籍入 {{provider}} 之账号组",
+      "removed": "已移 {{name}} 出机组",
+      "deleted": "已删 {{provider}} 之机组"
     }
   },
   "regionScreenshot": {
@@ -1346,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
     "INVALID_PARAMS": "参数无效，请察之而后再试。",
     "PRECONDITION_FAILED": "今之状态下不能行此操作，请稍后再试。",
-    "PROVIDER_GROUP_CHANGED": "供方组已于他处修改，此番操作未行。请察最新设置而后重为之",
+    "PROVIDER_GROUP_CHANGED": "机组已于他处修改，此番操作未行。请察最新设置而后重为之",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未易：不能确知今差事已用之上下文。请留今模型，或新开差事后再择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未易：不能确知今模型之上下文窗口。请察自订模型之窗口设置；若不能改，请留今模型或新开差事",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未易：不能确知目标模型之上下文窗口。请察自订模型之窗口设置；若不能改，请另择模型或新开差事",
@@ -4360,9 +4360,9 @@
         "detailNote": "Agent 行于 {{device}}，用彼机之登门与限额。新开差事时于模型清单中择之即可；欲改此供方，请至彼机之「规制 → 模型供方」。",
         "modelsTitle": "可用之模型",
         "modelsEmpty": "此供方于彼机尚无可用之模型，虚席以待。",
-        "rowLabelGroup": "{{provider}} · {{device}} · 供方组",
-        "groupBadge_other": "供方组 · {{count}} 台机",
-        "groupNote": "{{device}} 已将此供方立为供方组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 机组",
+        "groupBadge_other": "机组 · {{count}} 台机",
+        "groupNote": "{{device}} 已将此供方立为机组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
         "groupMembersTitle": "组内之机",
         "groupMembersFailed": "暂不能读组内诸机之状态。",
         "hiddenBanner": "已隐于此机模型之选。所藏与方用之差事皆不受其扰。"
@@ -4414,7 +4414,7 @@
         "remoteAccess": {
           "label": "许远程调用",
           "description": "启之，则君之他机与君所分享之人，可用此供方之模型；Agent 行于此机，用此机之登门与限额。",
-          "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由供方组择一机行 Agent。",
+          "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由机组择一机行 Agent。",
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
           "writeFailed": "远程调用之设未能存，请再试",
           "followsPool": "此连接已并入「{{pool}}」，随其「许远程调用」，请于「{{pool}}」中改之。"
@@ -8578,8 +8578,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
-        "hostTools_usage": "查用量及供应商组状态",
-        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置。亦可查有权访问之任务额度，含同账号已授权他机及准予阅额度之分享供应商。",
+        "hostTools_usage": "查用量及机组状态",
+        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、机组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置。亦可查有权访问之任务额度，含同账号已授权他机及准予阅额度之分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
         "hostTools_scheduler": "自动化治办",
@@ -14645,7 +14645,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "今行于 {{device}}",
         "providerGroupRunningHere": "今行于此机",
-        "providerGroupUnassigned": "始后由供方组择一机，耗用依彼机而示"
+        "providerGroupUnassigned": "始后由机组择一机，耗用依彼机而示"
       },
       "modelListAria": "模型录",
       "speed": {
@@ -16416,7 +16416,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暂不可用：对方之机或不在线，或对方暂罢分享。可稍后再试，或易他模型续之。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃旧版分享，启「唯用 Agent-Net」时暂不可用。关此开关即可续之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已达耗用上限。可改用他模型，或待限额重置后续之。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方组中之机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可至此供方之「远程与分享」页察组内之机。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "机组中之机今皆不能行此差事：或皆脱机、已暂停分配、方冷却，或无此模型。可至此供方之「远程与分享」页察组内之机。",
       "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此设备所留远程差事之数已达上限。可封存暂不用之差事，或请远方之机主于「远程与分享」中提高上限。",
@@ -18150,7 +18150,7 @@
           "sessions_dispatch": "派差事",
           "feishu_read": "读飞书之讯",
           "settings_read": "读分享成员",
-          "usage_read": "查用量及供应商组状态"
+          "usage_read": "查用量及机组状态"
         },
         "project": "案之目录",
         "capabilitiesLabel": "许呼之能",
@@ -18164,7 +18164,7 @@
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",
           "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯",
           "settings_read": "读己所分享成员及其可用模型，含同账号已授权他机；不改设置",
-          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
+          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、机组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未纳——差事行时此能必败",

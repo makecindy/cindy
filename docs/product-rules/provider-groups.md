@@ -12,6 +12,9 @@
 > `apps/desktop/scripts/fixtures/{provider-group-accounts,provider-group-rebalance,provider-group-status}/**`、
 > `apps/desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts`
 
+> **名称**（2026-11-26，dash 建议）：面向用户叫「**电脑组**」（原「供应商组」），与「智能路由」（挑来源与模型）、「订阅账号」（挑账号）
+> 一起，三个名字各说各挑什么。代码、协议字段与本文档沿用 `providerGroup`／「供应商组」，不改名。
+
 同一执行电脑的 Anthropic / OpenAI 供应商（2026-11-13 起也包括用户合并出的同类供应商）可包含[多个订阅账号](subscription-account-pools.md)。
 外层组仍选择供应商与电脑，执行入口在该电脑内部按账号池策略分配；组配额读取反映池内可用账号，
 不能只因默认账号耗尽而把整个供应商排除。旧电脑没有账号池查询能力时继续走原单账号配额读取。

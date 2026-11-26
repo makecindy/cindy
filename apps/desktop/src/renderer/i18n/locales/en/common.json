@@ -401,7 +401,7 @@
       "progress": "Current share {{used}}% · limit {{limit}}%",
       "paused": "This model is paused. Choose another available model.",
       "recommendation": "Recommended: {{model}}",
-      "unsupported": "Model share limits are not yet supported for this provider group.",
+      "unsupported": "Model share limits are not yet supported for this computer group.",
       "basis": "Last 7 calendar days · input + output tokens, excluding cache",
       "maxPercent": "Maximum share of personal usage",
       "empty": "No usage recorded",
@@ -498,14 +498,14 @@
         "confirm": "Remove Share"
       },
       "reshare": {
-        "applying": "wants to use it through {{owner}}’s provider group",
+        "applying": "wants to use it through {{owner}}’s computer group",
         "requestedAt": "Requested {{time}}",
         "usageHint": "If you agree, {{name}}’s sessions can run on this computer, and usage counts under {{owner}}",
         "approve": "Agree",
         "reject": "Decline",
         "summaryUsing_one": "{{count}} person uses it through {{owner}}’s provider group",
-        "summaryUsing_other": "{{count}} people use it through {{owner}}’s provider group",
-        "summaryOwner": "Through {{owner}}’s provider group",
+        "summaryUsing_other": "{{count}} people use it through {{owner}}’s computer group",
+        "summaryOwner": "Through {{owner}}’s computer group",
         "summaryDeclined_one": "{{count}} declined",
         "summaryDeclined_other": "{{count}} declined",
         "stateApproved": "Agreed",
@@ -513,10 +513,10 @@
         "revoke": "Withdraw",
         "revokeAria": "Withdraw agreement for {{name}}",
         "approveAria": "Agree to {{name}} using it",
-        "toastApproved": "{{name}} can now use {{provider}} through {{owner}}’s provider group",
+        "toastApproved": "{{name}} can now use {{provider}} through {{owner}}’s computer group",
         "toastRejected": "Declined {{name}}’s request",
         "toastRevoked": "Withdrew agreement for {{name}}. Running sessions were stopped.",
-        "listTitle": "Using it through {{owner}}’s provider group"
+        "listTitle": "Using it through {{owner}}’s computer group"
       },
       "memberNote": {
         "add": "Set Note",
@@ -562,7 +562,7 @@
       "requestedAt": "Requested {{time}} with your share link",
       "pairingHint": "Before approving, you can ask them over the channel you sent the link through: “What pairing code do you see?” Approve if it matches.",
       "callout": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
-      "calloutGroup": "Once approved, {{name}} can use {{provider}} models in their own sessions. The provider group picks the computer that runs the Agent, and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
+      "calloutGroup": "Once approved, {{name}} can use {{provider}} models in their own sessions. The computer group picks the computer that runs the Agent, and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
       "calloutRemote": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on the computer hosting this provider and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
       "calloutClaudeEmail": "While {{name}} uses it, the Agent can see the email address you sign in to Claude with.",
       "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
@@ -702,7 +702,7 @@
       "rejectedTitle": "Share Request Declined",
       "rejectedBody": "{{name}} declined to share {{provider}}",
       "reshareTitle": "New Usage Request",
-      "reshareBody": "{{name}} wants to use your shared {{provider}} through {{owner}}’s provider group"
+      "reshareBody": "{{name}} wants to use your shared {{provider}} through {{owner}}’s computer group"
     },
     "runLimits": {
       "title": "Remote session limits",
@@ -758,7 +758,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "Managing the provider group on {{device}}. Changes are saved on that computer; keep it online.",
+      "note": "Managing the computer group on {{device}}. Changes are saved on that computer; keep it online.",
       "unsupported": "The Cindy version on the computer with this group does not support remote management yet. Update Cindy on that computer first."
     },
     "page": {
@@ -829,12 +829,12 @@
       "emptyRange": "No usage in this period"
     },
     "section": {
-      "title": "Provider Group",
+      "title": "Computer Group",
       "addComputer": "Add Computer",
       "delete": "Delete Group",
       "empty": "Add {{provider}} from your other computers and tasks will pick one automatically",
-      "loading": "Loading provider group…",
-      "loadFailed": "Couldn’t load the provider group",
+      "loading": "Loading computer group…",
+      "loadFailed": "Couldn’t load the computer group",
       "note": "For sessions on this computer and sessions of people you share with, the group picks the computer that runs the Agent"
     },
     "autoSwitch": {
@@ -895,9 +895,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remove {{name}} from the provider group?",
+        "title": "Remove {{name}} from the computer group?",
         "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
-        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
+        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} computer group.",
         "confirm": "Remove from Group"
       },
       "sourceGroupOwner": "Hosts the group",
@@ -935,12 +935,12 @@
       "send": "Send message"
     },
     "deleteConfirm": {
-      "title": "Delete the {{provider}} provider group?",
+      "title": "Delete the {{provider}} computer group?",
       "description": "New tasks on this computer will run here. Tasks already on other computers stay where they are.",
       "confirm": "Delete Group"
     },
     "add": {
-      "title": "Add Computers to the {{provider}} Provider Group",
+      "title": "Add Computers to the {{provider}} Computer Group",
       "sourceAria": "Computer source",
       "tabAvailable": "Already Available",
       "tabLink": "Share Link",
@@ -957,11 +957,11 @@
     },
     "toast": {
       "added_one": "Added {{count}} computer to the {{provider}} provider group",
-      "added_other": "Added {{count}} computers to the {{provider}} provider group",
+      "added_other": "Added {{count}} computers to the {{provider}} computer group",
       "addedAccounts_one": "Added {{count}} account to the {{provider}} provider group",
-      "addedAccounts_other": "Added {{count}} accounts to the {{provider}} provider group",
-      "removed": "Removed {{name}} from the provider group",
-      "deleted": "Deleted the {{provider}} provider group"
+      "addedAccounts_other": "Added {{count}} accounts to the {{provider}} account group",
+      "removed": "Removed {{name}} from the computer group",
+      "deleted": "Deleted the {{provider}} computer group"
     }
   },
   "regionScreenshot": {
@@ -1359,7 +1359,7 @@
     "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
     "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
     "PRECONDITION_FAILED": "This action isn’t available in the current state.",
-    "PROVIDER_GROUP_CHANGED": "The provider group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
+    "PROVIDER_GROUP_CHANGED": "The computer group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the target model’s context window. Check the window setting for a custom model. If it can’t be changed, choose another model or start a new task.",
@@ -4402,10 +4402,10 @@
         "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
         "modelsTitle": "Available Models",
         "modelsEmpty": "This provider has no models available on that computer yet.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Provider Group",
+        "rowLabelGroup": "{{provider}} · {{device}} · Computer Group",
         "groupBadge_one": "Provider Group · {{count}} computer",
-        "groupBadge_other": "Provider Group · {{count}} computers",
-        "groupNote": "{{device}} made this provider a provider group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
+        "groupBadge_other": "Computer Group · {{count}} computers",
+        "groupNote": "{{device}} made this provider a computer group. When you start a task with it, {{device}} assigns the task to one of the computers below by its group strategy, and moves it to another one if that computer runs into a problem. While {{device}} is online, use Remote & Sharing here to manage the group and its shares.",
         "groupMembersTitle": "Computers in the Group",
         "groupMembersFailed": "Couldn’t get the status of the computers in the group right now.",
         "hiddenBanner": "Hidden from the model picker on this computer. Favorites and sessions that use it are unaffected."
@@ -4457,7 +4457,7 @@
         "remoteAccess": {
           "label": "Allow remote use",
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
-          "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
+          "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The computer group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn’t save the remote access setting. Try again.",
           "followsPool": "This connection was merged into “{{pool}}” and follows its “Allow remote use”. Change it there."
@@ -8635,8 +8635,8 @@
         "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
-        "hostTools_usage": "Read usage and provider group status",
-        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
+        "hostTools_usage": "Read usage and computer group status",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, computer group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -14701,7 +14701,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "Running on {{device}}",
         "providerGroupRunningHere": "Running on this computer",
-        "providerGroupUnassigned": "The Provider Group picks a computer when the task starts; usage then shows for that computer"
+        "providerGroupUnassigned": "The Computer Group picks a computer when the task starts; usage then shows for that computer"
       },
       "speed": {
         "label": "Speed",
@@ -16491,7 +16491,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can’t be used while “Use Only Agent-Net” is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the computer group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
       "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
@@ -18225,7 +18225,7 @@
           "sessions_dispatch": "Dispatch sessions",
           "feishu_read": "Read Feishu messages",
           "settings_read": "Read share members",
-          "usage_read": "Read usage and provider group status"
+          "usage_read": "Read usage and computer group status"
         },
         "project": "Project directory",
         "capabilitiesLabel": "Allowed capabilities",
@@ -18239,7 +18239,7 @@
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
           "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)",
           "settings_read": "Read your share members and allowed models on this computer or other authorized computers on the same account; no changes",
-          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
+          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, computer group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the “{{name}}” plugin, which is not installed — this capability will fail at run time",

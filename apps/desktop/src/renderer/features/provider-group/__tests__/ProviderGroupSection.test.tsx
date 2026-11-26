@@ -457,7 +457,7 @@ describe('ProviderGroupSection', () => {
     expect(accounts[0].textContent).toContain('Claude Pro');
     expect(accounts[1].textContent).toContain('Claude Max');
     // 本机 + Kai 的那台 = 2 台。
-    expect(screen.getByRole('heading', { name: '供应商组' }).nextElementSibling?.textContent).toBe('2');
+    expect(screen.getByRole('heading', { name: '电脑组' }).nextElementSibling?.textContent).toBe('2');
     fireEvent.click(screen.getByRole('button', { name: '添加电脑' }));
     const dialog = await screen.findByTestId('provider-group-add-dialog');
     const offered = await within(dialog).findByTestId('provider-group-candidate-device');

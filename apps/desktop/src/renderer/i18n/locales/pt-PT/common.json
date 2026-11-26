@@ -406,7 +406,7 @@
       "progress": "Proporção atual {{used}}% · limite {{limit}}%",
       "paused": "Este modelo está em pausa. Escolha outro modelo disponível.",
       "recommendation": "Recomendado: {{model}}",
-      "unsupported": "Os limites de proporção por modelo ainda não são suportados neste grupo de fornecedores.",
+      "unsupported": "Os limites de proporção por modelo ainda não são suportados neste grupo de computadores.",
       "basis": "Últimos 7 dias de calendário · tokens de entrada + saída, excluindo a cache",
       "maxPercent": "Proporção máxima da utilização pessoal",
       "empty": "Sem utilização registada",
@@ -505,14 +505,14 @@
         "confirm": "Remover partilha"
       },
       "reshare": {
-        "applying": "quer utilizar através do grupo de fornecedores de {{owner}}",
+        "applying": "quer utilizar através do grupo de computadores de {{owner}}",
         "requestedAt": "Pedido {{time}}",
         "usageHint": "Se concordar, as sessões de {{name}} poderão ser executadas neste computador e a utilização será contabilizada em nome de {{owner}}",
         "approve": "Aceitar",
         "reject": "Recusar",
         "summaryUsing_one": "{{count}} pessoa utiliza através do grupo de fornecedores de {{owner}}",
-        "summaryUsing_other": "{{count}} pessoas utilizam através do grupo de fornecedores de {{owner}}",
-        "summaryOwner": "Através do grupo de fornecedores de {{owner}}",
+        "summaryUsing_other": "{{count}} pessoas utilizam através do grupo de computadores de {{owner}}",
+        "summaryOwner": "Através do grupo de computadores de {{owner}}",
         "summaryDeclined_one": "{{count}} recusou",
         "summaryDeclined_other": "{{count}} recusaram",
         "stateApproved": "Aceite",
@@ -520,10 +520,10 @@
         "revoke": "Retirar",
         "revokeAria": "Retirar consentimento para {{name}}",
         "approveAria": "Consentir a utilização por {{name}}",
-        "toastApproved": "{{name}} já pode utilizar {{provider}} através do grupo de fornecedores de {{owner}}",
+        "toastApproved": "{{name}} já pode utilizar {{provider}} através do grupo de computadores de {{owner}}",
         "toastRejected": "Pedido de {{name}} recusado",
         "toastRevoked": "Consentimento para {{name}} retirado. As sessões em execução foram interrompidas.",
-        "listTitle": "A utilizar através do grupo de fornecedores de {{owner}}",
+        "listTitle": "A utilizar através do grupo de computadores de {{owner}}",
         "summaryUsing_many": "{{count}} pessoas utilizam através do grupo de fornecedores de {{owner}}",
         "summaryDeclined_many": "{{count}} recusaram"
       },
@@ -571,7 +571,7 @@
       "requestedAt": "Pedido feito {{time}} através da sua ligação de partilha",
       "pairingHint": "Antes de aprovar, pode perguntar através do canal pelo qual enviou a ligação: «Que código de emparelhamento aparece?» Aprove se corresponder.",
       "callout": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O Agent é executado neste computador e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
-      "calloutGroup": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O grupo de fornecedores escolhe o computador que executa o Agent e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
+      "calloutGroup": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O grupo de computadores escolhe o computador que executa o Agent e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
       "calloutRemote": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O Agent é executado no computador que aloja este fornecedor e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
       "calloutClaudeEmail": "Enquanto {{name}} o utiliza, o Agent pode ver o endereço de e-mail que utiliza para iniciar sessão no Claude.",
       "calloutUnknown": "Se não reconhecer esta pessoa, recuse; a ligação deixa de funcionar assim que o pedido for recusado.",
@@ -711,7 +711,7 @@
       "rejectedTitle": "Pedido de partilha recusado",
       "rejectedBody": "{{name}} recusou partilhar {{provider}}",
       "reshareTitle": "Novo pedido de utilização",
-      "reshareBody": "{{name}} quer utilizar o seu {{provider}} partilhado através do grupo de fornecedores de {{owner}}"
+      "reshareBody": "{{name}} quer utilizar o seu {{provider}} partilhado através do grupo de computadores de {{owner}}"
     },
     "runLimits": {
       "title": "Limites de sessões remotas",
@@ -767,7 +767,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "A gerir o grupo de fornecedores em {{device}}. As alterações são guardadas nesse computador; mantenha-o online.",
+      "note": "A gerir o grupo de computadores em {{device}}. As alterações são guardadas nesse computador; mantenha-o online.",
       "unsupported": "A versão do Cindy no computador com este grupo ainda não suporta gestão remota. Atualize primeiro o Cindy nesse computador."
     },
     "page": {
@@ -839,12 +839,12 @@
       "computerCount_many": "{{count}} computadores"
     },
     "section": {
-      "title": "Grupo de fornecedores",
+      "title": "Grupo de computadores",
       "addComputer": "Adicionar computador",
       "delete": "Eliminar grupo",
       "empty": "Adicione {{provider}} dos seus outros computadores e as tarefas escolherão um automaticamente",
-      "loading": "A carregar o grupo de fornecedores…",
-      "loadFailed": "Não foi possível carregar o grupo de fornecedores",
+      "loading": "A carregar o grupo de computadores…",
+      "loadFailed": "Não foi possível carregar o grupo de computadores",
       "note": "Para sessões neste computador e sessões das pessoas com quem partilha, o grupo escolhe o computador que executa o Agent"
     },
     "autoSwitch": {
@@ -905,9 +905,9 @@
         }
       },
       "removeConfirm": {
-        "title": "Remover {{name}} do grupo de fornecedores?",
+        "title": "Remover {{name}} do grupo de computadores?",
         "description": "Não receberá novas tarefas. As tarefas já em execução nesse computador permanecem nele.",
-        "lastDescription": "É o último computador do grupo, pelo que removê-lo elimina o grupo de fornecedores de {{provider}}.",
+        "lastDescription": "É o último computador do grupo, pelo que removê-lo elimina o grupo de computadores de {{provider}}.",
         "confirm": "Remover do grupo"
       },
       "sourceGroupOwner": "Aloja o grupo",
@@ -950,12 +950,12 @@
       "send": "Enviar mensagem"
     },
     "deleteConfirm": {
-      "title": "Eliminar o grupo de fornecedores de {{provider}}?",
+      "title": "Eliminar o grupo de computadores de {{provider}}?",
       "description": "As novas tarefas neste computador serão executadas aqui. As tarefas já noutros computadores permanecem onde estão.",
       "confirm": "Eliminar grupo"
     },
     "add": {
-      "title": "Adicionar computadores ao grupo de fornecedores de {{provider}}",
+      "title": "Adicionar computadores ao grupo de computadores de {{provider}}",
       "sourceAria": "Origem do computador",
       "tabAvailable": "Já disponíveis",
       "tabLink": "Ligação de partilha",
@@ -972,11 +972,11 @@
     },
     "toast": {
       "added_one": "{{count}} computador adicionado ao grupo de fornecedores de {{provider}}",
-      "added_other": "{{count}} computadores adicionados ao grupo de fornecedores de {{provider}}",
+      "added_other": "{{count}} computadores adicionados ao grupo de computadores de {{provider}}",
       "addedAccounts_one": "{{count}} conta adicionada ao grupo de fornecedores de {{provider}}",
-      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de fornecedores de {{provider}}",
-      "removed": "{{name}} removido do grupo de fornecedores",
-      "deleted": "Grupo de fornecedores de {{provider}} eliminado",
+      "addedAccounts_other": "{{count}} contas adicionadas ao grupo de contas de {{provider}}",
+      "removed": "{{name}} removido do grupo de computadores",
+      "deleted": "Grupo de computadores de {{provider}} eliminado",
       "added_many": "{{count}} computadores adicionados ao grupo de fornecedores de {{provider}}",
       "addedAccounts_many": "{{count}} contas adicionadas ao grupo de fornecedores de {{provider}}"
     }
@@ -1377,7 +1377,7 @@
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
     "PRECONDITION_FAILED": "Esta ação está indisponível no estado atual. Tente novamente.",
-    "PROVIDER_GROUP_CHANGED": "O grupo de fornecedores foi alterado noutro local, pelo que esta ação não foi aplicada. Reveja as definições mais recentes e tente novamente.",
+    "PROVIDER_GROUP_CHANGED": "O grupo de computadores foi alterado noutro local, pelo que esta ação não foi aplicada. Reveja as definições mais recentes e tente novamente.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar quanto contexto esta tarefa utiliza. Mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo atual. Verifique a definição da janela para um modelo personalizado. Se não puder ser alterada, mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo de destino. Verifique a definição da janela para um modelo personalizado. Se não puder ser alterada, escolha outro modelo ou inicie uma nova tarefa.",
@@ -4457,10 +4457,10 @@
         "detailNote": "O Agent é executado em {{device}}, usando a sessão e a quota desse computador. Para o usar, selecione-o na lista de modelos ao iniciar uma tarefa. Para alterar este fornecedor, aceda a Definições → Fornecedores nesse computador.",
         "modelsTitle": "Modelos disponíveis",
         "modelsEmpty": "Este fornecedor ainda não tem modelos disponíveis nesse computador.",
-        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de fornecedores",
+        "rowLabelGroup": "{{provider}} · {{device}} · Grupo de computadores",
         "groupBadge_one": "Grupo de fornecedores · {{count}} computador",
-        "groupBadge_other": "Grupo de fornecedores · {{count}} computadores",
-        "groupNote": "{{device}} transformou este fornecedor num grupo de fornecedores. Ao iniciar uma tarefa com este grupo, {{device}} atribui a tarefa a um dos computadores abaixo segundo a estratégia do grupo e transfere-a para outro se esse computador tiver um problema. Enquanto {{device}} estiver online, use Acesso remoto e partilha aqui para gerir o grupo e as respetivas partilhas.",
+        "groupBadge_other": "Grupo de computadores · {{count}} computadores",
+        "groupNote": "{{device}} transformou este fornecedor num grupo de computadores. Ao iniciar uma tarefa com este grupo, {{device}} atribui a tarefa a um dos computadores abaixo segundo a estratégia do grupo e transfere-a para outro se esse computador tiver um problema. Enquanto {{device}} estiver online, use Acesso remoto e partilha aqui para gerir o grupo e as respetivas partilhas.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o estado dos computadores do grupo neste momento.",
         "groupBadge_many": "Grupo de fornecedores · {{count}} computadores",
@@ -4513,7 +4513,7 @@
         "remoteAccess": {
           "label": "Permitir utilização remota",
           "description": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O Agent é executado neste computador, usando a sessão e a quota deste computador.",
-          "descriptionGroup": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O grupo de fornecedores escolhe o computador que executa o Agent.",
+          "descriptionGroup": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O grupo de computadores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
           "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente.",
           "followsPool": "Esta ligação foi integrada em “{{pool}}” e segue o “Permitir utilização remota” dele. Altere lá."
@@ -8709,8 +8709,8 @@
         "hostTools_controlDetail": "Usar as ferramentas da Cindy para editar, arquivar, restaurar e controlar tarefas e projetos existentes, e importar ficheiros de tarefas em formato nativo neste computador.",
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
-        "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
-        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
+        "hostTools_usage": "Ler a utilização e o estado dos grupos de computadores",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de computadores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -18394,7 +18394,7 @@
           "sessions_dispatch": "Encaminhar sessões",
           "feishu_read": "Ler mensagens do Feishu",
           "settings_read": "Ler membros das partilhas",
-          "usage_read": "Ler a utilização e o estado dos grupos de fornecedores"
+          "usage_read": "Ler a utilização e o estado dos grupos de computadores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -18408,7 +18408,7 @@
           "sessions_dispatch": "Criar ou reativar sessões de {{appName}} e entregar mensagens",
           "feishu_read": "Listar conversas com atividade recente; obter mensagens recentes de uma conversa (grupo ou mensagem direta)",
           "settings_read": "Lê os membros das tuas partilhas e os modelos permitidos neste computador ou noutros computadores autorizados da mesma conta; não faz alterações",
-          "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
+          "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de computadores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — esta capacidade irá falhar durante a execução",

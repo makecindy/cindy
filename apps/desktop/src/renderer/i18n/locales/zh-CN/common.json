@@ -401,7 +401,7 @@
       "progress": "当前占比 {{used}}% · 上限 {{limit}}%",
       "paused": "此模型已暂停，请选择其他可用模型。",
       "recommendation": "推荐使用 {{model}}",
-      "unsupported": "此供应商组暂不支持模型占比限制。",
+      "unsupported": "此电脑组暂不支持模型占比限制。",
       "basis": "近 7 个自然日 · 输入＋输出 token，不含缓存",
       "maxPercent": "占个人用量的上限",
       "empty": "暂无用量数据",
@@ -496,23 +496,23 @@
         "confirm": "删除分享"
       },
       "reshare": {
-        "applying": "想经 {{owner}} 的供应商组使用",
+        "applying": "想经 {{owner}} 的电脑组使用",
         "requestedAt": "{{time}}请求",
         "usageHint": "同意后，{{name}} 的任务可以在这台电脑上运行，用量算在 {{owner}} 名下",
         "approve": "同意",
         "reject": "拒绝",
-        "summaryUsing_other": "{{count}} 人经 {{owner}} 的供应商组使用",
-        "summaryOwner": "经 {{owner}} 的供应商组",
+        "summaryUsing_other": "{{count}} 人经 {{owner}} 的电脑组使用",
+        "summaryOwner": "经 {{owner}} 的电脑组",
         "summaryDeclined_other": "{{count}} 人未同意",
         "stateApproved": "已同意",
         "stateRejected": "未同意",
         "revoke": "撤回同意",
         "revokeAria": "撤回对 {{name}} 的同意",
         "approveAria": "同意 {{name}} 使用",
-        "toastApproved": "已同意 {{name}} 经 {{owner}} 的供应商组使用 {{provider}}",
+        "toastApproved": "已同意 {{name}} 经 {{owner}} 的电脑组使用 {{provider}}",
         "toastRejected": "已拒绝 {{name}} 的请求",
         "toastRevoked": "已撤回对 {{name}} 的同意，正在运行的任务已停止",
-        "listTitle": "经 {{owner}} 的供应商组使用"
+        "listTitle": "经 {{owner}} 的电脑组使用"
       },
       "memberNote": {
         "add": "设置备注",
@@ -558,7 +558,7 @@
       "requestedAt": "{{time}}通过你的分享链接申请",
       "pairingHint": "同意前可以通过发链接的渠道问对方一句：「你看到的配对码是多少？」一致再同意。",
       "callout": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
-      "calloutGroup": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。由供应商组选一台电脑运行 Agent，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
+      "calloutGroup": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。由电脑组选一台电脑运行 Agent，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
       "calloutRemote": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在供应商所在的电脑上运行，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
       "calloutClaudeEmail": "{{name}} 使用时，Agent 能看到你登录 Claude 用的邮箱。",
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
@@ -698,7 +698,7 @@
       "rejectedTitle": "分享申请未通过",
       "rejectedBody": "{{name}} 没有同意分享 {{provider}}",
       "reshareTitle": "新的使用请求",
-      "reshareBody": "{{name}} 想经 {{owner}} 的供应商组使用你分享的 {{provider}}"
+      "reshareBody": "{{name}} 想经 {{owner}} 的电脑组使用你分享的 {{provider}}"
     },
     "runLimits": {
       "title": "远程任务上限",
@@ -710,7 +710,7 @@
       "idleHint": "任务闲置满这个时长后，这台电脑会结束它的 Agent，名额随即释放；对方再发消息时会自动接回原来的对话。正在运行的任务不会被收回。填 0 表示从不收回。",
       "idleInvalid": "请填写 0～{{max}} 的整数。",
       "usage": "当前占用 {{used}} / {{total}}，来自 {{devices}} 台设备；单台设备最多占用 {{largest}} 个。",
-      "applyHint": "保存后立即生效。调低上限不会中断已有任务，只会限制新增。供应商组中转按直接连接的设备计数。",
+      "applyHint": "保存后立即生效。调低上限不会中断已有任务，只会限制新增。电脑组中转按直接连接的设备计数。",
       "save": "保存",
       "reset": "恢复默认",
       "saved": "远程任务上限已保存",
@@ -754,7 +754,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "正在管理 {{device}} 上的供应商组。修改会保存到那台电脑，请保持它在线。",
+      "note": "正在管理 {{device}} 上的电脑组。修改会保存到那台电脑，请保持它在线。",
       "unsupported": "建组电脑的 Cindy 版本暂不支持远程管理。请先更新那台电脑上的 Cindy。"
     },
     "page": {
@@ -824,12 +824,12 @@
       "emptyRange": "这段时间没有用量"
     },
     "section": {
-      "title": "供应商组",
+      "title": "电脑组",
       "addComputer": "添加电脑",
       "delete": "删除组",
       "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
-      "loading": "正在读取供应商组…",
-      "loadFailed": "未能读取供应商组",
+      "loading": "正在读取电脑组…",
+      "loadFailed": "未能读取电脑组",
       "note": "这台电脑上的任务和分享的人的任务，都由组选一台电脑运行 Agent"
     },
     "autoSwitch": {
@@ -887,9 +887,9 @@
         }
       },
       "removeConfirm": {
-        "title": "把 {{name}} 移出供应商组？",
+        "title": "把 {{name}} 移出电脑组？",
         "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
-        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
+        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的电脑组。",
         "confirm": "移出组"
       },
       "sourceGroupOwner": "组所在电脑",
@@ -925,12 +925,12 @@
       "send": "继续发送"
     },
     "deleteConfirm": {
-      "title": "删除 {{provider}} 的供应商组？",
+      "title": "删除 {{provider}} 的电脑组？",
       "description": "之后这台电脑上的新任务都在本机运行；已经分到其他电脑的任务留在那台电脑上。",
-      "confirm": "删除供应商组"
+      "confirm": "删除电脑组"
     },
     "add": {
-      "title": "把电脑加入 {{provider}} 的供应商组",
+      "title": "把电脑加入 {{provider}} 的电脑组",
       "sourceAria": "电脑来源",
       "tabAvailable": "已经能用的",
       "tabLink": "分享链接",
@@ -939,17 +939,17 @@
       "loadFailed": "未能读取可以加入的电脑",
       "empty": "没有可以加入的电脑。在其他电脑上对 {{provider}} 打开「允许被远程调用」，或用别人的分享链接申请。",
       "alreadyMember": "已在组里",
-      "confirm": "加入供应商组",
+      "confirm": "加入电脑组",
       "cancel": "取消",
       "linkDescription": "粘贴别人分享的 {{provider}} 链接，对方同意后，回到「已经能用的」里勾选加入。",
       "remoteLinkDescription": "请在组所在电脑的「模型供应商」设置中输入分享链接。对方同意后，再回到「已经能用的」勾选加入。",
       "pasteLink": "粘贴分享链接"
     },
     "toast": {
-      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的供应商组",
-      "addedAccounts_other": "已把 {{count}} 个账号加入 {{provider}} 的供应商组",
-      "removed": "已把 {{name}} 移出供应商组",
-      "deleted": "已删除 {{provider}} 的供应商组"
+      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的电脑组",
+      "addedAccounts_other": "已把 {{count}} 个账号加入 {{provider}} 的账号组",
+      "removed": "已把 {{name}} 移出电脑组",
+      "deleted": "已删除 {{provider}} 的电脑组"
     }
   },
   "regionScreenshot": {
@@ -1346,7 +1346,7 @@
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "INVALID_PARAMS": "参数无效，请检查后重试。",
     "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
-    "PROVIDER_GROUP_CHANGED": "供应商组已在别处修改，本次操作未执行。请查看最新设置后重新操作",
+    "PROVIDER_GROUP_CHANGED": "电脑组已在别处修改，本次操作未执行。请查看最新设置后重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切换：无法确认当前任务已使用的上下文。请保留当前模型，或新建任务后再选择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切换：无法确认当前模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请保留当前模型或新建任务",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未切换：无法确认目标模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请选择其他模型或新建任务",
@@ -4360,9 +4360,9 @@
         "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
         "modelsTitle": "可用的模型",
         "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。",
-        "rowLabelGroup": "{{provider}} · {{device}} · 供应商组",
-        "groupBadge_other": "供应商组 · {{count}} 台电脑",
-        "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。{{device}} 在线时，你可以从这里的「远程与分享」管理这个组和分享。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 电脑组",
+        "groupBadge_other": "电脑组 · {{count}} 台电脑",
+        "groupNote": "{{device}} 把这个供应商建成了电脑组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。{{device}} 在线时，你可以从这里的「远程与分享」管理这个组和分享。",
         "groupMembersTitle": "组内电脑",
         "groupMembersFailed": "暂时读不到组内电脑的状态。",
         "hiddenBanner": "已从这台电脑的模型选择器中隐藏。收藏和正在使用它的任务不受影响。"
@@ -4414,7 +4414,7 @@
         "remoteAccess": {
           "label": "允许被远程调用",
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
-          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
+          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由电脑组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试",
           "followsPool": "这条连接已并进「{{pool}}」，跟随它的「允许被远程调用」，请在「{{pool}}」里修改。"
@@ -8592,8 +8592,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
-        "hostTools_usage": "读取用量与供应商组状态",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
+        "hostTools_usage": "读取用量与电脑组状态",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、电脑组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -14646,7 +14646,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "当前在 {{device}} 上运行",
         "providerGroupRunningHere": "当前在这台电脑上运行",
-        "providerGroupUnassigned": "开始后由供应商组选一台电脑，用量按那台显示"
+        "providerGroupUnassigned": "开始后由电脑组选一台电脑，用量按那台显示"
       },
       "speed": {
         "label": "速度",
@@ -16425,7 +16425,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "电脑组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
       "REMOTE_AGENT_GROUP_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在「远程与分享」中提高上限。",
@@ -18150,7 +18150,7 @@
           "sessions_dispatch": "派发任务",
           "feishu_read": "读取飞书消息",
           "settings_read": "读取分享成员",
-          "usage_read": "读取用量与供应商组状态"
+          "usage_read": "读取用量与电脑组状态"
         },
         "project": "项目目录",
         "capabilitiesLabel": "允许调用的能力",
@@ -18164,7 +18164,7 @@
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",
           "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息",
           "settings_read": "读取自己分享的成员及模型范围，含同账号已授权电脑；不修改",
-          "usage_read": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置"
+          "usage_read": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、电脑组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依赖「{{name}}」插件，但该插件未安装——运行时此能力会失败",
@@ -22758,7 +22758,7 @@
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 个来源）",
       "routeDecides": "这次用哪个来源由路由「{{name}}」决定",
-      "quotaOf": "额度：{{name}}"
+      "quotaOf": "配额：{{name}}"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -22896,7 +22896,7 @@
       "addWhole": "添加整个供应商",
       "addWholeHint": "它的全部模型都进这条路由：选模型时这条路由像一个供应商，照常选模型，由路由决定这次用哪个成员。",
       "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。",
-      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、思考深度，由路由决定这次用哪个成员。"
+      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、推理强度，由路由决定这次用哪个成员。"
     },
     "kinds": {
       "byModel": "按模型",

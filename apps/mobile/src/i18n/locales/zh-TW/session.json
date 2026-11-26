@@ -695,7 +695,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未傳送訊息，Cindy 未能及時確認安全記錄",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以在電腦上這個供應商的「遠端與分享」頁查看組內電腦。",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "電腦組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以在電腦上這個供應商的「遠端與分享」頁查看組內電腦。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法存取本地檔案或圖片附件。請直接貼上內容。",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動審批模型的配額已耗盡。在執行 Agent 的電腦上檢查用量或計費，或在設定中自訂輔助模型。需要審批的操作仍需由你確認。",
