@@ -728,6 +728,47 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
 }
 
 /**
+ * Give each packaged macOS app its own deterministic Mach-O LC_UUID before
+ * signing. Prebuilt Electron shares one stock LC_UUID across apps of the same
+ * Electron release; macOS Local Network privacy (nehelper) tracks executables
+ * by LC_UUID as well as bundle ID, so colliding with stock Electron.app or
+ * another Electron app causes macOS to suppress the one-time permission prompt
+ * and omit Cindy from System Settings > Local Network (verified 2026-11-26).
+ */
+async function applyMacUniqueExecutableUuid(buildPath: string, platform: string): Promise<void> {
+  if (platform !== 'darwin') return;
+  const { deriveMacAppMachoUuid, patchMachoUuid } = await import('../../scripts/macos-macho-uuid.mjs');
+  const electronVersion = (_require('electron/package.json') as { version: string }).version;
+  const apps = fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'));
+  for (const appDir of apps) {
+    const exePath = path.join(buildPath, appDir, 'Contents', 'MacOS', CINDY_EXE);
+    if (!fs.existsSync(exePath)) {
+      throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
+    }
+    const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
+    const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
+    if (process.platform === 'darwin') {
+      // Refresh the local ad-hoc signature so unsigned `forge package` outputs
+      // stay launchable on Apple silicon; external release signing seals it again.
+      const resign = spawnSync(
+        'codesign',
+        ['--force', '--sign', '-', '--preserve-metadata=entitlements', exePath],
+        { stdio: 'pipe' },
+      );
+      if (resign.status !== 0) {
+        const stderr = resign.stderr ? String(resign.stderr).trim() : '';
+        throw new Error(
+          `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${stderr}`,
+        );
+      }
+    }
+    console.log(
+      `[forge:postPackage] mac LC_UUID ${previous.join(',')} → ${uuid} (${appDir}/Contents/MacOS/${CINDY_EXE})`,
+    );
+  }
+}
+
+/**
  * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
  * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
  * toolchains still package the app without it. The widget extension needs its own
@@ -2240,6 +2281,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          await applyMacUniqueExecutableUuid(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
           installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }

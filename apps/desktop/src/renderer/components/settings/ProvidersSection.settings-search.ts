@@ -30,12 +30,18 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     keywordKeys: [
       'subscriptionAccounts.add',
+      'subscriptionAccounts.existing.connect',
+      'subscriptionAccounts.existing.choose',
       'subscriptionAccounts.strategy',
       'settings.providers.detail.sameAccountConnections',
       'settings.providers.detail.sameAccountConnectionsHint',
     ],
     aliases: [
       '多账号',
+      'Claude 路径',
+      '配置目录',
+      'CLAUDE_CONFIG_DIR',
+      'CODEX_HOME',
       '订阅账号',
       '并发上限',
       '权重',
