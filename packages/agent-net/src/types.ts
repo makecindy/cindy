@@ -166,6 +166,12 @@ export interface TransportOptions {
   module?: WebAssembly.Module;
   tap?(datagram: Uint8Array, via: 'udp' | 'relay'): void;
   udpTraffic?: BigUint64Array;
+  /**
+   * The native engine's transport (Desktop): turn a `host:port` for STUN or relay UDP into the address to use, before the
+   * engine resolves it itself. The Desktop avoids proxies' Fake-IP answers this way (stun.ts `resolveUdpHost`), as the WASM
+   * transport does on its own; the phones pass none and the engine resolves names as before.
+   */
+  resolveUdpServer?(server: string): Promise<string>;
   /** Optional plain-text transport lifecycle/fallback logger (no addresses, keys or payloads). */
   onLog?(level: 'info' | 'warn', message: string): void;
 }

@@ -107,7 +107,12 @@ port.on('message', (message) => {
   if (message.type === 'init' && !socket) {
     const options = message.options as AgentNetSocketOptions;
     for (const view of options.cachedDirectory ?? []) ids.add(view.certificate.deviceId);
+    // The native engine when Main found its module (workerSocket.ts `native`); WASM when there is none or it fails.
+    const nativeBinding = typeof message.nativeBinding === 'string' && !message.tap && !options.bindAddress && !options.bindPort
+      ? message.nativeBinding : undefined;
+    let fellBack = false;
     void AgentNetSocket.open({ ...options, client: client(message.client),
+      ...(nativeBinding ? { native: { binding: nativeBinding, onFallback(code: string) { fellBack = true; send({ type: 'engine', engine: 'wasm', code }); } } } : {}),
       onLog(level, text) { send({ type: 'log', level, message: text }); },
       onDirectory(directory) { receivedDirectory = true; for (const view of directory) ids.add(view.certificate.deviceId); send({ type: 'directory', directory }); snapshot(); },
       onDelegationRequests(requests) { send({ type: 'delegation-requests', requests }); },
@@ -119,6 +124,7 @@ port.on('message', (message) => {
       ...(message.tap ? { tap: (data, via) => send({ type: 'tap', data, via }) } : {}),
     }).then((value) => {
       socket = value;
+      if (nativeBinding && !fellBack) send({ type: 'engine', engine: 'native' });
       sessionMessage = serveWorkerSessions(value, send);
       if (!receivedDirectory) send({ type: 'directory', cached: true, directory: (options.cachedDirectory ?? []).filter((view) =>
         socket!.certificateFor(view.certificate.deviceId)?.signature === view.certificate.signature) });

@@ -22,6 +22,7 @@ import {
 import os from 'node:os';
 import { StunClient } from './stun.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
+import { PathRouter } from './pathRouter.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
@@ -45,16 +46,8 @@ const DRAIN_TIMEOUT_MS = 2_000;
 /** 和核心放弃握手的时间（`dead_after_us`）一样长。 */
 const REFUSAL_MEMORY_MS = 30_000;
 const DEFAULT_REPROBE_MS = 10_000;
-/** 备用路径（直连时测中转，或优先中转时测直连）的首次与定期测速间隔。 */
-const STANDBY_INITIAL_MEASURE_MS = 2_000;
-/** 备用路径测速结果超过这么久未更新就视为过期，不再在详情里展示旧值。 */
-const PATH_RTT_STALE_MS = 120_000;
-/** 自动选路门槛：直连比中转慢 50% 以上且至少慢 40ms 才自动切/留中转；回切直连需恢复到 ≤ 1.2x + 15ms 且过了冷却。 */
-export const AUTO_RELAY_RATIO = 1.5;
-export const AUTO_RELAY_DELTA_MS = 40;
-export const AUTO_DIRECT_RECOVER_RATIO = 1.2;
-export const AUTO_DIRECT_RECOVER_DELTA_MS = 15;
-export const AUTO_SWITCH_COOLDOWN_MS = 30_000;
+// 选路的门槛与判断在 pathRouter.ts（原生引擎的传输共用），这里照旧导出给已有的调用方。
+export { AUTO_DIRECT_RECOVER_DELTA_MS, AUTO_DIRECT_RECOVER_RATIO, AUTO_RELAY_DELTA_MS, AUTO_RELAY_RATIO, AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from './pathRouter.js';
 /** 显式换网触发重建 UDP 套接字的最短间隔：合并短时间内连续到达的网卡/代理/中转重连事件，避免高频抖动。 */
 const DEFAULT_NETWORK_REBIND_COOLDOWN_MS = 3_000;
 /** 连续 UDP 发送报错达到该次数，或出现套接字 fd 已失效错误时，触发重建 UDP 套接字。 */
@@ -68,28 +61,6 @@ const MAX_AUTO_REBINDS_WITHOUT_INBOUND = 2;
 const DEFAULT_UDP_BLACKHOLE_TIMEOUT_MS = 5_000;
 /** 巡检 UDP 套接字健康状态的默认周期。 */
 const DEFAULT_UDP_HEALTH_POLL_MS = 1_000;
-
-export function decideAutoPreferRelay(input: {
-  currentPreferRelay: boolean;
-  directRttMs: number | null;
-  relayRttMs: number | null;
-  msSinceLastSwitch: number;
-}): boolean {
-  const { currentPreferRelay, directRttMs, relayRttMs, msSinceLastSwitch } = input;
-  if (directRttMs === null || relayRttMs === null) return currentPreferRelay;
-  if (!currentPreferRelay) {
-    if (msSinceLastSwitch < AUTO_SWITCH_COOLDOWN_MS) return false;
-    return directRttMs > relayRttMs * AUTO_RELAY_RATIO && directRttMs - relayRttMs >= AUTO_RELAY_DELTA_MS;
-  }
-  if (msSinceLastSwitch < AUTO_SWITCH_COOLDOWN_MS) return true;
-  return !(directRttMs <= relayRttMs * AUTO_DIRECT_RECOVER_RATIO + AUTO_DIRECT_RECOVER_DELTA_MS);
-}
-
-function isPathPreference(value: unknown): value is PathPreference {
-  return value === 'auto' || value === 'direct' || value === 'relay';
-}
-/** 核心一次最多同时验证 4 条路径，再多会把先开始的挤掉，所以每轮最多验这么多个，下一轮接着验后面的。 */
-const PROBES_PER_ROUND = 4;
 /** 对端给的候选地址最多收这么多个。 */
 const MAX_CANDIDATES = 16;
 const DATA = 0x44;
@@ -105,8 +76,6 @@ export interface CoreDial {
 }
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
-const sameAddress = (a: Address | null, b: Address | null): boolean =>
-  a !== null && b !== null && a.address === b.address && a.port === b.port;
 
 class CoreChannel implements PeerChannel {
   readonly remoteId: string;
@@ -114,23 +83,8 @@ class CoreChannel implements PeerChannel {
   private readonly outbound: SendStream;
   private readonly control: SendStream;
   private readonly localCandidates: Address[];
-  private candidates: Address[] = [];
-  /** 下一轮从第几个候选地址验起。 */
-  private nextCandidate = 0;
-  private reprobe: NodeJS.Timeout | null = null;
-  private standbyMeasure: NodeJS.Timeout | null = null;
-  private initialStandbyTimer: NodeJS.Timeout | null = null;
-  private lastDirectAddress: Address | null = null;
-  private lastObservedPath: 'direct' | 'relay' | null = null;
-  private measuredDirectRttMs: number | null = null;
-  private measuredDirectAt = 0;
-  private measuredRelayRttMs: number | null = null;
-  private measuredRelayAt = 0;
-  private localPreference: PathPreference = 'auto';
-  private peerPreference: PathPreference = 'auto';
-  private autoPreferRelay = false;
-  private peerAutoPreferRelay = false;
-  private lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
+  /** Direct or relayed, and when to probe or measure which path (pathRouter.ts, shared with the native engine's transport). */
+  private readonly router: PathRouter<PeerAddress>;
   private sessionCapable = false;
   private sessionsDeclared = false;
   /** What the peer declared besides session support itself (opaque to this layer; see `declareSessions`). */
@@ -155,9 +109,9 @@ class CoreChannel implements PeerChannel {
   constructor(
     private readonly connection: Connection,
     localCandidates: Address[],
-    private readonly reprobeMs: number,
+    reprobeMs: number,
     private readonly publicOnly = false,
-    private readonly relayAddress: () => PeerAddress | null = () => null,
+    relayAddress: () => PeerAddress | null = () => null,
   ) {
     this.remoteId = hex(connection.remotePublicKey);
     this.outbound = connection.openStream('normal');
@@ -165,8 +119,19 @@ class CoreChannel implements PeerChannel {
     this.control = connection.openStream('interactive');
     this.control.write(Uint8Array.of(CONTROL));
     this.localCandidates = localCandidates;
+    this.router = new PathRouter<PeerAddress>({
+      closed: () => this.events.closed || connection.closed,
+      path: () => this.path(),
+      directAddress: () => { const address = connection.closed ? null : connection.peerAddress(); return address && !isLinkAddress(address) ? address : null; },
+      activeRttMs: () => { const srtt = this.stats()?.srttUs; return typeof srtt === 'number' && srtt > 0 ? srtt / 1000 : null; },
+      relayAddress,
+      probe: (address) => { connection.probe(address); },
+      measure: (address) => { connection.measure(address); },
+      setPreferRelay: (prefer) => connection.setPreferRelay(prefer),
+      writeControl: (line) => this.control.write(Buffer.from(line)),
+    }, reprobeMs);
     this.announceCandidates();
-    connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.onProbeRtt(address, rttUs));
+    connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.router.onProbeRtt(address, isLinkAddress(address), rttUs));
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
       let text = '';
@@ -208,23 +173,11 @@ class CoreChannel implements PeerChannel {
       });
     });
     connection.on('close', () => {
-      this.stopReprobe();
+      this.router.stop();
       this.events.close();
     });
-    // 还在走中转时每隔一阵再验证一轮：先前没打通，或者直连断了退回了中转。
-    this.reprobe = setInterval(() => {
-      if (this.path() === 'relay' && !this.effectivePreferRelay()) this.probeCandidates();
-    }, reprobeMs);
-    this.reprobe.unref();
-    // 定期轻测备用路径往返（直连时测中转，优先中转时测直连）：既给详情页提供双路延迟，也让自动选路能察觉线路变化。
-    const standbyMs = reprobeMs * 3;
-    this.initialStandbyTimer = setTimeout(() => {
-      this.initialStandbyTimer = null;
-      this.measureStandbyPath();
-    }, Math.min(STANDBY_INITIAL_MEASURE_MS, standbyMs));
-    this.initialStandbyTimer.unref();
-    this.standbyMeasure = setInterval(() => this.measureStandbyPath(), standbyMs);
-    this.standbyMeasure.unref();
+    // 还在走中转时每隔一阵再验证一轮（先前没打通，或者直连断了退回了中转），并定期轻测备用路径往返。
+    this.router.start();
   }
 
   private onControl(line: string): void {
@@ -240,237 +193,30 @@ class CoreChannel implements PeerChannel {
         .filter((value): value is string => typeof value === 'string' && value !== AGENT_NET_SESSION_V1 && value.length <= 64).slice(0, 16);
       for (const handler of this.sessionCapableHandlers.splice(0)) handler();
     }
-    if (isPathPreference(message.pathPreference) || typeof message.autoRelay === 'boolean') {
-      if (isPathPreference(message.pathPreference)) this.peerPreference = message.pathPreference;
-      if (typeof message.autoRelay === 'boolean') this.peerAutoPreferRelay = message.autoRelay;
-      this.applyRoutePreference(true);
-    }
+    this.router.onPeerPreference(message);
     if (!Array.isArray(message.candidates)) return;
-    this.candidates = message.candidates
+    this.router.setCandidates(message.candidates
       .filter((value): value is Address => !!value && typeof value.address === 'string' && value.address.length <= 128 && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535)
       .filter((value) => !this.publicOnly || !isPrivate(value.address))
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
-      .slice(0, MAX_CANDIDATES);
-    this.nextCandidate = 0;
-    // 对端换网或重新公布候选时，若当前未走直连且旧直连地址已不在新候选列表里，清掉旧缓存以便立即探测新候选。
-    if (this.path() !== 'direct' && this.lastDirectAddress && !this.candidates.some((c) => sameAddress(c, this.lastDirectAddress))) {
-      this.lastDirectAddress = null;
-    }
-    if (this.effectivePreferRelay()) this.measureStandbyPath();
-    else this.probeCandidates();
+      .slice(0, MAX_CANDIDATES));
   }
   announceCandidates(): void {
     if (!this.events.closed && this.localCandidates.length) this.control.write(Buffer.from(`${JSON.stringify({ candidates: this.localCandidates })}\n`));
   }
 
-  private announcePathPreference(): void {
-    if (this.events.closed) return;
-    this.control.write(Buffer.from(`${JSON.stringify({ pathPreference: this.localPreference, autoRelay: this.autoPreferRelay })}\n`));
-  }
+  pathMetrics(): PeerPathMetrics { return this.router.pathMetrics(); }
 
-  private effectivePreferRelay(): boolean {
-    if (this.localPreference !== 'auto') return this.localPreference === 'relay';
-    if (this.peerPreference !== 'auto') return this.peerPreference === 'relay';
-    return this.autoPreferRelay || this.peerAutoPreferRelay;
-  }
+  setPathPreference(preference: PathPreference): void { this.router.setPathPreference(preference); }
 
   /** 当前连接是否因用户选择或自动选路主动偏好中转（与被动断直连区分）。 */
   isPreferringRelay(): boolean {
-    return this.effectivePreferRelay();
+    return this.router.effectivePreferRelay();
   }
 
   /** 本机换网或重建 UDP 套接字后：清掉旧网络的直连测速缓存与自动切路冷却，若此刻走中转则立即重新探测直连。 */
   onLocalNetworkChanged(): void {
-    if (this.events.closed || this.connection.closed) return;
-    this.lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
-    this.measuredDirectRttMs = null;
-    this.measuredDirectAt = 0;
-    this.nextCandidate = 0;
-    if (this.path() === 'relay') {
-      if (this.effectivePreferRelay()) this.measureStandbyPath();
-      else this.probeCandidates();
-    }
-  }
-
-  private freshRtt(value: number | null, at: number, now: number): number | null {
-    return value !== null && now - at <= PATH_RTT_STALE_MS ? value : null;
-  }
-
-  private activeRttMs(): number | null {
-    const srtt = this.stats()?.srttUs;
-    return typeof srtt === 'number' && srtt > 0 ? srtt / 1000 : null;
-  }
-
-  pathMetrics(): PeerPathMetrics {
-    const now = performance.now();
-    const active = this.path();
-    const activeRtt = this.activeRttMs();
-    const pathChanged = active !== null && active !== this.lastObservedPath;
-    if (active !== null) this.lastObservedPath = active;
-    if (active === 'direct') {
-      const addr = this.connection.closed ? null : this.connection.peerAddress();
-      if (addr && !isLinkAddress(addr)) this.lastDirectAddress = addr;
-      if (activeRtt !== null) {
-        this.measuredDirectRttMs = activeRtt;
-        this.measuredDirectAt = now;
-      }
-      const relayRttMs = this.freshRtt(this.measuredRelayRttMs, this.measuredRelayAt, now);
-      if (pathChanged && relayRttMs === null) this.measureStandbyPath();
-      return {
-        directRttMs: activeRtt ?? this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now),
-        relayRttMs,
-        preference: this.localPreference,
-      };
-    }
-    if (active === 'relay') {
-      if (activeRtt !== null) {
-        this.measuredRelayRttMs = activeRtt;
-        this.measuredRelayAt = now;
-      }
-      const directRttMs = this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now);
-      if (pathChanged && this.effectivePreferRelay() && directRttMs === null) this.measureStandbyPath();
-      return {
-        directRttMs,
-        relayRttMs: activeRtt ?? this.freshRtt(this.measuredRelayRttMs, this.measuredRelayAt, now),
-        preference: this.localPreference,
-      };
-    }
-    return {
-      directRttMs: this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now),
-      relayRttMs: this.freshRtt(this.measuredRelayRttMs, this.measuredRelayAt, now),
-      preference: this.localPreference,
-    };
-  }
-
-  setPathPreference(preference: PathPreference): void {
-    if (this.events.closed) return;
-    this.localPreference = preference;
-    this.lastAutoSwitchAt = Number.NEGATIVE_INFINITY;
-    if (preference !== 'auto') {
-      this.autoPreferRelay = false;
-    } else {
-      this.evaluateAutoRoute(false);
-    }
-    this.announcePathPreference();
-    this.applyRoutePreference(true);
-  }
-
-  private onProbeRtt(address: PeerAddress, rttUs: number): void {
-    if (this.events.closed) return;
-    const now = performance.now();
-    const rttMs = Math.max(0.1, rttUs / 1000);
-    if (isLinkAddress(address)) {
-      this.measuredRelayRttMs = rttMs;
-      this.measuredRelayAt = now;
-    } else {
-      const existingFresh = this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now);
-      // 同一轮多候选测速里保留更快的直连地址，避免慢公网回包覆盖刚测出的局域网低延迟直连。
-      const keepExisting =
-        this.lastDirectAddress !== null &&
-        !sameAddress(this.lastDirectAddress, address) &&
-        existingFresh !== null &&
-        now - this.measuredDirectAt < this.reprobeMs &&
-        existingFresh < rttMs;
-      if (!keepExisting) {
-        this.lastDirectAddress = address;
-        this.measuredDirectRttMs = rttMs;
-        this.measuredDirectAt = now;
-      }
-    }
-    const autoChanged = this.evaluateAutoRoute(true);
-    // 正在中转且自动模式测出直连不比中转明显慢：马上发起真正切换。
-    if (!autoChanged && !isLinkAddress(address) && this.path() === 'relay' && !this.effectivePreferRelay()) {
-      this.connection.probe(this.lastDirectAddress ?? address);
-    }
-  }
-
-  private evaluateAutoRoute(applyAndNotify: boolean): boolean {
-    if (this.localPreference !== 'auto') return false;
-    const { directRttMs, relayRttMs } = this.pathMetrics();
-    const now = performance.now();
-    const next = decideAutoPreferRelay({
-      currentPreferRelay: this.autoPreferRelay,
-      directRttMs,
-      relayRttMs,
-      msSinceLastSwitch: now - this.lastAutoSwitchAt,
-    });
-    if (next === this.autoPreferRelay) return false;
-    this.autoPreferRelay = next;
-    this.lastAutoSwitchAt = now;
-    if (applyAndNotify) {
-      this.announcePathPreference();
-      this.applyRoutePreference(true);
-    }
-    return true;
-  }
-
-  private pickDirectTargets(): Address[] {
-    const now = performance.now();
-    if (this.lastDirectAddress && this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now) === null) {
-      this.lastDirectAddress = null;
-    }
-    const targets: Address[] = [];
-    if (this.lastDirectAddress) targets.push(this.lastDirectAddress);
-    const total = this.candidates.length;
-    if (total > 0 && targets.length < PROBES_PER_ROUND) {
-      let checked = 0;
-      while (checked < total && targets.length < PROBES_PER_ROUND) {
-        const candidate = this.candidates[this.nextCandidate % total];
-        this.nextCandidate = (this.nextCandidate + 1) % total;
-        checked++;
-        if (!targets.some((item) => sameAddress(item, candidate))) targets.push(candidate);
-      }
-    }
-    return targets;
-  }
-
-  private applyRoutePreference(triggerSwitch: boolean): void {
-    if (this.events.closed || this.connection.closed) return;
-    const preferRelay = this.effectivePreferRelay();
-    this.connection.setPreferRelay(preferRelay);
-    if (!triggerSwitch) return;
-    const current = this.path();
-    if (preferRelay && current === 'direct') {
-      const relay = this.relayAddress();
-      if (relay) this.connection.probe(relay);
-    } else if (!preferRelay && current === 'relay') {
-      for (const target of this.pickDirectTargets()) this.connection.probe(target);
-    }
-  }
-
-  private measureStandbyPath(): void {
-    if (this.events.closed || this.connection.closed) return;
-    const current = this.path();
-    if (current === 'direct') {
-      const relay = this.relayAddress();
-      if (relay) this.connection.measure(relay);
-    } else if (current === 'relay' && this.effectivePreferRelay()) {
-      for (const target of this.pickDirectTargets()) this.connection.measure(target);
-    }
-  }
-
-  private probeCandidates(): void {
-    if (this.events.closed) return;
-    // 公网地址排在前面（查公网地址得到的那些），内网地址在后。装了 Docker 之类的机器有很多内网地址，
-    // 2026-11-05 真实网络测试里公网地址排在第 9 个，被截掉了，两台本来能直连的电脑一直走中转。
-    const count = Math.min(PROBES_PER_ROUND, this.candidates.length);
-    // 自动模式且走在中转上时，先仅测速验证直连往返，拿到 RTT 确认直连不明显慢于中转后再切，避免切到慢直连抖一下。
-    const measureFirst = this.localPreference === 'auto' && this.path() === 'relay' && this.relayAddress() !== null;
-    for (let i = 0; i < count; i++) {
-      const target = this.candidates[(this.nextCandidate + i) % this.candidates.length];
-      if (measureFirst) this.connection.measure(target);
-      else this.connection.probe(target);
-    }
-    this.nextCandidate = (this.nextCandidate + count) % Math.max(1, this.candidates.length);
-  }
-
-  private stopReprobe(): void {
-    if (this.reprobe) clearInterval(this.reprobe);
-    this.reprobe = null;
-    if (this.standbyMeasure) clearInterval(this.standbyMeasure);
-    this.standbyMeasure = null;
-    if (this.initialStandbyTimer) clearTimeout(this.initialStandbyTimer);
-    this.initialStandbyTimer = null;
+    this.router.onLocalNetworkChanged();
   }
 
   send(bytes: Uint8Array): void {
@@ -614,7 +360,7 @@ class CoreChannel implements PeerChannel {
 
   close(options?: { drain?: boolean }): void {
     if (this.events.closed) return;
-    this.stopReprobe();
+    this.router.stop();
     this.events.close();
     if (options?.drain === false) { this.connection.close(); return; }
     this.outbound.finish();

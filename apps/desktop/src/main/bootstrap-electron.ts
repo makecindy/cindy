@@ -9,6 +9,7 @@ import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import type { AppSettingsWriteGuard } from './app-settings/service.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushProviderShareUsageStore } from './device-link/providerShareUsageStore.js';
 import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
@@ -11896,6 +11897,8 @@ onQuit('git-context', () => disposeGitContext(), 'async');
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 const stopPiUsageRecovery = onUsagePricingChanged(() => { void retryPendingPiUsageReceipts(); });
 onQuit('pi-usage-recovery', stopPiUsageRecovery, 'sync');
+// Final turn receipts are emitted while async Maker shutdown drains; checkpoint afterwards.
+onQuit('provider-share-usage', flushProviderShareUsageStore, 'post-async');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();
