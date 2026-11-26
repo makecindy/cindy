@@ -225,6 +225,7 @@ import { BotGroupQuote } from '@/session/BotGroupQuote';
 import {
   clearSentCompanionReplyQuote,
   companionReplyQuoteDisplay,
+  companionReplyQuoteScope,
   getPendingCompanionReplyQuote,
   setPendingCompanionReplyQuote,
   usePendingCompanionReplyQuote,
@@ -6519,18 +6520,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     companionName={companionName} enabled={companionEntry.ready} />
   ) : undefined;
   const showCompanionReplyTargets = useCompanionReplyTargetPreference();
-  const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat ? sessionId : null);
+  const pendingReplyScope = companionReplyQuoteScope(deviceId, sessionId);
+  const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat && sessionId ? pendingReplyScope : null);
   const companionQuoteNames = useMemo(() => ({ owner: t('message.renderer.you'), companion: companionName }), [companionName, t]);
   const companionQuoteOptions = useMemo<CompanionQuoteOptions | undefined>(() =>
       companionChat && sessionId ? {
     names: companionQuoteNames,
     showReplyTargets: showCompanionReplyTargets,
     onQuote: (quote) => {
-      setPendingCompanionReplyQuote(sessionId, quote);
+      setPendingCompanionReplyQuote(pendingReplyScope, quote);
       requestAnimationFrame(() => composerInputRef.current?.focus());
     },
     onLocate: (clientId) => router.setParams({ focusClientId: clientId, focusRequestKey: String(Date.now()) }),
-  } : undefined, [companionChat, companionQuoteNames, router, sessionId, showCompanionReplyTargets]);
+  } : undefined, [companionChat, companionQuoteNames, pendingReplyScope, router, sessionId, showCompanionReplyTargets]);
   const pendingCompanionQuoteOriginal = useMemo(() => {
     const clientId = pendingCompanionReplyQuote?.clientId;
     if (!clientId) return undefined;
@@ -6842,7 +6844,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!connectionDispatchBlockedAtSend) setError(null);
     const outboxEligible = !queueEditAtSendStart;
     // 伙伴私聊的待发引用随这条消息写进信封；送达交接后才撤下，失败时保留以便重发。
-    const replyQuoteAtSend = outboxEligible && !independent ? (getPendingCompanionReplyQuote(sessionId) ?? undefined)
+    const replyQuoteAtSend = outboxEligible && !independent ? (getPendingCompanionReplyQuote(pendingReplyScope) ?? undefined)
           : undefined;
     const uploadsInFlight = outboxEligible && !independent ? getPendingUploadCount() : 0;
     const willHaveAttachments = !independent && (attachmentsRef.current.length > 0 || uploadsInFlight > 0);
@@ -7195,7 +7197,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           mobileDebugLog('debug', 'device-link', 'send saved on phone', {
             client: item.clientId.slice(-8), clickToSavedMs: Date.now() - clickedAt,
           });
-          if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+          if (replyQuoteAtSend) clearSentCompanionReplyQuote(pendingReplyScope, replyQuoteAtSend);
           handoff?.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
           if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
@@ -7596,7 +7598,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           queued.clientId,
         );
         enqueueAccepted = true;
-        if (replyQuoteAtSend) clearSentCompanionReplyQuote(sessionId, replyQuoteAtSend);
+        if (replyQuoteAtSend) clearSentCompanionReplyQuote(pendingReplyScope, replyQuoteAtSend);
       } catch (err) {
         // 回滚前先分辨「确实没应用」vs「已应用但响应丢了」:优先 refetch 权威
         // projection 判断。只有权威证据能保留乐观气泡；证据不可用时回到现有
@@ -12001,7 +12003,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <RouteActionButton
                     accessibilityLabel={t('message.quote.remove')}
                     hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-                    onPress={() => setPendingCompanionReplyQuote(sessionId, null)}
+                    onPress={() => setPendingCompanionReplyQuote(pendingReplyScope, null)}
                     style={styles.queueEditBarClose}
                     testID="session.companionQuoteRemove"
                   >
