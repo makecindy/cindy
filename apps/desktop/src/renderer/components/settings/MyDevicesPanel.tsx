@@ -517,7 +517,7 @@ export function MyDevicesPanel({
                   setEditingName(selfName);
                 }}
                 aria-label={t('settings.devices.rename')}
-                className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
               >
                 <Pencil size={13} />
               </button>
@@ -675,7 +675,7 @@ export function MyDevicesPanel({
                           setEditingName(cloud?.baseName?.(d) ?? d.name);
                         }}
                         aria-label={t('settings.devices.rename')}
-                        className="rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                        className="rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                       >
                         <Pencil size={13} />
                       </button>
@@ -686,7 +686,7 @@ export function MyDevicesPanel({
                         onClick={() => requestDelete(d)}
                         disabled={deleting}
                         aria-label={t('settings.devices.delete')}
-                        className="rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 size={13} />
                       </button>

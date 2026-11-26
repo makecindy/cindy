@@ -85,17 +85,21 @@ export function AppPreferenceControl() {
       if (patch.sidebarPinned !== undefined) pinned.setMode(patch.sidebarPinned);
       if (patch.sidebarTasks !== undefined) tasks.setMode(patch.sidebarTasks);
       if (patch.feishuNotifications !== undefined) feishu.setEnabled(patch.feishuNotifications);
-      if (patch.swallowActivationClick !== undefined) swallow.setEnabled(patch.swallowActivationClick);
+      const swallowSave = patch.swallowActivationClick === undefined
+        ? undefined : swallow.setEnabled(patch.swallowActivationClick);
       if (patch.networkDebug !== undefined) {
         networkDebug.setEnabled(patch.networkDebug);
         // Same main-side switch the About row syncs; development builds keep it on.
         void window.electronAPI?.ccSetDebugNet?.(import.meta.env.DEV ? true : patch.networkDebug);
       }
-      if (patch.language !== undefined) {
-        return Promise.resolve(locale.setLocale(patch.language)).then(saved => {
+      const localeSave = patch.language === undefined
+        ? undefined : Promise.resolve(locale.setLocale(patch.language)).then(saved => {
           if (!saved) throw new Error('PERSISTENCE_NOT_CONFIRMED');
         });
-      }
+      if (!swallowSave) return localeSave;
+      return Promise.all([swallowSave, localeSave]).then(([saved]) => {
+        if (!saved) throw new Error('PERSISTENCE_NOT_CONFIRMED');
+      });
     };
     const pending = patch.theme !== undefined || patch.themeFamily !== undefined
       ? theme.setSelection({ theme: patch.theme, familyId: patch.themeFamily }, active) : undefined;

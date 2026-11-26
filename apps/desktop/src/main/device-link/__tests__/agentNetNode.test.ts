@@ -20,6 +20,7 @@ import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { createTransportModeProof, verifyTransportModeProof } from '@cindy/agent-net-relay/client';
 import { createAgentNetNode, type AgentNetNodePorts } from '../agentNetNode';
+import { resetPeerOfficialStunCacheForTest } from '../agentNetStunDiscovery';
 import { acceptTransportStatement } from '../agentNetTransportStatement';
 
 const { root, bootstrap } = createPrivateNetwork('Unit official network', generateIdentity('unit-root-owner'));
@@ -48,7 +49,7 @@ function fixture() {
 }
 
 describe('createAgentNetNode', () => {
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(() => { vi.useRealTimers(); resetPeerOfficialStunCacheForTest(); });
   it('starts from the device list it saved last time when the official service cannot be reached', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-net-node-cache-'));
     const { ports } = fixture();
@@ -243,4 +244,63 @@ it('uses the rejoined Host certificate for a member request during rejoin', asyn
   expect(startedBeforeRenewalFinished).toBe(1);
   expect(connected.certificate.signature).not.toBe(previous.certificate.signature);
   expect((await node.member()).certificate.signature).toBe(connected.certificate.signature);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createAgentNetNode().openSocket` 在官方网络下并行补齐对向官方区域 STUN（含慢返回非阻塞更新），
+ *   非官方/测试 URL 不访问官方 STUN，同时将可选 `bindPort` 端口透传给 `AgentNetWorkerSocket.open`。
+ * - Bug／规则依据：Node Host 与 Desktop 共用官方双区 STUN 与公网云主机固定 UDP 端口能力（architecture-invariants §5）。
+ * - 现有覆盖缺口：原有 agentNetNode 测试未覆盖双区 STUN 与 `bindPort` 透传。
+ * - 最小失败输入：官方 CN 基址 + 慢 Global `/info` + `bindPort: () => 41641`；非官方测试基址不触发官方请求。
+ * - tier：unit（内存凭证库与假 fetch，无真实网络或等待）。
+ */
+it('discovers dual-region official STUN without blocking openSocket and forwards optional bindPort on Node Host', async () => {
+  resetPeerOfficialStunCacheForTest();
+  const { ports } = fixture();
+  let resolvePeer!: (res: Response) => void;
+  const fetched: string[] = [];
+  ports.base = () => 'https://agent-net.cindy.com.cn';
+  ports.workerFile = () => 'unit-worker.mjs';
+  ports.coreModule = async () => ({}) as WebAssembly.Module;
+  ports.bindPort = () => 41641;
+  ports.fetch = async (url) => {
+    fetched.push(String(url));
+    if (String(url) === 'https://agent-net.cindy.com.cn/api/agent-net/info') {
+      return Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.com.cn', features: [] });
+    }
+    if (String(url) === 'https://agent-net.cindy.app/api/agent-net/info') {
+      return new Promise<Response>((resolve) => { resolvePeer = resolve; });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const opened: Array<Parameters<typeof AgentNetWorkerSocket.open>[0]> = [];
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn(), useSessions: vi.fn(), restrictPeers: vi.fn(), setStunServers: vi.fn() });
+  const open = vi.spyOn(AgentNetWorkerSocket, 'open').mockImplementation(async (options) => { opened.push(options); return socket as never; });
+  try {
+    await createAgentNetNode(ports).openSocket('account-a');
+    expect(opened[0].bindPort).toBe(41641);
+    expect(opened[0].relayUdpServer).toBe('agent-net-stun.cindy.com.cn:3479');
+    expect(opened[0].stunServers).toEqual(['agent-net-stun.cindy.com.cn:3479']);
+    expect(fetched).toEqual(['https://agent-net.cindy.app/api/agent-net/info', 'https://agent-net.cindy.com.cn/api/agent-net/info']);
+    resolvePeer(Response.json({ protocolVersion: 2, mode: 'official', udpPort: 3479, stunHost: 'agent-net-stun.cindy.app', features: [] }));
+    await vi.waitFor(() => expect(socket.setStunServers).toHaveBeenCalledWith([
+      'agent-net-stun.cindy.com.cn:3479',
+      'agent-net-stun.cindy.app:3479',
+    ]));
+
+    // Non-official base never queries official STUN endpoints and omits bindPort when unset.
+    const nonOfficialFetched: string[] = [];
+    const { ports: custom } = fixture();
+    custom.workerFile = () => 'unit-worker.mjs';
+    custom.coreModule = async () => ({}) as WebAssembly.Module;
+    custom.fetch = async (url) => {
+      nonOfficialFetched.push(String(url));
+      return Response.json({ protocolVersion: 2, mode: 'self-hosted', udpPort: 3479, stunHost: 'custom-stun.example.test', features: [] });
+    };
+    await createAgentNetNode(custom).openSocket('account-a');
+    expect(nonOfficialFetched).toEqual(['https://agent-net.example.test/api/agent-net/info']);
+    expect(opened[1].stunServers).toEqual(['custom-stun.example.test:3479']);
+    expect(opened[1].bindPort).toBeUndefined();
+  } finally { open.mockRestore(); resetPeerOfficialStunCacheForTest(); }
 });

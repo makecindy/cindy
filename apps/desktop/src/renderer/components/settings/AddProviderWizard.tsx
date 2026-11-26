@@ -1,3 +1,5 @@
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityPluginName } from '@cindy/maker-shared/branding';
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
@@ -26,6 +28,7 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { Check, Info, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -1897,7 +1900,9 @@ export function AddProviderWizard({
                     {matchingPlugins.map(item => (
                       <ProviderRow
                         key={item.pluginId}
-                        icon={cardIcon({ name: item.name })}
+                        icon={isAntigravityPluginId(item.ghostId) || isAntigravityPluginName(item.name)
+                          ? <PluginEngineIcon size={15} iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} />
+                          : cardIcon({ name: item.name })}
                         name={item.name}
                         meta={t('settings.providers.wizard.configurePlugin')}
                         onClick={() => setPluginStep({ item, owner: getDataOwnerGeneration() })}
@@ -2248,37 +2253,26 @@ export function AddProviderWizard({
                       style={{ borderColor: 'var(--border-default)' }}
                     >
                       {generalPicks.map(([id, v], i) => (
-                        <button
+                        <label
                           key={id}
-                          type="button"
-                          onClick={() =>
-                            setPicks((prev) => {
-                              const next = new Map(prev);
-                              const cur = next.get(id);
-                              if (cur) next.set(id, { ...cur, checked: !cur.checked });
-                              return next;
-                            })
-                          }
                           className={cn(
-                            'flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                            'flex cursor-pointer items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
                             i > 0 && 'border-t',
                           )}
                           style={{ borderColor: 'var(--border-default)' }}
                         >
-                          <span
-                            className="flex h-4 w-4 shrink-0 items-center justify-center rounded border"
-                            style={
-                              v.checked
-                                ? {
-                                    backgroundColor: 'var(--accent-cta-bg)',
-                                    borderColor: 'var(--accent-cta-bg)',
-                                    color: 'var(--surface-on-card)',
-                                  }
-                                : { borderColor: 'var(--text-tertiary)' }
+                          <Checkbox
+                            data-settings-search-action="Choose whether this discovered model is added to the new provider"
+                            checked={v.checked}
+                            onChange={() =>
+                              setPicks((prev) => {
+                                const next = new Map(prev);
+                                const cur = next.get(id);
+                                if (cur) next.set(id, { ...cur, checked: !cur.checked });
+                                return next;
+                              })
                             }
-                          >
-                            {v.checked && <Check size={11} strokeWidth={3} />}
-                          </span>
+                          />
                           <span
                             className="min-w-0 flex-1 truncate text-13"
                             style={{ color: 'var(--settings-section-title)' }}
@@ -2310,7 +2304,7 @@ export function AddProviderWizard({
                               {t('settings.providers.wizard.recommended')}
                             </span>
                           )}
-                        </button>
+                        </label>
                       ))}
                     </div>
                   )}

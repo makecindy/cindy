@@ -50,6 +50,13 @@ export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-
  * 只有对端声明了它，接收端才对其发紧凑 / 延后 ACK；链路确认 ACK 永远立即发送。
  */
 export const DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2 = 'transport-ack-v2';
+/**
+ * 双向声明支持在可靠层请求帧上附带控制端实际协商等待上限（`meta.deadlineMs`），
+ * 供被控端仅在控制端自身明确已超时的前提下将只读回包原位退役为 `transport-skip`。
+ * 未声明该能力或未携带 `deadlineMs` 的旧控制端/自定义调用永不按默认猜测上限退役。
+ */
+export const DEVICE_LINK_CAPABILITY_READ_DEADLINE_V1 = 'read-deadline-v1';
+export const MAX_TRANSPORT_READ_DEADLINE_MS = 3_600_000;
 /** 紧凑 ACK 里 streamId 前缀的长度（UUID 前 12 位，约 44 bit，足以区分同一对端的前后两代 stream）。 */
 export const TRANSPORT_ACK_STREAM_PREFIX_CHARS = 12;
 /** 延后 ACK 的合并窗口。 */
@@ -211,6 +218,8 @@ export interface ReliableTransportMeta {
   seq: number;
   /** 发送端当前仍可能重放的最小 seq，用于接收端进程重启后恢复累计 ACK 基线。 */
   baseSeq?: number;
+  /** 控制端为本次幂等只读请求声明的最大剩余等待毫秒数（仅在协商 read-deadline-v1 后发送）。 */
+  deadlineMs?: number;
   segment?: {
     index: number;
     total: number;
@@ -312,6 +321,7 @@ export function encodeReliableFrames(
   streamId: string,
   seq: number,
   baseSeq = 1,
+  deadlineMs?: number,
 ): Envelope[] {
   if (
     !streamId
@@ -323,6 +333,13 @@ export function encodeReliableFrames(
   ) {
     throw new Error('invalid transport stream metadata');
   }
+  const validDeadlineMs =
+    typeof deadlineMs === 'number'
+    && Number.isSafeInteger(deadlineMs)
+    && deadlineMs > 0
+    && deadlineMs <= MAX_TRANSPORT_READ_DEADLINE_MS
+      ? deadlineMs
+      : undefined;
   const json = JSON.stringify(env.payload);
   if (typeof json !== 'string') throw new Error('transport payload is not JSON serializable');
   const totalBytes = byteLength(json);
@@ -339,6 +356,7 @@ export function encodeReliableFrames(
       streamId,
       seq,
       ...(baseSeq > 1 ? { baseSeq } : {}),
+      ...(validDeadlineMs !== undefined && index === 0 ? { deadlineMs: validDeadlineMs } : {}),
       ...(chunks.length > 1
         ? { segment: { index, total: chunks.length, totalBytes } }
         : {}),
@@ -376,6 +394,13 @@ export function parseTransportPayload(payload: unknown): ParsedTransportPayload 
   ) {
     return null;
   }
+  const deadlineMs =
+    typeof rawMeta.deadlineMs === 'number'
+    && Number.isSafeInteger(rawMeta.deadlineMs)
+    && rawMeta.deadlineMs > 0
+    && rawMeta.deadlineMs <= MAX_TRANSPORT_READ_DEADLINE_MS
+      ? rawMeta.deadlineMs
+      : undefined;
   const segment = rawMeta.segment;
   if (segment !== undefined) {
     if (!isRecord(segment)) return null;
@@ -406,6 +431,7 @@ export function parseTransportPayload(payload: unknown): ParsedTransportPayload 
         streamId,
         seq,
         ...(baseSeq > 1 ? { baseSeq } : {}),
+        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
         segment: {
           index,
           total,
@@ -421,6 +447,7 @@ export function parseTransportPayload(payload: unknown): ParsedTransportPayload 
       streamId,
       seq,
       ...(baseSeq > 1 ? { baseSeq } : {}),
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
     },
     data: payload.data,
   };

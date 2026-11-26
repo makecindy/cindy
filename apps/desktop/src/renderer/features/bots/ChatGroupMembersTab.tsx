@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from '@/components/ui/input';
 import type { BotGroupMemberView, BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
@@ -32,7 +33,14 @@ export function ChatGroupMembersTab({ group, owner, manager, busy, actions }: {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => botGroupMemberDisplayName(member).toLocaleLowerCase().includes(needle)) : group.members;
+  const shown = needle ? group.members.filter(member => [
+    botGroupMemberDisplayName(member),
+    member.name,
+    member.displayName,
+    member.orgName,
+    member.department,
+    member.departmentPath,
+  ].some(field => field?.toLocaleLowerCase().includes(needle))) : group.members;
   return <>
     <div className="relative">
       <Search size={16} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
@@ -63,13 +71,17 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
   // Ownership goes to a person, including yourself when your teammate holds it.
   const transferable = owner && !!member.actorId && member.actorKind === 'human' && member.role !== 'owner';
   const menuable = !group.dissolvedAt && (manageable || transferable || (mine && !!member.actorId));
+  const orgInfo = !bot
+    ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null))
+    : null;
   const hint = assistant ? t(key('assistantHint')) : bot
     ? `${t(key('teammateTag'))} · ${t(paused ? key('paused') : ACCESS_LABELS[member.guestAccess ?? 'chat'])}`
-    : t(key(member.role ?? 'member'));
+    : [t(key(member.role ?? 'member')), orgInfo].filter(Boolean).join(' · ');
   // The wrapper carries the card divider: the row inside is always its first child.
   return <div className={SETTINGS_DIVIDER} onContextMenu={menuable ? event => { event.preventDefault(); setOpen(true); } : undefined}>
     <SettingsRow media lead={<BotAvatar bot={member} size="sm" className={paused ? 'h-8 w-8 opacity-60' : 'h-8 w-8'} />}
-      title={name} tag={member.isSelf ? t(key('you')) : undefined} hint={hint}
+      title={member.external ? <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5"><span>{name}</span><BotGroupExternalBadge /></span> : name}
+      tag={member.isSelf ? t(key('you')) : undefined} hint={hint}
       trailing={menuable ? <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label={name} data-testid="chat-group-member-menu" disabled={busy}

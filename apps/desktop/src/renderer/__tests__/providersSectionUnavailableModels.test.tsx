@@ -275,6 +275,10 @@ beforeEach(() => {
   confirmSpy.mockReset().mockResolvedValue(false);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    providerGroup: {
+      command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
     modelAccess: { getByokStatus: vi.fn(async () => ({ providers: [] })) },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({

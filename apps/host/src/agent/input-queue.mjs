@@ -13,6 +13,7 @@ import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/messag
 import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
+import { bindTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
@@ -53,7 +54,7 @@ const errorText = error => error instanceof Error ? error.message : String(error
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
-function composeInput(item, stored) {
+function composeInput(item, stored, handoff) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
@@ -81,6 +82,17 @@ function composeInput(item, stored) {
       if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
       result[key] = item[key];
     }
+  }
+  if (handoff) {
+    // Only the in-process handoff adapter supplies this argument.
+    result.autoReviewUserText = handoff.autoReviewUserText;
+    result.origin = handoff.origin;
+    result.sourcePlugin = handoff.sourcePlugin;
+    result.createOpts = {
+      ...storedSessionOptions(stored),
+      planMode: handoff.inheritTargetPlanMode === true && Boolean(stored.planModeEnabled),
+    };
+    return result;
   }
   // Only the in-process App service can mint this symbol. Wire JSON cannot
   // promote page text into user intent or recreate a grant after a crash.
@@ -554,7 +566,9 @@ export function createInputQueue(deps) {
         assertCurrent();
         return known?.has(clientId) ? 'recorded' : 'unknown';
       }),
-      enqueue(id, item) {
+      // The optional third argument is supplied only by the in-process handoff adapter.
+      // HTTP/IPC input still goes through composeInput's untrusted-field filter.
+      enqueue(id, item, handoff) {
         const admission = stateFor(id).admission;
         return command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
@@ -564,7 +578,20 @@ export function createInputQueue(deps) {
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
           if (known?.has(item?.clientId)) return api.projection(id);
           refuseWhileHeld();
-          const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
+          if (handoff && !stored) {
+            assertCurrent();
+            return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
+          }
+          const queued = composeInput(item, stored, handoff);
+          if (handoff) bindTaskActionInput(id, queued, handoff.taskActionDeliveryGuard);
+          const prepared = await prepareAttachments(id, queued, admission);
+          if (handoff) {
+            await handoff.taskActionDeliveryGuard();
+            assertCurrent();
+            refuseWhileHeld();
+            if (state.admission !== admission) throw new Error('input cancelled before acceptance');
+          }
           let accepted = false;
           try {
             state.lastUserActionAt = Date.now();

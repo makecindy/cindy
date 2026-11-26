@@ -22,6 +22,7 @@ import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDep
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
 import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { holdsContextRecoveryBroadcast, isContextOverflowErrorData } from '../../maker-ipc/contextOverflowRollover';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
@@ -931,7 +932,19 @@ describe('remote connection pool with a real host', () => {
     scenario.releaseHold?.();
   });
 
-  it.each(['missing', 'aborted', 'provider-restarting'] as const)('settles %s during the first turn once and reconnects the live Session', async reason => {
+  // #12558 integration: the restart branch must retain the received close reason
+  // and run correlation, not infer an OS process exit. Existing assertions only
+  // counted errors. Minimal input: an unfinished real Session + a missing run.
+  it.each([
+    { reason: 'missing' },
+    { reason: 'aborted' },
+    { reason: 'provider-restarting' },
+    { reason: 'provider-restarting', message: 'provider is shutting down' },
+    { reason: 'provider-restarting', message: '' },
+    { reason: 'provider-restarting', message: 'prompt is too long' },
+    { reason: 'provider-restarting', message: 'tool execution failed' },
+    { reason: 'aborted', message: 'user rejected the request' },
+  ])('settles $reason ($message) during the first turn once and reconnects the live Session', async ({ reason, message }) => {
     const clients: RemoteAgentRunClient[] = [];
     const onData = RemoteAgentRunClient.prototype.onData;
     const receive = vi.spyOn(RemoteAgentRunClient.prototype, 'onData').mockImplementation(function (this: RemoteAgentRunClient, data, done) {
@@ -944,7 +957,8 @@ describe('remote connection pool with a real host', () => {
       interrupt = false;
       return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => {
         if (reason === 'missing') return { ...run, missing: true };
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason }) + '\n');
+        const data = Buffer.from(JSON.stringify({ t: 'closed', reason,
+          ...(message !== undefined ? { error: { code: 'AGENT_ERROR', message } } : {}) }) + '\n');
         return { ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true };
       }) };
     });
@@ -963,6 +977,21 @@ describe('remote connection pool with a real host', () => {
       await expect(sending).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'done')).toBe(true));
       expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
+      const closedRunId = clients[0].runId;
+      const interruption = seen.find(e => e.type === 'error')!;
+      // #12605: a close detail must not select a second recovery owner. Exercise
+      // the actual projection plus the group's and context delivery's predicates.
+      expect(isContextOverflowErrorData(interruption.data)).toBe(false);
+      expect(holdsContextRecoveryBroadcast({ remoteHostId: null }, interruption)).toBe(false);
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(interruption.data), 'run')).toMatchObject({
+        action: 'switch', connection: 'lost', cool: false,
+      });
+      expect(interruption.data).toMatchObject({
+        reason: 'remote_agent_restarted', isTerminal: true,
+        remoteCloseReason: reason, remoteRunId: closedRunId,
+        sdkError: `Remote agent stream closed (${reason}); runId: ${closedRunId}`,
+        message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
+      });
       expect(session.isTurnRunning()).toBe(false);
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'text' && textOf(e) === 'ok:continued')).toBe(true));

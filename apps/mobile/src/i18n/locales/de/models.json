@@ -157,7 +157,6 @@
     "genericName": "Plugin-Engine",
     "defaultModel": "Standardmodell",
     "unavailable": "{{engine}} ist nicht verfügbar",
-    "unavailableWithHint": "{{engine}} ist nicht verfügbar: {{hint}}",
-    "worktreeUnsupported": "Plugin-Engines können noch keine Aufgaben in einem Worktree starten. Schalte Worktree aus, um zu senden."
+    "unavailableWithHint": "{{engine}} ist nicht verfügbar: {{hint}}"
   }
 }
