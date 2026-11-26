@@ -23,6 +23,16 @@ export const windowBehaviorSettings = defineSettings({
     descriptionKey: 'settings.windowBehavior.menubar.hint',
     isVisible: ({ platform }) => platform === 'darwin',
   },
+  trayCardLabel: {
+    id: 'settings.windowBehavior.trayCard.label',
+    fallbackTargetId: 'settings-window-behavior',
+    tab: 'general',
+    targetId: 'settings-search-tray-card',
+    titleKey: 'settings.windowBehavior.trayCard.label',
+    sectionKey: 'settings.sections.windowBehavior',
+    descriptionKey: 'settings.windowBehavior.trayCard.hint',
+    isVisible: ({ platform }) => platform === 'win32',
+  },
   closeBehaviorLabel: {
     id: 'settings.windowBehavior.closeBehavior.label',
     fallbackTargetId: 'settings-window-behavior',
@@ -36,7 +46,7 @@ export const windowBehaviorSettings = defineSettings({
       { value: 'minimize', labelKey: 'settings.windowBehavior.closeBehavior.minimize', isVisible: ({ platform }) => platform === 'linux' },
       { value: 'quit', labelKey: 'settings.windowBehavior.closeBehavior.quit' },
     ],
-    isVisible: ({ platform }) => platform === 'linux' || platform === 'win32',
+    isVisible: ({ platform, managedCloudInstance }) => (platform === 'linux' || platform === 'win32') && !managedCloudInstance,
   },
   swallowActivationClickLabel: {
     id: 'settings.windowBehavior.swallowActivationClickLabel',

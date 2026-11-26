@@ -1,4 +1,4 @@
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ModelSelectorContent } from '../../../src/renderer/components/new-chat/ModelSelector';
 import { recordRecentModel } from '../../../src/renderer/state/recentModels';
 import { addModelFavorite, setModelFavoritesOwner } from '../../../src/renderer/state/modelFavorites';
@@ -121,7 +121,10 @@ function Fixture({ scenario }: { scenario: string }) {
     ? { membershipKind: 'personal', orgSlug: null, orgName: null }
     : { membershipKind: 'org', orgSlug: scenario === 'cindy-xd' ? 'xd' : 'example', orgName: 'Example International Game Studio' }, t);
   const custom = scenario.startsWith('custom-ids');
-  const sourceProviders = custom ? customProviders : gateway ? [...providers, {
+  const uploadedIcon = ctx.data.customIcon;
+  const sourceProviders = typeof uploadedIcon === 'string'
+    ? [{ ...providers[0]!, customIcon: uploadedIcon }, providers[1]!]
+    : custom ? customProviders : gateway ? [...providers, {
     ...providers[1], id: 'xd', name: accountName, auth: { method: 'managed' },
     logoKind: scenario === 'cindy-xd' ? 'xd' : 'cindy',
     models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },

@@ -17,6 +17,8 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 const {
   readProviderPresentation,
+  readProviderConnectionIcons,
+  setProviderConnectionIcon,
   setProviderPresentation,
   readLocalCodexPresentation,
   renameLocalCodexProvider,
@@ -26,6 +28,16 @@ const {
 } = await import('../provider-presentation-store.js');
 const { withCrossProcessLock } = await import('../../device-link/crossProcessLock.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+it('只读目录查询保留坏的展示配置并报告不可读，不走旧 read 自愈', () => {
+  owner = 'readonly-malformed';
+  const file = path.join(tmpDir, owner, 'local-codex-provider-prefs.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{invalid');
+  try {
+    expect(() => readProviderPresentation('openai', { allowSideEffects: false })).toThrow('PROVIDER_PRESENTATION_UNREADABLE');
+    expect(fs.readFileSync(file, 'utf8')).toBe('{invalid');
+  } finally { owner = 'first'; }
+});
 
 it.each(['openai', 'anthropic', 'xai', 'google', 'generic-oauth'])('does not fail committed %s authentication when presentation cannot be written', async (id) => {
   owner = `failed-presentation-${id}`;
@@ -80,6 +92,21 @@ it('rejects empty or oversized names without changing the saved name', async () 
   await expect(renameLocalCodexProvider('  ')).rejects.toThrow();
   await expect(renameLocalCodexProvider('a'.repeat(129))).rejects.toThrow();
   expect(readLocalCodexPresentation()).toEqual({ name: 'My OpenAI', removed: false });
+});
+
+// Unit: two accounts at the same brand need independent, resettable picker marks.
+it('keeps icons scoped to each connection and owner when resetting one of two identical brands', async () => {
+  owner = 'icon-owner';
+  try {
+    await setProviderConnectionIcon('glm-home', 'personal');
+    await setProviderConnectionIcon('glm-team', 'work');
+    expect(readProviderConnectionIcons()).toEqual({ 'glm-home': 'personal', 'glm-team': 'work' });
+    owner = 'another-icon-owner';
+    expect(readProviderConnectionIcons()).toEqual({});
+    owner = 'icon-owner';
+    await setProviderConnectionIcon('glm-team', null);
+    expect(readProviderConnectionIcons()).toEqual({ 'glm-home': 'personal' });
+  } finally { owner = 'first'; }
 });
 
 it('keeps each native connection and local service name separate', async () => {

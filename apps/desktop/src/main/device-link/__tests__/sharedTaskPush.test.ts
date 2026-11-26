@@ -11,7 +11,8 @@ vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 
-import { __testing } from '../dispatch.desktop';
+import { __testing, setSessionsSubscribedListener, pushSessionActivityToController } from '../dispatch.desktop';
+import { SessionActivityRelay } from '../../agent-island/sessionActivityRelay';
 import * as subscriptions from '../subscriptions';
 import { setSharedTaskDispatchHost } from '../sharedTaskDispatch';
 import type { SharedTaskHost } from '../sharedTaskHost';
@@ -58,6 +59,55 @@ afterEach(() => {
 });
 
 describe('shared task metadata uses only its authorized task subscription', () => {
+  // Unit regression: task-only subscriptions previously skipped activity replay,
+  // leaving the guest running after a lost terminal push or host restart.
+  it('replays an idle clear after stale offline activity, only to the subscribing guest', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe(guestB, ['session:task-b']);
+    subscriptions.subscribe('own-list', ['sessions']);
+    subscriptions.clearController(guestA);
+    __testing.forwardPush('local-db:sessions:activity', { sessionId: 'task-a', phase: 'running', attention: false });
+    const relay = new SessionActivityRelay(() => {});
+    setSessionsSubscribedListener((dst, sessionId) => {
+      relay.replay([], payload => pushSessionActivityToController(dst, payload), sessionId);
+    });
+    const result = __testing.handleSubscriptionFrame(guestA, {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:task-a'] }],
+    });
+    expect(result.ok).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    const frames = transport.sendPush.mock.calls.filter(call => call[0] === guestA && call[1] === 'local-db:sessions:activity');
+    expect(frames.at(-1)?.[2]).toMatchObject({ sessionId: 'task-a', phase: 'completed', attention: false });
+    expect(transport.sendPush.mock.calls.filter(call => call[0] === guestB)).toEqual([]);
+    relay.dispose();
+  });
+
+  it('filters scoped replay and refuses other tasks and revoked guests', async () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestB, ['session:task-b']);
+    const replay = vi.fn((dst: string) => {
+      for (const sessionId of ['task-a', 'task-b']) {
+        pushSessionActivityToController(dst, { sessionId, phase: 'running', attention: false });
+      }
+    });
+    setSessionsSubscribedListener(replay);
+    const subscribe = (sessionId: string) => __testing.handleSubscriptionFrame(guestA, {
+      channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: [`session:${sessionId}`] }],
+    });
+    expect(subscribe('task-b').ok).toBe(false);
+    expect(replay).not.toHaveBeenCalled();
+    expect(subscribe('task-a').ok).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(replay).toHaveBeenCalledExactlyOnceWith(guestA, 'task-a');
+    expect(transport.sendPush.mock.calls.map(call => [call[0], call[2].sessionId])).toEqual([[guestA, 'task-a']]);
+    grants.delete(guestA);
+    expect(subscribe('task-a').ok).toBe(false);
+    expect(replay).toHaveBeenCalledTimes(1);
+  });
+
   it.each(metadata)('delivers %s to the matching guest and ordinary list subscriber only', async (channel, payload) => {
     const transport = client();
     __testing.setActiveClient(transport as never);

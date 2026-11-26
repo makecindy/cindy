@@ -14,7 +14,7 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
@@ -342,6 +342,22 @@ function renderPanel(
     }),
   );
 }
+
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
 
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
@@ -1126,6 +1142,7 @@ describe('模型浮层上下文按目录来源隔离', () => {
   const localProviders = providersRef.providers;
   const getModelContextLimit = vi.fn();
   beforeEach(() => {
+    setDataOwnerGeneration('test-owner');
     getModelContextLimit.mockReset().mockResolvedValue({
       limit: 123_000, isCustomized: true,
       codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
@@ -1161,6 +1178,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
     }));
   });
   afterEach(() => {
+    cleanup();
+    setDataOwnerGeneration(null);
     remoteProvidersRef.providers = [];
     vi.unstubAllGlobals();
   });

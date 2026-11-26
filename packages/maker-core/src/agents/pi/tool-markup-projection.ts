@@ -21,6 +21,12 @@ export class PiToolMarkupProjection {
   private preserve = false;
   private projectedTerminals = new WeakSet<AgentEvent>();
 
+  hasDeliveredReply(finalText: string): boolean {
+    if (this.preserve || this.unexecuted) return false;
+    const result = reconcileToolCallMarkup(finalText, this.calls, true);
+    return !result.unexecuted && result.text.trim().length > 0;
+  }
+
   resetTurn(sink: Sink): void {
     this.finish(sink, true);
     this.unexecuted = false;

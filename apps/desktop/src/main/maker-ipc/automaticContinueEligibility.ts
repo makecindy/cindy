@@ -59,12 +59,12 @@ export function createAutomaticContinueEligibility(deps: {
     const row = await deps.readSession(sessionId);
     if (!row || (row.orcaRole === 'worker' && !context)) return false;
     const ownsQuota = () => !!row.agentDeviceId && !row.remoteHostId
-      && (!context || context.kind === 'before-send')
+      && (!context || context.kind === 'before-send' || (context.kind === 'failure' && context.token !== undefined))
       && (deps.ownsScheduledQuotaInput?.(sessionId, context?.kind === 'before-send' ? context.clientId : undefined) ?? false);
     const ownsInput = () => ownsQuota() || (!!context && deps.ownsCompanionInput(sessionId, context));
     if (row.source === 'bot') {
       // A role alone cannot identify who owns the turn: IM and scheduling can
-      // also enter canonical. Only coordinator-owned human input qualifies.
+      // also enter canonical. Only coordinator-owned human or scheduled quota input qualifies.
       if ((!ownsQuota() && (!context || (context.kind !== 'failure' && context.kind !== 'before-send'))) || row.status !== 'active') return false;
       // Candidate recovery owns these remote turns, including when it declines
       // recovery. No visible output does not prove the remote work never ran.

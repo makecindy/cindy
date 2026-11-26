@@ -1,4 +1,8 @@
 import type { CompanionCallDialogue } from './dialogue.js';
+import { RealtimeVoicePreview } from './realtimePreview.js';
+import { RealtimeVoiceSession } from './realtimeSession.js';
+import type { RealtimeConnection } from './realtimeModels.js';
+import type { RealtimeVoiceSelection, RealtimePlaybackPosition } from '../../shared/realtimeVoice.js';
 import {
   VoiceConversationInput,
   type AsrProvider,
@@ -36,7 +40,8 @@ type Call = {
   inputGeneration: number;
   inputTeardown: Promise<unknown>;
   inputReady: Promise<void>;
-  speech: SpeechSynthesisQueue;
+  speech: SpeechSynthesisQueue | null;
+  realtime?: RealtimeVoiceSession;
   selection: VoiceConversationStart;
   exitUtterance: { id: string; text: string } | null;
   exitJudgment: AbortController | null;
@@ -46,7 +51,7 @@ type Preview = {
   id: string;
   sender: number;
   owner: string;
-  speech: SpeechSynthesisSession;
+  speech: SpeechSynthesisSession | RealtimeVoicePreview;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -61,7 +66,8 @@ export class VoiceConversationService {
       hasDictation(): boolean;
       assertCompanion(botId: string, sessionId: string): Promise<void>;
       models(): VoiceConversationModel[];
-      createDialogue?(selection: VoiceConversationStart, emit: (record: import("@cindy/maker-core").VoiceCallRecord) => void): CompanionCallDialogue;
+      createDialogue?(selection: VoiceConversationStart, emit: (record: import("@cindy/maker-core").VoiceCallRecord) => void, nativeResult?: (taskId: string, text: string) => void): CompanionCallDialogue;
+      realtimeConnection?(selection: RealtimeVoiceSelection): RealtimeConnection;
       createProvider(): Promise<AsrProvider>;
       createAudioGate?(onFiltered: () => void): AudioGate | undefined;
       connection(selection: SpeechModelSelection): SpeechConnection;
@@ -98,44 +104,56 @@ export class VoiceConversationService {
     );
   }
 
-  /** Preview uses the exact synthesis adapter without starting ASR or submitting a task. */
+  private previewTransport(selection: SpeechPreviewStart, assertCurrent: () => void) {
+    if (selection.mode === 'realtime') {
+      const resolve = this.deps.realtimeConnection;
+      if (!resolve) throw new Error('model_unavailable');
+      const binding = resolve(selection);
+      const identity = JSON.stringify(binding);
+      return new RealtimeVoicePreview(binding, () => {
+        assertCurrent();
+        if (JSON.stringify(resolve(selection)) !== identity) throw new Error('connection_changed');
+      });
+    }
+    if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
+      throw new Error('model_unavailable');
+    let binding = this.deps.connection(selection);
+    let identity = JSON.stringify(binding);
+    return new SpeechSynthesisSession({
+      diagnostic: (event) =>
+        this.deps.log?.[event.stage === 'error' ? 'warn' : 'info']('speech transport', {
+          previewId: selection.previewId,
+          ...event,
+        }),
+      connection: () => binding,
+      prepareConnection: this.deps.prepareConnection ? async () => {
+        binding = await this.deps.prepareConnection!(selection);
+        identity = JSON.stringify(binding);
+      } : undefined,
+      fetch: this.deps.fetch,
+      assertCurrent: () => {
+        assertCurrent();
+        if (JSON.stringify(this.deps.connection(selection)) !== identity) throw new Error('preview_ended');
+      },
+    });
+  }
+
+  /** Audition the selected model under the existing playback-only lease. */
   async startPreview(
     sender: number,
     selection: SpeechPreviewStart,
   ): Promise<SpeechAudioResult> {
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
-    if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
-      throw new Error('model_unavailable');
-    let binding = this.deps.connection(selection);
-    let identity = JSON.stringify(binding);
     const owner = this.deps.owner();
-    if (!acquireVoiceConversationLease(selection.previewId)) throw new Error('busy');
     const preview: Preview = {
       id: selection.previewId,
       sender,
       owner,
-      speech: new SpeechSynthesisSession({
-        diagnostic: (event) =>
-          this.deps.log?.[event.stage === 'error' ? 'warn' : 'info']('speech transport', {
-            previewId: selection.previewId,
-            ...event,
-          }),
-        connection: () => binding,
-        prepareConnection: this.deps.prepareConnection ? async () => {
-          binding = await this.deps.prepareConnection!(selection);
-          identity = JSON.stringify(binding);
-        } : undefined,
-        fetch: this.deps.fetch,
-        assertCurrent: () => {
-          if (
-            this.preview !== preview ||
-            this.deps.owner() !== owner ||
-            JSON.stringify(this.deps.connection(selection)) !== identity
-          )
-            throw new Error('preview_ended');
-        },
+      speech: this.previewTransport(selection, () => {
+        if (this.preview !== preview || this.deps.owner() !== owner) throw new Error('preview_ended');
       }),
     };
+    if (!acquireVoiceConversationLease(preview.id)) throw new Error('busy');
     this.preview = preview;
     // A crashed/hidden renderer must not retain the global voice lease indefinitely.
     preview.timer = setTimeout(() => this.stopPreview(sender, preview.id), 60_000);
@@ -145,7 +163,7 @@ export class VoiceConversationService {
         requestId: preview.id,
         modelId: selection.modelId,
         voice: selection.voice,
-        speed: selection.speed,
+        speed: selection.mode === 'realtime' ? undefined : selection.speed,
         text: selection.text,
       });
     } catch (error) {
@@ -177,7 +195,57 @@ export class VoiceConversationService {
   }
 
   async start(sender: number, selection: VoiceConversationStart): Promise<{ callId: string }> {
+    if (selection.mode === 'realtime') return this.openRealtime(sender, selection);
     return this.open(sender, selection, 'conversation');
+  }
+
+  private async openRealtime(sender: number, selection: VoiceConversationStart & RealtimeVoiceSelection): Promise<{ callId: string }> {
+    if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
+    if (!this.deps.realtimeConnection) throw new Error('model_unavailable');
+    this.deps.realtimeConnection(selection);
+    const id = selection.callId, owner = this.deps.owner();
+    if (!acquireVoiceConversationLease(id)) throw new Error('busy');
+    const call: Call = { id, kind: 'conversation', sender, owner, selection, speech: null,
+      input: null, inputGeneration: 0, inputReady: Promise.resolve(), inputTeardown: Promise.resolve(),
+      exitUtterance: null, exitJudgment: null };
+    this.call = call;
+    const assertCurrent = () => {
+      if (this.call !== call || this.deps.owner() !== owner) throw new Error('call_ended');
+    };
+    try {
+      await this.deps.assertCompanion(selection.botId, selection.sessionId);
+      assertCurrent();
+      call.dialogue = this.deps.createDialogue?.(selection, record => {
+        if (this.call === call && this.deps.owner() === owner)
+          this.deps.emit(sender, { callId: id, event: { type: 'call-record', record } });
+      }, (taskId, text) => call.realtime?.deliverResult(taskId, text));
+      if (!call.dialogue) throw new Error('call_context_unavailable');
+      await call.dialogue.start();
+      assertCurrent();
+      call.realtime = new RealtimeVoiceSession({
+        selection, connection: () => this.deps.realtimeConnection!(selection), assertCurrent,
+        reference: call.dialogue.nativeContext(),
+        beginTurn: (itemId) => call.dialogue!.beginNativeTurn(itemId),
+        turn: (itemId, role, text, complete) => call.dialogue!.nativeTurn(itemId, role, text, complete),
+        handoff: (inputId, supplement) => call.dialogue!.nativeHandoff(inputId, supplement),
+        interrupted: itemId => call.dialogue!.nativeInterrupt(itemId),
+        createAudioGate: () => this.deps.createAudioGate?.(() => {
+          if (this.call === call && this.deps.owner() === owner)
+            this.deps.emit(sender, { callId: id, inputGeneration: call.inputGeneration, event: { type: 'speaker-filtered' } });
+        }),
+        emit: event => {
+          if (this.call !== call || this.deps.owner() !== owner) return;
+          this.deps.emit(sender, { callId: id, inputGeneration: call.inputGeneration, event });
+        },
+      });
+      await call.realtime.start();
+      assertCurrent();
+      return { callId: id };
+    } catch (error) { await this.end(sender, id); throw error; }
+  }
+
+  setRealtimeQuestion(sender: number, id: string, pending: boolean): void {
+    this.requireCall(sender, id).realtime?.setQuestion(pending);
   }
 
   async startPlayback(
@@ -192,6 +260,7 @@ export class VoiceConversationService {
     selection: VoiceConversationStart,
     kind: Call['kind'],
   ): Promise<{ callId: string }> {
+    if (selection.mode === 'realtime') throw new Error('speech_model_required');
     if (this.call || this.preview || this.deps.hasDictation()) throw new Error('busy');
     if (!this.models().some((model) => voiceModelKey(model) === voiceModelKey(selection)))
       throw new Error('model_unavailable');
@@ -349,6 +418,10 @@ export class VoiceConversationService {
   ): Promise<{ inputGeneration: number }> {
     const call = this.requireCall(sender, id);
     if (call.kind !== 'conversation') throw new Error('playback_only');
+    if (call.realtime) {
+      call.realtime.setMuted(muted);
+      return { inputGeneration: ++call.inputGeneration };
+    }
     const startedAt = Date.now();
     if (muted) {
       await this.stopInput(call);
@@ -389,7 +462,10 @@ export class VoiceConversationService {
     inputGeneration = 0,
   ): void {
     const call = this.requireCall(sender, id);
-    if (inputGeneration === call.inputGeneration) call.input?.appendAudio(pcm, trace);
+    if (inputGeneration === call.inputGeneration) {
+      if (call.realtime) call.realtime.audio(pcm, trace);
+      else call.input?.appendAudio(pcm, trace);
+    }
   }
 
   finishUtterance(sender: number, id: string): void {
@@ -457,6 +533,7 @@ export class VoiceConversationService {
     streaming = false,
   ): Promise<SpeechStartResult> {
     const call = this.requireCall(sender, id);
+    if (!call.speech || call.selection.mode === 'realtime') throw new Error('speech_model_required');
     // The pending UI flag is set only after done. Check the actual hook before
     // every incremental request so unprocessed text never bypasses that boundary.
     if (streaming && (this.deps.hasReplyHook?.() ?? true)) {
@@ -477,11 +554,14 @@ export class VoiceConversationService {
     id: string,
     requestId: string,
   ): Promise<{ pcm: ArrayBuffer; done: boolean }> {
-    return this.requireCall(sender, id).speech.read(requestId);
+    const call = this.requireCall(sender, id);
+    return call.realtime ? call.realtime.read(requestId) : call.speech!.read(requestId);
   }
 
-  interrupt(sender: number, id: string): void {
-    this.requireCall(sender, id).speech.cancel();
+  interrupt(sender: number, id: string, position?: RealtimePlaybackPosition, throughResponse?: number): void {
+    const call = this.requireCall(sender, id);
+    if (call.realtime) call.realtime.interrupt(position, throughResponse);
+    else call.speech?.cancel();
   }
 
   async promoteTurn(sender: number, id: string, inputId: string): Promise<boolean> {
@@ -490,6 +570,7 @@ export class VoiceConversationService {
 
   async submitTurn(sender: number, id: string, inputId: string, text: string, forceHandoff: boolean): Promise<boolean> {
     const call = this.requireCall(sender, id);
+    if (call.realtime) return false;
     if (!call.dialogue || call.kind !== "conversation") return false;
     return call.dialogue.submit(inputId, text, forceHandoff);
   }
@@ -501,7 +582,8 @@ export class VoiceConversationService {
     this.call = null;
     this.deps.log?.info('call ended', { callId: call.id });
     this.deps.emit(call.sender, { callId: call.id, event: { type: 'ended' } });
-    call.speech.cancel();
+    call.speech?.cancel();
+    call.realtime?.stop();
     const dialogueClosed = call.dialogue?.end();
     try {
       await this.stopInput(call);

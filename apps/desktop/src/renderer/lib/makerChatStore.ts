@@ -74,6 +74,8 @@ import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProviderId,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   parseAgentErrorCode,
   localizeSubscriptionAccountError,
@@ -251,7 +253,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
-import { providerErrorExplanation } from '@/utils/streamInterruptError';
+import { hasProviderErrorDetails } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -427,8 +429,13 @@ export function remoteErrorMessageForBanner(error: unknown): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
-  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
-  if (providerErrorExplanation(message)) return message;
+  // The banner localizes its summary and decides which details are safe to show inline.
+  if (hasProviderErrorDetails(message)) return message;
+  // Preserve raw upstream safety refusal copy (e.g. plain-text Claude refusal) for
+  // ErrorBanner detection and collapsed details even if an older host sent turn-failed.
+  if (reason === PROVIDER_SAFETY_REFUSAL_REASON || isProviderSafetyRefusalError(message, reason)) {
+    return message;
+  }
   if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.
@@ -5233,6 +5240,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )
@@ -12796,6 +12805,7 @@ function ensureInitialMessages(sessionId: string): void {
   // Mark in-flight to prevent concurrent callers from double-fetching.
   // historyLoaded stays false until data actually arrives.
   _historyFetchInFlight.add(sessionId);
+  emitStateNotifications(sessionId);
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
   _historyLoadOrigin.set(sessionId, historyOriginAtStart);
@@ -19219,6 +19229,7 @@ function mirrorSessionFields(
 }
 
 export const makerChatStore = {
+  isInitialHistoryLoading: (sessionId: string) => _historyFetchInFlight.has(sessionId),
   initGlobalListeners,
   subscribe,
   subscribeToMessageRemovals,
@@ -19230,6 +19241,9 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** Read only the presence of an existing feedback request, without creating chat state. */
+  hasPendingIssueConfirm: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.pendingIssueConfirm != null,
   /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
   hasRunningWakeTask: (sessionId: string): boolean => {
     const state = sessions.get(sessionId);

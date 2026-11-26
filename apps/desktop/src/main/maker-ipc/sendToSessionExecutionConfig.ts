@@ -27,6 +27,7 @@ export interface SendToSessionExecutionConfig {
 }
 
 export interface SendToSessionExecutionOverrides {
+  providerId?: string;
   agentKind?: AgentKind;
   model?: string;
   effort?: Effort;
@@ -97,6 +98,7 @@ function routeProviderFor(params: {
   agentKind: AgentKind;
   model: string;
   sourceProviderId?: string | null;
+  requestedProviderId?: string;
   routeChanged: boolean;
   providerRouting: OrcaWorkerProviderRoutingContext;
 }):
@@ -119,17 +121,18 @@ function routeProviderFor(params: {
     return { ok: false, message: providerRouteUnavailableMessage(agentKind, model) };
   }
 
-  if (!routeChanged && sourceProviderId) {
-    const inherited = offering.find((provider) => provider.id === sourceProviderId);
-    if (!inherited) {
+  const selectedId = params.requestedProviderId ?? (routeChanged ? undefined : sourceProviderId);
+  if (selectedId) {
+    const selected = offering.find((provider) => provider.id === selectedId);
+    if (!selected) {
       return {
         ok: false,
         message:
-          `供应商 "${sourceProviderId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
+          `供应商 "${selectedId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
           + '请在「设置 → 模型供应商」检查连接与模型配置后重试。',
       };
     }
-    return { ok: true, provider: inherited, providerId: sourceProviderId };
+    return { ok: true, provider: selected, providerId: selectedId };
   }
 
   const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(agentKind, model);
@@ -180,10 +183,11 @@ export function resolveSendToSessionExecutionConfig(params: {
 
   const routeChanged = params.locationChanged === true
     || agentKind !== source.agentKind
-    || model !== source.model;
-  const budgetRouteProviderId = !routeChanged && source.providerId
+    || model !== source.model
+    || (overrides.providerId !== undefined && overrides.providerId !== source.providerId);
+  const budgetRouteProviderId = overrides.providerId ?? (!routeChanged && source.providerId
     ? source.providerId
-    : params.providerRouting.resolveDefaultProviderIdForModel(agentKind, model);
+    : params.providerRouting.resolveDefaultProviderIdForModel(agentKind, model));
   if (
     budgetModelRequiresApiKey(agentKind, model, params.hasCindyAiApiKey)
     && (budgetRouteProviderId === null || budgetRouteProviderId === 'xd')
@@ -199,6 +203,7 @@ export function resolveSendToSessionExecutionConfig(params: {
     agentKind,
     model,
     sourceProviderId: source.providerId,
+    requestedProviderId: overrides.providerId,
     routeChanged,
     providerRouting: params.providerRouting,
   });
@@ -323,8 +328,12 @@ export async function resolveSendToSessionCreateRoute(
   }
   const locationChanged = agentDeviceId !== params.sourceAgentDeviceId;
   const overrides = params.overrides ?? {};
+  if (overrides.providerId !== undefined && (agentDeviceId !== null || params.sourceIsSsh)) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接。' };
+  }
   const hasOverrides = overrides.agentKind !== undefined
     || overrides.model !== undefined
+    || overrides.providerId !== undefined
     || overrides.effort !== undefined
     || overrides.fastMode !== undefined;
   if (!locationChanged && !hasOverrides) return { ok: true, agentDeviceId, config: params.source };

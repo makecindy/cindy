@@ -1619,6 +1619,21 @@ describe('GoalController', () => {
     expect(text).not.toContain('goal_assessment'); // no custom block anymore
   });
 
+  // Unit, docs/plans/acp-plugin-bridge.md (user decision 2026-11-25): plugin engines have no
+  // AskUserQuestion, so their first Goal turn skips the clarification step and its refined_objective.
+  it('first plugin engine goal turn pursues the goal as written, without the clarification step', async () => {
+    const pluginSession = new FakeSession('s1', 'acp');
+    const local = makeController({ getSession: () => pluginSession, ensureSession: async () => pluginSession });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'ship the release notes' });
+    await tick();
+    expect((await local.storage.get('s1'))?.agentKind).toBe('acp');
+    const first = pluginSession.sends[0]?.content ?? '';
+    expect(first).toContain('ship the release notes');
+    expect(first).toContain('goal_status');
+    expect(first).not.toContain('AskUserQuestion');
+    expect(first).not.toContain('refined_objective');
+  });
+
   it('buildFirstTurnDirective omits the budget line when maxTurns is null', () => {
     const text = buildFirstTurnDirective('do the thing', { maxTurns: null });
     expect(text).toContain('AskUserQuestion');
@@ -2434,6 +2449,28 @@ describe('GoalController', () => {
     h.session.emit({ type: 'done', data: { usage: { input_tokens: 700, output_tokens: 77 } }, turnOrigin: { kind: 'goal' } } as never);
     await tick();
     expect((await h.storage.get('s1'))?.tokensUsed).toBe(777);
+  });
+
+  // Unit, docs/plans/acp-plugin-bridge.md (Goals on plugin engines): a plugin engine sends no
+  // end-of-turn status, so its turns counted 0 tokens and a token budget never stopped the goal.
+  // Minimal input: one turn whose done carries the ACP prompt-result usage.
+  it('plugin engine goal turn counts its prompt-result usage against the token budget', async () => {
+    await startGoal(h);
+    await h.controller.updateGoal('s1', { budgetTokens: 1000 });
+    h.session.emit({ type: 'tool_use', data: { name: 'edit' } } as never);
+    h.session.emit({ type: 'text', data: { text: '```json\n{"goal_status":"continue","reason":"wip"}\n```', isFinal: true } } as never);
+    h.session.emit({
+      type: 'done',
+      data: {
+        type: 'acp/prompt_end', status: 'completed', stopReason: 'end_turn',
+        usage: { inputTokens: 700, outputTokens: 200, cacheReadTokens: 100, cacheCreationTokens: 50 },
+      },
+      turnOrigin: { kind: 'goal' },
+    } as never);
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.tokensUsed).toBe(1050);
+    expect(st?.status).toBe('budgetLimited');
   });
 
   it('on complete: persists a completion record, clears the row, emits null, no continuation', async () => {
