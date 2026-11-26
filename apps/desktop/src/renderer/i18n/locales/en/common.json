@@ -2808,7 +2808,7 @@
         "description": "Ubuntu uses system .deb packages. Arch Linux and Omarchy use the managed user installer with the same verified .deb payload, without a Debian package manager.",
         "item1": "Ubuntu: use sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: follow the user-install guide in docs/linux.md.",
         "item2": "After choosing Update, system .deb installs request authorization; managed user installs switch versions without a system password. Other package-managed installs use their package manager.",
-        "item3": "Linux x64 and arm64 support the Beta channel. Linux updates are applied only when you choose to restart, never automatically while idle."
+        "item3": "Linux x64 and arm64 support the Beta channel. Managed user installs can install updates automatically while idle; system .deb installs with passwordless authorization can install updates automatically while idle, while other system .deb installs apply updates only when you choose to restart."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "Still need help? Ask how to do what you have in mind.",
@@ -2883,7 +2883,7 @@
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
       "autoUpdateDescription": "After an update finishes downloading, restart the app to install it when this computer has been idle for 10 minutes and no tasks are running.",
-      "linuxUpdateDescription": "Updates are applied only when you choose to restart. System .deb installs request your system password; managed user installs do not. Other installations use their package manager.",
+      "linuxUpdateDescription": "System .deb installs request your system password, so updates apply only when you choose to restart. Managed user installs need no password and can install while idle. Other installations use their package manager.",
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",

@@ -1027,6 +1027,8 @@ interface AutoUpdateSettingsPayload {
   autoRelaunchOnIdle: boolean;
   isCustomized?: boolean;
   defaultAutoRelaunchOnIdle?: boolean;
+  /** False when this installation cannot install unattended (Linux system .deb). */
+  unattendedInstallSupported?: boolean;
 }
 
 /* ── 跨 Agent 工作区互转 wire 类型（同 main/cross-agent-convert/types.ts） ── */

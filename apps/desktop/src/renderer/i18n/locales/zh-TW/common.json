@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 使用系統 .deb 安裝套件。Arch Linux 和 Omarchy 使用受管理的使用者目錄安裝程式，採用同一份經過驗證的 .deb 內容，無需 Debian 套件管理器。",
         "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：請依照 docs/linux.md 中的使用者目錄安裝指南操作。",
         "item2": "點擊更新後，系統 .deb 安裝需要授權；使用者目錄安裝無需系統密碼即可切換版本。其他套件管理器安裝的版本請透過對應套件管理器更新。",
-        "item3": "Linux x64 和 arm64 支援 Beta 渠道。Linux 僅在你選擇重新啟動時套用更新，不會在閒置時自動安裝。"
+        "item3": "Linux x64 和 arm64 支援 Beta 渠道。使用者目錄安裝可在閒置時自動安裝更新；已設定免密授權的系統 .deb 安裝也可在閒置時自動安裝更新，其他系統 .deb 安裝僅在你選擇重新啟動時套用更新。"
       },
       "qnaTitle": "直接提問",
       "qnaDescription": "沒找到答案？直接問你想做什麼",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
       "autoUpdateDescription": "更新下載完成後，當這臺電腦 10 分鐘無操作且沒有任務執行時，自動重啟應用完成安裝。",
-      "linuxUpdateDescription": "更新在你選擇重新啟動時生效。系統 .deb 安裝需要系統密碼，使用者目錄安裝不需要。其他安裝方式請透過對應套件管理器更新。",
+      "linuxUpdateDescription": "系統 .deb 安裝需要系統密碼，更新在你選擇重新啟動時生效；使用者目錄安裝不需要密碼，可在閒置時自動安裝。其他安裝方式請透過對應套件管理器更新。",
       "autoUpdateEnabledToast": "已開啟空閒時自動安裝更新",
       "autoUpdateDisabledToast": "已關閉空閒時自動安裝更新",
       "autoUpdateSaveFailed": "儲存自動更新設定失敗",
