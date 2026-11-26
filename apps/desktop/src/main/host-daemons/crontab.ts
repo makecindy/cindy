@@ -136,7 +136,8 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
           // crontab 没有运行状态可言：条目存在就是「在等下一次」。
           state: 'ready',
           command: entry.command,
-          trigger: 'schedule',
+          // `@reboot` 是开机跑一次，和「等到某个时刻」不是一回事。
+          trigger: entry.line.startsWith('@reboot') ? 'startup' : 'schedule',
           attributionNeedles: [entry.command],
           definitionMtimeMs: null,
           lastRunAtMs: null,

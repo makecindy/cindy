@@ -81,16 +81,24 @@ describe('systemd 用户单元', () => {
     expect(file.schedule).toBe('OnCalendar=*-*-* 04:00:00');
   });
 
-  it('list-units 跳过表头与无效行', () => {
+  it('list-units 跳过表头与无效行（真实 Ubuntu WSL 输出，带引号描述）', () => {
+    // 取自 WSL2 Ubuntu 里 `systemctl --user list-units --type=service --type=timer
+    // --all --plain --no-legend` 的原始输出：列是 NAME/LOAD/ACTIVE/SUB/DESCRIPTION，
+    // 描述里的引号与空格会把「按空白切分」的实现带偏。
     const units = parseSystemdListUnits(
       [
+        'cindy-probe.service              loaded active   running Cindy host-daemon probe',
+        'gpg-agent.service                loaded inactive dead    GnuPG cryptographic agent and passphrase cache',
+        'ubuntu-insights-collect.service  loaded inactive dead    "Collect platform report using Ubuntu Insights while respecting consent"',
+        'cindy-probe.timer                loaded active   waiting Cindy host-daemon probe timer',
         'UNIT FILE STATE ACTIVE SUB DESCRIPTION',
-        'backup.timer enabled active waiting Daily backup',
         'junk-line',
       ].join('\n'),
     );
-    expect(units.get('backup.timer')).toEqual({ active: 'active', sub: 'waiting' });
-    expect(units.size).toBe(1);
+    expect(units.get('cindy-probe.service')).toEqual({ active: 'active', sub: 'running' });
+    expect(units.get('cindy-probe.timer')).toEqual({ active: 'active', sub: 'waiting' });
+    expect(units.get('gpg-agent.service')).toEqual({ active: 'inactive', sub: 'dead' });
+    expect(units.size).toBe(4);
   });
 });
 
@@ -143,5 +151,7 @@ describe('crontab', () => {
     expect(items).toHaveLength(2);
     expect(new Set(items.map((item) => item.id)).size).toBe(2);
     expect(items.map((item) => item.name)).toEqual(['sync', 'sync']);
+    // `@reboot` 是开机跑一次，不是定时：同一条 cron 行要按开机归类。
+    expect(items.map((item) => item.trigger)).toEqual(['startup', 'startup']);
   });
 });
