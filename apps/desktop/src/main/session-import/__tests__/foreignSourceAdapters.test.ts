@@ -10,9 +10,10 @@
  * - 实测耗时：见 PR 描述。
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { zstdCompressSync } from 'node:zlib';
 
 import Database from 'better-sqlite3';
@@ -21,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as codexSessions from '../../maker-host/codex-local-sessions';
 import { defaultClassifyEnv, groupFor } from '../classify';
 import { codexAdapter } from '../sources/codex';
+import { antigravityAdapter } from '../sources/antigravity';
 import { cursorAdapter } from '../sources/cursor';
 import { deepseekAdapter } from '../sources/deepseek';
 import { factoryAdapter } from '../sources/factory';
@@ -136,6 +138,199 @@ describe('foreign source adapters', () => {
       try { expect.soft(sourceDb.prepare('SELECT cwd FROM threads WHERE id = ?').get(id(1))).toEqual({ cwd: '' }); }
       finally { sourceDb.close(); }
     } finally { discovery.mockRestore(); }
+  });
+
+  // A shared summary ID may have its transcript in the other client. Use the
+  // annotation for the child and project, while preserving both same-index inputs.
+  it('imports Antigravity App and CLI transcripts once by conversation ID and hides subagents', async () => {
+    const appId = '11111111-0000-0000-0000-000000000000';
+    const cliId = '22222222-0000-0000-0000-000000000000';
+    const childId = '33333333-0000-0000-0000-000000000000';
+    const prefix = '.gemini/antigravity';
+    const appLog = (id: string) => `${prefix}/brain/${id}/.system_generated/logs/transcript.jsonl`;
+    const cliLog = (id: string) => `${prefix}-cli/brain/${id}/.system_generated/logs/transcript.jsonl`;
+    const date = '2026-11-05T12:00:00Z';
+    const olderDate = '2026-11-05T11:00:00Z';
+    const appTranscript = await put(appLog(appId), [
+      { type: 'SYSTEM_MESSAGE', content: 'internal prompt' },
+      { type: 'USER_INPUT', step_index: 1, content: 'first prompt', created_at: date },
+      { type: 'USER_INPUT', step_index: 1, content: 'queued prompt', created_at: date },
+      { type: 'PLANNER_RESPONSE', step_index: 2, content: 'App reply' },
+    ]);
+    await utimes(appTranscript, new Date(date), new Date(date));
+    await put(appLog(childId), [{ type: 'USER_INPUT', content: 'child-only prompt' }]);
+    const stale = await put(cliLog(appId), [{ type: 'USER_INPUT', content: 'older copy' }]);
+    await utimes(stale, new Date(olderDate), new Date(olderDate));
+    const cliTranscript = await put(cliLog(cliId), [
+      { type: 'USER_INPUT', content: 'CLI prompt' },
+      { type: 'GENERIC', content: 'internal tool output' },
+      { type: 'PLANNER_RESPONSE', content: 'CLI reply' },
+    ]);
+    await utimes(cliTranscript, new Date(date), new Date(date));
+
+    const indexPath = path.join(home, prefix, 'conversation_summaries.db');
+    const db = new Database(indexPath);
+    try {
+      db.pragma('journal_mode = WAL');
+      db.exec(`CREATE TABLE conversation_summaries (
+        conversation_id TEXT, title TEXT, workspace_uris TEXT, last_modified_time TEXT,
+        parent_conversation_id TEXT, nesting_depth INTEGER
+      )`);
+      const record = db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)');
+      const workspaces = JSON.stringify([pathToFileURL(project()).href]);
+      record.run(appId, 'App title', workspaces, date, '', 0);
+      record.run(cliId, 'CLI title from App index', workspaces, date, '', 0);
+      record.run(childId, '', workspaces, date, appId, 1);
+      const before = await readFile(indexPath + '-wal');
+      const { listed, messages } = await readAll(antigravityAdapter);
+      expect(await readFile(indexPath + '-wal')).toEqual(before);
+      expect(listed.internalCount).toBe(1);
+      expect(listed.sessions.map(s => [s.sourceSessionId, s.title, s.cwd, s.updatedAt])).toEqual([
+        [appId, 'App title', project(), Date.parse(date)],
+        [cliId, 'CLI title from App index', project(), Date.parse(date)],
+      ]);
+      expect(brief(messages[appId]!)).toEqual(['user:first prompt', 'user:queued prompt', 'assistant:App reply']);
+      expect(new Set(messages[appId]!.map(message => message.key)).size).toBe(3);
+      expect(brief(messages[cliId]!)).toEqual(['user:CLI prompt', 'assistant:CLI reply']);
+    } finally {
+      db.close();
+    }
+  });
+
+  // Equal-mtime overlap, fresher cross-client metadata, >256KB leading rows,
+  // and strict read/index failure handling prevent silent truncation or subagent leaks.
+  it('handles Antigravity overlap ties, large leading rows, truncated reads, and unreadable roots safely', async () => {
+    const isolated = await mkdtemp(path.join(os.tmpdir(), 'cindy-ag-edges-'));
+    const writeIsolated = async (rel: string, content: string | unknown[]) => {
+      const file = path.join(isolated, rel);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, Array.isArray(content) ? content.map((l) => JSON.stringify(l)).join('\n') + '\n' : content);
+      return file;
+    };
+    try {
+      const tieId = '44444444-0000-0000-0000-000000000000';
+      const metaId = '55555555-0000-0000-0000-000000000000';
+      const bigId = '66666666-0000-0000-0000-000000000000';
+      const truncatedId = '77777777-0000-0000-0000-000000000000';
+      const oldDir = path.join(isolated, 'old-proj');
+      const newDir = path.join(isolated, 'new-proj');
+      const t1 = new Date('2026-11-05T10:00:00Z');
+      const t2 = new Date('2026-11-05T11:00:00Z');
+      const t3 = new Date('2026-11-05T12:00:00Z');
+
+      const appTie = await writeIsolated(`.gemini/antigravity/brain/${tieId}/.system_generated/logs/transcript.jsonl`, [
+        { type: 'USER_INPUT', content: 'stub', created_at: t1.toISOString() },
+      ]);
+      const cliTie = await writeIsolated(`.gemini/antigravity-cli/brain/${tieId}/.system_generated/logs/transcript.jsonl`, [
+        { type: 'USER_INPUT', content: 'stub', created_at: t1.toISOString() },
+        { type: 'PLANNER_RESPONSE', content: 'full reply', created_at: t1.toISOString() },
+      ]);
+      await utimes(appTie, t1, t1);
+      await utimes(cliTie, t1, t1);
+
+      const appMeta = await writeIsolated(`.gemini/antigravity/brain/${metaId}/.system_generated/logs/transcript.jsonl`, [
+        { type: 'USER_INPUT', content: 'meta turn', created_at: t1.toISOString() },
+      ]);
+      const cliMeta = await writeIsolated(`.gemini/antigravity-cli/brain/${metaId}/.system_generated/logs/transcript.jsonl`, [
+        { type: 'USER_INPUT', content: 'meta turn', created_at: t1.toISOString() },
+      ]);
+      await utimes(appMeta, t3, t3);
+      await utimes(cliMeta, t1, t1);
+
+      for (const [sub, title, dir, mod] of [
+        ['antigravity', 'Old title', oldDir, t1.toISOString()],
+        ['antigravity-cli', 'Fresher CLI title', newDir, t2.toISOString()],
+      ] as const) {
+        const db = new Database(path.join(isolated, '.gemini', sub, 'conversation_summaries.db'));
+        try {
+          db.exec(`CREATE TABLE conversation_summaries (
+            conversation_id TEXT, title TEXT, workspace_uris TEXT, last_modified_time TEXT,
+            parent_conversation_id TEXT, nesting_depth INTEGER
+          )`);
+          db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)').run(
+            metaId, title, JSON.stringify([pathToFileURL(dir).href]), mod, '', 0,
+          );
+        } finally {
+          db.close();
+        }
+      }
+
+      await writeIsolated(`.gemini/antigravity/brain/${bigId}/.system_generated/logs/transcript.jsonl`, [
+        { type: 'SYSTEM_MESSAGE', content: 'x'.repeat(300 * 1024) },
+        { type: 'USER_INPUT', content: 'prompt after big system row', created_at: t1.toISOString() },
+        { type: 'PLANNER_RESPONSE', content: 'reply after big system row', created_at: t1.toISOString() },
+      ]);
+      await writeIsolated(
+        `.gemini/antigravity/brain/${truncatedId}/.system_generated/logs/transcript.jsonl`,
+        `${JSON.stringify({ type: 'USER_INPUT', content: 'complete turn' })}\n{"type":"PLANNER_RESPONSE","content":"half`,
+      );
+
+      const listed = await antigravityAdapter.list({ homeDir: isolated, cindyUserDataDir: null });
+      const byId = new Map(listed.sessions.map((s) => [s.sourceSessionId, s]));
+      expect(byId.get(metaId)).toMatchObject({ title: 'Fresher CLI title', cwd: newDir, updatedAt: t3.getTime() });
+      expect(byId.get(bigId)?.title).toBe('prompt after big system row');
+
+      const tieMsgs: NormalizedMessage[] = [];
+      for await (const m of antigravityAdapter.read(byId.get(tieId)!, { cindySessionId: 'x' })) tieMsgs.push(m);
+      expect(brief(tieMsgs)).toEqual(['user:stub', 'assistant:full reply']);
+
+      await expect((async () => {
+        for await (const _m of antigravityAdapter.read(byId.get(truncatedId)!, { cindySessionId: 'x' })) { /* consume */ }
+      })()).rejects.toThrow(/truncated or malformed/);
+
+      // A transcript modified mid-read must fail instead of committing a partial snapshot.
+      const mutating = byId.get(tieId)!;
+      await expect((async () => {
+        let appended = false;
+        for await (const _m of antigravityAdapter.read(mutating, { cindySessionId: 'x' })) {
+          if (!appended) {
+            appended = true;
+            await writeFile(mutating.locator, `${JSON.stringify({ type: 'USER_INPUT', content: 'stub' })}\n${JSON.stringify({ type: 'PLANNER_RESPONSE', content: 'reply' })}\n${JSON.stringify({ type: 'USER_INPUT', content: 'late turn' })}\n`);
+          }
+        }
+      })()).rejects.toThrow(/changed while reading/);
+
+      // Corrupt summary DB must fail rather than leak subagents or drop project attribution.
+      const corruptHome = await mkdtemp(path.join(os.tmpdir(), 'cindy-ag-corrupt-'));
+      try {
+        await mkdir(path.join(corruptHome, '.gemini/antigravity/brain/88888888-0000-0000-0000-000000000000/.system_generated/logs'), { recursive: true });
+        await writeFile(
+          path.join(corruptHome, '.gemini/antigravity/brain/88888888-0000-0000-0000-000000000000/.system_generated/logs/transcript.jsonl'),
+          `${JSON.stringify({ type: 'USER_INPUT', content: 'subagent prompt' })}\n`,
+        );
+        await writeFile(path.join(corruptHome, '.gemini/antigravity/conversation_summaries.db'), 'not sqlite');
+        await expect(antigravityAdapter.list({ homeDir: corruptHome, cindyUserDataDir: null })).rejects.toThrow();
+
+        // The CLI can store its metadata only in the App index. A missing
+        // local index must not expose a CLI child when that shared index fails.
+        const cliLogs = path.join(corruptHome, '.gemini/antigravity-cli/brain/99999999-0000-0000-0000-000000000000/.system_generated/logs');
+        await mkdir(cliLogs, { recursive: true });
+        await writeFile(path.join(cliLogs, 'transcript.jsonl'), '{"type":"USER_INPUT","content":"unclassified CLI prompt"}\n');
+        await expect(antigravityAdapter.list({ homeDir: corruptHome, cindyUserDataDir: null })).rejects.toThrow();
+      } finally {
+        await rm(corruptHome, { recursive: true, force: true });
+      }
+
+      // A broken App brain path must not block scanning healthy CLI sessions.
+      const brokenAppHome = await mkdtemp(path.join(os.tmpdir(), 'cindy-ag-broken-app-'));
+      try {
+        await mkdir(path.join(brokenAppHome, '.gemini/antigravity'), { recursive: true });
+        await writeFile(path.join(brokenAppHome, '.gemini/antigravity/brain'), 'not a dir');
+        const healthyCliId = '99999999-0000-0000-0000-000000000000';
+        await mkdir(path.join(brokenAppHome, `.gemini/antigravity-cli/brain/${healthyCliId}/.system_generated/logs`), { recursive: true });
+        await writeFile(
+          path.join(brokenAppHome, `.gemini/antigravity-cli/brain/${healthyCliId}/.system_generated/logs/transcript.jsonl`),
+          `${JSON.stringify({ type: 'USER_INPUT', content: 'healthy cli session' })}\n`,
+        );
+        const partial = await antigravityAdapter.list({ homeDir: brokenAppHome, cindyUserDataDir: null });
+        expect(partial.sessions.map((s) => s.sourceSessionId)).toEqual([healthyCliId]);
+        expect(partial.unreadableCount).toBe(1);
+      } finally {
+        await rm(brokenAppHome, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(isolated, { recursive: true, force: true });
+    }
   });
 
   it('Gemini CLI folds overwrites, patches and rewinds and maps the project folder', async () => {

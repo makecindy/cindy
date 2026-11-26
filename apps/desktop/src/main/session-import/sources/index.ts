@@ -1,6 +1,7 @@
 /** 来源适配器注册表：顺序即界面「全部来源」菜单与空状态里的顺序。 */
 
 import type { ImportSourceId, SourceAdapter } from '../types.js';
+import { antigravityAdapter } from './antigravity.js';
 import { claudeAdapter } from './claude.js';
 import { codexAdapter } from './codex.js';
 import { cursorAdapter } from './cursor.js';
@@ -19,6 +20,7 @@ export const SOURCE_ADAPTERS: SourceAdapter[] = [
   piAdapter,
   opencodeAdapter,
   geminiAdapter,
+  antigravityAdapter,
   cursorAdapter,
   qwenAdapter,
   kimiAdapter,

@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ImportJobView, NormalizedMessage, SourceSession } from '../types';
 import { cancelImport, onImportProgress, startImport } from '../executor';
+import { createSessionImportRemoteProvider } from '../remoteResource';
 
 const h = vi.hoisted(() => ({
   owner: 'owner-a',
@@ -57,7 +58,16 @@ vi.mock('../../maker-host/newMakerDefaultsCache.js', () => ({
   getRemoteNewMakerDefaults: () => ({}),
   getNewMakerModelTuning: () => ({}),
 }));
-vi.mock('../scan.js', () => ({ resolveSourceSessions: async () => new Map(h.sources), invalidateImportScan: vi.fn() }));
+vi.mock('../scan.js', () => ({
+  resolveSourceSessions: async () => new Map(h.sources),
+  invalidateImportScan: vi.fn(),
+  scanImportSources: async () => ({
+    candidates: [...h.sources].map(([key, source]) => ({
+      ...source, key, groupKey: 'dialogue', groupName: '', hidden: null, missingDir: false,
+    })),
+    hiddenCounts: { cindy: 0, temp: 0, internal: 0, imported: 0 },
+  }),
+}));
 vi.mock('../sources/index.js', () => ({ adapterFor: () => ({ label: 'Example', read: h.read }) }));
 vi.mock('../handoff.js', () => ({ buildImportHandoffMarker: async () => undefined }));
 vi.mock('../writer.js', () => ({
@@ -78,10 +88,10 @@ function deferred() {
   return { promise, resolve };
 }
 
-function source(id: string, project = false): string {
-  const key = `cursor:${id}`;
+function source(id: string, project = false, sourceId: SourceSession['source'] = 'cursor'): string {
+  const key = `${sourceId}:${id}`;
   h.sources.set(key, {
-    source: 'cursor', sourceSessionId: id, title: id, cwd: project ? path.resolve('missing-project') : null,
+    source: sourceId, sourceSessionId: id, title: id, cwd: project ? path.resolve('missing-project') : null,
     dialogue: !project, createdAt: 1, updatedAt: 2, archived: false, sizeBytes: 10, locator: id,
   });
   return key;
@@ -106,6 +116,34 @@ function notifications() {
 }
 
 describe('import completion notifications without an import page', () => {
+  // Older controllers index source marks by a closed list. The production
+  // resource must hide unknown rows in both scan and jobs while preserving other sources.
+  it('shows and imports Antigravity on a capable controller without exposing its rows to old controllers', async () => {
+    const done = deferred(); h.settled = done.resolve;
+    const cursorKey = source('cursor-history');
+    const antigravityKey = source('antigravity-history', false, 'antigravity');
+    const provider = createSessionImportRemoteProvider();
+    const context = { controllerDeviceId: 'phone' };
+    const oldClient = { protocolVersion: 1, primitives: ['session-import'] };
+    const newClient = { protocolVersion: 1, primitives: ['session-import', 'session-import-antigravity'] };
+    const collectionId = 'session-import';
+    const get = async (id: string, client: typeof oldClient) => {
+      const resource = await provider.get!(context, { client, ref: { collectionId, kind: 'import', id } });
+      return resource.blocks?.[0]?.data;
+    };
+
+    expect(await get('scan', oldClient)).toMatchObject({ total: 1, candidates: [{ key: cursorKey }] });
+    expect(await get('scan', newClient)).toMatchObject({ total: 2, candidates: expect.arrayContaining([expect.objectContaining({ key: antigravityKey, source: 'antigravity' })]) });
+    const response = await provider.invoke!(context, { client: newClient, collectionId, actionId: 'import', input: { keys: [antigravityKey] } });
+    const { requestId } = response.result as { requestId: string };
+    await done.promise;
+
+    expect(await get(`job:${requestId}`, newClient)).toMatchObject({
+      items: [{ key: antigravityKey, status: 'ready', mode: 'handoff', sessionId: expect.any(String) }],
+    });
+    expect(await get('job:latest', oldClient)).toMatchObject({ status: 'missing', items: [] });
+  });
+
   it('notifies once after a batch with ready and missing-directory tasks becomes visible', async () => {
     const done = deferred(); h.settled = done.resolve;
     const job = await startImport([source('ready'), source('needs-folder', true)]);

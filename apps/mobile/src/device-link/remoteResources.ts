@@ -416,11 +416,12 @@ export async function invokeRemoteResourceAction(
     input?: Record<string, unknown>;
   },
   locale?: string,
+  supportedPrimitives: readonly string[] = [],
 ): Promise<RemoteActionInvokeResponse> {
   assertMobileRemoteCollectionSupported(request.collectionId);
   if (request.resourceRef) assertMobileRemoteCollectionSupported(request.resourceRef.collectionId);
   return invoke<RemoteActionInvokeResponse>(target.deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
-    client: clientDescriptor(locale),
+    client: { ...clientDescriptor(locale), primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, ...supportedPrimitives] },
     ...request,
   }]);
 }
