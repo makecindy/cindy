@@ -61,6 +61,23 @@ it('opens a legacy cached task with null source instead of waiting forever', () 
   expect(state.getSession).not.toHaveBeenCalled();
 });
 
+// Unit, #12799: neither the provisional id nor the hidden child is listed.
+// Losing the composer on either transition would interrupt active input.
+it('keeps the same composer from the side-chat preview through snapshot retirement', () => {
+  const view = (id: string, snapshotId?: string) => <MemoryRouter>
+    <CindyMakeSessionGate sessionId={id} sessionSnapshot={snapshotId ? { id: snapshotId, source: 'side-chat' } : null}>
+      <input aria-label="Side chat composer" />
+    </CindyMakeSessionGate>
+  </MemoryRouter>;
+  const ui = render(view('side-chat-pending:1', 'side-chat-pending:1'));
+  const composer = screen.getByRole('textbox', { name: 'Side chat composer' });
+  ui.rerender(view('child', 'child'));
+  expect(screen.getByRole('textbox')).toBe(composer);
+  ui.rerender(view('child'));
+  expect(screen.getByRole('textbox')).toBe(composer);
+  expect(state.getSession).not.toHaveBeenCalled();
+});
+
 // Unit #6529: the old hidden-task tests only covered warm origins. A route
 // surviving a renderer reload must pin its host before the first metadata read,
 // even when no mirror has persisted. Exercise the production gates and router.

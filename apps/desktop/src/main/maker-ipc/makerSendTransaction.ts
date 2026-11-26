@@ -18,6 +18,7 @@ import {
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
+  defusePluginEngineWireEnvelope,
   type AgentKind,
   type EngineKind,
   type MainOwnedSendContext,
@@ -236,6 +237,8 @@ type MakerSendOptions = {
      * 「已自动继续」,host 的 createDbMessage 据此跳过自动续跑额度充值。
      */
     autoResume?: unknown;
+    /** Main-only source of the exact user input this automatic retry sends again. */
+    automaticReplaySourceClientId?: string;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
     /** Manual and automatic retries share the same durable recovery handoff. */
@@ -288,6 +291,7 @@ export interface MakerSendTransactionSession {
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
   isTurnRunning(): boolean;
+  getPluginEngineCommandNames?(): readonly string[];
   /** 项目资源漂移且满足回收空闲口径(仅 pi 本地根任务实现;其余会话缺省,永不回收)。 */
   hasRecyclableProjectResourceDrift?(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
@@ -299,6 +303,7 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  onUserProviderDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
   /** Null when the launcher has no interface-language preference. */
   getResolvedMainLocale(): SupportedLocale | null;
@@ -475,7 +480,7 @@ export interface MakerSendTransactionDeps {
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
-  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  prepareUnhealthySession?(sessionId: string, retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void }): Promise<boolean | void>;
   /** Retire external ownership before selecting a runtime or applying a route. */
   prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
@@ -486,7 +491,7 @@ export interface MakerSendTransactionDeps {
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
    * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
-  peekPendingHandoff?(sessionId: string): Promise<string | null>;
+  peekPendingHandoff?(sessionId: string, retryClientId?: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
@@ -1263,7 +1268,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         );
       }
-      await deps.prepareUnhealthySession?.(sessionId);
+      let retryHandoff: { full: string; forRetry: string } | undefined;
+      const retrySource = requestedSendOpts.persistUserMessage?.automaticReplaySourceClientId;
+      await deps.prepareUnhealthySession?.(sessionId, retrySource ? {
+        userClientId: retrySource,
+        onHandoff: (full, forRetry) => { retryHandoff = { full, forRetry }; },
+      } : undefined);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
@@ -1429,7 +1439,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         }
       }
 
-      return dispatch(sess, message, requestedSendOpts, sessionId, createOpts, dispatchProductTurn);
+      return dispatch(sess, message, requestedSendOpts, sessionId, createOpts, dispatchProductTurn, undefined, retryHandoff);
     },
   };
 
@@ -1441,6 +1451,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     createOpts: unknown,
     dispatchProductTurn: (() => void) | undefined,
     recovery?: SharedReconnectRecovery,
+    retryHandoff?: { full: string; forRetry: string },
   ): Promise<DesktopMakerSendResult> {
       recovery?.assertCurrent();
       if (!sess) {
@@ -1554,9 +1565,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : normalized;
       // Native commands must lead the provider input. Defer the handoff rather
       // than discarding it or consuming it when only the command is accepted.
-      const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
+      const fullPendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? (await deps.peekPendingHandoff?.(sessionId, requestedSendOpts.persistUserMessage?.automaticReplaySourceClientId)) ?? null
         : null;
+      const pendingHandoff = retryHandoff?.full && fullPendingHandoff?.endsWith(retryHandoff.full)
+        ? fullPendingHandoff.slice(0, -retryHandoff.full.length) + retryHandoff.forRetry
+        : fullPendingHandoff;
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
         : withRecoveryNote;
@@ -1767,6 +1781,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           const code = error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED';
           return toCompatibleMakerSendResult(createHostSendFailure(code, 'The selected runtime plugin stopped this reply.'));
         }
+      }
+      if (sess.agentKind === 'acp') {
+        outgoing = defusePluginEngineWireEnvelope(
+          outgoing as HandoffWireMessage,
+          normalized as HandoffWireMessage,
+          sess.getPluginEngineCommandNames?.(),
+        );
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {
@@ -2194,6 +2215,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
             activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
+            if (!persistUserMessage?.autoResume && (mainOwnedSendContext?.origin.kind === 'desktop'
+              || (persistUserMessage?.clientId && !so.origin && !so.fromMobileClient))) {
+              deps.onUserProviderDispatch?.(sess.id);
+            }
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
                 userPromptPreviewSessionId,
@@ -2231,7 +2256,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             });
           }
         }
-        if (pendingHandoff && sendResult.accepted) {
+        if (fullPendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
         }

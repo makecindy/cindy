@@ -16,7 +16,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
-import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
+import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin, MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
@@ -417,6 +417,11 @@ export interface AgentInputQueuedMessage {
          * 「群里的 Cindy」）。标签与 `[消息来源]` 写出是谁、在哪个群；没有来源任务（senderSessionId 为空）。
          */
         groupRequest?: MessageSourceGroupRequest;
+        /**
+         * 来源任务是本任务回答插件转来的 IM 消息时开的，插件跟随这一轮，把最后回答发回那条消息的来处
+         * （plugin-agent-tasks.md「后续轮次」）。只进 `[消息来源]`，标签照旧是「由任务「X」发送」。
+         */
+        pluginReply?: MessageSourcePluginReply;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
