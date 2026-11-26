@@ -7441,7 +7441,8 @@
       "localNetwork": {
         "label": "Lokales Netzwerk",
         "deniedHint": "Ohne diese Berechtigung können sich Computer und Telefone im selben Netzwerk nicht direkt mit diesem Computer verbinden. Sie laufen über das Relay, was langsamer ist.",
-        "settingsHint": "Aktiviere Cindy unter Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk. Die Änderung gilt, sobald du zurückkommst."
+        "promptedHint": "Klicke im macOS-Hinweis auf „Erlauben“. Wenn kein Hinweis erscheint, öffne die Systemeinstellungen.",
+        "settingsHint": "Öffne unter „Datenschutz & Sicherheit“ den Punkt „Lokales Netzwerk“ und aktiviere Cindy. Fehlt Cindy in der Liste, füge diese App über „+“ hinzu — die Änderung gilt sofort."
       }
     },
     "imBot": {

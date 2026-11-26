@@ -7510,7 +7510,8 @@
       "localNetwork": {
         "label": "Rede local",
         "deniedHint": "Sem esta permissão, computadores e celulares na mesma rede não conseguem se conectar diretamente a este computador. Eles passam pelo relay, que é mais lento.",
-        "settingsHint": "Ative o Cindy em Ajustes do Sistema › Privacidade e Segurança › Rede Local. A mudança vale assim que você voltar."
+        "promptedHint": "Clique em Permitir no aviso do macOS. Se nenhum aviso aparecer, abra os Ajustes do Sistema para ativar manualmente.",
+        "settingsHint": "Em Privacidade e Segurança, abra Rede Local e ative o Cindy. Se ele não aparecer na lista, clique em + para adicionar este app — vale assim que você voltar."
       }
     },
     "imBot": {
