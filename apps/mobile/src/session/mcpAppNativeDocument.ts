@@ -23,6 +23,22 @@ let swept = false;
 // clipped. Leave real overflow and the author's scroll containers alone.
 const IOS_INLINE_SCROLL = `<script data-cindy-ios-scroll>
 document.addEventListener('DOMContentLoaded', () => {
+  // WebKit zooms a small focused text field beyond the fixed native card slot.
+  // Increase just its editing size and let WebKit keep its normal pinch range.
+  const editingSize = document.createElement('style');
+  editingSize.textContent = 'input:focus { font-size: 16px !important }';
+  document.addEventListener('focus', event => {
+    // The previous field can disappear without firing blur. Measure the next
+    // field with the App's own styles, including any explicit larger font.
+    editingSize.remove();
+    const input = event.target;
+    if (input instanceof HTMLInputElement && !input.readOnly &&
+        ['text', 'search', 'email', 'tel', 'url', 'password'].includes(input.type) &&
+        parseFloat(getComputedStyle(input).fontSize) < 16) {
+      document.head.append(editingSize);
+      input.addEventListener('blur', () => editingSize.remove(), { once: true });
+    }
+  }, true);
   const root = document.documentElement;
   const body = document.body;
   if (!body) return;

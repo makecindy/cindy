@@ -417,3 +417,44 @@ it('hands a fitting iOS document to the conversation and restores scrolling when
     iframe.remove();
   }
 });
+
+// iOS confirm card, unit: the focus-geometry tests do not cover WebKit's focus
+// zoom threshold. Exercise the prepared 13px single-line field and its next
+// focus target. The WKWebView touch fixture verifies the actual pinch range.
+it('uses a readable editing size only for the focused small text input on iOS', async () => {
+  state.os = 'ios';
+  await prepareMcpAppNativeDocument(document, 'native-key');
+  const html = state.files.get('file:///cache/mcp-apps/' + '01'.repeat(24) + '/0')!;
+  const iframe = globalThis.document.createElement('iframe');
+  globalThis.document.body.append(iframe);
+  try {
+    const win = iframe.contentWindow as Window & typeof globalThis;
+    const doc = win.document;
+    const script = new win.DOMParser().parseFromString(html, 'text/html')
+      .querySelector('script[data-cindy-ios-scroll]')!;
+    doc.head.innerHTML = '<style>input {font-size:13px} .large {font-size:21px}</style>';
+    doc.body.innerHTML = '<input value="draft"><input class="large"><input readonly>';
+    new Script(script.textContent!).runInNewContext({
+      window: win, document: doc, HTMLInputElement: win.HTMLInputElement,
+      innerHeight: 500, innerWidth: 360, getComputedStyle: win.getComputedStyle.bind(win),
+      ResizeObserver: class { observe() {} },
+    });
+    doc.dispatchEvent(new win.Event('DOMContentLoaded'));
+    const [small, large, readOnly] = Array.from(doc.querySelectorAll('input'));
+    const size = (field: HTMLInputElement) => win.getComputedStyle(field).fontSize;
+    small.setSelectionRange(1, 3);
+    small.focus();
+    expect(size(small)).toBe('16px');
+    expect([small.value, small.selectionStart, small.selectionEnd]).toEqual(['draft', 1, 3]);
+    small.blur();
+    expect(size(small)).toBe('13px');
+    small.focus();
+    small.remove();
+    large.focus();
+    expect(size(large)).toBe('21px');
+    readOnly.focus();
+    expect(size(readOnly)).toBe('13px');
+  } finally {
+    iframe.remove();
+  }
+});
