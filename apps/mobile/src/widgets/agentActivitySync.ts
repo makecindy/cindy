@@ -19,15 +19,19 @@ export function createAgentActivitySync(
   let stale = false;
   let disposed = false;
   let checking = false;
+  let staleEpisode = 0;
+  let lastCheck = -Infinity;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   // Content nobody can confirm stays until its own stale date, then goes: an
   // absent activity is better than outdated information left on the Lock Screen.
   const endIfExpired = async () => {
-    if (!isExpired || checking || last === null) return;
+    if (!isExpired || checking || last === null || Date.now() - lastCheck < 1_000) return;
+    const episode = staleEpisode;
+    lastCheck = Date.now();
     checking = true;
     try {
-      if (!(await isExpired()) || disposed || !stale || !canSync()) return;
+      if (!(await isExpired()) || disposed || episode !== staleEpisode || !stale || !canSync()) return;
       sink.setState(null);
       mobileDebugLog("info", "lifecycle", "activity-local-sync", { outcome: "expired", recovered: false });
       last = null;
@@ -62,11 +66,12 @@ export function createAgentActivitySync(
       void endIfExpired();
       return;
     }
+    if (stale) staleEpisode++;
     const elapsed = Date.now() - lastWrite;
     // Refresh the native stale deadline while a healthy foreground connection
     // still confirms the same task. No network request is involved.
     if (!force && !stale && json === last && (json === null || elapsed < 60_000)) return;
-    if (!force && !stale && json !== null && elapsed < 1_000) {
+    if (!force && (json !== null || last === null) && elapsed < 1_000) {
       timer ??= setTimeout(() => { timer = undefined; sync(); }, 1_000 - elapsed);
       return;
     }

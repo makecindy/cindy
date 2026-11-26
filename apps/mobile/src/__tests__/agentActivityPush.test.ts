@@ -15,7 +15,7 @@ const fixture = vi.hoisted(() => ({
     configureAccount: vi.fn(async () => {}),
     setState: vi.fn(),
     markStale: vi.fn(),
-    addListener: vi.fn(() => ({ remove: vi.fn() })),
+    addListener: vi.fn((_event: string, _notify: () => void) => ({ remove: vi.fn() })),
   },
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" }, AppState: fixture.appState }));
@@ -259,6 +259,13 @@ it("refreshes a stale registered activity on resume without publishing local dia
     await sync.sync(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+    fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+    await sync.sync(true);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).refreshStale).toBe(true);
   } finally { sync.dispose(); vi.useRealTimers(); }
 });
 
@@ -425,5 +432,38 @@ it.each(["recovered", "rotated"])("starts a new expiry window after %s registrat
     expect(fixture.native.setState).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, #13216: events during a failed PUT used to queue a complete registration
+// for every notification. Check native reads and the actual latest PUT on retry.
+it("coalesces native events across a failed request and backs off subsequent failures", async () => {
+  vi.useFakeTimers();
+  const opts = options();
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    let reject!: (reason: Error) => void;
+    fetchMock.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), startToken: "intermediate" });
+    const attempt = sync.sync();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = fixture.native.getPushRegistration.mock.calls.length;
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), startToken: "latest" });
+    const notify = fixture.native.addListener.mock.calls.at(-1)![1];
+    for (let i = 0; i < 100; i++) notify();
+    reject(new TypeError("offline"));
+    await attempt;
+    expect(fixture.native.getPushRegistration.mock.calls.length - before).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRejectedValueOnce(new TypeError("still offline"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await sync.sync(true);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).startToken).toBe("latest");
   } finally { sync.dispose(); vi.useRealTimers(); }
 });

@@ -66,6 +66,7 @@ describe('mobile Home live activity', () => {
       expect(visible.at(-1)).toBe('running');
       value = 'running';
       controller.sync();
+      vi.advanceTimersByTime(1_000);
       expect(expired).toBe(false);
       value = null;
       controller.sync();
@@ -240,4 +241,35 @@ describe('mobile Home live activity', () => {
       await i18n.changeLanguage(previousLanguage);
     }
   });
+});
+
+// Unit, #13216. Continuous disconnection can re-read native expiry on every
+// completed store event. A read from before recovery must never end a new task.
+it('bounds expiry reads while offline and ignores a result from an earlier disconnect', async () => {
+  vi.useFakeTimers();
+  let value: string | undefined = 'first';
+  let finish!: (expired: boolean) => void;
+  const expiry = vi.fn(async () => false).mockImplementationOnce(() => new Promise(done => { finish = done; }));
+  const setState = vi.fn();
+  const controller = createAgentActivitySync(() => value, { setState, markStale: vi.fn() }, () => true, expiry);
+  try {
+    controller.sync();
+    value = undefined;
+    controller.sync();
+    value = 'second';
+    vi.advanceTimersByTime(1_000);
+    controller.sync();
+    value = undefined;
+    controller.sync();
+    finish(true);
+    await Promise.resolve();
+    expect(setState.mock.calls).toEqual([['first'], ['second']]);
+    for (let i = 0; i < 100; i++) {
+      controller.sync();
+      await Promise.resolve();
+    }
+    expect(expiry).toHaveBeenCalledTimes(2);
+    controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { controller.dispose(); vi.useRealTimers(); }
 });
