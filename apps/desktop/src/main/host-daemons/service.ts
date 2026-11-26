@@ -104,12 +104,10 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
   const now = deps.now ?? Date.now;
 
   /**
-   * 所有改动本机常驻项的动作串行执行。
-   *
-   * 适配器的写侧是「读当前整表 → 算新表 → 写回」：crontab 只有一份共享表格，
-   * systemd 要先落文件再 daemon-reload。两个动作交错时，后者的写回会覆盖掉前者
-   * （删掉 A 的同时停止 B，A 会被复活或 B 的停止丢失）。串行化放在这一处，
-   * 而不是让每个适配器各自记锁。
+   * 面板发起的停止 / 立即运行 / 删除一律串行：crontab 只有一份共享表格，
+   * 两个删除交错时，后写的会把先删的那一行带回来。
+   * 这里保证「面板的动作不互相交错」；适配器被别的入口单独使用时也要成立，
+   * 所以 crontab 适配器内还有一把只属于那张表的锁。
    */
   let mutationQueue: Promise<unknown> = Promise.resolve();
   function serialize<T>(task: () => Promise<T>): Promise<T> {
