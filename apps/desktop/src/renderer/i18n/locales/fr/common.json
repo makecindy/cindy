@@ -23027,7 +23027,7 @@
     "sourceCount_other": "{{count}} sources",
     "strategy": {
       "expiring": {
-        "title": "Bientôt expiré d'abord",
+        "title": "Automatique",
         "hint": "Utilise d'abord le quota d'abonnement le plus fourni et sur le point d'être réinitialisé, pour ne rien perdre. Les sources sans quota lisible passent après."
       },
       "order": {
@@ -23110,6 +23110,7 @@
       "nameHint": "Affiché dans le sélecteur de modèles.",
       "routeShownAs": "Affiché sous « Routage intelligent » dans le sélecteur de modèles.",
       "pick": "Laquelle utiliser",
+      "moreStrategies": "Autres options",
       "effort": "Effort de raisonnement",
       "effortUnset": "Non défini",
       "effortHint": "Si le modèle choisi ne prend pas en charge ce niveau, il s'exécute avec sa valeur par défaut.",

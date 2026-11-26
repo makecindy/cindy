@@ -23027,7 +23027,7 @@
     "sourceCount_other": "{{count}} fuentes",
     "strategy": {
       "expiring": {
-        "title": "Primero lo que caduca",
+        "title": "Automático",
         "hint": "Usa primero la cuota de suscripción que más sobra y que está a punto de restablecerse, para no desperdiciarla. Las fuentes sin cuota legible van después."
       },
       "order": {
@@ -23110,6 +23110,7 @@
       "nameHint": "Se muestra en el selector de modelos.",
       "routeShownAs": "Se muestra en «Enrutamiento inteligente» del selector de modelos.",
       "pick": "Cuál usar",
+      "moreStrategies": "Más opciones",
       "effort": "Intensidad de razonamiento",
       "effortUnset": "Sin especificar",
       "effortHint": "Si el modelo elegido no admite este nivel, se ejecuta con su valor predeterminado.",

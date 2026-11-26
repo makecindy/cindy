@@ -15,6 +15,20 @@ export type RouteStrategy = (typeof ROUTE_STRATEGIES)[number];
 export const DEFAULT_ROUTE_STRATEGY: RouteStrategy = 'expiring';
 
 /**
+ * 选择框里主推的选法(2026-11-26，dash 建议做减法)：「自动」(expiring，面向用户不再叫「快作废的先用」)、「按顺序」，
+ * 几个不同供应商之间再加「最省钱」。轮流、按权重、余量最多、用完再换收进「更多选法」一组，功能不删，存量配置照常显示。
+ */
+export const PRIMARY_ROUTE_STRATEGIES: readonly RouteStrategy[] = ['expiring', 'order', 'cheapest'];
+
+/** 把能选的选法分成主推与「更多选法」两组，保持原来的先后。 */
+export function splitRouteStrategies(available: readonly RouteStrategy[]): { primary: RouteStrategy[]; more: RouteStrategy[] } {
+  return {
+    primary: available.filter((value) => PRIMARY_ROUTE_STRATEGIES.includes(value)),
+    more: available.filter((value) => !PRIMARY_ROUTE_STRATEGIES.includes(value)),
+  };
+}
+
+/**
  * 成员都是同一个供应商的账号或电脑时能选的选法：它们价格相同，「最省钱」没有可比的，不列。
  */
 export const SAME_SOURCE_ROUTE_STRATEGIES: readonly RouteStrategy[] = ['expiring', 'order', 'rotate', 'weighted', 'drain', 'headroom'];

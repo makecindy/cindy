@@ -23028,7 +23028,7 @@
     "sourceCount_other": "{{count}} fontes",
     "strategy": {
       "expiring": {
-        "title": "Primeiro o que expira",
+        "title": "Automático",
         "hint": "Usa primeiro a cota de assinatura que está sobrando e prestes a ser redefinida, para que nada seja desperdiçado. As fontes sem cota legível vêm depois."
       },
       "order": {
@@ -23111,6 +23111,7 @@
       "nameHint": "Aparece no seletor de modelos.",
       "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
       "pick": "Qual usar",
+      "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
       "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, ele roda com o próprio padrão.",

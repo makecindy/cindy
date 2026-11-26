@@ -61,3 +61,25 @@ it('lists the accounts of a mixed OpenAI group and reorders them through the acc
   // 账号的设置不经整份组配置保存，免得覆盖账号分配里存的先后与权重。
   expect(h.save).not.toHaveBeenCalled();
 });
+
+// 2026-11-26(dash 建议做减法)：选法选择框主推「自动」「按顺序」，轮流、按权重、余量最多、用完再换收在「更多选法」下面，
+// 功能不删；同一个供应商的账号与电脑之间价格相同，不列「最省钱」。
+it('features Automatic and In order and keeps the other strategies under More options', async () => {
+  h.groups = { openai: {
+    strategy: 'expiring', autoSwitch: true,
+    members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'openai', weight: 1, limit: 4, paused: false }],
+    localAccountIds: ['key-1'],
+  } };
+  Object.assign(window, { electronAPI: { providerGroup: { command: vi.fn() } } });
+  // jsdom 没有 scrollIntoView：下拉列表打开时会滚到选中项。
+  Element.prototype.scrollIntoView ??= () => undefined;
+  render(<ProviderAllocationRows config={{ routes: [] } as never} />);
+  fireEvent.click(screen.getByRole('combobox', { name: 'modelGroups.auto.pickFor' }));
+  const options = (await screen.findAllByRole('option')).map((option) => option.textContent);
+  expect(options).toEqual([
+    'modelGroups.strategy.expiring.title', 'modelGroups.strategy.order.title',
+    'modelGroups.strategy.rotate.title', 'modelGroups.strategy.weighted.title',
+    'modelGroups.strategy.drain.title', 'modelGroups.strategy.headroom.title',
+  ]);
+  expect(screen.getByText('modelGroups.settings.moreStrategies')).toBeTruthy();
+});

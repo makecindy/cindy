@@ -9,12 +9,13 @@ import {
   PROVIDER_GROUP_MAX_WEIGHT,
 } from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
+import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 
 const weights = [1, 2, 3, 5, 10, 20, 50, PROVIDER_GROUP_MAX_WEIGHT];
 
 /**
- * OpenAI 订阅与 API key 混合的账号组在供应商页里的选法(main 2026-11-26 新增)。选项、名字与说明和智能路由同一套
- * (shared/routeStrategy.ts、modelGroups.strategy.*)，选的是同一个选择函数。
+ * 另一台电脑上的电脑组的选法：这台的智能路由管不到它，仍在组的页面里改、存到那台(本机的组在智能路由里改)。
+ * 选项、名字与说明和智能路由同一套(shared/routeStrategy.ts、modelGroups.strategy.*)，选的是同一个选择函数。
  */
 export function ProviderGroupStrategyControl({ strategy, disabled, onChange }: {
   strategy: RouteStrategy;
@@ -28,7 +29,7 @@ export function ProviderGroupStrategyControl({ strategy, disabled, onChange }: {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-13 text-[var(--text-primary)]">{label}</span>
         <Select label={label} value={strategy} disabled={disabled} width="sm"
-          options={SAME_SOURCE_ROUTE_STRATEGIES.map(value => ({ value, label: t(`modelGroups.strategy.${value}.title`) }))}
+          groups={routeStrategySelectGroups(SAME_SOURCE_ROUTE_STRATEGIES, t)}
           onValueChange={value => onChange(value as RouteStrategy)} />
       </div>
       <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>

@@ -22722,7 +22722,7 @@
     "sourceCount_other": "소스 {{count}}개",
     "strategy": {
       "expiring": {
-        "title": "곧 만료되는 것 먼저",
+        "title": "자동",
         "hint": "많이 남았고 곧 초기화되는 구독 할당량부터 써서 낭비하지 않습니다. 할당량을 읽을 수 없는 소스는 뒤로 갑니다."
       },
       "order": {
@@ -22803,6 +22803,7 @@
       "nameHint": "모델 선택에 표시되는 이름입니다.",
       "routeShownAs": "모델 선택의 '스마트 라우팅'에 표시됩니다.",
       "pick": "이번에 쓸 소스",
+      "moreStrategies": "기타 방식",
       "effort": "추론 강도",
       "effortUnset": "지정 안 함",
       "effortHint": "선택된 모델이 이 단계를 지원하지 않으면 해당 모델의 기본값으로 실행합니다.",

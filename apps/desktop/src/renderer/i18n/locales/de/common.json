@@ -22811,7 +22811,7 @@
     "sourceCount_other": "{{count}} Quellen",
     "strategy": {
       "expiring": {
-        "title": "Bald Verfallendes zuerst",
+        "title": "Automatisch",
         "hint": "Nutzt zuerst das Abo-Kontingent, von dem viel übrig ist und das bald zurückgesetzt wird, damit nichts verfällt. Quellen ohne lesbares Kontingent kommen danach."
       },
       "order": {
@@ -22893,6 +22893,7 @@
       "nameHint": "Wird in der Modellauswahl angezeigt.",
       "routeShownAs": "Wird in der Modellauswahl unter „Smartes Routing“ angezeigt.",
       "pick": "Welche verwendet wird",
+      "moreStrategies": "Weitere Optionen",
       "effort": "Denkintensität",
       "effortUnset": "Nicht festgelegt",
       "effortHint": "Unterstützt das gewählte Modell diese Stufe nicht, läuft es mit seinem Standard.",

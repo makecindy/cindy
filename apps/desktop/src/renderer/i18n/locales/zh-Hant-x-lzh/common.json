@@ -22722,7 +22722,7 @@
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": {
-        "title": "將廢者先用",
+        "title": "自擇",
         "hint": "訂閱限額餘多而將重設者先用，不使虛擲；限額不可讀之源居後。"
       },
       "order": {
@@ -22803,6 +22803,7 @@
       "nameHint": "擇模型時顯此名。",
       "routeShownAs": "擇模型時見於「智慧路由」。",
       "pick": "此番用何者",
+      "moreStrategies": "他法",
       "effort": "思之深淺",
       "effortUnset": "不指定",
       "effortHint": "所擇模型不支此檔時，依其常例而行。",

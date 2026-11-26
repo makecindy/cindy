@@ -23027,7 +23027,7 @@
     "sourceCount_other": "{{count}} fontes",
     "strategy": {
       "expiring": {
-        "title": "Primeiro o que expira",
+        "title": "Automático",
         "hint": "Usa primeiro a quota de subscrição que sobra e que está prestes a ser reposta, para que nada seja desperdiçado. As fontes sem quota legível ficam para depois."
       },
       "order": {
@@ -23110,6 +23110,7 @@
       "nameHint": "Aparece no seletor de modelos.",
       "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
       "pick": "Qual usar",
+      "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
       "effortHint": "Se o modelo escolhido não suportar este nível, corre com a sua própria predefinição.",

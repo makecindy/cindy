@@ -22721,7 +22721,7 @@
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": {
-        "title": "快作廢的先用",
+        "title": "自動",
         "hint": "剩得多又快重設的訂閱配額先用，不浪費；讀不到配額的來源排在後面。"
       },
       "order": {
@@ -22802,6 +22802,7 @@
       "nameHint": "選模型時顯示這個名字。",
       "routeShownAs": "選模型時在「智慧路由」裡顯示。",
       "pick": "這次用哪個",
+      "moreStrategies": "更多選法",
       "effort": "推理強度",
       "effortUnset": "不指定",
       "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",

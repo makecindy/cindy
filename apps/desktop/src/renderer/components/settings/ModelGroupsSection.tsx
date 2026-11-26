@@ -26,6 +26,7 @@ import {
   useModelGroupCandidateNames,
   useModelGroups,
 } from '@/features/model-groups/modelGroupsClient';
+import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -157,10 +158,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   const updateRoute = (id: string, patch: (route: ModelGroupRoute) => ModelGroupRoute) =>
     save((latest) => ({ ...latest, routes: latest.routes.map((route) => (route.id === id ? patch(route) : route)) }));
 
-  const strategyOptions = useMemo(
-    () => MODEL_GROUP_STRATEGIES.map((value) => ({ value, label: t(`modelGroups.strategy.${value}.title`) })),
-    [t],
-  );
+  const strategyGroups = useMemo(() => routeStrategySelectGroups(MODEL_GROUP_STRATEGIES, t), [t]);
   const effortOptions = useMemo(
     () => [
       { value: UNSET_EFFORT, label: t('modelGroups.settings.effortUnset') },
@@ -252,7 +250,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                       data-setting-id={modelGroupsSettings.routes.id}
                       label={t('modelGroups.settings.pick')}
                       value={route.strategy}
-                      options={strategyOptions}
+                      groups={strategyGroups}
                       width="sm"
                       onValueChange={(value) => void updateRoute(route.id, (current) => ({ ...current, strategy: value as ModelGroupStrategy }))}
                     />

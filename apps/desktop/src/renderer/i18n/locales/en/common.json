@@ -22811,7 +22811,7 @@
     "sourceCount_other": "{{count}} sources",
     "strategy": {
       "expiring": {
-        "title": "Expiring first",
+        "title": "Automatic",
         "hint": "Uses subscription quota that is plentiful and about to reset first, so none is wasted. Sources without readable quota come after."
       },
       "order": {
@@ -22893,6 +22893,7 @@
       "nameHint": "Shown in the model picker.",
       "routeShownAs": "Shown under Smart routing in the model picker.",
       "pick": "Which one to use",
+      "moreStrategies": "More options",
       "effort": "Reasoning effort",
       "effortUnset": "Not set",
       "effortHint": "If the chosen model does not support this level, it runs at its own default.",

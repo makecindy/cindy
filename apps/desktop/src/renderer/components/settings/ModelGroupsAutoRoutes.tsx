@@ -52,6 +52,7 @@ import {
   type ProviderGroupConfig,
 } from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
+import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
 
@@ -66,12 +67,9 @@ function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SO
   strategies?: readonly RouteStrategy[];
 }) {
   const { t } = useTranslation();
-  const options = useMemo(
-    () => strategies.map((item) => ({ value: item, label: t(`modelGroups.strategy.${item}.title`) })),
-    [t, strategies],
-  );
+  const groups = useMemo(() => routeStrategySelectGroups(strategies, t), [t, strategies]);
   return (
-    <Select label={label} value={value} options={options} width="sm" disabled={disabled}
+    <Select label={label} value={value} groups={groups} width="sm" disabled={disabled}
       onValueChange={(next) => { if (next !== value) onChange(next as RouteStrategy); }} />
   );
 }
