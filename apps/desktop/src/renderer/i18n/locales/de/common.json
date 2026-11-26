@@ -16157,6 +16157,7 @@
       },
       "autoResumePending": {
         "label": "Verbindung wird wiederhergestellt",
+        "continuingWithProgress": "Automatische Fortsetzung ({{attempt}}/{{total}})…",
         "labelWithProgress": "Verbindung wird wiederhergestellt {{attempt}}/{{total}}",
         "groupSwitch": "Wechsel zu einem anderen Computer"
       },
@@ -19999,6 +20000,9 @@
       "permissionTightenInterruptFailed": "Die laufende Aufgabe konnte beim Einschränken der Berechtigungen nicht gestoppt werden; sie läuft möglicherweise bis zum Abschluss ohne Genehmigungsabfragen weiter. Stoppe sie bei Bedarf manuell.",
       "codexAutoReviewUnavailable": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Die aktuelle Aktion wurde blockiert und die Berechtigungen auf Standard umgestellt. Versuche die Anfrage erneut; Cindy fragt bei Bedarf nach.",
       "hostShellCommandBlocked": "Cindy hat diesen Shell-Befehl blockiert. Prüfe den Befehl und verwende ein verfügbares Tool oder einen verfügbaren Befehl, um fortzufahren.",
+      "reconnectAutoResumeExhausted": "Die maximale Anzahl automatischer Fortsetzungsversuche ist erreicht.",
+      "reconnectAutoResumeDisabled": "Die automatische Fortsetzung ist deaktiviert.",
+      "codexReconnectStalled": "Die Modellverbindung konnte innerhalb von 2 Minuten nicht wiederhergestellt werden.",
       "upstreamResponseIdleTimeout": "Das Modell hat lange nicht mehr geantwortet. Daher wurde diese Runde unterbrochen, um endloses Warten zu vermeiden. Abgeschlossene Tool-Aufrufe bleiben erhalten — sende die nächste Nachricht, um fortzufahren.",
       "codexHistoryOversized": "Der Bildverlauf ist zu groß für eine automatische Fortsetzung. Sende „Fortsetzen“, damit Cindy die aktuelle Aufgabe wieder aufnimmt.",
       "codexHistoryOversizedRemote": "Der Verlauf dieser Aufgabe enthält zu große Bilder, sodass die Remote-Komprimierung nicht abgeschlossen werden kann. Öffne die Aufgabe auf dem Computer, auf dem Codex läuft, und sende erneut; Cindy lässt diese Bilder dort weg.",

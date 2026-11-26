@@ -124,6 +124,7 @@ import {
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,
+  ReconnectHandoff,
   AgentInputQueuedMessage,
   AgentInputRecovery,
   AgentInputSessionRef,
@@ -492,6 +493,11 @@ export interface AskUserQuestionItem {
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
+function parseReconnectHandoff(reason: unknown, value: unknown): ReconnectHandoff | undefined {
+  return reason === 'codex_reconnect_stalled' && (value === 'disabled' || value === 'exhausted')
+    ? value : undefined;
+}
+
 export interface ChatMessage {
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: HistoryCacheReceipt;
@@ -707,6 +713,7 @@ export interface ChatMessage {
    * 里的原始 message 文案。live 报错仍走 ErrorBanner(store.error),与本字段无关。
    */
   errorReason?: string;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -2696,6 +2703,7 @@ export interface SessionChatState {
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
    */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -3053,6 +3061,7 @@ export type SessionChatLightState = Pick<
   | 'error'
   | 'usageLimitRecovery'
   | 'errorReason'
+  | 'reconnectHandoff'
   | 'toolLoop'
   | 'outputLimit'
   | 'recoverableError'
@@ -3131,6 +3140,7 @@ function createInitialState(): SessionChatState {
     error: null,
     usageLimitRecovery: null,
     errorReason: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     recoverableError: null,
@@ -3219,6 +3229,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   error: null,
   usageLimitRecovery: null,
   errorReason: null,
+  reconnectHandoff: undefined,
   toolLoop: null,
   outputLimit: null,
   recoverableError: null,
@@ -5353,6 +5364,7 @@ function applyInputProjection(
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。结构化字段同样
       // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
       errorReason: projectionErrorReason,
+      reconnectHandoff: parseReconnectHandoff(projectionErrorReason, projection.reconnectHandoff),
       toolLoop: projectionToolLoop,
       outputLimit: projectionOutputLimit,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
@@ -6827,6 +6839,7 @@ export function handleStreamEvent(
         streamingText: '',
         isStreaming: false,
         recoverableError: null,
+        reconnectHandoff: finalized.error ? state.reconnectHandoff : undefined,
         toolLoop: preservedToolLoop,
         outputLimit: preservedOutputLimit,
         activeTurnRetryText: null,
@@ -6872,12 +6885,14 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        reconnectHandoff,
         toolLoop: toolLoopRaw,
         outputLimit: outputLimitRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        reconnectHandoff?: unknown;
         toolLoop?: unknown;
         outputLimit?: unknown;
       };
@@ -6923,6 +6938,7 @@ export function handleStreamEvent(
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -6949,6 +6965,7 @@ export function handleStreamEvent(
           // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
           // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
           errorReason: reason ?? null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: errMsg,
@@ -7009,6 +7026,7 @@ export function handleStreamEvent(
             : extractUsageLimitRecoveryHint(event.data),
         errorReason:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
+        reconnectHandoff: suppressAutoResumeBroadcastError ? undefined : parseReconnectHandoff(reason, reconnectHandoff),
         toolLoop:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (toolLoop ?? null),
         outputLimit:
@@ -7545,6 +7563,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     streamingText: '',
     isStreaming: false,
     recoverableError: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     activeTurnRetryText: null,
@@ -7881,6 +7900,7 @@ function handleStatusUpdate(
     error: isTurnStart ? null : state.error,
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
+    reconnectHandoff: isTurnStart ? undefined : state.reconnectHandoff,
     toolLoop: isTurnStart ? null : state.toolLoop,
     outputLimit: isTurnStart ? null : state.outputLimit,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
@@ -10557,6 +10577,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     error: state.error,
     usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
+    reconnectHandoff: state.reconnectHandoff,
     toolLoop: state.toolLoop,
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
@@ -10619,6 +10640,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.error === b.error &&
     a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
+    a.reconnectHandoff === b.reconnectHandoff &&
     a.toolLoop === b.toolLoop &&
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
@@ -11222,6 +11244,7 @@ function syncActiveTurnsFromMain(): void {
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -12126,6 +12149,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
           error: remoteErrorMessageForBanner(error),
           usageLimitRecovery: null,
           errorReason: null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: null,
@@ -17268,6 +17292,7 @@ function clearError(sessionId: string): void {
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -17406,6 +17431,7 @@ function continueAfterSilentStop(sessionId: string): void {
         error: null,
         usageLimitRecovery: null,
         errorReason: null,
+        reconnectHandoff: undefined,
         toolLoop: null,
         outputLimit: null,
         errorRetryText: null,
@@ -17617,6 +17643,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -20323,6 +20350,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       >;
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
+      const reconnectHandoff = parseReconnectHandoff(reason, c.reconnectHandoff);
       const toolLoop = parseToolLoopErrorDetails(c.toolLoop);
       const outputLimit = parseOutputLimitDetails(c.outputLimit);
       const errorProviderId =
@@ -20334,6 +20362,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
+        ...(reconnectHandoff ? { reconnectHandoff } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。

@@ -318,6 +318,7 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;

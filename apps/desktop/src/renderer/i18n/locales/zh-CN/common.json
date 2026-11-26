@@ -16128,6 +16128,7 @@
       },
       "autoResumePending": {
         "label": "重新连接中",
+        "continuingWithProgress": "正在自动继续（{{attempt}}/{{total}}）…",
         "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
         "groupSwitch": "正在换一台电脑继续"
       },
@@ -19923,6 +19924,9 @@
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止这条 Shell 命令。请检查命令，并使用可用的工具或命令继续。",
+      "reconnectAutoResumeExhausted": "自动续跑已达到重试次数上限。",
+      "reconnectAutoResumeDisabled": "自动续跑已关闭。",
+      "codexReconnectStalled": "模型连接在 2 分钟内未能恢复。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexHistoryOversized": "图片历史太大，没能自动恢复。请发送「继续」，Cindy 会接着完成当前任务。",
       "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩无法完成。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",

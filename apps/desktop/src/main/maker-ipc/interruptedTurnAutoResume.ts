@@ -26,7 +26,7 @@ import { type OutputLimitDetails } from '@cindy/maker-shared';
  */
 
 import { hasUserVisibleText } from '../../shared/visibleText.js';
-import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import type { AgentInputToolLoopDetails, ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
 
 import {
@@ -46,6 +46,8 @@ export interface InterruptedTurnErrorSignals {
   reason?: string;
   /** 从错误里抽出的 HTTP 状态码。 */
   errorStatus?: number;
+  /** Main-only sink for the guard decision on this exact terminal event. */
+  recordReconnectHandoff?: (reason: ReconnectHandoff) => void;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
   outputLimit?: OutputLimitDetails;

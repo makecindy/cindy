@@ -6,7 +6,7 @@
  */
 import type { AgentEvent } from '@cindy/maker-core';
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
-import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
+import { parseAgentInputToolLoopDetails, type ReconnectHandoff } from '../../shared/agentInputQueue.js';
 
 /** prepareSessionEvent's reading of a terminal error: its data, the message and the signals for the coordinator. */
 export function readTerminalTurnErrorSignals(
@@ -21,6 +21,7 @@ export function readTerminalTurnErrorSignals(
               reason?: unknown;
               sdkError?: unknown;
               errorStatus?: unknown;
+              reconnectHandoff?: unknown;
               toolLoop?: unknown;
               outputLimit?: unknown;
               usageLimit?: unknown;
@@ -48,6 +49,15 @@ export function readTerminalTurnErrorSignals(
         ...(typeof errData?.sdkError === 'string' ? { sdkError: errData.sdkError } : {}),
         ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
         ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
+        ...(errData?.reason === 'codex_reconnect_stalled' ? {
+          recordReconnectHandoff: (handoff: ReconnectHandoff) => {
+            errData.reconnectHandoff = handoff;
+            // Redaction can give live delivery a separate payload from history.
+            if (broadcastEvent.data && typeof broadcastEvent.data === 'object') {
+              (broadcastEvent.data as { reconnectHandoff?: ReconnectHandoff }).reconnectHandoff = handoff;
+            }
+          },
+        } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。

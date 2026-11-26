@@ -266,7 +266,7 @@ import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, 
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
-import { parseReconnectAttemptMessage } from '../shared/network-error.js';
+import { parseReconnectAttemptMessage, type ReconnectAttempt } from '../shared/network-error.js';
 import {
   extractNonSecretErrorSignals,
   isProviderSafetyRefusalError,
@@ -9199,6 +9199,7 @@ assertRouteCurrent();
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
     let reconnectStallErrorStatus: number | undefined;
+    let reconnectStallAttempt: ReconnectAttempt | null = null;
     let reconnectStallCapacitySignal: CodexUpstreamCapacitySignal | null = null;
     let upstreamCapacityIgnoredThrough = 0;
     let reconnectStallCapacityNoticeEmitted = false;
@@ -9249,6 +9250,7 @@ assertRouteCurrent();
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
       reconnectStallErrorStatus = undefined;
+      reconnectStallAttempt = null;
       reconnectStallCapacitySignal = null;
       reconnectStallCapacityNoticeEmitted = false;
       reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
@@ -9485,29 +9487,21 @@ assertRouteCurrent();
           });
           return;
         }
-        const stalledMessage =
-          `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
-          'without making progress; the turn was interrupted automatically. ' +
-          'You can send the next message to continue.';
-        const emitStalled = (reason: string, message: string): void => {
-          if (
-            !isReconnectStallCurrent() ||
-            threadId !== stalledThreadId ||
-            reconnectStallTurnGeneration !== stalledTurnGeneration
-          ) return;
-          interruptTurnForProviderFailure({
-            reason,
-            timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
-            ignorePendingTools: true,
-            allowPendingTurnStart,
-            logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
-            message: reconnectStallErrorStatus === undefined
-              ? message : `${message} (HTTP ${reconnectStallErrorStatus})`,
-            errorStatus: reconnectStallErrorStatus,
-          });
-        };
-        // History size does not establish why the connection stalled.
-        emitStalled('codex_reconnect_stalled', stalledMessage);
+        const attemptDetail = reconnectStallAttempt
+          ? ` Last reconnect attempt: ${reconnectStallAttempt.attempt}/${reconnectStallAttempt.maxAttempts}.`
+          : '';
+        const gatewayDetail = reconnectStallErrorStatus === undefined ? '' : ` (HTTP ${reconnectStallErrorStatus})`;
+        interruptTurnForProviderFailure({
+          reason: 'codex_reconnect_stalled',
+          timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
+          ignorePendingTools: true,
+          allowPendingTurnStart,
+          logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
+          message: `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+            `without making progress. The turn was interrupted automatically.${attemptDetail} ` +
+            `Pending tool calls at interruption: ${pendingToolItemIds.size}.${gatewayDetail}`,
+          errorStatus: reconnectStallErrorStatus,
+        });
       }, slice);
       (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
     }
@@ -9647,13 +9641,12 @@ assertRouteCurrent();
         codexErrorInfo?: unknown;
       } | null | undefined;
       const message = typeof data?.message === 'string' ? data.message : null;
-      const isReconnectNotice =
+      const reconnectAttempt =
         event.type === 'error' &&
         data?.isTerminal !== true &&
         data?.willRetry !== false &&
-        message !== null &&
-        parseReconnectAttemptMessage(message) !== null;
-      if (isReconnectNotice) {
+        message !== null ? parseReconnectAttemptMessage(message) : null;
+      if (reconnectAttempt) {
         const isCapacityNotice =
           data?.reason === UPSTREAM_OVERLOAD_REASON || data?.codexErrorInfo === 'serverOverloaded';
         if (isCapacityNotice && !reconnectStallCapacitySignal) {
@@ -9671,8 +9664,11 @@ assertRouteCurrent();
         );
         // The queue probe sees only accepted root-turn events. Keep the latest
         // known gateway status within this retry episode; progress clears it.
-        if (reconnectStallTurnId && (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504)) {
-          reconnectStallErrorStatus = data.errorStatus;
+        if (reconnectStallTurnId) {
+          reconnectStallAttempt = reconnectAttempt;
+          if (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504) {
+            reconnectStallErrorStatus = data.errorStatus;
+          }
         }
         return;
       }
@@ -9737,6 +9733,13 @@ assertRouteCurrent();
         // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
+        ...(timeoutReason === 'codex_reconnect_stalled' ? {
+          ...(reconnectStallAttempt && {
+            reconnectAttempt: reconnectStallAttempt.attempt,
+            reconnectMaxAttempts: reconnectStallAttempt.maxAttempts,
+          }),
+          pendingToolCount: pendingToolItemIds.size,
+        } : {}),
         ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
         ...(opts?.codexErrorInfo ? { codexErrorInfo: opts.codexErrorInfo } : {}),
         message: opts?.message ??
@@ -15330,6 +15333,7 @@ assertRouteCurrent();
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
         const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
+        const reconnectAttemptAtStop = reconnectStallAttempt;
         const reconnectCapacitySignalAtStop = reconnectStallCapacitySignal;
         const reconnectTimeoutBudgetAtStop = reconnectStallTimeoutBudgetMs;
         let watchdogActivityVersionAtStop = 0;
@@ -15362,7 +15366,10 @@ assertRouteCurrent();
               reconnectCapacitySignalAtStop,
               reconnectTimeoutBudgetAtStop,
             );
-            if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
+            if (reconnectStallTurnId === turnId) {
+              reconnectStallErrorStatus = reconnectErrorStatusAtStop;
+              reconnectStallAttempt = reconnectAttemptAtStop;
+            }
           }
         };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });

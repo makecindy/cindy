@@ -296,6 +296,7 @@
       "neutral": "复连",
       "usageReset": "耗用已复，已自续",
       "pending": "方复连…",
+      "continuingWithProgress": "自动续行中（{{attempt}}/{{total}}）…",
       "pendingWithProgress": "方复连 {{attempt}}/{{total}}…",
       "groupSwitchPending": "方易一机而续…",
       "details": "此番再试 {{attempt}}/{{total}} · 本差事累计复连 {{count}} 次",

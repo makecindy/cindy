@@ -16119,6 +16119,7 @@
       },
       "autoResumePending": {
         "label": "方重連",
+        "continuingWithProgress": "自動續行中（{{attempt}}/{{total}}）…",
         "labelWithProgress": "方重連 {{attempt}}/{{total}}",
         "groupSwitch": "方易一機續之"
       },
@@ -19923,6 +19924,9 @@
       "permissionTightenInterruptFailed": "收緊權柄時未能止方行之差事，其或將免確認而行至終；如有需要，請手止之。",
       "codexAutoReviewUnavailable": "自動審批暫不可用，此舉已阻，權柄已改為預設。請再試，需時當問於君。",
       "hostShellCommandBlocked": "Cindy 已阻此 Shell 命令。請察其命令，改用可用之工具或命令續之。",
+      "reconnectAutoResumeExhausted": "自動續行已達重試之限。",
+      "reconnectAutoResumeDisabled": "自動續行未啟。",
+      "codexReconnectStalled": "模型斷連，兩分鐘未復。",
       "upstreamResponseIdleTimeout": "模型久無所應，此輪已自斷，以免空待無期。已成之工具呼叫皆存，逕遣下一訊即可續之。",
       "codexHistoryOversized": "圖之歷史過鉅，未能自復。請遣「繼續」，Cindy 當接續今之差事。",
       "codexHistoryOversizedRemote": "此段歷史中有過鉅之圖，遠端壓縮遣之不出。請於行 Codex 之機開此差事再遣，Cindy 將自略其圖而續之。",

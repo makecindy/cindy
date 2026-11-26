@@ -1055,7 +1055,7 @@ function AutoResumeActionRow({
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
     ? hasProgress
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+      ? t(info.reconnectStalled ? 'chat.systemCard.autoResumePending.continuingWithProgress' : 'chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })
@@ -1067,7 +1067,9 @@ function AutoResumeActionRow({
         : t('chat.systemCard.autoResume.labelNeutral');
   // 供应商组正在换电脑时错误先不呈现：行内不带原始错误(它只用来认出终态 event 的回声)。
   const shownError = info.groupSwitchPending ? undefined : info.error;
-  const summary = summarizeInterruption(shownError);
+  const summary = info.reconnectStalled && !info.groupSwitchPending
+    ? t('logic.errors.codexReconnectStalled')
+    : summarizeInterruption(shownError);
   const canExpand = Boolean(shownError) || hasProgress || showSessionTotal;
   return (
     <div className="flex flex-col">

@@ -17347,6 +17347,30 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
+  // Unit: an accepted Codex turn may already have run tools before its first
+  // persisted output. Manual continuation must not replay that input or exit Plan.
+  it('continues a reconnect-stalled turn manually after automatic recovery is declined', async () => {
+    const h = createHarness();
+    const sid = 'reconnect-manual-continuation';
+    h.onResumableTurnError.mockImplementation((_id, signals) => {
+      signals.recordReconnectHandoff?.('disabled');
+      return null;
+    });
+    h.setHasAssistantProgressAfter(async () => false);
+    const original = makeItem('q-first', 'original long task');
+    original.createOpts.planMode = true;
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'Model reconnect timed out', { reason: 'codex_reconnect_stalled' });
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ reconnectHandoff: 'disabled' });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+    expect(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ planMode: true });
+    expect(h.coordinator.getProjection(sid).reconnectHandoff).toBeUndefined();
+  });
+
   it.each([
     ['turn_no_event_timeout', false, true],
     ['upstream_response_idle_timeout', false, true],
