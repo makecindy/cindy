@@ -1,6 +1,7 @@
 /**
  * The plugins page under test with its leaves stubbed, shared by pluginsScreen.test.tsx,
- * pluginsScreenMarketFences.test.tsx and pluginsScreenSuccessRead.test.tsx (split so each file stays within the unit budget): the fixture, every module mock
+ * pluginsScreenMarketFences.test.tsx, pluginsScreenSuccessRead.test.tsx and pluginsScreenSlot.test.tsx (split so each file stays
+ * within the unit budget): the fixture, every module mock
  * (registered here, before a test file imports the page), the per-test reset, and the helpers the files use.
  * Test files import it first.
  */
@@ -469,3 +470,72 @@ export const managementSnapshot = (installed: boolean, record?: unknown) => ({ v
   market: { items: installed ? [record ?? { ...marketItem("demo", "Demo"), installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
     unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
 export { fixture };
+// Shared by pluginsScreen.test.tsx and pluginsScreenSlot.test.tsx (moved here unchanged).
+export function managedScreen() {
+  const plugin = {
+    instanceKey: "demo",
+    namespace: null,
+    enabled: true,
+    manifest: { id: "demo", name: "Demo", version: "1" },
+    approval: {
+      state: "approved",
+      revision: "12345678-1234-4123-8123-123456789abc",
+    },
+  };
+  const market = {
+    pluginId: "market/demo",
+    ghostId: "demo",
+    namespace: null,
+    name: "Demo",
+    releaseId: "r2",
+    version: "2",
+    sourceType: "server",
+    installState: "update-available",
+    manifest: { ...plugin.manifest, version: "2" },
+  };
+  const snapshot = {
+    version: 1,
+    settingsPage: true,
+    ghosts: [plugin],
+    market: { items: [market], unavailableCustomSourceNames: [] },
+  };
+  // A stand-in operation is over at once: it gives back the page slot it was handed (as the real controller does).
+  const settleHold = async (...args: any[]) => { args.find((arg) => arg && typeof arg.onSettled === "function")?.onSettled(); };
+  const controller = {
+    uninstall: vi.fn(settleHold),
+    install: vi.fn(settleHold),
+    refresh: vi.fn().mockResolvedValue(undefined),
+    getState: () => fixture.management.state,
+  };
+  fixture.management = {
+    state: {
+      capability: "supported",
+      snapshot,
+      online: true,
+      busy: false,
+      outcome: "idle",
+    },
+    controller,
+  };
+  fixture.marketRead.mockResolvedValue(market);
+  return { plugin, market, snapshot, controller };
+}
+
+// Production screen → hook → controller → client. Transport and visual leaves remain isolated.
+export function realManagementHost() {
+  const { plugin, market, snapshot } = managedScreen();
+  Object.assign(plugin.manifest, { schemaVersion: 3 });
+  Object.assign(market, { description: null, author: null, scope: "public", organizationId: null,
+    defaultInstall: false, publishedAt: "", icon: null, enabled: true, sourceMarketName: null });
+  Object.assign(market.manifest, { schemaVersion: 3 });
+  Object.assign(snapshot.market, { unavailableReason: null, customSourceNames: [] });
+  fixture.realManagement = true;
+  fixture.wire.mockImplementation(async (_host, channel, args, options) => transportSend(options, () => {
+    if (channel.endsWith(":manifest")) return { collections: [{ id: "plugins", actions: [{ id: "management:snapshot" }] }] };
+    const request = args[0];
+    if (request.actionId === "management:snapshot") return { result: snapshot };
+    if (request.actionId === "management:market-detail") return { result: market };
+    throw new Error("Unexpected action " + request.actionId);
+  }));
+  return { plugin, market, snapshot };
+}
