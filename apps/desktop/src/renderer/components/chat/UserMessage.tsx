@@ -1288,6 +1288,9 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
+  // 卡片标题由 OrcaMessageHeading 统一渲染；这里只留宿主通知标记（用于卡片内那行摘要）。
+  const orcaHostNotice =
+    automationOrigin?.kind === 'session' ? automationOrigin.orcaHostNotice : undefined;
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
   const botLetter =
@@ -1478,6 +1481,11 @@ export function UserMessage({
                   <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 )}
               </button>
+              {orcaHostNotice === 'dispatch-claim' && (
+                <p className="border-t border-[var(--msg-tool-card-border)] px-3 py-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+                  {t('chat.userMessage.orcaHostNoticeDispatchClaim')}
+                </p>
+              )}
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
                   <div

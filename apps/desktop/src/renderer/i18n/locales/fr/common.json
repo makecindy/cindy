@@ -16588,6 +16588,8 @@
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
+      "orcaFromHost": "Message de l’hôte (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Cette réponse cite un résultat d'envoi que le protocole ne renvoie jamais ; le Lead a été prié de le corriger.",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
       "deviceSentMobile": "Envoyé depuis un téléphone",

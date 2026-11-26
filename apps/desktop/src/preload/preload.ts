@@ -6804,7 +6804,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:collaboration-settings:get'),
       listExecutionDevices: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:orca:execution-devices'),
-      setCollaborationSetting: (key: string, value: number): Promise<unknown> =>
+      setCollaborationSetting: (key: string, value: number | boolean): Promise<unknown> =>
         ipcRenderer.invoke('maker:collaboration-settings:set', { key, value }),
       resetCollaborationSettings: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:collaboration-settings:reset'),

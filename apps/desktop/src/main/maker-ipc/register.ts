@@ -782,7 +782,11 @@ import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botG
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
 import { withBotGroupUiMock } from './botGroupUiMock.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
+import {
+  showDesktopChatMessage,
+  getDesktopNotificationsEnabled,
+  showDesktopSessionEvent,
+} from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -2566,7 +2570,10 @@ function requireInteger(value: unknown, key: CollaborationSettingKey): number {
   return value;
 }
 
-function validateCollaborationSettingValue(key: CollaborationSettingKey, value: unknown): number {
+function validateCollaborationSettingValue(
+  key: CollaborationSettingKey,
+  value: unknown,
+): number {
   const next = requireInteger(value, key);
   const current = readCollaborationSettings();
   if (key === 'workerIdleReleaseMinutes') {
@@ -17151,18 +17158,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ...orcaQueueHostDeps,
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId, _report, reportClientId) => {
+    // 宿主 -> Lead 队列的唯一盖章入口：Worker 回报与派单主张纠正文都从这里进队列，
+    // 合批归属只有这一处，别的入口不得自行盖 autoBridge（见 orcaAutoBridgeBatch.contract）。
+    sendAutoBridgeToLead: async (
+      leadSessionId,
+      message,
+      workerId,
+      _report,
+      reportClientId,
+      hostNotice,
+    ) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
         ...(reportClientId ? { reportClientId } : {}),
+        ...(hostNotice ? { hostNotice } : {}),
         rawContent: message,
         source: 'worker',
-        senderLabel: 'Worker',
-        workerId,
+        senderLabel: workerId ? 'Worker' : 'Orca host',
+        ...(workerId ? { workerId } : {}),
         autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
-          context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
+          context: `auto_bridge/${leadSessionId}/${workerId ?? 'host'}`,
         },
       });
       return { accepted: result.ok, ...(!result.ok && result.reportRejected ? { reportRejected: true as const } : {}) };

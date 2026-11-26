@@ -16415,6 +16415,8 @@
       "orcaFromWorker": "来自 Worker 的消息",
       "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
+      "orcaFromHost": "来自宿主（Orca host）的消息",
+      "orcaHostNoticeDispatchClaim": "这条回复引用了协议不会返回的派发结果值，已提醒 Lead 改正。",
       "hookChannelFrom": "来自 {{channel}}",
       "deviceSentMobileNamed": "从手机「{{name}}」发送",
       "deviceSentMobile": "从手机发送",

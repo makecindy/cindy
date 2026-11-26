@@ -1,5 +1,6 @@
 import { isWindowsPathLike } from './workingDir.js';
 import type { AgentRequestReceipt } from './forwardedRequest.js';
+import type { OrcaHostNoticeKind } from './orcaHostNotice.js';
 import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
@@ -376,6 +377,8 @@ export interface AgentInputQueuedMessage {
         senderSessionId?: string;
         autoBridge?: true;
         autoBridgeBatchCount?: number;
+        /** 宿主自己的通知（不是 Worker 发言）；卡片据此换来源标题并挂本地化摘要。 */
+        hostNotice?: OrcaHostNoticeKind;
       }
     | {
         /**

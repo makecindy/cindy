@@ -16415,6 +16415,8 @@
       "orcaFromWorker": "Worker からのメッセージ",
       "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
       "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",
+      "orcaFromHost": "ホスト（Orca host）からのメッセージ",
+      "orcaHostNoticeDispatchClaim": "この返信はプロトコルが返さない派遣結果を引用しています。Lead に修正を求めました。",
       "hookChannelFrom": "{{channel}} から",
       "deviceSentMobileNamed": "スマートフォン「{{name}}」から送信",
       "deviceSentMobile": "スマートフォンから送信",

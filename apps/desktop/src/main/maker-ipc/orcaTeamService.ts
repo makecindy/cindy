@@ -3,12 +3,21 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import type {
   CollabDispatchFailureOutcome,
   CollabDispatchQueuedOutcome,
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
+import {
+  consumeDispatchClaimReminder,
+  dropLeadDispatchFact,
+  findUnbackedDispatchClaim,
+  noteLeadDispatchFact,
+  resetDispatchClaimState,
+  sessionInstanceToken,
+} from './orcaDispatchClaims.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
@@ -504,13 +513,20 @@ export interface OrcaTeamServiceDeps {
   }>;
   /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
   getWorkerQueuePaused(sessionId: string): boolean;
+  /**
+   * 宿主 -> Lead 队列的唯一入口：Worker 回报与派单主张纠正文都走这里。
+   * 纠正消息没有具体 Worker，`workerId` 省略时按宿主来源呈现。
+   */
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
     workerId: string,
     report?: WorkerTerminalTurnParams['remoteReport'],
     reportClientId?: string,
+    hostNotice?: OrcaHostNoticeKind,
   ): Promise<{ accepted: boolean; reportRejected?: true }>;
+  /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
+  /** 能力开关，缺省开启；关闭后完全不判定也不修改结果。 */
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -662,6 +678,12 @@ export interface OrcaTeamService {
   /** Synchronous product boundary; never call for a suppressed vendor terminal. */
   noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
+  /** Lead 收口核对：回复引用了宿主没有的派发凭据时提醒一次。 */
+  handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText?: string;
+  }): Promise<void>;
 }
 
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
@@ -1398,6 +1420,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
 
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
+      // 轮次在**请求时**取：排队投递可能晚于本轮收口才落地，落地时才读会把它记到下一轮头上。
+      const leadRuntime = deps.getLiveSession(link.leadSessionId);
+      const dispatchTurnGeneration = leadRuntime?.getTurnGeneration?.() ?? 0;
       let result: DispatchWorkerMessageResult;
       try {
         await params.assertCurrent?.();
@@ -1463,6 +1488,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await rollbackAccepted();
         return { result, wasLiveBeforeDispatch };
       }
+      // 派发凭据只认宿主这次成功落地的投递，供 Lead 收口时的主张对账使用。
+      const workerLabel = target.label ?? target.role ?? target.id;
+      const delivery = result.mode === 'queued' ? 'queued' : 'direct';
+      noteLeadDispatchFact(link.leadSessionId, {
+        dispatchId: result.clientId,
+        turnGeneration: dispatchTurnGeneration,
+        workerId: target.id,
+        workerLabel,
+        delivery,
+        ...(delivery === 'queued' ? { queuedMessageId: result.clientId } : {}),
+        ...(leadRuntime ? { instanceToken: sessionInstanceToken(leadRuntime) } : {}),
+        at: Date.now(),
+      });
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2104,6 +2142,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             },
     });
     if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
+    dropLeadDispatchFact(params.callerLeadSessionId, params.queuedMessageId);
     deps.log.info('orca lead cancelled queued worker message', {
       workerId: found.worker.id,
       workerSessionId: found.worker.sessionId,
@@ -2392,7 +2431,56 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     captureWorkerTerminalTurn,
     noteWorkerProductTerminal,
-    async handleWorkerTurnStarted(sessionId) {
+
+  /**
+   * Lead 收口核对：回复里引用了协议之外的派发结果值时，提醒一次。
+   * 只判闭集，不看账本、不读措辞；同一轮只提醒一次，避免反复空转。
+   */
+  async handleLeadTurnSettled(params: {
+    leadSessionId: string;
+    turnGeneration: number;
+    finalText?: string;
+  }): Promise<void> {
+    const text = params.finalText?.trim();
+    if (!text) return;
+    // 没有 worker 的会话不是协同 Lead：普通对话不参与核对。
+    const workers = await deps.listWorkersByLead(params.leadSessionId);
+    if (workers.length === 0) return;
+
+    // 只判闭集：不读账本，也不看措辞。账本会过期、重启就没了，查不到不等于编造。
+    const claim = findUnbackedDispatchClaim(text);
+    if (!claim) return;
+    if (!consumeDispatchClaimReminder(params.leadSessionId, params.turnGeneration)) {
+      deps.log.info('orca dispatch claim reminder skipped', {
+        leadSessionId: params.leadSessionId,
+        token: claim.token,
+      });
+      return;
+    }
+
+    const lines = [
+      '[Orca host] You cited a dispatch result value the protocol never issues.',
+      `You wrote \`${claim.label}=${claim.token}\`; no dispatch returns that value.`,
+      'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
+    ];
+    const delivered = await deps
+      .sendAutoBridgeToLead(
+        params.leadSessionId,
+        lines.join('\n'),
+        '',
+        undefined,
+        undefined,
+        'dispatch-claim',
+      )
+      .catch(() => ({ accepted: false }));
+    deps.log.info('orca dispatch claim reminder', {
+      leadSessionId: params.leadSessionId,
+      accepted: delivered.accepted,
+      token: claim.token,
+    });
+  },
+
+  async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 
