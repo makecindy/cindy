@@ -2468,6 +2468,23 @@ describe('whether a finished operation opens an instance', () => {
   ] as const)('install: %s', (_name, ghosts, market, reason) => {
     expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
   });
+  // Contract V2.10 case 7b (Host 0b93a48c25): a remote update of the old simulator migrates it to a new plugin id; after a
+  // Host restart (receipt gone) the device that ran it reads 'self' with its id, another device 'unattributed'. On the
+  // phone the old instance never pairs with the new market item (other ghostId), so the update entry cannot start it;
+  // the market install of the new plugin is the phone's way in, and it opens only for the device that ran it. No new
+  // rule; covers existing behaviour. Tier: unit (pure).
+  it('contract case 7b: the old simulator migrated by this device opens; another device keeps the result without Open', () => {
+    const target = { ...detail, pluginId: 'market/cindy-simulator', ghostId: 'cindy-simulator', installState: 'installed' as const };
+    const migrated: ManagedPlugin = { ...plugin, instanceKey: '_root__cindy-simulator', manifest: { ...manifest, id: 'cindy-simulator' } };
+    const old: ManagedPlugin = { ...plugin, instanceKey: '_root__baguette-simulator', manifest: { ...manifest, id: 'baguette-simulator' } };
+    expect(marketItemMatchesPlugin(target, old)).toBe(false);
+    const install = { operationId: 'op-0000000000000001', entry: 'market-install' as const, who: {}, detail: target };
+    const read = (fields: Record<string, unknown>) => parsePluginManagementDetail({ ...target, ...fields, manifest: { ...manifest, id: 'cindy-simulator' } });
+    expect(pluginOperationOpens(install, { ghosts: [migrated], market: read({ installedOperationAttribution: 'self', installedOperationId: 'op-0000000000000001' }) }))
+      .toEqual({ open: true, instanceKey: '_root__cindy-simulator' });
+    expect(pluginOperationOpens(install, { ghosts: [migrated], market: read({ installedOperationAttribution: 'unattributed' }) }))
+      .toEqual({ open: false, reason: 'unconfirmed' });
+  });
   it('update: another instance of the plugin with its own gone', () => {
     const { record } = facts('own');
     expect(pluginOperationOpens(finished('update', '_root__demo'), { ghosts: [{ ...updated, instanceKey: 'demo-copy' }], market: [record] }))
