@@ -15418,6 +15418,7 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
+      "addImages": "Fotos hinzufügen",
       "imageRejected": "„{{name}}“ konnte nicht angehängt werden. Verwende PNG, JPEG, WebP oder GIF. Bis zu {{limit}} Bilder und {{size}} MB insgesamt.",
       "unanswered": "Unbeantwortet",
       "withdrawn": "Keine Antwort mehr nötig",

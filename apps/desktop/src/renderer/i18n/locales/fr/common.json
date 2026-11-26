@@ -15543,6 +15543,7 @@
     "prevMessageJump": "Aller au prompt précédent : {{preview}}",
     "sessionLoading": "Chargement de la tâche",
     "askUserQuestion": {
+      "addImages": "Ajouter des photos",
       "imageRejected": "Impossible de joindre « {{name}} ». Utilisez PNG, JPEG, WebP ou GIF. Jusqu’à {{limit}} images et {{size}} Mo au total.",
       "unanswered": "Sans réponse",
       "withdrawn": "Réponse désormais inutile",

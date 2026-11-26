@@ -15455,6 +15455,7 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
+      "addImages": "Add photos",
       "imageRejected": "Couldn’t attach “{{name}}”. Use PNG, JPEG, WebP, or GIF. Up to {{limit}} images and {{size}} MB total.",
       "unanswered": "Unanswered",
       "withdrawn": "No longer needs an answer",

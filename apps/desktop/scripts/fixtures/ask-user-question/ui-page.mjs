@@ -92,7 +92,7 @@ export default {
       await checkComposer();
       const text = free ? '' : '我想保留截图里这版。';
       if (!free) {
-        const addLabel = await ui.t('settings.shortcuts.workLouderCodex.commands.composer.addPhotos.name');
+        const addLabel = await ui.t('chat.askUserQuestion.addImages');
         const chooser = page.waitForEvent('filechooser');
         await frame.getByRole('button', { name: addLabel, exact: true }).click();
         await (await chooser).setFiles({ name: 'extra.png', mimeType: 'image/png', buffer: Buffer.from(png) });

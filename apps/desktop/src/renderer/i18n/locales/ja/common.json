@@ -15393,6 +15393,7 @@
     "prevMessageJump": "前の質問へ移動：{{preview}}",
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
+      "addImages": "画像を追加",
       "imageRejected": "「{{name}}」を添付できませんでした。PNG、JPEG、WebP、GIF に対応しています。最大 {{limit}} 枚、合計 {{size}} MB までです。",
       "unanswered": "未回答",
       "withdrawn": "回答は不要になりました",

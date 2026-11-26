@@ -1006,7 +1006,7 @@ function AskUserQuestionForm({
     ? pending.withdrawalReason ? 'chat.askUserQuestion.sendSupplement' : pending.resumeOnSubmit ? 'chat.askUserQuestion.sendAndContinue' : 'chat.askUserQuestion.submit'
     : 'chat.askUserQuestion.next');
   const answerSubmitting = voiceSubmitting || imageSubmitting;
-  const attachLabel = t('settings.shortcuts.workLouderCodex.commands.composer.addPhotos.name');
+  const attachLabel = t('chat.askUserQuestion.addImages');
   const imageDropHandlers = allowImages ? { onPaste: onImagePaste, onDragOver: onImageDragOver, onDrop: onImageDrop } : {};
   const imagePicker = allowImages && (
     <>

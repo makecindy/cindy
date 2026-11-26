@@ -15543,6 +15543,7 @@
     "prevMessageJump": "Ir para o pedido anterior: {{preview}}",
     "sessionLoading": "A carregar tarefa",
     "askUserQuestion": {
+      "addImages": "Adicionar fotografias",
       "imageRejected": "Não foi possível anexar «{{name}}». Utilize PNG, JPEG, WebP ou GIF. Até {{limit}} imagens e {{size}} MB no total.",
       "unanswered": "Sem resposta",
       "withdrawn": "Já não precisa de resposta",

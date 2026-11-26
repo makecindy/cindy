@@ -15393,6 +15393,7 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
+      "addImages": "添加图片",
       "imageRejected": "无法添加「{{name}}」。支持 PNG、JPEG、WebP、GIF，最多 {{limit}} 张，合计不超过 {{size}} MB。",
       "unanswered": "未回答",
       "withdrawn": "无需再回答",
