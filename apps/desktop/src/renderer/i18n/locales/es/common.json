@@ -14023,6 +14023,9 @@
           "allow": "permitir",
           "deny": "denegar",
           "approve": "aprobar"
+        },
+        "companion": {
+          "retryLater": "inténtalo de nuevo más tarde"
         }
       },
       "hook": {

@@ -13907,6 +13907,9 @@
           "allow": "erlauben",
           "deny": "ablehnen",
           "approve": "genehmigen"
+        },
+        "companion": {
+          "retryLater": "bitte versuche es später noch einmal"
         }
       },
       "hook": {

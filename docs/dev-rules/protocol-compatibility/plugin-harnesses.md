@@ -281,7 +281,13 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
 - `maker:generate-title` / `maker:auto-title` 的 `agentKind` 接受 `acp`（只用辅助模型）。旧被控端拒绝，标题保持占位。
 - `session_goals.agent_kind`、目标状态的 `agentKind` 可为 `acp`（列无 CHECK 约束，只放宽 TS 枚举，无需迁移）。旧版读到 `acp`
   目标时不恢复该任务（与旧版行为一致），不会在内置引擎上运行。
-- send_to_session、/learn 不新增字段或 channel。自建中转无需改动。
+- /learn 不新增字段或 channel。自建中转无需改动。
+
+## 独立任务新建支持插件引擎（2026-11-27）
+
+- **Agent 工具**：`send_to_session`（create 模式）的 `agent_kind` 新增取值 `acp`，配合 `provider_id`（`acp-plugin:<插件>:<引擎>`，取自 `list_available_models` 的 `plugin_engines[].provider_id`；来源本身已是插件引擎且未换引擎时可省）、`model`（省略或 `default` 由引擎自选；有模型关闭或受限时不可用 `default`）与 `effort`（按该模型的 `efforts` 严格校验，不支持 `fast`）。支持本机插件引擎、同账号其他电脑与已收到插件引擎分享（`provider_device_id` / 兼容旧名 `agent_device_id`），以及在同账号另一台电脑上新建插件引擎任务（`device`）。`list_available_models` 的 `agent` 枚举同步追加 `acp`，并在查询远程电脑或插件引擎分享位置时返回其开放的 `plugin_engines`（不向内置供应商分享发插件引擎目录请求）；向另一台电脑查询 `agent: 'acp'` 时经既有 `maker:orca:remote-worker:models` 省略 `agent` 参数并在本机裁剪，不向旧电脑发未知枚举值。
+- **跨电脑新建协议（`maker:session:handoff`）**：`task-action-capability` 探测回包追加可选能力位 `ordinaryCreatePluginEngine: 1`（仅 Desktop 声明，Node Host 不声明）；`remoteSessionCreationSchema` 的 `agentKind` 新增取值 `acp`、追加可选字段 `providerId`（仅 `agentKind === 'acp'` 时出现，内置引擎新建载荷与回执操作串字节不变）。发送端在发起带 `agentKind: 'acp'` 或 `providerId` 的远程新建前复核 `ordinaryCreatePluginEngine === 1`，旧版电脑或 Node Host 缺少该位时在发送前以 `REMOTE_UNSUPPORTED` 拒绝，不创建任务。发送端对 `maker:session:handoff` 成功回包的 `agentKind` 校验同步接受 `acp`（覆盖跨电脑新建与既有插件引擎任务的 jump 投递）。不新增 channel、allowlist、relay 帧或服务端字段，官方与自建中转按既有 invoke 帧透明转发，无需同步修改。
+- **实现与回归**：`packages/lizi-mcps/src/xdt-helper/{send_to_session,list_available_models}.ts`、`packages/device-link/src/orcaRemoteWorker.ts`、`apps/desktop/src/shared/remoteSessionCreation.ts`、`apps/desktop/src/main/maker-ipc/{sendToSessionExecutionConfig,remoteSessionCreation,sessionHandoffCore,register}.ts`、`apps/desktop/src/main/mcp-integrations/{sessionHandoffRemote,mcp-providers}.ts`、`apps/host/src/agent/session-handoff.ts`；回归见 `sendToSessionTool.test.ts`、`listAvailableModelsTool.test.ts`、`sendToSessionExecutionConfig.test.ts`、`sendToSessionLazyResumePermission.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts` 与 host `device-link.test.mjs`。
 
 ## 每轮权限闸（2026-11-25）
 
@@ -308,3 +314,12 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
 与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
 `channelToolPolicy.test.ts`。
+
+## 插件引擎模型收藏（2026-11-26）
+
+插件引擎模型（Desktop 与 Mobile 统一模型选择器）复用既有收藏存储（`xdt:modelFavorites:v1`）与既有 Device Link 收藏通道（`maker:model-favorites:get` / `apply` / `changed`），不新增 wire 字段、channel、allowlist 或中转帧，官方与自建中转无需修改：
+
+- **编码与兼容**：`providerId` 为本机引擎的 `acp-plugin:<插件实例>:<引擎 id>`，或按既有复合键包一层 `agent-device-favorite:`（同账号另一台电脑的引擎）/ `provider-share-favorite:`（收到的插件引擎分享）；`modelId` 为引擎模型 id 或 `default`；`effort` 为可选规范档位键；`agent` 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`（`'cc'`，定义在 `packages/device-link/src/modelFavorites.ts`）。不发 `agent: 'acp'`——旧 Desktop 与旧 Mobile 的 `parseModelFavorites` 只接受 `cc | codex | pi`，否则会整表拒绝。旧端读到该条目后整表解析通过，因 `acp-plugin:` / 复合前缀不在内置供应商目录中而静默隐藏，不会报错也不会误派到内置引擎，单条增删改不会误删该条目；新端解析时以 `acp-plugin:` 识别插件引擎收藏并忽略 `agent`。
+- **解析与准入**：桌面与手机按完整插件引擎目录（含 `hidden: true` 的引擎，与内置隐藏供应商同口径）解析收藏；引擎不可用（未登录 / 已停用）、模型被关闭或 `defaultModelAllowed: false` 时不展示但不删除原收藏。写入远控通道（被控电脑 / 手机）时遵守 512 字符通道上限。
+- **插件路由模型（`GhostPickerModel`）**：仅在本机桌面新任务草稿提供，收藏按账号存在本机 `localStorage`（`cindy:pluginModelFavorites:v1`），与模型组收藏（`cindy:modelGroupFavorites:v1`）同口径，不跨设备同步、不进收藏同步协议。
+- **实现与回归**：`packages/device-link/src/modelFavorites.ts`（`PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`）、desktop `renderer/lib/pluginEngineFavorites.ts`、`PluginEnginesSection.tsx`、`UnifiedModelPanel.tsx`、`pluginModelFavorites.ts`、`PluginModelsSection.tsx` 与 mobile `session/pluginEngines.ts`、`UnifiedModelPickerSheet.tsx`、`UnifiedModelPickerView(.ios).tsx`；回归见 `packages/device-link/src/__tests__/modelFavorites.test.ts`、desktop `PluginEnginesSection.test.tsx`、`PluginModelsSection.test.tsx` 与 mobile `pluginEngines.test.ts`、`unifiedMobilePicker.test.tsx`、`unifiedMobilePickerView.test.tsx`。

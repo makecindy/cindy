@@ -4586,6 +4586,7 @@ interface ElectronAPI {
         devices: Array<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: Record<string, unknown>[];
         }>;
         ownerToken?: string;
@@ -4595,6 +4596,7 @@ interface ElectronAPI {
         devices: ReadonlyArray<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: readonly Record<string, unknown>[];
         }>,
         expectedOwnerToken?: string,

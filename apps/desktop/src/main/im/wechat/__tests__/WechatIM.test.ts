@@ -213,6 +213,38 @@ describe('WechatIM host boundary', () => {
     } finally { await im.dispose(); }
   });
 
+  // A paused / unavailable companion is rejected by the runner with a composed notice. WeChat
+  // used to discard it and send the generic "try again" text, hiding that the buddy is paused.
+  it('sends the runner’s companion-unavailable notice through the durable outbox', async () => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name !== 'wechatLeaseNextTask' || leased) return null;
+      leased = true;
+      return {
+        id: 'paused-task', bindingEpoch: 'epoch', peerId: 'owner',
+        sessionId: 'companion-canonical', conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'paused-task'),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      };
+    }) as DbClient['tx']);
+    im.attachTurnRuntime({ runner: {
+      companionBotIdFor: () => 'cindy',
+      dispatchAgentTurn: vi.fn(async () => ({
+        kind: 'rejected', reason: 'companion_unavailable', notice: 'buddy paused notice',
+      })),
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(vi.mocked(db.tx).mock.calls.some(([name]) =>
+        name === 'wechatCommitPreDispatchFailure')).toBe(true));
+      const [, args] = vi.mocked(db.tx).mock.calls.find(([name]) => name === 'wechatCommitPreDispatchFailure')!;
+      expect(args).toMatchObject({ taskId: 'paused-task', errorCode: 'COMPANION_UNAVAILABLE',
+        outbox: [expect.objectContaining({ text: 'buddy paused notice' })] });
+    } finally { await im.dispose(); }
+  });
+
   it.each([
     { text: '解释这张图', delivered: true },
     { text: '', delivered: true },
