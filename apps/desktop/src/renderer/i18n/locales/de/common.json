@@ -17635,6 +17635,13 @@
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
         "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+      },
+      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
+      "origin": {
+        "createdByTask": "Von einer anderen Aufgabe geöffnet",
+        "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+        "createdByRemoteTask": "Von einer Aufgabe auf {{device}} geöffnet",
+        "createdByRemoteTaskNamed": "Von „{{title}}“ auf {{device}} geöffnet"
       }
     },
     "rename": {
@@ -17655,7 +17662,9 @@
       "orcaRemoteLead": "Zusammenarbeit von {{device}}",
       "orcaRemoteLeadReleased": "Zusammenarbeit beendet · von {{device}}",
       "orcaRemoteLeadUnknownDevice": "einem anderen Computer",
-      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben."
+      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben.",
+      "createdByTask": "Aus anderer Aufgabe",
+      "createdByTaskNamed": "Aus „{{title}}“"
     },
     "gitContext": {
       "detached": "Detached HEAD",

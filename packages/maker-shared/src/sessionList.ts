@@ -42,6 +42,23 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   id: string;
   model: string;
   orcaRole?: 'lead' | 'worker' | string | null;
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
+  } | null;
   permissionMode?: string | null;
   pinnedAt?: string | null;
   source?: string | null;
@@ -54,7 +71,12 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
   projectDir?: string | null;
-  companion?: { taskProjectDir?: string | null } | null;
+  companion?: {
+    id?: string;
+    role?: string;
+    routineId?: string;
+    taskProjectDir?: string | null;
+  } | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -940,19 +962,32 @@ export function groupAutomationListItems(
   return next;
 }
 
+/** 伙伴例行任务 Session（含旧主机不带 routineId 的行），供自动化筛选与归组共用。 */
+export function isTeammateRoutineSession(session: RemoteSessionListItem['session']): boolean {
+  const like = session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { role?: unknown } | null;
+  };
+  return like.source === 'bot' && like.orcaRole !== 'worker' && like.companion?.role === 'routine';
+}
+
+/**
+ * 列表自动化任务统一判定（分组与「隐藏自动化任务」筛选共用）：
+ * 覆盖定时自动化（`source === 'scheduler'` 及历史 `[Schedule] ` 标题前缀）与伙伴例行任务。
+ */
+export function isAutomationSidebarSession(session: RemoteSessionListItem['session']): boolean {
+  return isAutomationGeneratedSession(session) || isTeammateRoutineSession(session);
+}
+
 /**
  * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)按例行规则归组,与桌面
  * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时返回 null,维持逐条显示。
  */
 function teammateRoutineGroupKey(session: RemoteSessionListItem['session']): string | null {
-  const like = session as {
-    source?: unknown;
-    orcaRole?: unknown;
-    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
-  };
-  if (like.source !== 'bot' || like.orcaRole === 'worker') return null;
-  const companion = like.companion;
-  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
+  if (!isTeammateRoutineSession(session)) return null;
+  const companion = (session as { companion?: { id?: string | null; routineId?: string | null } | null }).companion;
+  if (!companion?.id || !companion.routineId) return null;
   return `routine:${companion.id}:${companion.routineId}`;
 }
 

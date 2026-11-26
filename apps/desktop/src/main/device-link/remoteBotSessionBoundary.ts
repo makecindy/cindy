@@ -236,7 +236,10 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     const entries = (listing ? row.sessions : row.hits) as unknown[];
     const ids = [...new Set(entries.flatMap((item) => {
       const entry = record(item);
-      return [listing ? entry?.id : entry?.sessionId, ...(listing ? [entry?.parentSessionId] : [])]
+      const origin = record(entry?.createdBySession);
+      const originSessionId = typeof origin?.sessionId === 'string' && !origin.sessionId.includes('::')
+        ? origin.sessionId : undefined;
+      return [listing ? entry?.id : entry?.sessionId, ...(listing ? [entry?.parentSessionId, originSessionId] : [])]
         .filter((id): id is string => typeof id === 'string');
     }))];
     const access = new Map<string, RemoteBotSessionAccess>();
@@ -249,14 +252,21 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       && (access.get(id) === 'ordinary' || access.get(id) === 'visible' || access.get(id) === 'background');
     // The page and its foreign references share one fresh, source-owned lookup.
     // Missing or hidden page members invalidate pagination; optional parents
-    // are simply omitted, including on cached/queued delivery after a hide.
+    // and originating task references are simply omitted, including on cached/queued delivery after a hide.
     if (entries.some((item) => !visible(listing ? record(item)?.id : record(item)?.sessionId))) {
       throw new Error('[NOT_FOUND] History page is no longer available');
     }
     if (Array.isArray(row.sessions)) {
       const sessions = row.sessions.map((item) => {
-        const { parentSessionId, ...session } = record(item)!;
-        return visible(parentSessionId) ? { ...session, parentSessionId } : session;
+        const { parentSessionId, createdBySession, ...session } = record(item)!;
+        const origin = record(createdBySession);
+        const originId = typeof origin?.sessionId === 'string' ? origin.sessionId : null;
+        const keepOrigin = originId !== null && (originId.includes('::') || visible(originId));
+        return {
+          ...session,
+          ...(visible(parentSessionId) ? { parentSessionId } : {}),
+          ...(keepOrigin ? { createdBySession } : {}),
+        };
       });
       return { ...row, sessions };
     }
@@ -291,16 +301,40 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     if (!row || typeof id !== 'string') return null;
     return { id, kind: ref?.kind === 'bot' || channel.startsWith('local-db:bots:') ? 'bot' as const : 'session' as const };
   };
+  const localOriginSessionId = (item: unknown): string | null => {
+    const origin = record(record(item)?.createdBySession);
+    return typeof origin?.sessionId === 'string' && origin.sessionId && !origin.sessionId.includes('::')
+      ? origin.sessionId : null;
+  };
+  const redactHiddenOrigin = (item: unknown, sessionAccess: ReadonlyMap<string, RemoteBotSessionAccess>): unknown => {
+    const originId = localOriginSessionId(item);
+    if (!originId) return item;
+    if (sessionAccess.get(originId) !== 'hidden') return item;
+    const { createdBySession: _omitted, ...rest } = record(item)!;
+    return rest;
+  };
   const project = async (item: unknown) => {
     const key = identity(item);
     if (!key) return item;
-    return excluded(await activeLookup(key.id, key.kind)) ? null : item;
+    if (excluded(await activeLookup(key.id, key.kind))) return null;
+    const originId = key.kind === 'session' ? localOriginSessionId(item) : null;
+    if (!originId) return item;
+    const originStatus = await activeLookup(originId, 'session');
+    if (originStatus !== 'hidden') return item;
+    const { createdBySession: _omitted, ...rest } = record(item)!;
+    return rest;
   };
   if (Array.isArray(value)) {
     const identities = value.map(identity);
     const accessByKind = new Map<'session' | 'bot', ReadonlyMap<string, RemoteBotSessionAccess>>();
     for (const kind of ['session', 'bot'] as const) {
-      const ids = [...new Set(identities.filter((key) => key?.kind === kind).map((key) => key!.id))];
+      const originIds = kind === 'session'
+        ? value.map(localOriginSessionId).filter((id): id is string => id !== null)
+        : [];
+      const ids = [...new Set([
+        ...identities.filter((key) => key?.kind === kind).map((key) => key!.id),
+        ...originIds,
+      ])];
       if (!ids.length) continue;
       if (activeBatchLookup) {
         accessByKind.set(kind, await activeBatchLookup(ids, kind));
@@ -311,10 +345,13 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
         accessByKind.set(kind, access);
       }
     }
-    return value.filter((item, index) => {
-      const key = identities[index];
-      return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
-    });
+    const sessionAccess = accessByKind.get('session') ?? new Map<string, RemoteBotSessionAccess>();
+    return value
+      .filter((item, index) => {
+        const key = identities[index];
+        return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
+      })
+      .map((item) => redactHiddenOrigin(item, sessionAccess));
   }
   const row = record(value);
   if (row && !row.id && Array.isArray(row.sessions)) return { ...row, sessions: await projectRemoteSessionResult(channel, row.sessions) };

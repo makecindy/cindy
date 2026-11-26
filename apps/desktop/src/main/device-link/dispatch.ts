@@ -172,6 +172,7 @@ import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke
 import {
   redactInputProjectionForSharedGuest,
   redactMessageRowForSharedGuest,
+  redactSessionRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
 import { isProviderSharePeer, isScopedPeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
@@ -4050,6 +4051,10 @@ function sanitizeMessageInvokeResult(
     const sanitized = sanitizeRemoteMessage(record);
     return sharedTaskGuest ? redactMessageRowForSharedGuest(sanitized) : sanitized;
   };
+  if (sharedTaskGuest && result.ok && channel === 'local-db:sessions:get') {
+    const redacted = redactSessionRowForSharedGuest(result.result);
+    return redacted === result.result ? result : { ok: true, result: redacted };
+  }
   if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
     const projection = redactInputProjectionForSharedGuest(result.result);
     return projection === result.result ? result : { ok: true, result: projection };

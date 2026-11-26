@@ -17560,6 +17560,13 @@
         "inbox": "收件匣",
         "enterInbox": "轉至收件匣之式",
         "leaveInbox": "轉至任務列之式"
+      },
+      "filterHideTaskCreated": "隱他差事所立之務",
+      "origin": {
+        "createdByTask": "他差事所立",
+        "createdByTaskNamed": "差事「{{title}}」所立",
+        "createdByRemoteTask": "{{device}} 上差事所立",
+        "createdByRemoteTaskNamed": "{{device}} 上差事「{{title}}」所立"
       }
     },
     "rename": {
@@ -17580,7 +17587,9 @@
       "orcaRemoteLead": "自 {{device}} 之協同",
       "orcaRemoteLeadReleased": "協同已終 · 自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "他機",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目錄與命令皆於此機行之；君於此所遣之訊不回報 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目錄與命令皆於此機行之；君於此所遣之訊不回報 Lead。",
+      "createdByTask": "出自他差事",
+      "createdByTaskNamed": "出自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",
