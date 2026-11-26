@@ -1517,8 +1517,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 for (const hint of change.data.work) {
                   if (!id.safeParse(hint?.botId).success || !id.safeParse(hint?.conversationId).success) continue;
                   noteUnresolvedWork(hint.botId, hint.conversationId);
-                  // The group's Cindy has no actor of ours: a notice for it just looks for work now.
-                  if (hint.botId === assistantActorId) { targets.push(hint.botId); continue; }
+                  // The group's Cindy has no actor of ours. This stream carries only this account's own
+                  // requests, so its room is noted as a companion's is: while Cindy is busy in another
+                  // conversation only noted rooms are read (#10454). Noted only while it is polled here.
+                  if (hint.botId === assistantActorId) {
+                    if (boundAssistantDevice && selfId) {
+                      const hints = queuedHints.get(hint.botId) ?? new Map<string, WorkHint>();
+                      hints.set(`room:${hint.conversationId}`, { roomId: hint.conversationId });
+                      queuedHints.set(hint.botId, hints);
+                    }
+                    targets.push(hint.botId); continue;
+                  }
                   const bot = actors.find(actor => actor.id === hint.botId);
                   if (!bot || !claimable(bot)) continue;
                   const hints = queuedHints.get(bot.id) ?? new Map<string, WorkHint>();
@@ -3923,7 +3932,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
         if (!mayRequest()) return;
         const execution = await claim(actorId, row.id);
-        if (!execution) continue;
+        // Every computer of the account hears of the group's Cindy work, but the server hands each
+        // group's requests only to that member's chosen computer: a refusal here is final until a new notice.
+        if (!execution) { if (actorId === assistantActorId) hints.delete(row.id); continue; }
         hints.delete(row.id);
         lanes.add(lane);
         void runExecution(execution, lane);

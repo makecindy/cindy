@@ -3033,6 +3033,42 @@ describe('Chat Server result delivery and refresh', () => {
       expect(dispatched()[1]!.message.startsWith('@Cindy from the phone')).toBe(true);
     });
 
+    // #10454: while the group's Cindy ran one request, the same person's @Cindy in another group was
+    // never read until that turn ended, so the server could settle it as an unclaimed timeout. Real
+    // entry: the account stream's work.available into withChatServer's claim loop. Existing cases only
+    // claim while idle. Minimal input: group A's request stays open, then a notice names group B.
+    // Another member's request in B, or one the server keeps for this member's other computer (every
+    // computer of the account hears the notice), is read once and then left alone.
+    it.each([
+      ['takes own request', selfId, true, 1],
+      ['leaves another member\'s request', peerId, false, 0],
+      ['leaves own request bound to another computer', selfId, false, 1],
+    ] as const)('%s in another group while busy there', async (_label, requester, granted, claims) => {
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets.at(-1)!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      await ask(5, 'Long work in group A');
+      const otherRoom = '10000000-0000-4000-8000-000000000002';
+      const other = { ...request(7, requester), conversation_id: otherRoom, source_message_id: '50000000-0000-4000-8000-000000000777' };
+      let claimed = false;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === `/conversations/${otherRoom}/executions`) return { body: claimed ? [] : [{ ...other, status: 'queued' }] };
+        if (route === '/executions/claim' && body?.executionId === other.id) { claimed = granted; return { body: { execution: granted ? other : null } }; }
+        if (route === `/conversations/${otherRoom}/messages/${other.source_message_id}`) return { body: { ...message(7, requester, 'Quick question in group B'), id: other.source_message_id } };
+        if (route === `/conversations/${otherRoom}/snapshot`) return { body: { room: { ...room(otherRoom), project: null }, members, messages: [], cursor: '1' } };
+        return base(route, method, body);
+      });
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
+        changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: otherRoom }] } }] }));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(dispatched().map(input => input.message.split('\n')[0])).toEqual(granted
+        ? ['Long work in group A', 'Quick question in group B'] : ['Long work in group A']);
+      expect(fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === other.id)).toHaveLength(claims);
+      if (!granted) expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${otherRoom}/executions`)).toHaveLength(1);
+    });
+
     // 2026-11-14 owner report: «已连接到某台电脑» said nothing about which computer took the request.
     // The computer running it tells the server where (itself, the task, the model) as soon as the
     // request is in the task; the requester's devices show it and open the task there.
