@@ -192,6 +192,52 @@ it('falls back from content streaming to lstat metadata when dirty count or byte
   // f1.bin is 24 bytes (> 20 byte budget, skipped); f2.bin is 16 bytes (streamed, leaves 4 bytes); f3.bin is 16 bytes (> 4, skipped).
   expect(streamSpy).toHaveBeenCalledTimes(1);
   expect(streamSpy.mock.calls[0]?.[0]).toBe(path.join(repo, 'f2.bin'));
+  expect(streamSpy.mock.calls[0]?.[1]).toEqual({ start: 0, end: 20 });
+});
+
+it('caps actual bytes read and falls back to fresh lstat when a file grows between lstat and streaming', async () => {
+  const repo = makeRepoDir();
+  const growing = path.join(repo, 'growing.log');
+  const trailing = path.join(repo, 'small.txt');
+  fs.writeFileSync(growing, 'tiny');
+  fs.writeFileSync(trailing, 'ok');
+  stubBasicGit(repo, { porcelain: ' M growing.log\0 M small.txt\0' });
+
+  const realCreateReadStream = fs.createReadStream.bind(fs);
+  let bytesActuallyRead = 0;
+  let grewOnce = false;
+  const streamSpy = vi.spyOn(fs, 'createReadStream').mockImplementation((filePath, opts) => {
+    if (!grewOnce && filePath === growing) {
+      grewOnce = true;
+      // Simulate a writer expanding the file well past the 20-byte budget after lstat ran.
+      fs.writeFileSync(growing, 'x'.repeat(4096));
+    }
+    const stream = realCreateReadStream(filePath, opts);
+    stream.on('data', (chunk) => {
+      bytesActuallyRead += Buffer.byteLength(chunk);
+    });
+    return stream;
+  });
+
+  const service = createCheckoutService(async () => [], {
+    fingerprintContentFileLimit: 10,
+    fingerprintContentByteBudget: 20,
+  });
+  const s1 = await service.status(repo);
+  // Only growing.log was opened, read capped at budget + 1 (21 bytes), and small.txt skipped once budget hit 0.
+  expect(streamSpy).toHaveBeenCalledTimes(1);
+  expect(streamSpy.mock.calls[0]?.[0]).toBe(growing);
+  expect(bytesActuallyRead).toBeLessThanOrEqual(21);
+
+  // Subsequent status hashes the now-4096-byte growing.log via lstat metadata (matching s1) and detects further growth.
+  streamSpy.mockClear();
+  const s2 = await service.status(repo);
+  expect(streamSpy).toHaveBeenCalledTimes(1);
+  expect(streamSpy.mock.calls[0]?.[0]).toBe(trailing);
+  fs.appendFileSync(growing, 'more');
+  const s3 = await service.status(repo);
+  expect(s3.fingerprint).not.toBe(s2.fingerprint);
+  expect(s1.fingerprint).not.toBe(s3.fingerprint);
 });
 
 it('coalesces concurrent external status scans for the same repo and target without caching settled reads', async () => {

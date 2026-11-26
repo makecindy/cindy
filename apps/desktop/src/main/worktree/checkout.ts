@@ -84,6 +84,8 @@ async function hashDirtyFiles(
   // repos with tens of thousands of modified assets do not stream hundreds of megabytes per read.
   const allowContent = files.length <= contentFileLimit;
   let remainingBytes = contentByteBudget;
+  const hashStat = (s: BigIntStats) =>
+    hash.update(`stat:${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.ino}:${s.mode}`);
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     const full = path.join(repo, file);
@@ -100,16 +102,47 @@ async function hashDirtyFiles(
     if (stat.isFile()) {
       const size = Number(stat.size);
       if (allowContent && Number.isSafeInteger(size) && size <= remainingBytes) {
-        remainingBytes -= size;
-        hash.update('bytes:');
+        const limit = remainingBytes;
+        const fileHash = createHash('sha256');
+        let bytesRead = 0;
+        let exceeded = false;
+        // Inclusive end = limit reads at most limit + 1 bytes so a file growing between lstat
+        // and open cannot stream unbounded data past the remaining byte budget.
+        const stream = fsSync.createReadStream(full, { start: 0, end: limit });
         try {
-          for await (const chunk of fsSync.createReadStream(full)) hash.update(chunk);
+          for await (const chunk of stream) {
+            const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+            bytesRead += buf.byteLength;
+            if (bytesRead > limit) {
+              exceeded = true;
+              stream.destroy();
+              break;
+            }
+            fileHash.update(buf);
+          }
         } catch (error) {
-          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') hash.update('\0vanished');
-          else throw error;
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            hash.update('missing');
+            continue;
+          }
+          throw error;
+        }
+        if (exceeded) {
+          remainingBytes = 0;
+          const fresh = await fs.lstat(full, { bigint: true }).catch(() => null);
+          if (fresh?.isSymbolicLink()) {
+            hash.update('link:').update(await fs.readlink(full).catch(() => ''));
+          } else if (fresh) {
+            hashStat(fresh);
+          } else {
+            hash.update('missing');
+          }
+        } else {
+          remainingBytes = Math.max(0, remainingBytes - bytesRead);
+          hash.update('bytes:').update(fileHash.digest());
         }
       } else {
-        hash.update(`stat:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}:${stat.mode}`);
+        hashStat(stat);
       }
       continue;
     }
