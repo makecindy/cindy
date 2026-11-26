@@ -492,6 +492,7 @@
     "many": "{{count}} 项插件操作还没结束",
     "waitingOne": "「{{name}}」在「{{device}}」上的结果待核实",
     "settledOne": "「{{name}}」在「{{device}}」上的操作有结果了",
+    "settledMany": "{{count}} 项插件操作有结果了",
     "kind": {
       "marketInstall": "安装",
       "update": "更新",
@@ -506,6 +507,7 @@
       "confirmation": "等待确认",
       "checking": "正在核实结果",
       "waiting": "结果未确认。可以再核实一次，或不再跟踪。",
+      "marketUnread": "电脑现在读不到这个插件所在的市场，还不能确认结果。可以稍后再核实一次，或不再跟踪。",
       "offline": "「{{device}}」未连接，连接后才能核实结果。",
       "awaitingYou": "电脑正在等你确认",
       "unprovable": {

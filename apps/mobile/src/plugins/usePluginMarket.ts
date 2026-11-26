@@ -17,6 +17,12 @@ import {
 import { tellPluginConclusion, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 
+/**
+ * How long "Check result" on a market row counts as the person waiting for that row's result: one lookup of the
+ * operation and the installed reads after it (each bounded by the request timeout). No timer runs on it; it is only
+ * compared when a result arrives.
+ */
+const ASKED_RESULT_WINDOW_MS = 30_000;
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
 const MARKET_REFRESH_MS = 30_000;
 const CACHED_LISTS = 6;
@@ -90,7 +96,7 @@ export interface UsePluginMarketOptions {
    * The install succeeded: `instanceKey` when the computer's facts prove this install's instance (it opens), otherwise
    * why not (`notOpened`: a `pluginOperationOpens` reason, or `unread` when the computer could not be read).
    */
-  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem,
+  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: Pick<ManagedMarketItem, "name">,
     notOpened?: PluginOperationNotOpened): void;
 }
 
@@ -488,6 +494,12 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const conclusions = usePluginCheckConclusions();
   /** Operations this mount's own row follows to their end (the row shows their conclusion itself). */
   const rowOperations = useRef(new Set<string>());
+  /** The operation of the attempt on screen (its id is gone from the controller once it is no longer tracked). */
+  const attemptOperation = useRef<string | undefined>(undefined);
+  /** Operations whose result the person just asked this market for ("Check result" on their row), and when. */
+  const asked = useRef(new Map<string, number>());
+  const me = useRef<symbol | undefined>(undefined);
+  me.current ??= Symbol("market");
   const checkFor = (pluginId: string) => checks.find((check) => check.entry === "market-install"
     && check.who.deviceId === deviceId && check.who.pluginId === pluginId);
   // A kept attempt that had started was handed over to its controller already.
@@ -620,10 +632,20 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     // Handed over and its result now waits for the person to check it (the computer's slot went), or its operation is
     // no longer tracked ("Stop tracking"): this attempt ends; its pending check, if any, carries on with the row (see
     // `rowState`). Before begin there is no operation to hand over: the paths below settle it.
-    if (state.operationId) operationSeen.current = attempt.id;
+    if (state.operationId) { operationSeen.current = attempt.id; attemptOperation.current = state.operationId; }
     const live = controller.getState();
     if (handedOver.current === attempt.id && !["succeeded", "failed", "cancelled"].includes(state.outcome)
       && (controller.pendingCheck()?.waiting || (operationSeen.current === attempt.id && !live.operationId && !live.busy))) {
+      // Its receipt was gone and the facts read after it settled it while this row was still waiting for the result:
+      // proven as this install (the same response's record and instance), its detail opens as after any install here.
+      const settled = operationSeen.current === attempt.id && !live.operationId && attemptOperation.current
+        ? conclusions.find((item) => item.operationId === attemptOperation.current) : undefined;
+      if (settled?.readback === "verified" && settled.instanceKey && !rowOperations.current.has(settled.operationId)
+        && tellPluginConclusion(settled.operationId)) {
+        rowOperations.current.add(settled.operationId);
+        complete(attempt, settled.instanceKey);
+        return;
+      }
       finish(attempt);
       return;
     }
@@ -702,9 +724,36 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
    */
   const checkResult = useCallback(async (item?: ManagedMarketItem) => {
     const attempt = installRef.current, controller = management.controller;
-    if (attempt && controller && (!item || attempt.item.pluginId === item.pluginId)) { await controller.reconcile(); return; }
-    if (item) await checkFor(item.pluginId)?.verify();
+    const mine = attempt && controller && (!item || attempt.item.pluginId === item.pluginId) ? controller.getState().operationId : undefined;
+    // Through its pending check, so the result is marked as asked for by this market (a later "Check result" in the
+    // list of checks takes that over, and then the list shows it).
+    const check = mine ? checks.find((entry) => entry.operationId === mine) : item ? checkFor(item.pluginId) : undefined;
+    if (check) { asked.current.set(check.operationId, Date.now()); await check.verify(me.current); return; }
+    if (mine && controller) await controller.reconcile();
   }, [management.controller, checks, deviceId]);
+  // The person asked this market for a row's result, and that lookup proved the install (a final receipt and the
+  // success's read, or the facts read after the receipt was gone): its installed detail opens, as after an install
+  // finished here. Only for what was asked here, and only as the answer to that request (within the time its lookup
+  // and the read of the facts after it can take): a result that comes later by itself (a reconnect, another page)
+  // never moves the page; it is listed at the top instead.
+  useEffect(() => {
+    for (const [operationId, at] of [...asked.current]) {
+      const conclusion = conclusions.find((item) => item.operationId === operationId);
+      if (conclusion) {
+        if (conclusion.readback === "pending") continue;
+        asked.current.delete(operationId);
+        const host = targets.find((candidate) => candidate.deviceId === conclusion.who.deviceId);
+        if (conclusion.entry !== "market-install" || conclusion.readback !== "verified" || !conclusion.instanceKey || !host
+          || conclusion.askedBy !== me.current || Date.now() - at > ASKED_RESULT_WINDOW_MS || !mounted.current || rowOperations.current.has(operationId) || conclusion.told || !tellPluginConclusion(operationId)) continue;
+        rowOperations.current.add(operationId);
+        if (conclusion.who.pluginId) invalidateComputer(host.deviceId, conclusion.who.pluginId);
+        onInstalled.current(host, conclusion.instanceKey, { name: conclusion.who.name });
+        continue;
+      }
+      // No longer tracked ("Stop tracking"), with nothing concluded: no longer asked.
+      if (!checks.some((item) => item.operationId === operationId) && installRef.current === null) asked.current.delete(operationId);
+    }
+  }, [conclusions, checks, targets, invalidateComputer]);
 
   return {
     target, online, targets, selectDevice,

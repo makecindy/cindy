@@ -8,7 +8,7 @@ import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollO
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
-import { retryPluginCheckReadback, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
+import { pluginConclusionSettled, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
 export interface PluginOperationLine {
@@ -58,6 +58,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   // A consent that could not be opened (another operation holds the computer's slot), per operation.
   const [blocked, setBlocked] = useState<string[]>([]);
   // Successes drawn here as settled: the person has seen how they ended once the list closes (they leave the notice).
+  // Only what is still settled then counts (`tellPluginConclusion`): one being read again, or that could not be read
+  // after all, stays listed.
   const settledSeen = useRef(new Set<string>());
   if (!visible) seen.current.clear();
   useEffect(() => {
@@ -77,6 +79,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       + (!check.unprovable.present ? "absent" : check.unprovable.pagesApproved === undefined ? "present"
         : check.unprovable.pagesApproved ? "approved" : "notApproved"));
     if (check.state.busy && check.state.outcome === "unknown") return t("plugins.checks.status.checking");
+    // The receipt is gone and the facts cannot settle it yet (the computer could not read the plugin's market then).
+    if (check.marketUnread) return t("plugins.checks.status.marketUnread");
     if (check.waiting || check.state.outcome === "unknown") return t("plugins.checks.status.waiting");
     return t(check.state.outcome === "confirmation" ? "plugins.checks.status.confirmation" : "plugins.checks.status.running");
   };
@@ -97,9 +101,11 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     const done = t("plugins.checks.result." + conclusion.result);
     // "Stop tracking" on one that could not be read.
     if (conclusion.told && conclusion.readback === "failed") return { text: t("plugins.checks.result.untracked") };
-    if (conclusion.readback !== "pending" && conclusion.readback !== "failed" && conclusion.readback !== "none") settledSeen.current.add(conclusion.operationId);
+    if (pluginConclusionSettled(conclusion)) settledSeen.current.add(conclusion.operationId);
     switch (conclusion.readback) {
       case "verified":
+        // Already shown to the person elsewhere (its own view opened or showed it): nothing more to open from here.
+        if (conclusion.told) return { text: done };
         return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.operationId }
           : { text: done, openUnavailable: true };
       case "pending": return { text: t("plugins.checks.result.readingBack") };
@@ -185,7 +191,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                         </Pressable>
                         {/* One that cannot be read (its computer is away for good) can always be let go: nothing is sent. */}
                         <Pressable testID="plugins.checks.stop" accessibilityRole="button"
-                          onPress={() => tellPluginConclusion(over.readAgain!)} style={styles.button}>
+                          onPress={() => stopPluginConclusion(over.readAgain!)} style={styles.button}>
                           <Text style={styles.label}>{t("plugins.checks.stop")}</Text>
                         </Pressable>
                       </>

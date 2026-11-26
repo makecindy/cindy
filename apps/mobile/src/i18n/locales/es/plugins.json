@@ -494,6 +494,7 @@
     "many": "{{count}} operaciones de complementos no han terminado",
     "waitingOne": "Hay que comprobar el resultado de «{{name}}» en «{{device}}»",
     "settledOne": "La operación de «{{name}}» en «{{device}}» tiene un resultado",
+    "settledMany": "{{count}} operaciones de complementos tienen un resultado",
     "kind": {
       "marketInstall": "Instalar",
       "update": "Actualizar",
@@ -508,6 +509,7 @@
       "confirmation": "Esperando confirmación",
       "checking": "Comprobando el resultado",
       "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
+      "marketUnread": "El ordenador no puede leer ahora el mercado de este complemento, así que el resultado aún no se puede confirmar. Compruébalo más tarde o deja de seguirlo.",
       "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
       "awaitingYou": "El ordenador espera tu confirmación",
       "unprovable": {

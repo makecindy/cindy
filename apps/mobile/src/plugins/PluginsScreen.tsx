@@ -91,7 +91,7 @@ import {
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
-import { pluginConclusionListed, pluginConclusionTold, retryPluginCheckReadback, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { pluginConclusionListed, pluginConclusionSettled, pluginConclusionTold, retryPluginCheckReadback, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
@@ -693,10 +693,11 @@ function PluginDirectory() {
   const lone = noticeLines.length === 1 ? noticeLines[0] : undefined;
   const loneWaits = lone?.concluded === "failed" || (!!lone?.check && (lone.check.waiting || lone.check.state.outcome === "unknown"));
   // Settled (read), but not shown to the person yet: it has a result to look at.
-  const loneSettled = !!lone?.concluded && lone.concluded !== "failed" && lone.concluded !== "pending";
+  const settledLine = (line: PluginOperationLine) => !!line.concluded && line.concluded !== "failed" && line.concluded !== "pending";
+  const loneSettled = !!lone && settledLine(lone);
   const holderNoticeProps: PluginNoticeProps | undefined = noticeLines.length ? {
     testID: "plugins.slotHolder", icon: "info", compact: true,
-    title: !lone ? t("plugins.checks.many", { count: noticeLines.length })
+    title: !lone ? t(noticeLines.every(settledLine) ? "plugins.checks.settledMany" : "plugins.checks.many", { count: noticeLines.length })
       : t(loneWaits ? "plugins.checks.waitingOne" : loneSettled ? "plugins.checks.settledOne" : "plugins.slot.holder", { name: lone.who.name, device: lone.who.deviceName }),
     actions: [{ label: t("plugins.slot.show"), testID: "plugins.slotHolder.show", onPress: () => setChecksOpen(true) }],
     // Anywhere on it opens the list (dispatcher P-2: at the largest text sizes its button can sit off screen).
@@ -947,47 +948,37 @@ function PluginDirectory() {
   // "Open" from the list of checks (dispatcher L-3): only the instance the list's own read found, and only on that
   // computer: one no longer listed for this account cannot be opened (the panel says so instead).
   const knownTarget = (deviceId: string) => targets.some((candidate) => candidate.deviceId === deviceId);
-  const openInstalled = (who: PluginSlotHolder, instanceKey: string) => {
+  const openInstalled = (who: PluginSlotHolder, instanceKey: string): boolean => {
     const host = targets.find((candidate) => candidate.deviceId === who.deviceId);
-    if (!host) return;
+    if (!host) return false;
     setChecksOpen(false);
     void showDetail({ key: JSON.stringify([who.deviceId, "plugins", "plugin", instanceKey]), host,
       item: { ref: { collectionId: "plugins", kind: "plugin", id: instanceKey }, revision: "", links: [], display: { title: who.name } } } as HostedRemoteCollectionItem);
+    return true;
   };
   // "Open plugin" in the list of checks: the computer is read once more first, and only what that newest read proves
   // is opened (a success is a past result: the plugin may have been replaced since the line was drawn). When it no
-  // longer proves it, or cannot be read, nothing opens and the line says so.
+  // longer proves it, or cannot be read, nothing opens and the line says so. Shown to the person once it did open.
   const openChecked = (operationId: string) => {
     const owner = getMobileAuthOwner();
     void retryPluginCheckReadback(operationId).then((latest) => {
       if (!isMobileAuthOwnerCurrent(owner) || !liveSelection.current.focused || latest?.readback !== "verified" || !latest.instanceKey) return;
-      tellPluginConclusion(operationId);
-      openInstalled(latest.who, latest.instanceKey);
+      if (openInstalled(latest.who, latest.instanceKey)) tellPluginConclusion(operationId);
     });
   };
-  // A market install nobody's own view is showing settled as installed while this page is open: the same as an install
-  // finished here (the list read again; its detail opened, as on the computer), once the list's one read proved the
-  // instance (also one read again after a failure, when its computer is back). Never while a sheet is up, and never
-  // one that was already proven before this page opened (opening the page must not jump somewhere by itself). Whatever
-  // is not opened here stays listed at the top until the person has seen it; nothing is assumed seen because the page
-  // was opened again.
+  // The page never moves by itself for a result (pre-push review 2026-11-26): a success is opened by the view the
+  // person is waiting in (the market row that started it or was just asked for its result; the installed detail of
+  // that instance), or by "Open plugin" in the list of checks. One that settles any other way (its computer came back,
+  // the app returned to the foreground, the page was opened again) stays listed at the top until the person looks.
+  // Here only the installed list is read again, once per operation that ended without its own view.
   const refreshedFor = useRef<Set<string> | undefined>(undefined);
-  const provenBefore = useRef<Set<string> | undefined>(undefined);
-  provenBefore.current ??= new Set(conclusions.filter((item) => item.readback === "verified").map((item) => item.operationId));
   refreshedFor.current ??= new Set(conclusions.map((item) => item.operationId));
   useEffect(() => {
     for (const conclusion of conclusions) {
-      if (!refreshedFor.current!.has(conclusion.operationId)) {
-        refreshedFor.current!.add(conclusion.operationId);
-        // Its own view reads the lists again itself.
-        if (!conclusion.shown) void list.refresh();
-      }
-      // Read live: the row or the installed detail that started it may have shown it earlier in this commit.
-      if (conclusion.entry !== "market-install" || conclusion.readback !== "verified" || !conclusion.instanceKey
-        || provenBefore.current!.has(conclusion.operationId) || pluginConclusionTold(conclusion.operationId) || !focused || checksOpen || deciding
-        || market.confirmation?.state.outcome === "confirmation") continue;
-      tellPluginConclusion(conclusion.operationId);
-      openInstalled(conclusion.who, conclusion.instanceKey);
+      if (refreshedFor.current!.has(conclusion.operationId)) continue;
+      refreshedFor.current!.add(conclusion.operationId);
+      // Its own view reads the lists again itself.
+      if (!conclusion.shown) void list.refresh();
     }
   }, [conclusions]);
   // "View and decide" (dispatcher L-2): a consent a lookup found that this phone never showed opens in the same
@@ -1147,59 +1138,50 @@ function PluginDirectory() {
       // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
       if (row) market.invalidate(row.host.deviceId);
     }
-    // What happened to the instance on screen is decided once. An update or a page approval: by the list's one read of
-    // this success (usePluginManagement `readBack`; dispatcher O-2), the same conclusion the notice at the top and the
-    // list of checks show, so this detail cannot say something else. While that read is out or failed nothing happens
-    // here (the success stays listed at the top, to be read again). Any other operation (an uninstall): by the
-    // controller's snapshot read after the result.
+    // The detail on screen is brought up to date once, on the controller's snapshot read after the result (its
+    // `finalReadback`, settled where a snapshot is published): the instance shown is read again, or the detail closes
+    // when it is gone (an uninstall). Only this detail's display: what an update or a page approval concluded (proven
+    // as this operation's, or why not) is the list's one read of the success, shown by the effect below. While the
+    // snapshot read is out nothing happens; a failed one leaves the detail as it is.
     const done = completedOperation.current!;
-    if (done.settled) return;
-    const finished = controller.finishedOperation();
-    const decides = finished && (finished.entry === "update" || finished.entry === "page-approval");
-    const conclusion = decides ? conclusions.find((item) => item.operationId === state.operationId) : undefined;
-    if (decides ? !conclusion || conclusion.readback === "pending" || conclusion.readback === "failed" : state.finalReadback !== "read") return;
+    if (done.settled || state.finalReadback !== "read") return;
     done.settled = true;
     const { row, generation, owner } = done;
     if (!row || liveManagement.current !== controller || generation !== detailGeneration.current || !isMobileAuthOwnerCurrent(owner)) return;
     const refreshed = controller.getState();
     if (!refreshed.online) return;
-    // Shown here from now on (whatever was not shown stays listed at the top).
-    if (conclusion) tellPluginConclusion(conclusion.operationId);
     const snapshot = refreshed.snapshot;
     const viewed = snapshot?.ghosts.find(
       (item) => item.instanceKey === row.item.ref.id,
     );
-    // An update or a page approval opens only the instance that read proved; when the plugin changed on the computer
-    // since, the detail stays on the instance shown and says so (nothing else is opened).
-    let instanceKey = viewed?.instanceKey;
-    if (conclusion) {
-      if (conclusion.readback === "verified" && conclusion.instanceKey) instanceKey = conclusion.instanceKey;
-      else if (conclusion.readback === "gone" || conclusion.readback === "unconfirmed" || conclusion.readback === "legacy") {
-        tell("plugins.checks.result.succeeded", PLUGIN_NOT_OPENED_TEXT[conclusion.readback]);
-        // No instance of it there now, by that read: the detail has nothing to show.
-        if (conclusion.readback === "gone") instanceKey = undefined;
-      }
-    }
-    if (instanceKey)
-      void showDetail({
-        ...row,
-        key: JSON.stringify([
-          row.host.deviceId,
-          "plugins",
-          "plugin",
-          instanceKey,
-        ]),
-        item: {
-          ...row.item,
-          ref: { ...row.item.ref, id: instanceKey },
-        },
-      });
-    else if (snapshot || conclusion) {
+    if (viewed)
+      void showDetail(row);
+    else if (snapshot) {
       detailGeneration.current += 1;
       setSelected(undefined);
       setDetail(undefined);
     }
-  }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback, conclusions]);
+  }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback]);
+  // An update or a page approval whose success was read (the list's one read, usePluginManagement `readBack`): shown to
+  // the person when the installed detail of that very instance is on screen, however it got there (the operation just
+  // ended here, its computer came back and it was read again, the detail's own "Check result" proved it). Proven: the
+  // detail is read again so it shows the result. Not proven (another install since, an older computer, no instance
+  // now): the sentence, once; the detail stays on the instance shown. Nothing else is opened. A success nobody was
+  // looking at stays listed at the top instead.
+  const shownHere = useRef(new Set<string>());
+  useEffect(() => {
+    if (!focused || !selected) return;
+    for (const conclusion of conclusions) {
+      if ((conclusion.entry !== "update" && conclusion.entry !== "page-approval") || !pluginConclusionListed(conclusion) || !pluginConclusionSettled(conclusion)) continue;
+      if (conclusion.who.deviceId !== selected.row.host.deviceId || conclusion.who.instanceKey !== selected.row.item.ref.id) continue;
+      if (shownHere.current.has(conclusion.operationId) || pluginConclusionTold(conclusion.operationId) || !tellPluginConclusion(conclusion.operationId)) continue;
+      shownHere.current.add(conclusion.operationId);
+      if (conclusion.readback === "verified") {
+        // Already read again for this operation by the effect above when both landed together.
+        if (!(completedOperation.current?.operationId === conclusion.operationId && completedOperation.current.settled)) void showDetail(selected.row);
+      } else if (conclusion.readback !== "none") tell("plugins.checks.result.succeeded", PLUGIN_NOT_OPENED_TEXT[conclusion.readback as "gone" | "unconfirmed" | "legacy"]);
+    }
+  }, [conclusions, selected?.row.key, focused]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {
     const state = management.state;

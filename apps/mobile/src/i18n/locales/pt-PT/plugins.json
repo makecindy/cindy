@@ -494,6 +494,7 @@
     "many": "{{count}} operações de plugins ainda não foram concluídas",
     "waitingOne": "É preciso verificar o resultado de «{{name}}» em «{{device}}»",
     "settledOne": "A operação de «{{name}}» em «{{device}}» tem um resultado",
+    "settledMany": "{{count}} operações de plugins têm um resultado",
     "kind": {
       "marketInstall": "Instalar",
       "update": "Atualizar",
@@ -508,6 +509,7 @@
       "confirmation": "A aguardar confirmação",
       "checking": "A verificar o resultado",
       "waiting": "Resultado não confirmado. Verifique novamente ou deixe de acompanhar.",
+      "marketUnread": "O computador não consegue ler agora o mercado deste plugin, pelo que o resultado ainda não pode ser confirmado. Verifique novamente mais tarde ou deixe de acompanhar.",
       "offline": "«{{device}}» não está ligado. Ligue-o para verificar o resultado.",
       "awaitingYou": "O computador está a aguardar a sua confirmação",
       "unprovable": {

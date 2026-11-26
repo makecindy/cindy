@@ -2474,16 +2474,24 @@ describe('whether a finished operation opens an instance', () => {
   ] as const)('install: %s', (_name, ghosts, market, reason) => {
     expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
   });
-  it('install: a response that says its market part is incomplete settles nothing unless it names the plugin', () => {
-    const incomplete = { marketComplete: false };
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], ...incomplete })).toEqual({ open: false, reason: 'unread' });
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [], ...incomplete })).toEqual({ open: false, reason: 'gone' });
+  it('install: a response that could not read the plugin\'s own market settles nothing unless it names the plugin', () => {
+    const catalogDown = { marketState: { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] } };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], ...catalogDown })).toEqual({ open: false, reason: 'unread' });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [], ...catalogDown })).toEqual({ open: false, reason: 'gone' });
     // What it does name still decides.
     const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [own], ...incomplete })).toEqual({ open: true, instanceKey: updated.instanceKey });
-    expect(pluginMarketFactsComplete({ unavailableReason: null, unavailableCustomSourceNames: [] })).toBe(true);
-    for (const market of [{ unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] }, { unavailableReason: null, unavailableCustomSourceNames: ['Acme'] },
-      { unavailableReason: null, unavailableCustomSourceNames: [], organizationAccessError: 'FORBIDDEN' }]) expect(pluginMarketFactsComplete(market)).toBe(false);
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [own], ...catalogDown })).toEqual({ open: true, instanceKey: updated.instanceKey });
+    // Only the source the plugin comes from matters: another market being down must not keep it from ever settling.
+    const customDown = { unavailableReason: null, unavailableCustomSourceNames: ['Acme'] };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], marketState: customDown })).toEqual({ open: false, reason: 'unconfirmed' });
+    const server = { sourceType: 'server' as const, sourceMarketName: null, scope: 'public' as const };
+    const custom = (name: string) => ({ sourceType: 'git-market' as const, sourceMarketName: name, scope: 'public' as const });
+    expect([pluginMarketFactsComplete(customDown, server), pluginMarketFactsComplete(customDown, custom('Acme')), pluginMarketFactsComplete(customDown, custom('Other'))])
+      .toEqual([true, false, true]);
+    const catalog = { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] };
+    expect([pluginMarketFactsComplete(catalog, server), pluginMarketFactsComplete(catalog, custom('Acme'))]).toEqual([false, true]);
+    const organization = { unavailableReason: null, unavailableCustomSourceNames: [], organizationAccessError: 'FORBIDDEN' };
+    expect([pluginMarketFactsComplete(organization, server), pluginMarketFactsComplete(organization, { ...server, scope: 'organization' as const })]).toEqual([true, false]);
   });
   // The Host shape asserted by apps/desktop plugin-market service.test.ts ("isolated-root"): a server summary carries no
   // `namespace` before the install; once installed the same item is projected with `namespace: null` beside the
@@ -2499,6 +2507,10 @@ describe('whether a finished operation opens an instance', () => {
     expect(pluginOperationOpens(operation, { ghosts: [{ ...root, instanceKey: 'team__demo', namespace: 'team' }], market: [own] })).toEqual({ open: false, reason: 'gone' });
     expect(pluginOperationOpens(operation, { ghosts: [root], market: [{ ...own, installedOperationId: undefined, installedOperationAttribution: 'unattributed' as const }] }))
       .toEqual({ open: false, reason: 'unconfirmed' });
+    // The record's namespace is exact: an instance in the older layout (no namespace, keyed by its id) listed first
+    // is not taken for the root one the record names.
+    const { namespace: _none, ...older } = { ...updated, instanceKey: 'demo' };
+    expect(pluginOperationOpens(operation, { ghosts: [older as ManagedPlugin, root], market: [own] })).toEqual({ open: true, instanceKey: '_root__demo' });
   });
   // Contract V2.10 case 7b (Host 0b93a48c25): a remote update of the old simulator migrates it to a new plugin id; after a
   // Host restart (receipt gone) the device that ran it reads 'self' with its id, another device 'unattributed'. On the

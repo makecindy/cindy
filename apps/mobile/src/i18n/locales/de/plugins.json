@@ -492,6 +492,7 @@
     "many": "{{count}} Plugin-Vorgänge sind nicht abgeschlossen",
     "waitingOne": "Das Ergebnis für „{{name}}“ auf „{{device}}“ muss geprüft werden",
     "settledOne": "Der Vorgang für „{{name}}“ auf „{{device}}“ hat ein Ergebnis",
+    "settledMany": "{{count}} Plugin-Vorgänge haben ein Ergebnis",
     "kind": {
       "marketInstall": "Installieren",
       "update": "Aktualisieren",
@@ -506,6 +507,7 @@
       "confirmation": "Wartet auf Bestätigung",
       "checking": "Ergebnis wird geprüft",
       "waiting": "Ergebnis unbestätigt. Prüfe es erneut oder verfolge es nicht weiter.",
+      "marketUnread": "Der Computer kann den Marktplatz dieses Plugins gerade nicht lesen, daher lässt sich das Ergebnis noch nicht bestätigen. Prüfe es später erneut oder verfolge es nicht weiter.",
       "offline": "„{{device}}“ ist nicht verbunden. Verbinde ihn, um das Ergebnis zu prüfen.",
       "awaitingYou": "Der Computer wartet auf deine Bestätigung",
       "unprovable": {

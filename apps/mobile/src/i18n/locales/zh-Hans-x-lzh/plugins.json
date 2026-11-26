@@ -492,6 +492,7 @@
     "many": "法器之事未竟者 {{count}}",
     "waitingOne": "「{{name}}」于「{{device}}」之果待核",
     "settledOne": "「{{name}}」于「{{device}}」之事已有果",
+    "settledMany": "法器之事已有果者 {{count}}",
     "kind": {
       "marketInstall": "纳之",
       "update": "更之",
@@ -506,6 +507,7 @@
       "confirmation": "待确",
       "checking": "方核其果",
       "waiting": "果未确。可复核之，或不复随之。",
+      "marketUnread": "彼机今不能读此法器所在之市，果未可确。可稍后复核之，或不复随之。",
       "offline": "「{{device}}」未连，连之乃可核果。",
       "awaitingYou": "彼机待汝确之",
       "unprovable": {
