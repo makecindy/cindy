@@ -1190,7 +1190,8 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectD
     ...base,
     workingDir: draft.workingDir.trim(),
     ...(projectDir ? { projectDir } : {}),
-    ...(extraDirs.length > 0 ? { extraDirs } : {}),
+    // 插件引擎不接受额外目录(与桌面一致，桌面对插件引擎隐藏这一项)。
+    ...(extraDirs.length > 0 && !engine ? { extraDirs } : {}),
   };
 }
 

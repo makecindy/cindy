@@ -108,6 +108,7 @@ port.on('message', (message) => {
     const options = message.options as AgentNetSocketOptions;
     for (const view of options.cachedDirectory ?? []) ids.add(view.certificate.deviceId);
     void AgentNetSocket.open({ ...options, client: client(message.client),
+      onLog(level, text) { send({ type: 'log', level, message: text }); },
       onDirectory(directory) { receivedDirectory = true; for (const view of directory) ids.add(view.certificate.deviceId); send({ type: 'directory', directory }); snapshot(); },
       onDelegationRequests(requests) { send({ type: 'delegation-requests', requests }); },
       onDelegations(delegations) { send({ type: 'delegations', delegations }); },
@@ -142,6 +143,9 @@ port.on('message', (message) => {
     snapshot();
   }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'set-stun-servers' && Array.isArray(message.servers)) {
+    socket.setStunServers(message.servers.filter((value: unknown): value is string => typeof value === 'string'));
+  }
   if (message.type === 'duplicate-identity-cooldown') socket.setDuplicateIdentityCooldown(message.active === true);
   if (message.type === 'relay-stalled') socket.relayStalled();
   if (message.type === 'relay-restart') socket.restartRelay();

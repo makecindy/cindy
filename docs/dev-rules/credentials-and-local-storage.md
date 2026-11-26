@@ -253,7 +253,21 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   在运行且不是共享数据的被动实例。单个密文损坏或文件访问错误不得因此触发自动重启。
 - 后端故障资格只消费 main 现有的 `credentialEncryptionUnavailable` 观察值，不依赖登录页
   当前步骤。返回或重置表单不清除已观察故障；后续真实凭证操作观察到后端可用时清除。
-  不增加探针、独立故障标记或恢复次数，实际重启仍经过原恢复器全部门禁。
+  不在启动路径探测钥匙串；仅在用户主动发起登录动作（取码 / 验码 / 浏览器登录）或显式登录
+  提交遇到旧账号库解密失败时，执行内存级 `encryptString → decryptString` 往返自检：
+  - 自检失败说明当前进程内加密后端（如 macOS 钥匙串拒绝/锁定）不可用：立即在发码/开浏览器前
+    返回 `CREDENTIAL_STORE_UNAVAILABLE`，不消耗验证码限流配额、不修改已有密文文件，并写入
+    `credentialEncryptionUnavailable` 供既有单次进程恢复消费。
+  - 用户主动登录遇到主账号库解密失败时，先尝试读取原子写入留下的备份，保留其中可恢复的账号。
+    新主库写入成功前必须始终保留可读副本，以应对磁盘写满、文件锁和进程中断。托管实例自动续期不获授替换权限。
+  - 仅当主账号库与备份均无可恢复记录、读取无 I/O 错误、`decryptString` 失败且内存自检通过（证明当前密钥健康、
+    旧密文永久不可解）时，显式登录事务允许在跨进程锁内以新凭证覆盖旧账号库，并在提交完成前
+    保留旧密文快照以支持失败回滚；冷启动、后端不可用与文件 I/O 错误均保持 fail-closed。
+  诊断日志仅额外记录脱敏枚举 `stage`（`io` / `backend` / `decrypt` / `decrypt-mismatch`）与
+  `probeOk` 布尔，不记录路径、明文或密文。实现与回归见
+  [authSafeStorageHealth.ts](../../apps/desktop/src/main/authSafeStorageHealth.ts)、
+  [authSafeStorageHealth.test.ts](../../apps/desktop/src/main/__tests__/authSafeStorageHealth.test.ts)
+  与 [authCredentialLoginRecovery.test.ts](../../apps/desktop/src/main/__tests__/authCredentialLoginRecovery.test.ts)。
 - 登录页与已登录警示条共用 `CredentialStoreHelpDialog`。提示说明本机存储问题、按系统给出
   解锁与完整退出步骤，持续异常时提供错误码、日志目录和私下支持渠道；不承诺重启一定恢复，
   不建议删除钥匙串、清空凭证或反复获取验证码。打开日志目录不等于上传日志。
