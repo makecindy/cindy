@@ -23,7 +23,7 @@ import {
 import { composerNodesForBoundedPlainTextPaste } from "./composerPaste";
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from "./pastedImageAttachment";
 
-type Payload = { ack: number; nodes: ReturnType<typeof nativeComposerNodes> };
+type Payload = { ack: number; nodes: ReturnType<typeof nativeComposerNodes>; caret?: number };
 type NativeHandle = {
   resolveLink(href: string, semantic: object): Promise<void>;
   focus(): Promise<void>;
@@ -167,6 +167,12 @@ export const ComposerNativeInput = forwardRef<
     },
   }), []);
   if (!NativeInput) return null;
+  // Dictation writes text while the editor is unfocused, so UIKit will not
+  // scroll to it. Hand native the insertion point to place and reveal.
+  const remembered = rememberedSelection.current;
+  const documentPayload = payload(props.document);
+  if (remembered && remembered.draft === composerDocumentProjectedText(props.document))
+    documentPayload.caret = composerOffsetToNative(props.document, remembered.end);
   return (
     <Animated.View
       style={[{ width: "100%", opacity: props.hidden ? 0 : 1 }, animatedStyle]}
@@ -175,7 +181,7 @@ export const ComposerNativeInput = forwardRef<
         ref={native}
         style={{ flex: 1 }}
         colorScheme={mode}
-        document={payload(props.document)}
+        document={documentPayload}
         editable={props.editable !== false}
         placeholder={props.placeholder}
         inputHint={props.accessibilityHint ?? ""}

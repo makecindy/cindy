@@ -477,7 +477,14 @@
         "nextWeek": "下週",
         "indefinite": "無限期",
         "custom": "自訂…",
-        "invalidTime": "請選擇未來一年內的日期與時間。"
+        "invalidTime": "請選擇未來一年內的日期與時間。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "電腦上線後自動歸檔",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待處理：worktree 有未提交改動，需確認後再歸檔。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待處理：電腦離線期間該任務有新進展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待處理：該任務正在執行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待處理：該任務正被接管或處於共享狀態，未自動歸檔。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待處理：未能核驗 worktree 狀態，需手動確認後歸檔。"
       },
       "taskListMode": {
         "enterInbox": "切換到收件匣",
@@ -521,7 +528,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "結果可能不完整，請使用更具體的關鍵詞或限定專案。"
     },
     "renameDevice": {
       "title": "重新命名裝置",

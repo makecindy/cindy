@@ -303,7 +303,7 @@ export function isSilentAgentIslandSoundChoice(choice: AgentIslandSoundChoice): 
   return choice.type === 'builtin' && choice.id === 'none';
 }
 
-/** Task notification sound ownership is per event; no chosen sound means OS defaults. */
+/** Whether Cindy plays an event sound for this alert kind (used to avoid double sounds on fallback OS toasts). */
 export function hasAgentIslandNotificationSound(
   settings: AgentIslandSoundSettings,
   kind: 'done' | 'needs-reply' | 'error',

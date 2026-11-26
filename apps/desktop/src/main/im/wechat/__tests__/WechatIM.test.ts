@@ -86,25 +86,32 @@ describe('WechatIM host boundary', () => {
     } finally { await im.dispose(); }
   });
 
-  // #12845, unit: an idle connection keeps polling. Completed waits must release
-  // their abort listeners before disconnect, which the reconnect tests do not check.
-  it('keeps abort listeners bounded across idle polling cycles', async () => {
+  // #12845, unit: a single empty poll misses listeners retained across idle waits.
+  it('releases completed idle waits while the connection keeps polling', async () => {
     vi.useFakeTimers();
     const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.mocked(transport.poll);
+    poll.mockResolvedValue({ cursor: '', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
     try {
       await im.init();
       await vi.advanceTimersByTimeAsync(0);
-      const signal = vi.mocked(transport.poll).mock.calls[0]![1];
-      const listenerCount = () => getEventListeners(signal, 'abort').length;
-      const initialCount = listenerCount();
-      const leases = () => vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask').length;
-      const initialLeases = leases();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(leases()).toBeGreaterThan(initialLeases);
-      expect(listenerCount()).toBe(initialCount);
+      const signal = poll.mock.calls[0]![1];
+      const listeners = () => getEventListeners(signal, 'abort').length;
+      const initialListeners = listeners();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+      expect(vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask')).toHaveLength(3);
+      expect(listeners()).toBe(initialListeners);
       await im.dispose();
       expect(signal.aborted).toBe(true);
-      expect(listenerCount()).toBe(0);
+      expect(listeners()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
     } finally {
       await im.dispose();
       vi.useRealTimers();
