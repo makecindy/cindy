@@ -101,15 +101,27 @@ describe('Claude Code translator context-overflow terminal result', () => {
     expect(ctx.onUsageUpdate).toHaveBeenCalledWith(272_000, 272_000);
   });
 
-  it('detects overflow that is only present in the pending API-error envelope', async () => {
+  it('recognizes the short context_length code from the SDK error envelope when the result has no detail', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(tracker);
     ctx.turn.apiCalls = 1;
-    ctx.turn.pendingApiError = {
-      message: OVERFLOW_ERROR_TEXT,
-      sdkError: 'api_error',
-    };
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'invalid_request',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: 'API Error: 400 {"error":{"code":"context_length","message":"Invalid input"}}',
+            },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
 
     translateSdkMessage(
       {
@@ -125,11 +137,15 @@ describe('Claude Code translator context-overflow terminal result', () => {
 
     const events = await drain(queue);
     const error = events.find((e) => e.type === 'error');
-    expect(error!.data).toMatchObject({ isTerminal: true, reason: CONTEXT_OVERFLOW_REASON });
+    expect(error!.data).toMatchObject({
+      isTerminal: true,
+      reason: CONTEXT_OVERFLOW_REASON,
+      errorStatus: 400,
+    });
     expect(tracker.snapshot().contextTokens).toBe(272_000);
   });
 
-  it('does NOT tag ordinary terminal errors and does NOT touch the tracker', async () => {
+  it('preserves a terminal 400 despite timeout wording without treating a parameter name as overflow', async () => {
     const tracker = new UsageTracker();
     tracker.setContextWindow(272_000);
     tracker.ingestApiCallUsage({ inputTokens: 50_000, outputTokens: 10 });
@@ -141,7 +157,7 @@ describe('Claude Code translator context-overflow terminal result', () => {
       {
         type: 'result',
         is_error: true,
-        result: 'Internal server error, please retry later.',
+        result: 'API Error: 400 {"error":{"param":"context_length","message":"Request timed out"}}',
         stop_reason: 'end_turn',
         total_cost_usd: 0,
       },
@@ -152,6 +168,7 @@ describe('Claude Code translator context-overflow terminal result', () => {
     const events = await drain(queue);
     const error = events.find((e) => e.type === 'error');
     expect(error).toBeDefined();
+    expect(error!.data).toMatchObject({ isTerminal: true, errorStatus: 400 });
     expect((error!.data as { reason?: string }).reason).toBeUndefined();
     // 普通失败不伪造读数
     expect(tracker.snapshot().contextTokens).toBe(50_000);

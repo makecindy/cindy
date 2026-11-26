@@ -10,7 +10,10 @@ export const CONTEXT_OVERFLOW_REASON = 'context-overflow';
 const CONTEXT_OVERFLOW_RE =
   /prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded/i;
 
+// The short code also appears as a model setting or parameter name.
+const CONTEXT_OVERFLOW_SHORT_CODE_RE = /[{,]\s*"(?:code|type)"\s*:\s*"context_length"/i;
+
 /** 是否是上下文超限类错误。命中 = 不可原样重试，恢复动作是压缩上下文或新开会话。 */
 export function isContextOverflowErrorMessage(message: string): boolean {
-  return CONTEXT_OVERFLOW_RE.test(message);
+  return CONTEXT_OVERFLOW_RE.test(message) || CONTEXT_OVERFLOW_SHORT_CODE_RE.test(message);
 }

@@ -179,7 +179,7 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 402 | 403 | 429 | 529;
+  errorStatus?: 400 | 401 | 402 | 403 | 429 | 529;
   usageLimit: boolean;
 }
 
@@ -278,8 +278,11 @@ export function isAccountUsageLimitReachedText(input: string): boolean {
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
+    // Claude may report a terminal 400 only in this prefix. Keep it so
+    // timeout or capacity wording in the body cannot authorize a replay.
+    /^\s*API Error:\s*(400)(?=$|[\s:{])/i.exec(input)
     // Pi's OpenAI SDK puts the authentication status before the error body.
-    /^OpenAI API error \((401)\):/.exec(input)
+    ?? /^OpenAI API error \((401)\):/.exec(input)
     ?? /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|402|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
     ) ?? /\brequest\s+rejected\s*\(\s*(401|402|403|429|529)\s*\)/i.exec(input);
