@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   catalogs: [] as any[],
   invoke: vi.fn(async () => ({ id: "schedule-1" })),
   picker: null as any,
+  sheet: null as any,
   capabilities: { supportsScheduleAgentDeviceSelection: true } as any,
 }));
 vi.mock("react-native", () => ({
@@ -63,7 +64,10 @@ vi.mock("@/session/agentCapabilities", () => ({
 vi.mock("@/session/useRemoteAgentCatalogs", () => ({
   useRemoteAgentCatalogs: () => h.catalogs,
 }));
-vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
+vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => {
+  h.sheet = p;
+  return p.children;
+} }));
 vi.mock("@/session/ModelPickerSheet", () => ({
   ModelPickerSheet: (p: any) => {
     h.picker = p;
@@ -127,6 +131,7 @@ beforeEach(() => {
   ];
   h.invoke.mockClear();
   h.picker = null;
+  h.sheet = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -154,6 +159,27 @@ it("lists remote catalogs and creates the schedule with the selected location", 
     model: "remote-model",
     providerId: "remote-provider",
   });
+});
+
+it("waits for each native modal to close before opening the next and keeps the draft", async () => {
+  await renderDraft({ ...intent, preRunPlugin: { pluginId: 'p1', onFailure: 'allow' } });
+  const check = host.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  await act(async () => check.click());
+  await clickButton('plugins.taskModel');
+  expect(h.sheet.visible).toBe(false);
+  expect(h.picker.visible).toBe(false);
+  await act(async () => h.sheet.onClosed());
+  expect(h.picker.visible).toBe(true);
+  await act(async () => h.picker.unified.onSelect(configuration, { deviceId: 'studio' }));
+  expect(h.picker.visible).toBe(false);
+  expect(h.sheet.visible).toBe(false);
+  await act(async () => h.picker.onClosed());
+  expect(h.sheet.visible).toBe(true);
+  expect(check.checked).toBe(false);
+  await clickButton('plugins.saveConfiguration');
+  const [, , [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(input.model).toBe('remote-model');
+  expect(input.preRunPlugin).toBeUndefined();
 });
 
 it.each([true, false])('saves the visible pre-run check choice (%s) on the original computer', async enabled => {

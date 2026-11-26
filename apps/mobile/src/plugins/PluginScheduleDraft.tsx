@@ -97,6 +97,7 @@ export function PluginScheduleDraft({
   };
   const [checkEnabled, setCheckEnabled] = useState(true);
   const [picker, setPicker] = useState(false),
+    [pickerVisible, setPickerVisible] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
   useEffect(() => {
@@ -203,6 +204,7 @@ export function PluginScheduleDraft({
     <>
       <SheetModal
         visible={!picker}
+        onClosed={() => { if (picker) setPickerVisible(true); }}
         keyboardAvoiding
         onBackdropPress={() => {}}
         onRequestClose={onClose}
@@ -376,8 +378,9 @@ export function PluginScheduleDraft({
         </ScrollView>
       </SheetModal>
       <ModelPickerSheet
-        visible={picker}
-        onClose={() => setPicker(false)}
+        visible={pickerVisible}
+        onClose={() => setPickerVisible(false)}
+        onClosed={() => setPicker(false)}
         agentKind={draft.agentKind}
         providers={providers.providers}
         providersReady={providers.ready}
@@ -430,7 +433,7 @@ export function PluginScheduleDraft({
               effort: value.effort || "",
               fastMode: value.fast,
             }));
-            setPicker(false);
+            setPickerVisible(false);
             return true;
           },
         }}
