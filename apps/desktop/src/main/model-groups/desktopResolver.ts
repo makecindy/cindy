@@ -1,6 +1,7 @@
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
+import { createLogger } from '../logger.js';
 import { getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
@@ -19,6 +20,7 @@ import { readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, setModelGroupSourceCatalog } from './store.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
+const pickLog = createLogger('model-groups:pick');
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
@@ -179,7 +181,14 @@ export async function readModelGroupRecoveryOffer(sessionId: string, recovery?: 
  * 要在这个来源真的用上之后再调(推进「轮流」、记进「最近的选择」)。
  */
 export async function pickModelGroupRoute(groupId: string, options: { dryRun: boolean }) {
-  const result = await resolver.resolve({ selection: { type: 'route', id: groupId }, dryRun: options.dryRun });
+  let result: Awaited<ReturnType<typeof resolver.resolve>>;
+  try {
+    result = await resolver.resolve({ selection: { type: 'route', id: groupId }, dryRun: options.dryRun });
+  } catch (error) {
+    // 伙伴的消息不能因为选路本身出错(读目录、读额度失败)发不出去：null = 沿用存下的模型(2026-11-26 排查)。
+    pickLog.warn('model group pick failed; keeping the saved model', { error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
   if (result.outcome !== 'routed') return null;
   const { decisionId } = result;
   return {

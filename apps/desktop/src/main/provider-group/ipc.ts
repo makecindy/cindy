@@ -195,7 +195,7 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
         throwIpcError('INVALID_PARAMS', 'Mixed group allocation snapshot required');
       }
       if (Object.keys(edit).length === 1 && Object.hasOwn(edit, 'strategy')) {
-        // 与智能路由同一套选法；旧版发来的四种旧名字认不出，按无效处理。
+        // 与智能路由同一套选法；旧版发来的四种旧名字换成对应的新选法，认不出的按无效处理。
         const strategy = knownRouteStrategy(edit.strategy);
         if (strategy) return { action: value.action, providerId, expectedConfig, edit: { strategy } };
       }

@@ -829,6 +829,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       silentStopAutoResumeGuard: { noteUserSend() {} },
       interruptedTurnAutoResumeGuard: { noteUserSend() {} },
       usageLimitAutoResume: { noteUserAction() {} },
+      startFallbackTurn: vi.fn(),
       getProviderGroupService: () => service,
       enqueueDurableWrite: (_label, write) => write(undefined),
       getLastAssistantTranscriptUuid: () => 'fixture-transcript-anchor',

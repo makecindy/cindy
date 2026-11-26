@@ -130,7 +130,10 @@ function readEnvUtilityChain(): string[] | null {
 function getEffectiveAuxiliaryModelChain(custom: readonly string[] = readAuxiliaryModelSettings().models): EffectiveAuxiliaryModelChain {
   if (custom.length > 0) {
     // 选了路由的格子在这里换成具体模型：后面所有用这条链的地方(发请求、健康记录、快照比对)只见到具体模型。
-    return { source: 'custom', refs: expandCustomRefs(custom) };
+    const refs = expandCustomRefs(custom);
+    // 每一格都是路由、而路由都已删除或这里没有智能路由(Node Host)时，展开是空的：按没设置处理、用默认的链，
+    // 不让标题、摘要这类请求一个模型都没有(2026-11-26 排查)。
+    if (refs.length > 0) return { source: 'custom', refs };
   }
   const envChain = readEnvUtilityChain();
   if (envChain) {

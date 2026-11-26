@@ -56,6 +56,7 @@ export function createSharedReconnectFixture() {
     silentStopAutoResumeGuard: { noteUserSend: vi.fn() },
     interruptedTurnAutoResumeGuard: { noteUserSend: vi.fn() },
     usageLimitAutoResume: { noteUserAction: vi.fn() },
+    startFallbackTurn: vi.fn(),
     getProviderGroupService: () => service,
     enqueueDurableWrite: async (_label, commit) => commit(null),
     getLastAssistantTranscriptUuid: () => 'anchor',

@@ -12,6 +12,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../../shared/modelGroups';
+
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
+
 import { createModelGroupSessionStart, type ModelGroupSessionStartPorts } from '../sessionStart';
 
 const routed = (agentDeviceId?: string): ModelGroupResolveResult => ({
@@ -38,6 +41,14 @@ function ports(result: ModelGroupResolveResult) {
 }
 
 describe('a mode picks the first source of a new task and is settled when its first turn is dispatched', () => {
+  // 2026-11-26 audit: only the scheduler caught a failing resolve; a Worker or other entry failed to create its
+  // task. Minimal input: resolve throws. Expected: the entry creates the task on its saved model.
+  it('creates the task on its saved model when routing itself fails', async () => {
+    const { value } = ports(routed());
+    const start = createModelGroupSessionStart({ ...value, resolve: async () => { throw new Error('catalog read failed'); } });
+    await expect(start.prepare('daily', { keptModelName: 'gpt-saved' })).resolves.toBeNull();
+  });
+
   it('gives the entry the picked source and settles only at dispatch, under that message, once', async () => {
     const { value, calls } = ports(routed('desk-2'));
     const start = createModelGroupSessionStart(value);

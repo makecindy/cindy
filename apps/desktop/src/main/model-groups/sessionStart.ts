@@ -18,6 +18,9 @@ import {
   type ModelGroupRouteNoteBody,
   type ModelGroupTranslate,
 } from '../../shared/modelGroupRouteNoteText.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('model-groups:session-start');
 
 export interface ModelGroupSessionStartPorts {
   resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult>;
@@ -75,7 +78,15 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
      */
     async prepare(groupId: string, options: { keptModelName: string; localOnly?: boolean }): Promise<ModelGroupStartPrepared | null> {
       const selection: ModelGroupSelection = { type: 'route', id: groupId };
-      const result = await ports.resolve({ selection, ...(options.localOnly ? { location: { agentDeviceId: null } } : {}) });
+      let result: ModelGroupResolveResult;
+      try {
+        result = await ports.resolve({ selection, ...(options.localOnly ? { location: { agentDeviceId: null } } : {}) });
+      } catch (error) {
+        // 选路本身出错(读目录、读额度失败等)不能挡住建任务：按没选模式、用存下的具体模型建。定时任务、协同 Worker、
+        // 伙伴这类没人看着的任务尤其不能因此建不起来(2026-11-26 排查：只有定时任务在入口自己兜了)。
+        log.warn('model group prepare failed; creating the task on its saved model', { error: error instanceof Error ? error.message : String(error) });
+        return null;
+      }
       if (result.outcome === 'missing') return null;
       prune(prepared);
       const token = ports.createToken();

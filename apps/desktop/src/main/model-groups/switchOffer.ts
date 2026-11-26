@@ -108,13 +108,22 @@ export async function computeModelGroupSwitchOffer(
     ...(wanted.fastMode ? { fastMode: wanted.fastMode } : {}),
   } : undefined);
   // 「轮流」从正在用的这个往后数；不读也不改新任务用的轮流位置。
-  const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey,
+  const pickFrom = (candidates: ModelGroupRoute) => pickModelGroupCandidate(candidates, facts, { now, lastPickedKey: binding.pickedKey,
     needsImage: recovery?.hasImages === true && route.exceptions?.some(item => item.when.type === 'image'),
   });
-  if (picked.index === null) return null;
+  // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不算选到。
+  const usablePick = (pick: ReturnType<typeof pickFrom>) =>
+    pick.index !== null && !('limitedUntilMs' in pick.trace[pick.index]) ? pick : null;
+  // 自动接替先在同一引擎的来源里按选法挑(同一引擎内换来源不用交接、上下文不丢)；没有才跨引擎(§4.2，2026-11-26 排查补上)。
+  // 横幅里的手动提议照 §6.1 按选法挑，由用户决定。
+  const sameEngine: ModelGroupRoute = {
+    ...eligible,
+    candidates: eligible.candidates.map((candidate) => (candidate.agentKind === current.agentKind ? candidate : { ...candidate, off: true })),
+  };
+  const picked = (recovery && sameEngine.candidates.some((candidate) => !candidate.off) ? usablePick(pickFrom(sameEngine)) : null)
+    ?? usablePick(pickFrom(eligible));
+  if (!picked || picked.index === null) return null;
   const entry = picked.trace[picked.index];
-  // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不提议。
-  if ('limitedUntilMs' in entry) return null;
   const candidate = route.candidates[picked.index];
   // 正在用的那个来源的名字(活动行「{from} …，已换到 {to} 继续」)，在 trace 里与其他候选一起算好了。
   const currentIndex = route.candidates.findIndex((item) => modelGroupCandidateKey(item) === currentKey);

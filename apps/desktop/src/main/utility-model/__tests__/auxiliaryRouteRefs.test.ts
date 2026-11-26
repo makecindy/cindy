@@ -99,4 +99,12 @@ describe('auxiliary models that point at a smart route', () => {
     ]);
     expect(options[0]).toMatchObject({ modelName: 'GPT-6 Luna', subscription: true, modelId: 'gpt-6-luna' });
   });
+
+  // 2026-11-26 排查：每一格都是已删除的路由时链是空的，标题、摘要一个模型都没有；按没设置处理、用默认的链。
+  it('uses the default chain when every slot is a route that is gone', () => {
+    h.models = ['route:gone'];
+    const chain = getEffectiveAuxiliaryModelChain();
+    expect(chain.source).not.toBe('custom');
+    expect(chain.refs.length).toBeGreaterThan(0);
+  });
 });
