@@ -148,7 +148,7 @@ pnpm mobile:sim:whoami -- --mock --json
   市场详情与电脑一致：Demo Shift Calendar（公开的社区作者插件）显示社区声明、不显示作者；官方插件的「来源」为「公开市场」，团队共享插件为「组织」，
   版本带 v。
   整页状态用 `cindy://plugins?market=<场景>`：`outdated`（电脑版本太旧）、`unavailable`、
-  `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复；同一深链重发不重新造失败）、`twoComputers`（多一台在线的
+  `organization`、`customPartial`、`empty`、`readFailed`（首次读取失败，重试恢复；同一深链重发不重新造失败。要看列表的「重试」按钮，重载 App 后直接进这个场景；先 `normal` 再 `readFailed` 时列表已经读到，只有下拉刷新才失败，表现是保留列表并加一行「未能读取插件市场」、没有按钮，再下拉一次提示消失）、`twoComputers`（多一台在线的
   CINDY Second Mock Mac，可在「安装到」里切换）、`offline`（离线模拟电脑变成可选且不应答，选中后显示离线状态）、
   `hold`（确认后的安装、更新一直停在「进行中」，不自动完成：用于截「进行中时其它入口不可用、顶部提示可见」，例如 iPad 宽屏
   打开 Demo Weather Board 详情点「更新到 v版本」并允许，再在旁边切到市场；换回 `normal` 后下一次查询即完成），

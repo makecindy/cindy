@@ -3845,9 +3845,9 @@ describe("market computer choice", () => {
 // Dispatcher S-1 (Android seventh reshoot): with market=detailReadFailed the detail's "Retry" seemed to leave the banner.
 // Through the real screen and the mock computer itself: the first detail read fails, the notice's own Retry reads it
 // again, and the banner goes with the freshly read detail. The product path recovers (this passes on 5983ba71dd too:
-// existing behaviour); the mock reset its fail-once counter whenever the same scenario was applied again, and counted
-// any plugin's read, so a repeated deep link made the next read fail again. It now fails once per plugin and keeps that
-// when the same scenario is applied again. Tier: unit/jsdom.
+// existing behaviour). What the capture saw was its script tapping the banner's text, which also contains "Retry"
+// (Android eighth reshoot), not the app. The mock is made repeatable on its own account: it fails once per plugin, and
+// applying the same scenario again does not arm it again. Tier: unit/jsdom.
 it("recovers the market detail with its Retry after the first read failed (mock market=detailReadFailed)", async () => {
   const { pluginMarketVisualManagement, setPluginMarketVisualScenario, resetPluginMarketVisualComputer } = await import("@/debug/pluginMarketVisualFixture");
   resetPluginMarketVisualComputer();
@@ -3863,7 +3863,7 @@ it("recovers the market detail with its Retry after the first read failed (mock 
     expect(banner()).not.toBeNull();
     // While failed the page shows what the market list already said; the manifest's tools come only from a detail read.
     expect(element.textContent).not.toContain("demo_list_events");
-    // The same deep link again (as a capture run may send it) does not make the next read fail.
+    // The same deep link again does not make the next read fail (the mock scenario is repeatable).
     setPluginMarketVisualScenario("detailReadFailed", true);
     await act(async () => fixture.props.get("plugins.market.detailFailed").actions[0].onPress());
     await settle(14);
@@ -3875,8 +3875,8 @@ it("recovers the market detail with its Retry after the first read failed (mock 
   } finally { setPluginMarketVisualScenario("normal", true); }
 });
 // Dispatcher S-1, the same check for the market list (mock market=readFailed): the list's Retry (it calls the market's
-// refresh) reads again and the failure goes, even when the deep link was applied again before it. Without the S-1 mock
-// change the repeated link re-armed the failure and the Retry failed again. Tier: unit/jsdom.
+// refresh) reads again and the failure goes, even when the deep link was applied again before it (before the S-1 mock
+// change a repeated link armed the failure again, so the Retry failed again). Tier: unit/jsdom.
 it("recovers the market list with its Retry after the first read failed (mock market=readFailed)", async () => {
   const { pluginMarketVisualManagement, setPluginMarketVisualScenario, resetPluginMarketVisualComputer } = await import("@/debug/pluginMarketVisualFixture");
   resetPluginMarketVisualComputer();

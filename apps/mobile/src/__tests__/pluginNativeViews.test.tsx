@@ -1475,9 +1475,10 @@ describe("older Host without a repository identity", () => {
 });
 
 // Dispatcher S-1 / T (seventh reshoots): after a failed market detail read, Retry recovered on iOS but not, as captured,
-// on Android. Both views' own Retry control reads the detail again (the same market.retryDetail; the page test covers
-// what the read then shows), and it is unavailable only while that computer is offline. Existing behaviour on
-// 5983ba71dd for both platforms; the Android capture's difference came from the mock (see the page test). Tier: unit/jsdom.
+// on Android (the capture script had tapped the banner's text, which also contains "Retry"; Android eighth reshoot).
+// Both views' own Retry control reads the detail again (the same market.retryDetail; the page test covers what the read
+// then shows), and it is unavailable only while that computer is offline. Existing behaviour on 5983ba71dd for both
+// platforms. Tier: unit/jsdom.
 it.each([["iOS", MarketDetailView], ["Android", AndroidMarketDetailView]] as const)(
   "%s market detail's own Retry reads the failed detail again", (_platform, Detail) => {
     const item = { pluginId: "market/demo", ghostId: "demo", name: "Market Demo", description: "From the market",

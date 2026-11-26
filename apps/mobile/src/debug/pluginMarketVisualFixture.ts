@@ -73,8 +73,9 @@ export function pluginMarketVisualDemoIds(): string[] { return DEMOS.map((demo) 
 /** Applies a deep-link scenario; returns true when the market tab should open. */
 export function setPluginMarketVisualScenario(value: unknown, enabled: boolean): boolean {
   if (!enabled || typeof value !== "string" || !SCENARIOS.includes(value as PluginMarketVisualScenario)) return false;
-  // The same scenario again (a repeated deep link) keeps what already failed once, so `readFailed`'s and
-  // `detailReadFailed`'s Retry read successfully (dispatcher S-1). Another scenario first arms them again.
+  // The same scenario again (a repeated deep link) keeps what already failed once, so the scenarios are repeatable:
+  // `readFailed`'s and `detailReadFailed`'s Retry read successfully however often the link is sent. Another scenario
+  // first arms them again.
   if (scenario === value) return true;
   scenario = value as PluginMarketVisualScenario;
   failedReads = 0;
