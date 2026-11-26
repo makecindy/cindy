@@ -85,8 +85,12 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/database-and-migrations.md`。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），
-  以及 PR Description 是否写明冷更原因、存量装机影响与发版节奏；缺项按规范违反上报。
+  仓库鼓励为了更好的用户体验积极采用原生方案与冷更，**不要**以「可以改用纯 JS 绕过」为由
+  否决体验更好的原生实现，也不要求在 PR 描述里论证「冷更不可避免」或填写发版节奏建议。
+  审查重点看两件事：① 纯 JS／UI 改动是否**无意误碰**了指纹输入（如把开发脚本写进
+  `apps/mobile/package.json` 或调试值写进 `app.config.js` 的 `extra`）；② 有意的原生改动是否
+  做好了**旧原生包的能力探测与平滑降级**（缺降级导致旧包崩溃或功能坏掉按缺陷上报）。PR 描述
+  应简明说明影响平台与旧包表现（文案不完美不作为阻断缺陷，除非完全未提及且疑似误碰指纹）。
   这类 PR 可保持 Ready 并正常审查，不需要把关人另外确认。见
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
