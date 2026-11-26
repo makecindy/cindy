@@ -12,6 +12,7 @@ import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarn
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
+import { toDesktopSessionDispatchOutcome } from '../../maker-host/send-outcome.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
 import { telegramQuestionOrigin, stampTelegramQuestionAnswer, TELEGRAM_QUESTION_ORIGIN, hasTelegramQuestionRoute } from '../telegramQuestionReply';
@@ -7625,7 +7626,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.errorRetryText).toBe('first');
   });
 
-  it('keeps a persisted ordinary send recoverable when maker-core dispatch is cancelled', async () => {
+  it.each(['cancelled', 'history-frame-too-large'])('keeps a persisted ordinary send recoverable after %s', async failure => {
     const h = createHarness();
     const sid = 'send-persisted-dispatch-failure';
     const first = makeItem('q-1', 'first');
@@ -7637,7 +7638,10 @@ describe('AgentInputCoordinator send transaction', () => {
       await persistQueuedUserMessage(sessionId, sendOpts);
       persisted.resolve();
       await sendSettled.promise;
-      return sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send');
+      return failure === 'cancelled' ? sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send')
+        : toDesktopSessionDispatchOutcome({
+          accepted: false, reason: 'provider-rejected-before-dispatch', diagnostic: 'pi-retry-history-frame-too-large',
+        }, { source: 'maker-ipc', context: sid });
     });
 
     h.coordinator.enqueue(sid, first);
@@ -7650,7 +7654,12 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
-    expect(projection.error).toContain('cancelled-before-dispatch');
+    if (failure === 'cancelled') expect(projection.error).toContain('cancelled-before-dispatch');
+    else {
+      expect(projection.error).toContain('not sent');
+      expect(projection.error).toContain('16 MiB');
+      expect(projection.error).not.toContain(sid);
+    }
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
     expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(

@@ -3473,6 +3473,18 @@ export class PiAgent extends BaseAgent {
       },
     );
     const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
+    // An inherited Codex model can have no entry in either of Pi's model
+    // catalogs. Pi would treat it as a custom Cindy model and send the first
+    // request without the selected subscription's provider identity.
+    if (
+      !remote && !hosted && !reviewMode && !opts.resumeSessionId &&
+      !explicitlyRequestedGateway && !nativeResolveFailed &&
+      initialProvider === PI_PROVIDER_ID && !gatewayApiByModel.has(opts.model) &&
+      authProviderId === 'openai' &&
+      await opts.isNewMakerTask?.()
+    ) {
+      throw new Error(`Model '${opts.model}' is unavailable in the current Pi catalog. Choose a different model for this task.`);
+    }
     if (
       explicitlyRequestedGateway &&
       initialProvider === PI_PROVIDER_ID &&
@@ -8300,6 +8312,7 @@ export class PiAgent extends BaseAgent {
                   before.error === PI_RPC_OVERSIZED_FRAME_ERROR
                     ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
                     : 'Pi retry history unavailable',
+                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR ? { diagnostic: 'pi-retry-history-frame-too-large' } : undefined,
                 );
               }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
@@ -8314,7 +8327,9 @@ export class PiAgent extends BaseAgent {
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
-                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`, {
+                  diagnostic: 'pi-retry-history-frame-too-large',
+                });
               }
               if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');

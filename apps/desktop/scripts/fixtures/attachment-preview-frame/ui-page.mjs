@@ -6,7 +6,7 @@ export default {
   name: 'attachment-preview-frame',
   entry: './preview.tsx',
   viewport: { width: 1280, height: 800 },
-  real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewWindow (shared non-modal shell), PreviewChrome header/footer and MarkdownRenderer',
+  real: 'TextLightbox, FileLightbox, FileBodyView, UnrenderablePlaceholder, OpenInSystemActions, ImageLightbox, PreviewWindow (shared non-modal shell), PreviewChrome header/footer, ToastContainer and MarkdownRenderer',
   notCovered:
     'Native traffic lights and Electron drag regions (geometry only), real file reads, Windows window controls, video/model/Mermaid viewers and Mobile; file stat, document text and image bytes are fixture data',
   stubs: {
@@ -16,7 +16,7 @@ export default {
       'export function DrawioPreview() { throw new Error("draw.io is outside this fixture"); }',
   },
   cases: {
-    default: { about: 'A zip that cannot be previewed opens in a compact centered non-modal window' },
+    default: { about: 'A spreadsheet that cannot be previewed opens in a compact centered non-modal window' },
     markdown: { about: 'A Markdown document in a movable window beside the conversation' },
     image: { about: 'An image still uses the existing modal preview shell' },
   },
@@ -30,7 +30,8 @@ export default {
         return (
           [...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
-          Math.round(panel.getBoundingClientRect().width) === 480
+          Math.round(panel.getBoundingClientRect().width) === 480 ||
+          document.querySelector('[role=dialog]')?.innerText.includes('59.7 KB')
         );
       },
     );
@@ -100,7 +101,22 @@ export default {
       assert.equal(panel.bottom - panel.top, 360);
       assert(Math.abs(panel.left - (viewport.width - panel.right)) <= 1);
       assert(Math.abs(panel.top - (viewport.height - panel.bottom)) <= 1);
-      await page.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.revealFolder') }).click();
+      // The compact panel shows the original name, the size and one primary
+      // action; the cached copy's internal name never leaks into the UI.
+      const dialog = page.locator('[data-preview-window-panel]');
+      assert.equal(await dialog.getByText(/cache-473d6dd49fb70e80510e/).count(), 0);
+      assert.equal(
+        await dialog.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.openInSystem') }).count(),
+        1,
+      );
+      await page.getByRole('button', { name: await ui.t('attachmentPreview.more') }).click();
+      assert.equal(
+        await page.getByRole('menuitem', { name: await ui.t('ccAgent.workdirBrowse.systemPreview') }).count(),
+        1,
+      );
+      await page.getByRole('menuitem', { name: await ui.t('chat.lightbox.openInExplorer') }).click();
+      const revealError = await ui.t('ccAgent.common.openFolderFailed');
+      await page.getByText(revealError, { exact: true }).waitFor({ state: 'visible', timeout: 3000 });
     } else {
       // 默认贴右,左侧对话仍露出;标题栏把手可以移动浮窗。
       assert(panel.left > viewport.width / 2);
@@ -115,7 +131,7 @@ export default {
       assert(moved.left < panel.left - 20, 'header drag moves the preview window');
     }
 
-    // 关闭只走标题栏按钮；点背景对话不再关闭预览。
+    // 关闭只走标题栏按钮；非模态预览没有遮罩,点背景对话不再关闭预览。
     await page.getByRole('button', { name: closeLabel }).click();
     await page.waitForFunction(
       () =>
