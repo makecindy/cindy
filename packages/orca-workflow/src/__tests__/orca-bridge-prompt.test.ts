@@ -191,6 +191,52 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).not.toContain('prefixed with [From Orca Worker].');
   });
 
+  it('routes user follow-ups by the worker latest settling report state', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain('2a. A follow-up on a worker');
+    expect(prompt).toContain('[Orca Worker report: <state>]');
+    expect(prompt).toContain("is the worker's to handle, not yours");
+    // 状态驱动：任务仍开着才转发；终态任务的后续归 Lead 自己处理。
+    expect(prompt).toContain('waiting, blocked, or no settling report yet');
+    expect(prompt).toContain('ready, failed, or dropped');
+    expect(prompt).toContain('closed, and the report is its final word');
+    // 标记由结构化回报产生，旧会话可能没有：必须有可用的降级判据，不能只看标记。
+    expect(prompt).toContain('No report line (older session): use its latest message');
+    // 终态分支不得再给转发指令，否则两条分支互相抵消。
+    const closedBranch = prompt.slice(
+      prompt.indexOf('- ready, failed, or dropped'),
+      prompt.indexOf('No report line (older session)'),
+    );
+    expect(closedBranch).not.toContain('forward it with send_to_worker');
+    // 开着的任务仍走既有修正/中断/队列纪律，不新增第二条修正通道。
+    expect(prompt).toContain('original wording');
+    expect(prompt).toContain('delivered per the correction, interruption, and queue rules below');
+    // 投递细节由既有规则说明，2a 不得重复列举（篇幅预算）。
+    const openBranch = prompt.slice(
+      prompt.indexOf('- waiting, blocked, or no settling report yet'),
+      prompt.indexOf('- ready, failed, or dropped'),
+    );
+    expect(openBranch).not.toContain('interrupt_worker');
+    expect(openBranch).not.toContain('other_queued_messages');
+    expect(prompt).toContain('if that or the target worker is unclear, ask the user');
+    expect(prompt).not.toContain('you may explicitly choose delivery=steer');
+    expect(prompt).not.toContain('otherwise send it plainly and let it queue');
+    // 敌对口径：不许退回“有任务在跑就无条件转发”。
+    expect(prompt).not.toContain('While an Orca team is active and an Orca Worker has a task in flight');
+    // 姊妹条目：2a 落在 rule 2 与 rule 3 之间，rule 1-4 既有文本不动。
+    expect(prompt).toContain('1. Ask about a missing decision only when it changes the assignment.');
+    expect(prompt).toContain('2. For a multi-role request, resolve every requested role or label');
+    expect(prompt).toContain('3. Send the task, essential context and requested outcome in one short message.');
+    expect(prompt).toContain('4. If a worker explicitly asks you to reply via send_to_worker, do so.');
+    expect(prompt.indexOf('2. For a multi-role request')).toBeLessThan(
+      prompt.indexOf('2a. A follow-up on a worker'),
+    );
+    expect(prompt.indexOf('2a. A follow-up that belongs to a worker')).toBeLessThan(
+      prompt.indexOf('3. Send the task, essential context'),
+    );
+  });
+
   it('addresses a known initial Worker with its session ID while preserving channel boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 
@@ -256,6 +302,20 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     expect(workerPrompt).toContain('Repeat a check when inputs change or a failure needs investigation.');
     expect(workerPrompt).toContain('Save a log when requested or useful for diagnosing a failure.');
     expect(workerPrompt).not.toContain('/review');
+  });
+
+  it('treats user wording forwarded by the lead as the user speaking', () => {
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+
+    expect(prompt).toContain(
+      'Messages from the lead arrive prefixed with [From Orca Lead]. Treat them as tasks or instructions from the lead, not user messages.',
+    );
+    expect(prompt).toContain(
+      "When the lead forwards the user's original wording, treat it as the user speaking",
+    );
+    expect(prompt).toContain(
+      'read_lead_history first when it depends on recent Lead-side discussion.',
+    );
   });
 
   it('keeps the Worker rule concise without the unreachable fallback', () => {
