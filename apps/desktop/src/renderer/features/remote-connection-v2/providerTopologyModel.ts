@@ -526,7 +526,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
         ),
         rttMs: shareRoute?.rttMs ?? null,
         directRttMs: null,
-        relayRttMs: shareRoute?.relayRttMs ?? null,
+        relayRttMs: path === 'relay' ? shareRoute?.rttMs ?? null : null,
         pathPreference: null,
         flow,
         busy: tasks.some((t) => t.running),
@@ -822,7 +822,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
       ),
       rttMs: sr?.rttMs ?? null,
       directRttMs: null,
-      relayRttMs: sr?.relayRttMs ?? null,
+      relayRttMs: p === 'relay' ? sr?.rttMs ?? null : null,
       pathPreference: null,
       busy: false,
     });

@@ -82,7 +82,7 @@ function makeSession(partial: Partial<Session> & { id: string }): Session {
   } as Session;
 }
 
-function buildFixtureModel() {
+function buildFixtureModel({ mixed = false, shareUsesAgentNet = false } = {}) {
   const sessions: Session[] = [
     makeSession({ id: 'sess-1', title: '重构支付结算核心状态机', agentDeviceId: 'dev-mac', model: 'Claude Opus 4.6' }),
     makeSession({ id: 'sess-2', title: 'Orca 多 Worker 并发调度', agentDeviceId: 'dev-mac', model: 'Claude Sonnet 4.6' }),
@@ -122,7 +122,7 @@ function buildFixtureModel() {
 
   const peerLinks: DeviceLinkPeerLinksSnapshot = {
     links: [
-      { deviceId: 'dev-mac', encrypted: true, open: true, path: 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
+      { deviceId: 'dev-mac', encrypted: true, open: true, path: mixed ? 'relay' : 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
     ],
     agentNetRoutes: [
       { deviceId: 'dev-mac', path: 'direct', rttMs: 4, directRttMs: 4, relayRttMs: 18, pathPreference: 'auto' },
@@ -131,15 +131,15 @@ function buildFixtureModel() {
       {
         shareId: 'sh-1',
         path: 'relay',
-        protocol: 'device-link',
+        protocol: shareUsesAgentNet ? 'agent-net' : 'device-link',
         rttMs: 28,
         sentAgoMs: null,
         receivedAgoMs: null,
         relayKind: 'official',
         relayHost: null,
-        relayTransport: 'websocket',
-        relayRttMs: null,
-        region: 'cn-east',
+        relayTransport: shareUsesAgentNet ? 'udp' : 'websocket',
+        relayRttMs: shareUsesAgentNet ? 16 : null,
+        region: mixed ? undefined : 'cn-east',
       },
     ],
     relayRttMs: 16,
@@ -165,6 +165,31 @@ function buildFixtureModel() {
 }
 
 describe('RemoteProviderTopology', () => {
+  it('keeps both protocols visible on machine cards when the mixed relay branches are too short', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 600 } as DOMRect);
+    try {
+      const model = buildFixtureModel({ mixed: true });
+      const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+      const cards = [...container.querySelectorAll('.rcv2-prov-card')].map((card) => card.textContent);
+      expect(cards.some((card) => card?.includes('Mac Studio') && card.includes('Agent-Net'))).toBe(true);
+      expect(cards.some((card) => card?.includes('Device Link'))).toBe(true);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it('shows end-to-end relay latency in the share card and keeps the hop latency on the relay', async () => {
+    const model = buildFixtureModel({ shareUsesAgentNet: true });
+    const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+    expect(container.querySelector('.rcv2-prov-relay')?.textContent).toContain('16 ms');
+    const shareCard = container.querySelector('.rcv2-prov-host-badge')?.closest('button');
+    expect(shareCard).not.toBeNull();
+    fireEvent.click(shareCard!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('28 ms')).toBeTruthy();
+    expect(within(dialog).queryByText('16 ms')).toBeNull();
+  });
+
   it('reuses .rcv2-tile + PlatformGlyph on own hosts and opens jumpable task list without redundant jump text', () => {
     const model = buildFixtureModel();
     const onOpenTask = vi.fn();

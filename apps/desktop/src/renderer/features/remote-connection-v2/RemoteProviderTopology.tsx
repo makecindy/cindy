@@ -110,6 +110,8 @@ function transportBadge(transport: LinkTransport | null): string | null {
 }
 
 /** 拓扑图上的协议小标签（Agent-Net 紫色 / Device Link 灰色），样式同设备连接页中转点下面那一行；协议未知时不画。 */
+const MIN_BRANCH_PROTOCOL_WIDTH = 90;
+
 function ProtocolTag({
   protocol,
   x,
@@ -344,7 +346,7 @@ function MachinePopoverBody({
 
   // 与设备连接卡片同一种写法：「连接方式」只写底层传输，直连与中转的延迟放进「线路选择」区逐条列出。
   const activePath =
-    machine.online && (machine.routeMode === 'direct' || machine.routeMode === 'relay') ? machine.routeMode : null;
+    machine.status === 'direct' || machine.status === 'relay' ? machine.status : null;
   const directRttMs = machine.directRttMs ?? (activePath === 'direct' ? machine.rttMs : null);
   const relayRttMs = machine.relayRttMs ?? (activePath === 'relay' ? machine.rttMs : null);
   const relayName = relay?.name ?? (machine.kind === 'own' ? primaryRelayName ?? null : null);
@@ -857,6 +859,8 @@ export function RemoteProviderTopology({
     [model, canvasWidth, expandedGroups],
   );
 
+  const mixedRelayIds = new Set(layout.relays.filter((relay) => relay.mixedProtocols).map((relay) => relay.relay.id));
+
   const flowLines: FlowLine[] = useMemo(() => {
     if (reducedMotion) return [];
     return layout.lines
@@ -1216,9 +1220,6 @@ export function RemoteProviderTopology({
                   const rtt = rttText(ml.machine.rttMs, t);
                   // 数据实际走 Agent-Net 还是 Device Link：直连写在线路标签下面；经中转的写在中转站下面，
                   // 只有同一台中转上混用两种协议时才在各条分支上各写各的（2026-11-26 用户要求）。
-                  const relayLayout = ml.machine.relayId
-                    ? layout.relays.find((r) => r.relay.id === ml.machine.relayId) ?? null
-                    : null;
                   const protocolTag = (x: number, top: number, maxWidth?: number) => (
                     <ProtocolTag protocol={ml.machine.protocol} x={x} top={top} maxWidth={maxWidth} dimmed={dimmed} />
                   );
@@ -1268,7 +1269,8 @@ export function RemoteProviderTopology({
                           {rtt}
                         </span>
                       ) : null}
-                      {ml.branchRttPos && relayLayout?.mixedProtocols
+                      {ml.branchRttPos && ml.branchRttPos.maxW >= MIN_BRANCH_PROTOCOL_WIDTH &&
+                        ml.machine.relayId && mixedRelayIds.has(ml.machine.relayId)
                         ? protocolTag(ml.branchRttPos.x, Math.round(ml.branchRttPos.y + (rtt ? 12 : -9)), ml.branchRttPos.maxW)
                         : null}
                     </div>
@@ -1351,6 +1353,11 @@ export function RemoteProviderTopology({
                 {/* 右栏：远程供应商机器卡片 */}
                 {layout.machines.map((ml) => {
                   const machineKey = `machine:${ml.machine.id}`;
+                  const protocolOnCard = ml.machine.relayId && mixedRelayIds.has(ml.machine.relayId) &&
+                    (ml.branchRttPos?.maxW ?? 0) < MIN_BRANCH_PROTOCOL_WIDTH
+                    ? ml.machine.protocol
+                    : null;
+                  const protocolLabel = protocolKindLabel(protocolOnCard, t);
                   const dimmed = isMachineDimmed(ml);
                   const isLive = Boolean(ml.flow);
                   const isError = ml.machine.status === 'error';
@@ -1438,7 +1445,7 @@ export function RemoteProviderTopology({
                             ) : null}
                             <span
                               className={cn(
-                                'block truncate text-11 leading-[1.3]',
+                                'flex min-w-0 items-center gap-1 text-11 leading-[1.3]',
                                 isError
                                   ? 'text-[var(--rcv2-error)]'
                                   : isLive
@@ -1446,7 +1453,10 @@ export function RemoteProviderTopology({
                                     : 'text-[var(--text-secondary)]',
                               )}
                             >
-                              {statusLine}
+                              {protocolOnCard && protocolLabel ? (
+                                <ProtocolMark kind={protocolOnCard} label={protocolLabel} className="shrink-0 text-[var(--text-tertiary)]" />
+                              ) : null}
+                              <span className="min-w-0 truncate" title={statusLine}>{statusLine}</span>
                             </span>
                           </span>
                         </button>
