@@ -1227,8 +1227,8 @@ describe("market read fences and lost-receipt facts", () => {
         } finally { vi.useRealTimers(); }
         await settle(30);
         expect({ record: told(), offered: !!byId("plugins.checks.open"), says: sheet().includes("plugins.checks.result.unconfirmed"),
-          opened: openedIds(), resultReads: lightReads(requests) - reads >= 1 })
-          .toEqual({ record: [{ readback: "unconfirmed", told: false }], offered: false, says: true, opened: [], resultReads: true });
+          opened: openedIds(), resultReads: lightReads(requests) - reads })
+          .toEqual({ record: [{ readback: "unconfirmed", told: false }], offered: false, says: true, opened: [], resultReads: 1 });
         expect(writes(requests)).toEqual(ONCE);
       });
       // Maintainer review 14:25 #1: "Open plugin" checks the install identity the installed list gives now (the row's
@@ -1249,6 +1249,24 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ opened: openedIds(), sheet: byId("plugins.checks") !== null, record: told(), reread: lightReads(requests) - reads })
           .toEqual({ opened: [], sheet: true, record: [{ readback: "unconfirmed", told: false }], reread: 1 });
         expect(writes(requests)).toEqual(ONCE);
+      });
+      // Pre-push review (2026-11-26): the installed list is older than the proving read (a row restored from cache, or its
+      // refresh not back yet). The first press reads again; that read proves the same install, so the next press opens
+      // (before: never, each press only read again). Minimal failing input on 8553b48754: this test.
+      it("proven, the list is open; the installed list row is older than the proving read: the first press reads again, the read proves the same install, the next press opens", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        await provenWhileAway(world);
+        fixture.extraRows = [{ key: "mac:_root__demo", host: { deviceId: "mac", deviceName: "Mac" },
+          item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: JSON.stringify(["1", "approved:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]), display: { title: "Demo" }, actions: [] } }];
+        await rerender();
+        const reads = lightReads(requests);
+        await click("plugins.checks.open");
+        await settle(30);
+        expect({ opened: openedDemo(), reread: lightReads(requests) - reads, record: told() })
+          .toEqual({ opened: false, reread: 1, record: [{ readback: "verified", told: false }] });
+        await click("plugins.checks.open");
+        expect({ opened: openedDemo(), reread: lightReads(requests) - reads }).toEqual({ opened: true, reread: 1 });
       });
       // Control: the same row with the token the proving read saw opens at once (passes before and after the change).
       it("control: the installed list shows the same install: \"Open plugin\" opens it", async () => {

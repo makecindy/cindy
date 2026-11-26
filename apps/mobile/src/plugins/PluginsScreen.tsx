@@ -964,16 +964,24 @@ function PluginDirectory() {
   // (PluginPendingChecksSheet).
   // (A second press in the same frame, before the list is gone, opens nothing again: a synchronous ref, as for Install.)
   const openedFromList = useRef(false);
+  /** Per result: the installed-list token a newer read overruled (`list token|proven token`). */
+  const staleListToken = useRef(new Map<string, string>());
   if (!checksOpen) openedFromList.current = false;
   const openChecked = (operationId: string) => {
     const proven = conclusions.find((item) => item.operationId === operationId);
     if (openedFromList.current || proven?.readback !== "verified" || !proven.instanceKey) return;
     // The installed list says that instance is another install now (its approval token, same key; maintainer review
     // 14:25 #1): nothing opens; the record reads it again (no page change when that read comes back).
+    // A list row older than the proving read (restored from cache, or its refresh not back yet) is overruled once a read
+    // issued after that press proves the same install again: the next press opens.
     const now = list.items.find((row) => row.host.deviceId === proven.who.deviceId && row.item.ref.id === proven.instanceKey);
     const token = installedApprovalToken(now?.item.revision);
-    if (token !== undefined && proven.approvalToken !== undefined && token !== proven.approvalToken) {
-      void retryPluginCheckReadback(operationId);
+    if (token !== undefined && proven.approvalToken !== undefined && token !== proven.approvalToken
+      && staleListToken.current.get(operationId) !== `${token}|${proven.approvalToken}`) {
+      void retryPluginCheckReadback(operationId).then((reread) => {
+        if (reread?.readback === "verified" && reread.approvalToken === proven.approvalToken)
+          staleListToken.current.set(operationId, `${token}|${proven.approvalToken}`);
+      });
       return;
     }
     if (!openInstalled(proven.who, proven.instanceKey)) return;
