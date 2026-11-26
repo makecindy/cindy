@@ -58,6 +58,7 @@ function boundedString(value: unknown, name: string, max: number): string {
 export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
   create?: ReturnType<typeof createRemoteSessionOpener>;
+  supportsPluginEngineCreate?: boolean;
   refineTitle?(sessionId: string, subject: string, initialTitle: string): void;
   listProjects?(options: { includeHidden: boolean; offset: number; limit: number }): Promise<unknown>;
   captureAccess?(controllerDeviceId: string): () => void;
@@ -190,6 +191,7 @@ export function registerSessionHandoffHandlers(
     if (request.action === 'task-action-capability') return {
       ...SESSION_HANDOFF_CAPABILITY,
       ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      ...(deps.create && deps.supportsPluginEngineCreate ? { ordinaryCreatePluginEngine: 1 } : {}),
       ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
       ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
     };
