@@ -1439,3 +1439,190 @@ describe('two-stage topic delivery boundaries', () => {
     }
   });
 });
+
+// Regression: mobile group chat must show fresh messages immediately on open and live WS push
+// without discarding messages on secondary 429 metadata failures or double-sweeping the roster.
+describe('incremental mobile group sync and 429 resilience', () => {
+  function fakeSockets() {
+    const opened: Array<{
+      readyState: number;
+      onmessage: ((event: { data: string }) => void) | null;
+      onopen: ((event: unknown) => void) | null;
+      onclose: ((event: unknown) => void) | null;
+      onerror: ((event: unknown) => void) | null;
+      send: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal('WebSocket', class {
+      readyState = 1; onmessage = null; onopen = null; onclose = null; onerror = null;
+      send = vi.fn();
+      close = vi.fn(() => { this.readyState = 3; (this.onclose as ((e: unknown) => void) | null)?.({}); });
+      constructor() { opened.push(this); }
+    });
+    const deliver = async (ws: (typeof opened)[number], payload: unknown) => {
+      await act(async () => {
+        ws.onmessage?.({ data: JSON.stringify(payload) });
+        for (let tick = 0; tick < 12; tick++) await Promise.resolve();
+      });
+    };
+    return { opened, deliver };
+  }
+
+  it('applies contiguous WS message.created directly into ChatHistory with zero HTTP calls and ACKs after commit', async () => {
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'First' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000202';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Live push' }], createdAt: '2026-11-26T01:01:00Z', deleted: false, threadRootId: null };
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [msg1], cursor: '1' };
+      if (path.includes('/messages?')) return [msg1];
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${id}`, after: '1' }));
+
+    h.auth.apiFetch.mockClear();
+    ws.send.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'message.created', entityId: msg2Id, data: { message: msg2 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'First' }, { content: 'Live push' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ack', scope: `conversation:${id}`, cursor: '2' }));
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+
+  it('shows fresh messages immediately on open and degrades secondary 429 metadata without 30s stall, while still enforcing 403 revocation', async () => {
+    vi.useFakeTimers();
+    const { opened, deliver } = fakeSockets();
+    const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Old msg' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
+    const msg2Id = '00000000-0000-4000-8000-000000000203';
+    const msg2 = { id: msg2Id, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fresh from list' }], createdAt: '2026-11-26T01:02:00Z', deleted: false, threadRootId: null };
+    let cursor = '2';
+    let serverMessages = [msg2, msg1];
+    let executionsError: unknown = Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 2_000 });
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') return [];
+      if (path.startsWith('/v1/conversations?')) return [{ ...room, head: cursor }];
+      if (path.endsWith('/snapshot')) return { room: { ...room, head: cursor }, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: serverMessages, cursor };
+      if (path.includes('/messages?')) return serverMessages;
+      if (path.startsWith('/v1/changes?')) return { head: cursor, cursor, changes: [], hasMore: false };
+      if (path.endsWith('/executions') && executionsError) throw executionsError;
+      return original(path, options);
+    });
+    // Home roster verifies the room first (leaving the newer message in shared ChatHistory).
+    await render();
+    expect(roster.items).toHaveLength(1);
+    // Opening the group renders the fresh message immediately even while /executions returns 429.
+    showChat = true; await render();
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }] } });
+    expect(chat.online).toBe(true);
+    // WS still subscribes at cursor '2' instead of failing and disconnecting.
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${id}`, after: '2' }));
+    // Incoming WS message during the 429 metadata cooldown renders immediately with zero HTTP calls.
+    const msg3Id = '00000000-0000-4000-8000-000000000204';
+    const msg3 = { id: msg3Id, seq: '3', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'During cooldown' }], createdAt: '2026-11-26T01:03:00Z', deleted: false, threadRootId: null };
+    cursor = '3';
+    serverMessages = [msg3, msg2, msg1];
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '3',
+      changes: [{ type: 'message.created', entityId: msg3Id, data: { message: msg3 } }],
+    });
+    expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }, { content: 'During cooldown' }] } });
+    expect(h.auth.apiFetch).not.toHaveBeenCalled();
+    // Once 429 clears, short-backoff recovery completes metadata well before the old 30s interval.
+    executionsError = null;
+    h.auth.apiFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_500); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
+    // Access loss (403) on secondary metadata must still revoke immediately, never degrade.
+    executionsError = Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+    await act(async () => { chat.reload(); await vi.advanceTimersByTimeAsync(50); });
+    expect(chat.state.kind).toBe('missing');
+  });
+
+  it('re-authorizes and wipes cache when WS delivers membership.changed followed by 403', async () => {
+    const { opened, deliver } = fakeSockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let revoked = false;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (revoked) throw Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
+      if (path === '/v1/actors') return [];
+      return original(path, options);
+    });
+    showChat = true; await render();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(chat.state.kind).toBe('ready');
+    revoked = true;
+    await deliver(ws, {
+      type: 'changes',
+      scope: `conversation:${id}`,
+      cursor: '2',
+      changes: [{ type: 'membership.changed', entityId: self, data: {} }],
+    });
+    expect(chat.state.kind).toBe('missing');
+    expect(peekChatMessages(id)).toBeNull();
+  });
+
+  it('deduplicates roster focus+connected sweeps and stops fan-out when 429 cooldown activates', async () => {
+    const { opened, deliver } = fakeSockets();
+    const rooms = Array.from({ length: 10 }, (_, idx) => ({
+      ...room,
+      id: `00000000-0000-4000-8000-${String(idx + 1).padStart(12, '0')}`,
+      name: `Group ${idx + 1}`,
+      head: '1',
+    }));
+    let rateLimitRoomIndex = -1;
+    h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+      options.assertCurrent();
+      if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
+      if (path.startsWith('/v1/conversations?')) return rooms;
+      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      const snapMatch = path.match(/^\/v1\/conversations\/([^/]+)\/snapshot$/);
+      if (snapMatch) {
+        const idx = rooms.findIndex(r => r.id === snapMatch[1]);
+        if (rateLimitRoomIndex >= 0 && idx >= rateLimitRoomIndex) {
+          throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 10_000 });
+        }
+        return { room: rooms[idx]!, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
+      }
+      if (path.endsWith('/executions') || path.endsWith('/plans')) return [];
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    await render();
+    expect(roster.items).toHaveLength(10);
+    const snapshotCallsAfterFocus = h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot')).length;
+    expect(snapshotCallsAfterFocus).toBe(10);
+
+    // WS ready immediately after focus must reuse the fresh room heads with zero extra room reads.
+    h.auth.apiFetch.mockClear();
+    const ws = opened.at(-1)!;
+    await deliver(ws, { type: 'ready', actorId: self });
+    expect(h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot'))).toHaveLength(0);
+    expect(h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/executions'))).toHaveLength(0);
+
+    // When 429 hits during an automatic refresh with moved heads, stop hammering the rest of the rooms.
+    rooms.forEach(r => { r.head = '2'; });
+    rateLimitRoomIndex = 0;
+    h.auth.apiFetch.mockClear();
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '2', changes: [{ type: 'conversation.updated', entityId: rooms[0]!.id, data: {} }] });
+    // First batch of 4 runs in parallel, hits 429, and remaining 6 rooms short-circuit onto cached rows.
+    const snapAttempts = h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot')).length;
+    expect(snapAttempts).toBeLessThanOrEqual(4);
+    expect(roster.items).toHaveLength(10);
+  });
+});

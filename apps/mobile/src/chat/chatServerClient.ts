@@ -7,7 +7,7 @@ import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-prese
 import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
-import type { ChatHistory } from '@cindy/maker-shared/chat-history';
+import type { ChatHistory, ChatHistoryBatch } from '@cindy/maker-shared/chat-history';
 import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
@@ -101,6 +101,14 @@ export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messa
   plans?: ChatPlan[];
   /** Authorized enrichments only; raw card fallback is never a resolved source. */
   threadSources?: Record<string, ChatMessage | null>; threadRoots?: Record<string, ChatMessage | null>; threadRetryAt?: number; previewMessages?: ChatMessage[];
+  /** Secondary metadata (executions/failures/plans) degraded on rate limit or transient error while messages remained authoritative. */
+  metadataIncomplete?: boolean;
+  metadataRetryAt?: number;
+}
+export interface ChatLoadOptions {
+  previous?: ChatPage;
+  skipMetadata?: boolean;
+  onMessages?: (partial: ChatPage) => void;
 }
 /** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string, signal?: AbortSignal) => Promise<T>;
@@ -504,10 +512,33 @@ type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifec
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
+export const CHAT_RATE_LIMIT_FALLBACK_MS = 5_000;
+export const CHAT_METADATA_RATE_LIMIT_FALLBACK_MS = 15_000;
+/** Returns an absolute epoch deadline when the error is a Chat Server 429 rate limit. */
+export function chatRateLimitDeadline(error: unknown, fallbackMs = CHAT_RATE_LIMIT_FALLBACK_MS): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const status = 'status' in error ? (error as { status?: unknown }).status : undefined;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+  if (status !== 429 && code !== 'RATE_LIMITED') return undefined;
+  const now = Date.now();
+  const retryAt = 'retryAt' in error && typeof (error as { retryAt?: unknown }).retryAt === 'number'
+    ? (error as { retryAt: number }).retryAt
+    : undefined;
+  return Math.max(now + 1_000, retryAt ?? now + fallbackMs);
+}
+/** Secondary metadata (executions/plans/failures) degrades on 429 rate limits (parity with Desktop PR #12616), never on access loss, owner change, or hard server errors. */
+export function chatDegradableMetadataError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if (chatAccessLost(error)) return false;
+  if (error instanceof Error && (error.message === 'OWNER_CHANGED' || error.name === 'AbortError')) return false;
+  return chatRateLimitDeadline(error) !== undefined;
+}
+
 export interface ChatAccountIdentity {
   request?: ChatRequest;
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
+  peekHistory?: (human: string) => ChatHistory | undefined;
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -664,6 +695,24 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return applied;
     },
     async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
+    /** Synchronous read of an already-authorized in-memory snapshot for instant first-frame display. */
+    peekSnapshot(roomId: string): (ChatSnapshot & { cacheGeneration: string }) | undefined {
+      const human = account.known?.id;
+      if (!human) return undefined;
+      try { return account.peekHistory?.(human)?.committedSnapshot<ChatSnapshot>(chatId(roomId)); }
+      catch { return undefined; }
+    },
+    /** Apply an authenticated WebSocket change batch directly into ChatHistory (0 HTTP when contiguous). */
+    async receiveChanges(roomId: string, batch: ChatHistoryBatch, subscribedAfter?: string): Promise<string | undefined> {
+      const stored = await cache();
+      return stored ? stored.receive(chatId(roomId), batch, subscribedAfter) : undefined;
+    },
+    /** Explicitly clear already-opened ChatHistory on room access loss without triggering network identity lookup. */
+    async clearHistory(roomId: string): Promise<void> {
+      const human = account.known?.id;
+      const existing = (human ? account.peekHistory?.(human) : undefined) ?? (historyCache ? await historyCache.catch(() => undefined) : undefined);
+      if (existing) await existing.clear(chatId(roomId));
+    },
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
       await identity();
@@ -893,21 +942,23 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     /** `shown` is the page this screen read moments ago. While the room's change cursor and
      * history generation have not moved, nothing in the room changed (messages, executions and
      * plans all advance that cursor), so only the personal metadata in the snapshot is replaced. */
-    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage): Promise<ChatPage> {
+    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage, options?: ChatLoadOptions): Promise<ChatPage> {
       const room = chatId(roomId);
       const threadQuery = threadRootId ? `&threadRootId=${chatId(threadRootId)}` : '';
       const stored = await cache();
       const snapshot = stored ? await stored.snapshot<ChatSnapshot>(room) : await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
       if (snapshot.room.id !== room || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       chatCursor(snapshot.cursor);
-      if (shown && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
+      if (shown && !shown.metadataIncomplete && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
         && shown.snapshot.room.id === room && shown.snapshot.cursor === snapshot.cursor && shown.threadRootId === threadRootId) {
         return { ...shown, snapshot };
       }
+      const previous = options?.previous;
+      const skipMetadata = !!options?.skipMetadata && !!previous;
       // Read after the snapshot's cursor, so a later change is still announced after it. It
       // does not depend on the message page; let both travel together.
-      const executionsRead = request<ChatExecution[]>(`/conversations/${room}/executions`);
-      executionsRead.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
+      const executionsRead = skipMetadata ? undefined : request<ChatExecution[]>(`/conversations/${room}/executions`);
+      executionsRead?.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
       // Snapshot includes Thread replies; the message endpoint selects the main timeline.
       let batch = await messagePage(room, `limit=100${threadQuery}`);
       const messages = [...batch];
@@ -931,31 +982,85 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
         }
       }
-      // Use the same execution snapshot for running status and stop controls. Failure notices
-      // and plan cards only need the page's message IDs; none of the three waits for another.
-      const [executions, executionFailures, plans] = await Promise.all([executionsRead, failures(room, messages),
-        snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : undefined]);
-      const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
-      const live = (Array.isArray(executions) ? executions : [])
-        .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
-      const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
-      if (unknown.length) for (const [id, result] of await lookup(room, unknown.map(chatId))) {
-        // Source-level denial leaves this execution unresolved, not the readable room.
-        if ('error' in result && !denied(result.error)) throw result.error;
-        sourceMessages.set(id, 'message' in result ? result.message : undefined);
+      const needsPlansForNewCard = skipMetadata && snapshot.room.kind === 'group' && !threadRootId
+        && messages.some(message => {
+          const planId = messagePlanId(message);
+          return planId !== null && !(previous?.plans ?? []).some(plan => plan.id === planId);
+        });
+      const shouldReadMetadata = !skipMetadata || needsPlansForNewCard;
+      const messagesChanged = !previous
+        || previous.snapshot.cursor !== snapshot.cursor
+        || previous.messages.length !== messages.length
+        || previous.messages[0]?.id !== messages[0]?.id
+        || previous.messages[0]?.revision !== messages[0]?.revision;
+      if (shouldReadMetadata && options?.onMessages && messagesChanged) {
+        const earlyProjection = await stored?.projection<ChatMessage>(room, []);
+        if (!earlyProjection || snapshot.cacheGeneration === earlyProjection.generation) {
+          options.onMessages({
+            snapshot, messages, before,
+            ...(previous?.plans ? { plans: previous.plans } : {}),
+            ...(earlyProjection ? { historyRevision: earlyProjection.generation } : {}),
+            ...(threadRootId ? { threadRootId } : {}),
+            ...(previous?.failures ? { failures: previous.failures } : {}),
+            ...(previous?.executions ? { executions: previous.executions } : {}),
+            metadataIncomplete: true,
+          });
+        }
       }
-      for (const execution of live) {
-        const source = sourceMessages.get(execution.source_message_id);
-        if (source) execution.threadRootId = source.threadRootId ?? null;
+      let executions: ChatExecution[] | undefined = previous?.executions;
+      let executionFailures: ChatExecutionFailure[] | undefined = previous?.failures;
+      let plans: ChatPlan[] | undefined = previous?.plans;
+      let metadataIncomplete = false;
+      let metadataRetryAt: number | undefined;
+      const noteMetadataFailure = (reason: unknown) => {
+        if (!chatDegradableMetadataError(reason)) throw reason;
+        metadataIncomplete = true;
+        const deadline = chatRateLimitDeadline(reason, CHAT_METADATA_RATE_LIMIT_FALLBACK_MS) ?? Date.now() + 2_000;
+        metadataRetryAt = Math.max(metadataRetryAt ?? 0, deadline);
+      };
+      if (shouldReadMetadata) {
+        // Use the same execution snapshot for running status and stop controls. Failure notices
+        // and plan cards only need the page's message IDs; none of the three waits for another.
+        const [execRes, failRes, planRes] = await Promise.allSettled([
+          executionsRead ?? request<ChatExecution[]>(`/conversations/${room}/executions`),
+          failures(room, messages),
+          snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : Promise.resolve(undefined),
+        ]);
+        if (execRes.status === 'fulfilled') executions = execRes.value; else noteMetadataFailure(execRes.reason);
+        if (failRes.status === 'fulfilled') executionFailures = failRes.value; else noteMetadataFailure(failRes.reason);
+        if (planRes.status === 'fulfilled') plans = planRes.value; else noteMetadataFailure(planRes.reason);
+        const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
+        const live = (Array.isArray(executions) ? executions : [])
+          .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
+        const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
+        if (unknown.length) {
+          try {
+            for (const [id, result] of await lookup(room, unknown.map(chatId))) {
+              // Source-level denial leaves this execution unresolved, not the readable room.
+              if ('error' in result && !denied(result.error)) {
+                noteMetadataFailure(result.error);
+                continue;
+              }
+              sourceMessages.set(id, 'message' in result ? result.message : undefined);
+            }
+          } catch (error) {
+            noteMetadataFailure(error);
+          }
+        }
+        for (const execution of live) {
+          const source = sourceMessages.get(execution.source_message_id);
+          if (source) execution.threadRootId = source.threadRootId ?? null;
+        }
       }
       const projection = await stored?.projection<ChatMessage>(room, []);
       if (projection && snapshot.cacheGeneration !== projection.generation) {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
-        return this.load(roomId, undefined, threadRootId, attempt + 1);
+        return this.load(roomId, undefined, threadRootId, attempt + 1, undefined, options);
       }
       return { snapshot, messages, before, ...(plans ? { plans } : {}), ...(projection ? { historyRevision: projection.generation } : {}),
-        ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
-        ...(Array.isArray(executions) ? { executions } : {}) };
+        ...(threadRootId ? { threadRootId } : {}), failures: executionFailures ?? [],
+        ...(Array.isArray(executions) ? { executions } : {}),
+        ...(metadataIncomplete ? { metadataIncomplete: true, ...(metadataRetryAt ? { metadataRetryAt } : {}) } : {}) };
     },
     async actPlan(roomId: string, plan: ChatPlan, input: ChatPlanAction, operationId: string, current = () => true, signal?: AbortSignal) {
       const room = chatId(roomId);

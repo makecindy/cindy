@@ -105,3 +105,42 @@ it('acknowledges owner work hints without reloading, but still reloads mixed bat
   await receive(ws, { type: 'changes', scope: `actor:${actorId}`, cursor: '2', changes: mixed });
   expect(changed).toHaveBeenCalledWith(mixed);
 });
+
+it('forwards contiguous subscribedAfter cursors to receive and respects retryAt on reconnect backoff', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-26T04:00:00.000Z'));
+  const frames: Array<{ scope: string; cursor: string; subscribedAfter?: string }> = [];
+  const onReceive = vi.fn(async (frame: { scope: string; cursor: string; subscribedAfter?: string }) => {
+    frames.push({ scope: frame.scope, cursor: frame.cursor, subscribedAfter: frame.subscribedAfter });
+  });
+  stop = subscribeChatServer({
+    baseUrl: 'https://chat.example.invalid',
+    token: async () => 'fixture',
+    current: () => true,
+    socket,
+    ready: async () => ({ scope: 'conversation:room', cursor: '10' }),
+    changed: vi.fn(),
+    receive: onReceive,
+    unavailable: vi.fn(),
+  });
+  await Promise.resolve();
+  const ws = sockets[0];
+  await receive(ws, { type: 'ready', actorId });
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '11', changes: [{ type: 'message.created', data: {} }] });
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '12', changes: [{ type: 'message.created', data: {} }] });
+  expect(frames).toEqual([
+    { scope: 'conversation:room', cursor: '11', subscribedAfter: '10' },
+    { scope: 'conversation:room', cursor: '12', subscribedAfter: '11' },
+  ]);
+  expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: 'conversation:room', cursor: '12' }));
+
+  onReceive.mockRejectedValueOnce(Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 7_000 }));
+  ws.send.mockClear();
+  await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '13', changes: [{ type: 'message.created', data: {} }] });
+  expect(ws.send).not.toHaveBeenCalled();
+  expect(ws.close).toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(6_500);
+  expect(sockets).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(600);
+  expect(sockets).toHaveLength(2);
+});
