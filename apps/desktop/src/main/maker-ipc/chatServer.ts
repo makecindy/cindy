@@ -729,9 +729,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * claim by execution ID is common and tells neither "not yet" nor "never". Such an execution keeps
    * its notice and is asked again on the work-request failure ladder (2 s doubling to 60 s, as in
    * `chatWorkPolling`), from notices and room sweeps alike. Companions claim only on their home
-   * computer, where an empty claim is rare, and keep the immediate retry.
+   * computer, where an empty claim is rare, and keep the immediate retry. `lane` is the conversation
+   * found when it was refused, so the order check below needs no extra reads.
    */
-  const emptyAssistantClaims = new Map<string, { failures: number; retryAt: number; roomId: string }>();
+  const emptyAssistantClaims = new Map<string, { failures: number; retryAt: number; roomId: string; lane: string }>();
   const metadata = new Map<string, Promise<void>>();
   /**
    * Followed room scopes, each with the newest cursor this process has read or acked. It only
@@ -3911,11 +3912,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     for (const [executionId, entry] of emptyAssistantClaims)
       if (entry.roomId === roomId && !keep?.has(executionId)) emptyAssistantClaims.delete(executionId);
   }
-  function noteEmptyAssistantClaim(executionId: string, roomId: string) {
+  function noteEmptyAssistantClaim(executionId: string, roomId: string, lane: string) {
     const failures = (emptyAssistantClaims.get(executionId)?.failures ?? 0) + 1;
     // Re-inserted, so the first entry is the one longest without a new refusal.
     emptyAssistantClaims.delete(executionId);
-    emptyAssistantClaims.set(executionId, { failures, roomId, retryAt: Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)) });
+    emptyAssistantClaims.set(executionId, { failures, roomId, lane, retryAt: Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)) });
     if (emptyAssistantClaims.size <= 1000) return;
     // Over the bound, the evicted execution loses its notice as well. It is asked again only when its
     // room is read for another reason (a notice, a sweep), once, and then starts the ladder anew.
@@ -3966,21 +3967,28 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (observed.some(([key]) => key === `room:${room}`))
         for (const row of queued) if (!hints.has(row.id)) hints.set(row.id, { roomId: room });
       for (const [key, hint] of observed) if (!queued.some(row => row.id === key)) retireHint(key, hint);
+      // The group's Cindy waits out an earlier empty claim and keeps the notice (see `emptyAssistantClaims`),
+      // but never lets a newer request of the same conversation go first: an older one still waiting is
+      // asked just before it, as without the backoff.
+      const checkedAt = Date.now();
+      const waiting: Execution[] = [];
       for (const row of queued) {
         if (!mayRequest()) return;
-        // The group's Cindy waits out an earlier empty claim and keeps the notice (see `emptyAssistantClaims`).
-        if (assistant && Date.now() < (emptyAssistantClaims.get(row.id)?.retryAt ?? 0)) continue;
+        if (assistant && checkedAt < (emptyAssistantClaims.get(row.id)?.retryAt ?? 0)) { waiting.push(row); continue; }
         let lane: string;
         try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
-        // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
-        if (!mayRequest()) return;
-        const execution = await claim(actorId, row.id);
-        if (!execution) { if (assistant) noteEmptyAssistantClaim(row.id, room); continue; }
-        emptyAssistantClaims.delete(row.id);
-        hints.delete(row.id);
-        lanes.add(lane);
-        void runExecution(execution, lane);
+        for (const candidate of [...waiting.filter(older => emptyAssistantClaims.get(older.id)?.lane === lane), row]) {
+          if (lanes.has(lane)) { if (candidate === row) hints.delete(row.id); break; }
+          // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
+          if (!mayRequest()) return;
+          const execution = await claim(actorId, candidate.id);
+          if (!execution) { if (assistant) noteEmptyAssistantClaim(candidate.id, room, lane); continue; }
+          emptyAssistantClaims.delete(candidate.id);
+          hints.delete(candidate.id);
+          lanes.add(lane);
+          void runExecution(execution, lane);
+        }
       }
     }
     if (!hints.size && queuedHints.get(actorId) === hints) queuedHints.delete(actorId);

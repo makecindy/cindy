@@ -3070,37 +3070,39 @@ describe('Chat Server result delivery and refresh', () => {
       if (!granted) expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${otherRoom}/executions`)).toHaveLength(reads);
     });
 
-    // #13328 review: B group's request found by the busy scan first got an empty claim, then became
-    // claimable (the member chose this computer) with no new notice while A kept running. Dropping
-    // the notice on an empty claim left B unread until A ended; the backoff keeps it and asks again.
-    // Also: with B's own Thread running, B is swept every 10 s, and the same empty main-group
-    // execution follows the ladder instead of being claimed on every sweep.
-    it.each(['recovers after one empty claim', 'keeps backing off'] as const)('busy in another group, B %s', async variant => {
+    // #13328 review, with A's request running throughout:
+    // - recovers: B's turn ended while A ran; B's next request got one empty claim, then became
+    //   claimable (the member chose this computer) with no new notice. Dropping the notice left B
+    //   unread until A ended; the backoff keeps it and asks again.
+    // - keeps backing off: B's own Thread runs, so B is swept every 10 s; the same empty main-group
+    //   execution follows the ladder instead of being claimed on every sweep, also while a newer
+    //   request waits behind B's Thread.
+    // - keeps the order: a newer request of B found only by that sweep never goes before an older
+    //   one still backing off.
+    // - execution.changed: the room stream naming the backed-off execution asks it on the next sweep.
+    it.each(['recovers after one empty claim', 'keeps backing off', 'keeps the order', 'asks again on execution.changed'] as const)('busy in another group, B %s', async variant => {
       await vi.advanceTimersByTimeAsync(2000);
       const socket = fixture.sockets.at(-1)!;
       Object.defineProperty(socket, 'readyState', { value: 1 });
       socket.emit('message', JSON.stringify({ type: 'ready' }));
       const otherRoom = '10000000-0000-4000-8000-000000000002';
       const recovers = variant === 'recovers after one empty claim';
-      const exec = (n: number, threadRootId: string | null = null) => ({ ...request(n), conversation_id: otherRoom,
-        source_message_id: `50000000-0000-4000-8000-00000000077${n}`, threadRootId });
-      const queuedB = recovers ? [exec(7)] : [exec(7, message(1, peerId, '').id)];
-      let empty = 0;
+      const rootId = message(1, peerId, '').id;
+      const exec = (n: number) => ({ ...request(n), conversation_id: otherRoom, source_message_id: `50000000-0000-4000-8000-00000000077${n}` });
+      const [b7, b8, b9] = [exec(7), exec(8), exec(9)];
+      const queuedB = [b7];
+      // B's next request: empty once, then claimable (recovers), or empty until `grantedAt`.
+      let empty8 = 0, grantedAt = Infinity;
       const base = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => {
         if (route === `/conversations/${otherRoom}/executions`) return { body: queuedB.map(e => ({ ...e, status: 'queued' })) };
         if (route === '/executions/claim' && body?.executionId) {
           const e = queuedB.find(row => row.id === body.executionId);
-          if (!e) return { body: { execution: null } };
-          // B's next request: empty once, then claimable (recovers), or always empty.
-          if (e.id === exec(8).id && (!recovers || empty++ === 0)) return { body: { execution: null } };
+          if (!e || (e === b8 && (recovers ? empty8++ === 0 : Date.now() < grantedAt))) return { body: { execution: null } };
           queuedB.splice(queuedB.indexOf(e), 1); return { body: { execution: e } };
         }
         const m = /\/conversations\/10000000-0000-4000-8000-000000000002\/messages\/(50000000-0000-4000-8000-00000000077(\d))$/.exec(route);
-        if (m) {
-          const row = [exec(7, recovers ? null : message(1, peerId, '').id), exec(8)].find(e => e.source_message_id === m[1])!;
-          return { body: { ...message(Number(m[2]), selfId, `B request ${m[2]}`, { threadRootId: row.threadRootId }), id: m[1] } };
-        }
+        if (m) return { body: { ...message(Number(m[2]), selfId, `B request ${m[2]}`, { threadRootId: (m[2] === '7' && !recovers) || (m[2] === '9' && variant === 'keeps backing off') ? rootId : null }), id: m[1] } };
         if (route === `/conversations/${otherRoom}/snapshot`) return { body: { room: { ...room(otherRoom), project: null }, members, messages: [], cursor: '1' } };
         return base(route, method, body);
       });
@@ -3108,16 +3110,34 @@ describe('Chat Server result delivery and refresh', () => {
       socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: String(Date.now()),
         changes: [{ type: 'work.available', data: { work: [{ botId: cindyId, conversationId: otherRoom }] } }] }));
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(dispatched().map(input => input.message.split('\n')[0])).toEqual(['Long work in group A', 'B request 7']);
-      // B's first turn ends while A runs (recovers), or keeps running in B's Thread (keeps backing off).
+      const firstLines = () => dispatched().map(input => input.message.split('\n')[0]);
+      expect(firstLines()).toEqual(['Long work in group A', 'B request 7']);
+      // B's first turn ends while A runs (recovers), or keeps running in B's Thread.
       if (recovers) await service.settleLaneTurn({ ...terminal, sessionId: dispatched()[1]!.targetSessionId, activeInputClientId: dispatched()[1]!.clientId, resultText: 'B done' });
-      queuedB.push(exec(8));
-      const claims8 = () => fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === exec(8).id).length;
-      await vi.advanceTimersByTimeAsync(recovers ? 30_000 : 300_000);
-      if (recovers) expect(dispatched().map(input => input.message.split('\n')[0]).at(-1)).toBe('B request 8');
-      // B's request is found only by the 10 s sweep of B, so the 2, 4, 8 … 60 s ladder rounds up to
-      // sweeps: 9 claims in 5 min (claiming on every sweep was 30).
-      expect(claims8()).toBe(recovers ? 2 : 9);
+      queuedB.push(b8);
+      const claims8 = () => fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === b8.id).length;
+      if (recovers) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(firstLines().at(-1)).toBe('B request 8');
+        expect(claims8()).toBe(2);
+      } else if (variant === 'keeps backing off') {
+        queuedB.push(b9);
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(fixture.handle.mock.calls.filter(([route, , body]) => route === '/executions/claim' && body?.executionId === b9.id)).toHaveLength(0);
+        // B's request is found only by the 10 s sweep of B, so the 2, 4, 8 … 60 s ladder rounds up to
+        // sweeps: 9 claims in 5 min (claiming on every sweep was 30).
+        expect(claims8()).toBe(9);
+      } else {
+        // Right after the fourth empty claim (on a sweep), the next try is 16 s out and the next sweep 10–12 s.
+        for (let second = 0; second < 60 && claims8() < 4; second++) await vi.advanceTimersByTimeAsync(1000);
+        expect(claims8()).toBe(4);
+        grantedAt = Date.now();
+        if (variant === 'keeps the order') queuedB.push(b9);
+        else socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${otherRoom}`, cursor: '1000',
+          changes: [{ type: 'execution.changed', entityId: b8.id, data: { status: 'queued', botId: cindyId } }] }));
+        await vi.advanceTimersByTimeAsync(13_000);
+        expect(firstLines().slice(2)).toEqual(['B request 8']);
+      }
     });
 
     // 2026-11-14 owner report: «已连接到某台电脑» said nothing about which computer took the request.
