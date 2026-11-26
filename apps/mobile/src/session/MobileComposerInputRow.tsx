@@ -94,6 +94,11 @@ export interface MobileComposerInputRowProps {
   onEntryTransitionComplete?(): void;
   /** Compact (non-card) outer height; on the iOS composer dock it matches the new-task button. */
   collapsedHeight?: number;
+  /**
+   * Text that no longer fits the one-line collapsed pill. Shown from its start on one line, ending in an
+   * ellipsis, instead of the native input scrolled to its last line with the line above cut in half.
+   */
+  collapsedOverflowText?: string;
   /** When set, a tap on the compact input calls this instead of focusing directly. */
   onCollapsedPress?(): void;
   /** See ComposerFrame; changes when onCollapsedPress opens the pill. */
@@ -222,6 +227,7 @@ export function MobileComposerInputRow({
   entryTransitionId,
   onEntryTransitionComplete,
   collapsedHeight,
+  collapsedOverflowText,
   onCollapsedPress,
   expandToken,
   accessibilityHint,
@@ -288,6 +294,7 @@ export function MobileComposerInputRow({
   // The collapsed viewport is one line, but a multiline native input wraps its
   // placeholder. Draw an ellipsized hint without changing/remounting the editor.
   const collapsedPlaceholder = geometricSingleLine && inputElement == null && value.length === 0 && !!placeholder;
+  const collapsedPreview = geometricSingleLine && inputElement == null && value.length > 0 && !!collapsedOverflowText;
   // iOS composer dock pill: every end control sits concentric with the pill,
   // i.e. its visible circle is as far from the pill edge as from the top and
   // bottom. The leading attachment keeps its 44pt hit area (its visible 34pt
@@ -358,6 +365,8 @@ export function MobileComposerInputRow({
         geometricSingleLine && styles.inputGeometricSingleLine,
         { maxHeight },
         inputStyle,
+        // The native text stays laid out (sizes, caret on focus); the preview below draws it instead.
+        collapsedPreview && styles.inputUnderPreview,
       ]}
       testID={inputTestID}
       value={value}
@@ -401,6 +410,12 @@ export function MobileComposerInputRow({
             numberOfLines={1} ellipsizeMode="tail"
             style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill, { color: placeholderTextColor }]}
           >{placeholder}</Text> : null}
+          {collapsedPreview ? <Text
+            accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
+            numberOfLines={1} ellipsizeMode="tail"
+            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill]}
+            testID={`${inputTestID}.collapsedPreview`}
+          >{collapsedOverflowText}</Text> : null}
           {inputOverlay}
           {!cardLayout && onCollapsedPress ? (
             // VoiceOver still reaches the input itself and focuses it directly.
@@ -854,6 +869,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
+  // Not 'transparent': that is colour 0, which Android's renderer reads as "no colour" and draws in the
+  // default black. Alpha 0 over a non-zero RGB is invisible on both platforms.
+  inputUnderPreview: { color: 'rgba(255, 255, 255, 0)' },
   inputGeometricSingleLine: {
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,

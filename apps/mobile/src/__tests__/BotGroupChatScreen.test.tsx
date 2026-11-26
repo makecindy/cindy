@@ -1586,6 +1586,26 @@ describe('group composer', () => {
     });
   }
 
+  // Unit regression: multi-line text left in the composer folded into the one-line pill scrolled to its
+  // end, the line above cut in half. The composer must hand the row its text to show from the start,
+  // only while folded and overflowing.
+  it('hands multi-line text to the folded pill to show from its start until the composer opens', async () => {
+    const long = 'please check this text keeps the mention and wraps over several lines';
+    await render(group({ openPlan: null }));
+    await type(long);
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
+    expect(h.row.cardActive).toBe(true);
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    await act(async () => h.row.onBlur());
+    expect(h.row.cardActive).toBe(false);
+    expect(h.row.collapsedOverflowText).toBe(long);
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 28 } } }));
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { height: 84 } } }));
+    await act(async () => h.row.onFocus());
+    expect(h.row.collapsedOverflowText).toBeUndefined();
+  });
+
   // Both Chat Server entry paths must carry the selected original through the real composer.
   it.each([true, false])('sends a quote and retains it after failure (direct server %s)', async server => {
     h.chat.server = server;
