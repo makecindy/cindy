@@ -1435,7 +1435,8 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
-  private readonly remoteAccountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string>();
+  /** null waits for a local account snapshot, a device id waits for that executor. */
+  private readonly accountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string | null>();
   private readonly remoteAccountFallbackUsed = new WeakSet<AgentInputQueuedMessage>();
   private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
     waiting: boolean;
@@ -2438,7 +2439,7 @@ export class AgentInputCoordinator {
     // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
     const queueHeadRecovery = state.recovery;
     if (queueHeadRecovery?.kind === 'queue-head' && !automaticOrigin &&
-      (!this.remoteAccountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
+      (!this.accountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
       const abandonedClientId = queueHeadRecovery.clientId;
       if (isUiContinuationItem(item)) {
         state.error = null;
@@ -4608,8 +4609,8 @@ export class AgentInputCoordinator {
     next.splice(insertIndex, 0, entry);
     const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
-    if (this.clearDisplacedRemoteAccountWait(state)) {
-      this.scheduleDrain(sessionId, 'remote-account-head-moved');
+    if (this.clearDisplacedAccountWait(state)) {
+      this.scheduleDrain(sessionId, 'account-wait-head-moved');
     }
     if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
       this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
@@ -5446,7 +5447,7 @@ export class AgentInputCoordinator {
   }
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
-    const wait = state.recovery?.kind === 'queue-head' && this.remoteAccountWaits.has(state.recovery)
+    const wait = state.recovery?.kind === 'queue-head' && typeof this.accountWaits.get(state.recovery) === 'string'
       ? state.recovery.clientId : null;
     const pendingQueue = state.pendingQueue.map((item) => {
       const projected = this.toProjectedItem(item);
@@ -6518,11 +6519,11 @@ export class AgentInputCoordinator {
         if (err instanceof RemoteAccountReadUnavailable && this.manualUiInputs.has(head) && !isAutomaticOriginItem(head)
           && !head.sourcePlugin && !head.botTaskCoordination) {
           const recovery = latest.recovery;
-          this.remoteAccountWaits.set(recovery, err.deviceId);
+          this.accountWaits.set(recovery, err.deviceId);
           latest.error = null;
           if (!this.remoteAccountFallbackUsed.has(head)) {
             this.remoteAccountFallbackUsed.add(head);
-            const timer = setTimeout(() => this.resumeRemoteAccountWait(sessionId, recovery), 10_000);
+            const timer = setTimeout(() => this.resumeAccountWait(sessionId, recovery), 10_000);
             timer.unref?.();
           }
           this.emit(sessionId);
@@ -6718,6 +6719,17 @@ export class AgentInputCoordinator {
       clearErrorProjectionSignals(latest);
       latest.stickyError = null;
       latest.recovery = { kind: 'queue-head', clientId: item.clientId };
+      if (result.kind === 'host-send' && result.accountReadRetryAt !== undefined && !latest.queueAbortPending
+        && latest.pendingQueue[0] === item) {
+        const recovery = latest.recovery;
+        this.accountWaits.set(recovery, null);
+        latest.error = `[CODEX_ACCOUNT_READ_RETRY] retryAtMs=${result.accountReadRetryAt}`;
+        const timer = setTimeout(() => this.resumeAccountWait(sessionId, recovery),
+          Math.max(0, result.accountReadRetryAt - Date.now()));
+        timer.unref?.();
+        this.emit(sessionId);
+        return;
+      }
       if (routeUnchanged && latest.pendingQueue[0] === item &&
           result.kind === 'host-send' && result.code === 'LAZY_CREATE_FAILED' &&
           !isAutomaticOriginItem(item) && !item.sourcePlugin && !item.botTaskCoordination && !item.orcaReportDelivery &&
@@ -6969,23 +6981,25 @@ export class AgentInputCoordinator {
   onRemoteAccountDeviceReady(deviceId: string): void {
     for (const [sessionId, state] of this.states) {
       const recovery = state.recovery;
-      if (recovery && this.remoteAccountWaits.get(recovery) === deviceId) this.resumeRemoteAccountWait(sessionId, recovery);
+      if (recovery && this.accountWaits.get(recovery) === deviceId) this.resumeAccountWait(sessionId, recovery);
     }
   }
 
-  private resumeRemoteAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
+  private resumeAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
     const state = this.states.get(sessionId);
     if (state?.recovery !== recovery || recovery.kind !== 'queue-head' ||
       state.pendingQueue[0]?.clientId !== recovery.clientId) return;
     state.recovery = null;
-    this.scheduleDrain(sessionId, 'remote-account-recheck');
+    if (this.accountWaits.get(recovery) === null) state.error = null;
+    this.scheduleDrain(sessionId, 'account-recheck');
     this.emit(sessionId);
   }
 
-  private clearDisplacedRemoteAccountWait(state: SessionInputState): boolean {
+  private clearDisplacedAccountWait(state: SessionInputState): boolean {
     const recovery = state.recovery;
-    if (recovery?.kind !== 'queue-head' || !this.remoteAccountWaits.has(recovery) ||
+    if (recovery?.kind !== 'queue-head' || !this.accountWaits.has(recovery) ||
       state.pendingQueue[0]?.clientId === recovery.clientId) return false;
+    if (this.accountWaits.get(recovery) === null) state.error = null;
     state.recovery = null;
     return true;
   }
@@ -7073,7 +7087,7 @@ export class AgentInputCoordinator {
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
-    this.clearDisplacedRemoteAccountWait(state);
+    this.clearDisplacedAccountWait(state);
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 

@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "로컬 네트워크",
         "deniedHint": "이 권한이 없으면 같은 네트워크의 컴퓨터와 휴대폰이 이 컴퓨터에 직접 연결할 수 없고 릴레이를 거쳐야 해서 느려집니다.",
-        "settingsHint": "시스템 설정 › 개인정보 보호 및 보안 › 로컬 네트워크에서 Cindy를 켜세요. 돌아오면 바로 적용됩니다."
+        "promptedHint": "macOS 권한 알림에서 허용을 클릭하세요. 알림이 뜨지 않으면 시스템 설정에서 직접 켤 수 있습니다.",
+        "settingsHint": "개인정보 보호 및 보안에서 로컬 네트워크를 열고 Cindy를 켜세요. 목록에 없으면 +를 눌러 이 앱을 추가하면 돌아오는 즉시 적용됩니다."
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
+        },
+        "copy-session-link": {
+          "label": "세션 링크 복사",
+          "description": "열려 있는 세션의 링크 복사"
         },
         "session-history-back": {
           "label": "이전 세션",
@@ -15621,7 +15626,6 @@
       "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
       "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
-      "upstreamEmpty550": "모델 서비스에서 빈 응답과 함께 HTTP 550을 반환했어요",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -16699,6 +16703,8 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "unreachable": "현재 Codex 계정 서비스에 연결할 수 없습니다.",
+      "rechecking": "현재 Codex 계정 서비스에 연결할 수 없습니다. {{resetAt}}에 다시 시도합니다.",
       "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
       "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
       "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",
@@ -22656,6 +22662,16 @@
     "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "계정 추가 방법",
+      "connect": "기존 로그인 연결…",
+      "found": "연결 가능 {{count}}개",
+      "title": "{{device}}의 로그인",
+      "note": "Cindy와 CLI가 선택한 계정의 설정을 공유합니다.",
+      "attach": "연결",
+      "choose": "다른 폴더 선택…",
+      "unverified": "이 구독 로그인을 확인할 수 없습니다."
+    },
     "pluginSignIn": {
       "method": "로그인 방법",
       "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",
