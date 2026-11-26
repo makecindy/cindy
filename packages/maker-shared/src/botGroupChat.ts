@@ -226,6 +226,16 @@ export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant'
   return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
 }
 
+/** Whether a group speaker/execution belongs to this account's own agent (owned companion or self-requested group Cindy). */
+export function isOwnBotGroupSpeaker(
+  group: { serverBacked?: boolean; members: readonly Pick<BotGroupMemberView, 'botId' | 'assistant' | 'isOwned'>[] },
+  speaker: Pick<BotGroupSpeaker, 'botId' | 'executionId' | 'isSelfRequested' | 'activity'>,
+): boolean {
+  if (!group.serverBacked) return true;
+  if (speaker.activity === 'planning' && !speaker.executionId) return speaker.isSelfRequested === true;
+  return canStopBotGroupWork(group.members.find(member => member.botId === speaker.botId), speaker.isSelfRequested === true);
+}
+
 /** Also used with older remote hosts: do not trust their legacy canStopAll flag. */
 export function canStopBotGroupSpeaker(group: { serverBacked?: boolean; supportsOwnedStop?: boolean; members: BotGroupMemberView[] }, speaker: Pick<BotGroupSpeaker, 'botId' | 'executionId' | 'isSelfRequested' | 'activity'>): boolean {
   if (!group.serverBacked && !speaker.executionId) return true;

@@ -81,7 +81,7 @@ export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; mask_owner_id?: string; created_at?: string; status: string }
 function mayStopWork(members: ChatMember[], selfId: string, botId: string, requesterId?: string) {
   const member = members.find(member => member.id === botId && member.kind === 'bot');
   return canStopBotGroupWork(member && { assistant: member.assistant, isOwned: member.ownerActorId === selfId }, requesterId === selfId);
@@ -855,11 +855,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return stored ? stored.message<ChatMessage>(room, id) : request<ChatMessage>(`/conversations/${room}/messages/${id}`);
     },
     /** Read-only roster state; independent of message heads because an approval can arrive silently. */
-    async rosterActivity(roomId: string, snapshot: ChatSnapshot): Promise<TeammateActivity | undefined> {
+    async rosterActivity(roomId: string, snapshot: ChatSnapshot, selfId?: string): Promise<TeammateActivity | undefined> {
       const room = chatId(roomId);
       const results = await Promise.allSettled([
         request<ChatExecution[]>(`/conversations/${room}/executions`),
-        request<Array<{ id?: string; status: string }>>(`/conversations/${room}/plans`),
+        request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans`),
       ]);
       // Older servers can lack these reads. Never manufacture a result from an ordinary unread message.
       if (results.some(result => result.status === 'rejected')) return undefined;
@@ -874,11 +874,16 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         && row.updated_at && Number.isFinite(Date.parse(row.updated_at)) && Date.parse(row.updated_at) >= lastMessageAt
         && !plans.some(plan => plan.id === row.plan_id) ? [chatId(row.plan_id)] : []))];
       if (missingPlans.length) {
-        const closed = await request<Array<{ id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
+        const closed = await request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
         if (Array.isArray(closed)) plans = [...plans, ...closed];
       }
+      const self = selfId ?? account.known?.id;
       return teammateChatActivity({ executions, plans, archived: snapshot.room.archived,
-        lastMessageAt });
+        lastMessageAt,
+        ...(self ? {
+          isOwnWork: ({ botId, requesterId, maskOwnerId }) =>
+            maskOwnerId ? maskOwnerId === self : !!botId && mayStopWork(snapshot.members, self, botId, requesterId),
+        } : {}) });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();

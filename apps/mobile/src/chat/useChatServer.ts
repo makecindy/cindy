@@ -219,7 +219,7 @@ export function useChatServerRoster(enabled: boolean) {
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
             if (!value.room.archived) {
-              const activity = await api.client.rosterActivity(room.id, value);
+              const activity = await api.client.rosterActivity(room.id, value, self);
               rows.push(chatRoomRow(room, value, self, activity));
             }
           } catch (error) {
