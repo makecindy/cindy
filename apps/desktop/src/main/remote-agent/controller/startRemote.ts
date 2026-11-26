@@ -33,8 +33,13 @@ import {
   type RemoteAgentStreamItem,
 } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle, Effort, StartSessionOptions } from '@cindy/maker-core';
-import { AgentStartupCleanupPendingError, AgentStartupResourcesReleasedError, AgentStartupStoppedError,
-  LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
+import {
+  AgentStartupCleanupPendingError,
+  AgentStartupResourcesReleasedError,
+  AgentStartupStoppedError,
+  createAcpMcpResultBackfiller,
+  LOCAL_AGENT_CLIENT,
+} from '@cindy/maker-core';
 import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
 
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
@@ -118,6 +123,8 @@ export interface PreparedRemoteMcp {
   dispose(): void;
   /** Close only the transports owned by a confirmed remote Agent process run. */
   closeSessionInstance?(): void;
+  /** Backfill empty ACP MCP tool results from this computer's Host MCP bridge. */
+  takeMcpToolResult?: import('@cindy/maker-core').TakeMcpToolResult;
 }
 
 export interface StartRemoteAgentDeps {
@@ -914,6 +921,9 @@ async function prepareAndStartRemoteAgentSession(
               linkState = unfinished ? 'closed' : 'released';
               idleReclaimedByHost = !unfinished;
               if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
+              // Reclaim is a live idle observation. The host stops its state
+              // timer before closing, so its last snapshot may still be busy.
+              else controller?.onState({ turnRunning: false, preparing: false });
             }
             if (releasing === pendingRelease) releasing = null;
             finishRelease();
@@ -925,6 +935,7 @@ async function prepareAndStartRemoteAgentSession(
           relay?.reset();
           linkState = 'released';
           idleReclaimedByHost = !restart;
+          if (!restart) controller.onState({ turnRunning: false, preparing: false });
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.
@@ -1398,8 +1409,16 @@ async function prepareAndStartRemoteAgentSession(
         recordApproval: (action) => executor.recordApproval(action),
         cancelPendingConfirmations: () => executor.cancelPendingConfirmations(),
         onInvalidResumeSession: opts.onInvalidResumeSession,
-        // 插件引擎的工具卡片标题由它自己的 Agent 给出，Cindy 不猜测改名。
-        mapEvent: pluginEngine ? undefined : deps.mapEvent?.(builtinKind),
+        // 插件引擎的工具卡片标题由它自己的 Agent 给出，Cindy 不猜测改名；但引擎若省略了 MCP
+        // `tool_call_update` 的输出正文，从本机 MCP 桥回填 `tool_result_full`（如 PR 卡片令牌）。
+        mapEvent: pluginEngine
+          ? (mcp.takeMcpToolResult
+              ? createAcpMcpResultBackfiller({
+                  takeMcpToolResult: mcp.takeMcpToolResult,
+                  serverNames: [...mcp.servers.keys()],
+                })
+              : undefined)
+          : deps.mapEvent?.(builtinKind),
         newId: deps.newId,
         ...(deps.groupSwitch?.takeNewRound ? { takeGroupNewRound: deps.groupSwitch.takeNewRound } : {}),
         onPermissionMode: (mode) => {

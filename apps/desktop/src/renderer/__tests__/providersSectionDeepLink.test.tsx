@@ -221,9 +221,13 @@ beforeEach(() => {
     }),
   ];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    providerGroup: {
+      command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
-        providerId, configured: false, strategy: 'least', accounts: [],
+        providerId, configured: false, strategy: 'expiring', accounts: [],
       })),
       onChanged: vi.fn(() => () => undefined),
     },
@@ -263,7 +267,7 @@ describe('ProvidersSection — 深链定位', () => {
       agents: kind === 'openai' ? ['codex'] : ['claude-code'],
     })];
     const pool: SubscriptionPoolView = {
-      providerId: kind, configured: true, strategy: 'least',
+      providerId: kind, configured: true, strategy: 'expiring',
       accounts: [{ id: 'default', identity: 'member@example.test', status: 'ready',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }],
     };
@@ -288,7 +292,7 @@ describe('ProvidersSection — 深链定位', () => {
     providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai', agents: ['codex'],
       auth: { method: 'oauth', native: 'codex' } })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    let pool: SubscriptionPoolView = { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+    let pool: SubscriptionPoolView = { providerId: 'openai', configured: true, strategy: 'expiring', accounts: [] };
     command.mockImplementation(async input => {
       if (input.action === 'add') {
         pool = { ...pool, accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'ready',
@@ -307,7 +311,7 @@ describe('ProvidersSection — 深链定位', () => {
   it('lets the user choose the login row when several saved accounts have no default', async () => {
     providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai' })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'expiring',
       accounts: ['first', 'second'].map(id => ({ id, identity: id, status: 'signed-out',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/' + id })) });
     renderAt('?tab=providers&connect=openai');
@@ -332,7 +336,7 @@ describe('ProvidersSection — 深链定位', () => {
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
     command.mockImplementation(async (input) => {
       if (input.action === 'login') throw new Error(`[${code}] synthetic sign-in result`);
-      return { providerId: 'openai', configured: true, strategy: 'least',
+      return { providerId: 'openai', configured: true, strategy: 'expiring',
         accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'signed-out',
           paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] };
     });
@@ -354,7 +358,7 @@ describe('ProvidersSection — 深链定位', () => {
   it('offers a re-read, not sign-in, when the pool accounts cannot be read', async () => {
     providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'expiring',
       accounts: [{ id: 'default', identity: 'member@example.test', status: 'unavailable',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] });
     renderAt('?tab=providers&connect=openai');
@@ -463,7 +467,7 @@ describe('ProvidersSection — 深链定位', () => {
       // Each row owns its quota, including the CLI-origin account. A successful empty pool
       // must never display an unrelated provider-wide card.
       vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-        providerId: 'openai', configured: true, strategy: 'least', accounts: [{
+        providerId: 'openai', configured: true, strategy: 'expiring', accounts: [{
           id: 'default', directory: 'fixture', status: 'ready', paused: false,
           limit: 1, weight: 1, running: 0, identity: 'first@example.test',
           usage: { codex: { credits: null, buckets: { codex: {
@@ -517,17 +521,33 @@ describe('ProvidersSection — 深链定位', () => {
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
     ).toEqual([
-      'settings.providers.pill.rename',
+      'settings.providers.menu.appearance',
       'settings.providers.menu.hideProvider',
       'settings.providers.menu.disableProvider',
       'settings.providers.custom.deleteAria',
     ]);
-    fireEvent.click(within(menu).getByText('settings.providers.pill.rename'));
+    fireEvent.click(within(menu).getByText('settings.providers.menu.appearance'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Personal' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'settings.providers.menu.connectionIcon.personal' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      { providerId: 'openai-work', action: 'rename', name: 'Work account', dataOwnerId: 'owner', ownerGeneration: 1 },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Personal', icon: 'personal' }),
     ));
     expect(updateCustomProvider).not.toHaveBeenCalled();
     expect(customDialogSpy).not.toHaveBeenCalled();
+  });
+
+  // Unit: selecting a mark in Settings must target just that saved connection.
+  it('sets the selected connection icon from its detail menu', async () => {
+    providersState.providers = [makeProvider('glm-team', { source: 'user', name: 'GLM', connected: true })];
+    renderAt('?tab=providers&connect=glm-team');
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.appearance' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Magpie' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(window.electronAPI.maker.setProviderPresentation).not.toHaveBeenCalled();
   });
 
   it('renames an account when its sidebar row is double-clicked', async () => {
@@ -545,17 +565,11 @@ describe('ProvidersSection — 深链定位', () => {
 
     fireEvent.doubleClick(await screen.findByRole('button', { name: /Work account/ }));
 
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'settings.providers.pill.rename' }),
-    ));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Desk' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      {
-        providerId: 'openai-work',
-        action: 'rename',
-        name: 'Work account',
-        dataOwnerId: 'owner',
-        ownerGeneration: 1,
-      },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Desk' }),
     ));
   });
 
@@ -826,7 +840,7 @@ describe('ProvidersSection — 深链定位', () => {
   ])('invalidated default OpenAI auth only allows models when another pooled account is usable ($configured/$usable)', async ({ configured, usable }) => {
     codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-      providerId: 'openai', configured, strategy: 'least',
+      providerId: 'openai', configured, strategy: 'expiring',
       accounts: usable ? [{ id: 'second', paused: false, limit: 4, weight: 1,
         directory: '/fixture/.codex-second', status: 'ready', running: 0 }] : [],
     });
@@ -1150,6 +1164,10 @@ describe('ProvidersSection — 深链定位', () => {
       }),
     ];
     (window as unknown as { electronAPI: unknown }).electronAPI = {
+      providerGroup: {
+        command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+        onChanged: vi.fn(() => () => undefined),
+      },
       maker: {
         listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
@@ -1284,7 +1302,7 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
     await act(async () => {
       answer({
         anthropic: {
-          strategy: 'least',
+          strategy: 'expiring',
           autoSwitch: true,
           members: [
             { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },

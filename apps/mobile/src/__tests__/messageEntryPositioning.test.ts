@@ -162,6 +162,7 @@ it('reconciles late attachment, composer and keyboard measurements through the p
     });
     const bindings = {
       scrollMetricsRef: metrics, nearBottomRef: nearBottom, readingOlderRef: readingOlder,
+      isDraggingRef: ref(false),
       historyPrependTransactionRef: ref(null),
       // Companion receipt behavior is covered by the mounted MessageRenderer tests.
       acknowledgeCompanionReadRef: ref(vi.fn()),

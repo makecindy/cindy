@@ -15,6 +15,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer } from '@cindy/device-link';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 
 import {
   applyPendingAgentSwitchIfIdle,
@@ -77,6 +78,143 @@ function makeDeps(row: AgentSwitchSessionRow, overrides: Partial<MakerSessionAge
 }
 
 describe('switching a task onto a plugin engine', () => {
+  // #12397: a finished, separate automation task keeps its conversation and
+  // hands it to the selected plugin on the next manual send. Unit, same harness.
+  it.each([false, true])('applies a local plugin selection on next send from a completed automation (remote=%s)', async (remote) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => true),
+    });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      localWindowRequest: true,
+    });
+
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    const send = () => applyPendingAgentSwitchIfIdle(deps, 's1');
+    await (remote ? runDeviceLinkInvokeContext({ controllerDeviceId: 'my-device', channel: 'maker:send' }, send) : send());
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('DeepSeek Harness'), undefined);
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // #12397: deleting a schedule can remove the run while keeping its task.
+  it('can return a kept automation task to a builtin after its run is gone', async () => {
+    const { deps } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', localWindowRequest: true,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cc', providerId: null, model: 'claude-fable-5',
+    }));
+  });
+
+  // #12397: at the production pre-send entry, a stale builtin route must
+  // reject the send and retain the choice. The success case above cannot
+  // detect fallback to the old plugin. Unit input: disable the selected
+  // provider after staging a switch from a completed automation's plugin.
+  it('blocks a manual automation send when the selected builtin route becomes unavailable', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', providerId: 'xd',
+      localWindowRequest: true,
+    });
+    const routeError = new Error('Selected provider is disabled');
+    vi.mocked(deps.assertModelRouteUsable!).mockRejectedValueOnce(routeError);
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toBe(routeError);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'claude-code', providerId: 'xd' });
+  });
+
+  it('lets a newly bound automation send without consuming a pending manual plugin choice', async () => {
+    const canSwitchCompletedAutomationSession = vi.fn(async () => true);
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession,
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
+      localWindowRequest: true,
+    });
+    canSwitchCompletedAutomationSession.mockResolvedValue(false);
+
+    // The scheduler uses the saved route. The next manual send still gets a
+    // refusal instead of quietly sending through the previous engine.
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true })).resolves.toBeUndefined();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
+  });
+
+  // #12397: a persistent automation that uses its task's model should
+  // continue applying any staged builtin-to-builtin choice on its next send.
+  it('applies a builtin engine choice on the next scheduled send from a bound task', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => false),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', localWindowRequest: true,
+    });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4',
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  it.each([false, true])('requires a trusted window choice for an automation switch (applyNow=%s)', async (applyNow) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => true),
+    });
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, applyNow,
+    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
+  // #13003: scheduledModelScope temporarily switches a standalone scheduler-created
+  // task (e.g. a PR opened inside an Antigravity automation run) to an explicit PR
+  // follow-up model and restores its original plugin engine before the next send.
+  it('allows main-internal scheduledModelSwitch to switch and restore a scheduler-created plugin task', async () => {
+    const schedulerRow = makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null });
+    const { deps } = makeDeps(schedulerRow);
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+    }));
+
+    Object.assign(schedulerRow, { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', sdkSessionId: 'sdk-codex' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
+    }));
+
+    // Staging or non-configStaged calls cannot misuse scheduledModelSwitch.
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: false, configStaged: true, scheduledModelSwitch: true,
+    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+  });
+
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
     const { deps, pendingSwitches } = makeDeps(makeRow());
     const staged = await performSessionAgentSwitch(deps, {

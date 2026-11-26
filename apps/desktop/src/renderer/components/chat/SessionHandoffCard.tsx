@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { shortSessionId } from '@/lib/sessionId';
+import { Badge } from '@/components/ui/badge';
 import {
   useSessionNavigationIntent,
   useSessionNavigationMode,
@@ -125,16 +126,18 @@ export function SessionHandoffCard({
           <span className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--msg-tool-card-text)]">
             {displayTitle}
           </span>
-          <span
-            className={cn(
-              'shrink-0 rounded-full px-2 py-0.5 text-10 font-medium uppercase leading-4 tracking-[0.4px]',
+          {/* Shape and size from Badge; the colours stay on the send button's slots, which some
+              themes tint differently from the CTA accent. */}
+          <Badge size="xs"
+            tone={solidBadge ? 'neutral' : 'outline'}
+            className={
               solidBadge
                 ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]'
-                : 'border border-[var(--send-btn-bg)] bg-[var(--cmd-palette-bg)] text-[var(--send-btn-bg)]',
-            )}
+                : 'border-[var(--send-btn-bg)] bg-[var(--cmd-palette-bg)] text-[var(--send-btn-bg)]'
+            }
           >
             {badgeLabel}
-          </span>
+          </Badge>
         </span>
 
         <span className="flex min-w-0 items-center gap-1.5">

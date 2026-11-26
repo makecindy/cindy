@@ -68,7 +68,7 @@ describe('decodeRemoteErrorMessage', () => {
       'Control for this device is off; the message was not sent.',
     );
     expect(decodeRemoteErrorMessage('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] upload failed')).toBe(
-      'Attachment transfer failed; the message was not sent. Please try again.',
+      'Attachment transfer failed; the message was not sent. Try again.',
     );
   });
 

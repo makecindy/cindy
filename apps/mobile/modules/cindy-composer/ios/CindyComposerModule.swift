@@ -26,6 +26,7 @@ public class CindyComposerModule: Module {
       AsyncFunction("setDocument") { (view: CindyComposerView, value: [String: Any], offset: Int, focus: Bool) in
         guard view.apply(value) else { return }
         view.editor.selectedRange = NSRange(location: min(max(0, offset), view.editor.attributedText.length), length: 0)
+        view.revealCaret()
         if focus { view.editor.becomeFirstResponder() }
         view.emitSelection()
       }
@@ -136,6 +137,8 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   // focus() starts editing again with a keyboard; JS keeps the composer open.
   private var focusHeldForPresentation = false
   private var releasingForPresentation = false
+  // JS 写入的转写(未聚焦、系统不会自动滚)要跟住插入点;用户拖动或开始编辑后交还给系统。
+  private var followsCaret = false
   private var lastHeight: CGFloat = 0
   private var lastScrollEdge: (top: Bool, bottom: Bool)?
   private var deferred: [String: Any]?
@@ -207,6 +210,8 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     editor.frame = bounds
     placeholder.frame = CGRect(x: 0, y: 3, width: bounds.width, height: textFont.lineHeight)
     measure()
+    // 输入框随内容长高时 bounds 晚于文字到位,长高后再对齐一次插入点。
+    if followsCaret { scrollCaretVisible() }
   }
   func updateStyle() {
     guard editor.markedTextRange == nil else { return }
@@ -265,10 +270,15 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
     let wasEmpty = editor.attributedText.length == 0
     editor.attributedText = next
     editor.typingAttributes = typingStyle
-    editor.selectedRange = wasEmpty ? NSRange(location: next.length, length: 0) : NSRange(location: min(range.location, next.length), length: min(range.length, max(0, next.length - range.location)))
+    if let caret = value["caret"] as? Int {
+      editor.selectedRange = NSRange(location: min(max(0, caret), next.length), length: 0)
+    } else {
+      editor.selectedRange = wasEmpty ? NSRange(location: next.length, length: 0) : NSRange(location: min(range.location, next.length), length: min(range.length, max(0, next.length - range.location)))
+    }
     applying = false
     emitSelection()
     measure()
+    if value["caret"] is Int { revealCaret() }
     return true
   }
   func resolveLink(_ href: String, semantic: [String: Any]) {
@@ -348,7 +358,21 @@ final class CindyComposerView: ExpoView, UITextViewDelegate {
   }
   func textViewDidBeginEditing(_ textView: UITextView) {
     focusHeldForPresentation = false
+    followsCaret = false
     onFocusChange(["focused": true])
+  }
+  func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { followsCaret = false }
+  func revealCaret() {
+    followsCaret = true
+    scrollCaretVisible()
+  }
+  private func scrollCaretVisible() {
+    guard let end = editor.selectedTextRange?.end else { return }
+    editor.layoutIfNeeded()
+    var rect = editor.caretRect(for: end)
+    guard !rect.isNull, !rect.isInfinite else { return }
+    rect.size.height += editor.textContainerInset.bottom
+    editor.scrollRectToVisible(rect, animated: false)
   }
   func textViewDidEndEditing(_ textView: UITextView) {
     // The quiet release keeps JS focused until the user or focus()/blur() decides.

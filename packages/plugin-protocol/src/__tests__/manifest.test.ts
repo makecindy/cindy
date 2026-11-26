@@ -1660,6 +1660,68 @@ describe('Ghost manifest contract', () => {
       reason: expect.stringContaining('与 node.secretBindings'),
     });
 
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      manifest: { network: { connections: [expect.objectContaining({ key: 'gitlab_conn', source: 'glab-cli' })] } },
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'X-Custom', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        setup: { requires: [{ anyOf: ['connection:gitlab_conn'] }] },
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+
     for (const invalidBinding of [
       { ...binding, key: 'Bad-Key' },
       { ...binding, label: '' },
@@ -2375,6 +2437,7 @@ describe('interactive page declarations', () => {
     { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'workdir.menu', kind: 'status' }] },
   ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
     const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
       commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
@@ -2387,7 +2450,7 @@ describe('interactive page declarations', () => {
     expect(projected).toMatchObject(legacy);
     expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
   });
-  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar', 'workdir.menu'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
       const entry = { id: 'extension', title: 'Extension', position,

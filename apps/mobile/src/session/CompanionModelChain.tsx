@@ -1,10 +1,10 @@
-import { serializeModelRoutes, normalizeCompanionModelRoute, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
+import { normalizeCompanionModelRoute, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 import { findCatalogModel } from '@cindy/model-providers';
 import { buildMobileModelSections } from './providerModelSections';
 import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
 import { iconSize, lineHeight } from '@/theme';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { ChevronRight, MinusCircle, Plus, ArrowUp } from 'lucide-react-native';
+import { ChevronRight, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { useDeviceProviders } from '@/device-link/useDeviceProviders';
@@ -42,7 +42,8 @@ export function readCompanionModelChain(value: unknown): CompanionModelRoute[] {
     return normalized.every((row): row is CompanionModelRoute => row !== null) ? normalized : [];
   } catch { return []; }
 }
-export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, single = false, modelGroups }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; single?: boolean; modelGroups?: CompanionModelGroup[] }) {
+// 伙伴只用一个模型(2026-11-26 用户裁决取消备用，想自动换来源就选智能路由)：默认只编辑这一个。旧版电脑存着的备用项原样带回，不在这里列出。
+export function CompanionModelChain({ deviceId, values, onChange, onPick, disabled, modelGroups }: { deviceId: string; values: ProfileValues; onChange(values: ProfileValues): void; onPick(index: number): void; disabled: boolean; modelGroups?: CompanionModelGroup[] }) {
   const { t } = useTranslation(); const { colors } = useTheme();
   const catalog = useDeviceProviders(deviceId);
   const maker = useMobileMakerTransport(deviceId);
@@ -53,8 +54,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
   const routeCatalogs = useRemoteAgentCatalogs({ enabled: chain.some(route => !!route.agentDeviceId),
     controlledDeviceId: deviceId, keepDeviceIds: chain.flatMap(route => route.agentDeviceId ? [route.agentDeviceId] : []), keepOnly: true });
   const following = values.followsDefault === true;
-  const update = (chain: CompanionModelRoute[]) => onChange({ ...values, modelChain: serializeModelRoutes(chain) });
-  const routeRow = (route: CompanionModelRoute, index: number) => {
+  const routeRow = (route: CompanionModelRoute) => {
     const remote = route.agentDeviceId ? routeCatalogs.find(item => item.deviceId === route.agentDeviceId) : undefined;
     const group = route.modelGroup ? modelGroups?.find(item => item.id === route.modelGroup) : undefined;
     const effort = route.effort ? t(`models.options.effortLevels.${route.effort}`, { defaultValue: route.effort }) : '';
@@ -67,7 +67,7 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
       const engine = !route.agentDeviceId ? findPluginEngine(pluginEngines.engines, route.providerId) : null;
       title = pluginEngineModelName(engine, route.model)
         ?? (route.model === PLUGIN_ENGINE_DEFAULT_MODEL ? t('models.pluginEngines.defaultModel') : route.model);
-      detail = [engine?.name ?? t('models.pluginEngines.sectionTitle'), remote?.name, effort].filter(Boolean).join(' · ');
+      detail = [engine?.name ?? t('models.pluginEngines.genericName'), remote?.name, effort].filter(Boolean).join(' · ');
     } else {
       const agent = route.harness === 'claude' ? 'claude-code' : route.harness;
       const routeProviders = route.agentDeviceId ? remote?.providers ?? [] : providers;
@@ -81,32 +81,20 @@ export function CompanionModelChain({ deviceId, values, onChange, onPick, disabl
         effort, route.fastMode ? t(route.fastMode === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : '']
         .filter(Boolean).join(' · ');
     }
-    const key = group ? `group:${group.id}:${index}` : JSON.stringify([route.agentDeviceId, route.harness, route.providerId, route.model]);
-    return <View key={key} style={styles.row}>
-      <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(index)} style={[styles.row, { flex: 1 }]}>
-        <Text style={{ ...styles.value, color: colors.textSecondary }}>{index + 1}</Text>
+    return <View style={styles.row}>
+      <Pressable accessibilityRole="button" disabled={disabled || following} onPress={() => onPick(0)} style={[styles.row, { flex: 1 }]}>
         <View style={{ flex: 1 }}>
           <Text style={{ ...styles.title, color: colors.textPrimary }}>{title}</Text>
           <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{detail}</Text>
         </View>
         <ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
       </Pressable>
-      {/* Desktop BotModelChainEditor: the first model stays primary (change it with the picker);
-          backups reorder among themselves and can be removed. */}
-      {!following && index > 1 ? <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.moveModelUp')} disabled={disabled} style={styles.hit} onPress={() => { const next = [...chain]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(next); }}><ArrowUp size={iconSize.lg} color={colors.textSecondary} /></Pressable> : null}
-      {!following && index > 0 ? <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.removeModel')} disabled={disabled} style={styles.hit} onPress={() => update(chain.filter((_, i) => index !== i))}><MinusCircle size={iconSize.lg} color={colors.textSecondary} /></Pressable> : null}
     </View>;
   };
-  const addRow = !following && chain.length < (single ? 1 : 5) ? <Pressable accessibilityRole="button" disabled={disabled} style={styles.row} onPress={() => onPick(chain.length)}><Plus size={iconSize.action} color={colors.textPrimary} /><Text style={{ ...styles.title, color: colors.textPrimary }}>{t('devices.companionProfile.addModel')}</Text></Pressable> : null;
+  const addRow = !following ? <Pressable accessibilityRole="button" disabled={disabled} style={styles.row} onPress={() => onPick(0)}><Plus size={iconSize.action} color={colors.textPrimary} /><Text style={{ ...styles.title, color: colors.textPrimary }}>{t('devices.companionProfile.addModel')}</Text></Pressable> : null;
   return <View style={{ gap: spacing.sm }}>
     <View style={styles.row}><Text style={{ ...styles.title, color: colors.textPrimary, flex: 1 }}>{t('devices.companionProfile.modelFollowsDefault')}</Text><NativeSwitch accessibilityLabel={t('devices.companionProfile.modelFollowsDefault')} value={following} disabled={disabled} onValueChange={value => onChange({ ...values, followsDefault: value })} seedColor={colors.inputCaret} /></View>
-    {chain.length ? routeRow(chain[0], 0) : addRow}
-    {chain.length && !single ? <>
-      <View style={styles.row} testID="companionModels.backups">
-        <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, flex: 1 }}>{t('devices.companionProfile.backupModels', { count: chain.length - 1 })}</Text>
-      </View>
-      {chain.slice(1).map((route, offset) => routeRow(route, offset + 1))}{addRow}
-    </> : null}
+    {chain.length ? routeRow(chain[0]) : addRow}
   </View>;
 }
 export function CompanionModelPicker({ visible, deviceId, route, onClose, onClosed, onSelect, modelGroups }: {
@@ -170,7 +158,6 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
     }}
     onSelectFlatModel={() => {}} onSelectProviderRow={() => {}} permissionOptions={[]} activePermissionMode="ask" onSelectPermissionMode={() => {}} hidePermissionTrigger keyboardAvoidingBehavior="padding" />;
 }
-// §3 roles: row titles / options 16/22 medium, the ordinal beside them 16/22 regular secondary.
-const styles = StyleSheet.create({ row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 }, hit: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: typeScales.body, lineHeight: lineHeights.body, fontWeight: fontWeight.medium },
-  value: { fontSize: typeScales.body, lineHeight: lineHeights.body, fontWeight: fontWeight.regular } });
+// §3 roles: row titles / options 16/22 medium.
+const styles = StyleSheet.create({ row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  title: { fontSize: typeScales.body, lineHeight: lineHeights.body, fontWeight: fontWeight.medium } });

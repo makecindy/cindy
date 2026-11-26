@@ -57,6 +57,7 @@ import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
+import { CompanionXAssignment } from './CompanionXAssignment';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
   HOOK_BIND_REASON_APP_CHANGED,
@@ -80,7 +81,6 @@ import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsTarget } from './settingsTarget';
 import {
   TelegramBehaviorSettings,
-  TelegramGroupActivationSettings,
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
@@ -1110,22 +1110,25 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
    * 子树 remount)。动作按钮完全由 binding.actions 数据驱动 —— X 的 actions
    * 里没有 add_to_group, 加群按钮自然不渲染。
    */
-  const changeXCompanion = async () => {
+  const setXCompanion = async (botId: string | null, expectedBotId: string | null) => {
+    const requestedAtRevision = ++viewRevisionRef.current;
+    const result = await hookControl.setXCompanion(botId, expectedBotId);
+    if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+  };
+  /** Settings → IM bots: releases the account from the teammate it is assigned to. */
+  const removeXCompanion = async () => {
     if (companionPending) return;
     const previous = hookRef.current?.x.companionBotId ?? null;
-    if (!companion && !previous) return;
-    const removing = !companion || previous === companion.id;
+    if (!previous) return;
     setCompanionPending(true);
     try {
       const ok = await confirm({
-        title: t(`bots.channels.officialX.${removing ? 'removeTitle' : 'bindTitle'}`, { name: companion?.name }),
-        description: t(`bots.channels.officialX.${removing ? 'removeBody' : 'bindBody'}`, { name: companion?.name }),
-        confirmText: t(`bots.channels.officialX.${removing ? 'remove' : 'bind'}`),
+        title: t('bots.channels.officialX.removeTitle', { name: undefined }),
+        description: t('bots.channels.officialX.removeBody', { name: undefined }),
+        confirmText: t('bots.channels.officialX.remove'),
       });
       if (!ok) return;
-      const requestedAtRevision = ++viewRevisionRef.current;
-      const result = await hookControl.setXCompanion(removing ? null : companion!.id, previous);
-      if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+      await setXCompanion(null, previous);
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     } finally {
@@ -1482,20 +1485,15 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
             <XUsageGuide companion={!!view.companionBotId} />
             {companion ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.bound'
-                    : view.companionBotId ? 'bots.channels.officialX.boundElsewhere' : 'bots.channels.officialX.unbound', { name: companion.name })}
-                </p>
-                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
-                </Button>
+                <CompanionXAssignment companion={companion} companionBotId={view.companionBotId ?? null}
+                  settingId={imBotSettings.cindy.id}
+                  assign={(assign, expectedBotId) => setXCompanion(assign ? companion.id : null, expectedBotId)} />
               </div>
             ) : view.companionBotId ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                 <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
                 <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
+                  onClick={() => void removeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
               </div>
             ) : null}
           </> : null}
@@ -1507,10 +1505,6 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
               <TelegramBehaviorSettings
-                source="official"
-                bindingId={cs.binding?.bindingId ?? undefined}
-              />
-              <TelegramGroupActivationSettings
                 source="official"
                 bindingId={cs.binding?.bindingId ?? undefined}
               />
@@ -1741,7 +1735,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
                     type="button"
                     onClick={() => void handleRemoveBinding(b)}
                     aria-label={t('settings.remoteControl.hook.multi.removeAria')}
-                    className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                    className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                   >
                     <Trash2 size={13} />
                   </button>

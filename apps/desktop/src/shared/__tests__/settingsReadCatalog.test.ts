@@ -42,9 +42,9 @@ describe('settings read catalog independent coverage anchors', () => {
     }
     expectIds(SUBAGENT_MODEL_CARD_KEYS.map(key => `subagentModel.${key}`));
   });
-  it('classifies all 30 shortcuts including hidden and platform-only definitions', () => {
+  it('classifies all 31 shortcuts including hidden and platform-only definitions', () => {
     expect([...SETTINGS_READ_SHORTCUT_IDS].sort()).toEqual(APP_SHORTCUT_DEFINITIONS.map(def => def.id).sort());
-    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(30);
+    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(31);
     for (const shortcut of APP_SHORTCUT_DEFINITIONS) {
       const field = SETTINGS_READ_CATALOG[`shortcuts.${shortcut.id}`];
       expect(field.platforms).toEqual(shortcut.platforms ?? ['darwin', 'win32', 'linux']);

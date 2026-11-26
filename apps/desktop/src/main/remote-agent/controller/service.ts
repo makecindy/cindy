@@ -1,3 +1,4 @@
+import { acceptSharedTurnValue } from '../sharedTurnValue.js';
 import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabilityStatus } from '../../device-link/providerShareAvailability.js';
 /**
  * 远程 Agent 的控制端接线：Maker 遇到「Agent 在另一台电脑上运行」的任务时调用这里。
@@ -41,7 +42,7 @@ import { createLogger } from '../../logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { findReceivedShare, findReceivedShareForExecution, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
-import { getRemoteLinkCloseEpoch, onRemoteLinkClosed } from '../../device-link/index.js';
+import { getRemoteLinkCloseEpoch, isPeerDeliveringBusinessTraffic, onRemoteLinkClosed } from '../../device-link/index.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -218,7 +219,12 @@ export function remoteAgentPollerFor(
   }
   let poller = byDevice.get(deviceId);
   if (!poller) {
-    poller = new RemoteAgentPoller(remoteAgentInvoker(deviceId, remoteInvoke), log);
+    poller = new RemoteAgentPoller(
+      remoteAgentInvoker(deviceId, remoteInvoke),
+      log,
+      Date.now,
+      () => isPeerDeliveringBusinessTraffic(deviceId),
+    );
     byDevice.set(deviceId, poller);
   }
   return poller;
@@ -785,11 +791,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           vendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
+          ...(input.agentKind === 'acp' ? { recordMcpToolResults: true } : {}),
         });
         return {
           servers: mcpTargets(extra),
           dispose: () => extra?.disposeSessionCtx?.(),
           closeSessionInstance: () => extra?.closeSessionInstance?.(),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
         };
       },
       capture: ({ kind, opts: startOpts }): ExecutorCaptureHooks | undefined => {
@@ -837,7 +845,16 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       collectImports: (imports) => collectInstructionImports(imports, collect),
       isGitRepo,
       ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
-      mapEvent: deps.mapEvent ?? remoteAgentEventMapper,
+      mapEvent: kind => {
+        const map = (deps.mapEvent ?? remoteAgentEventMapper)(kind);
+        if (kind !== 'codex' || !sessionId || !initialShareId || initialAccessEpoch === undefined) return map;
+        return event => {
+          const mapped = map?.(event) ?? event;
+          return mapped.type === 'done' && activeOwnerScopeKey() === ownerScope && !isAppSessionBoundaryPending()
+            && providerShareAccessEpoch(initialShareId) === initialAccessEpoch
+            ? acceptSharedTurnValue(mapped, sessionId, input.deviceId) : mapped;
+        };
+      },
       newId: randomUUID,
       log: {
         debug: (message, fields) => startupLog.debug(message, fields),

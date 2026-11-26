@@ -6,7 +6,9 @@ import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placem
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
+import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readSessionQuota } from './sessionQuota.js';
 import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -24,7 +26,7 @@ import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js'
 import { createStorageToolExecutor } from '../cindy-brain/storageToolAccess.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
-import { findGhostForInstanceId } from '../cindy-brain/index.js';
+import { findGhostForInstanceId, ghostEventSourceCandidates } from '../cindy-brain/index.js';
 import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
@@ -67,6 +69,7 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
+import { previewWorkspaceMove, requestWorkspaceMove, workspaceMoveStatus, cancelWorkspaceMove } from '../workspace-migration/service.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
@@ -158,6 +161,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
+import { createSharedTaskDelivery } from './sharedTaskDelivery.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -176,7 +180,7 @@ import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
-import { botSessionLinks, sessions } from '../localDb/schema.js';
+import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsPatcher, createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
@@ -634,6 +638,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 仅 description 生成模式需要,tool-call 时才解引用。
       webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
       webhookReceiver: scheduleWebhookReceiver,
+      pluginEventSources: async () => ghostEventSourceCandidates(),
       webhookManagement: {
         list: async () => {
           const host = getScheduleWebhookHost();
@@ -697,7 +702,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
       listModels: wrap(async (s, params) => {
         const result = await s.listAvailableModels(params);
-        if (!result.ok || params.agentDeviceId) return result;
+        if (!result.ok) return result;
+        if (params.agentDeviceId) {
+          if (params.agent || isDisallowedPluginEngineDeviceId(params.agentDeviceId)) return result;
+          const remoteEngines = await readRemotePluginEngines(params.agentDeviceId).catch(() => []);
+          const pluginEngines = pluginEngineDescriptors(remoteEngines);
+          return pluginEngines.length > 0 ? { ...result, pluginEngines } : result;
+        }
         const modelGroups = readModelGroupsConfig().routes.map((route) => ({
           id: route.id,
           name: route.name,
@@ -1276,6 +1287,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
           }
         : {}),
+      sendToSharedTask: createSharedTaskDelivery({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote, assertActionCurrent: assertTaskActionCurrent }),
       sendToSession: async ({
         device,
         targetSessionId,
@@ -1446,6 +1458,50 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
+      },
+      workspaceMigration: {
+        run: (request, signal) => withAccountDataAccess(request.callerSessionId, async assertAccess => {
+          const db = getDbClient();
+          const owner = activeOwnerScopeKey();
+          const root = ownerScopedUserDataPath();
+          const actionGuard = captureTaskActionSyncGuard();
+          let assertGroupCurrent: (() => void) | undefined;
+          const assertCurrent = () => {
+            signal?.throwIfAborted();
+            actionGuard?.();
+            assertGroupCurrent?.();
+            const lane = readChannelToolScope({ sessionId: request.callerSessionId, sessionInstanceId: request.callerSessionInstanceId });
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || db !== tryGetDbClient()
+              || isSessionSharedTaskActive(request.callerSessionId) || (lane && !lane.requesterIsOwner)
+              || !deps.isCurrentLocalSessionInstance?.(request.callerSessionId, request.callerSessionInstanceId)) {
+              throw new Error('WORKSPACE_MIGRATION_CALLER_CHANGED_OR_RESTRICTED');
+            }
+          };
+          assertCurrent();
+          const [profile] = await db.drizzle.select({ status: botProfiles.status }).from(botProfiles)
+            .where(eq(botProfiles.id, request.teammateId)).limit(1);
+          if (!profile || profile.status === 'deleting') throw new Error('BUDDY_NOT_FOUND');
+          const [callerLink] = await db.drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, request.callerSessionId)).limit(1);
+          if (callerLink?.role === 'group') {
+            const group = await authorizeGroupTool(request.callerSessionId, callerLink.botId, 'owner-action');
+            assertGroupCurrent = group.assertCurrent;
+          }
+          if (request.action === 'preview' || request.action === 'request') {
+            const cloud = activeCompanionCloud();
+            if (cloud && (await cloud.homeChoices(request.teammateId)).mode !== 'local') throw new Error('BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
+          }
+          await assertAccess();
+          assertCurrent();
+          if (request.action === 'request' || request.action === 'cancel') await assertTaskActionCurrent();
+          if (request.action === 'request') return requestWorkspaceMove(root, request.teammateId, request.target!, assertCurrent, signal);
+          if (request.action === 'cancel') return cancelWorkspaceMove(root, request.teammateId, assertCurrent);
+          const result = request.action === 'preview'
+            ? await previewWorkspaceMove(root, request.teammateId, request.target!, signal)
+            : await workspaceMoveStatus(root, request.teammateId);
+          assertCurrent();
+          return result;
+        }),
       },
       botProfiles: {
         create: async ({ callerSessionId, callerSessionInstanceId, name, description, identitySource }) => {
