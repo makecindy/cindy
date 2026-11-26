@@ -155,12 +155,14 @@ function createSearchDb(): Database.Database {
       project_key TEXT PRIMARY KEY, alias TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
   `);
+  db.exec(readFileSync(resolve(__dirname, '../../../..', 'drizzle/0163_silly_deadpool.sql'), 'utf8'));
   return db;
 }
 
 function makeSearchDbClient(db: Database.Database): DbClient {
   return {
     drizzle: drizzle(db, { schema }),
+    query: async (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   } as unknown as DbClient;
 }
 
@@ -180,6 +182,28 @@ afterEach(() => {
   clearCurrentDbClient();
   vi.useRealTimers();
   mocks.searchChatHistoryHybrid.mockReset();
+});
+
+it('finds unsent annotation replies and quotes while excluding deleted and rewound responses', async () => {
+  const db = createSearchDb();
+  setCurrentDbClient(makeSearchDbClient(db), 'test-user');
+  mocks.searchChatHistoryHybrid.mockResolvedValue({ hits: [], sessions: {}, vectorUsed: false,
+    vectorSkipReason: null, nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false });
+  try {
+    for (const id of ['visible', 'deleted', 'rewound', 'cleared']) {
+      insertSearchSession(db, id, 100, 100);
+      db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', ?, 100)")
+        .run(id, `${id}-client`, id, JSON.stringify('original response'));
+      db.prepare('INSERT INTO message_annotations (id, session_id, message_id, ordinal, anchor_json, comment, created_at) VALUES (?, ?, ?, 1, ?, ?, 100)')
+        .run(id, id, id, JSON.stringify({ quote: 'unique-quote' }), 'unique-review');
+    }
+    db.exec("UPDATE sessions SET status = 'deleted' WHERE id = 'deleted'; UPDATE messages SET rewind_at = 101 WHERE id = 'rewound'");
+    db.exec("UPDATE sessions SET cleared_at = 100 WHERE id = 'cleared'");
+    for (const query of ['unique-review', 'unique-quote']) {
+      const result = await searchConversations({ query, limit: 20, semanticMode: 'keyword' });
+      expect(result.results.map(item => item.session.id)).toEqual(['visible']);
+    }
+  } finally { db.close(); }
 });
 
 // #7026 / #6916: the mobile cache only contains the first 200 tasks. The existing
@@ -323,6 +347,16 @@ describe('conversationSearch recent activity SQL filtering', () => {
           sessionActivityFromMs: now - 3 * day,
         }),
       );
+      // Old annotations in a recently active task use the task's activity window,
+      // just like old message content; an inactive task must still stay excluded.
+      for (const id of ['sent-recently', 'stale']) {
+        db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, 'assistant', 'response', 100)")
+          .run(id, `${id}-client`, id);
+        db.prepare('INSERT INTO message_annotations (id, session_id, message_id, ordinal, anchor_json, comment, created_at) VALUES (?, ?, ?, 1, ?, ?, 100)')
+          .run(id, id, id, JSON.stringify({ quote: 'quote' }), 'older-annotation-review');
+      }
+      const annotations = await searchConversations({ query: 'older-annotation-review', semanticMode: 'keyword', filters: { lastActivity: '3d' } });
+      expect(annotations.results.map(item => item.session.id)).toEqual(['sent-recently']);
     } finally {
       clearCurrentDbClient(client);
       db.close();

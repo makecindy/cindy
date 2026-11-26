@@ -1,5 +1,7 @@
 import type { ClaimedOversizedInput } from './contextOverflowRollover.js';
 import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
+import { sentMessageAnnotationSnapshots } from '../../shared/messageAnnotations.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
@@ -1508,6 +1510,38 @@ export class AgentInputCoordinator {
 
   constructor(private readonly deps: AgentInputCoordinatorDeps) {}
 
+  /** Live queue ownership is authoritative; snapshots rehydrate it after restart. */
+  async getQueuedMessageAnnotationIds(sessionId: string): Promise<ReadonlySet<string>> {
+    await this.ensureQueueRestored(sessionId);
+    if (!this.restoredQueueSessions.has(sessionId)) throwIpcError('PRECONDITION_FAILED', 'Input queue is not ready');
+    return this.queuedMessageAnnotationIds(sessionId);
+  }
+
+  private queuedMessageAnnotationIds(sessionId: string, exceptClientId?: string): Set<string> {
+    const state = this.states.get(sessionId);
+    if (!state) return new Set();
+    const items = [...state.pendingQueue, ...state.directSteeringItems,
+      state.activeTurn?.item, state.recovery?.kind === 'active-turn' ? state.recovery.item : null];
+    return new Set(items.flatMap(item => item && item.clientId !== exceptClientId
+      ? this.inputAnnotationIds(item) : []));
+  }
+
+  private inputAnnotationIds(item: AgentInputQueuedMessage): string[] {
+    if (!item.persistedContent.includes('cindy:message-annotations:v1')) return [];
+    let content: unknown = item.persistedContent;
+    try { content = JSON.parse(item.persistedContent); } catch { /* Legacy text-only queue row. */ }
+    return sentMessageAnnotationSnapshots(content).map(annotation => annotation.annotationId);
+  }
+
+  private assertMessageAnnotationsAvailable(sessionId: string, item: AgentInputQueuedMessage): void {
+    const annotations = this.inputAnnotationIds(item);
+    if (!annotations.length) return;
+    const reserved = this.queuedMessageAnnotationIds(sessionId, item.clientId);
+    if (annotations.some(id => reserved.has(id))) {
+      throwIpcError('ANNOTATION_ALREADY_QUEUED', 'Annotation belongs to another pending input');
+    }
+  }
+
   /**
    * 媒体回收器活引用取证(recycler.ts 的内存队列暂存区):序列化所有会话在
    * 内存中的排队/在途消息(pendingQueue + activeTurn 消息体 + recovery 项),
@@ -2320,6 +2354,7 @@ export class AgentInputCoordinator {
       opts?.onDuplicate?.();
       return this.getProjection(sessionId);
     }
+    this.assertMessageAnnotationsAvailable(sessionId, item);
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     if (opts?.manualUiSend && isManualUiOrigin(item.origin) && !item.autoResume && !item.originalSyntheticTrigger) {
       this.manualUiInputs.add(item);
@@ -2976,6 +3011,7 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
+    this.assertMessageAnnotationsAvailable(sessionId, item);
     const steerRequestToken = this.beginSteerRequest(sessionId, item.clientId);
     const finishSteerRequest = (result: boolean): boolean => {
       this.settleSteerRequest(sessionId, item.clientId, steerRequestToken);
@@ -4415,6 +4451,7 @@ export class AgentInputCoordinator {
     if (index < 0) return { projection: this.getProjection(sessionId), updated: false };
     const current = state.pendingQueue[index];
     const updated = updateQueuedMessageContent(current, next);
+    this.assertMessageAnnotationsAvailable(sessionId, updated);
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.edit', current);
     const authorizationContentChanged = updated.text !== current.text
       || updated.persistedContent !== current.persistedContent

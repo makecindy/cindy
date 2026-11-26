@@ -8981,7 +8981,8 @@
             "context": "Aktuelle Aufgabe und ausgewählten Text lesen",
             "draft": "Nachrichtenentwurf lesen und bearbeiten",
             "appearance": "Deklarierte Darstellungseinstellungen ändern",
-            "visibility": "Fenster und deklarierte Oberflächenbereiche ein- oder ausblenden"
+            "visibility": "Fenster und deklarierte Oberflächenbereiche ein- oder ausblenden",
+            "annotations": "Nachrichten kommentieren, Markierungen behalten und Antworten mitsenden"
           },
           "fields": {
             "uiFont": "Oberflächenschrift ändern",
@@ -16890,6 +16891,22 @@
       "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
       "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
       "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
+    },
+    "annotations": {
+      "queued": "Zum Senden eingereiht",
+      "add": "Anmerkung hinzufügen",
+      "title": "Anmerkung",
+      "open": "Anmerkung {{number}} öffnen",
+      "close": "Schließen",
+      "placeholder": "Auf diese Passage antworten…",
+      "pending": "Wird mit der nächsten Nachricht gesendet",
+      "sent": "Gesendet · im Verlauf gespeichert",
+      "save": "Anmerkung speichern",
+      "saving": "Wird gespeichert…",
+      "remove": "Löschen",
+      "saveFailed": "Speichern fehlgeschlagen. Die Antwort wurde möglicherweise geändert oder hat 99 Anmerkungen. Wähle den Text erneut und versuche es noch einmal.",
+      "ready": "{{count}} Anmerkungen werden gesendet. Du kannst ohne Nachrichtentext senden.",
+      "deliverySaveFailed": "Die Nachricht wurde gesendet, der Anmerkungsstatus konnte aber nicht gespeichert werden. Bitte vor dem erneuten Senden prüfen."
     }
   },
   "ccAgent": {
@@ -20559,6 +20576,7 @@
       "reviseHint": "Du möchtest Änderungen? Sag einfach in der Lernsitzung Bescheid"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Diese Anmerkung ist bereits zum Senden eingereiht. Warte auf den Versand oder entferne die Nachricht aus der Warteschlange.",
       "LEARN_BUSY": "Eine Lernaufgabe läuft bereits",
       "LEARN_INVALID_STATE": "Der Status des Vorschlags hat sich geändert. Aktualisiere die Ansicht und versuch es erneut.",
       "NOT_FOUND": "Die Lernaufgabe existiert nicht oder wurde bereits bereinigt",

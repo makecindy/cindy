@@ -231,6 +231,8 @@ import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../..
 import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSuggestions';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useMessageAnnotations, loadMessageAnnotations } from '@/lib/messageAnnotationStore';
+import { formatMessageAnnotationsForSend } from '../../../shared/messageAnnotations';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
 import {
@@ -3367,6 +3369,10 @@ export function ChatInput({
   // 目录级禁用同判(ghostWorkdirFilter):被禁用的意识胶囊不亮——渲染层
   // 绝不比发送层乐观;禁用变更会广播 ghosts:changed,清单引用变化时重滤。
   const installedGhosts = useInstalledGhosts(deviceLinkDeviceId === null);
+  const messageAnnotations = useMessageAnnotations(deviceLinkDeviceId ? null : sessionId);
+  const pendingMessageAnnotations = messageAnnotations.filter(annotation => annotation.sentAt === null && !annotation.queued);
+  const pendingMessageAnnotationsRef = useRef(pendingMessageAnnotations);
+  pendingMessageAnnotationsRef.current = pendingMessageAnnotations;
   const installedGhostsRef = useRef(installedGhosts);
   installedGhostsRef.current = installedGhosts;
   const trigger: TriggerState = editor ? detectTrigger(editor.state) : { kind: 'none' };
@@ -6093,7 +6099,9 @@ export function ChatInput({
         // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
-        const text = formatBrowserCommentsForSend(commentsForSend, editorText);
+        const annotationsForSend = sourceSessionId && !deviceLinkDeviceId && pendingMessageAnnotationsRef.current.length > 0
+          ? (await loadMessageAnnotations(sourceSessionId)).filter(annotation => annotation.sentAt === null && !annotation.queued) : [];
+        const text = formatMessageAnnotationsForSend(formatBrowserCommentsForSend(commentsForSend, editorText), annotationsForSend);
         if (!text && attachmentsForSend.length === 0) return;
 
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
@@ -6498,6 +6506,9 @@ export function ChatInput({
               )
             : () => {};
         const onDeferredAccepted = () => {
+          if (sourceSessionId && annotationsForSend.length) {
+            void loadMessageAnnotations(sourceSessionId).catch(() => {});
+          }
           if (optimisticallyClearRemoteComposer) {
             // 缺 workingDir 的第一次尝试会返回 false，并把远程 composer 恢复回来。
             // 补选目录后若真正受理，需要开启一轮新的失败恢复资格，再只清掉原草稿；
@@ -6643,6 +6654,10 @@ export function ChatInput({
         if (result === false) {
           restoreRemoteComposerAndRelease();
           return;
+        }
+        if (sourceSessionId && annotationsForSend.length) {
+          try { await loadMessageAnnotations(sourceSessionId); }
+          catch { toast.error(t('chat.annotations.deliverySaveFailed')); }
         }
         if (!sourceSessionId) clearSentComposer();
         releaseRemoteComposerTransition();
@@ -9340,7 +9355,7 @@ export function ChatInput({
 
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
-  const hasComposerPayload = hasMessage || hasPreparedOrPendingAttachments || browserComments.length > 0;
+  const hasComposerPayload = hasMessage || hasPreparedOrPendingAttachments || browserComments.length > 0 || pendingMessageAnnotations.length > 0;
   const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
   const recommendationComposerState = {
     enabled: recommendationEnabled,
@@ -9350,7 +9365,7 @@ export function ChatInput({
       !isRestoringRef.current,
     hasMessage,
     hasAttachments: hasPreparedOrPendingAttachments,
-    hasBrowserComments: browserComments.length > 0,
+    hasBrowserComments: browserComments.length > 0 || pendingMessageAnnotations.length > 0,
     hasVoiceDraftText,
     mutationLocked: composerMutationLocked || showStopButton,
   };
@@ -9830,6 +9845,9 @@ export function ChatInput({
             {/* Browser comment chip:页面评论收敛为一个「N 条注释」胶囊,
             hover 浮出逐条预览(截图缩略 + 目标标签 + 评论文字,可逐条删),
             X 清空全部。发送时序列化为 `# Browser comments:` 段 + 截图附件。 */}
+            {pendingMessageAnnotations.length > 0 && <div className="px-3 py-2 text-xs text-muted-foreground" role="status">
+              {t('chat.annotations.ready', { count: pendingMessageAnnotations.length })}
+            </div>}
             {browserComments.length > 0 && (
               <div className="pb-1.5">
                 <div className="group/bcomment relative inline-flex">

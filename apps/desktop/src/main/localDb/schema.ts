@@ -974,6 +974,20 @@ export const messages = sqliteTable(
   }),
 );
 
+export const messageAnnotations = sqliteTable('message_annotations', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  ordinal: integer('ordinal').notNull(),
+  anchorJson: text('anchor_json').notNull(),
+  comment: text('comment').notNull(),
+  createdAt: integer('created_at').notNull(),
+  sentAt: integer('sent_at'),
+}, t => ({
+  bySession: index('idx_message_annotations_session').on(t.sessionId),
+  byMessageOrdinal: uniqueIndex('uniq_message_annotations_ordinal').on(t.messageId, t.ordinal),
+}));
+
 export const mcpAppViewStates = sqliteTable('mcp_app_view_states', {
   messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
   sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),

@@ -1,4 +1,5 @@
 import { BotChatReplyTarget } from '@/features/bots/BotChatQuoteViews';
+import { annotationSourceVersion } from '../../../shared/messageAnnotations';
 import { BotStartedTasksFooter, type BotStartedTask } from './BotStartedTasks';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
@@ -292,6 +293,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     messageClientId ? getGhostCardEntry(messageClientId) : undefined,
   );
   const ghostRenderCard = renderCardEntry?.status === 'ready' ? renderCardEntry : null;
+  const annotationVersion = useMemo(() => isStreaming ? undefined : annotationSourceVersion(content), [content, isStreaming]);
   const [showOriginal, setShowOriginal] = useState(false);
 
   // fork-from-reply: 在 AI 回复上分叉 — 复制含本回复所在 turn 的全部上下文
@@ -406,6 +408,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   return (
     <div
       data-selection-quote-scope=""
+      data-annotation-message={!isStreaming && !remoteHostId && !ghostRenderCard && !hasRichAnswer(content) && !pluginUi.messageBody ? messageClientId : undefined}
+      data-annotation-session={currentSessionId}
+      data-annotation-version={annotationVersion}
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message chat-bubble-layout')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

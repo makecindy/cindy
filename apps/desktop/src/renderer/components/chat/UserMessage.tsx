@@ -1,4 +1,5 @@
 import '@/styles/chatContentDirection.css';
+import { messageAnnotationPresentation } from '../../../shared/messageAnnotations';
 import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
@@ -938,6 +939,7 @@ export function UserMessage({
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
   const displayContent = resolveUserDisplayText({ content, hookSource, automationOrigin }, orcaCommunication);
+  const annotationPresentation = useMemo(() => messageAnnotationPresentation(displayContent), [displayContent]);
   // Only the bubble is decoded. Draft restoration must retain the canonical envelope.
   const forwardedDraftBody = !hookSource && !orcaCommunication
     && automationOrigin?.kind === 'session' && displayContent !== content ? content : undefined;
@@ -1067,6 +1069,7 @@ export function UserMessage({
     [bubbleAgentReferences, bubbleBody, bubblePastedRanges, displayBubbleBody, ghostBody],
   );
   const collapseMeasureEnabled =
+    !annotationPresentation &&
     !orcaCommunication &&
     !hookSource &&
     mayExceedVisualLineThreshold(collapseMeasureBody, collapseThreshold);
@@ -1665,7 +1668,16 @@ export function UserMessage({
                         {collapseMeasureBody}
                       </div>
                     )}
-                    {inlineQuoteCount > 0 ? (
+                    {annotationPresentation ? (
+                      <div data-selection-quote-body="" className="space-y-3 text-sm leading-relaxed">
+                        {annotationPresentation.text && <p className="whitespace-pre-wrap break-words">{annotationPresentation.text}</p>}
+                        {annotationPresentation.annotations.map((annotation, index) => <div key={annotation.annotationId} className="space-y-1.5 border-l-2 border-border pl-3">
+                          <div className="text-xs text-muted-foreground">{t('chat.annotations.title')} · {annotation.number ?? index + 1}</div>
+                          <blockquote className="whitespace-pre-wrap break-words text-muted-foreground">{annotation.quote}</blockquote>
+                          <p className="whitespace-pre-wrap break-words">{annotation.reply}</p>
+                        </div>)}
+                      </div>
+                    ) : inlineQuoteCount > 0 ? (
                       <div
                         data-selection-quote-body=""
                         className={cn(

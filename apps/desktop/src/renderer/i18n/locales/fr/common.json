@@ -9055,7 +9055,8 @@
             "context": "Lire la tâche actuelle et le texte sélectionné",
             "draft": "Lire et modifier le brouillon du message",
             "appearance": "Modifier les paramètres d’apparence déclarés",
-            "visibility": "Afficher ou masquer la fenêtre et les zones d’interface déclarées"
+            "visibility": "Afficher ou masquer la fenêtre et les zones d’interface déclarées",
+            "annotations": "Annoter les messages, conserver les surlignages et inclure les réponses à l’envoi"
           },
           "fields": {
             "uiFont": "Modifier la police de l’interface",
@@ -17044,6 +17045,22 @@
       "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
       "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
       "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
+    },
+    "annotations": {
+      "queued": "En attente d’envoi",
+      "add": "Ajouter une annotation",
+      "title": "Annotation",
+      "open": "Ouvrir l’annotation {{number}}",
+      "close": "Fermer",
+      "placeholder": "Répondez à ce passage…",
+      "pending": "Incluse dans votre prochain message",
+      "sent": "Envoyée · conservée dans l’historique",
+      "save": "Enregistrer",
+      "saving": "Enregistrement…",
+      "remove": "Supprimer",
+      "saveFailed": "Enregistrement impossible. La réponse a peut-être changé ou atteint 99 annotations. Sélectionnez à nouveau le texte et réessayez.",
+      "ready": "{{count}} annotations seront envoyées. Vous pouvez envoyer sans saisir de texte.",
+      "deliverySaveFailed": "Le message a été envoyé, mais le statut des annotations n’a pas pu être enregistré. Vérifiez avant de renvoyer."
     }
   },
   "ccAgent": {
@@ -20746,6 +20763,7 @@
       "reviseHint": "Des modifications ? Dites-le simplement dans la session d'apprentissage"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Cette annotation est déjà en attente. Attendez son envoi ou retirez le message de la file.",
       "LEARN_BUSY": "Une tâche d'apprentissage est déjà en cours",
       "LEARN_INVALID_STATE": "L'état de la proposition a changé. Veuillez actualiser et réessayer.",
       "NOT_FOUND": "La tâche d'apprentissage n'existe pas ou a été nettoyée",

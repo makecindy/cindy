@@ -9055,7 +9055,8 @@
             "context": "Ler a tarefa atual e o texto selecionado",
             "draft": "Ler e editar o rascunho da mensagem",
             "appearance": "Alterar as configurações de aparência declaradas",
-            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas"
+            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas",
+            "annotations": "Anotar mensagens, manter destaques e incluir respostas no envio"
           },
           "fields": {
             "uiFont": "Alterar a fonte da interface",
@@ -17044,6 +17045,22 @@
       "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
       "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
       "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
+    },
+    "annotations": {
+      "queued": "Na fila para enviar",
+      "add": "Adicionar anotação",
+      "title": "Anotação",
+      "open": "Abrir anotação {{number}}",
+      "close": "Fechar",
+      "placeholder": "Responda a este trecho…",
+      "pending": "Incluída na próxima mensagem",
+      "sent": "Enviada · salva no histórico",
+      "save": "Salvar anotação",
+      "saving": "Salvando…",
+      "remove": "Excluir",
+      "saveFailed": "Não foi possível salvar. A resposta pode ter mudado ou atingido 99 anotações. Selecione o texto novamente e tente outra vez.",
+      "ready": "{{count}} anotações serão enviadas. Você pode enviar sem digitar texto.",
+      "deliverySaveFailed": "A mensagem foi enviada, mas não foi possível salvar o estado das anotações. Verifique antes de enviar novamente."
     }
   },
   "ccAgent": {
@@ -20746,6 +20763,7 @@
       "reviseHint": "Quer alterações? Basta pedir na sessão de aprendizado"
     },
     "ipcError": {
+    "ANNOTATION_ALREADY_QUEUED": "Esta anotação já está na fila. Aguarde o envio ou remova a mensagem da fila.",
       "LEARN_BUSY": "Uma tarefa de aprendizado já está em andamento",
       "LEARN_INVALID_STATE": "O estado da proposta mudou. Atualize e tente novamente.",
       "NOT_FOUND": "A tarefa de aprendizado não existe ou foi removida",

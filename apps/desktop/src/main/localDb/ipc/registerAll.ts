@@ -25,6 +25,7 @@ import {
   setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
+import { registerMessageAnnotationsIpc } from './messageAnnotations';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
 import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
@@ -233,6 +234,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     localPluginWorktrees: opts.localPluginWorktrees,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
+  registerMessageAnnotationsIpc();
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
   registerBotIpc((id, subject, initialTitle) => { void refineCreatedTaskTitle(id, subject, { initialTitle }); });
