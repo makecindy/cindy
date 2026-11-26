@@ -9,10 +9,14 @@ import { MessageContentOpenButton } from './MessageContentOpenButton';
 import type { AudioAttachmentPhase } from './messagePayload';
 import type { ResolvedPreviewFile } from './RemoteAttachmentPreview';
 
-export function AudioAttachmentCard({ title, needsFetch, width, presentationOnly, prepare, onOpen }: {
+const MIN_AUDIO_CARD_WIDTH = 152;
+const MAX_AUDIO_CARD_WIDTH = 320;
+
+export function AudioAttachmentCard({ title, needsFetch, availableWidth, align = 'left', presentationOnly, prepare, onOpen }: {
   title: string;
   needsFetch: boolean;
-  width: number;
+  availableWidth: number;
+  align?: 'left' | 'right';
   presentationOnly?: boolean;
   prepare?: (signal: AbortSignal, forceRefresh: boolean) => Promise<ResolvedPreviewFile>;
   onOpen?: (reportPhase: (phase: AudioAttachmentPhase) => void, source?: ResolvedPreviewFile) => void;
@@ -54,13 +58,18 @@ export function AudioAttachmentCard({ title, needsFetch, width, presentationOnly
     : t('message.renderer.playAudio');
   const Icon = failed ? RefreshCw : fetchNeeded ? ArrowDown : Play;
   const filled = !loading && !failed && !fetchNeeded;
+  const maxWidth = Math.min(MAX_AUDIO_CARD_WIDTH, availableWidth);
   return (
     <MessageContentOpenButton
       presentationOnly={presentationOnly}
       accessibilityLabel={`${title}, ${action}`}
       busy={loading}
       onPress={onOpen ? open : undefined}
-      style={[styles.card, { width: Math.min(288, width) }]}
+      style={[styles.card, {
+        alignSelf: align === 'right' ? 'flex-end' : 'flex-start',
+        minWidth: Math.min(MIN_AUDIO_CARD_WIDTH, maxWidth),
+        maxWidth,
+      }]}
       testID="message.audioAttachmentCard"
     >
       <View style={[styles.control, filled && styles.filledControl]} accessible={false}>
@@ -86,7 +95,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.md,
-    maxWidth: '100%',
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
@@ -99,7 +107,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     width: 44,
   },
   filledControl: { backgroundColor: colors.cta },
-  information: { flex: 1, minWidth: 0, gap: spacing.xs },
+  information: { flexShrink: 1, minWidth: 0, gap: spacing.xs },
   title: { ...textStyles.bodySmall, color: colors.textPrimary, fontWeight: fontWeight.medium },
   status: { ...textStyles.footnote, color: colors.textSecondary },
 });

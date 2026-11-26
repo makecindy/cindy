@@ -7260,10 +7260,7 @@ export function AttachmentStrip({
       {fileAttachments.length > 0 ? (
         <View style={[
           styles.attachmentFileColumn,
-          {
-            gap: layout.attachmentGap,
-            maxWidth: layout.fileChipMaxWidth,
-          },
+          { gap: layout.attachmentGap, maxWidth: layout.markdownTableAvailableWidth },
           align === 'right' && styles.attachmentFileColumnRight,
         ]}>
           {fileAttachments.map((item, index) => (
@@ -7274,6 +7271,7 @@ export function AttachmentStrip({
               onOpen={onOpenFile ? () => onOpenFile(index) : onOpen ? () => onOpen(buildAttachmentPayload(item)) : undefined}
               path={item.path}
               audioSource={item.path || item.uri}
+              audioAlign={align}
               mimeType={item.mimeType}
               onOpenAudioPayload={onOpenFile ? undefined : onOpen}
               onResolveRemoteMedia={onResolveRemoteMedia}
@@ -7594,7 +7592,7 @@ function MediaPreview({
         key={media.url}
         title={preview.title}
         needsFetch={preview.needsRemoteFetch === true}
-        width={layout.fileChipMaxWidth}
+        availableWidth={layout.markdownTableAvailableWidth}
         presentationOnly={presentationOnly}
         prepare={onResolveRemoteMedia && onOpenAudioPayload
           ? (signal, forceRefresh) => resolveAttachmentPreviewSource(mediaPayload, onResolveRemoteMedia, signal, forceRefresh)
@@ -7760,6 +7758,7 @@ function FileChip({
   onOpen,
   path,
   audioSource = path,
+  audioAlign,
   mimeType,
   onOpenAudioPayload,
   onResolveRemoteMedia,
@@ -7770,6 +7769,7 @@ function FileChip({
   onOpen?: () => void;
   path?: string;
   audioSource?: string;
+  audioAlign?: 'left' | 'right';
   mimeType?: string;
   onOpenAudioPayload?: (payload: MessagePayload) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
@@ -7789,7 +7789,8 @@ function FileChip({
         key={audioSource ?? name}
         title={name}
         needsFetch={!audioSource || !isPayloadDirectPreviewableUrl(audioSource)}
-        width={layout.fileChipMaxWidth}
+        availableWidth={layout.markdownTableAvailableWidth}
+        align={audioAlign}
         presentationOnly={presentationOnly}
         prepare={audioPayload && onResolveRemoteMedia
           ? (signal, forceRefresh) => resolveAttachmentPreviewSource(audioPayload, onResolveRemoteMedia, signal, forceRefresh)
@@ -10597,7 +10598,8 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
       typeof visual.height === 'number' ? visual.height : naturalFrameHeight));
   const layout = { ...body.layout, imagePreviewWidth: imageWidth,
     imagePreviewHeight: imageHeight,
-    mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
+    mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width),
+    markdownTableAvailableWidth: Math.min(body.layout.markdownTableAvailableWidth, width) };
   return (
     <View style={{ minWidth: 0 }} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
     {width > 0 && node.kind === 'video' ? (

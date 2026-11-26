@@ -6,6 +6,7 @@ export const audioFixtureTracks = [
   { title: 'PCM WAV · Retry after read failure', xdt_audio_url: audioUrl('2') },
   { title: 'PCM WAV · Invalid source', xdt_audio_url: audioUrl('3') },
   { title: '小猫观察日记 · 片头旁白和客厅环境声 · 第三版试听录音.wav', xdt_audio_url: audioUrl('4') },
+  { title: 'Tone.wav', xdt_audio_url: audioUrl('5') },
 ];
 
 function toneWav(rate = 40_000, seconds = 0.4, channels = 2) {

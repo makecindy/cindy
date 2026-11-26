@@ -74,13 +74,20 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
-    React.createElement(
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) => {
+    const layoutStyle = Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean));
+    return React.createElement(
       "div",
       {
         ref: nativeRef,
         "data-testid": testID,
-        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
+        "data-min-height": layoutStyle.minHeight,
+        ...(testID === "message.audioAttachmentCard" ? {
+          "data-min-width": layoutStyle.minWidth,
+          "data-max-width": layoutStyle.maxWidth,
+          "data-set-width": layoutStyle.width,
+          "data-align": layoutStyle.alignSelf,
+        } : {}),
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
@@ -90,6 +97,7 @@ vi.mock("react-native", async () => {
       },
       children,
     );
+  };
   class Value {
     constructor(public value: number) {}
     interpolate() {
@@ -1324,16 +1332,21 @@ it('renders sent WAVs as audio cards and keeps the original file index for group
   const root = createRoot(host);
   const onOpenFile = vi.fn();
   const onResolveRemoteMedia = vi.fn();
+  const layout = buildMessageContentLayout({ screenWidth: 320 });
   act(() => root.render(
     <AttachmentStrip attachments={[
       { kind: 'file', name: 'Readme.pdf', previewable: false },
       { kind: 'file', name: '录音附件.wav', mimeType: 'audio/wav', previewable: false },
-    ]} messageKey="sent-audio" align="right" layout={buildMessageContentLayout({ screenWidth: 320 })}
+    ]} messageKey="sent-audio" align="right" layout={layout}
     usePreviewState={useState} onOpenFile={onOpenFile} onResolveRemoteMedia={onResolveRemoteMedia} />,
   ));
   try {
     const card = host.querySelector<HTMLElement>('[data-testid="message.audioAttachmentCard"]');
     expect(card?.textContent).toContain('录音附件.wav');
+    expect(card?.getAttribute('data-min-width')).toBe('152');
+    expect(card?.getAttribute('data-max-width')).toBe(String(layout.markdownTableAvailableWidth));
+    expect(card?.hasAttribute('data-set-width')).toBe(false);
+    expect(card?.getAttribute('data-align')).toBe('flex-end');
     expect(card?.querySelector('[data-testid="audio-fetch-icon"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="message.filePreviewButton.pdf"]')).not.toBeNull();
     act(() => card!.click());
