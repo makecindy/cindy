@@ -666,7 +666,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     const check = checkFor(item.pluginId);
     // A pending check: not confirmed, waiting for the person's answer on the computer (as its own attempt says while
     // its consent is up), or under way.
-    if (check) return check.waiting || check.state.outcome === "unknown" ? { kind: "unknown" }
+    // (Waiting for the person first, as the list of checks puts it first: a consent whose cancel for leaving could not
+    // be written is both "to be checked" and waiting for an answer.)
+    if (check) return check.awaitingYou ? { kind: "waiting" }
+      : check.waiting || check.state.outcome === "unknown" ? { kind: "unknown" }
       : check.state.outcome === "confirmation" ? { kind: "waiting" } : { kind: "installing" };
     if (item.installState === "not-installed" && pluginMarketSourceUnverified(item)) return { kind: "sourceUnverified" };
     const failure = deviceId ? rowErrors[errorKey(deviceId, item.pluginId)] : undefined;

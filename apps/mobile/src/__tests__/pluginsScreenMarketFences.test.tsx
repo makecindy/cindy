@@ -2932,6 +2932,37 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(30);
         expect(detail()).toEqual({ detail: true, installed: true });
       }));
+      // Pre-push review, round 11 (failed on 346028ad97: the list said the computer was waiting for the person, the row
+      // said "not confirmed, check the result", and checking changed nothing).
+      it("Notes' consent is on screen; the page is left and the cancel for leaving is refused before it is written; back on the market: the row says it waits for the person, as the list does", async () => numbered(async () => {
+        const world = computer();
+        const original = fixture.wire.getMockImplementation()!;
+        const asked: string[] = [];
+        fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+          if (args?.[0]?.actionId === "management:cancel") { asked.push("cancel"); options?.preSend?.(); options?.onNotSent?.(); throw new Error("[LINK_NOT_OPEN] refused before the first write"); }
+          return original(device, channel, args, options);
+        });
+        fixture.platform = "android"; fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(14);
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.install.${world.notes.pluginId}`);
+        await settle(20);
+        expect(writes(world.requests)).toEqual(["begin:operation-0001"]);
+        await act(async () => root.render(createElement("div")));
+        await settle(30);
+        expect({ asked, written: writes(world.requests).filter((write: string) => write.startsWith("cancel")) }).toEqual({ asked: ["cancel"], written: [] });
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(20);
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(30);
+        const rowText = [...element.querySelectorAll("span")].map((span) => span.textContent).filter((text) => /^plugins\.market\.(waiting|installing|resultUnknownDetail)$/.test(text ?? ""));
+        await click("plugins.slotHolder.show");
+        const list = allById("plugins.checks")[0]?.textContent ?? "";
+        expect({ rowText, listAwaitingYou: list.includes("plugins.checks.status.awaitingYou"), decide: allById("plugins.checks.decide").length, phase: world.ops.get("operation-0001")!.phase })
+          .toEqual({ rowText: ["plugins.market.waiting"], listAwaitingYou: true, decide: 1, phase: "confirmation" });
+      }));
       // Pre-push review, round 10 (both failed on f2f5038007: the computer waited for an answer while the phone neither
       // showed the consent nor offered "View and decide" for it).
       const cancelsWritten = (world: any) => writes(world.requests).filter((write: string) => write.startsWith("cancel"));
