@@ -88,12 +88,20 @@ export interface PluginCheckConclusion {
   told?: boolean;
 }
 /** Its read of the computer gave an answer (proven, or why not): there is something to show. */
-export function pluginConclusionSettled(conclusion: Pick<PluginCheckConclusion, "readback">): boolean {
-  return conclusion.readback === "verified" || conclusion.readback === "gone" || conclusion.readback === "unconfirmed" || conclusion.readback === "legacy";
+export function pluginConclusionSettled(conclusion: Pick<PluginCheckConclusion, "readback" | "result">): boolean {
+  return unconfirmedResult(conclusion)
+    || conclusion.readback === "verified" || conclusion.readback === "gone" || conclusion.readback === "unconfirmed" || conclusion.readback === "legacy";
 }
-/** A success that opens something, not yet shown to the person: listed at the top of the page and in the list of checks. */
+/** A result that could not be confirmed from the computer's facts after its receipt was gone. */
+const unconfirmedResult = (conclusion: Pick<PluginCheckConclusion, "result">) =>
+  conclusion.result === "notInstalled" || conclusion.result === "mismatch" || conclusion.result === "legacy";
+/**
+ * Not yet shown to the person: listed at the top of the page and in the list of checks. A success that opens something
+ * (whatever its read says so far), and an operation whose result could not be confirmed after its receipt was gone.
+ */
 export function pluginConclusionListed(conclusion: PluginCheckConclusion): boolean {
-  return !conclusion.told && conclusion.readback !== "none" && (conclusion.result === "succeeded" || conclusion.result === "installed");
+  if (conclusion.told) return false;
+  return unconfirmedResult(conclusion) || (conclusion.readback !== "none" && (conclusion.result === "succeeded" || conclusion.result === "installed"));
 }
 const CONCLUSIONS_KEPT = 20;
 let conclusions: Array<PluginCheckConclusion & { ownerKey: string; seq: number }> = [];
@@ -123,10 +131,10 @@ export interface PluginPendingCheck {
   unprovable?: { present: boolean; pagesApproved?: boolean };
   /**
    * A market install or update whose receipt is gone, and the facts read after it cannot settle it yet: the plugin is
-   * there, but the computer could not read the market it comes from then (`pluginOperationOpens` "unread"). The panel
-   * says so; "Check result" looks it up and reads the facts again.
+   * there, but that response has no installed record of it (`pluginOperationOpens` "unread"). The panel says so; "Check
+   * result" looks it up and reads the facts again.
    */
-  marketUnread?: boolean;
+  recordMissing?: boolean;
   /** Look up the original operation once (never a second begin, answer or cancel). */
   verify(): Promise<void>;
   /**
@@ -157,11 +165,11 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
     const gone = AFTER_RECEIPT_GONE[check.entry] === "unprovable" ? controller.currentMissingReceiptFacts() : null;
     const now = gone && check.who.instanceKey ? gone.ghosts.find((ghost) => ghost.instanceKey === check.who.instanceKey) : undefined;
     const facts = AFTER_RECEIPT_GONE[check.entry] === "facts" ? controller.currentMissingReceiptFacts() : null;
-    const marketUnread = !!facts && (() => { const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items, marketState: facts.market });
+    const recordMissing = !!facts && (() => { const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
       return !opens.open && opens.reason === "unread"; })();
     list.push({ ...check, state: controller.getState(), shown: !!entry.listener, controller,
       ...(gone ? { unprovable: { present: !!now, ...(check.entry === "page-approval" && now ? { pagesApproved: now.uiCapabilityApproved === true } : {}) } } : {}),
-      ...(marketUnread ? { marketUnread } : {}),
+      ...(recordMissing ? { recordMissing } : {}),
       awaitingYou: controller.consentUnseen() && !entry.listener,
       canStop: controller.idle(),
       verify: async () => { entry.settling = undefined; await controller.reconcile(); },
@@ -238,8 +246,7 @@ async function readBack(operationId: string): Promise<boolean> {
       .snapshot(job.snapshotRead);
     if (!current()) return false;
     // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
-    opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items,
-      marketState: snapshot.market });
+    opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items });
   } catch {
     if (!current()) return false;
   }
@@ -273,6 +280,24 @@ function setReadbackAvailable(reporter: symbol, deviceId: string, up: boolean) {
   for (const [operationId, job] of [...readbacks]) {
     if (job.check.who.deviceId !== deviceId || !isMobileAuthOwnerCurrent(job.owner)) continue;
     if (conclusions.find((item) => item.operationId === operationId)?.readback === "failed") void readBack(operationId);
+  }
+}
+/**
+ * A computer the page lists went offline: a read still out to it will not come back in time, so it ends now as "could
+ * not read" (the read's own reply, if it ever lands, is ignored); it is read again when the computer is reachable again.
+ * Only the computer's own connection ends a read: the page losing focus or the app going to the background does not.
+ */
+const computerOnline = new Map<string, boolean>();
+function noteComputerOnline(deviceId: string, online: boolean) {
+  const before = computerOnline.get(deviceId);
+  computerOnline.set(deviceId, online);
+  if (online || before !== true) return;
+  for (const [operationId, job] of [...readbacks]) {
+    if (job.check.who.deviceId !== deviceId) continue;
+    const conclusion = conclusions.find((item) => item.operationId === operationId);
+    if (conclusion?.readback !== "pending") continue;
+    job.reads += 1;
+    conclude(job, { ...conclusion, readback: "failed", instanceKey: undefined });
   }
 }
 /** A page instance went away: it reaches nothing any more (the counts stay). */
@@ -362,8 +387,7 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   };
   // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
   // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
-  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items,
-    marketState: facts.market });
+  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
   if (opens.open) { settle("installed", opens.instanceKey); return; }
   // An instance is there, but this response says its market part is incomplete and names no record of the plugin (the
   // computer just restarted and cannot reach its catalog or a custom market yet): nothing proves or disproves it. It
@@ -440,7 +464,7 @@ export const __retainedForTests = {
   /** The signed-in account's pending checks and conclusions, as the page lists them. */
   checks: () => pendingChecksOf(pluginSlotOwnerKey(getMobileAuthOwner())),
   conclusions: () => conclusions.filter((item) => item.ownerKey === pluginSlotOwnerKey(getMobileAuthOwner())),
-  clear: () => { for (const [scope, entry] of [...retained]) letGo(scope, entry); conclusions = []; readbacks.clear(); reachable.clear(); notifyChecks(); },
+  clear: () => { for (const [scope, entry] of [...retained]) letGo(scope, entry); conclusions = []; readbacks.clear(); reachable.clear(); computerOnline.clear(); notifyChecks(); },
 };
 
 /**
@@ -478,7 +502,12 @@ export function usePluginPendingChecks(isOnline?: (deviceId: string) => boolean,
   useEffect(() => {
     if (!isOnline) return;
     for (const deviceId of reported.current) if (!deviceIds.includes(deviceId)) { reported.current.delete(deviceId); setReadbackAvailable(reporter.current!, deviceId, false); }
-    for (const deviceId of deviceIds) { reported.current.add(deviceId); setReadbackAvailable(reporter.current!, deviceId, active && foreground && isOnline(deviceId)); }
+    for (const deviceId of deviceIds) {
+      const online = isOnline(deviceId);
+      reported.current.add(deviceId);
+      noteComputerOnline(deviceId, online);
+      setReadbackAvailable(reporter.current!, deviceId, active && foreground && online);
+    }
   });
   useEffect(() => isOnline ? () => clearReadbackAvailability(reporter.current!) : undefined, [!!isOnline]);
   return checks;

@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import * as expoCrypto from "expo-crypto";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { __retainedForTests, usePluginPendingChecks } from "@/plugins/usePluginManagement";
+/**
+ * Proven as this install: concluded as done with its instance read from the computer. The page never opens a result by
+ * itself; the person opens it from the list of checks ("Open plugin"), which the tests of that list cover.
+ */
+const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
+  && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
 // The plugins page's market read fences and lost-receipt facts (the order matrices); the rest of the page's cases are in
 // pluginsScreen.test.tsx. Split to keep each file within the unit budget; both share pluginsScreenHarness.tsx.
 
@@ -163,7 +169,10 @@ describe("market read fences and lost-receipt facts", () => {
     expect(shownMarket().installBusy).toBe(false);
     await act(async () => { gate.release(); });
     await settle(20);
-    expect(shownMarket().detail).toBeNull();
+    // The detail the person opened stays theirs (nothing closes it for them). The read of it that was out before the
+    // install is dropped: the detail was read again once the install was known, so it does not offer it again.
+    expect(shownMarket().detail?.item.pluginId).toBe(item.pluginId);
+    expect(details).toBeGreaterThan(1);
   });
   it("does not send the paging probe when the manifest read finishes after the page unmounted", async () => {
     const gate = deferred();
@@ -320,7 +329,7 @@ describe("market read fences and lost-receipt facts", () => {
     await act(async () => { snapshotGate.release(); });
     await settle(14);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(provenDemo()).toBe(false);
   });
   // Maintainer review 03:54 #1 (a second "Check result" while the first round is out). Since controller rule ④ (contract
   // V2.10) a round settles only from its own installed snapshot, read inside that round's lookup (no market detail
@@ -365,7 +374,7 @@ describe("market read fences and lost-receipt facts", () => {
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     await act(async () => { firstFacts.release(); });
     await settle(20);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(present);
+    expect(provenDemo()).toBe(present);
     if (!present) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
     // Settled from the installed snapshot alone (controller rule ④): no market detail is read after NOT_FOUND.
     expect(details()).toBe(detailsBefore);
@@ -412,7 +421,7 @@ describe("market read fences and lost-receipt facts", () => {
     await act(async () => { readA.release(); });
     await settle(14);
     expect(shownMarket().rowState(item)).not.toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(true);
+    expect(provenDemo()).toBe(true);
   });
   // Maintainer review 04:20: A (read after NOT_FOUND) is held; refresh B lands showing nothing; a newer refresh C is
   // still in flight when A returns. B was replaced by C, so it must not conclude "not on this computer".
@@ -460,7 +469,7 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
     expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(provenDemo()).toBe(false);
     // C lands with the plugin installed: the result follows the newest facts. This row had ended by then (its check
     // carried on), so the page does not move for it: it is proven and listed at the top.
     await act(async () => { readC.release(); });
@@ -506,17 +515,18 @@ describe("market read fences and lost-receipt facts", () => {
     await settle(14);
     await act(async () => { heldFacts.release(); });
     await settle(14);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(provenDemo()).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedNotInstalled" });
   });
   // Maintainer review 05:04: facts settle a result only while they come from the newest installed read issued.
   // Instead of hand-picked orders, run every order of: A (read after NOT_FOUND) returns, a plugin-change refresh B
-  // is sent, the market detail read on the facts returns, B returns (B is always sent before it returns).
-  // A shows the same-id instance; the detail always says "installed" (a stale detail is the dangerous case).
+  // is sent, B returns (B is always sent before it returns). A shows the same-id instance. The result is judged from
+  // the installed read's own records, so no market detail is read for it (contract rule ④; asserted in every order):
+  // the orders that used to interleave that detail's reply are the same runs now and are no longer listed.
   const permutations = <T,>(items: T[]): T[][] => items.length <= 1 ? [items]
     : items.flatMap((first, index) => permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
-  type Step = "releaseA" | "sendB" | "releaseDetail" | "releaseB";
-  const orders = permutations<Step>(["releaseA", "sendB", "releaseDetail", "releaseB"])
+  type Step = "releaseA" | "sendB" | "releaseB";
+  const orders = permutations<Step>(["releaseA", "sendB", "releaseB"])
     .filter((order) => order.indexOf("sendB") < order.indexOf("releaseB"));
   describe.each([["B still shows the instance", true], ["B shows it removed", false]])("every reply order when %s", (_case, bPresent) => {
     it.each(orders.map((order) => [order.join(" → "), order] as const))("settles only on the newest installed read: %s", async (_label, order) => {
@@ -525,7 +535,7 @@ describe("market read fences and lost-receipt facts", () => {
         if (!gates.has(label)) { let release!: () => void; const promise = new Promise<void>((resolve) => { release = resolve; }); gates.set(label, { promise, release }); }
         return gates.get(label)!;
       };
-      let began = false, checking = false, sentA = false, sentB = false, sentDetail = false, bIssued = false, bReturned = false;
+      let began = false, checking = false, sentA = false, sentB = false, detailReads = 0, bIssued = false, bReturned = false;
       queuedWire((request) => {
         switch (request.actionId) {
           case "management:snapshot": {
@@ -547,7 +557,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (!sentA) { sentA = true; (request as any).label = "A"; return gate("A").promise; }
           if (bIssued && !sentB) { sentB = true; (request as any).label = "B"; return gate("B").promise; }
         }
-        if (request.actionId === "management:market-detail" && !sentDetail) { sentDetail = true; return gate("detail").promise; }
+        if (request.actionId === "management:market-detail") detailReads += 1;
         return undefined;
       });
       await openMarket();
@@ -557,15 +567,16 @@ describe("market read fences and lost-receipt facts", () => {
       checking = true;
       await act(async () => { void shownMarket().checkResult(item); });
       await settle(14);
-      // Proven as this install: its detail opened (the row was still waiting for it), or, once the row had ended and its
-      // check carried on, concluded as installed from the facts and listed at the top (the page does not move then).
-      const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")
+      // Proven as this install: concluded as installed from the facts read, and listed at the top (the page never moves
+      // for it; "opened" below means proven, the only thing that can lead to an Open).
+      const opened = () => provenDemo()
         || __retainedForTests.conclusions().some((conclusion) => conclusion.result === "installed" && conclusion.readback === "verified");
       let openedBeforeB = false;
       for (const step of order) {
         if (step === "sendB") { bIssued = true; await act(async () => { void fixture.props.get("confirmation").controller.refresh(); }); }
-        else gate(step === "releaseA" ? "A" : step === "releaseB" ? "B" : "detail").release();
+        else gate(step === "releaseA" ? "A" : "B").release();
         await settle(14);
+        expect(detailReads, "no market detail is read to judge the result").toBe(0);
         if (!bIssued) { openedBeforeB = opened(); continue; }
         // Once B is sent, nothing may open an instance until B has returned showing it.
         if (!bReturned) expect(opened()).toBe(openedBeforeB);
@@ -580,25 +591,26 @@ describe("market read fences and lost-receipt facts", () => {
    * - 生产入口与可观察结果：真实 PluginsScreen + usePluginMarket + 管理 client / controller，只替换传输；观察是否打开
    *   实例、行的结论。
    * - 依据：核实事实只在它所依据的已装读取是最新发出的那次时有效（派生判断，单一出口 conclude）。
-   * - 剪枝：A 的回包固定在最前（维护者 05:04 点名的顺序即以它开头）；其余事件 B 发出 / 回包、C 发出 / 回包、按 A 的
-   *   事实发起的市场详情回包、再次点核实的全部合法先后顺序（发出先于回包，C 在 B 之后发出）都在集合里，共 90 种 × 两种
-   *   内容。对应关系：05:04「B 挂起时先放行旧详情」= A → 发 B → 详情 → B 回包；03:54 #1「第一轮详情在途时再次核实」=
-   *   A → 核实 → 详情……。tier: unit。
+   * - 剪枝：A 的回包固定在最前（维护者 05:04 点名的顺序即以它开头）；其余事件 B 发出 / 回包、C 发出 / 回包、再次点
+   *   核实的全部合法先后顺序（发出先于回包，C 在 B 之后发出）都在集合里，共 15 种 × 两种内容。结论只按已装读取同一次
+   *   响应里的记录判断（契约规则 ④），不再为它读市场详情（每个顺序里都断言没有这次读取），所以原先穿插「市场详情
+   *   回包」的顺序与这 15 种是同一次运行，不再重复列出。对应关系：05:04「B 挂起时先放行旧详情」= A → 发 B → B 回包；
+   *   03:54 #1「第一轮详情在途时再次核实」= A → 核实……。tier: unit。
    * - 每一步之后断言：结论第一次出现时，最新发出的已装读取已回包且结论与它的内容一致；最新读取在途时仍待确认。
    *   全部回包后有结论，且等于最新一次读取的内容。
    */
   describe("every order with a third installed read and a second check", () => {
-    type Step = "sendB" | "releaseB" | "sendC" | "releaseC" | "releaseDetail" | "check";
+    type Step = "sendB" | "releaseB" | "sendC" | "releaseC" | "check";
     const perms = <T,>(items: T[]): T[][] => items.length <= 1 ? [items]
       : items.flatMap((first, index) => perms([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [first, ...rest]));
     const legal = (order: Step[]) => order.indexOf("sendB") < order.indexOf("releaseB") && order.indexOf("sendC") < order.indexOf("releaseC")
       && order.indexOf("sendB") < order.indexOf("sendC");
-    const core = perms<Step>(["sendB", "releaseB", "sendC", "releaseC", "releaseDetail"]).filter(legal);
+    const core = perms<Step>(["sendB", "releaseB", "sendC", "releaseC"]).filter(legal);
     const all = core.flatMap((order) => Array.from({ length: order.length + 1 }, (_, at) => [...order.slice(0, at), "check" as Step, ...order.slice(at)]));
     it("has the orders the maintainer named among them", () => {
-      expect(all).toHaveLength(90);
-      expect(all.some((order) => order.join() === "sendB,releaseDetail,releaseB,sendC,releaseC,check")).toBe(true);
-      expect(all.some((order) => order.join() === "check,releaseDetail,sendB,releaseB,sendC,releaseC")).toBe(true);
+      expect(all).toHaveLength(15);
+      expect(all.some((order) => order.join() === "sendB,releaseB,sendC,releaseC,check")).toBe(true);
+      expect(all.some((order) => order.join() === "check,sendB,releaseB,sendC,releaseC")).toBe(true);
     });
     describe.each([["B shows the instance, C shows it removed", true, false], ["B shows it removed, C shows it again", false, true]])(
       "%s", (_case, bPresent, cPresent) => {
@@ -610,7 +622,7 @@ describe("market read fences and lost-receipt facts", () => {
           };
           // Installed reads in the order they were sent, with what each shows and whether it came back.
           const reads: Array<{ label: string; present: boolean; returned: boolean }> = [];
-          let began = false, checking = false, wanted: "B" | "C" | null = null, sentDetail = false;
+          let began = false, checking = false, wanted: "B" | "C" | null = null, detailReads = 0;
           const truth = () => reads.length ? reads[reads.length - 1].present : true;
           queuedWire((request) => {
             switch (request.actionId) {
@@ -638,7 +650,7 @@ describe("market read fences and lost-receipt facts", () => {
               if (label === "A" || label === "B" || label === "C") { if (wanted === label) wanted = null; return gate(label).promise; }
               return undefined;
             }
-            if (request.actionId === "management:market-detail" && !sentDetail) { sentDetail = true; return gate("detail").promise; }
+            if (request.actionId === "management:market-detail") detailReads += 1;
             return undefined;
           });
           await openMarket();
@@ -650,7 +662,7 @@ describe("market read fences and lost-receipt facts", () => {
           await settle(14);
           gate("A").release();
           await settle(14);
-          const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+          const opened = () => provenDemo();
           const failed = () => shownMarket().rowState(item).kind === "failed";
           let concluded: boolean | null = opened() ? true : failed() ? false : null;
           // A was the newest read and settled the result right away: valid (it is what A showed).
@@ -661,8 +673,9 @@ describe("market read fences and lost-receipt facts", () => {
               await act(async () => { void fixture.props.get("confirmation")?.controller.refresh(); });
             } else if (step === "check") {
               await act(async () => { void shownMarket().checkResult(item); });
-            } else gate(step === "releaseB" ? "B" : step === "releaseC" ? "C" : "detail").release();
+            } else gate(step === "releaseB" ? "B" : "C").release();
             await settle(14);
+            expect(detailReads, "no market detail is read to judge the result").toBe(0);
             const now = opened() ? true : failed() ? false : null;
             if (concluded === null && now !== null) {
               // The first conclusion rests on the newest installed read issued, which has returned and agrees with it.
@@ -698,7 +711,7 @@ describe("market read fences and lost-receipt facts", () => {
       };
       return { hold: (label: string) => get(label).promise, release: (label: string) => { const g = get(label); g.released = true; g.release(); } };
     };
-    const opened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+    const opened = () => provenDemo();
 
     // Group 2 (03:54 #3): the first probe P1 is held while the person leaves the market and comes back, which starts
     // probe P2 (held too). P1 either times out or succeeds late.
@@ -824,11 +837,11 @@ describe("market read fences and lost-receipt facts", () => {
     // Maintainer review 03:52 of c6efda5691: after a success, the market row settles only on a snapshot read after the
     // result. The first order the maintainer reproduced, through the page: the computer goes offline while the row waits
     // for its read, which times out, and comes back (the row must end, and the reconnect read take over: the success's
-    // read opens the instance it proves). The second (a plugin-change refresh sent while the read is out, its reply
+    // read proves the instance, which is then listed at the top). The second (a plugin-change refresh sent while the read is out, its reply
     // held: nothing may settle on a snapshot from before the install) is the first case of the next group, where the
     // success's own read, issued after the result, is the only one that decides. Only reads go out after Allow; begin
     // and Allow once each. Both failed on c6efda5691 (stuck "installing"; "not on this computer now"). Tier: unit/jsdom.
-    describe("a success read again around a disconnect or a plugin-change refresh (maintainer review 03:52)", () => {
+    describe("a success read again around a disconnect (maintainer review 03:52)", () => {
       /**
        * `hold` / `fail` see each installed read written after Allow, labelled in the order written; a held read is
        * written (it left this phone) and only its reply waits, as when the computer answers late.
@@ -868,29 +881,30 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(14);
         await act(async () => { void fixture.props.get("confirmation").controller.answer(true); });
         await settle(14);
-        expect(shownMarket().installBusy).toBe(true);
+        // The row ended with the result (another market install may start); the success's read is out.
+        expect(shownMarket().installBusy).toBe(false);
         fixture.online = false;
         await act(async () => root.render(createElement(PluginsScreen)));
         g.release("reads");
         await settle(14);
-        // The row ended (another market install may start); nothing was opened on facts it did not read.
+        // Nothing is concluded on facts that were not read.
         expect(held.length).toBeGreaterThan(0);
-        expect(shownMarket().installBusy).toBe(false);
         expect(opened()).toBe(false);
+        const reallyOpened = () => fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
         offline = false;
         fixture.online = true;
         await act(async () => root.render(createElement(PluginsScreen)));
         await settle(20);
-        // A read after the reconnect proves this install (V2.10 ①). The page does not move by itself for it (the person
-        // may be doing something else by now): it is listed at the top as having a result, and opens from the list.
-        expect(opened()).toBe(false);
+        // A read after the reconnect proves this install (V2.10 ①). The page does not move by itself for it: it is
+        // listed at the top as having a result, and opens from the list.
+        expect({ proven: opened(), opened: reallyOpened() }).toEqual({ proven: true, opened: false });
         const control = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement;
         expect(control("plugins.slotHolder").textContent).toContain("plugins.checks.settledOne");
         await act(async () => control("plugins.slotHolder.show").click());
         await settle(10);
         await act(async () => control("plugins.checks.open").click());
         await settle(20);
-        expect(opened()).toBe(true);
+        expect(reallyOpened()).toBe(true);
         expect(writes(sent)).toEqual(["management:begin", "management:answer"]);
       });
     });
@@ -1023,6 +1037,9 @@ describe("market read fences and lost-receipt facts", () => {
       const openedDemo = () => openedIds().includes("mac:_root__demo");
       const prompts = () => fixture.alert.mock.calls.map((call) => call[1]);
       const UNREAD = "plugins.checks.result.succeededUnread";
+      const told = () => __retainedForTests.conclusions().map((item: any) => ({ readback: item.readback, told: !!item.told }));
+      /** The one conclusion so far says "done, but could not be read". */
+      const unreadLine = () => __retainedForTests.conclusions().map((item) => item.readback).join() === "failed";
       const banner = () => byId("plugins.slotHolder")?.textContent ?? "";
       const sheet = () => byId("plugins.checks")?.textContent ?? "";
       /** Real controls: the market segment, the row's Install, the consent sheet's Allow. */
@@ -1044,7 +1061,8 @@ describe("market read fences and lost-receipt facts", () => {
       async function installUnread(world: World) {
         world.hold = timesOut;
         await installAndAllow();
-        expect(prompts()).toEqual([UNREAD]);
+        // Nothing is prompted and nothing opens: the success is listed at the top as needing a check.
+        expect({ prompts: prompts(), opened: openedIds(), sheet: unreadLine() }).toEqual({ prompts: [], opened: [], sheet: true });
         expect(banner()).toContain("plugins.checks.waitingOne");
         world.hold = () => undefined;
       }
@@ -1063,9 +1081,10 @@ describe("market read fences and lost-receipt facts", () => {
         world.hold = () => undefined;
         hold.release("installed-1");
         await settle(20);
-        expect({ opened: openedDemo(), prompts: prompts(), banner: banner(), writes: writes(requests) }).toEqual({ opened: true, prompts: [], banner: "", writes: ONCE });
+        expect({ proven: provenDemo(), opened: openedIds(), prompts: prompts(), banner: banner(), writes: writes(requests) })
+          .toEqual({ proven: true, opened: [], prompts: [], banner: expect.stringContaining("plugins.checks.settledOne"), writes: ONCE });
       });
-      it("Allow's reply arrives while the app is in the background: the reads answer, the instance opens, nothing says \"could not read\"", async () => {
+      it("Allow's reply arrives while the app is in the background: the reads answer, the proven install is listed, nothing says \"could not read\"", async () => {
         const hold = holds();
         const world = { ...fresh(), hold: (label: string) => label === "answer" ? hold.wait(label) : undefined };
         const requests = wire(world);
@@ -1075,20 +1094,25 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(30);
         await appState("active");
         await settle(20);
-        expect({ opened: openedDemo(), prompts: prompts(), banner: banner(), writes: writes(requests) }).toEqual({ opened: true, prompts: [], banner: "", writes: ONCE });
+        expect({ proven: provenDemo(), opened: openedIds(), prompts: prompts(), banner: banner(), writes: writes(requests) })
+          .toEqual({ proven: true, opened: [], prompts: [], banner: expect.stringContaining("plugins.checks.settledOne"), writes: ONCE });
       });
-      it("the computer goes offline and comes back before the reads time out: read again by itself, once, and opened", async () => {
+      it("the computer goes offline while the success's read is out and comes back before that read times out: the read ends at once, is read again on return, once, and the proven install is listed", async () => {
         const hold = holds();
         const world = { ...fresh(), hold: (label: string) => label.startsWith("installed-") ? hold.wait(label) : undefined };
         const requests = wire(world);
         await installAndAllow();
-        fixture.online = false; await rerender();
-        fixture.online = true; await rerender();
-        world.hold = () => undefined;
         const before = lightReads(requests);
+        // Offline: the read that is out will not come back in time, so it ends now (the success needs a check).
+        fixture.online = false; await rerender();
+        expect(told()).toEqual([{ readback: "failed", told: false }]);
+        world.hold = () => undefined;
+        // Back online: read again by itself; the earlier read's late timeout changes nothing.
+        fixture.online = true; await rerender();
         hold.release("installed-1", false); hold.release("installed-2", false);
         await settle(30);
-        expect({ readAgain: lightReads(requests) > before, opened: openedDemo(), prompts: prompts(), writes: writes(requests) }).toEqual({ readAgain: true, opened: true, prompts: [], writes: ONCE });
+        expect({ readAgain: lightReads(requests) > before, proven: provenDemo(), opened: openedIds(), prompts: prompts(), writes: writes(requests) })
+          .toEqual({ readAgain: true, proven: true, opened: [], prompts: [], writes: ONCE });
         // Read again once for that reconnect, not in a loop.
         const settled = world.installedReads;
         await settle(30);
@@ -1167,30 +1191,30 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ sheet: byId("plugins.checks"), segment: fixture.props.get("segment").value, banner: banner() }).toEqual({ sheet: null, segment: "installed", banner: "" });
       });
       it.each([
-        // The computer could not read its catalog then: the response says so, and settles nothing (read again later).
-        ["a response that says its market part is incomplete", "fetch failed", UNREAD, "plugins.checks.waitingOne"],
-        // A complete response without a record of it: an instance is there, nothing attributes it (②).
-        ["a complete response", null, "plugins.checks.result.unconfirmed", ""],
-      ] as const)("the instance is there but the response has no market record of it, in %s: never \"not on the computer now\"", async (_name, unavailableReason, said, listed) => {
+        // The computer could not read its catalog then (it says so), or its market data has not caught up with the
+        // install that just committed (it says nothing): either way the response has the instance and no record of it.
+        ["says its market is unavailable", "fetch failed"],
+        ["says nothing about it", null],
+      ] as const)("the instance is there but the response has no installed record of it and %s: nothing is concluded (never \"not on the computer now\"), and it can be read again", async (_name, unavailableReason) => {
         const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], unavailableReason } }) };
         const requests = wire(world);
         await installAndAllow();
-        expect({ prompts: prompts(), opened: openedDemo() }).toEqual({ prompts: [said], opened: false });
-        if (listed) expect(banner()).toContain(listed); else expect(banner()).toBe("");
-        if (!unavailableReason) return;
-        // Readable again: "Read again" proves it, and it opens from the list.
+        expect({ prompts: prompts(), opened: openedIds(), told: told(), banner: banner() })
+          .toEqual({ prompts: [], opened: [], told: [{ readback: "failed", told: false }], banner: expect.stringContaining("plugins.checks.waitingOne") });
+        // The record is there on the next read: "Read again" proves it, and it opens from the list.
         world.reply = undefined;
         await click("plugins.slotHolder.show");
+        expect(sheet()).toContain(UNREAD);
         await click("plugins.checks.readAgain");
         await click("plugins.checks.open");
         expect({ opened: openedDemo(), writes: writes(requests) }).toEqual({ opened: true, writes: ONCE });
       });
-      it("the market item read before the install has no namespace (the computer fills it in once installed): the proven instance opens", async () => {
+      it("the market item read before the install has no namespace (the computer fills it in once installed): the instance is proven", async () => {
         const { namespace: _omitted, ...summary } = demo;
         const world: World = { ...fresh(), items: [summary, notes] };
         const requests = wire(world);
         await installAndAllow();
-        expect({ opened: openedDemo(), prompts: prompts(), writes: writes(requests) }).toEqual({ opened: true, prompts: [], writes: ONCE });
+        expect({ proven: provenDemo(), opened: openedIds(), prompts: prompts(), writes: writes(requests) }).toEqual({ proven: true, opened: [], prompts: [], writes: ONCE });
       });
       it("could not be read and its computer left the account's list: says why it cannot be read, and can be let go", async () => {
         const world = fresh();
@@ -1233,7 +1257,7 @@ describe("market read fences and lost-receipt facts", () => {
           const requests = wire(world);
           world.hold = timesOut;
           await installAndAllow(demo.pluginId);
-          expect(prompts()).toEqual([UNREAD]);
+          expect(told()).toEqual([{ readback: "failed", told: false }]);
           world.hold = () => undefined;
           await click(`plugins.market.install.${notes.pluginId}`);
           const first = ["begin:operation-0001", "answer:operation-0001", "begin:operation-0002"];
@@ -1311,7 +1335,6 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ opened: openedDemo(), banner: banner() }).toEqual({ opened: false, banner: expect.stringContaining("plugins.checks.settledOne") });
         await click("plugins.slotHolder.show");
       }
-      const told = () => __retainedForTests.conclusions().map((item: any) => ({ readback: item.readback, told: !!item.told }));
       it("\"Open plugin\" reads once more and that read fails: closing the list keeps the success listed as not read", async () => {
         const world = fresh();
         const requests = wire(world);
@@ -1323,7 +1346,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ banner: banner(), told: told(), writes: writes(requests) })
           .toEqual({ banner: expect.stringContaining("plugins.checks.waitingOne"), told: [{ readback: "failed", told: false }], writes: ONCE });
       });
-      it("\"Open plugin\" pressed and the list closed while its read is out: the read proves the instance and it opens", async () => {
+      it("\"Open plugin\" pressed and the list closed while its read is out: the read proves the instance, nothing opens, and it stays listed", async () => {
         const world = fresh();
         wire(world);
         await provenWhileAway(world);
@@ -1336,7 +1359,9 @@ describe("market read fences and lost-receipt facts", () => {
         world.hold = () => undefined;
         hold.release("open-read");
         await settle(30);
-        expect({ opened: openedDemo(), told: told(), banner: banner() }).toEqual({ opened: true, told: [{ readback: "verified", told: true }], banner: "" });
+        // The person closed the list: nothing opens for them later; the success is still listed.
+        expect({ opened: openedIds(), told: told(), banner: banner() })
+          .toEqual({ opened: [], told: [{ readback: "verified", told: false }], banner: expect.stringContaining("plugins.checks.settledOne") });
       });
       it("proven while the account's computers are not listed yet (the page was just reopened): not marked as shown, still listed once they are", async () => {
         const hold = holds();
@@ -1377,7 +1402,7 @@ describe("market read fences and lost-receipt facts", () => {
           const requests = wire(world);
           world.hold = timesOut;
           await installAndAllow(demo.pluginId);
-          expect(prompts()).toEqual([UNREAD]);
+          expect(told()).toEqual([{ readback: "failed", told: false }]);
           world.hold = () => undefined;
           await click(`plugins.market.install.${notes.pluginId}`);          // Notes' consent is on screen
           await appState("background");
@@ -1523,7 +1548,7 @@ describe("market read fences and lost-receipt facts", () => {
         if (!lookups()) await click(`plugins.market.install.${demo.pluginId}`);   // the row's "Check result"
         await settle(20);
         await click("plugins.slotHolder.show");
-        expect(sheet()).toContain("plugins.checks.status.marketUnread");
+        expect(sheet()).toContain("plugins.checks.status.recordMissing");
         const quiet = requests.length;
         await settle(40);
         expect(requests.length).toBe(quiet);                                       // nothing looks it up again by itself
@@ -1712,6 +1737,110 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(20);
         expect(sheetLines()).toEqual([expect.stringContaining("plugins.checks.status.confirmation")]);
       });
+
+      /* 测试价值（推送前自查第四轮，2026-11-26：页面只在用户当场点按时换页，结果不自己打开也不弹提示）
+       * - 生产入口与可观察结果：同本组（真实页面与控件，只替换传输）；观察打开了哪个实例、写出了什么、面板与市场详情上的
+       *   按钮与文字。
+       * - 依据：维护者 17:43 第 1 条（离开未答复的确认会取消它，必须受控）；自查第四轮在 a337ae955c 上复现：点「打开插件」
+       *   后关掉面板，读取回来时页面仍被换走（那时用户已在做别的事，正开着的确认会被取消）；从市场详情发起的安装装完后
+       *   详情仍给「安装」；读取中的成功没有「不再跟踪」。
+       * - 现有覆盖缺口：只有「关掉面板后不打开」一条，没有关掉后又打开面板、关掉后另一项确认出现两种；市场详情上的安装
+       *   与读取中的行没有用例。
+       * - 最小失败输入：见各用例名。tier: unit（jsdom，内存 Host）。
+       */
+      /** Proven while the page was away, the list of checks open over the market; the next installed read written is held. */
+      async function openPressedOverMarket(world: World) {
+        await provenWhileAway(world);
+        // The market is the page under the list (closing the list here would count the result as seen).
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        const hold = holds();
+        let held = false;
+        world.hold = (label: string) => { if (!label.startsWith("installed-") || held) return undefined; held = true; return hold.wait("open-read"); };
+        await click("plugins.checks.open");
+        expect(sheet()).toContain("plugins.checks.result.readingBack");
+        return () => { world.hold = () => undefined; hold.release("open-read"); };
+      }
+      it("\"Open plugin\" pressed, the list closed and opened again while its read is out: that press is over, nothing opens until it is pressed again", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        const answer = await openPressedOverMarket(world);
+        await click("plugins.checks.close");
+        await click("plugins.slotHolder.show");
+        answer();
+        await settle(30);
+        expect({ opened: openedIds(), open: !!byId("plugins.checks.open"), told: told() }).toEqual({ opened: [], open: true, told: [{ readback: "verified", told: false }] });
+        await click("plugins.checks.open");
+        expect({ opened: openedIds(), writes: writes(requests) }).toEqual({ opened: ["mac:_root__demo"], writes: ONCE });
+      });
+      it("\"Open plugin\" pressed and the list closed; another install's consent comes up; the read proves the first: nothing opens, nothing is written for the consent", async () => {
+        let n = 0;
+        const spy = vi.spyOn(expoCrypto, "randomUUID").mockImplementation(() => `operation-000${++n}` as any);
+        try {
+          const world = fresh();
+          const requests = wire(world);
+          const answer = await openPressedOverMarket(world);
+          await click("plugins.checks.close");
+          await click(`plugins.market.install.${notes.pluginId}`);          // Notes' consent is on screen
+          const begun = ["begin:operation-0001", "answer:operation-0001", "begin:operation-0002"];
+          const written = () => writes(requests).filter((write) => !write.startsWith("operation:"));
+          expect(written()).toEqual(begun);
+          answer();
+          await settle(30);
+          expect({ opened: openedIds(), written: written(), consent: !!byId("plugins.management.allow") }).toEqual({ opened: [], written: begun, consent: true });
+          // The consent is still the one on screen: Allow is the only thing written for it.
+          const allows = [...element.querySelectorAll('[data-testid="plugins.management.allow"]')] as HTMLButtonElement[];
+          await act(async () => allows.at(-1)!.click());
+          await settle(30);
+          expect({ opened: openedIds(), written: written() }).toEqual({ opened: [], written: [...begun, "answer:operation-0002"] });
+        } finally { spy.mockRestore(); }
+      });
+      it("a success whose read is still out can be let go from the list (\"Stop tracking\"); its late read brings nothing back", async () => {
+        const hold = holds();
+        const world: World = { ...fresh(), hold: (label: string) => label.startsWith("installed-") ? hold.wait(label) : undefined };
+        const requests = wire(world);
+        await installAndAllow();
+        await click("plugins.slotHolder.show");
+        expect(sheet()).toContain("plugins.checks.result.readingBack");
+        await click("plugins.checks.stop");
+        expect(sheet()).toContain("plugins.checks.result.untracked");
+        await click("plugins.checks.close");
+        world.hold = () => undefined;
+        for (let read = 1; read <= world.installedReads; read++) hold.release(`installed-${read}`);
+        await settle(20);
+        expect({ banner: banner(), opened: openedIds(), prompts: prompts(), writes: writes(requests) }).toEqual({ banner: "", opened: [], prompts: [], writes: ONCE });
+      });
+      it.each([["a result already read", true, "plugins.checks.open", "plugins.checks.openOffline"], ["a success not read yet", false, "plugins.checks.readAgain", "plugins.checks.status.offline"]] as const)(
+        "the computer is not connected while the list shows %s: its button is unavailable and the line says what connecting is for", async (_name, proven, button, why) => {
+          const world = fresh();
+          wire(world);
+          if (proven) await provenWhileAway(world); else await installUnread(world);
+          fixture.online = false; await rerender();
+          if (!proven) await click("plugins.slotHolder.show");
+          // (The harness's Text drops test ids: the sentence is looked for in the list's text.)
+          const other = why === "plugins.checks.openOffline" ? "plugins.checks.status.offline" : "plugins.checks.openOffline";
+          expect({ disabled: byId(button)?.disabled, says: sheet().includes(why), other: sheet().includes(other) }).toEqual({ disabled: true, says: true, other: false });
+        });
+      it("installed from the market detail: the detail stays, is read again and no longer offers Install; the result is listed and opens from the list", async () => {
+        const world = fresh();
+        const requests = wire(world);
+        fixture.platform = "android";
+        fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.row.${demo.pluginId}`);
+        await click("plugins.market.detailInstall");
+        await click("plugins.management.allow");
+        await settle(20);
+        const detail = () => byId("plugins.market.detail")?.textContent ?? "";
+        expect({ install: !!byId("plugins.market.detailInstall"), installed: detail().includes("plugins.market.alreadyInstalled"), opened: openedIds(), prompts: prompts() })
+          .toEqual({ install: false, installed: true, opened: [], prompts: [] });
+        expect(banner()).toContain("plugins.checks.settledOne");
+        await click("plugins.slotHolder.show");
+        await click("plugins.checks.open");
+        expect({ opened: openedIds(), writes: writes(requests) }).toEqual({ opened: ["mac:_root__demo"], writes: ONCE });
+      });
     });
 
     /* 测试价值（推送前自查第三轮，2026-11-26：一笔安装装完时，页面不得把用户从别的确认面板前带走）
@@ -1857,9 +1986,13 @@ describe("market read fences and lost-receipt facts", () => {
         await act(async () => { void menu().props.onAction("update"); });
         await settle(30);
         expect({ writes: writes(world.requests), update: world.ops.get("operation-0002")!.phase }).toEqual({ writes: BOTH, update: "confirmation" });
+        // Two operations, both still under way (one on each computer): the notice says so in those words.
+        expect(banner()).toContain("plugins.checks.many");
         answer.release(true);                                                                   // PC's install ends
         await settle(40);
-        expect({ writes: writes(world.requests), update: world.ops.get("operation-0002")!.phase, listed: banner() !== "" }).toEqual({ writes: BOTH, update: "confirmation", listed: true });
+        // One has a result now and one is still under way: they need a look.
+        expect({ writes: writes(world.requests), update: world.ops.get("operation-0002")!.phase, banner: banner() })
+          .toEqual({ writes: BOTH, update: "confirmation", banner: expect.stringContaining("plugins.checks.attentionMany") });
       }));
     });
 
@@ -1965,6 +2098,25 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ results: results(), read: detailReads().includes("mac:demo"), actions: menuActions(), banner: banner() })
           .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], read: true, actions: ["uninstall"], banner: "" });
       });
+      // Pre-push review, round 4 (failed on a337ae955c: the detail kept the old version and its Update under a result
+      // that said done): the success is read again from the list, by the person; closing the list brings the detail of
+      // that very instance up to date, once.
+      it.each([["wide", 900], ["narrow", 390]] as const)("update; the reads after it time out; \"Read again\" in the list proves it and the list is closed (%s): the detail shows the update and nothing stays listed", async (_name, width) => {
+        const world = host();
+        world.hold = timesOut;
+        await open(width);
+        await update();
+        expect({ banner: banner(), actions: menuActions() }).toEqual({ banner: expect.stringContaining("plugins.checks.waitingOne"), actions: expect.arrayContaining(["update"]) });
+        world.hold = () => undefined;
+        fixture.read.mockClear();
+        await click("plugins.slotHolder.show");
+        await click("plugins.checks.readAgain");
+        expect(byId("plugins.checks")!.textContent).toContain("plugins.checks.result.succeeded");
+        await click("plugins.checks.close");
+        await settle(30);
+        expect({ results: results(), read: detailReads().includes("mac:demo"), actions: menuActions(), banner: banner(), prompts: prompts() })
+          .toEqual({ results: [{ entry: "update", result: "succeeded", readback: "verified", told: true }], read: true, actions: ["uninstall"], banner: "", prompts: [] });
+      });
       it("page approval; the reads after it time out; the computer comes back: approved on screen and nothing stays listed", async () => {
         const world = host({ ui: true });
         world.hold = timesOut;
@@ -2043,7 +2195,7 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ ...onPluginPage(), detailReads: detailReads() }).toEqual({ menu: false, detailsButton: "plugins.details", detailReads: [] });
       });
       it.each([["another install since (②)", "unattributed", "plugins.market.unconfirmedMismatch"], ["an older computer (③)", "legacy", "plugins.market.unconfirmedLegacy"]] as const)(
-        "update; begin's reply lost; receipt gone; the detail's own \"Check result\" reads %s: the person is told how it ended", async (_name, attribution, said) => {
+        "update; begin's reply lost; receipt gone; the detail's own \"Check result\" reads %s: how it ended is listed, not prompted", async (_name, attribution, said) => {
           const world = host();
           world.attribution = attribution;
           await open();
@@ -2053,7 +2205,13 @@ describe("market read fences and lost-receipt facts", () => {
           await update();
           await act(async () => { fixture.props.get("detail").managementNotice.actions[0].onPress(); });
           await settle(30);
-          expect({ prompts: prompts(), begins: world.asked.filter((id) => id === "management:begin").length }).toEqual({ prompts: [said], begins: 1 });
+          // Nothing is prompted; how it ended is listed at the top and said in the list of checks.
+          expect({ prompts: prompts(), begins: world.asked.filter((id) => id === "management:begin").length, banner: banner() })
+            .toEqual({ prompts: [], begins: 1, banner: expect.stringContaining("plugins.checks.settledOne") });
+          await click("plugins.slotHolder.show");
+          expect(byId("plugins.checks")!.textContent).toContain(said);
+          await click("plugins.checks.close");
+          expect(banner()).toBe("");
         });
       it("update could not be read; back to the list; the computer comes back; the person opens that detail again: it is read once, and the notice goes", async () => {
         const world = host();

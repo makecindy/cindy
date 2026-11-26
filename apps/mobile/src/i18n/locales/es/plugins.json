@@ -510,7 +510,7 @@
       "confirmation": "Esperando confirmación",
       "checking": "Comprobando el resultado",
       "waiting": "Resultado sin confirmar. Compruébalo otra vez o deja de seguirlo.",
-      "marketUnread": "El ordenador no puede leer ahora el mercado de este complemento, así que el resultado aún no se puede confirmar. Compruébalo más tarde o deja de seguirlo.",
+      "recordMissing": "Este complemento está en el ordenador, pero no se pudo leer su registro de instalación, así que el resultado aún no se puede confirmar. Compruébalo más tarde o deja de seguirlo.",
       "offline": "«{{device}}» no está conectado. Conéctalo para comprobar el resultado.",
       "awaitingYou": "El ordenador espera tu confirmación",
       "unprovable": {
@@ -547,6 +547,7 @@
     "decideBlocked": "Otra operación en este ordenador no ha terminado. Decide cuando termine.",
     "readAgain": "Volver a leer",
     "showInstalled": "Ir a Instalados",
-    "openUnavailable": "«{{device}}» ya no está entre los ordenadores de esta cuenta, así que no se puede abrir desde aquí."
+    "openUnavailable": "«{{device}}» ya no está entre los ordenadores de esta cuenta, así que no se puede abrir desde aquí.",
+    "openOffline": "«{{device}}» no está conectado. Conéctalo para abrir el complemento."
   }
 }

@@ -508,7 +508,7 @@
       "confirmation": "等待确认",
       "checking": "正在核实结果",
       "waiting": "结果未确认。可以再核实一次，或不再跟踪。",
-      "marketUnread": "电脑现在读不到这个插件所在的市场，还不能确认结果。可以稍后再核实一次，或不再跟踪。",
+      "recordMissing": "电脑上有这个插件，但读不到它的安装记录，还不能确认结果。可以稍后再核实一次，或不再跟踪。",
       "offline": "「{{device}}」未连接，连接后才能核实结果。",
       "awaitingYou": "电脑正在等你确认",
       "unprovable": {
@@ -545,6 +545,7 @@
     "decideBlocked": "这台电脑上另一项操作还没结束，结束后再决定。",
     "readAgain": "重新读取",
     "showInstalled": "去已安装",
-    "openUnavailable": "「{{device}}」已不在这个账号的电脑列表里，不能从这里打开。"
+    "openUnavailable": "「{{device}}」已不在这个账号的电脑列表里，不能从这里打开。",
+    "openOffline": "「{{device}}」未连接，连接后才能打开。"
   }
 }

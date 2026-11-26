@@ -508,7 +508,7 @@
       "confirmation": "Waiting for confirmation",
       "checking": "Checking the result",
       "waiting": "Result unconfirmed. Check it again, or stop tracking.",
-      "marketUnread": "The computer can’t read this plugin’s marketplace right now, so the result can’t be confirmed yet. Check it again later, or stop tracking.",
+      "recordMissing": "This plugin is on the computer, but its install record couldn’t be read, so the result can’t be confirmed yet. Check it again later, or stop tracking.",
       "offline": "“{{device}}” isn’t connected. Connect it to check the result.",
       "awaitingYou": "The computer is waiting for you to confirm",
       "unprovable": {
@@ -545,6 +545,7 @@
     "decideBlocked": "Another operation on this computer isn’t finished. Decide once it is.",
     "readAgain": "Read again",
     "showInstalled": "Go to Installed",
-    "openUnavailable": "“{{device}}” is no longer in this account’s computers, so it can’t be opened from here."
+    "openUnavailable": "“{{device}}” is no longer in this account’s computers, so it can’t be opened from here.",
+    "openOffline": "“{{device}}” isn’t connected. Connect it to open the plugin."
   }
 }

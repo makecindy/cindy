@@ -14,10 +14,10 @@ import type { PluginSlotEntry } from "@/plugins/pluginManagementSlot";
  */
 export type VisualCheckState = "running" | "waiting" | "offline" | "awaitingYou" | "succeeded" | "unread" | "failed" | "untracked" | "many"
   | "readingBack" | "changed" | "uninstalled" | "decideBlocked" | "unprovableUninstall" | "updateGone"
-  | "reinstalled" | "goneSince" | "catalogAhead" | "legacyHost" | "marketUnread" | "results" | "attention";
+  | "reinstalled" | "goneSince" | "catalogAhead" | "legacyHost" | "recordMissing" | "results" | "attention";
 export const VISUAL_CHECK_STATES: VisualCheckState[] = ["running", "waiting", "offline", "awaitingYou", "succeeded", "unread", "failed", "untracked", "many",
   "readingBack", "changed", "uninstalled", "decideBlocked", "unprovableUninstall", "updateGone", "reinstalled", "goneSince", "catalogAhead", "legacyHost",
-  "marketUnread", "results", "attention"];
+  "recordMissing", "results", "attention"];
 /** A computer that is not in the account's list: its pending check shows as offline. */
 const AWAY_DEVICE = { deviceId: "cindy-visual-mock-away", deviceName: "CINDY Away Mock Mac" };
 /** The online mock computer (visualMock's VISUAL_MOCK_DEVICE_ID; not imported, so this module stays out of its imports). */
@@ -102,7 +102,7 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     // The waiting one first: it lets go of the computer's slot, so the second operation may begin beside it.
     case "many": await one("waiting"); await seedOne(SIMULATOR, "running"); return () => {};
     // The receipt is gone and the computer cannot read the plugin's market: the facts settle nothing yet (it says so).
-    case "marketUnread": { const c = await one("goneUnread"); return () => { void c?.reconcile(); }; }
+    case "recordMissing": { const c = await one("goneUnread"); return () => { void c?.reconcile(); }; }
     // Two successes proven once looked up: the notice at the top (behind the list) says both have a result.
     case "results": { const a = await one("succeeded"); const b = await seedOne(SIMULATOR, "succeeded"); return () => { void a?.reconcile(); void b?.reconcile(); }; }
     // One proven success and one still waiting to be checked: the notice says they need a look.

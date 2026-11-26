@@ -9,16 +9,16 @@ export interface FinishedPluginOperation {
   /** Update, page approval: the instance it started from (its computer and account are the caller's fence). */
   who: Pick<PluginSlotHolder, "instanceKey">;
   /** Install and update: the market release it was for (its version is the target). */
-  detail?: Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "releaseId" | "version"> & Partial<Pick<ManagedMarketItem, "sourceType" | "sourceMarketName" | "scope">>;
+  detail?: Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "releaseId" | "version">;
 }
 
 /**
  * Why a finished operation offers no "Open" (the success, when there was one, stays a past result): `gone`, no instance
- * of it on the computer now; `unconfirmed`, an instance is there but the computer does not attribute it to this
- * operation (V2.10 ②: another install since, a conflict, or no record of it in a complete response); `legacy`, an older
- * computer gives no evidence (③: the person opens it from the installed list); `unread`, an instance is there but this
- * response says its own market part is incomplete and has no record of the plugin (the computer could not read its
- * catalog or a custom market then): nothing can be concluded from it, it has to be read again.
+ * of it on the computer now; `unconfirmed`, an instance is there and the computer's record of it is not attributed to
+ * this operation (V2.10 ②: another install since, or a conflict); `legacy`, an older computer gives no evidence (③: the
+ * person opens it from the installed list); `unread`, an instance is there but this response has no installed record of
+ * the plugin at all (the computer could not read its catalog or the plugin's market then, or its market data has not
+ * caught up with an install that just committed): nothing can be concluded from it, it has to be read again.
  */
 export type PluginOperationNotOpened = "gone" | "unconfirmed" | "legacy" | "unread";
 export type PluginOperationOpens = { open: true; instanceKey: string } | { open: false; reason: PluginOperationNotOpened };
@@ -29,25 +29,6 @@ export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = 
   legacy: "plugins.checks.result.legacyHost",
   unread: "plugins.checks.result.succeededUnread",
 };
-/** What a snapshot says about its own market part (which of its sources the computer could not read then). */
-export type PluginMarketReadState = { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[];
-  customSourceNames?: readonly string[]; organizationAccessError?: string | null };
-/**
- * Whether a snapshot's market part would hold this plugin's record if the computer had one: the source the plugin comes
- * from was read. A plugin of the plugin market needs the catalog read (and, for an organization's plugin, the
- * organization's part); one of a custom market needs that market read: not named as unreadable, and, when the computer
- * says its market part as a whole was unavailable (it answers with no items at all while its session switches or it is
- * not signed in), named among the custom markets it did read. Another source being unreadable does not matter: otherwise
- * a market that stays down would keep an unrelated plugin from ever being settled.
- */
-export function pluginMarketFactsComplete(market: PluginMarketReadState,
-  item: Partial<Pick<ManagedMarketItem, "sourceType" | "sourceMarketName" | "scope">> = {}): boolean {
-  if (item.sourceType === undefined || item.sourceType === "server")
-    return !market.unavailableReason && (item.scope === "organization" || item.scope === undefined ? !market.organizationAccessError : true);
-  if (!item.sourceMarketName) return market.unavailableCustomSourceNames.length === 0 && !market.unavailableReason;
-  if (market.unavailableCustomSourceNames.includes(item.sourceMarketName)) return false;
-  return !market.unavailableReason || (market.customSourceNames ?? []).includes(item.sourceMarketName);
-}
 type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "installState" | "installedOperationId" | "installedOperationAttribution">;
 
 /**
@@ -68,8 +49,6 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   ghosts: readonly ManagedPlugin[];
   /** The market records read with those facts (the same snapshot's items); absent when not read. */
   market?: readonly MarketRecord[] | MarketRecord | null;
-  /** What that snapshot says about its market part; absent when it says nothing (taken as complete). */
-  marketState?: PluginMarketReadState;
 }): PluginOperationOpens {
   if (operation.entry === "page-approval") {
     const instance = facts.ghosts.find((ghost) => ghost.instanceKey === operation.who.instanceKey);
@@ -87,13 +66,14 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   if (evidence === "none") {
     // A conflict: a package of the same id from elsewhere is there (not this attempt's instance, but not "gone" either).
     if (record?.installState === "conflict") return { open: false, reason: "unconfirmed" };
-    // No installed record of it. "Gone" only when no instance of the plugin is there either; one that is there cannot
-    // be attributed (②), and when the response itself says its market part is incomplete it settles nothing.
+    // No installed record of it. "Gone" only when no instance of the plugin is there either. One that is there with a
+    // record saying "not installed" cannot be attributed (②); with no record at all the response says nothing about
+    // it (its market part is incomplete or behind): it settles nothing and has to be read again.
     // (An instance of the same id in another known namespace is another plugin.)
     const there = (ghost: ManagedPlugin) => ghost.manifest.id === item.ghostId
       && (item.namespace === undefined || ghost.namespace === undefined || item.namespace === ghost.namespace);
     if (!facts.ghosts.some((ghost) => there(ghost) && started(ghost))) return { open: false, reason: "gone" };
-    return { open: false, reason: !record && facts.marketState && !pluginMarketFactsComplete(facts.marketState, item) ? "unread" : "unconfirmed" };
+    return { open: false, reason: record ? "unconfirmed" : "unread" };
   }
   if (evidence !== "confirmed") return { open: false, reason: evidence };
   const identity = record && record.namespace !== undefined ? record : item;

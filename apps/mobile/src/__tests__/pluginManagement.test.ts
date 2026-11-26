@@ -11,7 +11,7 @@ import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
 import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
-import { pluginMarketFactsComplete, pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
 import { CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
@@ -2462,11 +2462,13 @@ describe('whether a finished operation opens an instance', () => {
   it.each([
     ['the same name in another namespace', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }],
       [{ ...detail, namespace: 'team', installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }], 'unconfirmed'],
-    // An instance is there but the response names no installed record of it (pre-push review 2026-11-26; the Host
-    // sends this shape when it could not read its catalog, or for a plugin whose market was removed): never "not on the
-    // computer now". A complete response leaves it unattributed (②); one that says its market part is incomplete settles
-    // nothing (read again). With no instance of the plugin there at all it is gone, whatever the market part says.
-    ['no record of it, an instance there', [updated], [], 'unconfirmed'],
+    // An instance is there but the response names no record of it (the Host sends this shape when it could not read its
+    // catalog, for a plugin whose market was removed, and on the first read after an install): what the computer says
+    // about this install was not read, so nothing is settled ("could not read", read again); never "not on the computer
+    // now", and never "cannot confirm" from a record that was not there to say so. Whether the response calls its market
+    // part complete plays no part (minimal failing input on a337ae955c: a complete-looking response gave 'unconfirmed').
+    // With no instance of the plugin there at all it is gone.
+    ['no record of it, an instance there', [updated], [], 'unread'],
     ['a record saying not installed, an instance there', [updated], [{ ...detail, installState: 'not-installed' as const }], 'unconfirmed'],
     ['no record of it, no instance', [], [], 'gone'],
     // A package of the same id from elsewhere is there: not this attempt's instance, and not "gone" (V2.10: unconfirmed).
@@ -2474,31 +2476,13 @@ describe('whether a finished operation opens an instance', () => {
   ] as const)('install: %s', (_name, ghosts, market, reason) => {
     expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
   });
-  it('install: a response that could not read the plugin\'s own market settles nothing unless it names the plugin', () => {
-    const catalogDown = { marketState: { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] } };
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], ...catalogDown })).toEqual({ open: false, reason: 'unread' });
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [], ...catalogDown })).toEqual({ open: false, reason: 'gone' });
-    // What it does name still decides.
+  it('install: what a response does name about the plugin decides, whatever else it left out', () => {
     const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [own], ...catalogDown })).toEqual({ open: true, instanceKey: updated.instanceKey });
-    // Only the source the plugin comes from matters: another market being down must not keep it from ever settling.
-    const customDown = { unavailableReason: null, unavailableCustomSourceNames: ['Acme'] };
-    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], marketState: customDown })).toEqual({ open: false, reason: 'unconfirmed' });
-    const server = { sourceType: 'server' as const, sourceMarketName: null, scope: 'public' as const };
-    const custom = (name: string) => ({ sourceType: 'git-market' as const, sourceMarketName: name, scope: 'public' as const });
-    expect([pluginMarketFactsComplete(customDown, server), pluginMarketFactsComplete(customDown, custom('Acme')), pluginMarketFactsComplete(customDown, custom('Other'))])
-      .toEqual([true, false, true]);
-    // The catalog could not be read but the custom markets were (the computer names the ones it read): a custom
-    // market's plugin is unaffected. When its whole market part was unavailable (no items at all, no market named:
-    // the computer's session is switching or it is not signed in), nothing was read for it either.
-    const catalog = { unavailableReason: 'fetch failed', unavailableCustomSourceNames: [], customSourceNames: ['Acme'] };
-    expect([pluginMarketFactsComplete(catalog, server), pluginMarketFactsComplete(catalog, custom('Acme'))]).toEqual([false, true]);
-    const nothingRead = { unavailableReason: 'session-switching', unavailableCustomSourceNames: [], customSourceNames: [] };
-    expect([pluginMarketFactsComplete(nothingRead, server), pluginMarketFactsComplete(nothingRead, custom('Acme'))]).toEqual([false, false]);
-    expect(pluginOperationOpens({ ...finished('market-install'), detail: { ...detail, ...custom('Acme') } }, { ghosts: [updated], market: [], marketState: nothingRead }))
-      .toEqual({ open: false, reason: 'unread' });
-    const organization = { unavailableReason: null, unavailableCustomSourceNames: [], organizationAccessError: 'FORBIDDEN' };
-    expect([pluginMarketFactsComplete(organization, server), pluginMarketFactsComplete(organization, { ...server, scope: 'organization' as const })]).toEqual([true, false]);
+    const other = { ...detail, pluginId: 'market/other', ghostId: 'other', name: 'Other', installState: 'installed' as const };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other, own] })).toEqual({ open: true, instanceKey: updated.instanceKey });
+    // Records of other plugins are not a record of this one.
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [other] })).toEqual({ open: false, reason: 'unread' });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [other] })).toEqual({ open: false, reason: 'gone' });
   });
   // The Host shape asserted by apps/desktop plugin-market service.test.ts ("isolated-root"): a server summary carries no
   // `namespace` before the install; once installed the same item is projected with `namespace: null` beside the

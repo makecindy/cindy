@@ -11,6 +11,29 @@ import { usePluginManagement, __retainedForTests } from "@/plugins/usePluginMana
 import { __testing as slotTesting, pluginManagementSlotFor } from "@/plugins/pluginManagementSlot";
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 import { CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from "./hostPluginInstallFacts";
+/**
+ * Proven as this install: concluded as done with its instance read from the computer. The page never opens a result by
+ * itself; the person opens it from the list of checks ("Open plugin"), which the tests of that list cover.
+ */
+const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
+  && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
+/** What the page draws at the top now (the stand-in keeps the props of a notice that is no longer drawn). */
+async function topNotice() {
+  fixture.props.delete("plugins.slotHolder");
+  await act(async () => root.render(createElement(PluginsScreen)));
+  return fixture.props.get("plugins.slotHolder") as { title: string; onPress: () => void } | undefined;
+}
+const sheetControl = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+/** "View" at the top, then "Open plugin" on the result's line: the only way a result's instance gets opened. */
+async function openListedResult() {
+  const notice = await topNotice();
+  expect(notice, "the result is listed at the top").toBeDefined();
+  await act(async () => notice!.onPress());
+  await settle(6);
+  expect(sheetControl("plugins.checks.open"), "its line offers Open plugin").not.toBeNull();
+  await act(async () => sheetControl("plugins.checks.open")!.click());
+  await settle(14);
+}
 
 it("reads selected plugin details when its computer comes online", async () => {
   fixture.online = false;
@@ -1264,14 +1287,20 @@ describe("page slot release paths", () => {
       expect(holder()).toBeNull();
     });
   });
-  // Dispatcher O-2: the installed detail after its own update uses the same decision as the list (pluginOperationOpens):
-  // the computer showing the new version keeps the detail on it quietly; one still at the old version (it changed since)
-  // keeps the detail on the instance shown and says so once. Minimal failing input on 015469869c: no sentence. Tier: unit.
-  // Dispatcher R-1, R-3: the computer's answer after the update, as it gives it in each situation. Only this phone's
-  // update in place (also with the catalog at its next release) stays quiet; a reinstall by the computer or another
-  // controller (no evidence for this phone), another controller's update and the old version each say why, once; an
-  // instance gone closes the detail. Minimal failing input on 5983ba71dd: the catalog's next release said "changed".
-  // Tier: unit/jsdom.
+  // The installed detail after its own update uses the same decision as the list (pluginOperationOpens), from the
+  // record's one read of the computer. Nothing is prompted for a result: this phone's update in place (also with the
+  // catalog at its next release) leaves no line (its detail is on screen); a reinstall by the computer or another
+  // controller, another controller's update, an older computer and the old version are each listed at the top with
+  // their sentence in the list of checks, and no "Open plugin". Minimal failing input on a337ae955c: each of those
+  // raised an alert over whatever was on screen. Tier: unit/jsdom.
+  const listedResult = async () => {
+    const notice = await topNotice();
+    if (!notice) return null;
+    await act(async () => notice.onPress());
+    await settle(6);
+    return { title: notice.title, text: sheetControl("plugins.checks")?.textContent ?? "", open: !!sheetControl("plugins.checks.open") };
+  };
+  const resultAlerts = () => fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result."));
   it.each([
     ["own", null], ["catalogAdvanced", null], ["localReinstall", "plugins.checks.result.unconfirmed"],
     ["otherControllerReinstall", "plugins.checks.result.unconfirmed"], ["otherControllerUpdate", "plugins.checks.result.unconfirmed"],
@@ -1280,17 +1309,20 @@ describe("page slot release paths", () => {
     const s = await updateScreen({ begin: (request) => { s.become(situation, request.input.operationId); return receiptOf(request, "succeeded"); } });
     fixture.alert.mockClear();
     await s.update();
-    const told = fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result."));
-    expect(told.map((call) => call[1])).toEqual(said ? [said] : []);
+    expect(resultAlerts()).toEqual([]);
     expect(fixture.props.get("header")).toBeDefined();
+    const listed = await listedResult();
+    if (!said) expect(listed).toBeNull();
+    else expect(listed).toMatchObject({ title: "plugins.checks.settledOne", text: expect.stringContaining(said), open: false });
   });
-  it("after an update succeeds on its detail and the computer still has the old version: says it cannot confirm", async () => {
+  it("after an update succeeds on its detail and the computer still has the old version: lists that it cannot confirm", async () => {
     // The old install is nobody's here: a V2.10 computer says `'unattributed'` for it.
     const s = await updateScreen({ begin: (request) => { Object.assign(s.market, { installedOperationAttribution: "unattributed" });
       return receiptOf(request, "succeeded"); } });
     fixture.alert.mockClear();
     await s.update();
-    expect(fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.unconfirmed")).toHaveLength(1);
+    expect(resultAlerts()).toEqual([]);
+    expect(await listedResult()).toMatchObject({ text: expect.stringContaining("plugins.checks.result.unconfirmed"), open: false });
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -2223,7 +2255,7 @@ it.each(["computer", "account"])("drops a late market page after switching the %
   await settle();
   expect(shownMarket().items.map((item: any) => item.name)).toEqual(change === "computer" ? ["PC only"] : []);
 });
-it("installs from the market through the existing consent sheet and opens the new installed detail", async () => {
+it("installs from the market through the existing consent sheet; its result is listed and opens the new installed detail", async () => {
   const item = marketItem("demo", "Demo");
   const manifest = { schemaVersion: 3, id: "demo", name: "Demo", version: "1" };
   let installed = false;
@@ -2258,6 +2290,12 @@ it("installs from the market through the existing consent sheet and opens the ne
     input: { kind: "install", pluginId: "market/demo", expectedReleaseId: "demo@1" } });
   expect(requests.find((request) => request.actionId === "management:begin")!.input).not.toHaveProperty("expectedInstalledApproval");
   expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  // The result does not change the page by itself: the market stays, the row is done, the result is listed at the top.
+  expect(fixture.props.get("header").title).not.toBe("Demo");
+  expect(shownMarket().installBusy).toBe(false);
+  expect(provenDemo()).toBe(true);
+  expect((await topNotice())?.title).toBe("plugins.checks.settledOne");
+  await openListedResult();
   expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
     expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
   expect(fixture.props.get("header").title).toBe("Demo");
@@ -2268,11 +2306,11 @@ it("installs from the market through the existing consent sheet and opens the ne
     .map((request) => request.input?.read)).toEqual(["capabilities", "catalog", "catalog", "installed", "installed", "installed", "installed"]);
 });
 
-// Dispatcher R (point 2), contract V2.10: once the controller's own read after the result has landed, the market row
-// settles at once: the proven instance opens; ② (not attributable) and ③ (an older computer) end with their sentence,
-// without waiting (only while that read is out is there nothing to decide; the controller says so, `finalReadback`).
+// Contract V2.10: once the one read of the computer after the result has landed, the market row ends at once and the
+// result is listed at the top, without a prompt and without waiting on any timer: the proven instance has "Open plugin"
+// in the list of checks; ② (not attributable) and ③ (an older computer) have their sentence and no "Open plugin".
 // Minimal failing input on 3429eff0eb: an older computer's shape kept the row "installing" for 5 more seconds, then
-// ended without a word (the proven row passes there too: existing behaviour). Tier: unit/jsdom (no timer is advanced).
+// ended without a word; on a337ae955c ② and ③ raised an alert over the page. Tier: unit/jsdom (no timer is advanced).
 it.each([
   ["this install, proven", { installedOperationId: "screen-operation", installedOperationAttribution: "self" }, null],
   ["not attributable (②)", { installedOperationAttribution: "unattributed" }, "plugins.checks.result.unconfirmed"],
@@ -2302,18 +2340,22 @@ it.each([
   fixture.alert.mockClear();
   await act(async () => fixture.props.get("confirmation").controller.answer(true));
   await settle(14);
-  // The read after the result landed: settled at once, without any timer running out (the proven one opened its
-  // installed detail instead of the market).
-  if (said === null) expect(fixture.props.get("header").title).toBe("Demo"); else expect(shownMarket().installBusy).toBe(false);
-  const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
-  expect(opened).toBe(said === null);
-  expect(fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result.")).map((call) => call[1]))
-    .toEqual(said ? [said] : []);
+  // The read after the result landed: the row ended at once, the market is still the page, nothing was prompted.
+  expect(shownMarket().installBusy).toBe(false);
+  expect(fixture.props.get("header").title).not.toBe("Demo");
+  expect(fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result."))).toEqual([]);
+  expect(provenDemo()).toBe(said === null);
+  const notice = await topNotice();
+  expect(notice?.title).toBe("plugins.checks.settledOne");
+  await act(async () => notice!.onPress());
+  await settle(6);
+  expect({ text: sheetControl("plugins.checks")?.textContent ?? "", open: !!sheetControl("plugins.checks.open") })
+    .toMatchObject({ text: expect.stringContaining(said ?? "plugins.checks.result.succeeded"), open: said === null });
   expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
 });
 
 // PR review (2026-11-25): a first install from the user's own Git market, end to end on the phone side.
-it("installs from a custom Git market with the Host's manifest check and opens the new installed detail", async () => {
+it("installs from a custom Git market with the Host's manifest check; its result opens the new installed detail", async () => {
   const { publisherKind: _server, ...base } = marketItem("repo-tools", "Repo Tools");
   const source = { kind: "git", repository: "github.com/demo-org/demo-git-market", sourceId: "DemoGitMarketSource001" };
   const item = { ...base, pluginId: "custom-market:Demo%20Git%20Market/repo-tools", sourceType: "git-market", sourceMarketName: "Demo Git Market",
@@ -2351,7 +2393,8 @@ it("installs from a custom Git market with the Host's manifest check and opens t
   expect(sheet.state.receipt.consent).toMatchObject({ origin: "custom-market", originLabel: "Demo Git Market", originSource: source });
   await act(async () => sheet.controller.answer(true));
   await settle(14);
-  // The installed detail opened is the new instance (the mocked resource read always titles it "Demo").
+  // Its result is listed; "Open plugin" opens the new instance (the mocked resource read always titles it "Demo").
+  await openListedResult();
   expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
     expect.objectContaining({ id: "_root__repo-tools" }), "en", ["plugin-capabilities"]);
 });
@@ -3151,7 +3194,13 @@ describe("market install recovery", () => {
     await settle(14);
     if (messageKey) expect(shownMarket()).toMatchObject({ installBusy: false, canInstall: true });
     if (messageKey) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey });
-    else expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
+    else {
+      // Proven as this install; listed, and opened only by the person from the list.
+      expect(provenDemo()).toBe(true);
+      expect(fixture.props.get("header").title).not.toBe("Demo");
+      await openListedResult();
+      expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
+    }
     // Never a second begin: the unknown result is only looked up, never replayed.
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
@@ -3191,7 +3240,7 @@ describe("market install recovery", () => {
     await act(async () => controller.setOnline(true));
     await settle(14);
     if (shownMarket().rowState(item).kind === "unknown") { await act(async () => { await shownMarket().checkResult(item); }); await settle(14); }
-    const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+    const opened = provenDemo();
     expect(opened).toBe(confirmed);
     // Unconfirmed: the row keeps the note and the market is released (confirmed opens the installed detail instead).
     if (!confirmed) {
@@ -3276,7 +3325,7 @@ describe("market install recovery", () => {
     receiptGone = true;
     await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(sameResponseProves);
+    expect(provenDemo()).toBe(sameResponseProves);
     if (!sameResponseProves) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
     expect(requests.filter((request) => request.actionId === "management:answer")).toHaveLength(1);
@@ -3328,7 +3377,7 @@ describe("market install recovery", () => {
     receiptGone = true;
     await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
-    const opened = fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo");
+    const opened = provenDemo();
     if (expected === "installed") expect(opened).toBe(true);
     else {
       expect(opened).toBe(false);
@@ -3347,7 +3396,8 @@ describe("market install recovery", () => {
         case "management:snapshot":
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Team"] };
-          return managementSnapshot(installed);
+          // The computer's record of this item comes with its installed read (the one response a result is judged from).
+          return managementSnapshot(installed, { ...item, installState: "installed", ...attributed(installed), installedSourceId: sourceA.sourceId });
         case "management:market-detail":
           return { ...item, installState: installed ? "installed" : "not-installed", ...attributed(installed), ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
@@ -3363,7 +3413,7 @@ describe("market install recovery", () => {
     await settle(14);
     await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(provenDemo()).toBe(false);
     expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
   });
   // Maintainer review 07:23: in each case the computer later has the same plugin at the same release (from another
@@ -3417,7 +3467,7 @@ describe("market install recovery", () => {
     if (scenario === "unanswered" || scenario === "mismatch") await act(async () => { await controller.reconcile(); });
     else await act(async () => { await shownMarket().checkResult(item); });
     await settle(14);
-    expect(fixture.read.mock.calls.some((call: any[]) => call[2]?.id === "_root__demo")).toBe(false);
+    expect(provenDemo()).toBe(false);
     expect(shownMarket()).toMatchObject({ installBusy: false });
     expect(shownMarket().rowState(shown)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
@@ -3535,6 +3585,9 @@ it("still lists the remaining market plugins when returning from the new install
   await settle(14);
   await act(async () => fixture.props.get("confirmation").controller.answer(true));
   await settle(14);
+  // The market stays on screen after the install and no longer offers what was just installed.
+  expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Other"]);
+  await openListedResult();
   expect(fixture.props.get("header").title).toBe("Demo");
   const later = Date.now() + 31_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(later);
@@ -3688,6 +3741,7 @@ describe("market caches across two computers", () => {
     await settle(14);
     await act(async () => fixture.props.get("confirmation").controller.answer(true));
     await settle(14);
+    await openListedResult();
     expect(fixture.props.get("header").title).toBe("Demo");
     await act(async () => fixture.props.get("header").onBack());
     await settle();
@@ -3810,6 +3864,7 @@ describe("market reads that outlive their purpose", () => {
     await settle();
     await act(async () => fixture.props.get("confirmation").controller.answer(true));
     await settle(14);
+    await openListedResult();
     expect(fixture.props.get("header").title).toBe("Demo");
     // The pre-install refresh reply arrives while the new installed detail is open.
     await act(async () => { releasePage(); });

@@ -510,7 +510,7 @@
       "confirmation": "En attente de confirmation",
       "checking": "Vérification du résultat",
       "waiting": "Résultat non confirmé. Vérifiez à nouveau ou arrêtez le suivi.",
-      "marketUnread": "L’ordinateur ne peut pas lire le marketplace de ce plugin pour le moment, le résultat ne peut donc pas encore être confirmé. Vérifiez à nouveau plus tard ou arrêtez le suivi.",
+      "recordMissing": "Ce plugin est sur l’ordinateur, mais son enregistrement d’installation n’a pas pu être lu : le résultat ne peut pas encore être confirmé. Vérifiez à nouveau plus tard ou arrêtez le suivi.",
       "offline": "« {{device}} » n’est pas connecté. Connectez-le pour vérifier le résultat.",
       "awaitingYou": "L’ordinateur attend votre confirmation",
       "unprovable": {
@@ -547,6 +547,7 @@
     "decideBlocked": "Une autre opération sur cet ordinateur n’est pas terminée. Décidez une fois qu’elle l’est.",
     "readAgain": "Relire",
     "showInstalled": "Aller à Installés",
-    "openUnavailable": "« {{device}} » ne fait plus partie des ordinateurs de ce compte et ne peut pas être ouvert d’ici."
+    "openUnavailable": "« {{device}} » ne fait plus partie des ordinateurs de ce compte et ne peut pas être ouvert d’ici.",
+    "openOffline": "« {{device}} » n’est pas connecté. Connectez-le pour ouvrir le plugin."
   }
 }

@@ -1,4 +1,3 @@
-import type { PluginOperationNotOpened } from "./pluginOperationOpens";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -14,7 +13,7 @@ import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
-import { tellPluginConclusion, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
+import { usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -85,20 +84,6 @@ export interface UsePluginMarketOptions {
   /** Installed-tab computer filter; empty means all computers. */
   installedDeviceId: string;
   query: string;
-  /**
-   * An install the row on screen was waiting for succeeded, and the page may show it now (`canPresent`): `instanceKey`
-   * when the computer's facts prove this install's instance (it opens), otherwise why not (`notOpened`: a
-   * `pluginOperationOpens` reason; `unread` when the computer could not be read).
-   */
-  onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: Pick<ManagedMarketItem, "name">,
-    notOpened?: PluginOperationNotOpened): void;
-  /**
-   * Whether the page may show a result by itself right now: this market is what is on screen, the page is in front, and
-   * no consent or list of checks is open (moving the page would take the person away from it, and leaving a consent
-   * cancels it). Read live. When it may not, the result stays listed at the top instead, and is never shown later by
-   * itself.
-   */
-  canPresent(): boolean;
 }
 
 function useDebounced(value: string, delay: number) {
@@ -123,10 +108,6 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const owner = useRef(getMobileAuthOwner()).current;
   const storageKey = `cindy.pluginMarketDevice.v1.${owner.accountKey}`;
   const { targets, isOnline, installedDeviceId, visible, focused } = options;
-  const onInstalled = useRef(options.onInstalled);
-  const canPresent = useRef(options.canPresent);
-  canPresent.current = options.canPresent;
-  onInstalled.current = options.onInstalled;
 
   // ---- Install attempt (declared first: it pins the market to the installing computer).
   // An attempt still holding its computer's slot outlives this hook (maintainer review 17:43): the plugins page mounted
@@ -495,10 +476,6 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   // row on this computer ("Check result" looks up the original operation), whatever this view does meanwhile.
   const checks = usePluginPendingChecks();
   const conclusions = usePluginCheckConclusions();
-  /** Operations this mount's own row follows to their end (the row shows their conclusion itself). */
-  const rowOperations = useRef(new Set<string>());
-  /** The operation of the attempt on screen (its id is gone from the controller once it is no longer tracked). */
-  const attemptOperation = useRef<string | undefined>(undefined);
   const checkFor = (pluginId: string) => checks.find((check) => check.entry === "market-install"
     && check.who.deviceId === deviceId && check.who.pluginId === pluginId);
   // A kept attempt that had started was handed over to its controller already.
@@ -563,24 +540,6 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     });
     return () => { off(); if (timer) clearTimeout(timer); };
   }, [onRemoteResourceChanged, invalidateComputer]);
-  /**
-   * The attempt on screen ends with its install done. `present`: the page shows it now (opens the proven instance, or
-   * says why not); otherwise only this market is brought up to date, and the success stays listed at the top.
-   */
-  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined, notOpened?: PluginOperationNotOpened, present = true) => {
-    if (installRef.current?.id !== attempt.id) return;
-    finish(attempt);
-    // The page is gone: nothing to open, and no read is sent for it.
-    if (!mounted.current) return;
-    invalidateComputer(attempt.target.deviceId, attempt.item.pluginId);
-    // Closing this plugin's market detail also fences a detail read still in flight for it (its reply must not open
-    // the detail again, whether or not the installed instance is known).
-    if (liveDetail.current?.item.pluginId === attempt.item.pluginId) {
-      detailRead.current += 1;
-      setDetail(null);
-    }
-    if (present) onInstalled.current(attempt.target, instanceKey, attempt.item, instanceKey ? undefined : notOpened);
-  }, [finish, invalidateComputer]);
   useEffect(() => {
     const attempt = install, state = management.state, controller = management.controller;
     if (!attempt || attempt.started || !state || !controller) return;
@@ -635,20 +594,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     // Handed over and its result now waits for the person to check it (the computer's slot went), or its operation is
     // no longer tracked ("Stop tracking"): this attempt ends; its pending check, if any, carries on with the row (see
     // `rowState`). Before begin there is no operation to hand over: the paths below settle it.
-    if (state.operationId) { operationSeen.current = attempt.id; attemptOperation.current = state.operationId; }
+    if (state.operationId) operationSeen.current = attempt.id;
     const live = controller.getState();
     if (handedOver.current === attempt.id && !["succeeded", "failed", "cancelled"].includes(state.outcome)
       && (controller.pendingCheck()?.waiting || (operationSeen.current === attempt.id && !live.operationId && !live.busy))) {
-      // Its receipt was gone and the facts read after it settled it while this row was still waiting for the result:
-      // proven as this install (the same response's record and instance), its detail opens as after any install here.
-      const settled = operationSeen.current === attempt.id && !live.operationId && attemptOperation.current
-        ? conclusions.find((item) => item.operationId === attemptOperation.current) : undefined;
-      if (settled?.readback === "verified" && settled.instanceKey && !rowOperations.current.has(settled.operationId)
-        && mounted.current && canPresent.current() && tellPluginConclusion(settled.operationId)) {
-        rowOperations.current.add(settled.operationId);
-        complete(attempt, settled.instanceKey);
-        return;
-      }
       finish(attempt);
       return;
     }
@@ -658,46 +607,34 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
-    else if (state.outcome === "succeeded" && state.operationId) {
-      // The success is closed by the list's one read of the computer (usePluginManagement `readBack`), the same read
-      // the notice at the top and the list of checks show: this row only shows its conclusion, so they cannot differ.
-      // While that read is out there is nothing to decide on. Settled: open the proven instance, or end with why not
-      // (② not attributable, ③ an older computer, no instance), and the person has been told. Not read: the row ends as
-      // "could not read", so another install may start; the success stays listed at the top until a read settles it.
-      // A result that settles any other way (its computer came back, "Check result" after this row had ended) is not
-      // shown here: it is listed at the top.
-      rowOperations.current.add(state.operationId);
-      const conclusion = conclusions.find((item) => item.operationId === state.operationId);
-      if (!conclusion || conclusion.readback === "pending") return;
-      // The page shows a result by itself only while nothing is in the way (see `canPresent`); otherwise the row just
-      // ends and the success stays listed at the top, to be opened from the list of checks.
-      const present = mounted.current && canPresent.current();
-      if (conclusion.readback === "failed" || conclusion.readback === "none") { complete(attempt, undefined, "unread", present); return; }
-      if (!present || !tellPluginConclusion(conclusion.operationId)) { complete(attempt, undefined, undefined, false); return; }
-      if (conclusion.readback === "verified") complete(attempt, conclusion.instanceKey);
-      else complete(attempt, undefined, conclusion.readback);
-    }
-  }, [install, management.state, management.controller, finish, complete, conclusions]);
-  // Pending checks of this market's installs that ended without this view (usePluginManagement): the row's note, and
-  // the computer's lists read again after an install. Each is applied once per mount.
+    // Done: the row ends at once, so another install may start. It shows nothing itself and never moves the page: how
+    // the success settled (its instance proven by the list's one read of the computer, or why not) is listed at the top
+    // of the page and in the list of checks, where the person opens it (maintainer review 03:52; pre-push review).
+    else if (state.outcome === "succeeded") finish(attempt);
+  }, [install, management.state, management.controller, finish]);
+  // How this market's installs ended (usePluginManagement), each applied once per mount. Done: the plugin is no longer
+  // offered, whatever its read says (its row or its open market detail must not show "Install" while the top of the
+  // page says it is done): the computer's lists are read again, and so is an open market detail of it.
+  // Not done (failed, or not confirmed from the facts after its receipt was gone): the row's note, unless its own view
+  // ended with it (that view said it then).
   const applied = useRef(new Set<string>());
   useEffect(() => {
     for (const conclusion of conclusions) {
-      if (conclusion.entry !== "market-install" || !conclusion.who.pluginId || rowOperations.current.has(conclusion.operationId)) continue;
-      const succeededNow = conclusion.result === "succeeded" || conclusion.result === "installed";
-      // An install that is done is no longer offered, whatever its read says (its row must not show "Install" while
-      // the list of checks says it is done): the computer's lists are read again as soon as it is known.
-      if (succeededNow && !applied.current.has(conclusion.operationId + ":done")) {
-        applied.current.add(conclusion.operationId + ":done");
-        invalidateComputer(conclusion.who.deviceId, conclusion.who.pluginId);
-      }
-      // The row's note for one that did not end as done (failed, or not confirmed from the facts after its receipt was
-      // gone), unless its own view ended with it (that view said it then). A success is not noted on the row: it is
-      // listed at the top until the person has seen it, and says how it settled there.
-      const key = conclusion.operationId + ":" + conclusion.result;
-      if (conclusion.shown || succeededNow || applied.current.has(key)) continue;
-      applied.current.add(key);
+      if (conclusion.entry !== "market-install" || !conclusion.who.pluginId) continue;
       const { deviceId: on, pluginId } = conclusion.who;
+      const succeeded = conclusion.result === "succeeded" || conclusion.result === "installed";
+      if (succeeded) {
+        if (applied.current.has(conclusion.operationId + ":done")) continue;
+        applied.current.add(conclusion.operationId + ":done");
+        invalidateComputer(on, pluginId);
+        // An open market detail of it is read again (a read of it still out is dropped): it then says installed.
+        const open = liveDetail.current;
+        if (open && open.item.pluginId === pluginId && open.target.deviceId === on) void readDetail(open.item, open.target);
+        continue;
+      }
+      const key = conclusion.operationId + ":" + conclusion.result;
+      if (conclusion.shown || applied.current.has(key)) continue;
+      applied.current.add(key);
       const note = conclusion.result === "notInstalled" ? "plugins.market.unconfirmedNotInstalled"
         : conclusion.result === "mismatch" ? "plugins.market.unconfirmedMismatch"
         : conclusion.result === "legacy" ? "plugins.market.unconfirmedLegacy"

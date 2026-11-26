@@ -508,7 +508,7 @@
       "confirmation": "待確",
       "checking": "方核其果",
       "waiting": "果未確。可復核之，或不復隨之。",
-      "marketUnread": "彼機今不能讀此法器所在之市，果未可確。可稍後復核之，或不復隨之。",
+      "recordMissing": "彼機有此法器，然其裝錄未可讀，果未可確。可稍後復核之，或不復隨之。",
       "offline": "「{{device}}」未連，連之乃可核果。",
       "awaitingYou": "彼機待汝確之",
       "unprovable": {
@@ -545,6 +545,7 @@
     "decideBlocked": "此機另有一事未竟，竟後再決。",
     "readAgain": "復讀",
     "showInstalled": "往已納",
-    "openUnavailable": "「{{device}}」已不在此號之機列，不能自此啟之。"
+    "openUnavailable": "「{{device}}」已不在此號之機列，不能自此啟之。",
+    "openOffline": "「{{device}}」未連，連之乃可啟。"
   }
 }
