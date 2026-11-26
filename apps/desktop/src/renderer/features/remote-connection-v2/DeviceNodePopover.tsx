@@ -43,6 +43,7 @@ import {
   type PeerUpdateConfirmTarget,
   type PeerUpdateEntry,
 } from './peerAppUpdate';
+import { AutoRouteInfoButton } from './AutoRouteInfoButton';
 import { DeviceCardHeading } from './DeviceCardHeading';
 import type { TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
@@ -491,8 +492,9 @@ export function DeviceNodePopover({
       {showRoutePanel ? (
         <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-11 font-medium text-[var(--text-tertiary)]">
-              {t('settings.remoteControl.v2.popover.routePreference')}
+            <span className="inline-flex items-center gap-1 text-11 font-medium text-[var(--text-tertiary)]">
+              <span>{t('settings.remoteControl.v2.popover.routePreference')}</span>
+              {onPathPreferenceChange ? <AutoRouteInfoButton /> : null}
             </span>
             <span className="text-11 text-[var(--text-tertiary)]">
               {t('settings.remoteControl.v2.popover.rttNote')}
@@ -516,8 +518,7 @@ export function DeviceNodePopover({
             <SegmentedControl<DeviceLinkPeerPathPreference>
               value={selectedPref}
               aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-              height={28}
-              optionHeight={24}
+              density="sm"
               fullWidth
               options={[
                 { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },

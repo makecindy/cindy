@@ -416,6 +416,8 @@ export type SessionSendResult =
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
       diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      /** 上游拒绝这次派发时的 HTTP 状态（400–599），有界数值。 */
+      upstreamStatus?: number;
     };
 
 export interface SessionTurnControlSnapshot {
@@ -1175,6 +1177,9 @@ export class Session {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
             ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
+            ...(!reservation.cancelled && e.upstreamStatus !== undefined
+              ? { upstreamStatus: e.upstreamStatus }
+              : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result

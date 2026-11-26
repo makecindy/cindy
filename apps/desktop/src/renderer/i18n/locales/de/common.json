@@ -2808,7 +2808,7 @@
         "description": "Ubuntu verwendet System-.deb-Pakete. Arch Linux und Omarchy verwenden das verwaltete Benutzerinstallationsprogramm mit derselben verifizierten .deb-Nutzlast, ohne einen Debian-Paketmanager.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb verwenden. Arch/Omarchy: der Anleitung zur Benutzerinstallation in docs/linux.md folgen.",
         "item2": "Nach Auswahl von „Aktualisieren“ erfordern systemweite .deb-Installationen eine Autorisierung; verwaltete Benutzerinstallationen wechseln die Version ohne Systempasswort. Andere paketverwaltete Installationen verwenden ihren Paketmanager.",
-        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Linux-Updates werden nur angewendet, wenn du einen Neustart auswählst, niemals automatisch bei Inaktivität."
+        "item3": "Linux x64 und arm64 unterstützen den Beta-Kanal. Verwaltete Benutzerinstallationen können Updates im Leerlauf automatisch installieren; systemweite .deb-Installationen mit passwortloser Autorisierung können Updates ebenfalls im Leerlauf installieren, während andere systemweite .deb-Installationen Updates nur bei einem von dir gewählten Neustart anwenden."
       },
       "qnaTitle": "Direkt fragen",
       "qnaDescription": "Brauchst du noch Hilfe? Frag, wie du dein Vorhaben umsetzen kannst.",
@@ -2883,7 +2883,7 @@
       "openLogsDirError": "Protokollverzeichnis konnte nicht geöffnet werden",
       "autoUpdateLabel": "Updates bei Inaktivität installieren",
       "autoUpdateDescription": "Nach dem Herunterladen eines Updates die App zur Installation neu starten, wenn dieser Computer seit 10 Minuten inaktiv ist und keine Aufgaben ausgeführt werden.",
-      "linuxUpdateDescription": "Updates erfordern einen von dir gewählten Neustart. Systemweite .deb-Installationen fragen nach deinem Systempasswort; verwaltete Benutzerinstallationen nicht. Andere Installationen verwenden ihren Paketmanager.",
+      "linuxUpdateDescription": "Systemweite .deb-Installationen fragen nach deinem Systempasswort, daher werden Updates erst bei einem von dir gewählten Neustart angewendet. Verwaltete Benutzerinstallationen brauchen kein Passwort und können sich im Leerlauf aktualisieren. Andere Installationen verwenden ihren Paketmanager.",
       "autoUpdateEnabledToast": "Updateinstallation im Leerlauf aktiviert",
       "autoUpdateDisabledToast": "Updateinstallation im Leerlauf deaktiviert",
       "autoUpdateSaveFailed": "Einstellungen für automatische Updates konnten nicht gespeichert werden",
@@ -7165,7 +7165,14 @@
           "routeUnavailable": "Nicht verfügbar",
           "routeMeasuring": "Wird gemessen…",
           "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar",
-          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen."
+          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen.",
+          "autoRule": {
+            "title": "Regeln für automatische Routenwahl",
+            "faster": "Wählt den Weg mit geringerer Latenz und bevorzugt Direktverbindung bei minimalem Unterschied.",
+            "thresholds": "Wechselt auf Relay, sobald es 25–50 ms+ schneller ist; kehrt zurück, wenn Direkt innerhalb von 15 ms liegt.",
+            "cooldown": "30 s Abkühlzeit gegen Hin-und-her-Wechsel; bei starker Verschlechterung (≥ 2× langsamer und ≥ 100 ms schlechter) sofortiger Wechsel.",
+            "peerOverride": "Hat die Gegenseite Direkt/Relay fest gewählt oder nutzt eine ältere Version, gilt deren Einstellung bzw. Fähigkeit."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7313,6 +7320,99 @@
             "busy": "Auf „{{name}}“ läuft bereits ein Update. Kurz warten und erneut versuchen.",
             "failed": "Cindy auf „{{name}}“ konnte nicht aktualisiert werden."
           }
+        },
+        "tabs": {
+          "aria": "Topologieansicht",
+          "devices": "Geräteverbindungen",
+          "providers": "Remote-Anbieter"
+        },
+        "providers": {
+          "empty": "Derzeit laufen keine Aufgaben über einen Remote-Anbieter. Sobald eine Aufgabe auf einem anderen Computer oder geteilten Anbieter läuft, erscheinen Route und Relay hier.",
+          "noMatch": "Keine Aufgaben, Geräte oder Relays entsprechen dem Filter.",
+          "searchPlaceholder": "Aufgaben, Geräte oder Relays suchen…",
+          "clearFilter": "Filter zurücksetzen",
+          "expand": "Erweitern",
+          "collapse": "Einklappen",
+          "groupTitle": "{{provider}}-Anbietergruppe",
+          "groupCount": "{{count}} gesamt",
+          "groupIdleSummary": "{{count}} weitere Mitglieder: {{online}} online · {{offline}} offline",
+          "filter": {
+            "aria": "Nach Aufgabenstatus filtern",
+            "all": "Alle Aufgaben ({{count}})",
+            "running": "Nur laufend ({{count}})"
+          },
+          "columns": {
+            "tasks": "Meine Aufgaben",
+            "path": "Route",
+            "machines": "Remote-Anbietergeräte"
+          },
+          "usage": {
+            "remoteModel": "Remote-Modell",
+            "remoteTask": "Remote-Aufgabe"
+          },
+          "bundle": {
+            "mixed": "{{running}} laufend · {{ready}} bereit",
+            "runningOnly": "{{running}} laufend",
+            "readyOnly": "{{ready}} bereit",
+            "countBadge": "{{count}} ges.",
+            "popoverTitle": "Aufgaben auf {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mein Computer",
+            "groupMember": "Gruppe",
+            "share": "Geteilter Anbieter",
+            "shareShort": "Geteilt",
+            "shareGroup": "Geteilte Gruppe · {{count}}",
+            "shareGroupShort": "Gruppe · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Offiziell",
+            "selfHostedShort": "Selbst gehostet",
+            "sharerRelayShort": "Teiler-Relay",
+            "officialFull": "Cindy Offizielles Relay",
+            "selfHostedFull": "Selbst gehostetes Relay",
+            "sharerRelayFull": "Selbst gehostetes Relay des Teilers"
+          },
+          "status": {
+            "ready": "Online",
+            "busy": "Beschäftigt",
+            "paused": "Pausiert",
+            "idle": "Inaktiv",
+            "standby": "Bereit"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} Aufgaben",
+            "ready": "Bereit · {{count}} Aufgaben"
+          },
+          "popover": {
+            "models": "Aktive Modelle",
+            "tasksCount": "Verknüpfte Aufgaben ({{count}})",
+            "clickToOpenHint": "Zum Öffnen klicken",
+            "relayHost": "Relay-Adresse",
+            "relayRegion": "Region",
+            "relayHop": "Lokal zum Relay",
+            "relayLoad": "Über dieses Relay",
+            "relayLoadValue": "{{machines}} Geräte · {{tasks}} Aufgaben"
+          },
+          "idleStrip": {
+            "summary": "{{count}} weitere Online-Remote-Anbieter sind derzeit inaktiv",
+            "show": "Inaktive Anbieter anzeigen",
+            "hide": "Inaktive Anbieter ausblenden"
+          },
+          "stats": {
+            "empty": "Keine laufenden Remote-Anbieter-Aufgaben",
+            "tasks": "{{total}} Aufgaben",
+            "tasksWithRunning": "{{total}} Aufgaben ({{running}} laufend)",
+            "machines": "{{active}} Anbietergeräte",
+            "machinesWithTotal": "{{active}} aktiv / {{total}} Anbietergeräte",
+            "relays": "{{count}} Relays"
+          },
+          "legend": {
+            "live": "Blaue gestrichelte Linie: Datenaustausch aktiv",
+            "ready": "Grüne Linie: Agent-Net-Verbindung bereit",
+            "busy": "Oranger Punkt: Aufgabe aktiv / Gerät beschäftigt",
+            "error": "Rot gepunktet: Keine Antwort oder pausiert"
+          }
         }
       }
     },
@@ -7441,7 +7541,8 @@
       "localNetwork": {
         "label": "Lokales Netzwerk",
         "deniedHint": "Ohne diese Berechtigung können sich Computer und Telefone im selben Netzwerk nicht direkt mit diesem Computer verbinden. Sie laufen über das Relay, was langsamer ist.",
-        "settingsHint": "Aktiviere Cindy unter Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk. Die Änderung gilt, sobald du zurückkommst."
+        "promptedHint": "Klicke im macOS-Hinweis auf „Erlauben“. Wenn kein Hinweis erscheint, öffne die Systemeinstellungen.",
+        "settingsHint": "Öffne unter „Datenschutz & Sicherheit“ den Punkt „Lokales Netzwerk“ und aktiviere Cindy. Fehlt Cindy in der Liste, füge diese App über „+“ hinzu — die Änderung gilt sofort."
       }
     },
     "imBot": {
@@ -7912,6 +8013,10 @@
         "toggle-sidebar": {
           "label": "Seitenleiste umschalten",
           "description": "Seitenleiste mit der Sitzungsliste ein- oder ausklappen"
+        },
+        "copy-session-link": {
+          "label": "Sitzungslink kopieren",
+          "description": "Link der geöffneten Sitzung kopieren"
         },
         "session-history-back": {
           "label": "Vorherige Aufgabe",
@@ -9629,6 +9734,7 @@
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
         "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
+        "embeddedGuide": "Dein Assistent hat dieses Formular geöffnet, um MCP für die aktuelle Aufgabe einzurichten. Prüfe die vorausgefüllten Angaben anhand der Anleitung des Anbieters, ergänze fehlende Angaben und speichere die Konfiguration.",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
@@ -12031,6 +12137,8 @@
         "loadEarlierFailed": "Frühere Nachrichten konnten nicht geladen werden. Versuch es erneut.",
         "emptyTitle": "Noch keine Nachrichten in dieser Gruppe",
         "emptyDescription": "Sag etwas zum Einstieg, dann beteiligen sich deine Freunde. Erwähne einen Freund mit @, damit nur dieser antwortet.",
+        "emptyDescriptionWithAssistant": "Du kannst Cindy mit @ erwähnen oder über das Menü oben rechts Personen einladen und Freunde hinzufügen.",
+        "emptyDescriptionInvite": "Über das Einladungsmenü oben rechts kannst du Personen einladen und Freunde hinzufügen.",
         "roundEnded": "Freunde sind fertig",
         "stepTag": "Schritt {{count}}",
         "sending": "Wird gesendet",
@@ -12362,7 +12470,7 @@
         "loginRequired": "Melde dich bei deinem Konto an und versuche es erneut.",
         "requestFailed": "Der Chatdienst ist nicht verfügbar. Versuche es gleich noch einmal.",
         "copyFailed": "Kopieren fehlgeschlagen. Wähle den Link aus und kopiere ihn manuell.",
-        "createDescription": "Wähle Freunde aus oder erstelle zuerst die Gruppe und lade dann Personen ein.",
+        "createDescription": "Nach dem Erstellen kannst du Personen einladen und Freunde hinzufügen.",
         "settings": {
           "name": "Gruppenname",
           "topic": "Thema",
@@ -13657,6 +13765,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "openAiReconnect": "Verbinde ChatGPT in Cindy unter Einstellungen → Anbieter → OpenAI erneut und sende hier eine Nachricht.",
         "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
@@ -15645,6 +15754,8 @@
       "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "piRetryHistoryTooLarge": "Deine Nachricht wurde nicht gesendet. Beim Lesen des Verlaufs für den erneuten Versuch wurde das lokale Limit von 16 MiB für einen Datenrahmen überschritten. Du kannst in einer neuen Aufgabe fortfahren.",
+      "piRetryHistoryUnavailable": "Deine Nachricht wurde nicht gesendet. Pi konnte den Verlauf, der zum Senden nötig ist, nicht lesen. Du kannst es erneut versuchen oder in einer neuen Aufgabe fortfahren.",
+      "upstreamStatusError": "Der vorgeschaltete Dienst hat {{status}} zurückgegeben – die Antwort konnte nicht abgeschlossen werden.",
       "messageNotSent": "Deine Nachricht wurde nicht gesendet.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
@@ -16484,7 +16595,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob das Verzeichnis auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
       "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
-      "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_TIMEOUT": "Der Computer, auf dem der Agent läuft, hat noch nicht geantwortet. Prüfe den Stand der Aufgabe. Wenn sie noch läuft oder bereits abgeschlossen ist, brauchst du sie nicht erneut zu starten.",
       "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
@@ -16768,6 +16879,8 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar.",
+      "rechecking": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar. Neuer Versuch um {{resetAt}}.",
       "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
       "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
       "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
@@ -18548,6 +18661,7 @@
         "intervalChip": "Nach Abschluss · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Benutzerdefinierter Cron",
         "intervalMinutes": "Minütlich (alle N Minuten)",
         "interval": "Stündlich (alle N Stunden)",
         "daily": "Täglich (jeden Tag)",
@@ -22735,6 +22849,16 @@
     "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Weitere Anmeldeoptionen",
+      "connect": "Vorhandene Anmeldung verbinden…",
+      "found": "{{count}} verfügbar",
+      "title": "Anmeldungen auf {{device}}",
+      "note": "Cindy und die CLI verwenden dieselbe Kontokonfiguration.",
+      "attach": "Verbinden",
+      "choose": "Anderen Ordner wählen…",
+      "unverified": "Die Anmeldung konnte nicht bestätigt werden."
+    },
     "pluginSignIn": {
       "method": "Anmeldemethode",
       "secretHint": "Der Schlüssel geht nur an das Plugin, das ihn im eigenen Ordner dieses Kontos speichert. Cindy speichert ihn nicht und sendet ihn nicht an andere Computer.",

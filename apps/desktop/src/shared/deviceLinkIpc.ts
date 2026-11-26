@@ -264,6 +264,28 @@ export interface DeviceLinkAgentNetPeerRouteView {
   pathPreference?: DeviceLinkPeerPathPreference;
 }
 
+/** 跨账号供应商分享在 Agent-Net 上的纯内存路由快照（不触发建链、探测或发包）。 */
+export interface DeviceLinkProviderShareRouteView {
+  shareId: string;
+  /** 本机到该分享执行端的数据路径；尚未建链时为 null。 */
+  path: DeviceLinkPeerPath | 'connecting' | null;
+  /** 端到端往返延迟(ms)；未测得为 null。 */
+  rttMs: number | null;
+  /** 距最近一次业务消息发出/收到多少毫秒；未收发过为 null。 */
+  sentAgoMs: number | null;
+  receivedAgoMs: number | null;
+  /** 该分享所在网络的中转归属：官方中转、本机自建中转、或分享方自建中转。 */
+  relayKind: 'official' | 'self-hosted' | 'sharer-relay';
+  /** 分享方自建中转的主机名（官方中转或本机自建中转为 null）。 */
+  relayHost: string | null;
+  /** 经中转时实际底层传输（UDP 或 WebSocket）。 */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到该分享所用中转站的往返延迟(ms)；未测得为 null。 */
+  relayRttMs: number | null;
+  /** 跨区域分享的区域标识（如 'cn' | 'global'），同区为 null。 */
+  region?: string | null;
+}
+
 export interface LinkTrafficBytes {
   sent: number;
   received: number;
@@ -278,6 +300,8 @@ export interface DeviceLinkPeerLinksSnapshot {
   traffic?: LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
+  /** 仅在 Agent-Net 启用时附带：已安装的跨账号供应商分享路由的纯内存只读快照。 */
+  providerShareRoutes?: DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /**
    * 经中转的数据现在走中转的 UDP 端口还是 WebSocket:Agent-Net 两种都可能(UDP 不通时退回 WebSocket),
