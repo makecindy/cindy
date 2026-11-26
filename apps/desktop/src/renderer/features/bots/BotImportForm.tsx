@@ -6,6 +6,7 @@ import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { useBotProfiles } from './botStore';
 import { extractIpcError } from '../../utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Import only adds a selection step. Identity and all later settings use the normal teammate UI. */
 export function BotImportForm({ api = window.electronAPI.companionImport, onBack, onCreated, onBusy }: {
@@ -97,9 +98,8 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   const categoryEntries = preview?.entries.filter(entry => entry.category === category) ?? [];
   const filtered = categoryEntries.filter(entry => `${entryLabel(entry)} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const openCategory = (next: CompanionImportCategory) => { setCategory(next); setQuery(''); setPage(0); };
-  const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <input type="checkbox" aria-label={label}
-    disabled={locked} checked={checked} ref={node => { if (node) node.indeterminate = partial; }} onChange={event => toggle(ids, event.target.checked)}
-    className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" />;
+  const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <Checkbox aria-label={label}
+    disabled={locked} checked={checked} indeterminate={partial} onChange={event => toggle(ids, event.target.checked)} />;
   if (enterChat) return null;
   return <div className="flex min-h-0 flex-col gap-5">
     <div className="min-h-0 space-y-5 overflow-y-auto">
@@ -168,7 +168,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
           </div>;
         })}
       </div>
-      {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <label className="flex items-start gap-3 text-13"><input type="checkbox" checked={takeover} disabled={locked} onChange={event => setTakeover(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--text-primary)]" /><span>{tr('takeover')}</span></label> : null}
+      {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <label className="flex items-start gap-3 text-13"><Checkbox checked={takeover} disabled={locked} onChange={event => setTakeover(event.target.checked)} className="mt-1" /><span>{tr('takeover')}</span></label> : null}
     </>}
     {(error || duplicate) ? <p role="alert" className="text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : tr(companionImportReasonKey(error))}</p> : null}
     </div>

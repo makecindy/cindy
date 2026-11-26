@@ -30,6 +30,7 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
 Host UI 以整版安装/更新批准有效、已启用及当前 manifest 声明为准，不另存分项批准。
 本机位置增量 `composer.header` 复用原生控件与弹层入口；旧端保留该声明但不挂载，既有位置与批准记录不变，无跨端协议变化。
+本机目录菜单位置 `workdir.menu` 随可选贡献声明生效。旧端忽略该位置和状态栏按钮的 `fontSize`，已有入口继续可用；无需迁移回执或同步更新远程端。
 旧 receipt 的 `approvedHostUi` 字段读到即忽略，不迁移、不删数据；旧页面批准与原工具审批保持不变。
 原生入口、具名页面工具及无任务全局工具不套用 Agent MCP 策略或调用时确认，仍校验归属、版本、声明与来源 ticket。
 原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
@@ -183,6 +184,15 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 哈希属于后续设计事项，本次不实现。
 
 ## 卡片来源、宿主按钮与固定尺寸（2026-11-16）
+
+本机 composer 附件能力沿用现有本地沙箱和 `maker:mcp-apps:v1`，只在执行电脑本机 View 的
+初始化能力里可选声明 `cindy/composer-attachment`，不加入 device-link、relay 或手机协议。
+资源读取和落盘在执行端完成，远程查看端、手机、共享访客与 Node Host 不声明也不处理该能力。
+旧查看端忽略该可选能力，页面必须在动态导入失败或能力缺失时继续可用。
+macOS 与 Windows 的已验证组合（目前为 Electron 42）额外声明 `drag: {version: 1}`。本地页面通过
+`cindy/composer-attachment/drag-ticket` 为本卡已有资源申请 30 秒一次性票。每 View 每分钟
+最多申请 60 次。只有来源窗口中同任务的输入框可以兑换；挂起、关闭、文档替换和撤权均使票失效。
+兑换复用按钮的读取、校验、去重和限频。其它平台保留原按钮，旧插件无需改清单或重新批准。
 
 公开 `mcpAppHistory` version 1 增加可选 `plugin: {name,source?}` 与 `customMcp: {name}`。
 source 是宿主记录的生成时快照，只包含 `{kind: "official"|"organization"|"market"|"third-party"|"local"|"unknown"}`；

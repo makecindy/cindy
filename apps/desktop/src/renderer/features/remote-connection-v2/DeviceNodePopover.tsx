@@ -9,16 +9,18 @@
  * 切不了的写原因。见 agentNetRemoteSwitch.ts。
  */
 
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
 import { Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
+import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 
 import {
   probePeer,
@@ -65,34 +67,69 @@ function Row({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 text-12">
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.45]">
       <span className="shrink-0 text-[var(--text-tertiary)]">{label}</span>
-      <span className={cn('min-w-0 truncate text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
+      <span className={cn('min-w-0 break-words text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
         {children ?? value}
       </span>
     </div>
   );
 }
 
-/** 路径:「协议 · 怎么连 · 传输协议」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色);长中转名只截断中间路径,不截掉末尾的 UDP / WS / WebRTC。 */
-function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayName: string; reconnecting: boolean }) {
+/** 连接方式:「协议 · 底层传输协议」(如 Agent-Net · UDP),与路径拆开避免长中转名把信息截断。 */
+function ConnectionRow({ node }: { node: TopologyNode }) {
   const { t } = useTranslation();
-  const label = t('settings.remoteControl.v2.popover.path');
-  if (reconnecting) return <Row label={label} value={t('settings.remoteControl.v2.peerSwitch.reconnecting')} />;
   const kind = protocolKind(node);
   const protocol = protocolLabel(node, t);
-  const path = pathLabel(routeOf(node), relayName, t);
   const transport = peerTransportLabel(node, t);
-  const text = [protocol, path, transport].filter(Boolean).join(' · ');
-  if (!kind || !protocol) return <Row label={label} value={text} />;
+  if (!kind || !protocol) return null;
+  const text = [protocol, transport].filter(Boolean).join(' · ');
   return (
-    <Row label={label} value={text}>
-      <span className="inline-flex max-w-full items-baseline justify-end gap-1">
-        <ProtocolMark kind={kind} label={protocol} className="shrink-0 self-center" />
-        <span className="min-w-0 truncate">· {path}</span>
-        {transport ? <span className="shrink-0">· {transport}</span> : null}
+    <Row label={t('settings.remoteControl.v2.popover.protocol')} value={text}>
+      <span className="inline-flex flex-wrap items-center justify-end gap-1">
+        <ProtocolMark kind={kind} label={protocol} className="shrink-0" />
+        {transport ? <span className="shrink-0 text-[var(--text-secondary)]">· {transport}</span> : null}
       </span>
     </Row>
+  );
+}
+
+function RouteOptionRow({
+  active,
+  label,
+  rttText,
+  available,
+}: {
+  active: boolean;
+  label: string;
+  rttText: string;
+  available: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.35]">
+      <span className={cn('flex min-w-0 items-start gap-2', active ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
+        <span
+          className={cn(
+            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+            active ? 'bg-[var(--status-success)]' : 'border border-[var(--border-default)]',
+          )}
+          aria-hidden
+        />
+        <span className="min-w-0 break-words">{label}</span>
+      </span>
+      <span
+        className={cn(
+          'shrink-0 tabular-nums',
+          active
+            ? 'font-medium text-[var(--text-primary)]'
+            : available
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--text-tertiary)]',
+        )}
+      >
+        {rttText}
+      </span>
+    </div>
   );
 }
 
@@ -108,7 +145,7 @@ function Heading({
   isMobile: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
+    <div className="flex min-w-0 items-start gap-2.5">
       {/* 与拓扑同一套外形:电脑方块,手机带「灵动岛」的竖条 */}
       <span className="flex size-8 shrink-0 items-center justify-center" aria-hidden>
         <span
@@ -122,12 +159,12 @@ function Heading({
           <PlatformGlyph platform={platform} isMobile={isMobile} size={isMobile ? 12 : 15} />
         </span>
       </span>
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]" title={name}>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="break-words text-13 font-medium leading-[1.35] text-[var(--text-primary)]" title={name}>
           {name}
         </span>
         {sub ? (
-          <span className="truncate text-12 text-[var(--text-secondary)]" title={sub}>
+          <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
             {sub}
           </span>
         ) : null}
@@ -277,6 +314,7 @@ export function DeviceNodePopover({
   onRemoteDesktop,
   switchEntry = null,
   onSwitch,
+  onPathPreferenceChange,
 }: {
   node: TopologyNode;
   relayName: string;
@@ -284,11 +322,30 @@ export function DeviceNodePopover({
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
 }) {
   const { t } = useTranslation();
+  const [optimisticPref, setOptimisticPref] = useState<{ id: string; value: DeviceLinkPeerPathPreference; seq: number } | null>(null);
+  const prefSeqRef = useRef(0);
   const switchArea = useSwitchArea(node, switchEntry, onSwitch);
   const running = switchEntry?.kind === 'running' ? switchEntry : null;
   const reconnecting = running !== null && running.step !== 'request';
+  const serverPref: DeviceLinkPeerPathPreference = node.pathPreference ?? 'auto';
+  const selectedPref: DeviceLinkPeerPathPreference =
+    optimisticPref && optimisticPref.id === node.id ? optimisticPref.value : serverPref;
+  useEffect(() => {
+    if (optimisticPref && (optimisticPref.id !== node.id || optimisticPref.value === serverPref)) {
+      setOptimisticPref(null);
+    }
+  }, [optimisticPref, node.id, serverPref]);
+  const showRoutePanel =
+    node.encrypted === true &&
+    node.status !== 'offline' &&
+    !reconnecting &&
+    node.path !== null;
+  const directRttMs = node.directRttMs ?? (node.path === 'direct' ? node.rttMs : null);
+  const relayRttMs = node.relayRttMs ?? (node.path === 'relay' ? node.rttMs : null);
+  const directSelectable = directRttMs !== null || node.path === 'direct' || selectedPref === 'direct';
   const sub = [
     node.modelLabel,
     platformLabel(node.platform),
@@ -322,13 +379,17 @@ export function DeviceNodePopover({
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
-        {node.status !== 'offline' ? (
-          <PathRow node={node} relayName={relayName} reconnecting={reconnecting} />
+        {node.status !== 'offline' && !reconnecting ? <ConnectionRow node={node} /> : null}
+        {node.status !== 'offline' && !showRoutePanel ? (
+          <Row
+            label={t('settings.remoteControl.v2.popover.path')}
+            value={reconnecting ? t('settings.remoteControl.v2.peerSwitch.reconnecting') : pathLabel(routeOf(node), relayName, t)}
+          />
         ) : null}
         {node.flow ? (
           <Row label={t('settings.remoteControl.v2.popover.activity')} value={flowLabel(node.flowText ?? node.flow, t)} />
         ) : null}
-        {node.rttMs !== null ? (
+        {!showRoutePanel && node.rttMs !== null ? (
           <Row
             label={t('settings.remoteControl.v2.popover.latency')}
             value={`${formatRtt(node.rttMs, t)} · ${t('settings.remoteControl.v2.popover.rttNote')}`}
@@ -351,11 +412,70 @@ export function DeviceNodePopover({
           </span>
         ) : null}
       </div>
+      {showRoutePanel ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-11 font-medium text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.v2.popover.routePreference')}
+            </span>
+            <span className="text-11 text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.v2.popover.rttNote')}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <RouteOptionRow
+              active={node.path === 'direct'}
+              label={t('settings.remoteControl.v2.path.direct')}
+              rttText={directRttMs !== null ? formatRtt(directRttMs, t) : t('settings.remoteControl.v2.popover.routeUnavailable')}
+              available={directRttMs !== null}
+            />
+            <RouteOptionRow
+              active={node.path === 'relay'}
+              label={t('settings.remoteControl.v2.path.relay', { name: relayName })}
+              rttText={relayRttMs !== null ? formatRtt(relayRttMs, t) : t('settings.remoteControl.v2.popover.routeMeasuring')}
+              available={relayRttMs !== null}
+            />
+          </div>
+          {onPathPreferenceChange ? (
+            <SegmentedControl<DeviceLinkPeerPathPreference>
+              value={selectedPref}
+              aria-label={t('settings.remoteControl.v2.popover.routePreference')}
+              height={28}
+              optionHeight={24}
+              fullWidth
+              options={[
+                { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
+                {
+                  value: 'direct',
+                  label: t('settings.remoteControl.v2.popover.routeDirect'),
+                  disabled: !directSelectable,
+                  title: !directSelectable ? t('settings.remoteControl.v2.popover.routeDirectUnavailableHint') : undefined,
+                },
+                { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
+              ]}
+              onValueChange={(next) => {
+                const seq = ++prefSeqRef.current;
+                setOptimisticPref({ id: node.id, value: next, seq });
+                Promise.resolve(onPathPreferenceChange(node, next)).then(
+                  (ok) => {
+                    if (ok === false) {
+                      setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                    }
+                  },
+                  () => {
+                    setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                  },
+                );
+              }}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {switchArea.body ? (
         <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">{switchArea.body}</div>
       ) : null}
       {canDelete || canRemoteDesktop || switchArea.action ? (
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {canDelete ? (
             <Button tone="danger-surface" size="sm" compact onClick={onDelete}>
               <Trash2 size={14} aria-hidden />

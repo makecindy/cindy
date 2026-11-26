@@ -46,6 +46,13 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     // 通用写入口不因这条查询放开。
     expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
   });
+  it('allows native window numbers without exposing model preference mutations', () => {
+    // #11716/#4477 protocol boundary: only this structured numeric read is remote.
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:model-context-limit:get')).toBe(true);
+    for (const channel of ['maker:model-context-limit:set', 'maker:model-context-limit:reset', 'maker:model-compaction:set']) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(false);
+    }
+  });
   it('lets owner controllers use the host model groups but never edit them remotely', () => {
     // model-groups.md §6.3：读、选路、提交、记绑定、代写说明在被控端执行；改模式只在本机。
     // 放开 set 等于让手机或另一台电脑改写这台电脑的全局配置。
@@ -321,6 +328,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:discard-precreated',
       'worktree:cancel-precreated',
       'worktree:removal-preview',
+      'worktree:restore-status',
+      'worktree:restore-for-session',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }

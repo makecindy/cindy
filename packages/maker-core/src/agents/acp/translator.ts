@@ -12,7 +12,8 @@
  *  - text:      `{ text, isFinal: false }` deltas, then `{ text, isFinal: true, isFullText: true }` per segment
  *  - thinking:  `stage: 'start' | 'delta' | 'final'` with a stable `blockId`
  *  - tools:     `tool_use` (including input patches), then paired results when the call settles
- *  - turn end:  `done` with `result` = last non-empty assistant segment
+ *  - turn end:  `done` with `result` = last non-empty assistant segment, and the
+ *               turn's tokens in `usage` when the agent reported them
  *
  * Usage, configuration and session-info updates are session state and are
  * handled by `AcpSession`, not here.
@@ -20,6 +21,10 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
 import {
@@ -30,6 +35,7 @@ import {
   type AcpRecord,
   type AcpStopReason,
   type AcpToolCallFields,
+  type AcpTurnUsage,
 } from './protocol.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 200_000;
@@ -51,8 +57,9 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason }
-  | { error: string; reason?: string };
+  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
+  /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
+  | { error: string; reason?: string; signals?: Record<string, unknown> };
 
 function clip(text: string): string {
   return text.length > MAX_TOOL_OUTPUT_CHARS ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)}\n…` : text;
@@ -226,9 +233,17 @@ export class AcpUpdateTranslator {
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
+      const reason =
+        outcome.reason ??
+        (isProviderSafetyRefusalError(outcome.error) ? PROVIDER_SAFETY_REFUSAL_REASON : undefined);
       events.push({
         type: 'error',
-        data: { message: outcome.error, isTerminal: true, ...(outcome.reason ? { reason: outcome.reason } : {}) },
+        data: {
+          ...(outcome.signals ?? {}),
+          message: outcome.error,
+          isTerminal: true,
+          ...(reason ? { reason } : {}),
+        },
       });
       return events;
     }
@@ -239,6 +254,9 @@ export class AcpUpdateTranslator {
         status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'completed',
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
+        // A cancelled turn still spent the tokens the agent reports for it.
+        ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
       },
     });
     return events;

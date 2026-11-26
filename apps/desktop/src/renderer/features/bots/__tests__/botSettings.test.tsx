@@ -593,8 +593,13 @@ describe('Bot settings profile consolidation', () => {
     }
   });
 
-  it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
+  // The settings drawer previously showed its editable identity under the invitation card.
+  it.each(['failed', 'welcome'] as const)('shows only the invitation header and keeps model settings accessible while invitation is %s', async (stage) => {
     renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
+    expect(screen.getByText(/^bots\.invitation\.waiting:/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1, name: 'PR steward' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.profile.changeAvatar' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.homeFolder.title' })).toBeTruthy();
     expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);
     expect(screen.getByLabelText('bots.profile.summary')).toHaveProperty('readOnly', true);
     expect(screen.getByLabelText('bots.profile.personality')).toHaveProperty('readOnly', true);
@@ -948,7 +953,10 @@ describe('Bot settings profile consolidation', () => {
   });
 
   it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
-    renderSettings({}, 'settings=1&tab=growth');
+    renderSettings({ invitation: { stage: 'ready' } }, 'settings=1&tab=growth');
+    expect(screen.getByRole('heading', { level: 1, name: 'PR steward' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
+    expect(screen.queryByText(/^bots\.invitation\.waiting:/)).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByRole('button', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));

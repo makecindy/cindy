@@ -776,6 +776,19 @@ describe('messageHandler !stop routing', () => {
     expect(capturedCtx?.consumePendingOpener).toBeUndefined();
   });
 
+  // Review (#12146): a lone oversize video only carried a retrievable note, so the handler replied
+  // "unsupported" and never invoked the model, which therefore could not fetch the original.
+  it('可按编号取回的附件照样进入模型轮次, 也不向对方报不支持', async () => {
+    deliver(makeEvent({
+      text: '',
+      unsupported: [{ type: 'oversize', retrievable: true, label: 'clip.MOV（96.0 MB）' }] as IMMessageEvent['unsupported'],
+    }));
+    await flushMicrotasks();
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(sendText).not.toHaveBeenCalled();
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+  });
+
   it('同话题后续纯 unsupported 不消费上一轮的 pending opener', async () => {
     consumePendingOpenerCard.mockResolvedValue(true);
     deliver(

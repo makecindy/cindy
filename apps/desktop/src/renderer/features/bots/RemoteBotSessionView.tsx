@@ -15,6 +15,7 @@ import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudCompanionAt, homeControlOff, localCompanionNeedsRecovery } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useDeviceLinkFirstConnectionPending } from '@/features/device-link/deviceLinkFirstConnection';
 import { useDelayedFlag } from '@/features/cc-agent/workdir-browse/hooks/useDelayedFlag';
 import { useBotProfilesLoadState } from './botStore';
 // Loaded only when a main computer is offline; keeps the live remote path light.
@@ -55,6 +56,13 @@ function RemoteBotSessionGate() {
   const homeActor = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId) : undefined;
   const recoveryHere = localCompanionNeedsRecovery(cloud, botId);
   const deviceListState = useDeviceLinkDeviceListRequestState();
+  // Right after launch or waking, "not connected yet" is not "offline" (cloud-companions.md §3.1).
+  // Only a chat opened inside the window waits for it; an open chat keeps its 15 s grace below,
+  // and a later drop does not re-protect a chat that was already open (#6257).
+  const firstConnectionPending = useDeviceLinkFirstConnectionPending();
+  const openedConnecting = useRef(firstConnectionPending);
+  if (!firstConnectionPending) openedConnecting.current = false;
+  const connecting = openedConnecting.current;
   const recoveringHere = useRef(false);
   if (recoveryHere) recoveringHere.current = true;
   const recoveryHydrationPending = !requestedSessionId && recoveringHere.current
@@ -161,10 +169,13 @@ function RemoteBotSessionGate() {
   const homeDevice = cloudActor?.homeDeviceId
     ? deviceList?.find((device) => device.deviceId === cloudActor.homeDeviceId)
     : undefined;
+  // The device directory can confirm the home is reachable before its retained roster row updates.
+  const homeConfirmedOnline = deviceListState.status === 'ready' && homeDevice?.online === true
+    && homeDevice.remoteControlEnabled && homeDevice.controlEnabled;
   // A missing teammate row is not evidence that its home computer is offline. Only
   // classify it as offline when the live device directory says so, or when a settled
   // directory has no row and the cloud snapshot itself carries an explicit offline state.
-  const homeOffline = !!cloudActor && (
+  const homeOffline = !!cloudActor && !homeConfirmedOnline && (
     bot ? (!bot.online && bot.connectionKnown !== false)
       : homeDevice ? !homeDevice.online
         : deviceListState.status === 'ready' && cloudActor.homeDevice?.online === false
@@ -185,7 +196,7 @@ function RemoteBotSessionGate() {
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.
   if (offlineActor && deviceId && botId && (recoveryHere || recoveryHydrationPending
-    || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
+    || (homeAway && !connecting && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
     return (
       <Suspense fallback={<main className="flex h-full items-center justify-center bg-[var(--surface)]"><Spinner size={18} /></main>}>
       <CloudCompanionOfflineView
@@ -220,13 +231,17 @@ function RemoteBotSessionGate() {
       <p className="text-14 text-[var(--text-secondary)]">
         {failed
           ? t('bots.sessionLoadFailedDescription')
-          : bot && !bot.online
-            ? t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
-            : !sessionId
-              ? t('bots.remote.preparing')
-              : t('ccAgent.common.loading')}
+          // Undetermined right after launch or waking reads "connecting"; a directory that
+          // already confirms the home online keeps main's preparation copy (#10758).
+          : connecting && !bot?.online && !homeConfirmedOnline
+            ? t('ccAgent.sidebar.machineSwitcher.connecting')
+            : bot && !bot.online && !homeConfirmedOnline
+              ? t('bots.remote.offlineDescription', { name: bot.name, device: bot.deviceName })
+              : !bot?.online || !sessionId
+                ? t('bots.remote.preparing')
+                : t('ccAgent.common.loading')}
       </p>
-      {sessionId && bot?.online && !failed ? <Spinner size={18} /> : null}
+      {!failed && (bot?.online ? sessionId : connecting && !homeConfirmedOnline) ? <Spinner size={18} /> : null}
       {failed ? (
         <Button
           variant="secondary"

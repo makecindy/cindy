@@ -12,12 +12,15 @@
  * - tier：unit（进程内假对端，无真实等待；宽限期用 fake timers）。
  */
 
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import { AcpLineDecoder, AcpLineTooLongError, type AcpLineTransport, type AcpTransportClosed } from './line-transport.js';
 import {
+  AcpAccountError,
   AcpAuthRequiredError,
   AcpResumeUnavailableError,
   openAcpSession,
@@ -26,7 +29,14 @@ import {
 } from './session.js';
 import type { AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import {
+  defusePluginEngineSlashMentions,
+  defusePluginEngineWireEnvelope,
+  formatPluginEngineSkillList,
+  renderPluginEngineCapabilityBriefing,
+} from './briefing.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, TurnPermissionPolicyUnsupportedError, type SendOptions } from '../base-agent.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
 
@@ -88,7 +98,8 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
         toClient({ jsonrpc: '2.0', id: message.id, result });
       } catch (error) {
         const code = typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -32603;
-        toClient({ jsonrpc: '2.0', id: message.id, error: { code, message: (error as Error).message } });
+        const data = (error as { data?: unknown }).data;
+        toClient({ jsonrpc: '2.0', id: message.id, error: { code, message: (error as Error).message, ...(data !== undefined ? { data } : {}) } });
       }
       return;
     }
@@ -190,7 +201,18 @@ describe('ACP line decoder (host stdout chunks)', () => {
 describe('openAcpSession handshake', () => {
   it('negotiates v1 without client fs/terminal and drops MCP transports the agent did not advertise', async () => {
     const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const warn = vi.fn();
+    const logger: Logger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn,
+      error: () => {},
+      fatal: () => {},
+      child: () => logger,
+    };
     const { session } = await open(agent, {
+      logger,
       mcpServers: [
         { type: 'http', name: 'cindy-tools', url: 'http://127.0.0.1:1/mcp', headers: [] },
         { name: 'local', command: '/bin/tool', args: [], env: [] },
@@ -204,6 +226,10 @@ describe('openAcpSession handshake', () => {
     expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
     expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
     expect(session.droppedMcpServers).toEqual(['cindy-tools']);
+    expect(warn).toHaveBeenCalledWith(
+      'acp: dropping MCP servers whose transport the agent did not advertise',
+      { dropped: ['cindy-tools'], mcpCapabilities: { http: false, sse: false } },
+    );
     expect(session.id).toBe('sess-1');
     expect(session.resumeOutcome).toBe('new');
   });
@@ -243,11 +269,35 @@ describe('openAcpSession handshake', () => {
     expect(events).toEqual([]);
   });
 
+  // 引擎账号(plugin-harnesses.md 引擎账号，2026-11-23)：入口把账号原因写在 error.data._meta.cindy 里，Cindy 据此冷却账号、
+  // 换号；消息只用 Cindy 自己的稳定码，不带 Agent 原文。最小失败输入：session/new 报额度用完并给重置时间。
+  it('turns an account classification on session/new into an account error the host can switch on', async () => {
+    const agent = createFakeAgent({
+      handlers: { 'session/new': () => { throw Object.assign(new Error('quota'), { code: -32603, data: { _meta: { cindy: { kind: 'usage-limit', resetsAt: 1_900_000_000_000 } } } }); } },
+    });
+    const failure = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AcpAccountError);
+    expect((failure as AcpAccountError).message).toMatch(/^\[SUBSCRIPTION_ACCOUNT_LIMITED\]/);
+    expect((failure as AcpAccountError).signals).toEqual({ usageLimit: true, usageResetAt: 1_900_000_000_000 });
+  });
+
   it('refuses to silently start fresh when the agent cannot resume', async () => {
     const agent = createFakeAgent();
     await expect(open(agent, { resumeSessionId: 'old-1' })).rejects.toBeInstanceOf(AcpResumeUnavailableError);
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
+  });
+
+  // Idle runtime reclamation closes only runtimes the next send can reopen; an agent with neither
+  // method would fail that resume (above), so it must answer false and keep its runtime.
+  it.each([
+    { name: 'neither method', caps: {}, reopenable: false },
+    { name: 'session/load', caps: { loadSession: true }, reopenable: true },
+    { name: 'session/resume', caps: { sessionCapabilities: { resume: {} } }, reopenable: true },
+  ])('reports whether a closed session can be reopened with $name', async ({ caps, reopenable }) => {
+    const { session } = await open(createFakeAgent({ agentCapabilities: caps }));
+    expect(session.canResumeAfterClose()).toBe(reopenable);
   });
 });
 
@@ -302,6 +352,31 @@ describe('AcpSession turns', () => {
     expect((events.find((event) => event.type === 'tool_result_full')?.data as AcpRecord).fullText).toContain('-a\n+b');
     expect(events.at(-1)?.data).toMatchObject({ status: 'completed', result: 'Done.', stopReason: 'end_turn' });
     expect(events.every((event) => event.turnScope === undefined)).toBe(true);
+  });
+
+  // 2026-11-23: plugin engine usage pages counted turns but showed no tokens, because the per-turn
+  // `usage` of the prompt result was dropped. Inputs are what Antigravity (agy 1.5.15) returned for two
+  // turns (input excludes the cache), the same counts in the input-includes-cache form, and a result
+  // without usage. Production entry: AcpSession send → done event; unit, in-process fake agent.
+  it.each([
+    ['input excludes the cache (agy turn 1)',
+      { inputTokens: 11516, outputTokens: 27, cachedReadTokens: 0, cachedWriteTokens: 0, thoughtTokens: 25, totalTokens: 11543 },
+      { inputTokens: 11516, outputTokens: 27, cacheReadTokens: 0, cacheCreationTokens: 0 }],
+    ['input excludes the cache (agy turn 2)',
+      { inputTokens: 2161, outputTokens: 15, cachedReadTokens: 9459, cachedWriteTokens: 0, thoughtTokens: 12, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['input includes the cache',
+      { inputTokens: 11620, outputTokens: 15, cachedReadTokens: 9459, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['no usage reported', undefined, undefined],
+  ])('reports the turn tokens from the prompt result: %s', async (_name, reported, expected) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', ...(reported ? { usage: reported } : {}) });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect((events.at(-1)?.data as AcpRecord).usage).toEqual(expected);
   });
 
   it('runs one prompt at a time, in send order even when the first message carries a slow image', async () => {
@@ -587,6 +662,19 @@ describe('AcpSession permissions', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
   });
 
+  // Security review on #12820: IM group turns carry a per-turn policy that requires the owner's
+  // confirmation. A plugin's agent can act without asking Cindy, so the turn must be refused before
+  // any prompt reaches the agent, in every mode. Minimal input: send with turnPermissionPolicy.
+  it.each(['ask', 'bypassPermissions'] as const)('refuses a turn that carries a per-turn permission policy (%s)', async (mode) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const policy = { evaluate: () => ({ kind: 'confirm' }) } as unknown as NonNullable<SendOptions['turnPermissionPolicy']>;
+    expect(() => session.validateSendOptions({ turnPermissionPolicy: policy })).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'go' }, { turnPermissionPolicy: policy }))
+      .rejects.toMatchObject({ code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp' });
+    expect(agent.prompts).toHaveLength(0);
+  });
+
   it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
     const agent = createFakeAgent();
     const { session } = await open(agent, { permissionMode: 'ask' });
@@ -672,6 +760,22 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  it.each([
+    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
+    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
+    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
+  });
+
   it('close() ends a running turn, closes the agent session and waits for the endpoint', async () => {
     const agent = createFakeAgent({
       agentCapabilities: { sessionCapabilities: { close: {} } },
@@ -725,6 +829,26 @@ describe('AcpSession model and effort', () => {
     expect(session.model).toBe('v4-pro');
     expect(changes).toEqual(['v4-pro']);
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
+  });
+
+  // #12433 (unit): an active prompt's usage belongs to its model even if the
+  // endpoint changes its model option before returning the prompt result.
+  it('reports the model selected when the metered prompt was sent', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const switched = configOptions.map(option =>
+      option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option,
+    );
+    agent.update({ sessionUpdate: 'config_option_update', configOptions: switched });
+    await vi.waitFor(() => expect(session.model).toBe('v4-pro'));
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0 },
+    });
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
+      type: 'done', data: { usageModel: 'v4-flash', usage: { inputTokens: 1 } },
+    }));
   });
 
   // Unit regression for PR #11549. The handle's own tests missed the product
@@ -947,6 +1071,27 @@ describe('AcpAgent (the acp engine)', () => {
     await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' })).rejects.toThrow("'remoteSession' not supported");
   });
 
+  // 引擎账号：宿主账号池选中 Cindy 加的账号时，入口带着这个账号的目录启动；插件原有的登录照旧不带参数。
+  // 拿出来的单独供应商(`…~<后缀>`)跑同一个引擎。最小失败输入：带账号能力启动；默认登录；带后缀的供应商 id。
+  it('starts the engine on the account the host picked, and a taken-out provider on its engine', async () => {
+    const connects: Array<{ key: string; options: unknown }> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async (key, options) => { connects.push({ key, options }); return createFakeAgent().transport; } },
+    });
+    const account = (configDir: string, defaultProfile: boolean) => ({
+      id: 'a', configDir, defaultProfile, assertCurrent() {}, readState: async () => ({ authenticated: true }),
+    });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh~ab12cd34', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('/accounts/a', false) });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('', true) });
+    expect(connects).toEqual([
+      { key: 'dsh-acp:dsh', options: { accountDir: '/accounts/a' } },
+      { key: 'dsh-acp:dsh', options: undefined },
+    ]);
+  });
+
   // 用户决定（2026-11-19）：协作 Worker 整体信任插件 Agent，它的工具调用按任务自己发起（能回报 Lead）；
   // 其他插件引擎任务仍是「来源未知」。最小失败输入：同一引擎，一次带信任标记、一次不带。
   it.each([
@@ -964,6 +1109,173 @@ describe('AcpAgent (the acp engine)', () => {
     await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', botProfilePrompt: 'Prompt text alone cannot grant task privileges.', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
     expect(contexts).toHaveLength(1);
     expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
+  });
+
+  // 用户决定（2026-11-24）：插件引擎收不到 Cindy system prompt，内置引擎从 system prompt 知道的已装插件花名册、
+  // 从原生 Skill 加载知道的 Skill，改在新会话首条消息前告诉它。依据：用户反馈 Antigravity 任务不知道已装插件与 Skill，
+  // 发 PR 绕开了 GitHub 插件的 pr Skill。覆盖缺口：此前首轮 briefing 只有协作角色、伙伴与远程工作区说明。
+  // 最小失败输入（unit）：本机任务带花名册与 Skill；对端不收 HTTP MCP（插件网关没交出去）；伙伴任务。
+  const briefingEngine = (agent: FakeAgent, roster: ReturnType<typeof vi.fn>, skills: ReturnType<typeof vi.fn>) => new AcpAgent({
+    auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+    runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+    endpoints: { connect: async () => agent.transport },
+    preparePiExtraSpawnConfig: async () => ({ mcpBridge: { token: 't', servers: [{ name: 'cindy', url: 'http://127.0.0.1:9/mcp/cindy' }] } }),
+    getGhostRosterPrompt: roster as unknown as (ctx: { workingDir?: string }) => string,
+    listSessionSkills: skills as unknown as (ctx: { workingDir?: string }) => Promise<Array<{ name: string; description?: string; path?: string }>>,
+  });
+  const skillList = [
+    { name: 'cindy-plugin-github:pr', description: 'Carry a GitHub pull request\n from start to merge.', path: '/skills/pr/SKILL.md' },
+    { name: 'no-file', description: 'Has no readable SKILL.md.' },
+  ];
+  const firstPrompt = async (agent: FakeAgent, handle: { send(m: { type: 'user'; content: string }): Promise<unknown> }) => {
+    await handle.send({ type: 'user', content: 'open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    return agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+  };
+
+  it('tells a new plugin-engine conversation which plugins and Skills it can use, once', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>\n{"id":"cindy-github"}\n</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(roster).toHaveBeenCalledWith({ workingDir: '/repo' });
+    expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    const [briefing, message, more] = await firstPrompt(agent, handle);
+    expect(briefing!.text.indexOf('<ghost-roster>')).toBeLessThan(briefing!.text.indexOf('<cindy-skills>'));
+    expect(briefing!.text.indexOf('<cindy-skills>')).toBeLessThan(briefing!.text.indexOf('You are a Worker.'));
+    expect(briefing!.text).toContain('- cindy-plugin-github:pr: Carry a GitHub pull request from start to merge. ("/skills/pr/SKILL.md")');
+    expect(briefing!.text).not.toContain('no-file');
+    expect(message).toEqual({ type: 'text', text: 'open a PR' });
+    expect(more).toBeUndefined();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: 'again' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again' }]);
+  });
+
+  it('leaves the plugin roster out when the agent did not take the plugin gateway, and keeps the Skills', async () => {
+    const agent = createFakeAgent({ agentCapabilities: {} });
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList))
+      .startSession({ workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy' });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).not.toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+  });
+
+  it('keeps a companion on its own capability set: no roster or Skill list', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toBe('You are Mika.');
+    // A `/<skill>` message is not expanded either: the companion's Skills are its own frozen set.
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: '/cindy-plugin-github:pr go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: '/cindy-plugin-github:pr go' }]);
+    expect(skills).not.toHaveBeenCalled();
+  });
+
+  // Review (#12294)：V2 项目伙伴（projectContext）按普通任务装配，与内置 Pi 一致要收到花名册与 Skill；恢复的会话
+  // 已有说明且恢复失败不会改开新会话，所以不读取。最小失败输入：projectContext 伙伴；带 resumeSessionId 启动。
+  it('briefs a project-context companion like any task, and reads nothing for a resumed session', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList)).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, projectContext: true, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toContain('You are Mika.');
+    expect(briefing!.text).toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+
+    const resumed = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const again = await briefingEngine(resumed, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', resumeSessionId: 'old-1',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    expect(await firstPrompt(resumed, again)).toEqual([{ type: 'text', text: 'open a PR' }]);
+  });
+
+  // 用户要求（2026-11-25）：插件引擎任务的 `/` 也能调 Cindy Skill。插件引擎没有 Cindy 的 Skill 加载，`/pr` 原样到了
+  // 引擎只是一行字。覆盖缺口：此前插件引擎只在首轮说明里收到 Skill 清单，发送路径不认 `/<skill>`。
+  // 最小失败输入（unit，临时目录里的真实 SKILL.md）：恢复的会话发 `/<别名>:pr 参数`；不带参数；没有对应 Skill；
+  // 文件读不到；普通消息。
+  it('expands a `/<skill>` message into the Skill instructions, the way Pi expands `/skill:`', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cindy-acp-skill-'));
+    try {
+      const file = join(dir, 'pr', 'SKILL.md');
+      mkdirSync(join(dir, 'pr'));
+      writeFileSync(file, '---\nname: pr\ndescription: Carry a PR.\n---\n\nOpen the PR with the plugin.\n');
+      const list = [
+        { name: 'pr', description: 'Carry a PR.', path: file },
+        { name: 'gone', path: join(dir, 'gone', 'SKILL.md') },
+      ];
+      const skills = vi.fn(async () => list);
+      const agent = createFakeAgent({ agentCapabilities: { sessionCapabilities: { resume: {} } }, handlers: { 'session/resume': () => ({}) } });
+      const handle = await briefingEngine(agent, vi.fn(() => ''), skills).startSession({
+        workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', resumeSessionId: 'old-1',
+      });
+      const block = `<skill name="pr" location="${file}">\nReferences are relative to ${join(dir, 'pr')}.\n\nOpen the PR with the plugin.\n</skill>`;
+      const cases: Array<[string, string]> = [
+        ['/cindy-plugin-github:pr fix the build\nplease', `${block}\n\nfix the build\nplease`],
+        ['  /skill:PR', block],
+        ['/review this', '/review this'],
+        ['/gone now', '/gone now'],
+        ['open /pr', 'open /pr'],
+      ];
+      for (const [index, [sent, received]] of cases.entries()) {
+        await handle.send({ type: 'user', content: sent });
+        await vi.waitFor(() => expect(agent.prompts).toHaveLength(index + 1));
+        expect(agent.prompts[index]!.params.prompt).toEqual([{ type: 'text', text: received }]);
+        agent.prompts[index]!.settle.resolve({ stopReason: 'end_turn' });
+      }
+      // Review (#12732)：带图片的消息以第一段文字为开头，与宿主不加说明的判定同一段（mobileClientPromptNote.ts）。
+      await handle.send({ type: 'user', content: [{ type: 'image', path: '/repo/shot.png' }, { type: 'text', text: '/pr look' }] });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(cases.length + 1));
+      expect(agent.prompts[cases.length]!.params.prompt).toEqual([
+        expect.objectContaining({ type: 'resource_link', name: 'shot.png' }),
+        { type: 'text', text: `${block}\n\nlook` },
+      ]);
+      // Only messages that start with `/` look the Skills up.
+      expect(skills).toHaveBeenCalledTimes(5);
+      expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Review (#12732, Codex P2)：插件引擎任务的 `/` 菜单此前借内置 Pi 的清单，本机 Pi 不可用（未注册）时请求失败、菜单为空，
+  // 而展开照样能用。生产入口 Maker.listAgentSkills('acp') → 本方法，读展开用的同一份清单。覆盖缺口：此前插件引擎没有自己的
+  // 菜单清单。最小失败输入：一个项目 Skill、一个托管 Skill、一个没有 SKILL.md 的项（展开不了，不列）；SSH 任务不列（unit）。
+  it('lists for the `/` menu the Skills its `/<skill>` messages expand from', async () => {
+    const skills = vi.fn(async () => [
+      { name: 'deploy', description: 'Ship it.', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo' },
+      { name: 'pr', path: '/managed/pr/SKILL.md' },
+      { name: 'no-file' },
+    ]);
+    const engine = briefingEngine(createFakeAgent(), vi.fn(() => ''), skills);
+    expect(await engine.listAgentSkills({ workingDir: '/repo' })).toEqual({ skills: [
+      { kind: 'agent-skill', name: 'deploy', description: 'Ship it.', source: 'skill', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo', enabled: true },
+      { kind: 'agent-skill', name: 'pr', source: 'skill', path: '/managed/pr/SKILL.md', scope: 'user', enabled: true },
+    ] });
+    expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    expect(await engine.listAgentSkills({ workingDir: '/repo', remoteHostId: 'ssh-1' })).toEqual({ skills: [] });
+    expect(skills).toHaveBeenCalledTimes(1);
   });
 
   // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
@@ -1014,6 +1326,28 @@ describe('AcpAgent (the acp engine)', () => {
     });
     expect(connected).toEqual([{ remoteWorkspace: true }, { remoteWorkspace: true, guestWorkspace: true }]);
     expect(prepared).not.toHaveBeenCalled();
+  });
+
+  // Review (#12294, P1)：托管任务与内置引擎一致，附任务所在电脑带来的花名册快照（隧道提供 cindy 时），不读本机花名册，
+  // 也不附 Skill 清单。最小失败输入：带快照的托管启动；隧道没有 cindy 的托管启动。unit tier。
+  it.each([
+    { name: 'with the gateway', servers: ['cindy', 'cindy_memory'], expected: true },
+    { name: 'without the gateway', servers: ['cindy_memory'], expected: false },
+  ])('gives a hosted task the roster snapshot of the task computer $name, never this computer\'s', async ({ servers, expected }) => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>{"id":"local-only"}</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      deviceHosted: { ...hosted, mcpServers: servers },
+      ghostRosterSnapshot: '<ghost-roster>\n{"id":"task-computer-plugin"}\n</ghost-roster>',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text.includes('task-computer-plugin')).toBe(expected);
+    expect(briefing!.text).not.toContain('local-only');
+    expect(briefing!.text).not.toContain('<cindy-skills>');
   });
 
   it.each([
@@ -1174,6 +1508,126 @@ describe('AcpAgent (the acp engine)', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'text', data: expect.objectContaining({ text: 'Hello from the chosen model.' }) }));
     await handle.setModel?.('default');
     expect(handle.model).toBe('first');
+    await handle.close();
+  });
+
+  // Regression (Antigravity agy 1.5.16, 2026-11-25): `agy acp` scans the entire `session/prompt`
+  // text for standalone `/command` tokens and appends `/learn` (plus `<LEARN>` instructions) when
+  // Cindy's Turn-1 Skill list, plugin roster, handoff replay or wire notes mention `/learn` or `/pr`.
+  it('defuses slash-command mentions in host briefings and handoffs without touching paths, URLs or user text', async () => {
+    const rawLearnPath = '/opt/cindy/shared-system-skills/learn/SKILL.md';
+    const skills = [
+      {
+        name: 'learn',
+        description: 'Capture reusable lessons when the user directly invokes /learn or /skill:learn in Pi. See https://cindy.app/learn and cost/spend.',
+        path: rawLearnPath,
+      },
+      {
+        name: 'cindy-plugin-github:pr',
+        description: 'Use when the user invokes /pr or /mr, checks @expo/ui on iOS/Android, or reads /tmp/build.log and /learn.md.',
+        path: '/work/skills/pr/SKILL.md',
+      },
+      {
+        name: 'custom-deploy',
+        description: 'Run /custom-deploy after PUT /harnesses in ~/learn or ./plan.',
+        path: '/work/skills/custom-deploy/SKILL.md',
+      },
+    ];
+    const rendered = renderPluginEngineCapabilityBriefing(
+      {
+        pluginRoster: '<ghost-roster>\n{"id":"cindy-github","recall":"发 PR 时输入 /pr 或调用/learn时触发"}\n</ghost-roster>',
+        skills,
+      },
+      ['cindy'],
+    );
+    expect(rendered).toContain('directly invokes learn or skill:learn in Pi.');
+    expect(rendered).toContain('invokes pr or mr,');
+    expect(rendered).toContain('Run custom-deploy after PUT /harnesses in ~/learn or ./plan.');
+    expect(rendered).toContain('发 PR 时输入 pr 或调用learn时触发');
+    // Paths, closing XML tags, URLs, scoped packages, ratios and dotted filenames stay intact.
+    expect(rendered).toContain(JSON.stringify(rawLearnPath));
+    expect(rendered).toContain('</cindy-skills>');
+    expect(rendered).toContain('</ghost-roster>');
+    expect(rendered).toContain('https://cindy.app/learn');
+    expect(rendered).toContain('cost/spend');
+    expect(rendered).toContain('@expo/ui');
+    expect(rendered).toContain('iOS/Android');
+    expect(rendered).toContain('/tmp/build.log');
+    expect(rendered).toContain('/learn.md');
+    expect(defusePluginEngineSlashMentions('No slash here')).toBe('No slash here');
+    expect(formatPluginEngineSkillList(skills)).toContain('invokes learn or skill:learn');
+
+    // Host wire envelope defuses notes/handoffs while preserving the user's own `/learn` or `/plan`.
+    expect(defusePluginEngineWireEnvelope(
+      '[客户端说明] 之前提到 `/learn` 与 /compact。\n\n请帮我执行 /learn 总结这轮改动',
+      '请帮我执行 /learn 总结这轮改动',
+    )).toBe('[客户端说明] 之前提到 `learn` 与 compact。\n\n请帮我执行 /learn 总结这轮改动');
+    const userBlock = { type: 'text', text: '/plan 重构认证模块' };
+    expect(defusePluginEngineWireEnvelope(
+      { type: 'user', content: [{ type: 'text', text: '[引用说明] 上条提到 /learn。' }, userBlock] },
+      { type: 'user', content: [userBlock] },
+    )).toEqual({
+      type: 'user',
+      content: [{ type: 'text', text: '[引用说明] 上条提到 learn。' }, userBlock],
+    });
+    expect(defusePluginEngineWireEnvelope(
+      '[引用说明] 上条提到 /release-check。\n\n请继续处理',
+      '请继续处理',
+      ['release-check'],
+    )).toBe('[引用说明] 上条提到 release-check。\n\n请继续处理');
+
+    // Live ACP session: available_commands_update custom commands are defused in pendingBriefing and
+    // handoff prefixes, while a leading user `/plan` keeps index 0 and defers pendingBriefing to Turn 2.
+    const agent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true } },
+      handlers: {
+        'session/new': () => {
+          queueMicrotask(() => {
+            agent.update({
+              sessionUpdate: 'available_commands_update',
+              availableCommands: [{ name: 'release-check', description: 'Run release check' }],
+            });
+          });
+          return { sessionId: 'sess-1', configOptions: [] };
+        },
+      },
+    });
+    const handle = await briefingEngine(
+      agent,
+      vi.fn(() => '<ghost-roster>{"id":"cindy-github","recall":"Run /release-check or /learn"}</ghost-roster>'),
+      vi.fn(async () => skills),
+    ).startSession({
+      workingDir: '/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      pluginEngineBriefing: 'Worker note: do not run /compact or /release-check.',
+    });
+    await vi.waitFor(() => expect(agent.methods()).toContain('session/new'));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Turn 1 starts with a native slash command: stays at prompt[0], briefing waits for Turn 2.
+    await handle.send({ type: 'user', content: '/plan check auth flow' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/plan check auth flow' }]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    // Turn 2 starts with a file path `/tmp/build.log` (not a slash command). User text is preserved
+    // byte-for-byte, including pasted handoff markers and slash commands.
+    const handoffAndUser = [
+      '[Session handoff · internal context]',
+      'Earlier note mentioned /learn and /release-check.',
+      "== End of handoff note; the user's new message follows ==",
+      '',
+      '/tmp/build.log 里为什么报 /learn 相关错误？',
+    ].join('\n');
+    await handle.send({ type: 'user', content: handoffAndUser });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    const [briefingBlock, secondMessage] = agent.prompts[1]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(briefingBlock!.text).toContain('Run release-check or learn');
+    expect(briefingBlock!.text).toContain('do not run compact or release-check.');
+    expect(secondMessage!.text).toContain('Earlier note mentioned /learn and /release-check.');
+    expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();
   });
 });

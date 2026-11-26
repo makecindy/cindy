@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +38,14 @@ const { deviceLinkSettings } = vi.hoisted(() => ({
 vi.mock('@/hooks/useDeviceLinkSettings', () => ({
   useDeviceLinkSettings: () => deviceLinkSettings,
 }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ mode: 'cloud' }) }));
+const { authUser } = vi.hoisted(() => ({
+  authUser: { current: null as null | { id: string; orgId: string; membershipKind: 'org' } },
+}));
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'cloud' }),
+  useOptionalAuthUser: () => authUser.current,
+  useOptionalDataOwnerGeneration: () => 0,
+}));
 vi.mock('../components/settings/MyDevicesPanel', () => ({
   MyDevicesPanel: ({
     variant,
@@ -61,7 +68,9 @@ vi.mock('../components/settings/RemoteSection', () => ({
 }));
 
 import { RemoteControlSection } from '@/components/settings/RemoteControlSection';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import { _resetRemoteConnectionV2ForTests } from '@/features/remote-connection-v2/useRemoteConnectionV2';
+import { toast } from '@/lib/toast';
 
 // 收起态的 header 无障碍名里还会带上摘要文案,所以用前缀匹配。
 const devicesHeader = () =>
@@ -228,8 +237,8 @@ describe('RemoteControlSection devices deep link', () => {
   });
 });
 
-// 「Agent-Net (Beta)」打开后「我的设备」只留本机卡片,下面紧接拓扑图,其它设备不再列出(用户裁决 2026-11-07)。
-// 设备深链照旧可用:指向本机时交给本机卡片定位,指向其它设备时打开拓扑里那台设备的卡片。
+// 「我的设备」就是设备管理:「Agent-Net (Beta)」打开后照样列出全部设备,拓扑图接在下面只管连接
+// (用户裁决 2026-11-25,取代 2026-11-07「只留本机卡片、其它设备在拓扑里看」)。设备深链由列表定位。
 describe('RemoteControlSection with Agent-Net on', () => {
   const phone = {
     deviceId: 'phone-1',
@@ -256,7 +265,7 @@ describe('RemoteControlSection with Agent-Net on', () => {
     deviceLinkSettings.devices.splice(deviceLinkSettings.devices.indexOf(phone), 1);
   });
 
-  it('keeps only this computer card above the topology, with no other-devices list', () => {
+  it('lists every device in My devices above the topology', () => {
     render(
       <MemoryRouter initialEntries={['/settings?tab=remote-control']}>
         <RemoteControlSection />
@@ -266,9 +275,11 @@ describe('RemoteControlSection with Agent-Net on', () => {
     expect(
       screen.getByRole('switch', { name: 'settings.remoteControl.v2.switch.title' }).getAttribute('aria-checked'),
     ).toBe('true');
+    // The same collapsible list as with the switch off: this computer pinned, the others one click away.
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByTestId('my-devices-panel-self')).toBeTruthy();
-    expect(screen.queryByTestId('my-devices-panel-others')).toBeNull();
-    expect(screen.queryByRole('button', { name: /^settings\.remoteControl\.sections\.myDevices/ })).toBeNull();
+    expect(screen.getByTestId('my-devices-panel-others')).toBeTruthy();
+    // The topology still draws every device.
     expect(screen.getByRole('button', { name: /^Pixel/ })).toBeTruthy();
   });
 
@@ -298,14 +309,155 @@ describe('RemoteControlSection with Agent-Net on', () => {
     expect(panel.getAttribute('data-focus-key')).toMatch(/^self:/);
   });
 
-  it('opens the topology card of another device the deep link points at', async () => {
+  it('focuses another device the deep link points at in My devices, not in the topology', () => {
     render(
       <MemoryRouter initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}>
         <RemoteControlSection />
       </MemoryRouter>,
     );
 
-    const card = await screen.findByRole('dialog');
-    expect(card.textContent).toContain('Pixel');
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    const panel = screen.getByTestId('my-devices-panel-others');
+    expect(panel.getAttribute('data-focus-device')).toBe('phone-1');
+    expect(panel.getAttribute('data-focus-key')).toMatch(/^phone-1:/);
+    // Two targets for one link would fight over the scroll position.
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+// Cloud instances are device cards in "My devices"; the retired category's deep
+// link and search entry open that list and focus the instance. Admission and the card's own
+// controls are covered in features/cloud-settings/__tests__/device-directory.test.tsx.
+describe('RemoteControlSection cloud instance deep link', () => {
+  it('opens My devices and focuses the instance from the cloud instances link', () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          '/settings?tab=remote-control&section=remoteControl.cloudInstances&device=cloud-1',
+        ]}
+      >
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe(
+      'cloud-1',
+    );
+  });
+
+  it('restores the expanded list without focusing anything when coming back from instance settings', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control&devices=open']}>
+        <LocationProbe />
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe('');
+    fireEvent.click(devicesHeader());
+    await waitFor(() => expect(currentSearch()).not.toContain('devices=open'));
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果:RemoteControlSection →「我的设备」里的「云主机」一行;用户看到哪些按钮,点了在浏览器里打开哪一页。
+// - 规则依据:用户裁决 2026-11-25,云主机的添加和管理放进设备管理(侧栏菜单入口保留,与这里读同一份入口)。
+// - 现有覆盖缺口:入口解析在 maker-shared deviceList.test.ts,但没有测试经界面验证按钮与打开的地址。
+// - 最小失败输入:组织成员已有一台运行中的云主机、还能再开一台 → 两个按钮,「添加」带下单参数;个人账号没有这一行;
+//   浏览器没打开(主进程回 success: false,不拒绝)→ 提示打开失败(PR #12823 评审)。
+// - tier:unit(jsdom),与同页其它用例同一文件、同一套 mock。
+describe('RemoteControlSection cloud computer row', () => {
+  const consoleUrl = 'https://console.example.test/console/orgs/org-1/personal/cloud';
+  const entry = (computer: unknown, canAdd = false) => ({
+    enabled: true,
+    membershipId: 'member-1',
+    organizationId: 'org-1',
+    url: consoleUrl,
+    computer,
+    canAdd,
+  });
+  let openExternal: ReturnType<typeof vi.fn>;
+
+  function renderWithEntry(value: unknown, opened = true) {
+    openExternal = vi.fn(async () => ({ success: opened }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        remoteSsh: { list: vi.fn(async () => ({ hosts: [] })), onStatusChanged: vi.fn(() => vi.fn()) },
+        deviceLink: { cloudComputerEntry: vi.fn(async () => value) },
+        openExternal,
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control']}>
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+  }
+
+  beforeEach(() => {
+    authUser.current = { id: 'member-1', orgId: 'org-1', membershipKind: 'org' };
+  });
+  afterEach(() => {
+    authUser.current = null;
+  });
+
+  it.each([
+    ['no cloud computer yet', entry(null), ['addCloud']],
+    ['one being prepared', entry({ status: 'creating' }), ['preparingCloud']],
+    ['a running one, room for another', entry({ status: 'linked' }, true), ['manageCloud', 'addCloud']],
+  ])('offers the actions for %s, pinned outside the collapsed list', async (_case, value, actions) => {
+    renderWithEntry(value);
+
+    for (const action of actions) {
+      expect(
+        await screen.findByRole('button', { name: `settings.remoteControl.cloudComputer.actions.${action}` }),
+      ).toBeTruthy();
+    }
+    expect(screen.getAllByRole('button', { name: /^settings\.remoteControl\.cloudComputer\.actions\./ })).toHaveLength(
+      actions.length,
+    );
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens the order form for 添加云主机 and the cloud page for 管理云主机', async () => {
+    renderWithEntry(entry({ status: 'linked' }, true));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.remoteControl.cloudComputer.actions.addCloud' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.cloudComputer.actions.manageCloud' }));
+
+    const [add, manage] = openExternal.mock.calls.map(([href]) => new URL(href as string));
+    expect(add.origin + add.pathname).toBe(consoleUrl);
+    expect(add.searchParams.get('add')).toBe('1');
+    expect(add.searchParams.get('app')).toBe(BRAND_IDENTITY.primaryScheme);
+    expect(manage.origin + manage.pathname).toBe(consoleUrl);
+    expect(manage.searchParams.has('add')).toBe(false);
+    expect(manage.searchParams.get('app')).toBe(BRAND_IDENTITY.primaryScheme);
+  });
+
+  it('shows no cloud computer row for an account without the entry', async () => {
+    authUser.current = null;
+    renderWithEntry(entry({ status: 'linked' }, true));
+    // Let any entry read settle, so a row that would appear late still fails the check.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('my-devices-panel-self')).toBeTruthy();
+    expect(screen.queryByText('settings.remoteControl.cloudComputer.title')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^settings\.remoteControl\.cloudComputer\.actions\./ })).toBeNull();
+  });
+
+  it('tells the user when the browser does not open the cloud computer page', async () => {
+    const error = vi.spyOn(toast, 'error');
+    try {
+      renderWithEntry(entry({ status: 'linked' }), false);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.remoteControl.cloudComputer.actions.manageCloud' }));
+
+      await waitFor(() => expect(error).toHaveBeenCalledWith('settings.remoteControl.cloudComputer.openFailed'));
+    } finally {
+      error.mockRestore();
+    }
   });
 });

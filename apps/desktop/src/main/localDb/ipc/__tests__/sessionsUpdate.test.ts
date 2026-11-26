@@ -6,6 +6,7 @@ import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCre
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../sessionOpening';
+import type { CreateWorktreeReq, CreateWorktreeResp } from '../../../worktree/types';
 /**
  * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
  * -------------------------------------------------------------------
@@ -123,6 +124,7 @@ vi.mock('../../../appSessionState', () => ({
   activeOwnerScopeKey: () => 'owner-a',
   isAppSessionBoundaryPending: () => false,
   getActiveAppSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner-a', ownerGeneration: 1 }),
   ownerScopedUserDataPath: (...parts: string[]) => path.join(h.userDataDir!, ...parts),
 }));
 vi.mock('../../../logger', () => ({
@@ -131,6 +133,7 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: () => h,
   getDbClient: () => h.client,
+  tryGetDbClient: () => h.client,
   getCurrentDbClientUserId: () => 'test-user',
 }));
 vi.mock('../../botProfileDeletionStore.js', () => ({
@@ -198,7 +201,8 @@ vi.mock('../../../maker-host/session-context-budget-store.js', async (importOrig
 });
 
 import { PendingCredentialSwitchService } from '../../../maker-ipc/pendingCredentialSwitch.js';
-import { createSessionRuntimeCleanup } from '../../../maker-ipc/sessionRuntimeProjection.js';
+import { createSessionRuntimeCleanup, createSessionRuntimeProjection, createSessionRuntimeProjector } from '../../../maker-ipc/sessionRuntimeProjection.js';
+import { acceptSessionRuntimeMutation, clearSessionRuntimeControlState } from '../../../maker-ipc/sessionRuntimeControl.js';
 
 import {
   applyAgentSwitchToSessionRow,
@@ -231,7 +235,8 @@ import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
-import { setSessionRuntimeProjector } from '../../mapper';
+import { getDbClient } from '../../client/current';
+import { sessionToCamel, setSessionRuntimeProjector } from '../../mapper';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -1287,6 +1292,50 @@ describe('local-db:sessions:update handler wiring', () => {
     }
   });
 
+  it('publishes the committed model when switching computers while keeping valid same-computer overrides', async () => {
+    const sessionId = 'pi-local';
+    const projection = createSessionRuntimeProjection({ broadcastSessionPatched });
+    setSessionRuntimeProjector(createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+    }));
+    const shared = {
+      agentDeviceId: 'shared-computer', agentKind: 'pi', model: 'shared-model',
+      providerId: 'shared-provider', effort: 'high', fastMode: true,
+    } as const;
+    const local = {
+      agentDeviceId: null, agentKind: 'pi', model: 'local-model',
+      providerId: 'local-provider', effort: 'medium', fastMode: false,
+    } as const;
+    acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile: shared, deferred: false });
+    try {
+      await applyAgentSwitchToSessionRow(sessionId, {
+        ...shared, model: 'saved-shared-model',
+      });
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({ runtimeEffective: shared }),
+      }));
+
+      await applyAgentSwitchToSessionRow(sessionId, local);
+      const { agentDeviceId, ...localProfile } = local;
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({
+          agentDeviceId, model: local.model, providerId: local.providerId, runtimeEffective: localProfile,
+        }),
+      }));
+
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId, patch: expect.objectContaining({ runtimeEffective: localProfile }),
+      }));
+      const row = await sessionQueries.selectSessionWithCount(getDbClient().drizzle, sessionId);
+      expect(sessionToCamel(row!)).toMatchObject({ agentDeviceId: null, runtimeEffective: localProfile });
+    } finally {
+      setSessionRuntimeProjector(null);
+      clearSessionRuntimeControlState(sessionId);
+    }
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,
@@ -1822,6 +1871,27 @@ describe('local-db:sessions:update handler wiring', () => {
       .filter(([channel]) => channel === 'local-db:sessions:patched')
       .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
     expect(statusPatches).toEqual(['deleted']);
+  });
+
+  // #12464, DB tier: IM owns this task's route lock while calling the helper.
+  // Retry the same pin with a later clock and clear the stored card via patch-meta.
+  it('pins the current IM task without reentering its lease or moving an existing pin', async () => {
+    const first = '2026-08-03T04:08:26.000Z';
+    h.routeLock.mockImplementation(async () => { throw new Error('reentered IM route lock'); });
+    await invokePatchMeta('codex-local', { pinnedAt: first });
+    await vi.dynamicImportSettled();
+    h.tapWindowBroadcast.mockClear();
+    h.summarizeSession.mockClear();
+    await expect(invokePatchMeta('codex-local', { pinnedAt: '2026-08-04T00:00:00.000Z' }))
+      .resolves.toMatchObject({ pinnedAt: first });
+    await vi.dynamicImportSettled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+    h.sqlite!.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run('card', 'codex-local');
+    await expect(invokePatchMeta('codex-local', { pinnedAt: null })).resolves.toMatchObject({ pinnedAt: null, summary: null });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local', patch: { pinnedAt: null, summary: null },
+    });
   });
 
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
@@ -2387,6 +2457,88 @@ it('does not create a renderer task when common model admission fails', async ()
   await expect(invokeCreate({ id: 'rejected-open', title: 'Rejected task' })).rejects.toThrow('model unavailable');
   expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('rejected-open')).toBeUndefined();
 });
+
+// #11956 / DB tier: exercise the local create IPC and its SQLite row, not just
+// admission. With one delayed checkout on a non-current source ref, the old
+// handler publishes a base-repo task without waiting for the worktree.
+it.each([true, false])('publishes a local ACP task only after successful checkout (%s)', async (ok) => {
+  const baseRepo = path.join(h.userDataDir!, 'repo');
+  const managedPath = path.join(baseRepo, '.cindy-worktrees', 'fixture');
+  await mkdir(baseRepo);
+  const request = { sessionId: 'acp-create', baseRepo, name: 'fixture', sourceBranch: 'feature/marker' };
+  const checkoutStarted = Promise.withResolvers<void>();
+  const checkout = Promise.withResolvers<CreateWorktreeResp>();
+  const create = vi.fn((_input: CreateWorktreeReq) => {
+    checkoutStarted.resolve();
+    return checkout.promise;
+  });
+  const discard = vi.fn();
+  registerSessionIpc(undefined, { localPluginWorktrees: { create, discard } });
+  const readRow = h.sqlite!.prepare(
+    'SELECT working_dir, worktree_path, agent_kind, provider_id, model FROM sessions WHERE id = ?',
+  );
+  const creation = invokeCreate({
+    id: request.sessionId, agentKind: 'acp', providerId: 'acp-plugin:fixture:marker',
+    model: 'fixture-model', workspaceKind: 'project', workingDir: baseRepo,
+    localPluginWorktree: { name: request.name, sourceBranch: request.sourceBranch },
+  });
+  const completion = ok
+    ? expect(creation).resolves.toMatchObject({ workingDir: normalizeWorkingDirForStorage(managedPath) })
+    : expect(creation).rejects.toThrow('Could not create the task worktree');
+  try {
+    await Promise.race([checkoutStarted.promise, creation]);
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      ...request, baseRepo: normalizeWorkingDirForStorage(baseRepo),
+    }, expect.any(Function));
+    expect(readRow.get(request.sessionId)).toBeUndefined();
+  } finally {
+    checkout.resolve(ok
+      ? { ok: true, meta: { ...request, path: managedPath, branch: 'cindy/fixture', createdAt: '2026-01-01T00:00:00.000Z' } }
+      : { ok: false, error: { kind: 'unknown', message: 'fixture checkout failed' } });
+    await completion;
+  }
+  const storedPath = normalizeWorkingDirForStorage(managedPath);
+  expect(readRow.get(request.sessionId)).toEqual(ok
+    ? { working_dir: storedPath, worktree_path: storedPath, agent_kind: 'acp',
+        provider_id: 'acp-plugin:fixture:marker', model: 'fixture-model' }
+    : undefined);
+});
+
+// 2026-11-25: an engine on another computer of the same account still works in this computer's files,
+// so the checkout happens here like any local task; the row keeps the engine's location.
+it('provisions the local worktree when the plugin engine runs on another computer', async () => {
+  const baseRepo = path.join(h.userDataDir!, 'repo-remote-engine');
+  const managedPath = path.join(baseRepo, '.cindy-worktrees', 'fixture');
+  await mkdir(baseRepo);
+  const create = vi.fn(async (input: CreateWorktreeReq): Promise<CreateWorktreeResp> => ({
+    ok: true, meta: { ...input, path: managedPath, branch: 'cindy/fixture', createdAt: '2026-01-01T00:00:00.000Z' },
+  }));
+  registerSessionIpc(undefined, { localPluginWorktrees: { create, discard: vi.fn() } });
+  await expect(invokeCreate({
+    id: 'acp-remote-engine', agentKind: 'acp', providerId: 'acp-plugin:fixture:marker',
+    model: 'fixture-model', workspaceKind: 'project', workingDir: baseRepo, agentDeviceId: 'other-computer',
+    localPluginWorktree: { name: 'fixture', sourceBranch: 'main' },
+  })).resolves.toMatchObject({ workingDir: normalizeWorkingDirForStorage(managedPath) });
+  expect(create).toHaveBeenCalledOnce();
+  expect(h.sqlite!.prepare('SELECT worktree_path, agent_device_id FROM sessions WHERE id = ?').get('acp-remote-engine'))
+    .toEqual({ worktree_path: normalizeWorkingDirForStorage(managedPath), agent_device_id: 'other-computer' });
+});
+
+it.each([{ remoteHostId: 'ssh-host' }, { orcaRole: 'worker' }])(
+  'rejects local ACP worktree provisioning for %j before any Git or task write',
+  async (placement) => {
+    const create = vi.fn();
+    registerSessionIpc(undefined, { localPluginWorktrees: { create, discard: vi.fn() } });
+    await expect(invokeCreate({
+      id: 'wrong-placement', agentKind: 'acp', providerId: 'acp-plugin:fixture:marker',
+      model: 'fixture-model', workspaceKind: 'project', workingDir: h.userDataDir,
+      localPluginWorktree: { name: 'fixture', sourceBranch: 'main' },
+      ...placement,
+    })).rejects.toThrow('INVALID_PARAMS');
+    expect(create).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('wrong-placement')).toBeUndefined();
+  },
+);
 
 // DB tier, T08b/F6: real IPC and route lock; only bootstrap IO is deferred.
 // Previous tests began after creation, missing the terminal/create lock inversion.

@@ -45,6 +45,7 @@ import type {
   BotImFeishuService,
   BotImGroupActivationMode,
 } from '../../../shared/botImConnection';
+import { BOT_IM_CONNECT_TIMEOUT_REASON } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { RemoteOfficialXCard } from './RemoteOfficialXCard';
@@ -251,6 +252,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
+                {view.health?.automationDenied && (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.automationDenied')}</p>
+                )}
                 {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
@@ -892,7 +896,10 @@ function BotChannelAddDialog({
       } else if (message.includes('CONNECT_FAILED')) {
         const marker = 'CONNECT_FAILED: ';
         const reason = message.slice(message.indexOf(marker) + marker.length).trim();
-        setError(t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
+        // 只是超时: 表单内容原样保留, 再点一次即用原输入重试。
+        setError(reason === BOT_IM_CONNECT_TIMEOUT_REASON
+          ? t('bots.channels.add.errors.connectTimedOut')
+          : t('bots.channels.add.errors.connectFailed', { reason: reason || '…' }));
       } else {
         setError(t('bots.channels.add.errors.failed'));
       }

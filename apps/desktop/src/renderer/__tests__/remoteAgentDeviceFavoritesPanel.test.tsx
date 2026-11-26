@@ -618,10 +618,12 @@ describe('收藏 / 全部聚合来源，供应商只筛自己的收藏', () => {
     expect(within(list()).queryByRole('group', { name: '收藏' })).toBeNull();
   });
 
-  it('分享下线或授权变化后，缓存目录不能把旧收藏重新显示出来', async () => {
+  // 2026-11-23 用户裁决「保留并标注」: the owner computer being briefly offline no longer hides the
+  // favorite (it used to vanish and come back with each presence change); a changed grant still does.
+  it('分享者电脑暂时离线时收藏保留；授权变化后缓存目录不能把旧收藏重新显示出来', async () => {
     renderPanel({ devices: allDevices });
     await act(async () => publish([{ ...shares[0]!, hostOnline: false }, shares[1]!]));
-    expect(within(favoritesGroup()).queryByText('Shared one')).toBeNull();
+    expect(within(favoritesGroup()).getByText('Shared one')).toBeTruthy();
     expect(listModelFavorites()).toHaveLength(4);
     await act(async () => publish());
     expect(within(favoritesGroup()).getByText('Shared one')).toBeTruthy();
