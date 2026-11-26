@@ -73,9 +73,11 @@ export function pluginMarketVisualDemoIds(): string[] { return DEMOS.map((demo) 
 /** Applies a deep-link scenario; returns true when the market tab should open. */
 export function setPluginMarketVisualScenario(value: unknown, enabled: boolean): boolean {
   if (!enabled || typeof value !== "string" || !SCENARIOS.includes(value as PluginMarketVisualScenario)) return false;
-  // A market scenario starts from a computer that can read its market: `checks=recordMissing` leaves the mock computer
-  // unable to (until its next seed), and an install from the market would then end as "could not read".
+  // A market scenario starts from a current computer that can read its market: `checks=recordMissing` leaves the mock
+  // computer unable to, and `checks=legacyHost` leaves it answering as an older one (until the next seed); an install
+  // from the market would then end as "could not read" or "older computer".
   catalogUnreadable = false;
+  legacyHost = false;
   // The same scenario again (a repeated deep link) keeps what already failed once, so the scenarios are repeatable:
   // `readFailed`'s and `detailReadFailed`'s Retry read successfully however often the link is sent. Another scenario
   // first arms them again.

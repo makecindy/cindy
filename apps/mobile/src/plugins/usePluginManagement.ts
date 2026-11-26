@@ -38,6 +38,8 @@ interface ManagementEntry {
   stopWatching?: () => void;
   /** The missing-receipt facts a market install's result is being settled from (each set settled once). */
   settling?: unknown;
+  /** Stops waiting for a write still on its way when the facts could not settle the operation yet (`settleFromFacts`). */
+  settleLater?: () => void;
   /** Runs the detached review again (after a sheet showing this entry closed). */
   review?: () => void;
   /** The pending check this entry last had (its final result is told once, see `conclude`). */
@@ -194,11 +196,11 @@ setPluginPendingCheckSource({
 function conclude(entry: { ownerKey: string }, conclusion: PluginCheckConclusion) {
   const next = [...conclusions.filter((item) => item.operationId !== conclusion.operationId),
     { ...conclusion, ownerKey: entry.ownerKey, seq: ++conclusionSeq }];
-  // The oldest go first, but never one still listed (a result the person has not been shown), and never the one that
-  // just ended (its row or the list of checks is about to say how).
-  let extra = next.length - CONCLUSIONS_KEPT;
-  conclusions = extra <= 0 ? next
-    : next.filter((item, index) => index === next.length - 1 || pluginConclusionListed(item) || extra-- <= 0);
+  // Results still listed (the person has not been shown them) are all kept. Of the others (failed, cancelled,
+  // uninstalled, already seen) the newest CONCLUSIONS_KEPT stay, so one that just ended is still there for its row and
+  // the list of checks to say how, however many results wait to be looked at.
+  let extra = next.filter((item) => !pluginConclusionListed(item)).length - CONCLUSIONS_KEPT;
+  conclusions = extra <= 0 ? next : next.filter((item) => pluginConclusionListed(item) || extra-- <= 0);
   // A read lives no longer than its conclusion.
   for (const operationId of [...readbacks.keys()]) if (!conclusions.some((item) => item.operationId === operationId)) readbacks.delete(operationId);
   notifyChecks();
@@ -381,9 +383,20 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
     && controller.getState().operationId === check.operationId;
   const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
     if (!valid()) return;
-    // A write of this operation is still on its way (Allow's reply has not come): not let go yet. These facts settle it
-    // once that write is over (the controller's next change comes back here).
-    if (!controller.untrack()) { if (entry.settling === facts) entry.settling = undefined; return; }
+    // A write of this operation is still on its way (the reply to begin or to Allow has not come): not let go yet.
+    // These facts settle it once that write is over. The controller tells its subscribers then, also when the end of
+    // the write changes nothing in its state (a begin whose reply is lost after the connection moved on).
+    if (!controller.untrack()) {
+      if (entry.settling === facts) entry.settling = undefined;
+      entry.settleLater ??= controller.subscribe(() => {
+        // Only once nothing is on its way any more (it then lets go, or the facts are no longer the ones to settle from).
+        if (!controller.idle()) return;
+        entry.settleLater?.();
+        entry.settleLater = undefined;
+        watch(entry);
+      });
+      return;
+    }
     // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
@@ -432,6 +445,8 @@ function letGo(scope: string, entry: ManagementEntry) {
   if (retained.get(scope) === entry) retained.delete(scope);
   entry.stopWatching?.();
   entry.stopWatching = undefined;
+  entry.settleLater?.();
+  entry.settleLater = undefined;
   entry.dead = true;
   entries.delete(entry);
   entry.controller.dispose();

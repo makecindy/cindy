@@ -2476,6 +2476,19 @@ describe('whether a finished operation opens an instance', () => {
   ] as const)('install: %s', (_name, ghosts, market, reason) => {
     expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
   });
+  // Pre-push review, round 6: an item read before the install carries no namespace (the root one, as the computer fills
+  // it in once installed). With the root instance gone, an instance of the same id in another known namespace is
+  // another plugin: "not on the computer now". Minimal failing input on 84ddb5043c: the two rows after the control gave
+  // 'unconfirmed' and 'unread' (a missing namespace matched any instance). Tier: unit (pure).
+  it.each([
+    ['control: the computer\'s ① record for the root', [{ ...detail, namespace: null, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }]],
+    ['a record saying not installed', [{ ...detail, namespace: undefined, installState: 'not-installed' as const }]],
+    ['no record of it', []],
+  ] as const)('install of an item without a namespace; only an instance of the same id in another namespace is there; %s: gone', (_name, market) => {
+    const { namespace: _omitted, ...before } = detail;
+    const team = { ...updated, instanceKey: 'team__demo', namespace: 'team' };
+    expect(pluginOperationOpens({ ...finished('market-install'), detail: before }, { ghosts: [team], market: market as any })).toEqual({ open: false, reason: 'gone' });
+  });
   it('install: what a response does name about the plugin decides, whatever else it left out', () => {
     const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
     const other = { ...detail, pluginId: 'market/other', ghostId: 'other', name: 'Other', installState: 'installed' as const };

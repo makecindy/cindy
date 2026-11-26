@@ -149,8 +149,6 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return () => { disposed = true; };
   }, [storageKey, owner]);
   useEffect(() => { if (installedDeviceId) setChoice(undefined); }, [installedDeviceId]);
-  const installedChoice = useRef(installedDeviceId);
-  installedChoice.current = installedDeviceId;
   const has = (id: string | undefined) => !!id && targets.some((host) => host.deviceId === id);
   const onlineId = (id: string | undefined) => {
     const host = id ? targets.find((candidate) => candidate.deviceId === id) : undefined;
@@ -504,10 +502,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (installRef.current?.id !== attempt.id) return;
     setInstall(null);
     installRef.current = null;
-    // The market stays on the computer the install was on (it was held there while it ran) unless the person chose a
-    // computer themselves: an automatic pick must not move it to another computer the moment the install ends. A
-    // specific computer picked in the Installed tab meanwhile applies from here on, as before.
-    setChoice((current) => current ?? (installedChoice.current ? undefined : attempt.target.deviceId));
+    // The market stays on the computer the attempt was on (it was held there while it ran): that computer becomes this
+    // visit's automatic pick, so the list does not move to another computer the moment the attempt ends. It is no
+    // explicit choice: one the person made (in the market, or a specific computer in the Installed tab) still wins,
+    // and the next visit picks again.
+    setPinned(attempt.target.deviceId);
     slot.release(attempt.token);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, [slot]);

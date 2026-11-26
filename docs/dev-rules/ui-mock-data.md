@@ -170,7 +170,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 已不再跟踪 | `cindy://plugins?checks=untracked` |
   | 多条记录，一条待核实、一条进行中（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=many` |
   | 多条都还在进行（「N 项插件操作还没结束」） | 没有入口：要两台电脑上各有一项进行中，模拟环境只有一台在线电脑；这句的出现条件由 `pluginsScreenMarketFences.test.tsx` 的两台电脑用例断言 |
-  | 回执过期，电脑上有这个插件但那份回答里没有它的安装记录（待核实的一行写「电脑上有这个插件，但读不到它的安装记录，还不能确认结果」，「核实结果」可点） | `cindy://plugins?checks=recordMissing`（模拟电脑的已装快照只剩自定义市场条目并报市场不可用；之后发任一 `market=` 场景，模拟电脑恢复为读得到市场） |
+  | 回执过期，电脑上有这个插件但那份回答里没有它的安装记录（待核实的一行写「电脑上有这个插件，但读不到它的安装记录，还不能确认结果」，「核实结果」可点） | `cindy://plugins?checks=recordMissing`（模拟电脑的已装快照只剩自定义市场条目并报市场不可用；之后发任一 `market=` 场景，模拟电脑恢复为读得到市场；`checks=legacyHost` 留下的「按旧电脑回答」同样在发 `market=` 场景时恢复） |
   | 记录面板打开时把之前证实的结果再读一次（先「已完成，正在确认电脑上的插件…」，读到后出现「打开插件」） | `cindy://plugins?market=normal` 安装一个插件，等顶部提示出现后点「查看」；读取很快，要截到中间态用 `checks=readingBack` |
   | 两条都已读出结果（关上面板前，面板后面的顶部提示写「2 项插件操作有结果了」；两行都是「已完成」与「打开插件」） | `cindy://plugins?checks=results` |
   | 一条有结果、一条待核实（顶部提示写「2 项插件操作待查看」） | `cindy://plugins?checks=attention` |
@@ -198,7 +198,7 @@ pnpm mobile:sim:whoami -- --mock --json
   `checks=` 用真实 controller 在模拟电脑上发起操作（按操作号预设回答），交给待核实记录后打开记录面板；每次都从模拟电脑的初始
   状态开始（已装插件复原、没有操作）。成功、读取失败、失败、不再跟踪、已卸载、无法确认、更新回执过期这几态在面板打开后才发生，面板里看得到
   结束的那一条。模拟电脑的市场记录按契约 V2.10 给归属：这台手机远程装的是 `self` 加操作号，其余已装的是 `unattributed`，`checks=legacyHost`
-  之后按旧 Host 两个字段都不给。任务设置保存、页面批准两个入口的模拟数据
+  之后按旧 Host 两个字段都不给（直到下一次 `checks=` 播种，或发任一 `market=` 场景）。任务设置保存、页面批准两个入口的模拟数据
   还没有（只有组件测试）。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。

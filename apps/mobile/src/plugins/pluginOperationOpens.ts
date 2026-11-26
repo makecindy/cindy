@@ -69,9 +69,10 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
     // No installed record of it. "Gone" only when no instance of the plugin is there either. One that is there with a
     // record saying "not installed" cannot be attributed (②); with no record at all the response says nothing about
     // it (its market part is incomplete or behind): it settles nothing and has to be read again.
-    // (An instance of the same id in another known namespace is another plugin.)
+    // (An instance of the same id in another known namespace is another plugin. An item read before the install may
+    // carry no namespace: that is the root one, as the computer fills it in once installed.)
     const there = (ghost: ManagedPlugin) => ghost.manifest.id === item.ghostId
-      && (item.namespace === undefined || ghost.namespace === undefined || item.namespace === ghost.namespace);
+      && (ghost.namespace === undefined || ghost.namespace === (item.namespace ?? null));
     if (!facts.ghosts.some((ghost) => there(ghost) && started(ghost))) return { open: false, reason: "gone" };
     return { open: false, reason: record ? "unconfirmed" : "unread" };
   }
