@@ -80,6 +80,16 @@ export default {
       // Direct entry preselects recommendations; address handoff starts with no selected models.
       if (item.kind === 'wizard') await row.click();
     } else await page.getByText('UI catalog probe', { exact: true }).click();
+    if (preset.id === 'command-code') {
+      await page.getByRole('button', { name: await ui.t('settings.providers.custom.test.button'), exact: true }).click();
+      await page.waitForFunction(() => window.templateEvidence.tested);
+      const probe = await page.evaluate(() => window.templateEvidence.tested);
+      assert.equal(probe.kind, 'adhoc');
+      assert.equal(probe.spec.modelId, selectedModelId);
+      assert.equal(probe.spec.apiKey, 'fake-ui-key');
+      assert.equal(probe.spec.wireProtocol, preset.runtimes[probe.spec.agent].wireProtocol);
+      assert.equal(await page.evaluate(() => window.templateEvidence.saved), undefined);
+    }
     await ui.capture('models');
     await finish.click();
     await page.waitForFunction(() => window.templateEvidence.saved);

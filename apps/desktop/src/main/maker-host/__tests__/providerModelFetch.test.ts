@@ -841,3 +841,44 @@ describe('ElevenLabs catalog authentication', () => {
     expect(noAuth.init.headers).toEqual({});
   });
 });
+
+describe('Command Code public catalog', () => {
+  const modelsUrl = 'https://api.commandcode.ai/provider/v1/models';
+
+  it('returns only models served by each bundled runtime without claiming account inventory', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'command-code')!;
+    const fetchImpl = vi.fn(async () => Response.json({ data: [
+      { id: 'claude-sonnet-5-5', supported_endpoints: ['/messages'] },
+      { id: 'vendor/chat-only', supported_endpoints: ['/chat/completions'] },
+      { id: 'vendor/portable', supported_endpoints: ['/chat/completions', '/responses'] },
+    ] }));
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const results = await Promise.all(agents.map(agent => {
+      const runtime = preset.runtimes[agent]!;
+      return fetchProviderModels(spec({ agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+        wireProtocol: runtime.wireProtocol }), fetchImpl);
+    }));
+
+    expect(results.map(result => ({
+      ok: result.ok, complete: result.complete, ids: result.models?.map(model => model.id),
+    }))).toEqual([
+      { ok: true, complete: false, ids: ['claude-sonnet-5-5'] },
+      { ok: true, complete: false, ids: ['vendor/portable'] },
+      { ok: true, complete: false, ids: ['vendor/chat-only', 'vendor/portable'] },
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes an empty protocol view from a malformed or failed catalog', async () => {
+    const input = spec({ baseUrl: 'https://api.commandcode.ai/provider', modelsUrl });
+    for (const data of [[], [{ id: 'vendor/chat-only', supported_endpoints: ['/chat/completions'] }]]) {
+      const result = await fetchProviderModels(input, async () => Response.json({ data }));
+      expect(result).toMatchObject({ ok: true, complete: false, models: [] });
+    }
+    for (const payload of [{ data: [], error: { message: 'rejected' } }, { data: [{ id: 'no-routes' }] }]) {
+      expect(await fetchProviderModels(input, async () => Response.json(payload))).toMatchObject({ ok: false });
+    }
+    expect(await fetchProviderModels(input, async () => new Response(null, { status: 401 })))
+      .toMatchObject({ ok: false, status: 401 });
+  });
+});

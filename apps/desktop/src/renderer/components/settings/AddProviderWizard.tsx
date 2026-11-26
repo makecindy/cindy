@@ -1399,7 +1399,7 @@ export function AddProviderWizard({
   }, [sel, apiKey, onDone, t]);
 
   const bindGeminiImages = sel?.kind === 'preset' && sel.preset.id === GEMINI_API_PRESET_ID && !detected && !(entry?.kind === 'preset' && entry.speechOnly);
-  const handleFinish = useCallback(async () => {
+  const handleFinish = useCallback(async (testOnly = false) => {
     if (savingRef.current || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
@@ -1425,7 +1425,7 @@ export function AddProviderWizard({
       return;
     }
     const oauthDraft = oauthDraftRef.current;
-    oauthDraftRef.current = null;
+    if (!testOnly) oauthDraftRef.current = null;
     savingRef.current = true;
     setSaving(true);
     try {
@@ -1518,6 +1518,33 @@ export function AddProviderWizard({
         ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
         runtimes,
       };
+      if (testOnly) {
+        const chosen = selected.find(model => model.checked);
+        const agent = chosen?.agents.find(candidate => runtimes[candidate]?.models.some(model => model.id === chosen.id));
+        const runtime = agent ? runtimes[agent] : undefined;
+        const model = runtime?.models.find(candidate => candidate.id === chosen?.id);
+        if (!agent || !runtime || !model || !keys[agent]) {
+          toast.error(t('settings.providers.custom.test.needFields'));
+          return;
+        }
+        const result = await api.testProviderConnection({
+          kind: 'adhoc',
+          spec: {
+            agent,
+            modelId: model.id,
+            authMethod: 'apiKey',
+            apiKey: keys[agent],
+            catalogPresetId: preset.id,
+            baseUrl: model.route?.baseUrl ?? runtime.baseUrl,
+            wireProtocol: model.route?.wireProtocol ?? runtime.wireProtocol,
+            api: model.api ?? model.piApi,
+            requestPath: model.route?.requestPath ?? runtime.requestPath,
+          },
+        });
+        if (result.ok) toast.success(t('settings.providers.custom.test.ok', { ms: result.latencyMs ?? 0 }));
+        else toast.error(t(`providerError.${result.code ?? 'UNKNOWN'}`));
+        return;
+      }
       if (bindGeminiImages) {
         const result = await api.createCustomProvider(config, keys, { bindGeminiImages: true });
         if (!result.ok) throw new Error('Gemini connection was not saved');
@@ -1531,8 +1558,8 @@ export function AddProviderWizard({
       );
       onDone(id);
     } catch {
-      if (oauthDraft) oauthDraftRef.current = oauthDraft;
-      toast.error(t('settings.providers.wizard.createFailed'));
+      if (!testOnly && oauthDraft) oauthDraftRef.current = oauthDraft;
+      toast.error(t(testOnly ? 'providerError.UNKNOWN' : 'settings.providers.wizard.createFailed'));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -2468,6 +2495,17 @@ export function AddProviderWizard({
                 disabled={!presetCanContinue}
               >
                 {t('settings.providers.wizard.next')}
+              </Button>
+            )}
+            {sel?.kind === 'preset' && sel.preset.id === 'command-code' && step === 3 && (
+              <Button
+                type="button"
+                size="lg"
+                title={t('settings.providers.custom.test.costHint')}
+                onClick={() => void handleFinish(true)}
+                disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
+              >
+                {t('settings.providers.custom.test.button')}
               </Button>
             )}
             {sel?.kind === 'preset' && step === 3 && (

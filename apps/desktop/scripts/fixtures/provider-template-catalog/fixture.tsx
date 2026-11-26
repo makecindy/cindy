@@ -5,7 +5,7 @@ import { ProviderConnectionDialog } from '../../../src/renderer/components/setti
 import { AddProviderWizard } from '../../../src/renderer/components/settings/AddProviderWizard';
 import type { DetectedProviderDraft } from '../../../src/shared/providerDetection';
 import { cases, presets, deployments, retainedPreset } from './cases';
-const evidence: { saved?: unknown; handoff?: DetectedProviderDraft; fetches: unknown[] } = { fetches: [] };
+const evidence: { saved?: unknown; tested?: unknown; handoff?: DetectedProviderDraft; fetches: unknown[] } = { fetches: [] };
 Object.assign(window, { templateEvidence: evidence, templateIds: presets.map(p => p.id) });
 function Page({ scenario }: { scenario: string }) {
   const item = cases.find(c => c.id === scenario) ?? cases[0];
@@ -38,7 +38,10 @@ mountPage({
       scanLocalCli: async () => ({ detections: [] }),
       onProviderOAuthProgress: subscription('providerOAuthProgress'),
       createCustomProvider: async (config: unknown) => { evidence.saved = config; return { ok: true }; },
-      testProviderConnection: forbid('testProviderConnection'),
+      testProviderConnection: item.providerId === 'command-code' ? async (input: unknown) => {
+        evidence.tested = input;
+        return { ok: false, code: 'AUTH_INVALID' };
+      } : forbid('testProviderConnection'),
     } };
   },
   render: ctx => <Page scenario={ctx.case} />,
