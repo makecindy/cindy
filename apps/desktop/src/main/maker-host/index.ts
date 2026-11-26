@@ -344,6 +344,7 @@ import {
   prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
+  closeCodexMcpSessionInstance,
 } from '../mcp-integrations/codexEnvironment.desktop.js';
 import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
@@ -1929,6 +1930,7 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
+      closeCodexMcpSessionInstance,
       prepareCodexMcpToolCancellation,
       // codexAuthTokenReaderBoundary.test.ts and hostCodexAuthTokenReaderParity.test.ts
       // use createCodexAuthTokenReader and recordCodexThreadLocation as extraction bounds.

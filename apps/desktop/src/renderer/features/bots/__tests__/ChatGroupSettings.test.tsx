@@ -209,6 +209,21 @@ it('lets an ordinary member choose notifications and follows the confirmed cross
   rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
   expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
 });
+// Unit regression for #13029: the displayed group default is not a personal choice.
+it('saves the currently displayed inherited mode as an explicit preference', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'mentions' as const, notificationModeInherited: true };
+  const view = renderAt(initial);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') });
+  expect(control.textContent).toContain(key('notifications.mentions'));
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  await waitFor(() => expect(control.hasAttribute('disabled')).toBe(false));
+  view.update({ ...initial, notificationModeInherited: false });
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  expect(mocks.manage).toHaveBeenCalledTimes(1);
+});
 // The choice shows the moment it is made; a rejected save returns to the confirmed value and says so.
 it('shows the chosen notification value while saving and returns to the confirmed one after rejection', async () => {
   let finish!: (value: { ok: false; errorCode: string }) => void;

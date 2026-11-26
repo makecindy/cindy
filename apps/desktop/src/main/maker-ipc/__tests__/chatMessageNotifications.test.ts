@@ -156,11 +156,14 @@ it('notifies once when a second flush overlaps presentation of the same message'
 
 // Unit: the new personal range must affect native alerts only. A merged burst
 // uses one snapshot, filters before sender/media preparation, and never replays.
-it('filters a mentions-only burst without changing the island projection or adding per-message reads', async () => {
+it.each([
+  { defaultScope: undefined, override: 'mentions' },
+  { defaultScope: 'mentions', override: null },
+] as const)('filters a mentions-only burst without changing the island projection: %j', async ({ defaultScope, override }) => {
   vi.useFakeTimers();
   const ordinary = message('ordinary', { seq: '9007199254740994' });
-  const snapshot = { room: { name: 'Team', kind: 'group' }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
-    reads: [{ thread_key: 'main', read_seq: '0', notification_scope: 'mentions' as const }] };
+  const snapshot = { room: { name: 'Team', kind: 'group', default_notification_scope: defaultScope }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
+    reads: [{ thread_key: 'main', read_seq: '0', notification_scope: override }] };
   const read = vi.fn(async () => snapshot), notify = vi.fn();
   const present = vi.fn(async () => ({ senderName: 'Peer', avatar: '', preview: 'Hello' }));
   const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me', snapshot: read, present, notify });
