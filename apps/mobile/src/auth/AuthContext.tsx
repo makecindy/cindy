@@ -129,7 +129,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
-import { clearBotGroupComposerDrafts, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
+import { clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -2720,6 +2720,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const client = authClientFor(did, realm);
         let pair: Awaited<ReturnType<CindyAuthClient['refresh']>> | null = null;
         let resourcePairStored = false;
+        let rejectedSessionRemoved = false;
         if (resource) {
           try {
             const refreshed = await client.refresh(resource.refreshToken);
@@ -2765,6 +2766,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (removal === 'stale') {
               throw authCodeError('AUTH_FLOW_SUPERSEDED');
             }
+            rejectedSessionRemoved = removal === 'removed';
           }
         }
 
@@ -2772,7 +2774,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const passport = initialVault.passports[
             passportVaultKey(realm, metadata.passportId)
           ];
-          if (!passport) throw authCodeError('SAVED_ACCOUNT_REAUTH_REQUIRED');
+          if (!passport) {
+            // The saved account's session was rejected and removed, with no passport to continue it: it ended,
+            // so its group drafts go too.
+            if (rejectedSessionRemoved && authGenerationRef.current === generationAtStart) {
+              await clearBotGroupComposerDraftsForAccounts([accountKey]).catch(() => undefined);
+            }
+            throw authCodeError('SAVED_ACCOUNT_REAUTH_REQUIRED');
+          }
           const accountPair = await refreshMobilePassportSingleFlight(
             client,
             realm,
@@ -3045,9 +3054,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
-    // 群聊输入框草稿是账号写下的文字。这里只结束当前这个账号（账号不可用、会话过期、注销），
-    // 其他已保存账号的草稿保留；主动退出全部账号由 logout 另行全部清掉。
-    await clearBotGroupComposerDraftsForAccounts([cleanupAccountKey]).catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
     await clearCanaryChannel().catch(() => undefined);
@@ -3096,7 +3102,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsBusy(false);
         }
       };
-      run = clearLocalSession();
+      // 会话到期或账号不可用只结束当前账号：清它的群聊草稿，其他已保存账号的保留。
+      const endedAccountKey = getMobileAuthOwner().accountKey || (userRef.current
+        ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
+        : '');
+      run = clearLocalSession().then(() => clearBotGroupComposerDraftsForAccounts([endedAccountKey]).catch(() => undefined));
       terminalLogoutInFlightRef.current = run;
       setIsBusy(true);
       run.then(clearIfCurrent, clearIfCurrent);
@@ -3140,8 +3150,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearReceipt: () => persistAccountDeletionReceipt(null),
       }),
     );
+    // 主动退出不清群聊草稿：同一账号、同一认证域重新登录后恢复，草稿键带认证域账号 key，换账号读不到。
     await clearLocalSession({ persistedAuthAlreadyCleared: true });
-    await clearBotGroupComposerDrafts().catch(() => undefined);
     setSavedAccounts([]);
     if (!did) return;
     const revocations: Promise<unknown>[] = [];
@@ -3332,6 +3342,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Deleting the passport removes every membership saved under it (the vault transaction reports which);
         // their group drafts go with them.
         let deletedAccountKeys: string[] = [];
+        const currentAccountKey = getMobileAuthOwner().accountKey;
         const deletedOwnerIsCurrent =
           activeAuthRealmRef.current === deletedRealm &&
           userRef.current?.passportId === deletedPassportId;
@@ -3344,7 +3355,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } finally {
             await deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined);
             await clearLocalSession({ persistedAuthAlreadyCleared: true });
-            await clearBotGroupComposerDraftsForAccounts(deletedAccountKeys).catch(() => undefined);
+            await clearBotGroupComposerDraftsForAccounts([currentAccountKey, ...deletedAccountKeys]).catch(() => undefined);
           }
           return;
         }

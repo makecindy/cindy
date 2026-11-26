@@ -13,6 +13,9 @@ const native = vi.hoisted(() => ({
   storage: new Map<string, string>(),
   asyncStorage: new Map<string, string>(),
   confirmDeletion: vi.fn(),
+  refreshAccount: vi.fn(),
+  accountMemberships: vi.fn(),
+  exchangeMembership: vi.fn(),
   chatFiles: new Map<string, string>(),
   removeChatFile: vi.fn(),
   readSecure: vi.fn(),
@@ -105,6 +108,9 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
       logout = async () => {};
       logoutAccount = async () => {};
       confirmAccountDeletion = native.confirmDeletion;
+      refreshAccount = native.refreshAccount;
+      getAccountMemberships = native.accountMemberships;
+      exchangeAccountMembership = native.exchangeMembership;
     },
   };
 });
@@ -167,9 +173,9 @@ import { AuthApiError, accountVaultKey, passportVaultKey } from '@cindy/auth-cli
 import { ApiError } from '@/api/client';
 import { MOBILE_ACCOUNT_VAULT_KEY } from '../mobileAccountVault';
 import { AuthProvider, useAuth } from '../AuthContext';
-import { setMobileAuthOwner } from '../authOwnerGeneration';
+import { getMobileAuthOwner, setMobileAuthOwner } from '../authOwnerGeneration';
 import { botGroupComposerDraftId } from '@/session/botGroupComposerDraft';
-import { flushComposerDraftWrites, saveComposerDraft, __testing as composerDraftTesting } from '@/session/composerDraftStore';
+import { flushComposerDraftWrites, readComposerDraft, saveComposerDraft, __testing as composerDraftTesting } from '@/session/composerDraftStore';
 import AddAccountScreen from '../../../app/add-account';
 import { redirectSystemPath } from '../../../app/+native-intent';
 
@@ -294,8 +300,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
   }
 
   // Unit regression (review of #13286): ending one account's session cleared every saved account's
-  // group drafts. Two saved accounts, real AuthProvider entries: expiry keeps the other account's draft;
-  // signing out of every account clears both.
+  // group drafts. Two saved accounts, real AuthProvider entries: a session that ends clears only that
+  // account's drafts; signing out keeps them (maintainer decision on #13286).
   describe('group composer drafts of two saved accounts', () => {
     const otherKey = accountVaultKey('cn', 'other');
     const draftKey = (accountKey: string) => composerDraftTesting.storageKeyForSession(
@@ -356,11 +362,61 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
     });
 
-    it('clears every account\'s draft when signing out of all accounts', async () => {
+    // Maintainer decision on #13286: signing out keeps group drafts on the device; the same account in the same
+    // realm gets them back after signing in again, another account or the other realm never reads them.
+    it('keeps drafts when signing out and restores them only for the same account and realm', async () => {
       await signInWithTwoSavedAccounts();
+      const currentKey = accountVaultKey('cn', membership.id);
       await act(async () => { await auth.logout(); });
-      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
-      expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false);
+      expect(native.asyncStorage.get(draftKey(currentKey))).toBe(`draft of ${currentKey}`);
+      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+
+      const signInAgain = async (realm: 'cn' | 'global') => {
+        await act(async () => root.unmount());
+        const key = accountVaultKey(realm, membership.id);
+        native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify({ version: 1, activeAccountKey: key, passports: {},
+          resources: { [key]: { realm, metadata: { ...membership, membershipId: membership.id }, lastUsedAt: 1, refreshToken: 'again' } } }));
+        native.storage.delete(profileKey);
+        native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
+        root = createRoot(document.createElement('div'));
+        await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
+        expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+        return readComposerDraft(botGroupComposerDraftId({ accountKey: getMobileAuthOwner().accountKey, deviceId: 'mac', groupId: 'g1' })!);
+      };
+      expect(await signInAgain('cn')).toBe(`draft of ${currentKey}`);
+      expect(await signInAgain('global')).toBeNull();
+    });
+
+    // Unit regression (review of #13286): switching to a saved account whose session is rejected and cannot be
+    // continued ends that account, so its drafts go; the signed-in account keeps its own. When a passport can
+    // continue the session, the account did not end and keeps its drafts.
+    it.each([false, true])('clears a saved account\'s drafts only when switching finds it ended (passport: %s)', async withPassport => {
+      await signInWithTwoSavedAccounts();
+      const currentKey = accountVaultKey('cn', membership.id);
+      if (withPassport) {
+        const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+        vault.passports[passportVaultKey('cn', 'other-passport')] = { realm: 'cn', passportId: 'other-passport',
+          accountRefreshToken: 'other-passport-refresh', memberships: [{ ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' }] };
+        native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      }
+      const other = { ...membership, id: 'other', passportId: 'other-passport' };
+      native.refresh.mockImplementation(async (token: string) => {
+        if (token === 'other-refresh') throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked');
+        return { membership, accessToken: 'fixture-access', refreshToken: 'rotated' };
+      });
+      native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'other-passport-refresh' });
+      native.accountMemberships.mockResolvedValue([other]);
+      native.exchangeMembership.mockResolvedValue({ membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' });
+      const switching = act(async () => { await auth.switchAccount(otherKey); });
+      if (withPassport) await switching;
+      else await expect(switching).rejects.toMatchObject({ code: 'SAVED_ACCOUNT_REAUTH_REQUIRED' });
+      if (withPassport) {
+        await act(async () => { await flushComposerDraftWrites(); });
+        expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+      } else {
+        await vi.waitFor(() => expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false));
+      }
+      expect(native.asyncStorage.get(draftKey(currentKey))).toBe(`draft of ${currentKey}`);
     });
   });
 

@@ -8,10 +8,10 @@ import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
-import { botGroupComposerDraftId, clearBotGroupComposerDrafts, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
+import { botGroupComposerDraftId, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
-import { __testing as composerDraftTesting, flushComposerDraftWrites } from '@/session/composerDraftStore';
+import { __testing as composerDraftTesting, clearComposerDraftsWithPrefix, flushComposerDraftWrites } from '@/session/composerDraftStore';
 
 const testThemeContext = createContext('light');
 
@@ -515,7 +515,7 @@ beforeEach(async () => {
   h.confirm.mockResolvedValue(true);
   h.userId = 'owner'; h.accountGeneration = 1; h.storageRead = Promise.resolve();
   setMobileAuthOwner('owner', 'global');
-  await clearBotGroupComposerDrafts();
+  await clearComposerDraftsWithPrefix('bot-group:');
   h.storage.clear();
   node = document.createElement('div');
   root = createRoot(node);
@@ -1769,9 +1769,9 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
-  // Unit regression: signing out clears group drafts; a send still in flight that fails afterwards
-  // must not write the signed-out account's text back to disk.
-  it('does not bring a draft back when its send fails after signing out', async () => {
+  // Unit regression: an account whose session ended (expired, unavailable, deleted) has its group drafts
+  // cleared; a send still in flight that fails afterwards must not write that account's text back to disk.
+  it('does not bring a draft back when its send fails after the account\'s session ended', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });
     let fail!: (error: Error) => void;
@@ -1780,12 +1780,34 @@ describe('group composer', () => {
     h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     await click('botGroup.composer.send');
     await act(async () => { root.render(null); });
-    await clearBotGroupComposerDrafts();
+    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'owner')]);
     await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
     await render(data, 'ready', undefined, '');
     expect(h.row.value).toBe('');
     await act(async () => { await flushComposerDraftWrites(); });
     expect([...h.storage.keys()].filter(key => key.includes('bot-group'))).toEqual([]);
+  });
+
+  // Unit regression (self-review of #13286): the per-account clear generation is what stops a send from before
+  // the account's session ended once the same account signs in again and its draft version moves on afresh.
+  it('does not put back a send from before the session ended after the same account signs in again', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    let fail!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await render(data, 'ready', undefined, '');
+    await type('到');
+    await click('botGroup.composer.send');
+    await act(async () => { root.render(null); });
+    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'owner')]);
+    await signIn('owner');
+    await render(data, 'ready', undefined, '');
+    await type('又');
+    await act(async () => h.row.onChangeText(''));
+    await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
+    await render(data, 'ready', undefined, '', 'g2');
+    await render(data, 'ready', undefined, '');
+    expect(h.row.value).toBe('');
   });
 
   // Unit regression: after an app restart only the stored copy is left; it must fill the input,

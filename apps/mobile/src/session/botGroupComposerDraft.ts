@@ -3,7 +3,8 @@ import { clearComposerDraftsWithPrefix } from './composerDraftStore';
 /**
  * Group composer text drafts live in the task draft store on this device (docs/product-rules/bot-group-chat.md
  * §11 默认「草稿先按设备保存」). One draft per signed-in account (realm-qualified key), computer, group and
- * topic. Signing out of every account clears them all; ending one account's session clears only that account's.
+ * topic. Signing out keeps them for the same account in the same realm; a session that ends (expired,
+ * unavailable, deleted, rejected) clears only that account's drafts.
  */
 const DRAFT_ID_PREFIX = 'bot-group:';
 
@@ -22,17 +23,16 @@ function accountPrefix(accountKey: string): string {
   return `${DRAFT_ID_PREFIX}${encodeURIComponent(accountKey)}:`;
 }
 
-let allClearGeneration = 0;
 const accountClearGenerations = new Map<string, number>();
 const draftVersions = new Map<string, number>();
 
 /**
- * Changes when this draft's account is cleared (or every account); a send that began before must not put its
- * text back. Ending another account's session leaves it unchanged.
+ * Changes when this draft's account is cleared; a send that began before must not put its text back. Ending
+ * another account's session leaves it unchanged.
  */
-export function botGroupComposerDraftGeneration(draftId: string): string {
+export function botGroupComposerDraftGeneration(draftId: string): number {
   const account = draftId.slice(DRAFT_ID_PREFIX.length, draftId.indexOf(':', DRAFT_ID_PREFIX.length));
-  return `${allClearGeneration}:${accountClearGenerations.get(account) ?? 0}`;
+  return accountClearGenerations.get(account) ?? 0;
 }
 
 /**
@@ -55,14 +55,10 @@ function forgetVersions(prefix: string): void {
   }
 }
 
-/** Signing out of every account on this device. */
-export function clearBotGroupComposerDrafts(): Promise<void> {
-  allClearGeneration += 1;
-  forgetVersions(DRAFT_ID_PREFIX);
-  return clearComposerDraftsWithPrefix(DRAFT_ID_PREFIX);
-}
-
-/** These accounts' sessions ended (expired, unavailable or deleted); other saved accounts keep their drafts. */
+/**
+ * These accounts' sessions ended (expired, unavailable, rejected on start or on switching, or deleted); other
+ * saved accounts keep their drafts. Signing out is not an ending: it keeps the drafts.
+ */
 export async function clearBotGroupComposerDraftsForAccounts(accountKeys: readonly string[]): Promise<void> {
   const ended = [...new Set(accountKeys.filter(Boolean))];
   for (const accountKey of ended) {

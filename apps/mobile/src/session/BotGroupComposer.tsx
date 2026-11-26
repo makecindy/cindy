@@ -150,7 +150,7 @@ export function BotGroupComposer({
   // nothing was typed, cleared, put back or sent for this draft since, here or after reopening the chat.
   // The input and the stored draft then come back together.
   const draftOwnerOf = () => ({
-    generation: draftId ? botGroupComposerDraftGeneration(draftId) : '',
+    generation: draftId ? botGroupComposerDraftGeneration(draftId) : 0,
     version: draftId ? botGroupComposerDraftVersion(draftId) : 0,
   });
   const ownsDraft = (owner: ReturnType<typeof draftOwnerOf>) => !draftId
