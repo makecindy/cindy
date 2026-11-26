@@ -65,7 +65,7 @@ let showChat = false;
 let threadRootId: string | undefined;
 const timelineChanges = vi.fn();
 function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+async function render(Component = Probe) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Component))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
@@ -111,6 +111,31 @@ it('keeps an unchanged direct group timeline stable across refresh and thread hy
   h.auth.apiFetch.mockRejectedValue({ status: 403 });
   await act(async () => { chat.reload(); });
   expect(chat.state.kind).toBe('missing');
+});
+
+it('publishes the first verified read when the server returns the restored disk snapshot unchanged', async () => {
+  showChat = true;
+  await render();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    await gate;
+    return original(path, options);
+  });
+  const committed = vi.fn();
+  function ReadStatus() {
+    const group = useBotGroupChat(host, id);
+    useEffect(() => { committed(group.verified, group.state.kind); }, [group.verified, group.state.kind]);
+    return null;
+  }
+  await render(ReadStatus);
+  expect(committed).toHaveBeenLastCalledWith(false, 'ready');
+  await act(async () => { release(); });
+  expect(committed).toHaveBeenLastCalledWith(true, 'ready');
 });
 
 // Integration tier, group-open latency (2026-11-17): opening a group ran the whole read two or
