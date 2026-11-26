@@ -142,7 +142,9 @@ vi.mock("react-native", async () => {
     Image: view,
     Pressable: (p: any) => {
       if (p.accessibilityLabel) fixture.props.set("pressable." + p.accessibilityLabel, p);
-      return React.createElement("button", { onClick: p.onPress, disabled: p.disabled, "data-testid": p.testID }, p.children);
+      // A selection row's state, as the selection rows say it (`accessibilityState.selected`).
+      const selected = p.accessibilityState && "selected" in p.accessibilityState ? String(!!p.accessibilityState.selected) : undefined;
+      return React.createElement("button", { onClick: p.onPress, disabled: p.disabled, "data-testid": p.testID, "aria-pressed": selected }, p.children);
     },
     RefreshControl: view,
     ScrollView: view,
@@ -153,7 +155,7 @@ vi.mock("react-native", async () => {
       },
     },
     StyleSheet: { create: (s: any) => s, hairlineWidth: 1 },
-    useWindowDimensions: () => ({ width: fixture.width }),
+    useWindowDimensions: () => ({ width: fixture.width, height: 800 }),
   };
 });
 vi.mock("react-native-safe-area-context", async () => ({
@@ -313,8 +315,14 @@ vi.mock("@/session/FileBrowserSegmentedControl", () => ({
     return null;
   },
 }));
-// The Android market choice sheet (same as pluginNativeViews): render content without native presentation.
-vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
+// The Android sheets (market choice, computer picker, list of checks): content without native presentation, drawn only
+// while visible like the native modal; each keeps its props under its surface's testID ("sheet:<testID>").
+vi.mock("@/session/SheetModal", () => ({
+  SheetModal: (p: any) => {
+    fixture.props.set("sheet:" + (p.children?.props?.testID ?? ""), p);
+    return p.visible === false ? null : p.children;
+  },
+}));
 vi.mock("@/session/SheetSurface", () => ({ SheetSurface: (p: any) => p.children }));
 vi.mock("@/plugins/PluginPage", () => ({ PluginPage: () => null }));
 // The real form, except where a test only needs what the screen hands it (the management slot): `stubTaskSettings`.

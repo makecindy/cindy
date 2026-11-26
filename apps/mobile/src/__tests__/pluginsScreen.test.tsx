@@ -372,6 +372,37 @@ it("keeps the same confirmed switch behavior on Android", async () => {
     busy: false,
   });
 });
+// Android's system alert shows at most three buttons: with "All computers" + two computers +
+// Cancel it dropped Cancel (Back and the backdrop could not close it) and further computers.
+// The Android picker is a bottom sheet; this fails while the control still opens Alert.alert.
+it("lists every computer in an Android sheet that Back and the backdrop close without choosing", async () => {
+  fixture.platform = "android";
+  fixture.extraDevices = ["Mac Studio", "Windows PC"].map((name, i) => ({
+    deviceId: `pc${i}`, name, platform: "win32", remoteControlEnabled: true,
+  }));
+  await act(async () => root.render(createElement(PluginsScreen)));
+  const buttons = () => [...element.querySelectorAll("button")];
+  // The directory's computer control shows the current choice as its whole label.
+  const control = () => buttons().find((b) => !b.dataset.testid
+    && ["plugins.allComputers", "Windows PC"].includes(b.textContent ?? ""))!;
+  const options = () => buttons().filter((b) => b.dataset.testid?.startsWith("plugins.computer."))
+    .map((b) => [b.textContent, b.getAttribute("aria-pressed")]);
+  for (const close of ["onRequestClose", "onBackdropPress"]) {
+    await act(async () => control().click());
+    expect(options()).toEqual([["plugins.allComputers", "true"], ["Mac", "false"],
+      ["Mac Studio", "false"], ["Windows PC", "false"]]);
+    await act(async () => fixture.props.get("sheet:plugins.computerPicker")[close]());
+    expect(options()).toEqual([]);
+    expect(element.textContent).toContain("Demo");
+  }
+  await act(async () => control().click());
+  await act(async () => element.querySelector<HTMLButtonElement>('[data-testid="plugins.computer.pc1"]')!.click());
+  expect(options()).toEqual([]);
+  expect(control().textContent).toBe("Windows PC");
+  // The Mac's plugin is filtered out once another computer is chosen.
+  expect(element.textContent).not.toContain("Demo");
+  expect(fixture.alert).not.toHaveBeenCalled();
+});
 it("keeps plugin task preferences on PC instead of mounting a mobile form", async () => {
   fixture.blocks = [{ id: "capabilities", data: { tasks: true } }];
   await openDetail();
@@ -1428,7 +1459,7 @@ it("only shows the Android empty directory after the selected computer replies",
     (button) => button.textContent === "plugins.allComputers",
   );
   await act(async () => selectComputer!.click());
-  await act(async () => fixture.alert.mock.lastCall![2][1].onPress());
+  await act(async () => element.querySelector<HTMLButtonElement>('[data-testid="plugins.computer.mac"]')!.click());
   expect(element.textContent).toContain("Mac");
   expect(element.textContent).toContain("plugins.listLoadFailed");
   expect(element.textContent).not.toContain("plugins.noPlugins");
