@@ -1212,8 +1212,9 @@ export function ModelEffortChip({
       ].filter(Boolean).join(' · ')
     : null;
 
+  // 合并条目下的模型照常显示成「模型 · 合并的供应商」，不显示路由内部展开出来的那一条。
   const activeModelGroupName = modelGroups?.active
-    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id)?.name ?? null
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id && !(modelGroups.onAttach && route.parent))?.name ?? null
     : null;
 
   return (

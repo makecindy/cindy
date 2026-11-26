@@ -841,3 +841,64 @@ describe('ElevenLabs catalog authentication', () => {
     expect(noAuth.init.headers).toEqual({});
   });
 });
+
+describe('GLM ordinary catalog with optional Flash discovery', () => {
+  const baseUrl = 'https://open.bigmodel.cn/api/paas/v4';
+  const flash = 'glm-realtime-flash';
+  const ordinary = { id: 'glm-5', display_name: 'GLM-5' };
+  const http = (rows: { id: string }[]) => async () => Response.json({ data: rows });
+  const glm = (extra: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec =>
+    ({ baseUrl, agent: 'codex', wireProtocol: 'openai-chat', apiKey: 'fixture', authMethod: 'apiKey', ...extra });
+
+  it.each([true, false])('merges Flash exactly once (already listed: %s)', async listed => {
+    const probe = vi.fn(async () => 'available' as const);
+    const result = await fetchProviderModels(glm({ probeGlmFlash: probe }), http(listed ? [ordinary, { id: flash }] : [ordinary]));
+    expect(probe).toHaveBeenCalledTimes(listed ? 0 : 1);
+    expect(result).toMatchObject({ ok: true, complete: true, models: [
+      { id: ordinary.id, name: ordinary.display_name }, { id: flash, discoveredMetadata: { mode: 'realtime' } },
+    ] });
+    expect(result.models?.[1].discoverySnapshotId).toBeTruthy();
+  });
+
+  it.each(['unknown', 'unavailable', 'exception'] as const)('preserves ordinary results on %s', async status => {
+    const probe = vi.fn(() => { if (status === 'exception') throw Error(); return Promise.resolve(status); });
+    const normal = await fetchProviderModels(glm(), http([ordinary]));
+    const actual = await fetchProviderModels(glm({ probeGlmFlash: probe }), http([ordinary]));
+    expect(actual).toEqual({ ...normal, glmFlashProbe: status === 'exception' ? 'unknown' : status });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', baseUrl])(
+    'confirms ordinary preset Flash separately from the chat catalog at %s', async chatBase => {
+      const probe = vi.fn(async () => 'available' as const);
+      const spec = glm({ baseUrl: chatBase, catalogPresetId: 'zhipu-glm-cn', probeGlmFlash: probe });
+      const response = http([ordinary, { id: flash }]);
+      const found = await fetchProviderModels(spec, response);
+      expect(probe).toHaveBeenCalledOnce();
+      expect(found.models?.map(model => model.id)).toEqual([ordinary.id, flash]);
+      expect(found.models?.[1]).toMatchObject({ discoverySnapshotId: expect.any(String),
+        discoveredMetadata: { mode: 'realtime', modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } });
+      for (const access of ['unknown', 'unavailable'] as const) {
+        const result = await fetchProviderModels({ ...spec, probeGlmFlash: async () => access }, response);
+        expect(result).toMatchObject({ ok: true, complete: true, glmFlashProbe: access });
+        expect(result.models?.map(model => model.id)).toEqual([ordinary.id]);
+      }
+      const denied = await fetchProviderModels({ ...spec, probeGlmFlash: async () => 'unavailable' },
+        async () => new Response('', { status: 403 }));
+      expect(denied).toMatchObject({ ok: false, status: 403, glmFlashProbe: 'unavailable' });
+      const onlyVoice = await fetchProviderModels(spec, async () => new Response('', { status: 403 }));
+      expect(onlyVoice).toMatchObject({ ok: true, complete: false, models: [{ id: flash }] });
+    },
+  );
+
+  it('skips unrelated endpoints, alternate discovery URLs, OAuth, and failed catalogs', async () => {
+    const probe = vi.fn(async () => 'available' as const);
+    for (const extra of [{ baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' }, { baseUrl: 'https://proxy.example/v4' },
+      { modelsUrl: baseUrl + '/alternate' }, { authMethod: 'oauth' as const }, { apiKey: null }]) {
+      const result = await fetchProviderModels(glm({ ...extra, probeGlmFlash: probe }), http([ordinary]));
+      expect(result.models?.map(m => m.id)).toEqual([ordinary.id]);
+    }
+    expect((await fetchProviderModels(glm({ probeGlmFlash: probe }), async () => new Response('', { status: 401 }))).ok).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+  });
+});

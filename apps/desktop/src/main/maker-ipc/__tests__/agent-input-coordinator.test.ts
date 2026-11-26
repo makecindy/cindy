@@ -3972,6 +3972,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.remove(sid, 'q-2');
     await flush();
     projection = latestProjection(h.projections);
+    expect(projection.withdrawnQueueClientIds).toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-1');
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
 
@@ -3983,6 +3984,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     projection = latestProjection(h.projections);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2', 'q-1']);
+    expect(projection.withdrawnQueueClientIds ?? []).not.toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-2');
 
     // 删除等待中的 q-2:该轮等待随消息一起取消;drain 随后为 q-1 重建自己的等待。
@@ -10018,6 +10020,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     let projection = latestProjection(h.projections);
+    expect(h.coordinator.getProjection(sid).queueSnapshot?.pendingSteerClientIds).toContain(second.clientId);
     expect(projection.error).toBe('agent failed before persist');
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
@@ -19622,7 +19625,7 @@ describe('provider group computer switch hold', () => {
       memberLabel: member => member.key, invalidate: vi.fn(),
     };
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now, random: () => 0 });
+      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now});
     const fallback = vi.fn();
     const directGuest = { ownerRoute: 'share:group', requestSwitch: async () => offerToken };
     group = createProviderGroupService({
@@ -19961,7 +19964,7 @@ describe('provider group computer switch hold', () => {
     let group!: ReturnType<typeof createProviderGroupService>;
     const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     const fallback = vi.fn();
-    const remoteRead = vi.fn(async () => ({ strategy: 'least', autoSwitch: false, members: [] }));
+    const remoteRead = vi.fn(async () => ({ strategy: 'expiring', autoSwitch: false, members: [] }));
     group = createProviderGroupService({
       readBinding: () => ({ providerId: 'codex', memberKey: 'local', groupDeviceId: 'other', at: 1 }),
       remote: { readGroup: remoteRead },

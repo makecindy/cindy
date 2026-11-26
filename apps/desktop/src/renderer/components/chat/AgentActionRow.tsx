@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -106,6 +107,8 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
+import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
@@ -759,12 +762,11 @@ export interface AgentActionRowProps {
   onActivateOverride?: () => void;
 }
 
+type ImageLightboxState = ReturnType<typeof imageSourceSnapshotFields> & { kind: 'image' };
 type LightboxState =
   | { kind: 'none' }
   | { kind: 'file'; path: string; name: string }
-  | { kind: 'image'; src: string; sessionId?: string; galleryId?: string;
-      filename?: string; enableGallery?: boolean; annotationFallbackSrc?: string;
-      autoAnnotate?: boolean; annotationDisabled?: boolean }
+  | ImageLightboxState
   | { kind: 'payload'; payload: ToolPayloadMode };
 
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
@@ -964,6 +966,9 @@ export function AgentActionRow({
   // 「最近 5 条」把旧行挤出 / work group 换 key),预览不能跟着行一起消失。
   // 没有宿主的场景(单独渲染这一行)保留就地渲染的退路。
   const previewHost = useFilePreviewLightbox();
+  const images = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  const attachments = useContext(AttachmentCollectionContext);
 
   /**
    * 行/chevron 激活时的分流:
@@ -1007,14 +1012,26 @@ export function AgentActionRow({
       if (isImagePath(absPath)) {
         // remote 会话:xdt-file://?path= 经 origin 改写走远程媒体管线(device 全量 /
         // ssh 限 workdir 内);本地 no-op。
-        setLightbox({
-          kind: 'image',
-          src: rewriteToRemoteMediaOrigin(
-            toLocalFileUrl(absPath),
-            toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
-          ),
+        const src = rewriteToRemoteMediaOrigin(
+          toLocalFileUrl(absPath),
+          toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+        );
+        const imageSource = imageSourceSnapshotFields({
+          src,
           sessionId: fileCtx.sessionId,
         });
+        if (previewHost) {
+          previewHost.open({
+            kind: 'image',
+            ...imageSource,
+            file: fileCtx,
+            images,
+            scope,
+            attachments,
+          });
+        } else {
+          setLightbox({ kind: 'image', ...imageSource });
+        }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
         if (previewHost) {
@@ -1280,22 +1297,15 @@ export function AgentActionRow({
       )}
       {lightbox.kind === 'image' && (
         <ImageLightbox
-          src={lightbox.src}
-          galleryId={lightbox.galleryId}
-          filename={lightbox.filename}
-          enableGallery={lightbox.enableGallery}
-          annotationFallbackSrc={lightbox.annotationFallbackSrc}
-          autoAnnotate={lightbox.autoAnnotate}
-          annotationDisabled={lightbox.annotationDisabled}
+          {...imageSourceSnapshotFields(lightbox)}
           onClose={closeLightbox}
           onSourceChangeCancelled={(displayed) =>
             setLightbox((current) =>
               current.kind === 'image'
-                ? { ...current, ...imageSourceSnapshotFields(displayed) }
+                ? { kind: 'image', ...imageSourceSnapshotFields(displayed) }
                 : current,
             )
           }
-          sessionId={lightbox.sessionId}
         />
       )}
       {lightbox.kind === 'payload' && (
