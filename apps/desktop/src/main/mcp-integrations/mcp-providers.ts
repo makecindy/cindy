@@ -4,6 +4,7 @@ import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js'
 import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscription-accounts/runtime.js';
 import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placement.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { pluginEngineDescriptors } from '../maker-ipc/pluginEnginesIpc.js';
@@ -161,6 +162,7 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
+import { createSharedTaskDelivery } from './sharedTaskDelivery.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -1286,6 +1288,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
           }
         : {}),
+      sendToSharedTask: createSharedTaskDelivery({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote, assertActionCurrent: assertTaskActionCurrent }),
       sendToSession: async ({
         device,
         targetSessionId,
@@ -1303,8 +1306,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         agentDeviceId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
-          if (providerId !== undefined)
-            return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持在本机新建任务。' };
+          if (providerId !== undefined && agentKind !== 'acp')
+            return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接；远程新建任务时仅用于插件引擎(agent_kind="acp")。' };
+          if (agentKind === 'acp') {
+            if (!providerId || !pluginEngineKeyFromProviderId(providerId)) {
+              return {
+                ok: false,
+                errorCode: 'INVALID_ARGS',
+                message: 'agent_kind "acp" requires provider_id (acp-plugin:...) from list_available_models plugin_engines',
+              };
+            }
+            if (fast) {
+              return { ok: false, errorCode: 'INVALID_ARGS', message: 'fast mode is not supported by plugin engine (acp)' };
+            }
+          }
           if (!remoteSessionHandoff || !dispatcherSessionId)
             return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
           const id = randomUUID();
@@ -1319,7 +1334,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
               return { title: title?.trim() || undefined, projectDir, workingDir,
-                useWorktree, agentKind, model, effort, fast, agentDeviceId,
+                useWorktree, agentKind, ...(agentKind === 'acp' && providerId ? { providerId } : {}), model, effort, fast, agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
           });
