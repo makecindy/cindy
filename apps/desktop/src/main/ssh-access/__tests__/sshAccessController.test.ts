@@ -92,6 +92,7 @@ function makeTarget(): SshAccessTarget {
     readEndpointFacts: async () => ({ user: 'ubuntu', port: 22, lanAddresses: [{ kind: 'lan', host: '10.0.0.5' }], mdnsName: null, hostKeys: [HOST_KEY] }),
     readPublicIpv4: async () => w.publicIp,
     terminator: {
+      endsKeySessions: true,
       terminateFingerprints: async (fingerprints) => ({ supported: true, terminated: fingerprints.size, unmapped: 0 }),
       terminateAll: async () => ({ supported: true, terminated: 0, unmapped: 0 }),
     },

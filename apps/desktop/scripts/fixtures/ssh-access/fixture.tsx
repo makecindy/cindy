@@ -70,6 +70,8 @@ function initialState(): SshAccessLocalState {
     manualKeys: [],
     recordUnreadable: false,
     lastSessionCleanup: null,
+    // Only the Linux cloud host can end one device's sessions (a Mac keeps them open until "end all").
+    endsDeviceSessions: selfIsCloud,
   };
   if (scene === 'target') {
     return {
@@ -157,7 +159,8 @@ function sshHosts(): RemoteHostSnapshot[] {
 void mountPage({
   route: scene === 'controller' ? '/settings?tab=remote-control&section=remoteControl.devices' : '/settings?tab=remote-control',
   host: {
-    // The scene's own computer, whatever machine runs the check: what SSH access can do there depends on it.
+    // The scene's own computer, whatever machine runs the check (remote desktop's setting reads it). What SSH access can
+    // do there arrives with its state (endsDeviceSessions).
     platform: selfIsCloud ? 'linux' : 'darwin',
     deviceLink: {
       cloudComputerEntry: async () => null,

@@ -10,11 +10,12 @@ import {
 // 测试价值
 // - 生产入口与可观察结果：createSessionTerminator 的 terminateFingerprints / terminateAll，经注入的进程表、环境与 sshd 日志
 //   断言实际被发信号的 PID。结束错误的进程（root、别的用户、守护进程、Cindy 自己所在的会话）是不可撤销的。
+//   endsKeySessions 是设置页撤销设备前读的同一能力，必须与 terminateFingerprints 的 supported 一致。
 // - Bug／规则依据：决定 11（优先 SSH_USER_AUTH，其次 sshd 日志；只结束同用户、名为 `sshd: <user>@…` / `sshd-session: <user>@…`
 //   的子进程；映射不到的只报告，不自动全部结束）。
 // - 现有覆盖缺口：新模块。
 // - 最小失败输入：OpenSSH 9.6（`sshd[pid]`）与 9.8+（`sshd-session[pid]`）日志；同指纹的另一用户会话；进程号在列表与发信号
-//   之间换了进程。
+//   之间换了进程；以 root 运行的 Linux 仍声称能按设备断开会话。
 // - tier：unit（纯内存夹具，无真实进程，单文件 <1s）。
 const FP_A = 'SHA256:djvBZ5K68oGMBtD5pFWRAPELgttcdadkztqINg63Joc';
 const FP_B = 'SHA256:mPr78KSflLHkRNgS3SpYoVqLKVcOT11nnMVTK+2G96Q';
@@ -126,6 +127,13 @@ describe('session terminator', () => {
     expect(await harness({ table: PS_96, platform: 'darwin' }).terminator.terminateFingerprints(new Set([FP_A])))
       .toEqual({ supported: false, terminated: 0, unmapped: 0 });
     expect(await harness({ table: PS_96, platform: 'win32' }).terminator.terminateAll()).toMatchObject({ supported: false });
+    // The capability the settings UI reads before a revocation is the one that decides terminateFingerprints.
+    expect(all.terminator.endsKeySessions).toBe(true);
+    for (const options of [{ uid: 0 }, { platform: 'darwin' }, { platform: 'win32' }]) {
+      const other = harness({ table: PS_96, ...options });
+      expect(other.terminator.endsKeySessions).toBe(false);
+      expect(await other.terminator.terminateFingerprints(new Set([FP_A]))).toMatchObject({ supported: false });
+    }
   });
 
   it('keeps only the last accepted line per monitor and only for Cindy\'s user', () => {

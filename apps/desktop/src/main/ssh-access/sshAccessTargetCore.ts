@@ -615,6 +615,7 @@ export function createSshAccessTarget(ports: SshAccessTargetPorts) {
       })),
       recordUnreadable,
       lastSessionCleanup: lastCleanup,
+      endsDeviceSessions: ports.terminator.endsKeySessions,
     };
   }
 

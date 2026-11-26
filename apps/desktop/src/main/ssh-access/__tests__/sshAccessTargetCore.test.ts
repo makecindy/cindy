@@ -21,7 +21,8 @@ vi.mock('../sshAccessTarget.desktop.js', () => ({ currentSshAccessTarget: () => 
 //   protocol 记录 device-link-ssh-access.md 的 announce 规则与 server-channel-review.md（关着时不发）。
 // - 现有覆盖缺口：新模块；文件写入与会话结束各自有单测，这里验证它们在什么时候被触发。
 // - 最小失败输入：恢复默认后仍保留 true；撤销后 authorized_keys 里还有那一行；换账号后旧账号的 key 还在；
-//   另一台设备用同一把 key 登记；关着时对没有 key 的电脑发 announce；启动时把已移除设备的 key 写回云电脑文件。
+//   另一台设备用同一把 key 登记；关着时对没有 key 的电脑发 announce；启动时把已移除设备的 key 写回云电脑文件；
+//   不能按设备断开会话时（以 root 运行）readLocal 仍说能断开。
 // - tier：unit（真实 fs 只在 mkdtemp 目录，平台与网络全部注入，announce 去抖用假计时器，单文件约 1s）。
 const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfYPtO9L0UmsOJcs+BJ3iMNHFGtQIONiQHLRdZfuvr7';
 const FP_A = 'SHA256:djvBZ5K68oGMBtD5pFWRAPELgttcdadkztqINg63Joc';
@@ -41,6 +42,8 @@ interface Harness {
   announces: Array<[string, SshAccessAnnounce]>;
   terminated: string[][];
   revoked: string[];
+  /** What the fake terminator says it can do: end particular keys' sessions (Linux, not as root). */
+  endsKeySessions: boolean;
 }
 
 let h: Harness;
@@ -52,7 +55,7 @@ beforeEach(async () => {
   h = {
     home: path.join(root, 'home'), userData: path.join(root, 'profile'), owner: 'owner-a',
     settings: { remoteControlEnabled: true, revokedControllers: [] }, cloudGuest: false, peers: ['laptop', 'studio'],
-    directory: ['laptop', 'studio', 'phone'], directoryReads: 0, announces: [], terminated: [], revoked: [],
+    directory: ['laptop', 'studio', 'phone'], directoryReads: 0, announces: [], terminated: [], revoked: [], endsKeySessions: true,
   };
 });
 afterEach(async () => {
@@ -87,6 +90,7 @@ function makeTarget(platform = 'linux'): SshAccessTarget {
     readEndpointFacts: async () => ({ user: 'ubuntu', port: 22, lanAddresses: [{ kind: 'lan', host: '10.0.0.5' }], mdnsName: null, hostKeys: [KEY_C] }),
     readPublicIpv4: async () => '203.0.113.7',
     terminator: {
+      endsKeySessions: h.endsKeySessions,
       terminateFingerprints: async (fingerprints) => { h.terminated.push([...fingerprints].sort()); return { supported: true, terminated: fingerprints.size, unmapped: 0 }; },
       terminateAll: async () => ({ supported: true, terminated: 0, unmapped: 0 }),
     },
@@ -109,7 +113,9 @@ describe('SSH access target: effective setting', () => {
   it('stores only the person\'s choice, follows the default after "restore default", and empties the file while off', async () => {
     const target = makeTarget();
     await target.activate();
-    expect(await target.readLocal()).toMatchObject({ supported: true, setting: false, defaultSetting: false, customized: false, enabled: false });
+    expect(await target.readLocal()).toMatchObject({
+      supported: true, setting: false, defaultSetting: false, customized: false, enabled: false, endsDeviceSessions: true,
+    });
 
     await target.setEnabled(true);
     expect(h.settings.sshAccessEnabled).toBe(true);
@@ -230,6 +236,14 @@ describe('SSH access target: keys', () => {
     expect(result.state.devices).toEqual([]);
     expect(await readText(userFile())).not.toContain(KEY_B);
     expect((await target.removeDevice('studio')).revoked).toBe(false);
+  });
+
+  it('tells the settings UI before a revocation whether the device\'s sessions can be ended here', async () => {
+    // Linux with Cindy running as root: the terminator cannot end particular keys' sessions, whatever the platform.
+    h.endsKeySessions = false;
+    const target = makeTarget('linux');
+    await target.activate();
+    expect((await target.readLocal()).endsDeviceSessions).toBe(false);
   });
 });
 

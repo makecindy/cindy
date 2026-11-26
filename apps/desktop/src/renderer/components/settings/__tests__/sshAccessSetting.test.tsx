@@ -12,13 +12,14 @@ import { SshDeviceHostRow, useSshDeviceHosts } from '../SshDeviceHostRow';
 //   文案 key、发出的 IPC 操作、确认框与结果提示。
 // - Bug／规则依据：spec 决定 3、5、11（位置与内容、恢复默认、移除设备 = 撤销远程访问且确认框写明、手动公钥直接移除、
 //   添加公钥的校验错误、断开全部会话先确认再报告数量、macOS 只给指引、Linux 给可复制命令且不执行 sudo；只有 Linux
-//   能断开被撤销设备自己的会话，macOS 的确认框不承诺断开）；spec 决定 6（其它设备卡片：终端命令、连接、
-//   「添加到 SSH 远程主机」、需要更新、暂不可用）；DESIGN §11.1（失败提示说明哪项操作没完成）；
+//   且不以 root 运行时能断开被撤销设备自己的会话，其他情况确认框不承诺断开）；spec 决定 6（其它设备卡片：终端命令、
+//   连接、「添加到 SSH 远程主机」、需要更新、暂不可用）；DESIGN §11.1（失败提示说明哪项操作没完成）；
 //   engineering-conventions §8.6（变化通知期间只读一次、待读一笔）。
 // - 现有覆盖缺口：新组件；主进程测试只覆盖 IPC 与状态，不覆盖哪些状态出现哪些按钮、确认框说什么。
-// - 最小失败输入：不支持的电脑仍显示开关；移除设备没有确认就撤销；macOS 确认框写会话会被断开；没断开任何会话时
-//   提示「已断开 0 个」；有会话没断开时只给 1.2 秒的成功提示；校验失败后弹窗关闭；断开会话不报告数量；
-//   连续通知触发多次读取；用户删过的主机仍显示「连接」；连接失败直接显示主进程的英文原始错误。
+// - 最小失败输入：不支持的电脑仍显示开关；移除设备没有确认就撤销；不能按设备断开会话时（macOS、Linux 上以 root
+//   运行）确认框仍写会话会被断开；没断开任何会话时提示「已断开 0 个」；有会话没断开时只给 1.2 秒的成功提示；
+//   校验失败后弹窗关闭；断开会话不报告数量；连续通知触发多次读取；用户删过的主机仍显示「连接」；连接失败直接显示
+//   主进程的英文原始错误。
 // - tier：unit（jsdom，宿主接口为内存 fake，单独运行约 3 秒）。各语言的真实句间空格见 sshAccessSetting.i18n.test.tsx。
 const { t, toast } = vi.hoisted(() => ({
   t: (key: string, values?: Record<string, unknown>) => (values ? `${key} ${JSON.stringify(values)}` : key),
@@ -38,12 +39,12 @@ vi.mock('@/lib/toast', () => ({ toast }));
 const FP = 'SHA256:9fQ2abcdefghijklmnopqrstuvwxyz0123456789k1Zc';
 const base: SshAccessLocalState = {
   supported: true, remoteControlEnabled: true, setting: true, defaultSetting: true, customized: false, cloudGuest: true,
-  enabled: true, blocked: null, endpoint: null, recordUnreadable: false, lastSessionCleanup: null,
+  enabled: true, blocked: null, endpoint: null, recordUnreadable: false, lastSessionCleanup: null, endsDeviceSessions: true,
   devices: [{ deviceId: 'studio', deviceName: 'Studio Mac', fingerprint: 'SHA256:x', enrolledAt: Date.now(), active: true }],
   manualKeys: [{ fingerprint: FP, label: '办公室服务器', addedAt: 1, active: true }],
 };
 
-function stubApi(state: SshAccessLocalState, overrides: Record<string, unknown> = {}, platform = 'linux') {
+function stubApi(state: SshAccessLocalState, overrides: Record<string, unknown> = {}) {
   const listeners = new Set<() => void>();
   const api = {
     read: vi.fn(async () => state),
@@ -57,7 +58,7 @@ function stubApi(state: SshAccessLocalState, overrides: Record<string, unknown> 
     onChanged: vi.fn((callback: () => void) => { listeners.add(callback); return () => listeners.delete(callback); }),
     ...overrides,
   };
-  Object.assign(window, { electronAPI: { platform, sshAccess: api } });
+  Object.assign(window, { electronAPI: { sshAccess: api } });
   return { api, notify: () => { for (const listener of listeners) listener(); } };
 }
 
@@ -140,18 +141,20 @@ describe('SshAccessSetting (this computer)', () => {
     expect(api.removeKey).toHaveBeenCalledWith(FP);
   });
 
-  // Ending one device's sessions needs each session's key, which only Linux gives (sessionTerminator.ts).
+  // Ending one device's sessions needs each session's key: Linux, and never as root (sessionTerminator.ts). Main reports
+  // that capability as endsDeviceSessions; the confirmation follows it, and the result toast follows what happened.
   it.each([
-    ['Linux, some ended', 'linux', { at: 1, supported: true, terminated: 2, unmapped: 0 },
+    ['ends them here, some ended', true, { at: 1, supported: true, terminated: 2, unmapped: 0 },
       'body', 'success', 'deviceRemovedSessionsEnded {"name":"Studio Mac","count":2}'],
-    ['Linux, some left running', 'linux', { at: 1, supported: true, terminated: 2, unmapped: 1 },
+    ['ends them here, some left running', true, { at: 1, supported: true, terminated: 2, unmapped: 1 },
       'body', 'warning', 'deviceRemovedSessionsLeft {"name":"Studio Mac","count":2,"unmapped":1}'],
-    ['Linux, none open', 'linux', { at: 1, supported: true, terminated: 0, unmapped: 0 },
+    ['ends them here, none open', true, { at: 1, supported: true, terminated: 0, unmapped: 0 },
       'body', 'success', 'deviceRemoved {"name":"Studio Mac"}'],
-    ['macOS', 'darwin', { at: 1, supported: false, terminated: 0, unmapped: 0 },
+    ['cannot end them here (macOS, or root on Linux)', false, { at: 1, supported: false, terminated: 0, unmapped: 0 },
       'bodyKeepsSessions', 'success', 'deviceRemovedSessionsKept {"name":"Studio Mac"}'],
-  ] as const)('says what becomes of a revoked device\'s SSH sessions: %s', async (_case, platform, sessions, body, variant, message) => {
-    stubApi(base, { removeDevice: vi.fn(async () => ({ state: { ...base, devices: [] }, revoked: true, sessions })) }, platform);
+  ] as const)('says what becomes of a revoked device\'s SSH sessions: %s', async (_case, endsDeviceSessions, sessions, body, variant, message) => {
+    const state = { ...base, endsDeviceSessions };
+    stubApi(state, { removeDevice: vi.fn(async () => ({ state: { ...state, devices: [] }, revoked: true, sessions })) });
     await renderSetting();
     fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.sshAccess.remove' })[0]!);
     const dialog = await screen.findByRole('alertdialog');

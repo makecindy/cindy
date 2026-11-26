@@ -27,7 +27,10 @@ export interface SshAccessManualKeyRow {
 
 export interface SshAccessSessionCleanup {
   at: number;
-  /** False where ending sessions is not supported yet (macOS key mapping). */
+  /**
+   * False where this computer cannot end them: one device's sessions wherever `endsDeviceSessions` is false, every
+   * session when Cindy runs as root or off macOS and Linux.
+   */
   supported: boolean;
   terminated: number;
   /** Sessions whose key could not be determined; they were left running. */
@@ -56,6 +59,11 @@ export interface SshAccessLocalState {
   recordUnreadable: boolean;
   /** The last time keys left the file and their sessions were ended. */
   lastSessionCleanup: SshAccessSessionCleanup | null;
+  /**
+   * Revoking a device here also ends its open SSH sessions (Linux, Cindy not running as root). Elsewhere they keep
+   * running until 「断开全部 SSH 会话」; the same capability decides the result reported after a revocation.
+   */
+  endsDeviceSessions: boolean;
 }
 
 /** One settings IPC request (not the device-link wire request, which is `SshAccessRequest` in `@cindy/device-link`). */

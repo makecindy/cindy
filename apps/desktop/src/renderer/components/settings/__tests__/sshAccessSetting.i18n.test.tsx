@@ -24,6 +24,7 @@ type Catalog = { settings: { remoteControl: { sshAccess: { description: string; 
 const state: SshAccessLocalState = {
   supported: true, remoteControlEnabled: true, setting: true, defaultSetting: true, customized: false, cloudGuest: true,
   enabled: true, blocked: null, endpoint: null, devices: [], manualKeys: [], recordUnreadable: false, lastSessionCleanup: null,
+  endsDeviceSessions: true,
 };
 
 afterEach(cleanup);
@@ -40,7 +41,7 @@ it.each([
     resources: { [locale]: { translation: catalog } },
     interpolation: { escapeValue: false },
   });
-  Object.assign(window, { electronAPI: { platform: 'linux', sshAccess: { read: async () => state, onChanged: () => () => {} } } });
+  Object.assign(window, { electronAPI: { sshAccess: { read: async () => state, onChanged: () => () => {} } } });
   render(
     <I18nextProvider i18n={i18n}>
       <SshAccessSetting selfName="VM-4-7-ubuntu" selfDeviceId="abc" deviceNames={new Map()} />

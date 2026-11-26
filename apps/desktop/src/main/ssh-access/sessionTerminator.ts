@@ -64,6 +64,11 @@ export interface SessionTerminationReport {
 }
 
 export interface SessionTerminator {
+  /**
+   * Whether this computer can end the sessions of particular keys (terminateFingerprints): Linux, not running as root.
+   * Elsewhere a revoked key's open sessions keep running; the settings UI says so before the person revokes a device.
+   */
+  readonly endsKeySessions: boolean;
   terminateFingerprints(fingerprints: ReadonlySet<string>): Promise<SessionTerminationReport>;
   terminateAll(): Promise<SessionTerminationReport>;
 }
@@ -138,10 +143,13 @@ export function createSessionTerminator(ports: SessionTerminatorPorts): SessionT
     return signalled.size;
   }
 
+  // Running as root, "same user" would mean root's sessions: never touch those.
+  const endsKeySessions = ports.platform === 'linux' && ports.uid !== 0;
+
   return {
+    endsKeySessions,
     async terminateFingerprints(fingerprints) {
-      // Running as root, "same user" would mean root's sessions: never touch those.
-      if (ports.platform !== 'linux' || ports.uid === 0) return { supported: false, terminated: 0, unmapped: 0 };
+      if (!endsKeySessions) return { supported: false, terminated: 0, unmapped: 0 };
       if (!fingerprints.size) return { supported: true, terminated: 0, unmapped: 0 };
       const table = await ports.listProcesses();
       const sessions = sessionsOf(table);

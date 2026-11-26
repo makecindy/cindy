@@ -969,7 +969,7 @@ test('Host SSH access: same-account enrolment, the remote commands and the profi
       platform: 'linux', homeDir: () => home, detectCloudGuest: async () => false, probeSshd: async () => true,
       readEndpointFacts: async () => ({ user: 'tester', port: 22, lanAddresses: [{ kind: 'lan', host: '10.0.0.9' }], mdnsName: null, hostKeys: [KEY_B] }),
       readPublicIpv4: async () => null,
-      terminator: { terminateFingerprints: async () => ({ supported: true, terminated: 0, unmapped: 0 }),
+      terminator: { endsKeySessions: true, terminateFingerprints: async () => ({ supported: true, terminated: 0, unmapped: 0 }),
         terminateAll: async () => ({ supported: true, terminated: 0, unmapped: 0 }) },
     },
   });

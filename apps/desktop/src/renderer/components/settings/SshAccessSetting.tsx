@@ -83,8 +83,9 @@ function showAllSessionsEnded(cleanup: SshAccessSessionCleanup, t: Translate): v
 
 /**
  * After a device's access was revoked: what became of its SSH sessions. Ending one device's sessions needs each
- * session's key, which only Linux gives (sessionTerminator.ts), so elsewhere they stay open, as the confirmation
- * said. Sessions whose key could not be identified are left running: a warning that names the way to end them.
+ * session's key, which only Linux gives, and never as root (sessionTerminator.ts); where that is not possible
+ * (`supported: false`, the same capability as `endsDeviceSessions`) they stay open, as the confirmation said.
+ * Sessions whose key could not be identified are left running: a warning that names the way to end them.
  * Nothing ended and nothing left running is the plain result, without a count of zero.
  */
 function showDeviceRemoved(name: string, sessions: SshAccessSessionCleanup | null, t: Translate): void {
@@ -330,8 +331,9 @@ export function SshAccessSetting({ selfName, selfDeviceId, deviceNames }: {
   const rows = state.devices.length + state.manualKeys.length;
   const deviceName = (row: SshAccessDeviceRow) => row.deviceName ?? deviceNames?.get(row.deviceId)
     ?? t('settings.remoteControl.sshAccess.unknownDevice');
-  // Only Linux ends a revoked device's own SSH sessions (sessionTerminator.ts); the confirmation says which happens.
-  const endsDeviceSessions = window.electronAPI?.platform === 'linux';
+  // Whether revoking a device also ends its sessions here (Linux, Cindy not running as root), from the same capability
+  // that decides the result toast (sessionTerminator.ts); the confirmation never promises more than that.
+  const endsDeviceSessions = state.endsDeviceSessions;
   const toggleFailed = t('settings.remoteControl.sshAccess.toggleFailed');
 
   const addKey = async (publicKey: string, note: string): Promise<string | null> => {
