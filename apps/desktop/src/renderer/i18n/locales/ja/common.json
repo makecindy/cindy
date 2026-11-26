@@ -2521,7 +2521,7 @@
       "skinLabel": "キャラクター",
       "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "イベント音を設定すると、その音のみ再生します。未設定またはオフの場合は、システムの通知設定に従います。",
+      "soundHint": "アラートごとに 8-bit サウンドを選べます。Agent Notch と Dynamic Island で共通です。タップ音は Agent Notch をタップしたときだけ鳴ります。",
       "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
@@ -2576,7 +2576,7 @@
         "select": "クリック操作"
       },
       "soundOptions": {
-        "none": "システムに従う",
+        "none": "なし",
         "startup-chime": "起動チャイム",
         "ring-chime": "リングチャイム",
         "item-found": "アイテム発見",
@@ -13811,6 +13811,9 @@
           "allow": "許可",
           "deny": "拒否",
           "approve": "承認"
+        },
+        "companion": {
+          "retryLater": "しばらくしてからもう一度お試しください"
         }
       },
       "hook": {
@@ -18009,6 +18012,13 @@
         "active": "フィルター {{count}} 件",
         "reset": "リセット",
         "allProjects": "すべてのプロジェクト"
+      },
+      "match": {
+        "label": "キーワード一致",
+        "any": "いずれかのキーワード",
+        "all": "すべてのキーワード",
+        "help": "「すべてのキーワード」を選び、空白で区切ると、同じメッセージにすべて含まれるものを検索します。“完全一致フレーズ” は連続する文字列に一致します。タイトルは個別に照合します。",
+        "partial": "結果が一部のみの可能性があります。キーワードを具体的にするか、プロジェクトを絞ってください。"
       }
     }
   },

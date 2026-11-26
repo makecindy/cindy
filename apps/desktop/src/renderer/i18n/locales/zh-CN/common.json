@@ -2521,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
+      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2576,7 +2576,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "跟随系统",
+        "none": "无",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -13811,6 +13811,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请稍后再试"
         }
       },
       "hook": {
@@ -18009,6 +18012,13 @@
         "active": "筛选 {{count}}",
         "reset": "重置",
         "allProjects": "所有项目"
+      },
+      "match": {
+        "label": "关键词匹配",
+        "any": "任意关键词",
+        "all": "全部关键词",
+        "help": "选择“全部关键词”后，用空格分开关键词，要求同一条消息全部包含。用“精确短语”匹配连续文字。标题单独匹配。",
+        "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
       }
     }
   },

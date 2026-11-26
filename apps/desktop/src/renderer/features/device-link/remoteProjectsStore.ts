@@ -45,6 +45,7 @@ import {
  */
 
 import { useSyncExternalStore } from 'react';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -69,7 +70,7 @@ interface DeviceShard {
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
 /** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
-type CreationPreview = {
+export type CreationPreview = {
   row: Session;
   message: import('@/lib/makerChatStore').ChatMessage;
   handedOff?: boolean;
@@ -1289,6 +1290,24 @@ const actions = {
   /** 用户界面使用的远端会话投影；旧 Cindy Make 行保留在原始镜像中但不可见。 */
   getVisibleMergedRemoteSessions(): Session[] {
     return visibleMergedSnapshot;
+  },
+
+  /**
+   * 每台被控设备最近一次可见任务的活跃时间(unix ms)。
+   * 复用 `visibleMergedSnapshot`(已过滤隐藏来源并叠加首条发送与创建预览时间戳),
+   * 供新建页设备切换器在尚未有本地显式选择记录时,也能按真实最近使用顺序排布对端设备。
+   */
+  getDeviceLatestActivityAt(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const session of visibleMergedSnapshot) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (!deviceId || session.status === 'deleted') continue;
+      const ts = Date.parse(getSessionListActivityAt(session));
+      if (Number.isFinite(ts) && ts > (out[deviceId] ?? 0)) {
+        out[deviceId] = ts;
+      }
+    }
+    return out;
   },
 
   /**

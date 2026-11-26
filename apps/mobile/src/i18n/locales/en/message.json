@@ -250,6 +250,7 @@
     "edit": "Edit",
     "steer": "Interject",
     "steerQueued": "Not delivered yet. Your message is still queued.",
+    "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
     "moveUp": "Move earlier",
     "moveDown": "Move later",
     "cancelSend": "Cancel send",
