@@ -9341,6 +9341,49 @@ async function silentStopHarness(t, { disabled = false, failBanner = false, queu
   return r;
 }
 
+// #12759, unit: the real Host queue, terminal pipeline and silent-stop handler must
+// carry the breaker across separate inputs, suppress repeated errors, and re-arm only
+// after a completed visible reply. The old single-done test cannot catch this.
+for (const source of ['claude', 'codex']) test(`silent stop: repeated breaker ends once and a completed ${source} reply re-arms recovery`, async t => {
+  const r = await silentStopHarness(t);
+  let sends = 1;
+  const send = async clientId => {
+    await r.h.queue.enqueue('s', { clientId, text: 'next' });
+    await r.sent(++sends);
+  };
+  const stop = async () => {
+    t.mock.timers.tick(6_000);
+    await r.turn('');
+    await r.decide();
+  };
+  const settled = () => settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  // Three user inputs, each with two continuations, reach the session limit.
+  for (let input = 0; input < 3; input++) {
+    if (input > 0) await send(`input-${input}`);
+    for (let continuation = 0; continuation < 2; continuation++) {
+      await stop();
+      await r.sent(++sends);
+    }
+    await stop();
+    await settled();
+  }
+  const breakerRows = () => r.rows('error').filter(row => row.content.silentStopFailureCause === 'session-breaker');
+  assert.equal(breakerRows().length, 1);
+  await send('still-broken');
+  await stop();
+  await settled();
+  assert.equal(breakerRows().length, 1, 'another turn does not persist a duplicate error');
+  await send('productive');
+  // #12834 review: Codex done must also clear the breaker; previously this
+  // event reached an out-of-scope history variable and silently skipped finish.
+  await r.turn('done', { type: 'done', source, data: { raw: { status: 'completed' }, result: 'done' } });
+  await settled();
+  await send('new-request');
+  await stop();
+  await r.sent(++sends);
+  assert.equal(r.session.sent.at(-1), '继续', 'the completed reply re-enabled automatic recovery');
+});
+
 test('silent stop: the turn continues on a new generation with a hidden 继续; the stream and the activity time follow it to its end', async t => {
   const r = await silentStopHarness(t);
   await r.turn('half done');

@@ -228,7 +228,7 @@ describe('ChatInput session switch focus contract', () => {
       'finishAgentSendDispatch();',
     );
     const worktreeSendBlock = extractBetween(
-      newMakerDraftRouteSource,
+      newMakerDraftRouteSource.slice(newMakerDraftRouteSource.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
       'const accepted = await makerChatStore.sendMessage(',
       'worktreeCreationStore.clear(newSession.id);',
     );
@@ -237,8 +237,8 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
     // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程普通视图交接 /
-    // 本机插件引擎首条 / 远程插件引擎首条直接发送 / 远程插件引擎视图交接 七处受理点。
-    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(7);
+    // 本机插件引擎（普通 / 独立工作区）/ 远程插件引擎直接发送 / 远程视图交接 八处受理点。
+    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(8);
     expect(newMakerDraftRouteSource).toContain('if (accepted) opts?.onAccepted?.();\n              else restoreEngineFirstMessageDraft();');
     expect(newMakerDraftRouteSource).toContain(
       'if (accepted) {\n                remoteProjectsStore.clearCreationPreview(remoteSessionId);\n                opts?.onAccepted?.();\n                return;\n              }',
