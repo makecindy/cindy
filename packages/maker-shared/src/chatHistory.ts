@@ -123,6 +123,7 @@ export function createChatHistory(input: {
     // Older writers preserve unknown JSON fields but cannot record exact targets.
     // Disk/CAS restores must conservatively repair their stale flags through pages.
     if (state && (state.stalePages?.length || state.staleLookups?.length)) delete state.staleAggregates;
+    if (state) dropIncomplete(state);
     return state;
   }
   async function save(room: string, state: ChatHistoryState, keepPage?: string) {
@@ -206,8 +207,7 @@ export function createChatHistory(input: {
         if (change.type === 'message.created') {
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
-            if (query.has('before')) continue;
-            if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
+            if (query.has('before') || !inView(query, message)) continue;
             const ids = state.pages[key]!;
             // The authorized change body is enough to maintain the latest page.
             // Keep the old bounded range for pagination without re-downloading the head.
@@ -217,20 +217,27 @@ export function createChatHistory(input: {
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again. One copy per
             // arrival would fill the page budget with near-identical windows, so copy only
-            // when no fresh page already bridges the new head down to the departing message.
-            // An existing copy under the same key is still replaced, as before: a late, older
-            // arrival leaves that copy without itself until the next arrival rewrites it.
+            // when no page coveredPage() may use already bridges the new head down to the
+            // departing message.
             const first = ids[0] && state.messages[ids[0]];
-            if (first) {
-              const copy = new URLSearchParams(query); copy.set('before', String(BigInt(first.seq) + 1n));
-              if (query.has('after') || Object.hasOwn(state.pages, copy.toString()) || BigInt(message.seq) <= BigInt(first.seq)
-                || !bridged(state, query, ids.at(-1)!, latest.at(-1)!)) {
-                state.pages[copy.toString()] = ids;
-                if (state.stalePages?.includes(key)) stale(state, copy.toString());
-              }
+            if (first && (query.has('after') || BigInt(message.seq) <= BigInt(first.seq) || !bridged(state, query, ids.at(-1)!, latest.at(-1)!))) {
+              query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
+              if (state.stalePages?.includes(key)) stale(state, query.toString());
             }
             if (query.has('after')) { delete state.pages[key]; continue; }
             state.pages[key] = latest;
+          }
+          // Every stored older page was exact when saved. A late arrival inside its range proves
+          // it outdated (including the copy just made from the head without it): drop it so it can
+          // never pass for coverage, and let that range be read from the server again.
+          const seq = BigInt(message.seq);
+          for (const [key, ids] of Object.entries(state.pages)) {
+            const query = new URLSearchParams(key);
+            const before = query.get('before'); const after = query.get('after');
+            // An in-order arrival is newer than every stored bound and stops here.
+            if (before === null || seq >= BigInt(before) || (after !== null && seq <= BigInt(after)) || !inView(query, message)) continue;
+            const last = ids.length < Number(query.get('limit') ?? 100) ? undefined : BigInt(state.messages[ids.at(-1)!]!.seq);
+            if ((last === undefined || seq > last) && !ids.includes(message.id)) delete state.pages[key];
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;
@@ -244,11 +251,44 @@ export function createChatHistory(input: {
   function bridged(state: ChatHistoryState, head: URLSearchParams, leaving: string, oldest: string) {
     const position = BigInt(state.messages[oldest]!.seq);
     return Object.entries(state.pages).some(([key, ids]) => {
-      const query = new URLSearchParams(key);
-      const before = query.get('before');
-      return before !== null && BigInt(before) >= position && !state.stalePages?.includes(key) && ids.includes(leaving)
-        && ['threadRootId', 'all', 'after'].every(field => query.get(field) === head.get(field));
+      const before = new URLSearchParams(key).get('before');
+      return before !== null && BigInt(before) >= position && !state.stalePages?.includes(key) && ids.includes(leaving) && sameView(key, head);
     });
+  }
+  function inView(query: URLSearchParams, message: ChatHistoryMessage) {
+    return query.get('all') === 'true' || (query.get('threadRootId') ?? null) === (message.threadRootId ?? null);
+  }
+  function sameView(key: string, view: URLSearchParams) {
+    const query = new URLSearchParams(key);
+    return ['threadRootId', 'all', 'after'].every(field => query.get(field) === view.get(field));
+  }
+  /** Stored pages are exact server pages; apply() drops one a late arrival makes outdated. A cache
+   * from an older build may still hold such a page: another page of the same view places a row
+   * inside its range that it lacks. Drop it once on restore so stitching never trusts it. */
+  function dropIncomplete(state: ChatHistoryState) {
+    const views = new Map<string, Array<[string, string[]]>>();
+    for (const [key, ids] of Object.entries(state.pages)) {
+      const query = new URLSearchParams(key);
+      const view = JSON.stringify(['threadRootId', 'all', 'after'].map(field => query.get(field)));
+      views.set(view, [...(views.get(view) ?? []), [key, ids]]);
+    }
+    for (const pages of views.values()) {
+      const seqs = [...new Set(pages.flatMap(([, ids]) => ids))].map(id => BigInt(state.messages[id]!.seq))
+        .sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+      const below = (bound: bigint) => {
+        let low = 0, high = seqs.length;
+        while (low < high) { const middle = (low + high) >> 1; if (seqs[middle]! < bound) low = middle + 1; else high = middle; }
+        return low;
+      };
+      for (const [key, ids] of pages) {
+        const query = new URLSearchParams(key);
+        const before = query.get('before');
+        if (before === null) continue; // Latest pages follow the change stream; only older ranges are checked.
+        const upper = below(BigInt(before));
+        const lower = ids.length < Number(query.get('limit') ?? 100) ? 0 : below(BigInt(state.messages[ids.at(-1)!]!.seq));
+        if (upper - lower > new Set(ids).size) delete state.pages[key];
+      }
+    }
   }
   function stale(state: ChatHistoryState, key: string) {
     state.stalePages ??= [];
@@ -358,14 +398,15 @@ export function createChatHistory(input: {
     const limit = Number(query.get('limit') ?? 100);
     let position = BigInt(before);
     const found = new Map<string, ChatHistoryMessage>();
-    const candidates = Object.entries(state.pages).filter(([key]) => !state.stalePages?.includes(key)
-      && ['threadRootId', 'all', 'after'].every(field => new URLSearchParams(key).get(field) === query.get(field)));
+    const candidates = Object.entries(state.pages).filter(([key]) => !state.stalePages?.includes(key) && sameView(key, query));
     while (candidates.length) {
       const covering = candidates.find(([key, ids]) => {
-        const upper = new URLSearchParams(key).get('before');
+        const page = new URLSearchParams(key);
+        const upper = page.get('before');
         if (upper && BigInt(upper) < position) return false;
         const last = ids.at(-1);
-        return !last || BigInt(state.messages[last]!.seq) < position;
+        // A short older page holds everything below its bound, so it also ends the history below position.
+        return !last || (upper !== null && ids.length < Number(page.get('limit') ?? 100)) || BigInt(state.messages[last]!.seq) < position;
       });
       if (!covering) return undefined;
       const [key, ids] = covering;
