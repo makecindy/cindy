@@ -6,13 +6,21 @@ mountPage({
   route: '/bots/fixture-cindy?settings=1&settingsPage=channels',
   host: (ctx) => {
     let saved = false;
+    let feishuGroups = [
+      { chatId: 'oc_release000000000001', chatName: 'Release room', activation: 'always' as const },
+      { chatId: 'oc_ops0000000000000002', chatName: 'Ops channel', activation: 'mention' as const },
+    ];
     const connections = ctx.data.imessage ? [{ id: 'aabbccddeeff', botId: 'fixture-cindy', channel: 'imessage',
       createdAt: 1, status: { kind: 'connected', appId: 'fixture' }, identity: { username: null, ownerUserId: null },
       ...(ctx.data.denied ? { health: { uncertainInputs: 0, uncertainSends: 1, automationDenied: true } } : {}),
       ...(ctx.data.groupEdit ? { botContextId: 'fixture' } : {}) }] : [];
     return {
     botImConnection: {
-      list: async () => ({ connections }),
+      // 飞书 / Lark 伙伴连接的「群聊」：按群参与模式(仅 @ / 全响应)。setGroupActivation 用内存状态回写,
+      // 截图里能看到两种档位, 交互后开关随之切换(真实权限申请与平台收发不在本页覆盖)。
+      list: async () => ({ connections: [...connections, ...(ctx.data.feishuGroups ? [{ id: 'aabbccddeeff', botId: 'fixture-cindy', channel: 'feishu',
+        service: ctx.data.lark ? 'lark' : 'feishu', createdAt: 1, status: { kind: 'connected', appId: 'cli_fixture0123456' },
+        identity: { username: null, ownerUserId: null }, botContextId: 'cli_fixture0123456' }] : [])] }),
       getIMessageConfig: async () => ({ serverUrl: 'http://192.168.1.20:1234', ownerAddress: 'owner@example.test',
         chatGuids: ['any;-;owner@example.test', ...(ctx.data.groupEdit === 'replace' ? ['any;+;old-group'] : [])], listenHost: '192.168.1.10', listenPort: 18747 }),
       updateIMessageConfig: ctx.data.groupEdit ? async () => { saved = true; return { connections }; } : forbid('botImConnection.updateIMessageConfig'),
@@ -21,6 +29,13 @@ mountPage({
           ? [{ chatId: 'any;+;new-group', chatName: 'New group', activation: 'mention' }]
           : ctx.data.groupEdit === 'replace' ? [{ chatId: 'any;+;old-group', chatName: 'Old group', activation: 'mention' }] : [] }),
         setGroupActivation: forbid('botImConnection.setGroupActivation'),
+      } : {}),
+      ...(ctx.data.feishuGroups ? {
+        listGroups: async () => ({ connectionId: 'aabbccddeeff', groups: feishuGroups }),
+        setGroupActivation: async ({ chatId, mode }: { chatId: string; mode: 'mention' | 'always' }) => {
+          feishuGroups = feishuGroups.map((group) => (group.chatId === chatId ? { ...group, activation: mode } : group));
+          return { connectionId: 'aabbccddeeff', groups: feishuGroups };
+        },
       } : {}),
       listAdoptable: async () => ({ bots: [] }),
       onChanged: subscription('connections'),

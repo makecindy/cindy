@@ -477,6 +477,7 @@ interface TurnOverrides {
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   attachments?: ImRunAgentTurnArgs['attachments'];
   replyContext?: ImRunAgentTurnArgs['replyContext'];
+  ambient?: boolean;
 }
 
 async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
@@ -505,6 +506,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
       ? { prePersistedUserMessage: overrides.prePersistedUserMessage }
       : {}),
     ...(overrides.onEarlyReject ? { onEarlyReject: overrides.onEarlyReject } : {}),
+    ...(overrides.ambient ? { ambient: true } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -661,6 +663,52 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledWith('主代理前半和最终结论'));
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  // 测试价值：PR #12934 评审修复回归——全响应(ambient)轮次在只有工具过程、或正文还是 NO_REPLY 哨兵前缀时
+  // 不得建过程卡；最终 NO_REPLY 交给收口时才创建的惰性 handle 静默收口，不走 sendText 降级发送。
+  // 最小输入：ambient 轮次 + tool_use + 哨兵前缀 + done。unit：可观察 startStreamingText / replace / finalize / sendText。
+  it('keeps an ambient turn cardless through tool frames and the NO_REPLY sentinel, then finalizes on the lazy handle', async () => {
+    const handle = { messageId: '', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const complete = vi.fn();
+    const { turnPromise } = await startDefaultTurn(complete, { ambient: true });
+    await turnPromise; // 等到 provider 受理，过程事件才开始流向本轮
+    h.emit({ type: 'tool_use', data: { toolName: 'Bash', toolUseId: 't1', input: { command: 'ls' } } });
+    h.emit({ type: 'text', data: { text: 'NO', isFinal: false } });
+    await flushMicrotasks();
+    expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
+    expect(handle.replace).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: 'NO_REPLY', isFinal: true } });
+    await flushMicrotasks();
+    expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
+    h.emit({ type: 'done', data: {} });
+    // 完成回调先于终稿送达触发，这里等到 handle.finalize 被调用为止。
+    await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledTimes(1));
+    await waitForAssertion(() => expect(complete).toHaveBeenCalledTimes(1));
+    // 收口时才创建惰性 handle，并把哨兵交给它静默处理；不降级成一条文本消息。
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(handle.finalize.mock.calls[0][0]).toBe('NO_REPLY');
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  // 对照：被召唤的普通轮次保持原有反馈——工具过程一到就建流式卡（与 ambient 的静默形成对照）。
+  it('still starts the streaming card on tool frames for a summoned (non-ambient) turn', async () => {
+    const handle = { messageId: 'stream-1', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const complete = vi.fn();
+    const { turnPromise } = await startDefaultTurn(complete);
+    await turnPromise;
+    h.emit({ type: 'tool_use', data: { toolName: 'Bash', toolUseId: 't1', input: { command: 'ls' } } });
+    await waitForAssertion(() => expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'text', data: { text: '查完了。', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => expect(complete).toHaveBeenCalledTimes(1));
+    expect(handle.finalize).toHaveBeenCalledTimes(1);
+    expect(handle.finalize.mock.calls[0][0]).toBe('查完了。');
   });
 
   // unit: shared production terminal entry must use the durable sink even when initial progress failed.
