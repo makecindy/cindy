@@ -295,6 +295,12 @@ export function MobileComposerInputRow({
   // placeholder. Draw an ellipsized hint without changing/remounting the editor.
   const collapsedPlaceholder = geometricSingleLine && inputElement == null && value.length === 0 && !!placeholder;
   const collapsedPreview = geometricSingleLine && inputElement == null && value.length > 0 && !!collapsedOverflowText;
+  // The row's own opaque surface, from the same source as the row: its base colour, or the caller's rowStyle
+  // override (which must then be opaque too). A native glass frame (iOS 26+; never on Android) leaves the row
+  // transparent, so there is none. Only resolved while the preview shows.
+  const rowSurface = !collapsedPreview || nativeComposerFrameAvailable
+    ? null
+    : (StyleSheet.flatten(rowStyle)?.backgroundColor ?? styles.row.backgroundColor);
   const focusInputKeepingSelection = () => {
     if (editable === false) return;
     (inputRef as { current?: { focus?(): void } | null } | undefined)?.current?.focus?.();
@@ -369,8 +375,8 @@ export function MobileComposerInputRow({
         geometricSingleLine && styles.inputGeometricSingleLine,
         { maxHeight },
         inputStyle,
-        // The native text stays laid out (sizes, caret on focus); the preview below draws it instead.
-        collapsedPreview && styles.inputUnderPreview,
+        // Only without an opaque row surface to cover it: the native text stays laid out, its glyphs hidden.
+        collapsedPreview && rowSurface == null && styles.inputUnderPreview,
       ]}
       testID={inputTestID}
       value={value}
@@ -400,6 +406,9 @@ export function MobileComposerInputRow({
             // 收起单行与 34pt + 并排：输入盒在行内居中。
             geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
+            // Under a preview the frame clips to a capsule: the opaque preview and the native input both stay clear
+            // of the pill's rounded ends and border, even with no leading control beside them.
+            collapsedPreview && styles.inputFramePreviewClip,
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
             inputFrameAnimatedStyle,
           ]}
@@ -417,7 +426,11 @@ export function MobileComposerInputRow({
           {collapsedPreview ? <Text
             accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none"
             numberOfLines={1} ellipsizeMode="tail"
-            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill]}
+            // On the row's opaque surface the preview covers everything the native input draws there (glyphs,
+            // emoji, spell-check and link decorations, autofill highlight, scroll bar), while the input itself
+            // stays visible to screen readers and focusable. It is gone once the row opens.
+            style={[styles.input, styles.inputGeometricSingleLine, inputStyle, StyleSheet.absoluteFill,
+              rowSurface != null && { backgroundColor: rowSurface }]}
             testID={`${inputTestID}.collapsedPreview`}
           >{collapsedOverflowText}</Text> : null}
           {inputOverlay}
@@ -751,11 +764,6 @@ export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; t
   );
 }
 
-/** '#RRGGBB' / '#RRGGBBAA' at alpha 0, keeping its non-zero RGB; anything else falls back to 'transparent'. */
-function withZeroAlpha(color: string): string {
-  return /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color) ? `${color.slice(0, 7)}00` : 'transparent';
-}
-
 const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // 外壳是纵向容器：mainRow（输入行）在上、toolbarRow（工具排）在下；
   // 简洁态工具排折叠为 0 高，外壳看起来就是单行 capsule。
@@ -819,6 +827,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     minWidth: 0,
     position: 'relative',
   },
+  inputFramePreviewClip: { borderRadius: radius.pill, overflow: 'hidden' as const },
   inputFrameSingleLine: {
     alignItems: 'center',
   },
@@ -881,11 +890,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
-  // Hides only the native glyphs under the one-line preview; the input stays laid out, tappable and the
-  // screen reader's node. Not view opacity: below 0.01 iOS stops taps, and Android's alpha 0 marks the node
-  // invisible to TalkBack. Android also reads colour 0 ('transparent') as unset and draws black, so it gets the
-  // primary text colour at zero alpha instead.
-  inputUnderPreview: { color: Platform.OS === 'android' ? withZeroAlpha(colors.textPrimary) : 'transparent' },
+  // Glass frame only (iOS): no opaque surface to cover with, so the native glyphs are hidden instead; the input
+  // stays laid out, tappable and the screen reader's node. Not view opacity: below 0.01 iOS stops taps, and
+  // Android's alpha 0 marks the node invisible to TalkBack.
+  inputUnderPreview: { color: 'transparent' },
   inputGeometricSingleLine: {
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
