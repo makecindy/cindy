@@ -299,9 +299,13 @@ function isFileFinderSearchTool(toolCall: Pick<AcpToolCallFields, 'name' | 'titl
 
 /**
  * Mandatory read-only `/review` permission check for ACP tool calls.
- * Fails closed on any non-read/search kind, unverifiable input, escaping file
- * selector, sensitive credential path, hard-link escape, or path outside the
- * granted `ReviewReadGrant[]` scope.
+ *
+ * External ACP `permissionGate` runs only before tool execution and cannot inject
+ * negative exclude globs or post-filter search hits returned by an external harness.
+ * Therefore `/review` permits `read` / `search` only when every target resolves to a
+ * concrete regular file inside `ReviewReadGrant[]` (never a directory-wide search or
+ * implicit `cwd` scan that could leak credential files such as `private.key` / `.env`
+ * or traverse escaping symlinks/hard links).
  */
 export async function isAcpReviewToolCallAllowed(
   toolCall: Pick<AcpToolCallFields, 'kind' | 'name' | 'title' | 'locations' | 'rawInput'>,
@@ -310,7 +314,7 @@ export async function isAcpReviewToolCallAllowed(
 ): Promise<boolean> {
   if (!toolCall.kind || !REVIEW_READ_TOOL_KINDS.has(toolCall.kind)) return false;
   const { paths, unverifiable } = extractAcpToolCallPaths(toolCall);
-  if (unverifiable) return false;
+  if (unverifiable || paths.length === 0) return false;
 
   if (toolCall.kind === 'search' && isPlainObject(toolCall.rawInput)) {
     for (const key of SEARCH_SELECTOR_KEYS) {
@@ -339,11 +343,11 @@ export async function isAcpReviewToolCallAllowed(
     }
   }
 
-  if (toolCall.kind === 'read' && paths.length === 0) return false;
-  const targets = paths.length > 0 ? paths : [cwd];
-  for (const raw of targets) {
+  for (const raw of paths) {
     const resolved = await resolveReviewReadPath(raw, cwd, grants);
     if (!resolved) return false;
+    const stat = await fs.stat(resolved).catch(() => null);
+    if (!stat || !stat.isFile()) return false;
   }
   return true;
 }

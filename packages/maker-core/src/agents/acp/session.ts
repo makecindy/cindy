@@ -1140,21 +1140,30 @@ export class AcpSession {
       isAcpWriteToolKind(toolCall.kind) &&
       (this.initializeResult.permissionGate || extractAcpToolCallPaths(toolCall).paths.length > 0)
     ) {
-      const generationBefore = this.directoryGeneration;
-      const within = await isAcpWriteWithinAllowedDirs(
-        toolCall,
-        this.cwd,
-        this.writableDirs,
-        this.libraryRoot,
-      );
-      if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
-      const stillWithin = within && this.directoryGeneration === generationBefore
-        ? true
-        : within
-          ? await isAcpWriteWithinAllowedDirs(toolCall, this.cwd, this.writableDirs, this.libraryRoot)
-          : false;
-      if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
-      writeOutsideAllowedDirs = !stillWithin;
+      let verifiedWithin = false;
+      // Bind every async realpath check to the directoryGeneration snapshot it verified.
+      // If writableDirs changes while an async check is in flight, re-verify against the
+      // new snapshot; fail closed (never auto-approve) if generations keep changing.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const checkedGeneration = this.directoryGeneration;
+        const writableSnapshot = [...this.writableDirs];
+        const within = await isAcpWriteWithinAllowedDirs(
+          toolCall,
+          this.cwd,
+          writableSnapshot,
+          this.libraryRoot,
+        );
+        if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
+        if (!within) {
+          verifiedWithin = false;
+          break;
+        }
+        if (this.directoryGeneration === checkedGeneration) {
+          verifiedWithin = true;
+          break;
+        }
+      }
+      writeOutsideAllowedDirs = !verifiedWithin;
     }
     if (this.permissionMode === 'bypassPermissions' && !writeOutsideAllowedDirs) {
       return selected(allowOnce ?? reject);

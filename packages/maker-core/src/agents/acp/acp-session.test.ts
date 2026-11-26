@@ -2036,6 +2036,70 @@ describe('AcpSession extraDirs and writableDirs', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('never auto-approves writes when writableDirs is revoked during a second async directory recheck', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-write-race-'));
+    try {
+      const workDir = join(root, 'workspace');
+      const writableDir = join(root, 'writable');
+      const extraWritableDir = join(root, 'writable-2');
+      mkdirSync(workDir, { recursive: true });
+      mkdirSync(writableDir, { recursive: true });
+      mkdirSync(extraWritableDir, { recursive: true });
+      const targetFile = join(writableDir, 'race.ts');
+      writeFileSync(targetFile, 'initial\n');
+
+      const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+      const { session } = await open(agent, {
+        cwd: workDir,
+        permissionMode: 'bypassPermissions',
+        writableDirs: [writableDir],
+      });
+      const asked: InteractionRequest[] = [];
+      session.setInteractionResolver(async (request) => {
+        asked.push(request);
+        return { kind: 'permission', behavior: 'deny' };
+      });
+
+      await session.send({ type: 'user', content: 'Edit file under concurrent revoke' });
+      await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+      const fsPromises = (await import('node:fs')).promises;
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let targetChecks = 0;
+      const realpathSpy = vi.spyOn(fsPromises, 'realpath').mockImplementation(async (p, ...rest) => {
+        const resolved = await realRealpath(p, ...rest);
+        if (String(p) === targetFile) {
+          targetChecks += 1;
+          if (targetChecks === 1) {
+            // Generation bumps during attempt 1 while writableDir is still granted.
+            await session.setWritableDirs([writableDir, extraWritableDir]);
+          } else if (targetChecks === 2) {
+            // User revokes writableDir while attempt 2 is already in flight with the stale array.
+            await session.setWritableDirs([]);
+          }
+        }
+        return resolved;
+      });
+      try {
+        const outcome = await agent.requestPermission({
+          toolCall: { toolCallId: 'w-race', kind: 'edit', rawInput: { path: targetFile } },
+          options: PERMISSION_OPTIONS,
+          ...requestMeta(agent, 0),
+        });
+        expect(outcome).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+        expect(asked).toHaveLength(1);
+        expect(targetChecks).toBeGreaterThanOrEqual(2);
+      } finally {
+        realpathSpy.mockRestore();
+      }
+
+      agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+      await session.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // 测试价值
@@ -2114,6 +2178,7 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
       mkdirSync(outsideDir, { recursive: true });
       const srcFile = join(workDir, 'src', 'index.ts');
       const envFile = join(workDir, '.env');
+      const privateKeyFile = join(workDir, 'private.key');
       const gitConfig = join(workDir, '.git', 'config');
       const extraRepoFile = join(extraRepo, 'lib.ts');
       const allowedArtifact = join(artifactDir, 'report.md');
@@ -2121,6 +2186,7 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
       const outsideFile = join(outsideDir, 'secret.txt');
       writeFileSync(srcFile, 'export const ok = true;\n');
       writeFileSync(envFile, 'SECRET=1\n');
+      writeFileSync(privateKeyFile, '-----BEGIN PRIVATE KEY-----\n');
       writeFileSync(gitConfig, '[core]\n');
       writeFileSync(extraRepoFile, 'export const lib = 1;\n');
       writeFileSync(allowedArtifact, '# report\n');
@@ -2207,7 +2273,7 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
       const promptBlocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text?: string }>;
       expect(promptBlocks[0]).toEqual({ type: 'text', text: 'Review changes' });
 
-      // Allowed reads and searches within cwd + reviewReadPaths (directory subtree and exact file).
+      // Allowed reads and single-file searches within cwd + reviewReadPaths.
       const allowedCalls = await Promise.all([
         agent.requestPermission({
           toolCall: { toolCallId: 'r-cwd', kind: 'read', rawInput: { file_path: 'src/index.ts' } },
@@ -2225,19 +2291,15 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
           ...requestMeta(agent, 0),
         }),
         agent.requestPermission({
-          toolCall: { toolCallId: 's-grep', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src', glob: '*.ts' } },
-          options: PERMISSION_OPTIONS,
-          ...requestMeta(agent, 0),
-        }),
-        agent.requestPermission({
-          toolCall: { toolCallId: 's-glob', kind: 'search', name: 'Glob', rawInput: { pattern: 'src/**/*.ts' } },
+          toolCall: { toolCallId: 's-grep-file', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src/index.ts' } },
           options: PERMISSION_OPTIONS,
           ...requestMeta(agent, 0),
         }),
       ]);
-      expect(allowedCalls).toEqual(Array(5).fill({ outcome: { outcome: 'selected', optionId: 'yes' } }));
+      expect(allowedCalls).toEqual(Array(4).fill({ outcome: { outcome: 'selected', optionId: 'yes' } }));
 
-      // Denied calls: writes, deletes, moves, execute, fetch, unknown, outside reads, sibling of exact file, credentials, escaping globs.
+      // Denied calls: writes, deletes, moves, execute, fetch, unknown, outside reads, sibling of exact file,
+      // credentials, directory-wide searches/reads (which cannot filter private.key/.env/symlinks in external harnesses), and escaping globs.
       const deniedToolCalls: AcpRecord[] = [
         { toolCallId: 'd-edit', kind: 'edit', rawInput: { path: srcFile } },
         { toolCallId: 'd-del', kind: 'delete', rawInput: { path: srcFile } },
@@ -2246,10 +2308,17 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
         { toolCallId: 'd-fetch', kind: 'fetch', rawInput: { url: 'https://example.com' } },
         { toolCallId: 'd-other', kind: 'other', rawInput: { path: srcFile } },
         { toolCallId: 'd-nopath', kind: 'read', rawInput: {} },
+        { toolCallId: 'd-read-dir', kind: 'read', rawInput: { path: workDir } },
         { toolCallId: 'd-outside', kind: 'read', rawInput: { path: outsideFile } },
         { toolCallId: 'd-sibling', kind: 'read', rawInput: { path: siblingArtifact } },
         { toolCallId: 'd-env', kind: 'read', rawInput: { path: envFile } },
+        { toolCallId: 'd-key', kind: 'read', rawInput: { path: privateKeyFile } },
         { toolCallId: 'd-git', kind: 'read', rawInput: { path: gitConfig } },
+        { toolCallId: 'd-grep-root', kind: 'search', name: 'Grep', rawInput: { path: '.', pattern: 'PRIVATE KEY' } },
+        { toolCallId: 'd-grep-dir', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src', glob: '*.ts' } },
+        { toolCallId: 'd-grep-nopath', kind: 'search', name: 'Grep', rawInput: { pattern: 'PRIVATE KEY' } },
+        { toolCallId: 'd-glob-dir', kind: 'search', name: 'Glob', rawInput: { pattern: 'src/**/*.ts' } },
+        { toolCallId: 'd-grep-key', kind: 'search', name: 'Grep', rawInput: { path: privateKeyFile, pattern: 'PRIVATE KEY' } },
         { toolCallId: 'd-glob-escape', kind: 'search', name: 'Glob', rawInput: { pattern: '../outside/*' } },
         { toolCallId: 'd-grep-env', kind: 'search', name: 'Grep', rawInput: { pattern: 'SECRET', glob: '**/.env*' } },
         ...(symlinksReady ? [{ toolCallId: 'd-sym', kind: 'read', rawInput: { path: symlinkInRepo } }] : []),
