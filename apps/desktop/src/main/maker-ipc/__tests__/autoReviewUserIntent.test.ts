@@ -29,6 +29,13 @@ it.each(['agent-request', 'delegated-continuation'] as const)('restores a verifi
   expect(restoreAutoReviewUserIntent([unverified])).toBe('');
 });
 
+it('marks partial authorization for scheduled replay and the next ordinary send', () => {
+  const page = { messages: [user('inspect')], complete: false };
+  expect(restoreAutoReviewUserIntent(page)).toMatchObject({ currentUserMessage: 'inspect', historyOmitted: true });
+  expect(restoreAutoReviewUserIntent(page, { clientId: 'next', content: 'continue' }))
+    .toMatchObject({ currentUserMessage: 'continue', historyOmitted: true });
+});
+
 describe('pasted authored text', () => {
   // #7424 / unit: production readText/resource projection must preserve exact owner authorization.
   // Existing negatives cover structured resources, not paste-only or mixed input; the minimal old
