@@ -148,6 +148,7 @@ import {
 } from './install.js';
 import {
   PluginMarketLedger,
+  pluginMarketLedgerRevision,
   ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from './ledger.js';
@@ -1063,6 +1064,8 @@ function sameDisconnectedMarketInstallation(
 type MarketCatalog = Awaited<ReturnType<PluginMarketApi['listAll']>>;
 interface MarketSnapshotFlight {
   promise: Promise<PluginMarketSnapshot>;
+  /** 发起时的安装代次（见 installGeneration）；只读的发现读取只并入同代次的在途读取。 */
+  generation: string;
   listeners: Set<PluginMarketSnapshotOptions>;
   outcome: 'completed' | 'failed' | null;
   deferredSettled: boolean;
@@ -1313,8 +1316,9 @@ export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
   private readonly officialEngineReads = new Map<string, Promise<VisiblePluginDetail>>();
   private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
-  private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
-  private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
+  /** 在途读取都记下发起时的安装代次；新请求只并入同代次的（见 installGeneration）。 */
+  private readonly catalogFlights = new Map<string, { promise: Promise<MarketCatalog>; generation: string }>();
+  private readonly localReadFlights = new Map<string, { promise: Promise<LocalInstallSnapshot>; generation: string }>();
   private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
   private readonly countDeductionMaxBatches = MARKET_COUNT_DEDUCTION_MAX_BATCHES;
   private lastMaintenanceCatalog: { owner: string; fingerprint: string } | null = null;
@@ -1481,10 +1485,28 @@ export class PluginMarketService {
     return this.requestSnapshot(options);
   }
 
+  /**
+   * 契约 V2.10：已装集合或安装记录的变更代次——本进程的市场账本写入次数，加上 Ghost 互斥变更（安装、更新、卸载、
+   * 启停、批准）完成次数。两者都在变更落盘之后才前进，只读内存。
+   * 可共享的在途读取（目录、本机安装快照、只读发现快照）记下发起时的代次；之后的请求只并入同代次的在途读取，否则
+   * 自己发起。于是安装、更新、卸载成功之后发出的读取，各组成部分都不早于那次变更；没有任何变更时复用不变。
+   */
+  private installGeneration(): string {
+    let ghosts = 0;
+    try {
+      ghosts = (getGhostManager() as { installationRevision?: () => number }).installationRevision?.() ?? 0;
+    } catch {
+      ghosts = -1;
+    }
+    return `${pluginMarketLedgerRevision()}:${ghosts}`;
+  }
+
   private loadCatalog(owner: ActiveAppSession, legacyCatalog = false, refresh?: PluginMarketRefreshContext): Promise<MarketCatalog> {
     const key = JSON.stringify([marketOwnerKey(owner), legacyCatalog]);
+    const generation = this.installGeneration();
     const existing = this.catalogFlights.get(key);
-    if (existing) return existing;
+    // 目录读取在发起时按已装集合定下要 resolve 的目标；变更之后的请求不能并入变更之前发起的那一份。
+    if (existing && existing.generation === generation) return existing.promise;
     const request = Promise.resolve().then(() => {
       requireSameMarketOwner(owner);
       if (legacyCatalog) return this.api.listAll();
@@ -1495,8 +1517,9 @@ export class PluginMarketService {
         return this.api.listAll();
       });
     });
-    this.catalogFlights.set(key, request);
-    const clear = () => { if (this.catalogFlights.get(key) === request) this.catalogFlights.delete(key); };
+    const flight = { promise: request, generation };
+    this.catalogFlights.set(key, flight);
+    const clear = () => { if (this.catalogFlights.get(key) === flight) this.catalogFlights.delete(key); };
     void request.then(clear, clear);
     return request;
   }
@@ -1915,8 +1938,10 @@ export class PluginMarketService {
     const owner = getActiveAppSession();
     const ownerKey = marketOwnerKey(owner);
     const key = JSON.stringify([ownerKey, !!options.discoveryOnly, !!options.deferReconciliation, ...(options.legacyCatalog ? [true] : [])]);
+    const generation = this.installGeneration();
     const existing = this.snapshotFlights.get(key);
-    if (existing) {
+    // 只读的发现快照只并入同代次的在途读取；带对账的快照照旧合并（保持对账的串行与执行顺序）。
+    if (existing && (!options.discoveryOnly || existing.generation === generation)) {
       existing.listeners.add(options);
       if (existing.outcome) options.onDefaultReconciliationOutcome?.(existing.outcome);
       return existing.promise;
@@ -1951,7 +1976,7 @@ export class PluginMarketService {
     }).finally(() => {
       if (!flight.deferredStarted || flight.deferredSettled) clear();
     });
-    flight = { promise, listeners: new Set([options]), outcome: null, deferredStarted: false, deferredSettled: false };
+    flight = { promise, generation, listeners: new Set([options]), outcome: null, deferredStarted: false, deferredSettled: false };
     this.snapshotFlights.set(key, flight);
     void flight.promise.catch(clear);
     return flight.promise;
@@ -2638,14 +2663,8 @@ export class PluginMarketService {
     try {
       const attached = await this.withCapturedLedgerMutation(placed.ledger,
         () => placed.ledger.attachRemoteOperationBinding(placed.record, placed.binding));
-      if (attached) {
-        // 补写之前开始的只读在途读取看不到这份证据：之后的请求不再并入它们，另起读取。只放掉只读的发现读取与本机
-        // 扫描；带对账的快照不动（它们承载自动更新与延后对账状态，不能并发再起一份）。
-        for (const key of [...this.snapshotFlights.keys()]) {
-          if ((JSON.parse(key) as unknown[])[1] === true) this.snapshotFlights.delete(key);
-        }
-        this.localReadFlights.clear();
-      } else {
+      // 补写是一次账本写入，安装代次随之前进：之后的读取不会并入补写之前开始的在途读取（见 installGeneration）。
+      if (!attached) {
         log.info('remote operation evidence not recorded: the installation changed before the operation finished', {
           ghostId: placed.record.ghostId,
         });
@@ -5101,14 +5120,16 @@ export class PluginMarketService {
   private readLocalInstallSnapshot(owner: ActiveAppSession, fresh = false): Promise<LocalInstallSnapshot> {
     const ownerKey = marketOwnerKey(owner);
     const key = ownerKey + (fresh ? ':fresh' : ':reuse');
+    const generation = this.installGeneration();
     const pending = this.localReadFlights.get(key);
-    if (pending) return pending;
-    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), this.localRefreshContext(owner, fresh))
+    if (pending && pending.generation === generation) return pending.promise;
+    const promise = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), this.localRefreshContext(owner, fresh))
       .finally(() => {
         if (this.localReadFlights.get(key) === flight) this.localReadFlights.delete(key);
       });
+    const flight = { promise, generation };
     this.localReadFlights.set(key, flight);
-    return flight;
+    return promise;
   }
 
   /** Keep one read-only installation view per owner so pagination reuses the same scan. */

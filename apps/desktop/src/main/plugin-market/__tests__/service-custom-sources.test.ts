@@ -35,6 +35,10 @@ const runtime = vi.hoisted(() => ({
   install: vi.fn(),
   /** 模拟包落位、账本写下之后的收尾步骤失败（生产里是绑定用量、确认新实例的 namespace）。 */
   failAfterCommit: false,
+  /** 后台安装扫描的次数（计数用例）。 */
+  scans: 0,
+  /** 生产 GhostManager.installationRevision()：每笔安装/卸载互斥段结束后加一（成败都加）。 */
+  mutations: 0,
   inspect: vi.fn(),
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
@@ -87,7 +91,10 @@ vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({
     createBackgroundRefresh() {
       const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
-      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
+      return createGhostBackgroundRefresh({ state, scan: async () => {
+        runtime.scans++;
+        return { ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() };
+      } });
     },
     async listAsync() { return this.list(); },
     list: () =>
@@ -101,6 +108,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
     inspect: runtime.inspect,
     // Same default as service.test.ts: no first-party approval evidence for these fixtures.
     approvedInstallEvidence: () => null,
+    installationRevision: () => runtime.mutations,
   }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: async (
@@ -145,6 +153,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
       ),
       canonicalManifest: installed.manifest,
     });
+    // Production advances the revision when the mutation lane is released, whether the commit tail succeeds or not.
+    runtime.mutations++;
     if (runtime.failAfterCommit) throw new Error('post-commit step failed');
     return installed;
   },
@@ -205,6 +215,8 @@ const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';
 afterEach(() => {
   runtime.ghosts = [];
   runtime.failAfterCommit = false;
+  runtime.scans = 0;
+  runtime.mutations = 0;
   runtime.listSequence = null;
   runtime.install.mockReset();
   runtime.inspect.mockReset();
@@ -371,8 +383,9 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     }),
     download: vi.fn(),
   };
-  vi.mocked(downloadVerifiedPlugin).mockImplementation(async (_url, _expected, targetPath) => {
-    const item = items[0];
+  vi.mocked(downloadVerifiedPlugin).mockImplementation(async (url, _expected, targetPath) => {
+    // A download URL naming a listed plugin id packages that plugin; otherwise the first fixture (historical tests).
+    const item = items.find((candidate) => String(url).includes(`/${candidate.id}.`)) ?? items[0];
     if (!item) throw new Error('missing server Plugin fixture');
     const zip = new JSZip();
     zip.file('ghost.json', JSON.stringify(ghostManifest(item.ghostId, item.currentRelease.version)));
@@ -3793,6 +3806,265 @@ describe('installed operation attribution through remote management (V2.10)', ()
       .rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(await restarted.seen('phone-a', m.pluginId)).toEqual(SELF('op-0000000000000001'));
     expect(await restarted.seen('phone-b', m.pluginId)).toEqual(UNATTRIBUTED());
+  });
+
+  /* 测试价值（维护者评审 6069999202，2026-11-26：安装代次）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 management:snapshot read:'installed' 与 read:'catalog'，
+   *   断言同一份响应里实例（ghosts[]）、市场条目与归属三者一致。
+   * - 覆盖缺口：在途目录请求（catalogFlights）、本机安装快照（localReadFlights）与外层快照只按参数合并，提交
+   *   改了已装集合之后新发起的读取仍会并入提交前开始的请求，拿到旧的目标集合或旧的已装状态。
+   * - 最小失败输入：A 已装、B 为非默认官方插件；A 的目录 resolve 挂起时远程首装 B 成功，立即读已装快照。
+   *   0760a289a2 上 market.items 缺 B 整行（陈旧检查只遍历已有条目，不会重读）。
+   * - tier：unit（真实 service + 远程出口，只替换网络与运行时边界）。
+   */
+  const B_ID = `c${'b'.repeat(24)}`;
+  const OP_B = 'op-00000000000000b1';
+  const ghostIdOf = (ghost: Wire) => (ghost.manifest as Wire).id;
+  const itemOf = (response: Wire, pluginId: string) =>
+    ((response.market as Wire & { items: Wire[] }).items).find((item) => item.pluginId === pluginId);
+
+  /** 两个官方插件：A 已在本机装好，B 是非默认插件、尚未安装（目录请求的目标集合里没有它）。 */
+  async function officialPair() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const a = serverSummary();
+    const b = serverSummary({ id: B_ID, ghostId: 'plugin-b', name: 'Plugin B',
+      currentRelease: { ...serverSummary().currentRelease, id: 'release-b' } });
+    const items = [a, b];
+    const h = harness(items, []);
+    h.api.download.mockImplementation(async (pluginId: string) => ({
+      url: `https://downloads.test.invalid/${pluginId}.cindy`, expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42,
+    }));
+    // The runtime places whatever plugin the verified package contains.
+    runtime.install.mockImplementation(async (filePath: string) => {
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(filePath));
+      const manifest = JSON.parse(await zip.file('ghost.json')!.async('text')) as GhostManifest;
+      const ghost = installedGhost(root, manifest.id, manifest.version);
+      runtime.ghosts = [...runtime.ghosts.filter((candidate) => candidate.manifest.id !== manifest.id), ghost];
+      return ghost;
+    });
+    runtime.uninstall.mockImplementation(async () => {
+      runtime.ghosts = runtime.ghosts.filter((ghost) => ghost.manifest.id !== 'server-plugin');
+      runtime.mutations++;
+    });
+    await h.service.install(PLUGIN_ID, { expectedReleaseId: 'release-1' }, TEST_INSTALL_CONTEXT);
+    return { root, h, items, remote: remoteManagement(h.service) };
+  }
+
+  /** 挂起下一次 api[name] 调用：返回「已到达」与「放行」。只挂一次，之后的调用照常。 */
+  function holdNext(api: Record<string, unknown>, name: 'resolve' | 'defaults' | 'catalog') {
+    const original = api[name] as (...args: unknown[]) => Promise<unknown>;
+    let release!: () => void;
+    let arrive!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+    api[name] = vi.fn(async (...args: unknown[]) => {
+      api[name] = original;
+      arrive();
+      await released;
+      return original(...args);
+    });
+    return { arrived, release };
+  }
+
+  // 维护者点名用例（改前失败：0760a289a2 上首次响应 market.items 缺 B，下一次才有）。
+  it('shows a first official install in the very next installed snapshot while an older catalog read is held', async () => {
+    const { h, remote } = await officialPair();
+    const held = holdNext(h.api as unknown as Record<string, unknown>, 'resolve');
+    const before = remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+    await held.arrived;
+    await remote.installRemotely('phone-a', OP_B, B_ID);
+    const after = remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+    const other = remote.invoke('phone-b', 'snapshot', { read: 'installed' });
+    held.release();
+    await before;
+    const [mine, theirs] = await Promise.all([after, other]);
+    expect((mine.ghosts as Wire[]).map(ghostIdOf)).toContain('plugin-b');
+    expect(pick(itemOf(mine, B_ID)!, EXIT_KEYS)).toEqual(SELF(OP_B));
+    // Only the controller that started the operation gets its id.
+    expect((theirs.ghosts as Wire[]).map(ghostIdOf)).toContain('plugin-b');
+    expect(pick(itemOf(theirs, B_ID)!, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+  });
+
+  // 同一机制的其他提交：更新、卸载、只改运行时不写账本（本机页卸载、账本收尾推迟）。
+  it.each([
+    ['an update', async (m: Awaited<ReturnType<typeof officialPair>>) => {
+      m.items[0] = { ...m.items[0]!, currentRelease: { ...m.items[0]!.currentRelease, id: 'release-2', version: '2.0.0' } };
+      await m.h.service.install(PLUGIN_ID, { expectedReleaseId: 'release-2', expectedInstalledApproval: APPROVED_INSTALL_TOKEN },
+        TEST_INSTALL_CONTEXT);
+    }, (item: Wire, ghosts: Wire[]) => {
+      expect(item).toMatchObject({ installState: 'installed', releaseId: 'release-2' });
+      expect(ghosts.find((ghost) => ghostIdOf(ghost) === 'server-plugin')?.manifest).toMatchObject({ version: '2.0.0' });
+    }],
+    ['an uninstall', async (m: Awaited<ReturnType<typeof officialPair>>) => {
+      await m.h.service.uninstall(PLUGIN_ID);
+    }, (item: Wire | undefined, ghosts: Wire[]) => {
+      // A non-default plugin that is no longer installed leaves the installed snapshot.
+      expect(item).toBeUndefined();
+      expect(ghosts.map(ghostIdOf)).not.toContain('server-plugin');
+    }],
+    ['a runtime-only removal', async () => {
+      runtime.ghosts = runtime.ghosts.filter((ghost) => ghost.manifest.id !== 'server-plugin');
+      runtime.mutations++;
+    }, (item: Wire | undefined, ghosts: Wire[]) => {
+      expect(item?.installState).not.toBe('installed');
+      expect(ghosts.map(ghostIdOf)).not.toContain('server-plugin');
+    }],
+  ] as const)('reads %s in the very next installed snapshot while an older catalog read is held', async (_name, commit, check) => {
+    const m = await officialPair();
+    const held = holdNext(m.h.api as unknown as Record<string, unknown>, 'resolve');
+    const before = m.remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+    await held.arrived;
+    await commit(m);
+    const after = m.remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+    held.release();
+    await before;
+    const response = await after;
+    check(itemOf(response, PLUGIN_ID) as Wire, response.ghosts as Wire[]);
+  });
+
+  // 目录分页出口（read:'catalog'）同理：首装后立即读的那一页里 B 是已装、带发起端操作号。
+  it('shows a first official install in the very next catalog page while an older catalog page is held', async () => {
+    const { h, remote } = await officialPair();
+    const held = holdNext(h.api as unknown as Record<string, unknown>, 'catalog');
+    const before = remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+    await held.arrived;
+    await remote.installRemotely('phone-a', OP_B, B_ID);
+    const after = remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+    held.release();
+    await before;
+    const page = await after;
+    expect(pick((page.items as Wire[]).find((item) => item.pluginId === B_ID)!, EXIT_KEYS)).toEqual(SELF(OP_B));
+  });
+
+  /* 测试价值（同上，计数侧）：没有任何提交时复用行为不变——并发的已装快照共用同一笔在途目录请求；并发打开、顺序
+   *   翻页、推荐的网络与扫描次数与 0760a289a2 逐项相同。
+   * - 改前失败：不适用（两条都在 0760a289a2 上通过，锁定其复用次数，防止代次判断把无提交的读取也拆开）。
+   * - 交错用例中「更新」「只改运行时」「目录页」三条在 0760a289a2 上也通过（陈旧检查或新鲜的服务端结果已兜住），
+   *   作覆盖性用例；改前失败的是首装缺行与卸载两条。
+   */
+  it('still shares one in-flight catalog read between concurrent installed snapshots when nothing was committed', async () => {
+    const { h, remote } = await officialPair();
+    const resolve = vi.spyOn(h.api, 'resolve');
+    const defaults = vi.spyOn(h.api, 'defaults');
+    const held = holdNext(h.api as unknown as Record<string, unknown>, 'resolve');
+    const reads = [remote.invoke('phone-a', 'snapshot', { read: 'installed' })];
+    await held.arrived;
+    reads.push(remote.invoke('phone-a', 'snapshot', { read: 'installed' }), remote.invoke('phone-b', 'snapshot', { read: 'installed' }));
+    await new Promise((settle) => setTimeout(settle, 20));
+    held.release();
+    await Promise.all(reads);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(defaults).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the read counts of concurrent page opens, sequential paging and recommendations when nothing was committed', async () => {
+    const m = await officialPair();
+    m.items.push(...Array.from({ length: 24 }, (_, index) => serverSummary({
+      id: `c${String(index).padStart(2, '0')}${'d'.repeat(22)}`, ghostId: `paged-${index}`, name: `Paged ${index}`,
+      currentRelease: { ...serverSummary().currentRelease, id: `release-p${index}` },
+    })));
+    (m.h.api as unknown as { recommendations: () => Promise<{ plugins: VisiblePluginSummary[] }> }).recommendations =
+      vi.fn(async () => ({ plugins: m.items.slice(0, 3) }));
+    const api = m.h.api as unknown as Record<string, { mock: { calls: unknown[] } }>;
+    const names = ['read', 'listAll', 'catalog', 'defaults', 'resolve', 'detail', 'recommendations'];
+    const before = Object.fromEntries(names.map((name) => [name, api[name]!.mock.calls.length]));
+    const scansBefore = runtime.scans;
+    const remote = remoteManagement(m.h.service);
+    // Concurrent opens: the installed view on two phones and the first catalog page.
+    await Promise.all([
+      remote.invoke('phone-a', 'snapshot', { read: 'installed' }),
+      remote.invoke('phone-b', 'snapshot', { read: 'installed' }),
+      remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 10 } }),
+    ]);
+    // Sequential paging through the rest of the catalog.
+    let cursor = ((await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 10 } })).nextCursor) as string | null;
+    while (cursor) {
+      cursor = (await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 10, cursor, counts: false } }))
+        .nextCursor as string | null;
+    }
+    await remote.invoke('phone-a', 'snapshot', { read: 'recommendations' });
+    await remote.invoke('phone-b', 'snapshot', { read: 'recommendations' });
+    const counts = {
+      ...Object.fromEntries(names.map((name) => [name, api[name]!.mock.calls.length - before[name]!])),
+      scans: runtime.scans - scansBefore, list: remote.reads.list, instance: remote.reads.instance.length,
+    };
+    // Recorded on 0760a289a2 with the same sequence: the generation must not split any no-commit sharing.
+    expect(counts).toEqual({ read: 6, listAll: 0, catalog: 4, defaults: 1, resolve: 1, detail: 0, recommendations: 2,
+      scans: 3, list: 2, instance: 0 });
+  });
+
+  /* 测试价值（合同 V2.10 样例补全，2026-11-26 调度要求：无真机联调兜底，手机端按合同样例对 Host 返回形状）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 market-detail 与 snapshot read:'installed' 的真实投影，
+   *   只取样例列出的键、按样例顺序逐字节断言。
+   * - 覆盖：官方市场条目、自定义市场条目各三态（安装前、发起设备装后、另一设备读）；市场部分不完整时的响应
+   *   （unavailableReason、organizationAccessError、unavailableCustomSourceNames 各一）。
+   * - 改前失败：覆盖性用例（锁定形状），不作为改前失败证据。
+   */
+  const MARKET_KEYS = ['unavailableReason', 'organizationAccessError', 'customSourceNames', 'unavailableCustomSourceNames'];
+  const sample = (item: Wire) => JSON.stringify(pick(item, SAMPLE_KEYS));
+  const marketSample = (response: Wire) => {
+    const market = response.market as Wire & { items: Wire[] };
+    return JSON.stringify({ ...pick(market, MARKET_KEYS), items: market.items.map((item) => pick(item, SAMPLE_KEYS)) });
+  };
+  it('produces the three-state contract samples for official and custom market items byte for byte', async () => {
+    const operationId = '3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58';
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const server = harness([serverSummary()], []);
+    server.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64), sizeBytes: 42,
+    });
+    runtime.install.mockImplementation(async () => {
+      const ghost = { ...installedGhost(root, 'server-plugin'), namespace: null };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const official = remoteManagement(server.service);
+    const officialStates = [sample(await official.detail('phone-a', PLUGIN_ID))];
+    await official.installRemotely('phone-a', operationId, PLUGIN_ID);
+    officialStates.push(sample(await official.detail('phone-a', PLUGIN_ID)), sample(await official.detail('phone-b', PLUGIN_ID)));
+    expect(officialStates).toEqual([
+      '{"pluginId":"caaaaaaaaaaaaaaaaaaaaaaaa","ghostId":"server-plugin","releaseId":"release-1","version":"1.0.0","installState":"not-installed","sourceType":"server"}',
+      '{"pluginId":"caaaaaaaaaaaaaaaaaaaaaaaa","ghostId":"server-plugin","namespace":null,"releaseId":"release-1","version":"1.0.0","installState":"installed","sourceType":"server","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}',
+      '{"pluginId":"caaaaaaaaaaaaaaaaaaaaaaaa","ghostId":"server-plugin","namespace":null,"releaseId":"release-1","version":"1.0.0","installState":"installed","sourceType":"server","installedOperationAttribution":"unattributed"}',
+    ]);
+
+    runtime.ghosts = [];
+    const custom = customMarket('Acme Team Plugins', 'weather-chip', '1.0.0');
+    const customStates = [sample(await custom.remote.detail('phone-a', custom.pluginId))];
+    await custom.remote.installRemotely('phone-a', operationId, custom.pluginId);
+    customStates.push(sample(await custom.remote.detail('phone-a', custom.pluginId)), sample(await custom.remote.detail('phone-b', custom.pluginId)));
+    expect(customStates).toEqual([
+      '{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"not-installed","sourceType":"local-market"}',
+      '{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"installed","sourceType":"local-market","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}',
+      '{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"installed","sourceType":"local-market","installedOperationAttribution":"unattributed"}',
+    ]);
+  });
+
+  it('produces the contract samples of a read:installed response whose market part is incomplete', async () => {
+    const operationId = '3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58';
+    const m = customMarket('Acme Team Plugins', 'weather-chip', '1.0.0');
+    await m.remote.installRemotely('phone-a', operationId, m.pluginId);
+    const installed = async () => marketSample(await m.remote.invoke('phone-a', 'snapshot', { read: 'installed' }));
+    // The server catalog cannot be read.
+    m.h.api.defaults.mockRejectedValueOnce(new Error('catalog unavailable'));
+    const serverFailed = await installed();
+    // The organization part of the catalog is refused.
+    m.h.api.defaults.mockResolvedValueOnce({ schemaVersion: 2, plugins: [], nextCursor: null, currentOrganization: null,
+      organizationAccessError: { code: 'PLUGIN_ORGANIZATION_ACCESS_DENIED', message: 'denied' } } as never);
+    const organizationRefused = await installed();
+    // A configured custom source cannot be discovered.
+    m.h.sourceStore.add({ name: 'Unreachable Plugins', addedAt: '2026-07-30T00:00:00.000Z', lastSyncedAt: null, lastRevision: null,
+      source: { type: 'local', path: path.join(m.root, 'missing-market') } });
+    const sourceUnavailable = await installed();
+    expect([serverFailed, organizationRefused, sourceUnavailable]).toEqual([
+      '{"unavailableReason":"catalog unavailable","customSourceNames":["Acme Team Plugins"],"unavailableCustomSourceNames":[],"items":[{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"installed","sourceType":"local-market","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}]}',
+      '{"unavailableReason":null,"organizationAccessError":"PLUGIN_ORGANIZATION_ACCESS_DENIED","customSourceNames":["Acme Team Plugins"],"unavailableCustomSourceNames":[],"items":[{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"installed","sourceType":"local-market","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}]}',
+      '{"unavailableReason":null,"organizationAccessError":null,"customSourceNames":["Acme Team Plugins","Unreachable Plugins"],"unavailableCustomSourceNames":["Unreachable Plugins"],"items":[{"pluginId":"custom:Acme%20Team%20Plugins/weather-chip","ghostId":"weather-chip","namespace":null,"releaseId":"custom:Acme%20Team%20Plugins:weather-chip:1.0.0","version":"1.0.0","installState":"installed","sourceType":"local-market","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}]}',
+    ]);
   });
 
   // 合同 V2.10 的三条样例，手机端拿它们当测试夹具：逐字节一致（只取样例里列出的键，顺序同样例）。
