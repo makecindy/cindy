@@ -107,20 +107,32 @@ async function ensureReportingAllowed(): Promise<boolean> {
   return status.ok && isAnalyticsAllowed();
 }
 
+// A native call only hands registration to the SDK. Keep the retry window short
+// so a later foreground visit can recover a registration that never arrived.
+const CHARGE_REGISTRATION_RETRY_MS = 60_000;
+type ChargeRegistration = { alias: string; retryAt?: number };
+let chargeRegistration: ChargeRegistration | undefined;
 let identityRevision = 0;
 let identityWrite: Promise<void> = Promise.resolve();
 
 export function setTapdbUser(chargeAlias?: string, usageAlias?: string): Promise<void> {
+  if (chargeRegistration?.alias !== chargeAlias) {
+    chargeRegistration = chargeAlias && /^pay1_[a-f0-9]{48}$/.test(chargeAlias) ? { alias: chargeAlias } : undefined;
+  }
+  const registration = chargeRegistration;
   const revision = ++identityRevision;
-  identityWrite = identityWrite.catch(() => undefined).then(() => applyIdentity(revision, chargeAlias, usageAlias));
+  identityWrite = identityWrite.catch(() => undefined).then(() => applyIdentity(revision, registration, usageAlias));
   return identityWrite;
 }
 
-async function applyIdentity(revision: number, chargeAlias?: string, usageAlias?: string): Promise<void> {
+async function applyIdentity(revision: number, registration?: ChargeRegistration, usageAlias?: string): Promise<void> {
   if (!(await ensureReportingAllowed()) || identityRevision !== revision) return;
-  if (chargeAlias && /^pay1_[a-f0-9]{48}$/.test(chargeAlias)) {
+  if (registration && (registration.retryAt === undefined || performance.now() >= registration.retryAt)) {
     try {
-      await setTapdbUserId(chargeAlias);
+      await setTapdbUserId(registration.alias);
+      // Queued binds for this alias share the result. Clearing or changing the
+      // alias detaches this record even if the native write is still in flight.
+      registration.retryAt = performance.now() + CHARGE_REGISTRATION_RETRY_MS;
     } catch {
       // SDK failure must not block login.
     }
@@ -136,6 +148,7 @@ async function applyIdentity(revision: number, chargeAlias?: string, usageAlias?
 }
 
 export async function clearTapdbUser(): Promise<void> {
+  chargeRegistration = undefined;
   const revision = ++identityRevision;
   await identityWrite.catch(() => undefined);
   if (revision !== identityRevision) return;
