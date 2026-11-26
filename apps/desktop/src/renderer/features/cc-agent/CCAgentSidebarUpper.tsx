@@ -3201,11 +3201,15 @@ function ExpandedView({
       const offlineDeviceId = session?.deviceLinkDeviceId;
       const canHandleOfflineInbox =
         Boolean(offlineDeviceId) &&
-        !isSharedTaskPeer(offlineDeviceId ?? '') &&
-        isRemoteSessionWriteBlocked(session);
+        isRemoteSessionWriteBlocked(session) &&
+        !isSharedTaskPeer(offlineDeviceId ?? '');
       if (action === 'unarchive' && canHandleOfflineInbox && offlineDeviceId) {
         if (getOfflineInboxIntent(offlineDeviceId, sessionId)?.kind === 'complete') {
-          await removeOfflineInboxIntent(offlineDeviceId, sessionId);
+          try {
+            await removeOfflineInboxIntent(offlineDeviceId, sessionId);
+          } catch {
+            toast.error(t('ccAgent.sidebar.unarchiveFailed'));
+          }
           return;
         }
       }
@@ -3240,8 +3244,12 @@ function ExpandedView({
           remoteProjectsStore
             .getDeviceSessions(offlineDeviceId)
             .find((row) => row.id === sessionId) ?? session;
-        await queueOfflineInboxComplete(offlineDeviceId, sessionId, rawHostSession);
-        advanceInbox();
+        try {
+          await queueOfflineInboxComplete(offlineDeviceId, sessionId, rawHostSession);
+          advanceInbox();
+        } catch {
+          toast.error(t('ccAgent.sidebar.archiveFailed'));
+        }
         return;
       }
       const isArchiveLike = action === 'archive' || action === 'archive-now' || action === 'complete';

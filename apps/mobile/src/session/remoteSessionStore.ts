@@ -1470,12 +1470,12 @@ function reconcileHomeSessions(): void {
     const cached = homeSessionProjectionCache.get(session.id);
     if (cached?.source === session && cached.intent === intent) return cached.projected;
 
-    const base = { ...session };
-    delete base.totalMoney;
-    delete base.totalCostUsd;
-    delete base.totalCostUsdIsApproximate;
-    delete base.totalTokenUsage;
-    const projected = projectSessionWithOfflineInboxIntent(base, intent);
+    let projected = { ...session };
+    delete projected.totalMoney;
+    delete projected.totalCostUsd;
+    delete projected.totalCostUsdIsApproximate;
+    delete projected.totalTokenUsage;
+    projected = projectSessionWithOfflineInboxIntent(projected, intent);
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
       : projected;

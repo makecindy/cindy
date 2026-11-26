@@ -20,15 +20,18 @@ import {
   isDeviceUnresponsiveRemoteError,
   isTransientRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
-import { isExplicitRemoteNotFoundError, isWorktreeChannelNotAllowedError } from '@/session/newSessionWorktree';
+import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import type { RemoteSession } from '@/session/types';
 
 const STORAGE_KEY_PREFIX = 'cindy.offlineInboxIntents.v1.';
 
 let activeUserId = '';
 let writeEpoch = 0;
+let writeSeq = 0;
 let revision = 0;
 let intentsByKey = new Map<string, OfflineInboxIntent>();
+const keyWriteSeq = new Map<string, number>();
+let persistQueue: Promise<void> = Promise.resolve();
 const listeners = new Set<() => void>();
 
 function storageKeyForUser(userId: string): string {
@@ -55,20 +58,29 @@ function replaceIntents(nextList: OfflineInboxIntent[]): void {
   emit();
 }
 
-async function persistForUser(userId: string, list: OfflineInboxIntent[], epoch: number): Promise<void> {
+function enqueuePersist(task: () => Promise<void>): Promise<void> {
+  const next = persistQueue.then(task, task);
+  persistQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function persistCurrentForUser(userId: string, epoch: number): Promise<void> {
   if (!userId.trim() || epoch !== writeEpoch) return;
-  const key = storageKeyForUser(userId);
-  const normalized = normalizeOfflineInboxIntents(list);
-  if (normalized.length === 0) {
-    await AsyncStorage.removeItem(key).catch(() => undefined);
-    return;
-  }
-  const serialized = JSON.stringify({ schemaVersion: 1, intents: normalized });
-  if (epoch !== writeEpoch) return;
-  await AsyncStorage.setItem(key, serialized).catch(() => undefined);
-  if (epoch !== writeEpoch) {
-    await AsyncStorage.removeItem(key).catch(() => undefined);
-  }
+  await enqueuePersist(async () => {
+    if (!userId.trim() || epoch !== writeEpoch) return;
+    const key = storageKeyForUser(userId);
+    const normalized = normalizeOfflineInboxIntents([...intentsByKey.values()]);
+    if (normalized.length === 0) {
+      await AsyncStorage.removeItem(key);
+      return;
+    }
+    const serialized = JSON.stringify({ schemaVersion: 1, intents: normalized });
+    if (epoch !== writeEpoch) return;
+    await AsyncStorage.setItem(key, serialized);
+    if (epoch !== writeEpoch) {
+      await AsyncStorage.removeItem(key).catch(() => undefined);
+    }
+  });
 }
 
 export function subscribeMobileOfflineInboxIntents(listener: () => void): () => void {
@@ -112,6 +124,7 @@ export async function hydrateMobileOfflineInboxIntents(userId: string): Promise<
   const trimmed = userId.trim();
   if (trimmed !== activeUserId) {
     activeUserId = trimmed;
+    keyWriteSeq.clear();
     intentsByKey = new Map();
     emit();
   }
@@ -136,13 +149,27 @@ export async function upsertMobileOfflineInboxIntent(
   if (trimmed && activeUserId !== trimmed) {
     activeUserId = trimmed;
   }
+  const epoch = writeEpoch;
   const key = offlineInboxIntentKey(intent.deviceId, intent.sessionId);
+  const previous = intentsByKey.get(key);
+  const token = (writeSeq += 1);
+  keyWriteSeq.set(key, token);
   const next = new Map(intentsByKey);
   next.set(key, intent);
   intentsByKey = next;
   emit();
-  if (trimmed) {
-    await persistForUser(trimmed, [...intentsByKey.values()], writeEpoch);
+  if (!trimmed) return;
+  try {
+    await persistCurrentForUser(trimmed, epoch);
+  } catch (err) {
+    if (epoch === writeEpoch && keyWriteSeq.get(key) === token) {
+      const rolledBack = new Map(intentsByKey);
+      if (previous) rolledBack.set(key, previous);
+      else rolledBack.delete(key);
+      intentsByKey = rolledBack;
+      emit();
+    }
+    throw err;
   }
 }
 
@@ -151,7 +178,11 @@ export async function removeMobileOfflineInboxIntent(
   deviceId: string,
   sessionId: string,
 ): Promise<void> {
+  const epoch = writeEpoch;
   const key = offlineInboxIntentKey(deviceId, sessionId);
+  const previous = intentsByKey.get(key);
+  const token = (writeSeq += 1);
+  keyWriteSeq.set(key, token);
   if (intentsByKey.has(key)) {
     const next = new Map(intentsByKey);
     next.delete(key);
@@ -159,8 +190,18 @@ export async function removeMobileOfflineInboxIntent(
     emit();
   }
   const trimmed = userId.trim() || activeUserId;
-  if (trimmed) {
-    await persistForUser(trimmed, [...intentsByKey.values()], writeEpoch);
+  if (!trimmed) return;
+  try {
+    await persistCurrentForUser(trimmed, epoch);
+  } catch (err) {
+    if (epoch === writeEpoch && keyWriteSeq.get(key) === token) {
+      const rolledBack = new Map(intentsByKey);
+      if (previous) rolledBack.set(key, previous);
+      else rolledBack.delete(key);
+      intentsByKey = rolledBack;
+      emit();
+    }
+    throw err;
   }
 }
 
@@ -170,6 +211,7 @@ export async function clearMobileOfflineInboxIntentsForDevice(
 ): Promise<void> {
   const trimmedDevice = deviceId.trim();
   if (!trimmedDevice) return;
+  const epoch = writeEpoch;
   let changed = false;
   const next = new Map<string, OfflineInboxIntent>();
   for (const [key, intent] of intentsByKey) {
@@ -182,13 +224,14 @@ export async function clearMobileOfflineInboxIntentsForDevice(
   }
   const trimmedUser = userId.trim() || activeUserId;
   if (trimmedUser) {
-    await persistForUser(trimmedUser, [...intentsByKey.values()], writeEpoch);
+    await persistCurrentForUser(trimmedUser, epoch).catch(() => undefined);
   }
 }
 
 export async function clearAllMobileOfflineInboxIntents(): Promise<void> {
   writeEpoch += 1;
   activeUserId = '';
+  keyWriteSeq.clear();
   if (intentsByKey.size > 0) {
     intentsByKey = new Map();
     emit();
@@ -225,6 +268,10 @@ export async function queueMobileOfflineInboxComplete(
   await upsertMobileOfflineInboxIntent(userId, intent);
 }
 
+export type MobileAutomationCheckResult = 'active' | 'none' | 'transient' | 'unknown';
+export type MobileSharedTaskCheckResult = 'active' | 'inactive' | 'transient' | 'unknown';
+export type MobileWorktreePreflightResult = 'clean' | 'dirty' | 'transient' | 'unknown';
+
 export interface MobileOfflineInboxReplayDeps {
   userId: string;
   deviceId: string;
@@ -235,8 +282,21 @@ export interface MobileOfflineInboxReplayDeps {
   getCachedFreshSession(deviceId: string, sessionId: string): RemoteSession | undefined;
   fetchFreshSession(deviceId: string, sessionId: string): Promise<RemoteSession | null>;
   isRunning(sessionId: string): boolean;
-  hasActiveAutomation(session: RemoteSession): boolean;
-  preflightWorktree(deviceId: string, sessionId: string): Promise<'clean' | 'dirty' | 'unknown'>;
+  /** Authoritatively query the target host for active bound automation status. */
+  checkActiveBoundAutomation(
+    deviceId: string,
+    session: RemoteSession,
+  ): Promise<MobileAutomationCheckResult>;
+  /** Authoritatively query the target host for active owned shared-task status. */
+  checkActiveOwnedSharedTask(
+    deviceId: string,
+    sessionId: string,
+  ): Promise<MobileSharedTaskCheckResult>;
+  /** Authoritatively query the target host for worktree removal preflight status. */
+  preflightWorktree(
+    deviceId: string,
+    sessionId: string,
+  ): Promise<MobileWorktreePreflightResult>;
   patchMeta(deviceId: string, sessionId: string, patch: Record<string, unknown>): Promise<RemoteSession>;
   applyPatchedSession(deviceId: string, sessionId: string, patch: Partial<RemoteSession>): void;
   markAutomationTaskRead(deviceId: string, session: RemoteSession): Promise<void>;
@@ -260,6 +320,7 @@ function isTransientReplayError(err: unknown): boolean {
 /**
  * Replay queued offline inbox intents for a reconnected device on Mobile.
  * Serialized per device; transient errors keep the intent queued for the next sync.
+ * Destructive `complete` replay fails closed on every host precondition check.
  */
 export function replayMobileOfflineInboxIntentsForDevice(
   deps: MobileOfflineInboxReplayDeps,
@@ -267,6 +328,13 @@ export function replayMobileOfflineInboxIntentsForDevice(
   const { deviceId, userId } = deps;
   const existing = inFlightByDevice.get(deviceId);
   if (existing) return existing;
+  const safeRemoveIntent = async (sessionId: string): Promise<void> => {
+    try {
+      await deps.removeIntent(userId, deviceId, sessionId);
+    } catch {
+      // Do not abort replay of other intents if clearing local storage fails.
+    }
+  };
   const run = (async () => {
     const intents = deps.getIntents(deviceId);
     if (intents.length === 0) return;
@@ -280,7 +348,12 @@ export function replayMobileOfflineInboxIntentsForDevice(
     for (const intent of intents) {
       if (!isIntentCurrent(intent)) continue;
 
-      let freshSession: RemoteSession | null = deps.getCachedFreshSession(deviceId, intent.sessionId) ?? null;
+      // For destructive `complete`, always fetch the authoritative single session from the target
+      // host so `imAttached`, status, and activity anchors reflect real-time host state.
+      let freshSession: RemoteSession | null =
+        intent.kind === 'snooze'
+          ? (deps.getCachedFreshSession(deviceId, intent.sessionId) ?? null)
+          : null;
       if (!freshSession) {
         try {
           freshSession = await deps.fetchFreshSession(deviceId, intent.sessionId);
@@ -290,6 +363,11 @@ export function replayMobileOfflineInboxIntentsForDevice(
           } else if (isTransientReplayError(err)) {
             continue;
           } else {
+            if (!isIntentCurrent(intent)) continue;
+            if (intent.kind === 'complete') {
+              await safeRemoveIntent(intent.sessionId);
+              deps.notifyRejected(intent, 'preflight-unknown');
+            }
             continue;
           }
         }
@@ -302,12 +380,12 @@ export function replayMobileOfflineInboxIntentsForDevice(
       });
 
       if (decision.action === 'drop') {
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
+        await safeRemoveIntent(intent.sessionId);
         continue;
       }
 
       if (decision.action === 'reject') {
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
+        await safeRemoveIntent(intent.sessionId);
         deps.notifyRejected(intent, decision.reason);
         continue;
       }
@@ -319,7 +397,7 @@ export function replayMobileOfflineInboxIntentsForDevice(
           });
           if (!isIntentCurrent(intent)) continue;
           if ((updated?.snoozedUntil ?? null) !== decision.snoozedUntil) {
-            await deps.removeIntent(userId, deviceId, intent.sessionId);
+            await safeRemoveIntent(intent.sessionId);
             deps.notifySnoozeFailed(intent);
             continue;
           }
@@ -327,39 +405,63 @@ export function replayMobileOfflineInboxIntentsForDevice(
             snoozedUntil: updated.snoozedUntil ?? null,
             snoozedAt: updated.snoozedAt ?? null,
           });
-          await deps.removeIntent(userId, deviceId, intent.sessionId);
+          await safeRemoveIntent(intent.sessionId);
         } catch (err) {
           if (isTransientReplayError(err)) continue;
-          await deps.removeIntent(userId, deviceId, intent.sessionId);
+          await safeRemoveIntent(intent.sessionId);
           if (!isExplicitRemoteNotFoundError(err)) deps.notifySnoozeFailed(intent);
         }
         continue;
       }
 
       // decision.action === 'apply-complete'
-      if (freshSession && deps.hasActiveAutomation(freshSession)) {
+      if (!freshSession) continue;
+      const automationStatus = await deps.checkActiveBoundAutomation(deviceId, freshSession);
+      if (!isIntentCurrent(intent)) continue;
+      if (automationStatus === 'transient') continue;
+      if (automationStatus === 'unknown') {
+        await safeRemoveIntent(intent.sessionId);
+        deps.notifyRejected(intent, 'preflight-unknown');
+        continue;
+      }
+      if (automationStatus === 'active') {
         try {
           await deps.markAutomationTaskRead(deviceId, freshSession);
           if (isIntentCurrent(intent)) {
-            await deps.removeIntent(userId, deviceId, intent.sessionId);
+            await safeRemoveIntent(intent.sessionId);
           }
         } catch (err) {
           if (isTransientReplayError(err)) continue;
-          await deps.removeIntent(userId, deviceId, intent.sessionId);
+          await safeRemoveIntent(intent.sessionId);
+          deps.notifyRejected(intent, 'preflight-unknown');
         }
+        continue;
+      }
+
+      const sharedTaskStatus = await deps.checkActiveOwnedSharedTask(deviceId, intent.sessionId);
+      if (!isIntentCurrent(intent)) continue;
+      if (sharedTaskStatus === 'transient') continue;
+      if (sharedTaskStatus === 'active') {
+        await safeRemoveIntent(intent.sessionId);
+        deps.notifyRejected(intent, 'attached');
+        continue;
+      }
+      if (sharedTaskStatus === 'unknown') {
+        await safeRemoveIntent(intent.sessionId);
+        deps.notifyRejected(intent, 'preflight-unknown');
         continue;
       }
 
       const preflight = await deps.preflightWorktree(deviceId, intent.sessionId);
       if (!isIntentCurrent(intent)) continue;
+      if (preflight === 'transient') continue;
       if (preflight === 'dirty') {
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
+        await safeRemoveIntent(intent.sessionId);
         deps.notifyRejected(intent, 'dirty-worktree');
         continue;
       }
-      if (preflight === 'unknown') {
-        if (!deps.isStillCurrent()) continue;
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
+      if (preflight !== 'clean') {
+        await safeRemoveIntent(intent.sessionId);
         deps.notifyRejected(intent, 'preflight-unknown');
         continue;
       }
@@ -373,11 +475,11 @@ export function replayMobileOfflineInboxIntentsForDevice(
           snoozedUntil: null,
           snoozedAt: null,
         });
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
+        await safeRemoveIntent(intent.sessionId);
       } catch (err) {
         if (isTransientReplayError(err)) continue;
-        await deps.removeIntent(userId, deviceId, intent.sessionId);
-        if (!isExplicitRemoteNotFoundError(err) && !isWorktreeChannelNotAllowedError(err)) {
+        await safeRemoveIntent(intent.sessionId);
+        if (!isExplicitRemoteNotFoundError(err)) {
           deps.notifyRejected(intent, 'preflight-unknown');
         }
       }
@@ -394,6 +496,9 @@ export const __testing = {
   reset(): void {
     activeUserId = '';
     writeEpoch += 1;
+    writeSeq = 0;
+    keyWriteSeq.clear();
+    persistQueue = Promise.resolve();
     intentsByKey = new Map();
     inFlightByDevice.clear();
     emit();

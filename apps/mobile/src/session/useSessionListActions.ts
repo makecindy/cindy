@@ -230,29 +230,35 @@ export function useSessionListActions(options?: {
     const rawHostSession =
       remoteSessionStore.getSessions().find((row) => row.id === session.id) ?? session;
     const run = () => {
-      if (kind === 'undo-complete') {
-        void removeMobileOfflineInboxIntent(userIdRef.current, devices.rpcDeviceId, session.id);
-      } else if (kind === 'complete') {
-        void queueMobileOfflineInboxComplete(
-          userIdRef.current,
-          devices.rpcDeviceId,
-          session.id,
-          rawHostSession,
-        );
-      } else {
-        void queueMobileOfflineInboxSnooze(
-          userIdRef.current,
-          devices.rpcDeviceId,
-          session.id,
-          rawHostSession,
-          snoozedUntil ?? null,
-        );
-      }
+      const promise =
+        kind === 'undo-complete'
+          ? removeMobileOfflineInboxIntent(userIdRef.current, devices.rpcDeviceId, session.id)
+          : kind === 'complete'
+            ? queueMobileOfflineInboxComplete(
+                userIdRef.current,
+                devices.rpcDeviceId,
+                session.id,
+                rawHostSession,
+              )
+            : queueMobileOfflineInboxSnooze(
+                userIdRef.current,
+                devices.rpcDeviceId,
+                session.id,
+                rawHostSession,
+                snoozedUntil ?? null,
+              );
+      void promise.catch(() => {
+        if (kind === 'snooze') {
+          Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
+        } else {
+          Alert.alert(t('devices.list.alert.actionFailed'));
+        }
+      });
     };
     if (animateListChange) animateListChange(run);
     else run();
     return true;
-  }, [animateListChange, preferredRpcDeviceId]);
+  }, [animateListChange, preferredRpcDeviceId, t]);
 
   const isSessionHostOffline = useCallback((session: RemoteSession): boolean => {
     const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);

@@ -30,6 +30,8 @@ function bridge(): OfflineInboxBridge | null {
 
 let intentsByKey = new Map<string, OfflineInboxIntent>();
 let revision = 0;
+let writeSeq = 0;
+const keyWriteSeq = new Map<string, number>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -107,6 +109,9 @@ export function listAllOfflineInboxIntents(): OfflineInboxIntent[] {
 export async function upsertOfflineInboxIntent(intent: OfflineInboxIntent): Promise<void> {
   const owner = getDataOwnerGeneration();
   const key = offlineInboxIntentKey(intent.deviceId, intent.sessionId);
+  const previous = intentsByKey.get(key);
+  const token = (writeSeq += 1);
+  keyWriteSeq.set(key, token);
   const next = new Map(intentsByKey);
   next.set(key, intent);
   intentsByKey = next;
@@ -115,9 +120,19 @@ export async function upsertOfflineInboxIntent(intent: OfflineInboxIntent): Prom
   if (!api) return;
   try {
     const persisted = await api.upsert(intent);
-    if (isDataOwnerGenerationCurrent(owner)) replaceAll(persisted);
+    if (isDataOwnerGenerationCurrent(owner) && keyWriteSeq.get(key) === token) {
+      replaceAll(persisted);
+    }
   } catch (err) {
     log.warn('failed to persist offline inbox intent', err);
+    if (isDataOwnerGenerationCurrent(owner) && keyWriteSeq.get(key) === token) {
+      const rolledBack = new Map(intentsByKey);
+      if (previous) rolledBack.set(key, previous);
+      else rolledBack.delete(key);
+      intentsByKey = rolledBack;
+      emit();
+    }
+    throw err;
   }
 }
 
@@ -127,6 +142,9 @@ export async function removeOfflineInboxIntent(
 ): Promise<void> {
   const owner = getDataOwnerGeneration();
   const key = offlineInboxIntentKey(deviceId, sessionId);
+  const previous = intentsByKey.get(key);
+  const token = (writeSeq += 1);
+  keyWriteSeq.set(key, token);
   if (intentsByKey.has(key)) {
     const next = new Map(intentsByKey);
     next.delete(key);
@@ -137,9 +155,19 @@ export async function removeOfflineInboxIntent(
   if (!api) return;
   try {
     const persisted = await api.remove(deviceId, sessionId);
-    if (isDataOwnerGenerationCurrent(owner)) replaceAll(persisted);
+    if (isDataOwnerGenerationCurrent(owner) && keyWriteSeq.get(key) === token) {
+      replaceAll(persisted);
+    }
   } catch (err) {
     log.warn('failed to remove offline inbox intent', err);
+    if (isDataOwnerGenerationCurrent(owner) && keyWriteSeq.get(key) === token) {
+      const rolledBack = new Map(intentsByKey);
+      if (previous) rolledBack.set(key, previous);
+      else rolledBack.delete(key);
+      intentsByKey = rolledBack;
+      emit();
+    }
+    throw err;
   }
 }
 
@@ -168,6 +196,7 @@ export async function clearOfflineInboxIntentsForDevice(deviceId: string): Promi
 }
 
 export function resetOfflineInboxIntents(): void {
+  keyWriteSeq.clear();
   if (intentsByKey.size === 0) return;
   intentsByKey = new Map();
   emit();

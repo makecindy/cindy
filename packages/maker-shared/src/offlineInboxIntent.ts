@@ -31,6 +31,8 @@ export interface OfflineInboxSessionSnapshot {
   updatedAt?: string | null;
   title?: string | null;
   deviceLinkDeviceName?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
 }
 
 export interface OfflineInboxReplayLiveState {
@@ -347,8 +349,11 @@ export function evaluateOfflineInboxIntentReplay(
   if (liveState.isRunning) {
     return { action: 'reject', reason: 'running' };
   }
-  if (liveState.isAttached) {
+  if (liveState.isAttached === true || freshSession.imAttached === true) {
     return { action: 'reject', reason: 'attached' };
+  }
+  if (liveState.isAttached !== false && freshSession.imAttached !== false) {
+    return { action: 'reject', reason: 'preflight-unknown' };
   }
   return { action: 'apply-complete' };
 }
