@@ -7441,7 +7441,8 @@
       "localNetwork": {
         "label": "Local network",
         "deniedHint": "Without this permission, computers and phones on the same network can't connect to this computer directly. They go through the relay, which is slower.",
-        "settingsHint": "Turn on Cindy in System Settings › Privacy & Security › Local Network. It takes effect as soon as you come back."
+        "promptedHint": "Click Allow in the macOS prompt. If no prompt appeared, open System Settings to turn it on manually.",
+        "settingsHint": "In Privacy & Security, open Local Network and turn on Cindy. If it isn't listed, click + to add this app—it takes effect as soon as you come back."
       }
     },
     "imBot": {
@@ -7912,6 +7913,10 @@
         "toggle-sidebar": {
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
+        },
+        "copy-session-link": {
+          "label": "Copy session link",
+          "description": "Copy the link to the open session"
         },
         "session-history-back": {
           "label": "Previous task",
@@ -15687,7 +15692,6 @@
       "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
       "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",
       "messageNotSent": "Your message was not sent.",
-      "upstreamEmpty550": "The model service returned HTTP 550 with an empty response",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
@@ -16773,6 +16777,8 @@
       "retryIn": "Retrying automatically in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "The Codex account service is temporarily unreachable.",
+      "rechecking": "The Codex account service is temporarily unreachable. Retrying at {{resetAt}}.",
       "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
       "poolRetryUntil": "Retry after {{resetAt}}.",
       "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
@@ -22748,6 +22754,16 @@
     "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "More ways to add an account",
+      "connect": "Connect an existing login…",
+      "found": "{{count}} available",
+      "title": "Logins on {{device}}",
+      "note": "Cindy and your CLI will use the same configuration.",
+      "attach": "Connect",
+      "choose": "Choose another folder…",
+      "unverified": "Could not verify this subscription login."
+    },
     "pluginSignIn": {
       "method": "Sign-in method",
       "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",
