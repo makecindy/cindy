@@ -1,4 +1,72 @@
-# 供应商内多订阅账号（2026-11-07，未发布）
+# 供应商内多订阅账号（2026-11-07 起；账号池与旧 Codex 连接归并已随 v0.1.135 正式版发布）
+
+## 已有登录的发现与连接（2026-11-26）
+
+桌面执行端在原账号管理通道接受 `discover-logins`、`pick-login` 和 `attach-login`。前两者返回执行电脑名称、经 CLI 核实的候选及短期回执；连接只提交回执，重新核实身份后落盘。仅限可信本机窗口和同账号控制端，共享任务与供应商受邀者不可使用。无新增中转帧、推送或 allowlist 项，执行端原生目录选择器在执行电脑上打开。旧执行端拒绝未知动作；旧界面继续原有添加账号流程。旧版本无法解析新绑定的外部目录，降级时终端登录仍保留。
+
+## Claude 官方套餐显示名（2026-11-17）
+
+Claude 登录、额度及账号视图可选追加 `planDisplayName`；匿名用量投影的 `plan` 对象可选追加
+`displayName`。原 `subscriptionType`、`plan`、`planTier`、`type` 与 `tier` 保持机器代码及原语义。
+显示名由执行电脑同账号的官方 CLI 状态提供，只用于文案，不影响认证、权限、调度或用量计算。
+持久额度恢复仍先校验当前账号身份；显示名变更随既有快照更新传播，不增加客户端轮询或远程请求。
+
+旧客户端忽略可选字段；新客户端连接旧执行端或 CLI 没有显示名时，沿用既有套餐／Max 倍率显示。
+沿用现有账号与用量 channel、参数、授权和 JSON 回包，没有新增 relay 帧，官方及自建中转继续透明
+传输，不需要服务端升级。回归覆盖 native CLI 状态、账号缓存、匿名投影、remote parser、菜单栏和手机
+读取；未以真实双设备互通作为验收。完整修复需要执行电脑与查看端都升级。
+
+## 匿名新分配摘要（2026-11-16）
+
+现有 owner-only `maker:subscription-pool:quota` 的默认回包对已配置池可选追加 `schedulingVersion: 1`。
+组主只在收到这一明确能力声明后，才按需发送 `[providerId, model, {scheduling: 1, ownComputer: boolean}]`。
+回包为 `{providerId, model, scheduling}`；`scheduling` 为 null 或版本 1 的匿名对象：`accounts`（当前配额候选带中
+可新分配的不同账号数）、`running`（池策略下一账号负载）、`totalRunning`（含预约的池内总负载）、`full`、
+`urgency` 和 `fiveHourTight`。不含账号 ID、身份、目录、原生会话 ID 或真实账号指纹。
+
+请求只接受合法供应商 ID 形状和有界模型字符串，再由执行端解析实际账号归属；命名订阅池也适用。
+共享任务访客和供应商分享 peer 不可读取；`ownComputer: true` 只能在已验证同账号上下文中生效，false 保持更严格的
+新任务远程准入。异步返回前复核 owner、账号与授权；控制端按连接及供应商身份代次丢弃过期回包。
+摘要不修改账号绑定、轮询游标或执行预约；实际启动仍在原入口重新校验并原子预约。
+
+旧控制端忽略新增能力字段。新控制端面对旧执行端不额外探测调度；能力未知、旧形状、版本未知、数值无效或
+providerId/model 不匹配时只沿用原物理成员调度，不推定新增容量。只在实际 pick 时读摘要，按成员、模型、远程授权
+范围合并在途请求，单次等待最多 1.5 秒；无新增轮询。只读的额度预览保留原语义，不按账号并发隐藏额度。
+
+沿用原 invoke channel、参数数组与 JSON 回包，不新增 relay 帧或顶层字段。已核对自建 relay `src/hub.ts` 的
+`route` 原样转发 payload/auth；此次不要求中转升级。共享客户端、自建中转与签名互通均须验证；不据此宣称真实
+账号或已部署官方服务已验收。产品范围及随机权重池／外部分享成员的降级见
+[账号池规则](../../product-rules/subscription-account-pools.md#合池后的组调度2026-11-16)。
+
+## 同一供应商内的重复登录（2026-11-16）
+
+执行电脑按已验证的 OpenAI 账号及工作区身份，把同供应商内多个登录目录返回为一个账号；任务专属 `read` 保留
+该任务原绑定 ID，未绑定读取沿用供应商账号顺序。配置、移动与移除命令接受任一保留 ID，并作用于同供应商内已验证的
+同账号记录；旧任务和原生会话继续使用各自目录。匿名分享用量也只返回一份，不泄漏身份或目录。
+字段、channel、事件与中转帧不变，账号身份只作本机去重，不替代逐目录的模型与远程授权。旧控制端仍能解析
+原形状；旧执行端继续返回重复记录，完整修复需要执行电脑升级。官方与自建中转无需适配，未验真实双设备互通。
+回归为 `subscription-accounts/__tests__/runtime.test.ts` 的合并、调度、旧任务续接和管理命令用例。
+
+## 自动化继续使用合并后的来源（2026-11-14）
+
+供应商目录给同账号控制端可选追加 `subscriptionPoolTarget`，只与 `subscriptionPoolAlias: true` 一起出现，
+值由执行电脑按当前账号归属派生。目标未开放远程调用或未覆盖原来源的逐模型权限时，两字段均不发布；
+访客目录剥离目标字段，不公开分享者的其它供应商关系。没有增加读请求、channel、allowlist 或 relay 帧。
+
+自动化下一次触发与恢复原配置时，只有原来源仍是 alias、原模型仍获授权、目录目标明确等于任务当前来源，
+才沿用已交接的来源。旧执行端不带目标字段时仅兼容原先唯一目标 `openai`，不能据 alias 标记猜测其它目标；
+旧控制端忽略新字段，沿用原行为。官方及自建中转继续透传既有 JSON，无需服务端适配；真实双设备互通未验。
+回归为 `orcaModelSelectionIntent.test.ts`、`providerListProjection.test.ts` 和 `providerShare.test.ts`。
+
+## ChatGPT credits 请求准入（2026-11-13）
+
+执行电脑的账号池不再用套餐窗口拦截 ChatGPT 请求；缓存 credits 只显示，实际准入由上游判断。
+组主读取已有 `nativeAccountPool: true` 快照时保留窗口展示与排序，忽略它作为套餐耗尽的准入阻断；
+真实错误冷却、权限与并发上限照旧。按模型的可用性查询只接受执行端已登录、未暂停、授权且无真实冷却的账号，
+仍要求已知模型窗口；窗口用满不排除可能使用 credits 的 ChatGPT 账号。重置卡唤醒仍判断实际窗口恢复。
+没有新增或改写字段、channel、allowlist、重试、订阅或隧道帧；窗口百分比也不伪装成未用过。
+旧组主仍按旧窗口逻辑筛选，新组主面对无原生池标记的旧执行端保留旧判定，修复完整生效需相关 Desktop 升级。
+官方和自建中转仅透传原有 JSON，无需服务端修改；回归覆盖账号池准入及本机／远程成员的真实路由与冷却。
 
 ## 每个 OpenAI 账号的额度重置（2026-11-13）
 
@@ -12,10 +80,68 @@
 回归入口为 `subscription-accounts/__tests__/runtime.test.ts`、`SubscriptionAccountsSection.test.tsx`
 和 `useCodexRateLimits.test.ts`；没有进行真实双设备互通或上游扣卡验收。
 
+`openai` 目标代表默认账号。Windows 没有建链接权限时内置连接改走独立登录，Cindy 的 `codex-home`
+可能没有任何登录文件，而默认账号仍在 `~/.codex` 正常运行（2026-11-13 设置页一直显示配额更新失败）。
+2026-11-14 复现发现 `codex-home` 仍有旧私有登录及断开标记时，仅检查文件缺失会漏掉已授权的默认账号。
+`openai` 的读取、兑换与自动规则身份按账号池及当前 owner 的授权来源选择：池未断开、仍有非旧版默认账号，
+且 native binding 已授权当前 owner 使用系统登录时，读取默认账号目录里的 `auth.json`，与账号池运行任务的来源一致。
+内置登录文件已经链接到同一凭证时沿用原 adapter，以便完成共享登录恢复确认。
+旧私有文件及其断开标记不参与该系统账号的来源选择；私有登录、授权撤销、账号移除或旧版默认账号仍走原 adapter。
+实时异步读取当前授权，账号或额度查询与兑换请求均在 CLI 启动后、派发前重新检查来源。
+读法和凭证门禁与其它池内账号相同，不写入内置连接的用量缓存。
+旧 adapter 的恢复确认只包住它自己发起的账号读取，系统默认账号读取成功不能解除私有登录的恢复状态。
+参数、回包与 channel 不变。回归见 `usage/__tests__/codexDefaultAccountHome.test.ts`。
+
 `subscription-accounts:changed` 可选追加 `resetAccountId`：只标记该账号的重置数据已刷新，
 额外账号的重置读取仅响应自身 ID。普通任务运行数通知继续只带供应商 ID，不触发整池 CLI 重读。
 旧控制端忽略此可选字段；新端面对旧通知仍保留挂载与手动刷新，不借用其它账号的数据。
 已登录账号的重置入口独立于用量卡：额度暂时未知时仍可读取重置卡与自动规则。
+
+2026-11-13 取消自动归并并还原（[合并与拿出由用户决定](../../product-rules/subscription-account-pools.md)）：账号属于哪个供应商记在
+owner 本机新文件 `subscription-account-placement.json`，不进入任何 wire 载荷。新版执行端只对仍归并的旧连接设置
+`subscriptionPoolAlias`；`maker:subscription-accounts` 的 `read` 只列内置供应商自己的账号（带 `taskId` 时保留该任务自己的账号）；
+池配额、模型可用性与匿名分享用量只统计内置供应商自己的账号；`session` 查询对已还原的旧连接不再回报 `replacementProviderId`。
+字段与形状均不变，只是取值范围变小：旧控制端看到还原后的连接是普通独立连接，收到的回包仍可解析，且不会据此把任务改到 OpenAI；
+旧执行端仍按归并处理，新控制端照旧只在明确收到替代来源时交接。没有新增 channel、allowlist、能力位或中转帧，官方与自建中转无需适配。
+降级到旧版后，旧版会按自己的规则再次归并且忽略新文件；再升级时再还原，用户明确选择的归属不受影响。
+回归入口：`subscription-accounts/__tests__/ipc.test.ts`（真实还原写入）、`runtime.test.ts`（任务跟着账号、内置供应商不再分配）、
+`maker-host/__tests__/providerCatalogRealmReload.test.ts`（目录投影与定时任务准入）；未做真实双设备新旧混用互通。
+
+同日第 2 批（用户主动并入／移动／拿出、Cindy 新建的订阅供应商）：
+- **目录字段**：`Provider.subscriptionPool?: 'openai' | 'anthropic'` 标记 Cindy 为订阅账号新建的供应商，ID 为
+  `openai-sub-<8 位>`／`anthropic-sub-<8 位>`，由执行端按 placement 文件镜像同类订阅的路由；OpenAI 模型成员按本供应商
+  账号各自发现的目录投影，不借用其它供应商的目录（不带平台 key 的图片／视频）。已有任务的完整路由目录另保留
+  持久绑定 `via` 指向本来源的账号型号，供合并后的历史与自动任务恢复；有历史的已登录暂停账号可只读发现模型元数据，
+  使冷启动也能先到达交接流程，执行准入仍拒绝暂停账号。新选用与访客投影不加这部分。
+  `ProviderView.subscriptionAccountPool?` 表示执行端在该类账号池里管理这个供应商的账号
+  （内置、新建或已登记的旧 Codex 连接）。两者都是可选字段：旧控制端忽略后，新建条目按复制来的内置字段显示为
+  `auth: { method: 'oauth' }`、无描述符的内置来源——只读、没有登录或断开动作，不会被当成 OpenAI／Anthropic 本身或
+  09-24 停用的旧 Claude 连接；远程调用默认关闭，用户打开后旧控制端按原 ID 发起任务，由新执行端解析。
+- **`maker:subscription-accounts`**：`providerId` 从内置两种放宽为任意供应商 ID 形状，执行端按自己的记录解析，非订阅
+  供应商仍拒绝。新增 `create`（只接受内置 ID）、`place`（`target: string | null`）、`merge`（`target: string`）、
+  `remove-provider`；`SubscriptionPoolView` 可选追加 `kind`，`providerId` 为实际所属供应商。旧执行端对这些动作或非内置 ID
+  一律回 `INVALID_PARAMS`，新控制端据此提示「执行电脑需要更新」，不退回成加进内置供应商。变更通知仍按账号池类型
+  （`openai`／`anthropic`）发出，同类所有供应商的界面一起刷新。没有新增 channel、allowlist、能力位或中转帧，
+  官方与自建中转无需适配。
+- **任务绑定**：`subscription-accounts.json` 的账号绑定可选追加 `via`，记下绑定时任务指定的供应商（内置时省略）。
+  任务改选同类的另一个供应商、且原账号不在那里时，发送前检查（`needsSubscriptionAccountHandoff`）要求交接，
+  新会话在新供应商里选账号；绕过交接直接续接原生会话则明确报错，不在别的账号目录里续接。
+  远程执行的任务由执行电脑自己判断，旧执行端不认识新建供应商，不在此列。账号被移动时任务指定的供应商不变，因此继续跟着账号走。旧版原样保留绑定对象，
+  不读这个字段。
+- **分供应商的远程交接（2026-11-14）**：`session` 查询可选追加 `routeProviderId`，表示任务选择的实际供应商；
+  执行端按自己的归属和原生绑定解析，并在回包回显同名字段。旧 Codex 查询的 `legacyProviderId` 仍接受，二者不能同时传。
+  新控制端只有收到匹配的回显，才采信新建供应商的换号准入；执行端忽略字段或返回不匹配来源时保留原生历史，不猜默认池。
+  `replacementProviderId` 在带来源回显时可为执行端确认的同类目标 ID，表示实际准入通过后的合并目标或用户刚改选的目标。
+  暂停账号可追加 `switchAvailable`；旧账号已移除或用户改选来源时可保持 `unavailable` 状态并附明确替代目标。
+  无回显的旧回包只保留既有 `openai` 替代兼容路径；旧控制端忽略其它目标，不能据此交接到未知供应商。
+  同账号权限、来源与目标模型授权、并发和真实失败冷却均由执行端核验，访客不使用此交接查询。
+  仍为每次发送一次原有 owner 查询，共享原有 2 秒准入预算；新端暂停路径不再额外查整池额度。
+  没有新增 channel、allowlist、隧道帧或服务端请求，官方与自建中转透传原有 JSON，无需同步服务端改动。
+  回归通过真实查询／解析／交接入口覆盖新建及旧连接目标、来源改选与旧端无回显；未进行真实双设备新旧版本混用验证。
+- **降级**：旧版忽略 placement 文件，新建供应商从目录消失，其账号回到内置供应商下显示；任务绑定存在账号池文件的
+  既有字段里，不会丢失。指定了新建供应商 ID 的旧任务在旧版里显示为来源不可用；回到新版后归属与任务恢复。
+- 回归入口：`subscription-accounts/__tests__/ipc.test.ts`、`runtime.test.ts`（命令解析与执行）、
+  `renderer/__tests__/addProviderWizardOpenAiAuth.test.tsx`（添加时选择放在哪里）。
 
 2026-11-11 旧独立 Codex 连接归并：供应商视图可选追加 `subscriptionPoolAlias: true`，表示本机设置与新来源栏在 OpenAI 内管理此账号；原供应商 ID、执行与鉴权语义保留。旧控制端忽略字段，继续显示独立连接。新版 owner 控制端在模型清单展示层隐藏重复来源，但明确指定的旧任务／自动任务仍保留原 ID 并通过原连接校验。整个 OpenAI 池没有开放远程调用或没有覆盖旧连接全部已开放模型时，远程目录不带旧连接的归并标记，避免移除原已开放入口；跨账号分享一律剥离标记，不让被分享的单账号变成整个池。没有新 channel、能力协商、隧道帧或服务端字段，官方与自建中转均按原协议透传。
 
@@ -42,7 +168,8 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
 不含路径的账号 id，宿主按当前 owner 推导目录；共享任务访客不能使用。
 该只读通道可选追加第二个参数 `model`（非空字符串，最多 512 字符），查询多账号池是否仍有该模型的明确可用容量，
-返回 `{providerId, model, available: boolean | null}`，不带账号身份或目录。缺省参数仍返回原 `{providerId, pooled, usage}`。
+返回 `{providerId, model, available: boolean | null}`，不带账号身份或目录。缺省参数保留 `{providerId, pooled, usage}`，
+已配置池可选追加上文的 `schedulingVersion: 1` 能力声明。
 新组主只接受 providerId/model 精确匹配的布尔回执；旧宿主忽略新参数并回原聚合形状时保留冷却，不能据此清除模型错误冷却。
 查询沿用同账号 owner 校验和在途 owner 栅栏，不增加 channel、allowlist、协议帧或服务端字段。
 官方与自建中转均通过原 invoke 参数透传，无需中转升级；验证覆盖 owner IPC、新旧端回包及共享客户端／自建中转测试与签名互通。
@@ -50,8 +177,20 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 `default` 或 `new`，后者始终创建独立目录。沿用原 channel 和 owner 校验；旧客户端的
 `read` / `add` 行为不变。旧宿主拒绝新 action 时显示重试错误，禁止退回含糊的 `add` 而
 静默接入旧账号。官方及自建中转均透传这些 action，无新增服务端字段。
-`subscription-accounts:changed` 普通变化仅推送供应商 id，重置数据刷新可附加上述 `resetAccountId`，
-路由到既有 `sessions` topic 后由当前管理页重读。
+2026-11-14 起 `preview` 回包可选追加 `defaultAdded: boolean`：默认 CLI 登录已被内置供应商使用，或同一身份已是同类
+未断开的其他账号时为 `true`，新向导据此不再提供默认账号快捷按钮。只读已保存记录与已缓存身份，不额外读取 CLI 或额度。
+旧控制端忽略该字段；新控制端连接旧宿主时字段缺省，按原样提供快捷按钮。沿用原 channel，中转无需适配。
+`subscription-accounts:changed` 继续推送供应商类别 `providerId`，重置数据刷新可附加上述 `resetAccountId`，
+路由到既有 `sessions` topic 后由当前管理页重读。2026-11-16 起可选追加 `change: "usage" | "load"`：
+仅分别用于普通额度观察与运行占用变化。缺省或未知值仍是身份／配置可能变化的完整失效通知，
+登录、移除、暂停、归属变动与鉴权失效不得标成普通变化。
+新版组主按来源电脑及该供应商类别（含同类命名账号供应商）失效；用量变化保留同身份在途额度，
+负载变化只刷新目录。旧提供端缺字段时新版仍完整失效该电脑对应类别，缺 `providerId` 则失效该电脑全部额度；
+旧组主忽略新增字段，维持原行为。需要组主升级才能消除跨成员的额度丢弃，提供端升级后还可避免普通变化作废自身在途读取。
+Main 的远程观察者仅收到上述白名单元数据，不接收原始推送正文。
+既有 push channel、sessions topic、allowlist、JSON 帧和鉴权均不变；官方与自建中转透传业务 payload，
+无需服务端或中转升级。回归见 `subscription-accounts/__tests__/ipc.test.ts`、`runtime.test.ts` 及
+`provider-group/__tests__/runtime.test.ts` 的通知竞争与迟到恢复用例。
 `read` 的账号视图以 `usage`（该账号自身的 Claude 窗口快照或 Codex 桶及余额）取代未发布的单条 `quota`。
 同账号 `manage-share` 的 `quota-account` 在池内有多个可分配账号时额外返回 `accounts`（匿名数组），
 顶层仍是首个账号：旧组主只读顶层，新组主遇到无 `accounts` 的旧成员按单账号显示。
@@ -79,7 +218,7 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 任务的账号显示（2026-11-11）：`maker:subscription-accounts` 追加只读 action `session`
 （`providerId`、`sessionId?`、`nativeSessionId?`，通常至少一个 id，各 ≤256 字符；旧来源的无原生会话查询见下文），沿用同一 owner 校验，共享任务访客不可用，
 不进入管理命令执行器，Helper 不暴露。执行端按「任务 → 原生会话」顺序读持久绑定，回 `{ providerId, state }`：
-`legacy`（无账号池、只有默认账号或池前旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
+`legacy`（无账号池或池前未绑定的旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
 `unavailable`（绑定的账号已移出或供应商已断开）、`bound`（附 `account`：`isDefault`、池内序号、身份、套餐、状态与该账号
 自己的 `usage`，形状同 `read` 的账号视图，不含目录与账号 id）。旧宿主以 INVALID_PARAMS 拒绝未知 action（读不懂的回复同样
 处理）时，远程任务的新使用端改用上文任务额度重置查询的 `{ subscriptionSessionId }` 追加参数读原 Claude / Codex 用量 channel，
@@ -87,6 +226,13 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 读法——那会把执行端的默认账号当成任务的账号。早于该追加参数的宿主忽略它并返回原单账号。查询失败、回复不可解析，或旧宿主不支持
 新查询且缺少原生会话 id 时，保留同 owner 代次的上次结果；没有已知结果就保持未知并允许后续刷新，不冒用默认账号。
 只有宿主明确返回 `legacy` 才恢复原读取。官方及自建中转只透传原 invoke，无新 channel、allowlist 或服务端字段。
+
+2026-11-16：已绑定官方 CLI 目录的账号也返回 `bound` 并携带自身用量，不再让查看端按 `isDefault`
+选择另一条额度来源。`isDefault` 与旧 `default-subscription-account` scope 仅保留兼容，不能决定管理权限。
+`read` / `session` 的账号投影加性提供 `planTier`（Claude）和 `planType`（Codex），保留旧 `plan`；
+Claude 额度快照加性提供 `planTier`，Codex 原生桶保留 `planType`。旧端忽略新字段，新端遇到缺失字段按
+原套餐名展示，不推测档位。移除与移动仍用原命令；旧执行端可能拒绝官方 CLI 账号的这些操作，明确报错，
+不通过复制登录目录绕过。没有新增 channel 或 relay 行为，官方与自建中转沿用原透传。
 
 远程组先探测池配额；旧电脑不支持时回到原有 Claude/Codex 配额 channel。同一电脑/供应商的
 探测合并、缓存 30 秒并随 owner 代次丢弃。旧控制端忽略新 push，现有调用格式不变。

@@ -16,9 +16,14 @@ const schedule: Schedule = {
   webhookTrigger: { endpointId: 'fixture-route', events: ['issues.opened'], source: ctx.case.startsWith('app-')
     ? { preset: 'github-app', repositories: ['makecindy/cindy', 'example/project'] } : { preset: 'github' } },
 };
+if (ctx.case === 'single-pr') {
+  schedule.name = 'PR 合并后通知';
+  schedule.webhookTrigger = undefined;
+  schedule.prTrigger = { url: 'https://github.com/example/project/pull/42', change: 'merged' };
+}
 const runs: ScheduleRun[] = initial ? [] : [{
   id: 'run', scheduleId: schedule.id, status: 'success', firedAt: time, finishedAt: time + 4600,
-  readAt: time + 5000, triggerSource: 'webhook', resultText: '检查完成',
+  readAt: time + 5000, triggerSource: ctx.case === 'single-pr' ? 'pr-status' : 'webhook', resultText: '检查完成',
 }];
 Object.assign(window, { __webhookFixtureRuns: runs });
 
@@ -32,6 +37,7 @@ function AppSource() {
 }
 
 function Detail() {
+  const [editing, setEditing] = useState(false);
   const [visit, setVisit] = useState(0);
   useEffect(() => {
     const revisit = () => setVisit((value) => value + 1);
@@ -39,7 +45,8 @@ function Detail() {
     return () => window.removeEventListener('webhook-fixture-revisit', revisit);
   }, []);
   return <div className="flex h-screen flex-col">
-    <RunHistoryPane key={visit} schedule={schedule} onRunNow={() => {}} onEdit={() => {}} onTogglePause={() => {}} onDelete={() => {}} />
+    <RunHistoryPane key={visit} schedule={schedule} onRunNow={() => {}} onEdit={() => setEditing(true)} connectionSetupVisible={!editing} onTogglePause={() => {}} onDelete={() => {}} />
+    {editing && <AppSource />}
   </div>;
 }
 
@@ -53,9 +60,16 @@ mountPage({
       delete: forbid('deleteProjectAlias'),
       onChanged: () => () => {},
     } },
+    gitContext: {
+      githubAppStatus: async () => {
+        Object.assign(window, { __githubAccountReads: ((window as unknown as { __githubAccountReads?: number }).__githubAccountReads ?? 0) + 1 });
+        return { available: true, login: ctx.case === 'app-disconnected' ? null : 'example-user', repositories: ['makecindy/cindy'], unavailable: ['app-unauthorized', 'app-editing'].includes(ctx.case) ? ['example/project'] : [] };
+      },
+      connectGithubApp: forbid('connectGithubApp'), installGithubApp: forbid('installGithubApp'),
+    },
     maker: { schedule: {
       webhookReceiver: async () => 'cloud',
-      webhookStatus: async () => ({ receiver: 'cloud', connected: ctx.case !== 'offline' && ctx.case !== 'app-disconnected',
+      webhookStatus: async () => ({ receiver: 'cloud', connected: ctx.case !== 'offline' && ctx.case !== 'app-disconnected' && ctx.case !== 'app-unauthorized' && ctx.case !== 'app-editing',
         url: released ? undefined : 'https://webhook.example.test/hooks/fixture',
         hasSecret: !initial, lastReceivedAt: initial ? undefined : time, ignored: 0,
         problem: released ? 'released' : unsupported ? 'unsupported' : undefined,

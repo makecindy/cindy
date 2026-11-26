@@ -1,4 +1,5 @@
 import { BrowserWindow, webContents } from 'electron';
+import { MCP_APP_COMPOSER_ATTACHMENT_EVENT } from '../../shared/mcpApps.js';
 import { randomUUID } from 'node:crypto';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
@@ -38,7 +39,8 @@ async function rendererAction(caller: string, input: Record<string, unknown>, si
   const source = callerWindow(caller);
   // Layout commands use the existing main-window sidebar controller. Full App
   // windows own their drafts; only sidebar-only windows need the main editor.
-  const window = input.kind === 'open' || isRsbWindowWebContentsId(source.webContents.id)
+  const composerQuery = input.kind === 'contains';
+  const window = !composerQuery && (input.kind === 'open' || isRsbWindowWebContentsId(source.webContents.id))
     ? getDeepLinkMainWindow() : source;
   if (!window || window.isDestroyed()) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
   const requestId = randomUUID();
@@ -70,11 +72,16 @@ async function rendererAction(caller: string, input: Record<string, unknown>, si
     replies.set(requestId, { caller: `renderer:${window.webContents.id}`, finish });
     signal.addEventListener('abort', abort, { once: true });
     window.webContents.once('destroyed', abort);
-    try { window.webContents.send('plugin-ui:action', { ...input, requestId, ownerStamp }); }
+    try { window.webContents.send(composerQuery ? MCP_APP_COMPOSER_ATTACHMENT_EVENT : 'plugin-ui:action', { ...input, requestId, ownerStamp }); }
     catch (failure) { cleanup(); reject(failure); }
   });
   await assertCurrent();
   return result;
+}
+
+export async function hasComposerAttachmentInWindow({ caller, sessionId, viewId, resourceKey, signal, assertCurrent }:
+  Parameters<NonNullable<import('./host.js').McpAppsHostDeps['hasComposerAttachment']>>[0]): Promise<boolean> {
+  return await rendererAction(caller, { kind: 'contains', sessionId, viewId, resourceKey }, signal, assertCurrent) === true;
 }
 
 const result = (data: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(data) }] });
@@ -127,7 +134,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
     visible: { type: 'boolean' }, regions: { type: 'object', additionalProperties: { type: 'boolean' } },
   }));
   return {
-    id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
+    config: entry.config, id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
     ...(watching ? {
       async observeContext(changed: () => void, signal: AbortSignal) {

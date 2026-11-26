@@ -11,6 +11,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -51,6 +52,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn, basename } from '@/lib/utils';
 import type {
   FileDiff,
@@ -75,6 +77,14 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+} from '@/components/ui/menu-row';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -490,6 +500,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     hideWhitespace,
     deviceLinkDeviceId: ctx.deviceLinkDeviceId,
     remoteHostId: ctx.remoteHostId,
+    workdir: ctx.workdir,
   });
   const data = sourceState.reviewData;
   const loading = sourceState.loading;
@@ -501,6 +512,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     capabilities.canSwitchSource ? sessionId : null,
     branchBaseRef,
     deviceLinkDeviceId,
+    ctx.workdir,
   );
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -609,6 +621,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     cappedFileDiffRequest,
     reviewWriteVersion,
     deviceLinkDeviceId,
+    ctx.workdir,
   );
   const cappedFileDiffData = cappedFileDiffState.data;
   const maybeCappedLoadedDiff = cappedFileDiffData?.diff ?? null;
@@ -1428,7 +1441,7 @@ export function ReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           </div>
         </div>
         {effectiveWriteDisabledReasons.length > 0 && (
-          <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
+          <div className="mt-2 flex items-start gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <span>
               {t('rightSidebar.review.writeDisabledNotice', {
@@ -1970,7 +1983,7 @@ function CommitOrPushDropdown({
         onKeyDown={handleKeyDown}
         className="w-[min(22rem,calc(100vw-24px))] p-2"
       >
-        <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">
             {branchLabel}
@@ -1991,7 +2004,7 @@ function CommitOrPushDropdown({
             }}
             rows={4}
             placeholder={t('rightSidebar.review.commit.placeholder')}
-            className="min-h-[92px] w-full resize-none rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="min-h-[92px] w-full resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           />
         </div>
         <DropdownMenuItem
@@ -2001,9 +2014,8 @@ function CommitOrPushDropdown({
           }}
           className="mt-1 gap-2"
         >
-          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
-            {includeUnstaged && <Check size={10} />}
-          </span>
+          {/* 共享 Checkbox 只作显示，勾选由菜单项本身承担。 */}
+          <Checkbox checked={includeUnstaged} readOnly tabIndex={-1} aria-hidden className="pointer-events-none" />
           <span className="min-w-0 flex-1 truncate">
             {t('rightSidebar.review.commit.includeUnstaged')}
           </span>
@@ -2084,7 +2096,7 @@ function CommitDropdownAction({
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {children}
       {shortcut && (
-        <span className="shrink-0 rounded bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-10 text-[var(--text-tertiary)]">
+        <span className="shrink-0 rounded-[4px] bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-10 text-[var(--text-tertiary)]">
           {shortcut}
         </span>
       )}
@@ -2199,7 +2211,7 @@ function FileJumpPopover({
           event.preventDefault();
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        className="w-[280px] rounded-[12px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
+        className="w-[280px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
           <label className="relative block">
@@ -2235,7 +2247,7 @@ function FileJumpPopover({
                   onMouseEnter={() => setSelectedIndex(index)}
                   onClick={() => selectResult(result)}
                   className={cn(
-                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-[8px] px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
+                    'flex h-9 w-full min-w-0 flex-col justify-center rounded-lg px-2 text-left hover:bg-[var(--cmd-palette-item-hover)]',
                     index === selectedIndex && 'bg-[var(--cmd-palette-item-hover)]',
                   )}
                 >
@@ -3549,7 +3561,7 @@ export function BatchActionPill({
   return (
     <div
       data-review-batch-action-pill="true"
-      className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-3 left-1/2 z-page-overlay flex -translate-x-1/2 items-center gap-1 overflow-hidden rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_92%,transparent)] p-1 shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm"
       style={{ maxWidth: 'calc(100% - 16px)' }}
     >
       {writeAction.sectionDiscardVisible && writeAction.onSectionDiscard && (
@@ -3939,7 +3951,7 @@ export function CappedSourceView({
 
 function CappedFileState({ icon, title, desc }: { icon: ReactNode; title: string; desc: string }) {
   return (
-    <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
+    <div className="m-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-center gap-2 font-medium text-[var(--text-primary)]">
         <span className="text-[var(--text-tertiary)]">{icon}</span>
         <span>{title}</span>
@@ -4203,6 +4215,34 @@ export function BranchBaseDropdown({
   onSelectBase: (baseRef: string) => void;
 }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listboxId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const panelRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: {
+      current: (rows) => rows.find((row) => row.hasAttribute('data-menu-current')),
+      currentAttributes: ['data-menu-current'],
+      keyboardSource: inputRef.current ?? undefined,
+    },
+  });
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleCandidates = candidates.filter(
+    (candidate) =>
+      candidate.refName.toLowerCase().includes(normalizedQuery) ||
+      candidate.shortName.toLowerCase().includes(normalizedQuery),
+  );
+  const currentIndex = Math.min(activeIndex, visibleCandidates.length - 1);
+  useEffect(() => {
+    if (open) optionRefs.current[currentIndex]?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, currentIndex, query]);
+  const pickBase = (refName: string) => {
+    onSelectBase(refName);
+    setOpen(false);
+  };
   const selected =
     candidates.find((candidate) => candidate.refName === selectedBaseRef) ?? candidates[0] ?? null;
   const label = selected?.shortName ?? t('rightSidebar.review.branch.basePlaceholder');
@@ -4210,8 +4250,22 @@ export function BranchBaseDropdown({
     ? t('rightSidebar.review.branch.baseTooltip', { base: selected.refName })
     : t('rightSidebar.review.branch.baseDropdownAria');
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          setQuery('');
+          setActiveIndex(
+            Math.max(
+              0,
+              candidates.findIndex((candidate) => candidate.refName === selected?.refName),
+            ),
+          );
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
         <Tip text={tooltip}>
           <button
             type="button"
@@ -4223,34 +4277,103 @@ export function BranchBaseDropdown({
             <ChevronDown size={13} className="ml-1.5 shrink-0 text-[var(--text-tertiary)]" />
           </button>
         </Tip>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
+      </PopoverTrigger>
+      <PopoverContent
         align="start"
         sideOffset={4}
-        className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] min-w-[14rem] overflow-y-auto"
+        aria-label={t('rightSidebar.review.branch.baseDropdownAria')}
+        className="flex max-h-[min(24rem,var(--radix-popover-content-available-height))] w-[28rem] max-w-[calc(100vw-1rem)] flex-col gap-1 p-1"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
       >
-        {candidates.map((candidate) => (
-          <DropdownMenuItem
-            key={candidate.refName}
-            onSelect={() => onSelectBase(candidate.refName)}
-            className="gap-2"
-          >
-            <span className="flex h-4 w-4 items-center justify-center text-[var(--text-secondary)]">
-              {candidate.refName === selectedBaseRef && <Check size={12} />}
-            </span>
-            <span className="min-w-0 flex-1 truncate">
-              {candidate.shortName}
-              {candidate.isStaleRisk && (
-                <span className="text-[var(--text-tertiary)]">
-                  {' '}
-                  {t('rightSidebar.review.branch.staleRiskSuffix')}
-                </span>
+        <Input
+          inputRef={inputRef}
+          size="sm"
+          className="m-1 shrink-0"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls={listboxId}
+          aria-activedescendant={currentIndex >= 0 ? `${listboxId}-${currentIndex}` : undefined}
+          aria-label={t('newChat.branchChip.searchPlaceholder')}
+          placeholder={t('newChat.branchChip.searchPlaceholder')}
+          value={query}
+          onChange={(value) => {
+            setQuery(value);
+            setActiveIndex(0);
+          }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              if (visibleCandidates.length > 0) {
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                setActiveIndex(
+                  (currentIndex + step + visibleCandidates.length) % visibleCandidates.length,
+                );
+              }
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              const candidate = visibleCandidates[currentIndex];
+              if (candidate) pickBase(candidate.refName);
+            }
+          }}
+        />
+        <div
+          ref={panelRef}
+          {...menuPanelAttrs}
+          role="listbox"
+          id={listboxId}
+          aria-label={t('rightSidebar.review.branch.baseDropdownAria')}
+          className="relative min-h-0 overflow-y-auto"
+        >
+          <MenuHighlightLayer />
+          {visibleCandidates.map((candidate, index) => (
+            <div
+              key={candidate.refName}
+              ref={(element) => {
+                optionRefs.current[index] = element;
+              }}
+              id={`${listboxId}-${index}`}
+              role="option"
+              aria-selected={candidate.refName === selected?.refName}
+              title={candidate.refName}
+              {...menuRowAttrs({
+                checked: candidate.refName === selected?.refName,
+                current: index === currentIndex,
+              })}
+              onMouseMove={() => setActiveIndex(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pickBase(candidate.refName)}
+              className={cn(
+                COMPOSER_MENU_ROW,
+                'flex cursor-pointer items-center gap-2 px-2 py-1.5',
               )}
-            </span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
+                {candidate.refName === selected?.refName && <Check size={12} />}
+              </span>
+              <span className="min-w-0 flex-1 break-all">
+                {candidate.shortName}
+                {candidate.isStaleRisk && (
+                  <span className="text-[var(--text-tertiary)]">
+                    {' '}
+                    {t('rightSidebar.review.branch.staleRiskSuffix')}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div role="status" aria-live="polite" className="text-12 text-[var(--text-tertiary)]">
+          {visibleCandidates.length === 0 && (
+            <span className="block px-3 py-2">{t('newChat.branchChip.noMatch')}</span>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -4636,7 +4759,7 @@ function FileRow({
           <span
             data-review-action-reveal="file"
             className={cn(
-              'absolute right-3 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1',
+              'absolute right-3 top-1/2 z-raised flex -translate-y-1/2 items-center gap-1',
               reviewActionRevealClass('file', fileActionsPending),
             )}
           >
@@ -4668,12 +4791,12 @@ function FileRow({
       {expanded && (
         <div className="min-w-0 px-3 pb-3">
           {showRenamePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.renamePartialNotice')}
             </div>
           )}
           {showTypechangePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.typechangePartialNotice')}
             </div>
           )}

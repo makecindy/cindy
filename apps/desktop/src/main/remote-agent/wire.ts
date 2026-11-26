@@ -118,6 +118,8 @@ export interface RemoteAgentWireStartOptions {
   makerMemorySwitchOwned?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
+  /** Optional project file locator; older executors retain their legacy tool-based recall. */
+  makerMemoryProjectDir?: string;
   /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
   ghostRosterSnapshot?: string;
   permissionMode?: string;
@@ -244,6 +246,9 @@ export function managedSkillPluginLayout(command: string): { root: string; dir: 
 export interface RemoteAgentOpenPayload {
   /** Controller can acknowledge durable image delivery; absent on legacy controllers. */
   acceptsImageDeliveryReceipts?: boolean;
+  acceptsNativeHistoryBackup?: boolean;
+  /** Receiver can preserve budget-omitted attachments in the owning task. */
+  acceptsAttachmentPreservation?: boolean;
   /** Task Host clear generation, preserved through provider-group relays. */
   imageDeliveryEpoch?: number;
   /** 控制端任务 id。 */
@@ -276,6 +281,8 @@ export interface RemoteAgentOpenPayload {
   acceptsGroupSwitch?: boolean;
   /** 自动交接后重新打开时带回的那张一次性凭证：组所在电脑据此避开出问题的那台。 */
   groupSwitchToken?: string;
+  /** The owner must confirm the current direct assignment was handed off before opening. */
+  requireGroupSwitchToken?: true;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -325,7 +332,7 @@ const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/comman
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
-  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
+  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'makerMemoryProjectDir', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
   'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
@@ -444,6 +451,8 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   return {
     sessionId,
     ...(value.acceptsImageDeliveryReceipts === true ? { acceptsImageDeliveryReceipts: true } : {}),
+    ...(value.acceptsNativeHistoryBackup === true ? { acceptsNativeHistoryBackup: true } : {}),
+    ...(value.acceptsAttachmentPreservation === true ? { acceptsAttachmentPreservation: true } : {}),
     ...(typeof value.imageDeliveryEpoch === 'number' && Number.isSafeInteger(value.imageDeliveryEpoch) && value.imageDeliveryEpoch >= 0
       ? { imageDeliveryEpoch: value.imageDeliveryEpoch } : {}),
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
@@ -457,6 +466,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     ...(typeof value.groupSwitchToken === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.groupSwitchToken)
       ? { groupSwitchToken: value.groupSwitchToken }
       : {}),
+    ...(value.requireGroupSwitchToken === true ? { requireGroupSwitchToken: true as const } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

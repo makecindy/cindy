@@ -158,6 +158,7 @@ describe("jank metrics", () => {
     recordInvokeSent("local-db:messages:view");
     recordInvokeTransfer({ channel: 'local-db:messages:view', phase: 'sent' });
     recordInvokeTransfer({ channel: 'local-db:messages:view', phase: 'result', payloadBytes: 95, notModified: true });
+    recordInvokeTransfer({ channel: 'local-db:sessions:list', phase: 'result', payloadBytes: 40, delta: true });
     const line = serializeMobileDebugRecord("debug", "performance", [
       "jank metrics",
       takeJankMetrics(),
@@ -168,8 +169,13 @@ describe("jank metrics", () => {
       store,
       pushes: [{ count: 1, totalMs: 3 }],
       invokes: [{ channel: "local-db:messages:view", count: 1 }],
-      relayTransfers: [{ channel: 'local-db:messages:view', sent: 1, results: 1, payloadBytes: 95, notModified: 1, gzip: 0 }],
+      relayTransfers: [
+        { channel: 'local-db:messages:view', sent: 1, results: 1, payloadBytes: 95, notModified: 1, gzip: 0 },
+        { channel: 'local-db:sessions:list', results: 1, payloadBytes: 40, delta: 1 },
+      ],
     });
+    // Rows without a delta response keep their old shape inside the log's value budget.
+    expect(JSON.parse(line).args[1].relayTransfers[0]).not.toHaveProperty('delta');
     expect(takeJankMetrics().relayTransfers).toEqual([]);
   });
 });

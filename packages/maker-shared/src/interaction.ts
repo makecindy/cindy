@@ -22,12 +22,18 @@ export interface AskAnswerConstraints {
   maxLength?: number;
 }
 
+export interface AskQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
 export interface AskQuestion {
   /** Stable provider identity; absent on legacy questions. */
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: AskQuestionOption[];
   multiSelect?: boolean;
   answerConstraints?: AskAnswerConstraints;
 }
@@ -164,6 +170,7 @@ export interface IssueConfirmPayload {
 export interface PermissionReviewPresentation {
   sourceDescription?: string;
   autoReviewUnavailable: boolean;
+  autoReviewQuotaExhausted?: true;
   /** Why Auto-review asked; null for ordinary Ask-mode prompts. */
   autoReviewReason: string | null;
   canAlwaysAllow: boolean;
@@ -344,6 +351,8 @@ export function buildPermissionReviewPresentation(
 
   return {
     autoReviewUnavailable: permissionAutoReviewUnavailable(request),
+    ...(permissionAutoReviewUnavailable(request) && isRecord(request.metadata) && request.metadata.autoReviewUnavailableReason === 'quota_exhausted'
+      ? { autoReviewQuotaExhausted: true as const } : {}),
     autoReviewReason: permissionAutoReviewUnavailable(request) ? null : permissionAutoReviewReason(request),
     ...(sourceDescription ? { sourceDescription } : {}),
     canAlwaysAllow,
@@ -1228,7 +1237,14 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
         const label = answerConstraints?.choices && typeof option.label === 'string' ? option.label : readString(option.label);
         if (!label) return [];
         const description = readString(option.description);
-        return [{ label, ...(description ? { description } : {}) }];
+        const preview = typeof option.preview === 'string' && option.preview.trim().length > 0
+          ? option.preview
+          : null;
+        return [{
+          label,
+          ...(description ? { description } : {}),
+          ...(preview ? { preview } : {}),
+        }];
       })
       : undefined;
     return [{
@@ -1253,7 +1269,7 @@ function normalizeAskAnswerConstraints(value: unknown): AskAnswerConstraints | u
   };
 }
 
-export function askQuestionOptions(question: AskQuestion | undefined): Array<{ label: string; description?: string }> {
+export function askQuestionOptions(question: AskQuestion | undefined): AskQuestionOption[] {
   return question?.answerConstraints?.choices ? [...(question.options ?? [])] : visibleAskOptions(question?.options);
 }
 

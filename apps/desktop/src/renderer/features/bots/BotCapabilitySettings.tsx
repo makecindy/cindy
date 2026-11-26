@@ -96,7 +96,6 @@ export function BotCapabilitySettings({
 
   // Same unsaved-changes question as memory.
   const confirmDiscard = useCallback(async () => !editorDirtyRef.current?.() || confirm({
-    presentation: 'standard',
     title: t('bots.capabilities.learned.unsavedTitle'),
     description: t('bots.capabilities.learned.unsavedDescription'),
     confirmText: t('bots.capabilities.learned.discard'),
@@ -348,7 +347,7 @@ export function BotCapabilitySettings({
             <Search
               size={14}
               aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[var(--text-tertiary)]"
+              className="pointer-events-none absolute left-3 top-1/2 z-raised -translate-y-1/2 text-[var(--text-tertiary)]"
             />
             <Input
               size="md"

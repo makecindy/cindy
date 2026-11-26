@@ -7,8 +7,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
-import {registeredApps} from './app-registry.mjs';
-import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
+import {appExtensions,registeredApps,registeredExtensions} from './app-registry.mjs';
+import { configFrom, discover, copyPlugin, localPluginSource, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '../personal-build.mjs');
@@ -130,12 +130,19 @@ export function doctor(c, exec = run) {
   if (fs.existsSync(r.personalApp + '.personal-transition.json')) result.issues.push('Unfinished fixed app installation; retain the transition and inspect it before switching');
   const appParent=path.dirname(r.personalApp), legacyPrefix='.'+path.basename(r.personalApp)+'.previous-';
   result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
+  if(result.legacyAppBackups.length)result.issues.push('Legacy personal app backups remain beside the fixed installation; move them into install-backups and run registry-clean');
   if(process.platform==='darwin' && fs.existsSync(r.personalApp+'.personal-install.json')) {
     try {
       const installed=read(r.personalApp+'.personal-install.json'), id=installed.inputs.bundleId;
-      if(installed.registrationPending)result.issues.push('LaunchServices registration needs repair; run registry-clean after inspecting retired paths');
+      if(installed.registrationPending)result.issues.push('LaunchServices/PlugInKit registration needs repair; run registry-clean after inspecting retired paths');
       result.registeredApps=registeredApps(id);
       if(result.registeredApps.length!==1 || result.registeredApps[0]!==r.personalApp)result.issues.push('Personal Bundle ID has stale or missing LaunchServices registrations; inspect paths before unregistering retired copies');
+      const expectedExtensions=appExtensions(r.personalApp);
+      result.registeredExtensions=registeredExtensions(`${id}.agent-activity`);
+      const extensionsOk=expectedExtensions.length===0
+        ? result.registeredExtensions.length===0
+        : result.registeredExtensions.length===expectedExtensions.length && expectedExtensions.every(ext=>result.registeredExtensions.includes(ext));
+      if(!extensionsOk)result.issues.push('Personal Live Activity extension has stale or missing PlugInKit registrations; inspect paths and run registry-clean');
     } catch(e) { result.issues.push(`Cannot inspect personal app registrations: ${e.message}`); }
   }
   result.recoveryAdvice = result.supervised?.phase === 'blocked'
@@ -180,18 +187,15 @@ export function syncPlugins(c, exec = run) {
     const candidates = [];
     for (const id of [...ids].sort()) {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) continue;
-      const source = c.localPlugins[id] || path.join(checkout, id);
+      const source = localPluginSource(c, id, checkout);
       if (!fs.existsSync(path.join(source, 'ghost.json'))) {
         check(!c.localPlugins[id], `Local plugin ${id} has no ghost.json`);
         if (previous.includes(id)) report.retired.push({ id, action: 'retained', reason: 'No canonical manifest; review before retirement' });
         continue;
       }
-      let mainManifest;
-      let existsOnMain = false;
-      try { exec('git', ['-C', checkout, 'cat-file', '-e', `${selection.baseSha}:${id}/ghost.json`], checkout); existsOnMain = true; } catch { /* New plugin. */ }
-      if (existsOnMain) mainManifest = JSON.parse(exec('git', ['-C', checkout, 'show', `${selection.baseSha}:${id}/ghost.json`], checkout));
       const dest = path.join(temp, 'seeds', id), isActive = active.has(id);
-      const entry = copyPlugin(id, source, dest, isActive ? mainManifest : undefined);
+      const repositoryRoot = typeof c.localPlugins[id] === 'string' ? undefined : checkout;
+      const entry = copyPlugin(id, source, dest, { repositoryRoot });
       entry.kind = isActive ? (c.localPlugins[id] ? 'local' : 'pr') : 'retire';
       if (!isActive) {
         // Remove only a seed, never installed files or ledgers. Host handles store ownership.
@@ -250,7 +254,7 @@ export function toolBundle(dest) {
     fs.copyFileSync(path.join(here, name), path.join(dest, 'personal-build', name));
   }
   // Keep the process classifier with the tool, so recovery can inspect older releases too.
-  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs'];
+  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs','macos-macho-uuid.mjs'];
   for(const file of guards) {
     const target=path.join(dest,file);fs.mkdirSync(path.dirname(target),{recursive:true});
     fs.copyFileSync(path.join(path.dirname(cli),file),target);

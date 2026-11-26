@@ -24,8 +24,9 @@ import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy, agentNetO
 import { agentNetSharingAlias, agentNetSharingInvitation, agentNetSharingInvitationRoute, agentNetSharingRoute,
   listAgentNetProviderShares, rememberAgentNetSharingAliases, rememberAgentNetSharingGuest, rememberAgentNetSharingHost,
   rememberAgentNetSharingService, requestAgentNetSharing, retireAgentNetSharingGuest, selectedAgentNetSharingRoute,
+  forgetAgentNetProviderShareMember,
   type AgentNetSharingRoute } from './agentNetSharing.js';
-import { grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
+import { agentNetProviderExecutorProof, grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
 
 /** 服务端错误码 → 本机 IPC 错误码(Renderer 据此给出可行动的提示)。 */
 const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
@@ -44,6 +45,7 @@ const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
   PROVIDER_SHARE_CROSS_REGION_DISABLED: 'PROVIDER_SHARE_CROSS_REGION_DISABLED',
 };
 const ALLOWED_REDACTED_CODES = Object.keys(ACTIONABLE_CODES);
+const PRIVATE_IDENTITY_CARD = 'private-device';
 
 function captureScope() {
   const key = activeOwnerScopeKey();
@@ -113,18 +115,26 @@ const listingApi = createProviderShareApi({ captureScope, request: async (path, 
     allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES });
   return await listAgentNetProviderShares(received, legacy) ?? legacy();
 } });
-export const providerShareApi: ProviderShareApi = {
+type CreateLink = ProviderShareApi['createLink'];
+type CreateLinkInput = Omit<Parameters<CreateLink>[0], 'identityCard'> & { identityCard?: string };
+export const providerShareApi: Omit<ProviderShareApi, 'createLink'> & {
+  createLink(input: CreateLinkInput, assertCurrent?: () => void): ReturnType<CreateLink>;
+} = {
   ...legacyProviderShareApi,
   listOwned: () => listingApi.listOwned(),
   listReceived: () => listingApi.listReceived(),
-  async createLink(input) {
+  async createLink(input, assertCurrent) {
+    const scope = captureScope();
     const route = selectedAgentNetSharingRoute('provider-share');
-    if (!route) {
-      if (isAgentNetActive()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Agent-Net is not ready');
-      return legacyProviderShareApi.createLink(input);
-    }
+    if (!route && isAgentNetActive()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Agent-Net is not ready');
+    const identityCard = route?.v === 3 ? PRIVATE_IDENTITY_CARD
+      : input.identityCard ?? await fetchIdentityCard('share-link', sha256Hex(`${getDeviceId()}:${input.providerId}`));
+    if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+    assertCurrent?.();
+    const payload = { ...input, identityCard };
+    if (!route) return legacyProviderShareApi.createLink(payload);
     rememberAgentNetSharingService(route);
-    const result = await scopedApi(route).createLink(input);
+    const result = await scopedApi(route).createLink(payload);
     rememberAgentNetSharingHost('provider-share', result.shareId, route);
     addAlias({ ...route, resourceId: result.shareId }, 'invitations', sha256Hex(result.invitation));
     return result;
@@ -132,7 +142,7 @@ export const providerShareApi: ProviderShareApi = {
   preview: invitation => aliasApi('invitations', sha256Hex(invitation)).api.preview(invitation),
   async sendRequest(invitation, card) {
     const { route, api } = aliasApi('invitations', sha256Hex(invitation));
-    const result = await api.sendRequest(invitation, card);
+    const result = await api.sendRequest(invitation, route?.v === 3 ? PRIVATE_IDENTITY_CARD : card);
     if (route) addAlias(route, 'requests', result.requestId);
     return result;
   },
@@ -158,6 +168,7 @@ export const providerShareApi: ProviderShareApi = {
   setMember: (id, action) => aliasApi('members', id).api.setMember(id, action),
   async leave(id) {
     const { route, api } = aliasApi('members', id); await api.leave(id);
+    forgetAgentNetProviderShareMember(id, route);
     if (route) retireAgentNetSharingGuest('provider-share', route.resourceId);
   },
 };
@@ -170,10 +181,10 @@ export function providerShareHiddenByEncryptedOnly(shareId: string): boolean {
 
 /** A V2 invitation carries its public root and service. Validate before pinning;
  * no account token, private root or transport seed is sent to that service. */
-export function resolveAgentNetProviderShareLink(input: string): { invitation: string; api: ProviderShareApi } | null {
+export function resolveAgentNetProviderShareLink(input: string): { invitation: string; identityCard?: string; api: ProviderShareApi } | null {
   const parsed = agentNetSharingInvitationRoute(input, 'provider-share'); if (!parsed) return null;
   const api = scopedApi(parsed.route);
-  return { invitation: parsed.invitation, api: { ...api,
+  return { invitation: parsed.invitation, ...(parsed.route.v === 3 ? { identityCard: PRIVATE_IDENTITY_CARD } : {}), api: { ...api,
     async preview(invitation) {
       const result = await api.preview(invitation);
       if (result.shareId !== parsed.route.resourceId) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
@@ -190,48 +201,55 @@ export function resolveAgentNetProviderShareLink(input: string): { invitation: s
 /** Only the share's authenticated host device may authorize a same-account executor. */
 export async function grantProviderShareDelegation(input: {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
-}): Promise<{ expiresAt: number; generation: string }> {
+}, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<{ expiresAt: number; generation: string }> {
   const privateGrant = await grantAgentNetProviderExecutor(input); if (privateGrant) return privateGrant;
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
-  const scope = captureScope();
-  const value = await serverApiFetch<{ expiresAt?: unknown; generation?: unknown }>('/api/device-link/provider-shares/delegations', {
-    method: 'POST', body: input,
-    baseUrl: () => {
-      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
-      return getClientEndpoint('deviceLinkApiBaseUrl');
-    },
-    timeoutMs: 15_000, cache: 'no-store',
-    logLabel: '/api/device-link/provider-shares/delegations',
-    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
-  });
-  if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()
-    || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)) {
-    throw new Error('Provider share delegation was not confirmed');
-  }
-  return { expiresAt: value.expiresAt as number, generation: value.generation };
+  const body = { ...input };
+  return delegationChecks.run(JSON.stringify(['grant', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId]), async (scope, timeoutMs, signal) => {
+    const value = await serverApiFetch<{ expiresAt?: unknown; generation?: unknown }>('/api/device-link/provider-shares/delegations', {
+      method: 'POST', body,
+      baseUrl: () => {
+        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+        return getClientEndpoint('deviceLinkApiBaseUrl');
+      },
+      timeoutMs, signal, cache: 'no-store',
+      logLabel: '/api/device-link/provider-shares/delegations',
+      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+    });
+    if (!Number.isSafeInteger(value.expiresAt) || (value.expiresAt as number) <= Date.now()
+      || typeof value.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(value.generation)) {
+      throw new Error('Provider share delegation was not confirmed');
+    }
+    return { expiresAt: value.expiresAt as number, generation: value.generation };
+  }, options);
 }
 
 export async function revokeProviderShareDelegation(input: {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string; generation: string;
-}): Promise<void> {
+}, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<void> {
   if (await revokeAgentNetProviderExecutor(input)) return;
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
-  const scope = captureScope();
-  await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
-    method: 'POST', body: input,
-    baseUrl: () => {
-      if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
-      return getClientEndpoint('deviceLinkApiBaseUrl');
-    },
-    timeoutMs: 15_000, cache: 'no-store',
-    logLabel: '/api/device-link/provider-shares/delegations/revoke',
-    redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
-  });
+  const body = { ...input };
+  return delegationChecks.run(JSON.stringify(['revoke', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId, body.generation]), async (scope, timeoutMs, signal) => {
+    await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
+      method: 'POST', body,
+      baseUrl: () => {
+        if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
+        return getClientEndpoint('deviceLinkApiBaseUrl');
+      },
+      timeoutMs, signal, cache: 'no-store',
+      logLabel: '/api/device-link/provider-shares/delegations/revoke',
+      redactErrorDetails: true, allowedRedactedErrorCodes: ALLOWED_REDACTED_CODES,
+    });
+  }, options);
 }
 
 /** M verifies that the server accepted O's delegation before trusting a cross-account guest. */
 const delegationChecks = createProviderShareDelegationChecks({
-  captureScope,
+  // Only the delegation budget survives an owner generation change. Ordinary
+  // sharing and private invitations keep their existing scope dependency.
+  captureScope: () => ({ ...captureScope(),
+    key: JSON.stringify([providerShareOwnerKey(), getClientEndpoint('deviceLinkApiBaseUrl')]) }),
   scopeChanged: () => new ProviderShareScopeChangedError(),
   async request(input, scope, timeoutMs, signal) {
     const privateCheck = await checkAgentNetProviderExecutor(input, signal); if (privateCheck) return privateCheck;
@@ -257,13 +275,24 @@ const delegationChecks = createProviderShareDelegationChecks({
 });
 
 export function checkProviderShareDelegation(input: DelegationCheckInput,
-  generation?: string): Promise<DelegationCheckResult> {
-  return delegationChecks.check(input, generation);
+  generation?: string, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<DelegationCheckResult> {
+  if (options.signal?.aborted) return Promise.reject(options.signal.reason);
+  const proof = agentNetProviderExecutorProof(input, options.background ? undefined : generation);
+  // Existing task leases share a guest/executor transport entry. Its latest
+  // generation confirms membership on recheck. A new task still needs an exact match.
+  if (proof && (options.background || generation === undefined || proof.generation === generation)) {
+    const { active, generation, expiresAt, ownerDeviceId, delegation } = proof;
+    return Promise.resolve({ active, generation, expiresAt, ownerDeviceId, proofId: delegation.id });
+  }
+  return delegationChecks.check(input, generation, options);
 }
 
 export function clearProviderShareDelegationChecks(): void {
   delegationChecks.clear();
 }
+
+/** Local shared account/endpoint cooldown, not a claim about the server's quota. */
+export function providerShareDelegationRetryAt(): number { return delegationChecks.retryAt(); }
 
 /**
  * 供应商分享运行时的账号作用域：模式 + 数据所有者，不含代次。同一账号的投影修复会推进代次但不

@@ -88,6 +88,16 @@ describe('generated reply image attachments', () => {
     expect(result.text).toBe(source);
     expect(f.canRead.mock.calls.map(call => call[0])).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
   });
+  // #11712, unit: the group reply preparer omitted managed MP4 nodes from attachments.
+  it('delivers a task-owned video once and refuses it when the task loses ownership', async () => {
+    const video = url.replace('.png', '.mp4');
+    const source = rich({ kind: 'video', props: { src: video } }, { kind: 'video', props: { src: video } });
+    f.resolve.mockReturnValue({ absPath: path.resolve('fixture', 'video.mp4'), mimeType: 'video/mp4' });
+    const result = await prepareChatReplyImages(source, 'lane', vi.fn());
+    expect(result.attachments).toEqual([expect.objectContaining({ url: video, mimeType: 'video/mp4', path: null })]);
+    f.canRead.mockResolvedValue(false);
+    await expect(prepareChatReplyImages(source, 'lane', vi.fn())).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+  });
   it('ignores code/text/src examples while collecting real image nodes', async () => {
     const source = rich(
       { kind: 'code', props: { text: `![example](${other})`, src: other } },

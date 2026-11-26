@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkReference } from '@cindy/maker-shared/message-window';
-import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow } from '../session/mobileHistoryRender';
+import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
 import { reconcileMobileMessageRenderItems } from '../session/messageRenderReconcile';
@@ -35,6 +35,41 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  // Unit: ready history previously normalized old message bodies on every delta.
+  // Exercise the screen entry; stale/changed history must still invalidate reuse.
+  it('reuses ready-history bodies across deltas and rebuilds edited or localized history', async () => {
+    let reads = 0;
+    const old = row(0, 'user', 'Earlier question');
+    Object.defineProperty(old, 'content', { get: () => { reads++; return 'Earlier question'; }, enumerable: true });
+    const rows = [old, row(1, 'assistant', 'Earlier answer'), row(2, 'user', 'Next question')];
+    const { view } = harness(rows, true);
+    await view.refresh();
+    const live = { ...row(3, 'assistant', 'First token'), agentMeta: { isStreaming: true } };
+    const prefixCache = { current: null };
+    let previous: ReturnType<typeof buildMobileSessionRenderWindow> | null = null;
+    const render = (message: RemoteMessage, locale = 'en') => {
+      const result = buildMobileSessionRenderWindow({
+        history: { view, snapshot: view.getSnapshot(), messages: [message], streaming: true, sessionId: 'session' },
+        raw: { cacheKey: locale, messages: [message], options: { isSessionStreaming: true, sessionId: 'session' }, prefixCache },
+        previousRenderState: previous && { ...previous, sessionId: 'session' },
+      });
+      previous = result;
+      return result;
+    };
+    const first = render(live);
+    reads = 0;
+    const next = render({ ...live, content: 'First token and second token' });
+    expect(reads).toBe(0);
+    expect(next.items[0]).toBe(first.items[0]);
+    expect(next.items.at(-1)).toMatchObject({ type: 'message', message: { body: 'First token and second token' } });
+    render(live, 'zh-CN');
+    expect(reads).toBeGreaterThan(0);
+    rows[0] = row(0, 'user', 'Edited earlier question');
+    await view.refresh();
+    expect(render(live).items[0]).toMatchObject({ type: 'message', message: { body: 'Edited earlier question' } });
+    expect(prefixCache.current).toBeNull();
+    view.setActive(false);
+  });
   // #7081: the host outline must agree with raw grouping when progress directly precedes the final.
   it.each([false, true])('folds adjacent companion commentary after history takeover (lazy=%s)', async (lazy) => {
     const rows = [row(0, 'user', 'Work'),
@@ -56,11 +91,47 @@ describe('remote history preserves original folding', () => {
     const { view } = harness(rows, false, lazy);
     await view.refresh();
     const result = buildMobileHistoryRenderItems({ view,
-      snapshot: historyAfter(view.getSnapshot(), Date.parse(rows[3].createdAt))!,
+      snapshot: historyAfter(view.getSnapshot(), mobileSessionHistoryBoundary({ source: 'side-chat', createdAt: rows[3].createdAt }))!,
       messages: [], streaming: false, sessionId: 'session', sessionSource: 'side-chat' });
     expect(result.map(item => item.key)).toEqual(['message-client-3', 'work-client-4', 'message-client-5']);
     expect(view.getSnapshot().items.length).toBeGreaterThan(3);
     view.setActive(false);
+  });
+  // Unit: the ordinary-list projection lost the follow-up cutoff. Read and
+  // render real history pages with the host's promoted metadata and an ordinary
+  // task control. The older page crosses the cutoff exactly at the first turn.
+  it.each([true, undefined] as const)('renders desktop-source history through paging and refresh (promoted=%s)', async (sideChatPromoted) => {
+    const parent = row(0, 'user', 'Parent context');
+    const question = row(1, 'user', 'First follow-up message');
+    const answer = row(2, 'assistant', 'Reply');
+    const session = { source: 'desktop', sideChatPromoted, createdAt: question.createdAt };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async before => ({
+        version: 1,
+        items: projectHistoryView(before ? [parent, question] : [answer], false),
+        hasMore: !before,
+        nextCursor: before ? null : answer.id,
+      }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => {},
+    });
+    const displayed = () => buildMobileHistoryRenderItems({
+      view, snapshot: historyAfter(view.getSnapshot(), mobileSessionHistoryBoundary(session))!,
+      messages: [], streaming: false, sessionId: 'session', sessionSource: session.source,
+    }).map(item => item.key);
+    const expected = sideChatPromoted
+      ? ['message-client-1', 'message-client-2']
+      : ['message-client-0', 'message-client-1', 'message-client-2'];
+    try {
+      await view.refresh();
+      expect(displayed()).toEqual(['message-client-2']);
+      await view.refresh(true);
+      const paged = displayed();
+      await view.refresh();
+      expect([paged, displayed()]).toEqual([expected, expected]);
+    } finally {
+      view.setActive(false);
+    }
   });
   // Regression: mobile's companion projection used to flatten away deferred
   // work after history takeover. Verify the production controller's expansion

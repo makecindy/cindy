@@ -85,6 +85,8 @@ const desktopDbExclude = [
 const desktopGitIntegrationInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const desktopCredentialCompatibilityTest =
+  'src/renderer/components/new-chat/__tests__/l342SignedCompatibility.test.tsx';
 const makerCoreIntegrationInclude = [
   'src/agents/codex/*.integration.test.ts',
   'src/agents/claude-code/__tests__/*.integration.test.ts',
@@ -102,6 +104,7 @@ const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // The Terra proxy regression starts a real Codex binary when explicitly configured.
   'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
+  'src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
@@ -162,9 +165,20 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Actual send closures: Pi startup/retry race and literal-input isolation (#11112).
+  'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
+  // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
+  'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
+  'src/main/maker-ipc/__tests__/silentStopRegisterWiring.guard.test.ts',
+  // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.
+  'src/main/__tests__/usageCorePortWiring.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
+  // User copy rule (2026-11-18): the Cindy background service is never called "Host" in any locale.
+  'src/renderer/i18n/__tests__/hostWordInCopy.guard.test.ts',
+  // Cloud snapshot coverage is a cross-repository protocol contract.
+  'src/shared/__tests__/settingsReadCatalog.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
@@ -182,9 +196,12 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
   'src/renderer/__tests__/designEffectsDiscipline.test.ts',
+  // DESIGN.md §6: only confirm({ blocking: true }) may draw on the modal-blocking layer.
+  'src/renderer/__tests__/modalBlockingLayer.guard.test.ts',
   'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
+  'src/main/__tests__/providerImportWiring.test.ts',
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
   'src/main/__tests__/authAccountDeletionLifecycle.test.ts',
   'src/main/__tests__/authLegacyTokenMirror.test.ts',
@@ -196,6 +213,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // Managed cloud login acknowledges durable instance credentials before publishing the owner.
+  'src/main/instance-runtime/__tests__/loginPublication.test.ts',
   // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
   'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
@@ -240,6 +259,11 @@ const desktopGuardInclude = [
   // the full device-link singleton would start Electron runtime wiring. Keep it in the explicit
   // guard tier rather than letting its source extraction enter ordinary unit tests.
   'src/main/mcp-apps/__tests__/remoteViews.test.ts',
+  // Executes the picker admission and confirmation branches it extracts from the source text of
+  // register.ts and of sessionRuntimeSelectionApply.ts (handleSetModel moved there). Importing
+  // register.ts would load Electron, so the test reads source text instead; that extraction stays in
+  // the guard tier, as remoteViews above.
+  'src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts',
   'src/renderer/features/cc-agent/sidebar/__tests__/sessionCardReviewRegressions.test.ts',
   'src/renderer/__tests__/orcaModelWindowSelection.test.ts',
   'src/renderer/__tests__/markdownRendererXdtAudio.test.ts',
@@ -378,6 +402,7 @@ export default {
             '**/*.git-integration.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
+            desktopCredentialCompatibilityTest,
             'src/main/localDb/**',
             'src/main/__tests__/*Migration.test.ts',
             'src/main/__tests__/schemaDriftRepair.test.ts',
@@ -394,11 +419,20 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive regressions transfer large encrypted files; Host compatibility and Pi parity run isolated subprocesses.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
-          include: ['src/main/local-agent/__tests__/*.integration.test.ts', 'src/main/bot-import/__tests__/skillArchive.integration.test.ts'],
+          include: [
+            'src/main/local-agent/__tests__/*.integration.test.ts',
+            'src/main/device-link/__tests__/linkTraffic.integration.test.ts',
+            'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/codexResponsesLifecycle.integration.test.ts',
+            'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
+            'src/main/maker-host/__tests__/codexHostedModelRefusal.integration.test.ts',
+            'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+            desktopCredentialCompatibilityTest,
+          ],
         },
         'git-integration': {
           status: 'manual',

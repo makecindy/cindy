@@ -112,11 +112,13 @@ export interface RichChannelIM extends TextChannelIM {
        * 流式 handle。不传则不渲染深链(不猜)。
        */
       ownerDmSourceMessageId?: string;
+      /** Ordinary questions: trusted platform id of the original requester. */
+      questionRespondentId?: string;
     },
   ): Promise<{ messageId: string }>;
 
   /** 原地替换一张已发出的交互卡片(spec 全量覆盖)。 */
-  updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void>;
+  updateInteractiveCard(messageId: string, spec: InteractiveCardSpec, opts?: { questionRespondentId?: string; questionClosed?: boolean }): Promise<void>;
 
   /** 把已有卡片一次性 patch 成纯 markdown 内容(清掉按钮)。 */
   patchMarkdownCard(messageId: string, markdown: string): Promise<void>;
@@ -188,6 +190,8 @@ export type ImOutputDriver =
   | {
       kind: 'rich-card';
       im: RichChannelIM;
+      /** Optional durable terminal sink; streaming remains a disposable progress surface. */
+      commitFinal?(output: ImFinalOutput & { inputMessageId: string; progressMessageId?: string }): Promise<void>;
     }
   | {
       kind: 'chunked-text';

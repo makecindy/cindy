@@ -7,6 +7,7 @@ import type { AgentCapabilities, AgentKind } from '@/hooks/useAgentCapabilities'
 import type { ProviderView } from '@cindy/model-providers';
 import { getRemoteDraftDefaults, rememberRemoteDraftDefaults } from './remoteDraftDefaultsCache';
 import { resolveDeviceLinkDraftDefaults, shouldReseedDeviceLinkDraftDefaults, type RemoteDraftDefaults, type DeviceLinkDraftSelection } from './deviceLinkDraftDefaults';
+import { isCloudDeviceId } from '@/features/cloud-settings/cloudDeviceId';
 
 export function useRemoteDraftDefaults({
   isDeviceLinkDraft, effectiveDeviceLinkDeviceId, capabilityAgentKind, wtPreferenceTransactionRef, dataOwnerId, dataOwnerGeneration
@@ -29,6 +30,8 @@ export function useRemoteDraftDefaults({
       ? { status: 'ready', value: cached }
       : { status: 'idle', value: null };
   });
+  // 本次请求确认的引擎，不能使用上一轮缓存结束自动跟随。
+  const confirmedEngineRef = useRef<{ deviceId: string; selectedAgentKind: AgentKind | undefined } | null>(null);
   const [remoteDraftRetryEpoch, setRemoteDraftRetryEpoch] = useState(0);
   const [dlSel, setDlSel] = useState<DeviceLinkDraftSelection | null>(null);
   const dlSeedKeyRef = useRef<string | null>(null);
@@ -36,6 +39,13 @@ export function useRemoteDraftDefaults({
   const dlSeedDefaultsRef = useRef<RemoteDraftDefaults | null>(null);
   /** 控制端是否编辑过当前设备 / Agent 的远程运行配置；能力刷新不得覆盖这类显式意图。 */
   const dlRuntimeTouchedRef = useRef(false);
+  /**
+   * 用户是否**明确选过模型或来源**。与 dlRuntimeTouchedRef 分开记:权限 / 思考档 / Fast
+   * 只是「动过这份草稿」,不代表他选定了来源。把它们当成显式选择,自动播种的那家来源
+   * 就被钉死 —— 那家一失效,首条消息就对着发不出去的来源发(Codex review #9369)。
+   * 与本机草稿同口径:patchVendorPrefs 收到显式 model 时才打标,只改思考档 / Fast 不打标。
+   */
+  const dlExplicitChoiceRef = useRef(false);
   const skipDefaultsRefetchRef = useRef(false);
   const remoteDraftIdentityRef = useRef<string | null>(null);
   const remoteDraftRevisionRef = useRef(0);
@@ -46,6 +56,7 @@ export function useRemoteDraftDefaults({
   // 拉被控端当前草稿值。切 device/vendor 时清旧镜像；同一目标重连时后台重拉，
   // 但保留已知值直到新结果落下，避免一次瞬态失败把工作端拥有的 true 压成 false。
   useEffect(() => {
+    confirmedEngineRef.current = null;
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) {
       remoteDraftIdentityRef.current = null;
       setRemoteDraftState({ status: 'idle', value: null });
@@ -79,6 +90,7 @@ export function useRemoteDraftDefaults({
           const received = (v as RemoteDraftDefaults | null) ?? null;
           const value = received && Object.keys(received).length === 0 && cached !== undefined
             ? cached : received;
+          confirmedEngineRef.current = { deviceId: effectiveDeviceLinkDeviceId, selectedAgentKind: received?.selectedAgentKind };
           rememberRemoteDraftDefaults(effectiveDeviceLinkDeviceId, capabilityAgentKind, value, wtPreferenceTransactionRef.current);
           setRemoteDraftState({
             status: 'ready',
@@ -110,6 +122,7 @@ export function useRemoteDraftDefaults({
   ]);
 
   return {
+    confirmedEngineRef,
     remoteDraftState,
     setRemoteDraftState,
     setRemoteDraftRetryEpoch,
@@ -120,6 +133,7 @@ export function useRemoteDraftDefaults({
     dlSeedCapabilitiesRef,
     dlSeedDefaultsRef,
     dlRuntimeTouchedRef,
+    dlExplicitChoiceRef,
     skipDefaultsRefetchRef,
     remoteDraftRevisionRef,
   };
@@ -138,6 +152,7 @@ export function useRemoteDraftSelection({
   deviceDraftDefaultsReady,
   deviceDraftDefaults,
   isAgentDeviceDraft,
+  deviceProvidersError,
 }: {
   remoteDefaults: ReturnType<typeof useRemoteDraftDefaults>;
   usesDeviceCatalog: boolean;
@@ -151,14 +166,20 @@ export function useRemoteDraftSelection({
   deviceDraftDefaultsReady: boolean;
   deviceDraftDefaults: RemoteDraftDefaults | null;
   isAgentDeviceDraft: boolean;
+  deviceProvidersError: string | null;
 }) {
-  const { dlSeedKeyRef, dlSeedCapabilitiesRef, dlSeedDefaultsRef, dlRuntimeTouchedRef, setDlSel } = remoteDefaults;
+  const {
+    dlSeedKeyRef, dlSeedCapabilitiesRef, dlSeedDefaultsRef, dlRuntimeTouchedRef, dlExplicitChoiceRef, setDlSel,
+  } = remoteDefaults;
+  const dlSeedProvidersRef = useRef<ProviderView[] | null>(null);
   useEffect(() => {
     if (!usesDeviceCatalog || !catalogDeviceId) {
       dlSeedKeyRef.current = null;
       dlSeedCapabilitiesRef.current = null;
       dlSeedDefaultsRef.current = null;
+      dlSeedProvidersRef.current = null;
       dlRuntimeTouchedRef.current = false;
+      dlExplicitChoiceRef.current = false;
       setDlSel(null);
       return;
     }
@@ -167,15 +188,18 @@ export function useRemoteDraftSelection({
     // 现代被控端还要等 provider:list；否则 flat capabilities 先播种后不会因目录到达而重校准。
     // 明确不支持该 channel 的旧端继续使用 capabilities fallback。
     const deviceProviderCatalogReady = deviceProvidersUnsupported || !deviceProvidersLoading;
+    // 托管云实例按已连接的供应商目录播种:目录读失败时等它恢复,目录变化与能力变化一样重新校准。
+    const cloudCatalog = isCloudDeviceId(catalogDeviceId);
     if (
       !capabilities ||
       capabilitiesLoading ||
       !deviceDraftDefaultsReady ||
-      !deviceProviderCatalogReady
+      !deviceProviderCatalogReady ||
+      (cloudCatalog && !!deviceProvidersError && !deviceProvidersUnsupported)
     ) return;
     const key = `${catalogDeviceId}:${capabilityAgentKind}`;
     const newTarget = dlSeedKeyRef.current !== key;
-    const capabilitiesChanged = dlSeedCapabilitiesRef.current !== capabilities;
+    const capabilitiesChanged = dlSeedCapabilitiesRef.current !== capabilities || (cloudCatalog && dlSeedProvidersRef.current !== agentCatalogProviders && (!!dlSeedProvidersRef.current?.length || agentCatalogProviders.length > 0));
     if (
       !shouldReseedDeviceLinkDraftDefaults({
         currentSeedKey: dlSeedKeyRef.current,
@@ -188,6 +212,7 @@ export function useRemoteDraftSelection({
     ) {
       if (capabilitiesChanged) {
         dlSeedCapabilitiesRef.current = capabilities;
+        dlSeedProvidersRef.current = agentCatalogProviders;
         // 显式意图只禁止“换成区域默认”，不能把已从新能力清单消失的 model / effort /
         // permission 留在草稿里。用当前控制端选择合成 active draft，只做合法性夹紧。
         setDlSel((current) =>
@@ -204,7 +229,8 @@ export function useRemoteDraftSelection({
                 },
                 current.model,
                 capabilityAgentKind,
-                agentCatalogProviders,
+                cloudCatalog && deviceProvidersUnsupported ? undefined : agentCatalogProviders,
+                catalogDeviceId,
               )
             : current,
         );
@@ -214,14 +240,23 @@ export function useRemoteDraftSelection({
     dlSeedKeyRef.current = key;
     dlSeedCapabilitiesRef.current = capabilities;
     dlSeedDefaultsRef.current = deviceDraftDefaults;
-    if (newTarget) dlRuntimeTouchedRef.current = false;
+    dlSeedProvidersRef.current = agentCatalogProviders;
+    if (newTarget) {
+      dlRuntimeTouchedRef.current = false;
+      // 恢复出来的明确选择（记忆 / 被控端快照标着 modelChosenByUser）继续当显式：一律清零
+      // 会把用户以前选过的来源降级成「自动默认」，随后 remember effect 把 false 写回记忆，
+      // 快照从此再也证明不了那是他选的 —— 断连 / 清单发现失败时静默换到另一家账号 / 计费
+      // 路径（Greptile P1, #9369）。只有真正的自动播种（无标记或标着 false）才记 false。
+      dlExplicitChoiceRef.current = deviceDraftDefaults?.modelChosenByUser === true;
+    }
     setDlSel(
       resolveDeviceLinkDraftDefaults(
         capabilities,
         deviceDraftDefaults,
         undefined,
         capabilityAgentKind,
-        agentCatalogProviders,
+        cloudCatalog && deviceProvidersUnsupported ? undefined : agentCatalogProviders,
+        catalogDeviceId,
       ),
     );
   }, [
@@ -236,6 +271,7 @@ export function useRemoteDraftSelection({
     deviceDraftDefaultsReady,
     deviceDraftDefaults,
     isAgentDeviceDraft,
+    deviceProvidersError,
   ]);
 }
 
@@ -251,7 +287,7 @@ export function useRemoteDraftPush({
   agentCatalogProviders: ProviderView[];
   wtPreferenceTransactionRef: MutableRefObject<Parameters<typeof rememberRemoteDraftDefaults>[3]>;
 }) {
-  const { remoteDraftRevisionRef, setRemoteDraftState, setDlSel } = remoteDefaults;
+  const { confirmedEngineRef, remoteDraftRevisionRef, setRemoteDraftState, setDlSel } = remoteDefaults;
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
     const vendorSlot = capabilityAgentKind === 'claude-code' ? 'claudeCode' : capabilityAgentKind;
@@ -261,6 +297,7 @@ export function useRemoteDraftPush({
       if (push.channel !== 'maker:new-maker-draft:changed') return;
       const payload = push.payload as Record<string, RemoteDraftDefaults | undefined> | null;
       const next = payload?.[vendorSlot] ?? null;
+      confirmedEngineRef.current = { deviceId: effectiveDeviceLinkDeviceId, selectedAgentKind: next?.selectedAgentKind };
       remoteDraftRevisionRef.current += 1;
       rememberRemoteDraftDefaults(effectiveDeviceLinkDeviceId, capabilityAgentKind, next, wtPreferenceTransactionRef.current);
       setRemoteDraftState({ status: 'ready', value: next });
@@ -276,6 +313,7 @@ export function useRemoteDraftPush({
             prev.model,
             capabilityAgentKind,
             agentCatalogProviders,
+            effectiveDeviceLinkDeviceId,
           );
           return { ...prev, effort: re.effort, fastMode: re.fastMode };
         });

@@ -13,7 +13,8 @@
 import { useLayoutEffect } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../shared/ghost';
+import { File as BrowserFile, Blob as BrowserBlob } from 'node:buffer';
+import { type InstalledGhost } from '../../shared/ghost';
 
 const toastWarning = vi.hoisted(() => vi.fn());
 const stageChatAttachment = vi.hoisted(() => vi.fn());
@@ -39,8 +40,10 @@ import {
   clearDraft,
   discardDraft,
   getDraft,
+  saveDraft,
   setComposerDraftOwner,
 } from '@/lib/composerDraftStore';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
@@ -48,7 +51,7 @@ import {
 
 /** Build a minimal FileList-like object addFiles can iterate. */
 function fileListOf(files: Array<{ name: string; size: number }>): FileList {
-  const arr = files.map((f) => ({ name: f.name, size: f.size })) as unknown as File[];
+  const arr = files.map((f) => new BrowserFile([new Uint8Array(f.size)], f.name)) as unknown as File[];
   return Object.assign(arr, { item: (i: number) => arr[i] }) as unknown as FileList;
 }
 
@@ -73,7 +76,7 @@ function enableAttachmentProvider(extensions = ['.pdf']) {
           { id: 'parse', title: 'Parse attachment', position: 'composer.attachment', tool: 'parse', accept: { extensions } },
         ] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); plugins.ghosts = [ghost];
+  plugins.ghosts = [ghost];
 }
 
 beforeEach(() => {
@@ -99,6 +102,27 @@ afterEach(() => {
 });
 
 describe('useAttachments inline rejections', () => {
+  // Tier: unit at the production MCP App → composer boundary. The mounted
+  // composer must mirror a Main-delivered attachment written through the same
+  // helper used by McpAppCard, while preserving the existing text draft.
+  it('shows a MCP App attachment in the mounted composer without replacing text', () => {
+    const sessionId = 'mcp-app-mounted-composer';
+    const text = { type: 'doc' as const, content: [{ type: 'paragraph' as const, content: [{ type: 'text' as const, text: 'keep this draft' }] }] };
+    saveDraft(sessionId, { text, attachments: [], quotes: [], browserComments: [] });
+    const { result, unmount } = renderHook(() => useAttachments(sessionId));
+    const added = {
+      id: 'mcp-app-attachment', name: 'sample.txt', path: '/cache/sample.txt', ext: '.txt',
+      size: 12, category: 'text' as const, mimeType: 'text/plain',
+    };
+
+    act(() => appendMcpAppComposerAttachment(sessionId, added));
+
+    expect(result.current.attachments).toEqual([added]);
+    expect(getDraft(sessionId)?.text).toEqual(text);
+    unmount();
+    clearDraft(sessionId);
+  });
+
   // B, unit: the real add/drop hook must keep the user's file while processing,
   // append text through the same draft and discard late output after removal.
   // Existing read/cache failures do not exercise plugin processing.
@@ -109,11 +133,54 @@ describe('useAttachments inline rejections', () => {
     await act(async () => { await result.current.addFiles(fileListOf([{ name: 'input.pdf', size: 5 }])); });
     expect(result.current.attachments.map(file => file.name)).toEqual(['input.pdf']);
     expect(plugins.call).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'plugin-action',
-      input: { attachment: { name: 'input.pdf', uri: '/tmp/input.pdf', size: 5, mimeType: 'application/pdf' } } }));
+      input: { attachment: { name: 'input.pdf', bytes: new Uint8Array(5), size: 5, mimeType: 'application/pdf' } } }));
     await act(async () => pending.resolve({ handled: true, text: 'Extracted text' }));
     expect(JSON.stringify(getDraft('plugin-attachment')?.text)).toContain('Extracted text');
     expect(result.current.attachments).toEqual([]);
     act(() => discardDraft('plugin-attachment'));
+  });
+  // Unit, #10649: real File/Blob bytes, never the cached or disk path, reach
+  // the provider. Ordinary adds keep the original no-read behavior.
+  it('reads selected File bytes only for a matching provider and reuses clipboard bytes', async () => {
+    const files = fileListOf([{ name: 'input.pdf', size: 5 }]);
+    const read = vi.spyOn(files[0]!, 'arrayBuffer');
+    const { result } = renderHook(() => useAttachments('byte-input'));
+    await act(async () => { await result.current.addFiles(files); });
+    expect(read).not.toHaveBeenCalled();
+    expect(plugins.call).not.toHaveBeenCalled();
+    enableAttachmentProvider(['.png']);
+    await act(async () => { await result.current.addFiles(files); });
+    expect(read).not.toHaveBeenCalled();
+    enableAttachmentProvider(['.pdf', '.png']);
+    plugins.call.mockResolvedValue({ handled: false });
+    await act(async () => { await result.current.addFiles(files); });
+    expect(read).toHaveBeenCalledOnce();
+    const cached = vi.fn(async () => ({ url: 'cindy-media://blobs/clipboard.png' }));
+    Object.assign(window.electronAPI, { cacheImageFromBuffer: cached });
+    const blob = new BrowserBlob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' });
+    const readClipboard = vi.spyOn(blob, 'arrayBuffer');
+    await act(async () => { await result.current.addClipboardImage(blob as unknown as Blob); });
+    expect(readClipboard).toHaveBeenCalledOnce();
+    expect(cached).toHaveBeenCalledOnce();
+    const input = plugins.call.mock.calls.at(-1)![1].input.attachment;
+    expect(input.bytes).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(input).not.toHaveProperty('uri');
+    expect(input).not.toHaveProperty('path');
+    act(() => discardDraft('byte-input'));
+  });
+  it.each(['remove', 'owner'] as const)('does not dispatch after %s changes while File bytes are loading', async kind => {
+    setDataOwnerGeneration('owner-a');
+    enableAttachmentProvider();
+    const pending = deferred<ArrayBuffer>();
+    const files = fileListOf([{ name: 'input.pdf', size: 5 }]);
+    vi.spyOn(files[0]!, 'arrayBuffer').mockReturnValue(pending.promise);
+    const { result } = renderHook(() => useAttachments(undefined, 'late-file-bytes'));
+    await act(async () => { await result.current.addFiles(files); });
+    if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0]!.id));
+    else act(() => setDataOwnerGeneration('owner-b'));
+    await act(async () => pending.resolve(new Uint8Array(5).buffer));
+    expect(plugins.call).not.toHaveBeenCalled();
+    act(() => discardDraft('late-file-bytes'));
   });
   // Unit, #9987: addFiles must adopt a valid result across an unrelated roster
   // broadcast. Removal/revocation coverage does not rebuild the provider entry;
@@ -149,7 +216,7 @@ describe('useAttachments inline rejections', () => {
     if (kind === 'remove') act(() => result.current.removeFile(result.current.attachments[0].id));
     else {
       plugins.ghosts = structuredClone(plugins.ghosts);
-      if (kind === 'revoke') plugins.ghosts[0].approvedHostUi = [];
+      if (kind === 'revoke') plugins.ghosts[0].approval = { state: 'invalid' };
       else if (kind === 'disable') plugins.ghosts[0].enabled = false;
       else plugins.ghosts[0].approval = { state: 'approved', revision: 'two' };
     }

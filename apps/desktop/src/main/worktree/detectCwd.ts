@@ -60,6 +60,7 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
         isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
         gitInstalled: true,
         supportsRecoveryKeyDiscard: true,
+        supportsCheckout: true,
         repoRoot: path.resolve(root),
         ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
       };
@@ -73,6 +74,7 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
     isInsideWorktree: false,
     gitInstalled: true,
     supportsRecoveryKeyDiscard: true,
+    supportsCheckout: true,
   };
   // 1. git --version 探测安装
   try {

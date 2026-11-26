@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import type {
   PluginManagementReceipt,
   PluginPermissionItem,
@@ -30,7 +31,7 @@ export function pluginConsentPresentation(
   return {
     title: facts.name + " · " + facts.version,
     identity: facts.ghostId,
-    trust: consent.trust ? t("plugins.management.trust." + consent.trust) : undefined,
+    trust: pluginSourceWarningKey(consent.installationSource) ? t(pluginSourceWarningKey(consent.installationSource)!) : undefined,
     origin: [
       t("plugins.notice.consentOrigin." + consent.origin),
       consent.originLabel,

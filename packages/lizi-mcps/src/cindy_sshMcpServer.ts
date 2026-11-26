@@ -35,6 +35,7 @@ import {
   registerSshReloadConfigTool,
 } from './ssh/index.js';
 import type { SshMcpDeps } from './types.js';
+import type { HostToolMcpServer } from './host-tool-runtime.js';
 
 const D_LIST_TOOLS =
   '探索 cindy_ssh 可用工具（渐进式发现入口）。不传 category → 返回所有类目+每个类目工具数量。' +
@@ -140,7 +141,7 @@ function registerCallToolEntry(
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
-export function createSshMcpServer(deps: SshMcpDeps): McpServer {
+export function createSshMcpServer(deps: SshMcpDeps): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_ssh',
     version: '1.0.0',
@@ -159,5 +160,10 @@ export function createSshMcpServer(deps: SshMcpDeps): McpServer {
   registerListToolsEntry(server, registry);
   registerCallToolEntry(server, registry);
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
+    describe: (name: string) => registry.list().find(tool => tool.name === name),
+    call: (name: string, args?: Record<string, unknown>) => registry.call(name, args),
+    close: () => server.close(),
+  } });
 }

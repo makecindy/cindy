@@ -66,7 +66,11 @@ interface FakeEndpoint {
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
   github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
-    prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+    installUrl?: string; userAuthorization?: boolean; prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+  githubAllowedRepositories: string[] | undefined;
+  githubConnect: { state: string; redirectUri: string } | undefined;
+  githubGrant: unknown;
+  githubCompleteBody: Record<string, unknown> | undefined;
   githubUnavailable = false;
   githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
@@ -159,8 +163,21 @@ class FakeServer {
         }
       }
       if (this.github && route === 'GET /api/v1/github') return reply(this.githubUnavailable ? 500 : 200, this.githubUnavailable ? {} : this.github);
+      if (this.github && route === 'POST /api/v1/github/connect') {
+        this.githubConnect = body() as { state: string; redirectUri: string };
+        return reply(200, { url: `https://github.com/login/oauth/authorize?state=${this.githubConnect.state}&code_challenge_method=S256` });
+      }
+      if (this.github && route === 'POST /api/v1/github/connect/complete') {
+        this.githubCompleteBody = body();
+        return reply(200, { url: this.github.installUrl, ...(this.githubCompleteBody.includeUserToken ? { grant: this.githubGrant } : {}) });
+      }
       if (this.github && route === 'PUT /api/v1/github/repositories') {
-        this.githubSubscriptionBodies.push(body()); this.github.repositories = body().repositories as string[]; return reply(200, this.github);
+        this.githubSubscriptionBodies.push(body());
+        const requested = body().repositories as string[];
+        const accepted = requested.filter(repo => !this.githubAllowedRepositories || this.githubAllowedRepositories.includes(repo));
+        this.github.repositories = accepted;
+        this.github.unavailable = requested.filter(repo => !accepted.includes(repo));
+        return reply(200, this.github);
       }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
@@ -799,9 +816,10 @@ it('routes managed GitHub events to matching active follow-ups and acknowledges 
     expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12', 'https://github.com/example/project/pull/123']);
     onGithubPrs.mockClear();
     server.push({ batchId: 'github-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
-      events: [{ deliveryId: 'g-1', event: 'pull_request_review', repository: 'example/project', number: 12, receivedAt: 1 }] });
+      events: [{ deliveryId: 'g-1', event: 'pull_request_review_comment', repository: 'example/project', number: 12, receivedAt: 1 }] });
     await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledOnce());
     expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12']);
+    expect(onGithubPrs.mock.calls[0]?.[2].reviews).toEqual(['https://github.com/example/project/pull/12']);
     expect(onBatch).not.toHaveBeenCalled();
     expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'github-batch' });
     expect(server.github.repositories).toEqual(['example/project']);
@@ -1009,8 +1027,143 @@ it('keeps the acknowledged subscription across refresh and connection checks', a
     await remote.githubStatus();
     await remote.refresh();
     expect(server.githubSubscriptionBodies).toHaveLength(count);
+    const requestsAfterExplicitRefresh = server.requests.length;
+    // Schedule run completions that only advance timing fields must not re-query /api/v1/github.
+    await remote.sync([{ ...follow(1), lastFiredAt: 100, lastFinishedAt: 120, nextFireAt: 420 } as Schedule]);
+    expect(server.requests).toHaveLength(requestsAfterExplicitRefresh);
     await remote.sync([follow(2)]);
     expect(server.githubSubscriptionBodies).toHaveLength(count + 1);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ScheduleWebhookRemote.sync 在远端请求尚未完成时本地订阅发生变化（含 A->B 与已同步 A 下的 B->A 回退），未落地的指纹绝不会被标为已同步，最终服务器订阅与最新本地集合一致。
+// - 规则依据：docs/dev-rules/server-channel-review.md —— 单飞对账必须绑定发起时的不可变快照，禁止把在途期间新产生的本地订阅变更静默吞掉。
+// - 现有覆盖缺口：既有测试仅串行 await remote.sync(...)，未覆盖 PUT /api/v1/github/repositories 在途期间并发修改 followed PRs。
+// - 最小失败输入：卡住在途 PUT /api/v1/github/repositories 时连续调用 remote.sync([follow(1), follow(2)]) 及回退到 [follow(1)]。
+// - tier：unit（回环 HTTP/WS 假服务器）。
+it('never marks an unsynced subscription fingerprint as synced when local PRs change mid-flight', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  let holdPut = false;
+  let putEntered = false;
+  let releasePut!: () => void;
+  const resetGate = () => {
+    putEntered = false;
+    return new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+  };
+  let putGate = resetGate();
+  const remote = new ScheduleWebhookRemote({
+    baseUrl: () => baseUrl,
+    getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false,
+    fetch: async (input, init) => {
+      if (holdPut && String(input).endsWith('/api/v1/github/repositories') && init?.method === 'PUT') {
+        putEntered = true;
+        holdPut = false;
+        await putGate;
+      }
+      return fetch(input, init);
+    },
+    socketOptions: async () => ({}),
+    logger: {},
+    onBatch: async () => {},
+    onGithubPrs: async () => {},
+  });
+  const follow = (number: number) => ({
+    id: `follow-${number}`,
+    name: `Follow #${number}`,
+    status: 'active',
+    recurring: true,
+    preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` },
+  }) as Schedule;
+  try {
+    // Case 1: [1] is in flight when local state expands to [1, 2] -> server MUST converge to [1, 2].
+    holdPut = true;
+    const firstSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const secondSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([firstSync, secondSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+
+    // Case 2 (ABA): [1, 2] is already synced; [1] starts in flight, then local state reverts to [1, 2]
+    // before [1] finishes -> pendingReconciles prevents short-circuiting on stale localSyncKey=[1, 2].
+    putGate = resetGate();
+    holdPut = true;
+    const shrinkSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const revertSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([shrinkSync, revertSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+  } finally {
+    releasePut?.();
+    remote.stop();
+    await server.close();
+  }
+});
+
+// Installing the App changes permissions without changing the followed PRs.
+// Only the explicit browser round trip may bypass subscription deduplication.
+it.each(['installation', 'oauth', 'retry', 'early-installation', 'early-oauth'])('rechecks repositories after installation (%s) without repeated background writes', async (outcome) => {
+  const server = new FakeServer();
+  const installUrl = 'https://github.com/apps/example-app/installations/new';
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], installUrl };
+  server.githubAllowedRepositories = [];
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {} });
+  const follow = { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    preRunHook: { command: 'node gate.mjs https://github.com/example/project/pull/1' } } as Schedule;
+  try {
+    await remote.sync([follow]);
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+    if (outcome.endsWith('oauth')) {
+      await remote.connectGithub();
+      const { redirectUri, state } = server.githubConnect!;
+      // Only the ephemeral port comes from the captured request. Keep the test
+      // request on loopback even if a broken callback advertises another host.
+      const port = Number(new URL(redirectUri).port);
+      const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
+      expect(callback.headers.get('location')).toBe(installUrl);
+    } else {
+      await expect(remote.installGithub()).resolves.toBe(installUrl);
+    }
+    // Regular task refreshes while the browser is open must not consume the pending recheck.
+    await remote.refresh();
+    let registrations = outcome.endsWith('oauth') ? 2 : 1;
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    if (outcome.startsWith('early-')) {
+      // PR #10508: a successful status read is not installation completion.
+      // The user returns once before granting access, then returns after granting it.
+      await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+      registrations++;
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+      await remote.refresh();
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    }
+    server.githubAllowedRepositories = ['example/project'];
+    if (outcome === 'retry') {
+      server.githubUnavailable = true;
+      await expect(remote.githubStatus()).rejects.toThrow();
+      server.githubUnavailable = false;
+    }
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: ['example/project'], unavailable: [] });
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
+    await remote.refresh();
+    await remote.githubStatus();
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
   } finally { remote.stop(); await server.close(); }
 });
 
@@ -1049,4 +1202,53 @@ it('keeps ordinary Webhooks and connection status usable while a GitHub batch is
     release();
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'slow-github' }));
   } finally { release(); remote.stop(); await server.close(); }
+});
+
+// New credentials are delivered only to main and must be persisted before reporting success.
+it.each([false, true])('persists an App user grant before redirecting the browser (storage failure: %s)', async fails => {
+  let input!: { state: string; codeChallenge: string; redirectUri: string };
+  const grant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  let saved = false;
+  const attempt = await beginGithubConnect({ start: async value => {
+    input = value; return { url: `https://github.com/login/oauth/authorize?state=${value.state}&code_challenge_method=S256` };
+  }, complete: async () => ({ url: 'https://github.com/apps/example-app/installations/new', grant }),
+    isCurrent: () => true, onConnected: async value => {
+      expect(value).toEqual(grant);
+      if (fails) throw new Error('storage unavailable');
+      saved = true;
+    } });
+  try {
+    const response = await fetch(`${input.redirectUri}?state=${input.state}&code=synthetic`, { redirect: 'manual' });
+    expect(response.status).toBe(fails ? 400 : 303);
+    expect(saved).toBe(!fails);
+    const visible = JSON.stringify([...response.headers]) + await response.text();
+    expect(visible).not.toContain(grant.accessToken);
+    expect(visible).not.toContain(grant.refreshToken);
+  } finally { attempt.close(); }
+});
+
+it.each([false, true])('negotiates App user authorization without changing the old server contract (%s)', async userAuthorization => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example', endpointId: 'whk-github', repositories: [],
+    userAuthorization, installUrl: 'https://github.com/apps/example-app/installations/new' };
+  server.githubGrant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  const baseUrl = await server.listen();
+  const authorized = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {},
+    onGithubAuthorized: authorized });
+  try {
+    await remote.sync([]);
+    await remote.connectGithub();
+    const { redirectUri, state } = server.githubConnect!;
+    // Only the ephemeral port comes from the captured request; the test request stays on loopback.
+    const port = Number(new URL(redirectUri).port);
+    const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
+    expect(callback.status).toBe(303);
+    expect(server.githubCompleteBody?.includeUserToken).toBe(userAuthorization ? true : undefined);
+    expect(authorized).toHaveBeenCalledTimes(userAuthorization ? 1 : 0);
+    if (userAuthorization) expect(authorized).toHaveBeenCalledWith(server.githubGrant);
+  } finally { remote.stop(); await server.close(); }
 });

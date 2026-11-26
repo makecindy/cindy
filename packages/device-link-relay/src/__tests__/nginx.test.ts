@@ -150,6 +150,19 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it('preserves quoted log format delimiters before a server in an included file (#12427)', () => {
+  const format = `log_format site_total escape=json '{' # comment with }
+    '"uri":"$request_uri"' "}" ";";\n`;
+  h.files.set(site, format + originalSite);
+  prepare();
+  expect(h.files.get(site)).toContain(format + 'server {');
+  material('site-total');
+  manageNginx('activate');
+  expect(h.files.get(`${root}/http.conf`)).toContain('proxy_pass https://127.0.0.1:47821;');
+  manageNginx('rollback');
+  expect(h.files.get(site)).toBe(format + originalSite);
+});
+
 it('preserves the original website and ACME webroot through certificate rotation, upgrade and removal', () => {
   const prepared = prepare();
   expect(prepared).toEqual({

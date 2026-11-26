@@ -164,6 +164,46 @@ describe('native mobile card actions', () => {
   });
 });
 
+// Unit: a desktop controlling this computer shows the stored card itself and may answer its
+// model menu. Only that reader gets the markup; mail cards keep their projection; a model choice
+// is accepted only in its declared shape and never with an autosave.
+describe('desktop controller card markup', () => {
+  const desktop = { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-html'] };
+  it('returns the stored card only to readers that ask for it, never for mail cards', async () => {
+    let html = '<div style="color:red"><button data-ghost-action="pick" data-ghost-model-select="">Model</button></div>';
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 240 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => true, dispatch: async () => true },
+    });
+    const card = async (client: typeof desktop) =>
+      (((await provider.get!(context, { ...request, client })).blocks?.find(b => b.id === 'actions')?.data) as { card?: unknown } | undefined)?.card;
+    expect(await card(desktop)).toEqual({ html, height: 240, externalLinks: true });
+    expect(await card({ protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'] })).toBeUndefined();
+    html = renderMailCard({ accountId: 'a', draftId: 'd', key: '12345678-1234-1234-1234-123456789abc', from: 'self@example.test',
+      state: 'draft', status: 'Ready', sendLabel: 'Send', fromLabel: 'From', attachments: [],
+      fields: ['to', 'subject', 'body'].map(name => ({ name, label: name, value: name })) });
+    expect(await card(desktop)).toBeUndefined();
+  });
+  it('forwards a valid model choice and rejects malformed or autosave choices', async () => {
+    const html = '<button data-ghost-action="pick" data-ghost-model-select="">Model</button><button data-ghost-action="change">x</button>';
+    const dispatch = vi.fn(async () => true);
+    const provider = createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'cindy-github', html, v: 1, height: 80 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      interactions: { externalLinks: () => false, dispatch },
+    });
+    const { revision } = await provider.get!(context, { ...request, client: desktop });
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false, agentDeviceId: 'controller' };
+    const base = { client: desktop, collectionId: 'plugin-results', resourceRef: request.ref, actionId: 'pick', input: { revision, pageId: 'page', modelSelection: route } };
+    await provider.invoke!({ controllerDeviceId: 'controller' }, base);
+    expect(dispatch).toHaveBeenCalledWith('c', 'pick', undefined, 'page', 'cindy-github', 'controller', undefined, undefined, undefined, route);
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, modelSelection: { ...route, agentDeviceId: 'local' } } })).rejects.toThrow();
+    await expect(provider.invoke!(context, { ...base, input: { ...base.input, formChange: true } })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('read-only plugin card projection', () => {
   it('preserves readable text and managed assets, never HTML, styles or executable actions', () => {
     const blocks = projectGhostCardBlocks(`<style>p{color:red}</style><h2>Result &amp; title</h2><p>Done</p><img src="${image}"/><div data-ghost-audio="${audio}"></div><button data-ghost-action="delete">Delete</button><script>secret()</script><img src="file:///secret"/>`);
@@ -394,6 +434,45 @@ describe('plugin-card-rich projection', () => {
     const ended = async (key: string) => key === 'o/r#2';
     expect(await omitEndedPrOpenOnly(html, ended)).toBe('<div data-ghost-pr-open-only="o/r#1">one end1</div><p>tail</p>');
     expect(await omitEndedPrOpenOnly(html, async () => true)).toBe('<p>tail</p>');
+  });
+
+  it('projects a merge-ready button to mobile only when live status is open and CLEAN', async () => {
+    const dormantCard = '<div><div data-ghost-pr-open-only="O/R#9"><button style="display:none" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="O/R#9" aria-label="合并"></button></div></div>';
+    const activeCard = '<div><div data-ghost-pr-open-only="O/R#9"><button style="display:inline-flex" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="O/R#9" aria-label="合并"></button></div></div>';
+    const projected = async (card: string, prStatus?: Record<string, unknown>) => {
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true,
+        prStatus: prStatus ? async () => prStatus as never : undefined,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-rich'] } });
+      return (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).items;
+    };
+    expect(await projected(dormantCard, { ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'BLOCKED', title: '', htmlUrl: '', branch: '' })).toEqual([]);
+    expect(await projected(dormantCard, { ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'CLEAN', title: '', htmlUrl: '', branch: '' })).toMatchObject([{ id: 'pr:merge', label: '合并' }]);
+    expect(await projected(dormantCard, undefined)).toEqual([]);
+    expect(await projected(activeCard, { ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'DIRTY', title: '', htmlUrl: '', branch: '' })).toEqual([]);
+    expect(await projected(activeCard, undefined)).toMatchObject([{ id: 'pr:merge', label: '合并' }]);
+  });
+
+  // Regression (Greptile P2 on #12991): a single remote get() with open-only, merge-ready, status
+  // slot, archive button and PR link must query prStatus at most once per PR key.
+  it('deduplicates prStatus lookups across open-only, merge-ready, status slot, archive and links in one get', async () => {
+    const card = '<div><a data-ghost-link="https://github.com/o/r/pull/9">#9 Fix</a>'
+      + '<div data-ghost-pr-status="O/R#9">snapshot</div>'
+      + '<div data-ghost-pr-open-only="O/R#9"><button style="display:none" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="O/R#9" aria-label="合并"></button></div>'
+      + '<button data-ghost-task-archive="O/R#9" aria-label="归档任务"></button></div>';
+    const lookup = vi.fn(async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: 'open', mergeState: 'CLEAN', title: '', htmlUrl: '', branch: '' }) as never);
+    const resource = await createGhostCardRemoteProvider({
+      readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+      authorize: async () => {}, captureScope: () => () => true,
+      prStatus: lookup,
+      taskArchive: async () => ({ allMerged: false, attached: false }),
+      interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+    }).get!(context, { ...request, client: { protocolVersion: 1, primitives: ['plugin-card-actions', 'plugin-card-rich'] } });
+    const items = (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).items;
+    expect(items).toMatchObject([{ url: 'https://github.com/o/r/pull/9', prState: 'open' }, { id: 'pr:merge', label: '合并' }]);
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 });
 

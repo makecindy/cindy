@@ -3,9 +3,8 @@
 This minimal plugin uses only local synthetic data. It declares four runtime hooks and a static
 system prompt fragment. It needs no API key, network access, tools or Agent of its own.
 
-These capabilities are **unreleased**. `minCindyVersion: "0.0.0"` matches the development build
-and is a fixture placeholder. Use a development build containing the runtime context controls.
-Set the actual first supported release before publishing a plugin.
+`minCindyVersion: "0.0.0"` matches the development build used by this fixture.
+Use a Cindy build containing the runtime context controls.
 
 Pack the folder using `ghost_forge_pack`, inspect the five independent permission rows and
 install the resulting `.cindy` package in a test profile. In a test task, open **Task plugins**

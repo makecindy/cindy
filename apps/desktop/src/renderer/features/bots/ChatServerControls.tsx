@@ -13,7 +13,14 @@ import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '..
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
-const emojiChoices = ['👍', '❤️', '😂', '🎉', '👀', '🙏', '✅', '🤔', '🔥', '👏', '🚀', '💯'];
+const emojiChoices = [
+  '👍', '❤️', '😂', '🎉', '👀', '🙏',
+  '✅', '🤔', '🔥', '👏', '🚀', '💯',
+  '😀', '😄', '😊', '😍', '🥰', '😎',
+  '🤣', '😅', '🥹', '😭', '😮', '😱',
+  '😢', '😡', '🤯', '😴', '🤦', '🤷',
+  '👌', '🤝', '💪', '🙌', '👋', '✨',
+];
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
 export { chatErrorKey } from './chatError';
 
@@ -93,7 +100,10 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
       reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange, disabled: busy,
         content: <div className="grid grid-cols-6 gap-1">{emojiChoices.map(emoji =>
           <button type="button" key={emoji} className={iconClass} aria-label={emoji}
-            onClick={() => { onPickerChange(false); void react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>{emoji}</button>)}</div>,
+            onClick={() => { onPickerChange(false); void react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>
+            {/* Color emoji inherit the text color's alpha; keep their native colors fully opaque. */}
+            <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{emoji}</span>
+          </button>)}</div>,
       } : undefined} />
   );
 }

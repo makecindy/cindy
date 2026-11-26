@@ -1,7 +1,10 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { isDarkBackground } from '../../../shared/theme-import/color';
+import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
@@ -26,7 +29,10 @@ import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import {
   engineOfAgentKind,
+  railItemDeviceId,
   railItemKey,
+  type DeviceModelGroupsRailTab,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
@@ -51,7 +57,13 @@ export function UnifiedModelRail({
   providerUsage = null,
   providerGroupUsage,
   remoteSources,
+  pluginEngineTabs,
+  modelGroupDeviceTabs,
 }: {
+  /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
+  /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
+  modelGroupDeviceTabs?: readonly DeviceModelGroupsRailTab[];
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
   onSelect: (item: UnifiedRailItem) => void;
@@ -94,10 +106,14 @@ export function UnifiedModelRail({
         // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线;
         // 远程供应商每台电脑一段,段首同样一条细线。
         const previous = index > 0 ? items[index - 1] : undefined;
+        // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
+        const itemDeviceId = railItemDeviceId(item);
         const separatorBefore =
           item.kind === 'all' ||
-          (item.kind === 'remote-provider' &&
-            (previous?.kind !== 'remote-provider' || previous.deviceId !== item.deviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+        const engineTab = item.kind === 'plugin-engine'
+          ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
+          : undefined;
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
         const railProviders =
@@ -152,8 +168,14 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups' && item.deviceId
+                    ? t('modelGroups.picker.deviceTitle', {
+                        device: modelGroupDeviceTabs?.find((tab) => tab.deviceId === item.deviceId)?.name ?? '',
+                      })
                   : item.kind === 'model-groups'
                     ? t('modelGroups.title')
+                  : item.kind === 'plugin-engine'
+                    ? (engineTab?.name ?? t('newChat.pluginEngines.genericName'))
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -175,6 +197,7 @@ export function UnifiedModelRail({
               label={label}
               accountIdentity={accountIdentity}
               {...(groupNote ? { groupNote } : {})}
+              selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
@@ -200,14 +223,33 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' && item.deviceId ? (
+                // 另一台电脑的模式：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <Waypoints size={16} />
+                </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
                 <Waypoints size={16} />
+              ) : item.kind === 'plugin-engine' && item.deviceId ? (
+                // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
+                <RemoteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' ? (
+                // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
+                <PluginEngineIcon
+                  size={16}
+                  iconDataUrl={engineTab?.iconDataUrl}
+                  className=""
+                />
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
-                <RemoteSourceMark>
-                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
-                </RemoteSourceMark>
+                !item.providerId && isProviderShareAgentDeviceId(item.deviceId) ? <Share2 size={16} /> : (
+                  <RemoteSourceMark>
+                    <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                  </RemoteSourceMark>
+                )
               ) : null}
             </RailButton>
           </div>
@@ -222,6 +264,7 @@ interface RailButtonProps {
   accountIdentity?: string;
   /** 供应商组那一格:用量读的是哪台(或还没分到电脑),账号名跟在这一句后面。 */
   groupNote?: string;
+  selectedUpload: boolean;
   isActive: boolean;
   itemKey: string;
   onClick: () => void;
@@ -245,6 +288,7 @@ function RailButton(props: RailButtonProps) {
   return props.provider ? (
     <ModelPickerAccountBoundary
       providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      subscriptionPool={!!props.provider.subscriptionPool || !!props.provider.subscriptionAccountPool}
       deviceId={props.usageDeviceId}
     >
       <ProviderQuotaButton {...props} provider={props.provider} />
@@ -269,12 +313,15 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
     ? t('providerGroup.member.accountCount', { count: pool.members.length })
     : pool && pickerAccount ? pool.members[0].identity
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : props.accountIdentity;
   const displayedQuota = pool
     ? pool.average === null
       ? null
-      : { usedPercent: 100 - pool.average, resetsAt: null }
+      : {
+          usedPercent: 100 - pool.average,
+          resetsAt: pool.isPool ? null : pool.members[0]?.resetsAt ?? null,
+        }
     : quota;
   return (
     <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
@@ -290,6 +337,7 @@ function RailButtonView({
   onClick,
   disabled,
   children,
+  selectedUpload,
   quota,
   pool,
 }: RailButtonProps & {
@@ -297,6 +345,45 @@ function RailButtonView({
   pool?: ModelPoolQuota | null;
 }) {
   const { t } = useTranslation();
+  const mark = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = mark.current;
+    if (!el || !selectedUpload) return;
+    const applyPalette = () => {
+      // Read the destination token, not an intermediate frame of the button transition.
+      // Chromium resolves CSS color expressions and composites translucent theme colors.
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      canvas.hidden = true;
+      canvas.style.backgroundColor = 'var(--accent-cta-bg)';
+      const button = el.parentElement!;
+      button.append(canvas);
+      const layers = [getComputedStyle(canvas).backgroundColor];
+      // A translucent button shows the rail and panel surfaces underneath.
+      for (let parent = button.parentElement; parent && !layers[0].startsWith('rgb('); parent = parent.parentElement) {
+        layers.unshift(getComputedStyle(parent).backgroundColor);
+      }
+      if (!layers[0].startsWith('rgb(')) {
+        canvas.style.backgroundColor = 'Canvas';
+        layers.unshift(getComputedStyle(canvas).backgroundColor);
+      }
+      canvas.remove();
+      for (const color of layers) {
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+      }
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      el.style.colorScheme = isDarkBackground({ r, g, b }) ? 'dark' : 'light';
+    };
+    applyPalette();
+    const unsubscribe = themeService.onDidChangeTheme(applyPalette);
+    return () => {
+      unsubscribe();
+      el.style.removeProperty('color-scheme');
+    };
+  }, [selectedUpload]);
   const remaining = quota ? Math.round(100 - quota.usedPercent) : null;
   const quotaLabel = pool?.hasAccountDetails
     ? pool.label
@@ -325,7 +412,8 @@ function RailButtonView({
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
-      <ModelPoolQuotaDetails pool={pool} />
+      {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
+      <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
   ) : quotaLabel || note ? (
     <>
@@ -353,14 +441,14 @@ function RailButtonView({
         aria-pressed={isActive}
         data-rail-item={itemKey}
         className={cn(
-          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-[9px] transition-colors',
+          'relative flex h-[38px] w-[34px] shrink-0 flex-col items-center justify-center rounded-lg transition-colors',
           isActive
             ? 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
             : 'text-[var(--text-tertiary)] hover:bg-[var(--model-item-hover)] hover:text-[var(--text-secondary)]',
           disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <span className="flex h-[24px] items-center justify-center">{children}</span>
+        <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
         {(pool?.warning || !!pool?.resetSoonCount) && (
           <span
             aria-hidden

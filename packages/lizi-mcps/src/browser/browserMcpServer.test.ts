@@ -1924,6 +1924,37 @@ describe('browser · backend capability gating (user browser via extension)', ()
       expect(h.calls).toEqual([]);
     } finally { await h.cleanup(); }
   });
+
+  // Production MCP entry (navigate / siteguide), unit tier. 2026-11-25 real run on My browser: every
+  // ctrip.com page suggested the opencli adapters, and `recipe` then refused each one for lacking the
+  // debugger protocol. Execution was gated, suggestions and discovery were not. Minimal failing input:
+  // rawProtocol:false + a ctrip.com navigation, which used to list `opencli:ctrip/*` adapters.
+  it('suggests only recipes the current browser can run, and marks the rest in the site guide', async () => {
+    const plain = { id: 'ctrip-plain-reader', match: ['ctrip.com'], inputs: {},
+      steps: [{ action: 'navigate', url: 'https://www.ctrip.com/' }], output: 'ok' } as unknown as Recipe;
+    const userRecipes = async () => ({ recipes: new Map([[plain.id, plain]]), siteGuides: new Map(), version: 'ctrip-runnable-gating' });
+    const call = async (h: Awaited<ReturnType<typeof makeHarness>>, args: Record<string, unknown>) =>
+      JSON.parse(((await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } })).content as Array<{ text: string }>)[0].text);
+    const page = { action: 'navigate', url: 'https://flights.ctrip.com/online/list/oneway-sha-szx?depdate=2026-12-03' };
+    const mine = await makeHarness({ backendCapabilities: () => ({ evaluate: true, rawProtocol: false }), getUserRecipes: userRecipes },
+      req => ({ targetId: 'tab', url: req.url }));
+    try {
+      expect((await call(mine, page)).recipeSuggestions.map((r: { id: string }) => r.id)).toEqual([plain.id]);
+      const guide = await call(mine, { action: 'siteguide', site: 'ctrip.com' });
+      expect(guide.runnableHint).toContain('不要自行切换');
+      expect(guide.recipes.find((r: { id: string }) => r.id === 'opencli:ctrip/flight')).toMatchObject({ runnable: false });
+      const byIntent = await call(mine, { action: 'siteguide', site: 'ctrip.com', intent: 'flight' });
+      expect(byIntent.recipes.map((r: { id: string }) => r.id)).not.toContain('opencli:ctrip/flight');
+    } finally { await mine.cleanup(); }
+    // The dedicated browser can run adapters: they stay suggested and unmarked.
+    const dedicated = await makeHarness({ backendCapabilities: () => ({}), getUserRecipes: userRecipes }, req => ({ targetId: 'tab', url: req.url }));
+    try {
+      expect((await call(dedicated, page)).recipeSuggestions.some((r: { id: string }) => r.id.startsWith('opencli:ctrip/'))).toBe(true);
+      const guide = await call(dedicated, { action: 'siteguide', site: 'ctrip.com' });
+      expect(guide.runnableHint).toBeUndefined();
+      expect(guide.recipes.every((r: { runnable?: boolean }) => r.runnable === undefined)).toBe(true);
+    } finally { await dedicated.cleanup(); }
+  });
 });
 
 // Sequences in one call and the protocol escape hatch (2026-11-10). Unit tier, production MCP entry.

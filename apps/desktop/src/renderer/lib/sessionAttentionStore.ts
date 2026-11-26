@@ -1,9 +1,11 @@
 import { useMemo, useSyncExternalStore } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { isTransientRemoteError, withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
 
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import {
+  acknowledgeSharedTaskCompletion,
   getRemoteSessionActivity,
   subscribeRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
@@ -253,6 +255,12 @@ function flushPendingRemoteReceipt(sessionId: string): void {
 function sendRemoteReceipt(sessionId: string, receiptClass: RemoteReceiptClass): void {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return;
+  // The normal display/fresh-sync gates have already passed. Shared guests
+  // cannot acknowledge another account's notifications (and must not try).
+  if (isSharedTaskPeer(deviceId)) {
+    acknowledgeSharedTaskCompletion(sessionId, deviceId);
+    return;
+  }
   const invoke = window.electronAPI?.deviceLink?.invoke;
   if (!invoke) return;
   const wireIntent: AttentionClearIntent = receiptClass === 'passive' ? 'passive' : 'explicit';

@@ -8,6 +8,11 @@ import {
 } from '@/components/settings/myDevicesModel';
 
 describe('canBeControlledPlatform（手机不展示「我控制它」）', () => {
+  // App routing: a Mac running another App is a controller, not another Cindy
+  // computer. Existing platform-only coverage missed this input. Unit.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('app=%s preserves legacy Cindy and hides computer controls for other Apps', app => {
+    expect(canBeControlledPlatform('darwin', app)).toBe(app === undefined || app === 'cindy');
+  });
   it('桌面平台可被控制', () => {
     expect(canBeControlledPlatform('darwin')).toBe(true);
     expect(canBeControlledPlatform('win32')).toBe(true);
@@ -70,5 +75,8 @@ describe('resolveActiveConnectionIssue（本机卡片的原因行）', () => {
     expect(resolveActiveConnectionIssue('connecting', authFailed)).toBe(authFailed);
     expect(resolveActiveConnectionIssue('online', authFailed)).toBeNull();
     expect(resolveActiveConnectionIssue('online', unstable)).toBe(unstable);
+    // 2026-11-17 审查：Agent-Net 主连接连不上中转时连接本身还在（online），原来设置页一直显示已连接。
+    const relayDown = { kind: 'agent-net-relay-down' as const };
+    expect(resolveActiveConnectionIssue('online', relayDown)).toBe(relayDown);
   });
 });

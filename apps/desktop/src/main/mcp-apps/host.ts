@@ -1,15 +1,16 @@
 import { z } from 'zod';
-import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, type ViewStateStorage } from './viewState.js';
+import { ComposerDragTickets, DRAG_TICKET_METHOD, DRAG_TICKETS_INVALIDATED, invalidDragTicket } from './composerDrag.js';
+import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, viewStateSnapshot, type ViewStateStorage } from './viewState.js';
 import { createLogger } from '../logger.js';
 import { hostAppSdkAsset } from './hostSdk.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
 import { pagePermissionGrants } from './pagePermissions.js';
-import { PluginAppFiles, type PluginFileAccess } from './pluginFiles.js';
+import { PluginAppFiles, grantViewResource, type PluginFileAccess } from './pluginFiles.js';
 import { withPluginPageTicket, createPageProgressRelay } from './pluginPageCall.js';
 import type { saveAppDownload } from './downloadFile.js';
 import type { AgentInputSerializedFile } from '../../shared/agentInputQueue.js';
 import { PLUGIN_PAGE_TICKET } from './pluginServer.js';
-import { randomUUID, randomBytes, createHmac } from 'node:crypto';
+import { randomUUID, randomBytes, createHmac, createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { AppBridge, type McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -37,10 +38,103 @@ import {
   MCP_APPS_MAX_BYTES,
   MCP_APPS_MAX_REMOTE_BYTES,
 } from './protocol.js';
+import { OwnerScopedAppResourceCache } from './appResourceCache.js';
 
 // A fixed total budget: server progress may renew the View's idle timer, but
 // must not keep a Main-owned tool request alive indefinitely.
 const MCP_APP_TOOL_TIMEOUT_MS = 30 * 60_000;
+export const MCP_APP_COMPOSER_ATTACHMENT_KEY = 'cindy/composer-attachment';
+export const MCP_APP_COMPOSER_ATTACHMENT_METHOD = 'cindy/composer-attachment/add';
+export const MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES = 64 * 1024 * 1024;
+// A manual page can add several files in a minute, while ten attempts per
+// View keeps a loop or a repeated click from turning into an MCP read flood.
+const MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT = 10;
+const MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS = 60_000;
+// Successful no-ops are free and can arrive far faster than actual additions.
+const MAX_COMPOSER_DUPLICATE_RECEIPTS = 512;
+// Pages may add without a gesture, so the rolling rate alone would keep
+// staging files for as long as a card stays open. Reopening resets the View.
+const MCP_APP_COMPOSER_ATTACHMENTS_PER_VIEW = 32;
+const MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW = 512 * 1024 * 1024;
+
+export function validateComposerAttachment(bytes: Uint8Array, mimeType: string): {
+  category: 'image' | 'pdf' | 'text';
+  mimeType: string;
+} {
+  if (bytes.byteLength < 1 || bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+    throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+  const normalizedMimeType = mimeType.split(';', 1)[0]!.trim().toLowerCase();
+  const category = normalizedMimeType.startsWith('image/') ? 'image'
+    : normalizedMimeType === 'application/pdf' ? 'pdf'
+      : normalizedMimeType === 'text/plain' ? 'text' : undefined;
+  if (!category) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_UNSUPPORTED_TYPE');
+  const isPng = bytes.length >= 8 && bytes.slice(0, 8).every((value, index) => value === [137, 80, 78, 71, 13, 10, 26, 10][index]);
+  const isJpeg = bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8;
+  const isGif = bytes.length >= 6 && (new TextDecoder().decode(bytes.slice(0, 6)) === 'GIF89a' || new TextDecoder().decode(bytes.slice(0, 6)) === 'GIF87a');
+  const isWebp = bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === 'RIFF' && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP';
+  const isPdf = bytes.length >= 5 && new TextDecoder().decode(bytes.slice(0, 5)) === '%PDF-';
+  if ((category === 'image' && !(isPng || isJpeg || isGif || isWebp)) || (category === 'pdf' && !isPdf))
+    throw new Error('MCP_APP_COMPOSER_ATTACHMENT_CONTENT_MISMATCH');
+  if (category === 'text') {
+    if (bytes.includes(0)) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_CONTENT_MISMATCH');
+    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { throw new Error('MCP_APP_COMPOSER_ATTACHMENT_CONTENT_MISMATCH'); }
+  }
+  if (category === 'image') {
+    const imageType = isPng ? 'image/png' : isJpeg ? 'image/jpeg' : isGif ? 'image/gif' : 'image/webp';
+    return { category, mimeType: imageType };
+  }
+  return { category, mimeType: normalizedMimeType };
+}
+
+function composerAttachmentUriAllowed(uri: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(uri) && !/^(?:https?|file|ui):/i.test(uri);
+}
+
+function composerAttachmentNameAllowed(name: string): boolean {
+  return name.length > 0 && name.length <= 200 && !/[\\/\0]/.test(name);
+}
+
+function collectComposerAttachmentResources(value: unknown, grants: Set<string>, depth = 0, seen = new Set<object>()): void {
+  if (depth > 32 || !value || typeof value !== 'object' || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectComposerAttachmentResources(item, grants, depth + 1, seen);
+  } else {
+    const object = value as Record<string, unknown>;
+    if (object.type === 'resource_link' && typeof object.uri === 'string' && composerAttachmentUriAllowed(object.uri))
+      grantViewResource(grants, object.uri);
+    for (const item of Object.values(object)) collectComposerAttachmentResources(item, grants, depth + 1, seen);
+  }
+  seen.delete(value);
+}
+
+async function readResourceBytes(result: unknown, uri: string): Promise<{ bytes: Uint8Array; mimeType?: string }> {
+  if (!result || typeof result !== 'object') throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
+  const contents = (result as { contents?: unknown }).contents;
+  if (!Array.isArray(contents)) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
+  const item = contents.find(value => value && typeof value === 'object' && (value as { uri?: unknown }).uri === uri) as Record<string, unknown> | undefined;
+  if (!item) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND');
+  const mimeType = typeof item.mimeType === 'string' ? item.mimeType : undefined;
+  if (typeof item.blob === 'string') {
+    if (Buffer.byteLength(item.blob, 'base64') > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+      throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+    if (item.blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(item.blob))
+      throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
+    try {
+      const decoded = Buffer.from(item.blob, 'base64');
+      if (decoded.toString('base64') !== item.blob) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
+      return { bytes: Uint8Array.from(decoded), mimeType };
+    }
+    catch { throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE'); }
+  }
+  if (typeof item.text === 'string') {
+    if (Buffer.byteLength(item.text, 'utf8') > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+      throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+    return { bytes: new TextEncoder().encode(item.text), mimeType: mimeType ?? 'text/plain' };
+  }
+  throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
+}
 
 export interface McpAppsHostDeps {
   pluginFiles?: PluginFileAccess;
@@ -49,10 +143,10 @@ export interface McpAppsHostDeps {
   /** Desktop injects an owner-scoped vault key so revisions survive restarts. */
   revisionKey?(): string;
   viewState?(owner: object, sessionId: string, clientId: string, record: McpAppRecord): ViewStateStorage;
-  readCard(sessionId: string, clientId: string): Promise<McpAppRecord>;
+  readCard(sessionId: string, clientId: string, localComposer?: boolean): Promise<McpAppRecord>;
   writeCard(sessionId: string, clientId: string, record: McpAppRecord): Promise<void>;
   authorizeTool(
-    sessionId: string | null,
+    sessionId: string,
     tool: Tool,
     args: Record<string, unknown>,
     signal: AbortSignal,
@@ -66,7 +160,24 @@ export interface McpAppsHostDeps {
     files?: AgentInputSerializedFile[],
   ): Promise<void>;
   downloadFile?(input: Omit<Parameters<typeof saveAppDownload>[0], 'showSaveDialog'>): Promise<{ isError?: boolean }>;
-  disposeDocument?(viewId: string): void;
+  /** Main-owned local composer handoff. Never exposed to remote callers. */
+  composerDrag?: (sessionId: string) => boolean | Promise<boolean>;
+  /** Whether the opening renderer shows the task composer that receives attachments. */
+  composerCaller?: (caller: string) => boolean;
+  hasComposerAttachment?(input: { caller: string; sessionId: string; viewId: string; resourceKey: string;
+    signal: AbortSignal; assertCurrent(): Promise<void> }): Promise<boolean>;
+  sendComposerAttachment?(input: {
+    caller: string;
+    sessionId: string;
+    viewId: string;
+    resourceKey: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    bytes: Uint8Array;
+    assertCurrent(): Promise<void>;
+  }): Promise<void>;
+  disposeDocument?(viewId: string, reason?: 'MCP_PLUGIN_UNAVAILABLE'): void;
   connection?(config: AppServerConfig): AppConnection;
   audit?(method: string): void;
 }
@@ -80,6 +191,8 @@ export interface McpAppModelContext {
 
 /** Main-owned authority for a declared resource opened independently of a tool. */
 export interface McpAppResourceBinding {
+  /** Main-owned plugin config; legacy tool-card servers remain in their registry. */
+  config?: AppServerConfig;
   id: string;
   title: string;
   serverId: string;
@@ -180,7 +293,23 @@ class ViewTransport implements Transport {
   }
 }
 
+function isViewStateSave(message: JSONRPCMessage): boolean {
+  return 'method' in message && [VIEW_STATE_METHOD, 'ui/set-view-state'].includes(message.method);
+}
+
 interface View {
+  suspended: boolean;
+  resuming?: boolean;
+  closing: boolean;
+  closingSave?: boolean;
+  contextDirty?: boolean;
+  closingState?: { id: string | number; aliases: Array<string | number>; complete(): void };
+  closingStateInvalid?: JSONRPCMessage[];
+  suspendedMessages: JSONRPCMessage[];
+  suspendedBytes: number;
+  resumeWaiters: Set<{ resolve(): void; reject(error: unknown): void }>;
+  deferredNotifications: Map<string, import('@modelcontextprotocol/sdk/types.js').Notification>;
+
   files?: PluginAppFiles;
   openId?: string;
   owner: object;
@@ -207,6 +336,14 @@ interface View {
   unlisten: (() => void)[];
   stopContext?: () => void;
   links: Map<string, { url: string; claim: () => void; resolve: (success: boolean) => void }>;
+  composerDrag?: ComposerDragTickets;
+  composerAttachmentResources: Set<string>;
+  composerAttachmentInFlight: boolean;
+  composerAttachmentTimes: number[];
+  /** Attachments this View delivered over its lifetime; never refunded. */
+  composerAttachmentTotal: { count: number; bytes: number };
+  composerAttachmentReceipts: Set<string>;
+  composerDuplicateReceipts: Set<string>;
 }
 
 // Standalone, non-persistent Hosts still need a private key. Desktop supplies
@@ -247,6 +384,10 @@ export class McpAppsHost {
     owner: object; sessionId: string; clientId: string; writer: ViewStateWriter;
   }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
+  private readonly resourceCache = new OwnerScopedAppResourceCache<{
+    html: string; hostFullscreenButton: boolean; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
+    policy: ReturnType<typeof appCsp>;
+  }>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   constructor(private readonly deps: McpAppsHostDeps) {}
 
@@ -260,9 +401,9 @@ export class McpAppsHost {
     return owner;
   }
 
-  /** Native entries use the same policy, one-use ticket and original main.js runner. */
-  async callPluginAction(caller: string, sessionId: string | null, source: {
-    serverId: string; id: string; title: string; attachments?: string[]; assertCurrent(): void | Promise<void>;
+  /** Installed native entries use the original main.js runner and source ticket. */
+  async callPluginAction(_caller: string, sessionId: string | null, source: {
+    config: AppServerConfig; id: string; title: string; attachmentBytes?: Uint8Array; assertCurrent(): void | Promise<void>;
   }, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
     const owner = this.captureOwner();
     const assertCurrent = async () => {
@@ -271,18 +412,16 @@ export class McpAppsHost {
       await source.assertCurrent();
     };
     await assertCurrent();
-    const config = this.deps.config(source.serverId);
+    const config = source.config;
     if (!config?.plugin) throw new Error('MCP_PLUGIN_UNAVAILABLE');
     const connection = this.deps.connection?.(config) ?? sharedPluginConnection(config, owner);
     const target = (await connection.tools(signal)).find(tool => tool.name === name && toolVisibleTo(tool, 'app'));
     if (!target) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-    await this.deps.authorizeTool(sessionId, target, args, signal, { caller, clientId: source.id,
-      serverId: config.id, title: source.title });
     await assertCurrent();
     const client = await connection.getClient(signal);
     return withPluginPageTicket({ instance: config.plugin.instance, revision: config.plugin.revision,
       sessionId, clientId: source.id, tool: name, assertCurrent,
-      ...(source.attachments ? { attachments: source.attachments } : {}) }, async ticket => {
+      ...(source.attachmentBytes ? { attachmentBytes: source.attachmentBytes } : {}) }, async ticket => {
       const result = await client.callTool({ name, arguments: args, _meta: { [PLUGIN_PAGE_TICKET]: ticket } },
         CallToolResultSchema, { signal, timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS });
       await assertCurrent();
@@ -321,8 +460,9 @@ export class McpAppsHost {
     clientId: string,
     hostContext: McpUiHostContext,
     openId?: string,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
-    return this.openSource(caller, sessionId, clientId, hostContext, openId);
+    return this.openSource(caller, sessionId, clientId, hostContext, openId, undefined, resolveSdkRef);
   }
 
   async openResource(
@@ -342,6 +482,7 @@ export class McpAppsHost {
     hostContext: McpUiHostContext,
     openId?: string,
     resourceBinding?: McpAppResourceBinding,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
     const owner = this.captureOwner();
     const key = JSON.stringify([caller, sessionId, openId ?? randomUUID()]);
@@ -358,7 +499,7 @@ export class McpAppsHost {
     });
     try {
       return await Promise.race([
-        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId, resourceBinding),
+        this.openView(caller, sessionId, clientId, hostContext, pending.abort.signal, openId, resourceBinding, resolveSdkRef),
         cancelled,
       ]);
     } finally {
@@ -416,6 +557,7 @@ export class McpAppsHost {
     signal: AbortSignal,
     openId?: string,
     resourceBinding?: McpAppResourceBinding,
+    resolveSdkRef?: (sdk: NonNullable<McpAppDocument['sdk']>) => string | undefined,
   ): Promise<McpAppDocument> {
     await this.sweep();
     signal.throwIfAborted();
@@ -434,7 +576,7 @@ export class McpAppsHost {
     const serverId = resourceBinding?.serverId ?? record!.serverId;
     const serverRevision = resourceBinding?.serverRevision ?? record!.serverRevision;
     const resourceUri = resourceBinding?.resourceUri ?? record!.resourceUri;
-    const config = this.deps.config(serverId);
+    const config = resourceBinding?.config ?? this.deps.config(serverId);
     if (!config || this.serverRevision(config) !== serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
     config.plugin?.assertCurrent(sessionId ?? undefined);
@@ -465,10 +607,16 @@ export class McpAppsHost {
       const tool = record ? (await connection.tools(signal)).find((item) => item.name === record!.tool.name) : undefined;
       if (record && (!tool || uiToolUri(tool) !== resourceUri))
         throw new Error('MCP_APP_TOOL_UNAVAILABLE');
-      const loaded = await connection.resource(resourceUri, signal);
-      signal.throwIfAborted();
-      const resource = readAppResource(loaded.result, resourceUri, loaded.meta);
-      const policy = appCsp(resource.meta);
+      const resourceKey = JSON.stringify([serverId, serverRevision, config.plugin?.packageSha256, resourceUri]);
+      let resource = config.plugin ? this.resourceCache.get(owner, resourceKey) : undefined;
+      if (!resource) {
+        const loaded = await connection.resource(resourceUri, signal);
+        signal.throwIfAborted();
+        const parsed = readAppResource(loaded.result, resourceUri, loaded.meta);
+        resource = { ...parsed, policy: appCsp(parsed.meta) };
+        if (config.plugin) this.resourceCache.set(owner, resourceKey, resource);
+      }
+      const policy = resource.policy;
       if (config.plugin) {
         const allowed = new Set(config.plugin.domains);
         for (const domains of Object.values(policy.csp)) {
@@ -479,6 +627,9 @@ export class McpAppsHost {
         }
         config.plugin.assertCurrent(sessionId ?? undefined);
       }
+      const composerAttachment = caller.startsWith('renderer:') && sessionId !== null &&
+        !!this.deps.sendComposerAttachment && (this.deps.composerCaller?.(caller) ?? true);
+      const allowComposerDrag = composerAttachment && sessionId !== null && await this.deps.composerDrag?.(sessionId);
       await resourceBinding?.assertCurrent();
       if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
       // Recheck after async resource loading so simultaneous opens share the limit.
@@ -488,23 +639,33 @@ export class McpAppsHost {
       )
         throw new Error('MCP_APP_VIEW_LIMIT');
       const viewId = randomUUID();
+      const remote = caller.startsWith('device:');
       const document: McpAppDocument = {
-        sdk: { source: hostAppSdkAsset.source, addons: hostAppSdkAsset.addons },
+        sdk: { source: hostAppSdkAsset.source, addons: remote ? {
+          'cindy/view-state': hostAppSdkAsset.addons['cindy/view-state'],
+        } : hostAppSdkAsset.addons },
         viewId,
         html: resource.html,
         csp: policy.header,
         policy: policy.csp,
         prefersBorder: resource.meta.prefersBorder !== false,
       };
-      const remote = caller.startsWith('device:');
+      // Use bytes already held by the viewer before optional SDK bytes compete
+      // with the page budget. The resolver is local, never part of hostContext.
+      const sdkRef = remote && document.sdk ? resolveSdkRef?.(document.sdk) : undefined;
+      if (sdkRef) { document.sdkRef = sdkRef; delete document.sdk; }
       // The optional runtime must not reduce the budget of an installed page.
       // With no source detection, a missing SDK can only fail that page's import.
       if (remote && document.sdk && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         // Optional addons never displace an official SDK that would fit on its own.
         document.sdk = { source: document.sdk.source };
+        // A previous boundary-sized page may have cached this reduced variant.
+        const reducedSdkRef = resolveSdkRef?.(document.sdk);
+        if (reducedSdkRef) { document.sdkRef = reducedSdkRef; delete document.sdk; }
       }
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
         delete document.sdk;
+        delete document.sdkRef;
         if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
           throw new Error('MCP_APP_RESOURCE_TOO_LARGE');
         createLogger('mcp-apps').warn('Host SDK omitted: page fits the remote budget, but page plus SDK exceeds it; bare SDK imports will fail in this View');
@@ -527,6 +688,7 @@ export class McpAppsHost {
       // Private restoration data is execution-host owned, including on the first open.
       delete context[VIEW_STATE_KEY];
       delete context.viewState;
+      delete context['cindy/host-controls'];
       // Independently opened resources have no persisted card to own a snapshot.
       const stateStorage = sessionId !== null && record
         ? this.deps.viewState?.(owner, sessionId, clientId, record) : undefined;
@@ -552,6 +714,8 @@ export class McpAppsHost {
       );
       const bridge = createBridge();
       const view: View = {
+        suspended: false, closing: false, contextDirty: false, suspendedMessages: [], suspendedBytes: 0,
+        resumeWaiters: new Set(), deferredNotifications: new Map(),
         openId,
         owner,
         caller,
@@ -572,6 +736,7 @@ export class McpAppsHost {
         initializeState: async () => {},
         restartDocument: async () => {
           // Revoke before closing the old SDK Protocol, including its error replies.
+          view.composerDrag?.invalidate();
           view.generation++;
           view.initialized = false;
           transport.discardDocumentEvents(view.generation);
@@ -581,8 +746,11 @@ export class McpAppsHost {
           const next = view.bridge = createBridge(view.context);
           const generation = view.generation;
           await old.close();
-          if (this.views.get(viewId) === view && view.generation === generation)
-            await connectDocument(next);
+          if (this.views.get(viewId) !== view || view.generation !== generation) return;
+          await connectDocument(next);
+          // A page can initialize again without replacing the DOM or its SDK bindings.
+          if (view.composerDrag && this.views.get(viewId) === view && view.generation === generation)
+            await transport.send({ jsonrpc: '2.0', method: DRAG_TICKETS_INVALIDATED });
         },
         inputSent: false,
         resultSent: false,
@@ -590,6 +758,13 @@ export class McpAppsHost {
         unlisten: [],
         stopContext,
         links: new Map(),
+        composerDrag: allowComposerDrag ? new ComposerDragTickets() : undefined,
+        composerAttachmentResources: new Set(),
+        composerAttachmentInFlight: false,
+        composerAttachmentTimes: [],
+        composerAttachmentTotal: { count: 0, bytes: 0 },
+        composerAttachmentReceipts: new Set(),
+        composerDuplicateReceipts: new Set(),
       };
       this.views.set(viewId, view);
       liveView = view;
@@ -605,11 +780,18 @@ export class McpAppsHost {
         view.files = new PluginAppFiles(viewId, config.plugin.instance, this.deps.pluginFiles, assertView);
         document.csp = document.csp.replace(/connect-src [^;]*/, match => match.replace("'none'", "").concat(" 'self'"));
       }
+      if (!view.files) {
+        collectComposerAttachmentResources(record?.tool, view.composerAttachmentResources);
+        collectComposerAttachmentResources(record?.arguments, view.composerAttachmentResources);
+        collectComposerAttachmentResources(record?.result, view.composerAttachmentResources);
+      }
       const connectDocument = async (bridge: AppBridge): Promise<void> => {
         const generation = view.generation;
         const assertCurrent = async () => {
+          await this.waitUntilActive(viewId, view);
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
           await assertView();
+          await this.waitUntilActive(viewId, view);
           await resourceBinding?.assertOperation?.();
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
         };
@@ -674,31 +856,59 @@ export class McpAppsHost {
               stateAllowed = true;
               restored = undefined;
             }
+            if ('id' in message && message.id === initializeId && 'result' in message) {
+              const result = message.result as Record<string, unknown>;
+              const capabilities = result.hostCapabilities as Record<string, unknown>;
+              const experimental = {
+                ...(capabilities.experimental as Record<string, unknown> | undefined),
+                ...(composerAttachment
+                  ? { [MCP_APP_COMPOSER_ATTACHMENT_KEY]: { version: 1, maxBytes: MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES, ...(view.composerDrag ? { drag: { version: 1 } } : {}) } }
+                  : {}),
+              };
+              message = { ...message, result: {
+                ...result,
+                hostCapabilities: { ...capabilities, ...(Object.keys(experimental).length ? { experimental } : {}) },
+              } };
+            }
             await transport.send(message);
+            const closing = view.closingState;
+            if (closing && !('method' in message) && 'id' in message && message.id === closing.id) {
+              // Coalesced saves receive the same commit receipt as the latest one,
+              // just like the normal single-flight writer's pending batch.
+              for (const id of closing.aliases) await transport.send({ ...message, id });
+              view.closingState = undefined;
+              closing.complete();
+            }
           },
           async close() { scopedTransport.onclose?.(); },
         };
         view.documentTransport = scopedTransport;
-        const currentClient = async (signal: AbortSignal) => {
-          await assertCurrent();
+        const currentClient = async (signal: AbortSignal, check = assertCurrent) => {
+          await check();
           signal.throwIfAborted();
           const current = await connection.getClient(signal);
           // Reconnecting can outlive a cancellation, card clear or owner change.
-          await assertCurrent();
+          await check();
           signal.throwIfAborted();
           return current;
         };
-        const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
+        const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal, check = assertCurrent): Promise<T> => {
           const result = await pending;
           // Authorization can change while the server is working. Discard the late
           // result before AppBridge can send it; never replay the upstream request.
-          await assertCurrent();
+          await check();
           signal.throwIfAborted();
           return result;
         };
         bridge.oninitialized = () => {
           if (view.initialized || !bridge.getAppCapabilities()) return;
           view.initialized = true;
+          // Host-generated presentation fact. Page requests cannot forge this key.
+          const appModes = bridge.getAppCapabilities()?.availableDisplayModes;
+          view.context = { ...view.context, 'cindy/host-controls': {
+            fullscreenButton: resource.hostFullscreenButton && view.context.availableDisplayModes?.includes('fullscreen') === true &&
+              (!appModes || appModes.includes('fullscreen')),
+          } };
           void assertCurrent()
             .then(async () => {
               const attachments = (record?.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
@@ -739,9 +949,13 @@ export class McpAppsHost {
           const tools = await currentResult(connection.tools(extra.signal), extra.signal);
           const target = tools.find((item) => item.name === params.name);
           if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-          // Page calls use the tool's normal policy regardless of how the script started.
-          // The one-use ticket below binds identity; it does not grant approval.
-          await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId, title: resourceBinding?.title ?? record!.tool.title ?? record!.tool.name, caller });
+          // Named plugin pages use installation authority. Legacy tool-card pages
+          // and external MCP Apps retain their existing Agent approval flow.
+          if (!resourceBinding || !config.plugin) {
+            if (sessionId === null) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+            await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal,
+              { clientId, serverId, title: resourceBinding?.title ?? record!.tool.title ?? record!.tool.name, caller });
+          }
           const client = await currentClient(extra.signal);
           if (!config.plugin) {
             const token = params._meta?.progressToken;
@@ -749,7 +963,7 @@ export class McpAppsHost {
             let forwarding = false;
             let pendingProgress: Progress | undefined;
             try {
-              return (await currentResult(
+              const result = (await currentResult(
                 client.callTool(params, CallToolResultSchema, {
                   signal: extra.signal,
                   timeout: MCP_APP_TOOL_TIMEOUT_MS,
@@ -790,6 +1004,8 @@ export class McpAppsHost {
                 }),
                 extra.signal,
               )) as CallToolResult;
+              collectComposerAttachmentResources(result, view.composerAttachmentResources);
+              return result;
             } finally {
               active = false;
               pendingProgress = undefined;
@@ -814,12 +1030,124 @@ export class McpAppsHost {
               revision: config.plugin.revision, sessionId, clientId, tool: target.name, assertCurrent,
               ...(typeof token === 'string' || typeof token === 'number' ? { onProgress: progress.update } : {}),
             }, invoke);
-            return view.files ? await view.files.project(result) : result;
+            const projected = view.files ? await view.files.project(result) : result;
+            if (!view.files) collectComposerAttachmentResources(projected, view.composerAttachmentResources);
+            return projected;
           } finally {
             extra.signal.removeEventListener('abort', closeProgress);
             progress.close();
           }
         };
+        if (composerAttachment && sessionId !== null) {
+          const files = view.files;
+          const resource = (params: unknown) => {
+            if (!params || typeof params !== 'object') throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
+            const { uri, name, requestId } = params as Record<string, unknown>;
+            if (typeof uri !== 'string' || !composerAttachmentUriAllowed(uri) ||
+                typeof name !== 'string' || !composerAttachmentNameAllowed(name) ||
+                (requestId !== undefined && (typeof requestId !== 'string' || requestId.length > 128)))
+              throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID');
+            return { uri, name, requestId };
+          };
+          const assertGranted = (uri: string) => {
+            if (!view.composerAttachmentResources.has(uri) && !files?.hasResource(uri))
+              throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+          };
+          const addAttachment = async ({ uri, name, requestId }: ReturnType<typeof resource>, signal: AbortSignal, check: () => Promise<void>) => {
+            await check();
+            if (requestId && (view.composerAttachmentReceipts.has(requestId) || view.composerDuplicateReceipts.has(requestId))) return {};
+            if (view.composerAttachmentInFlight) throw new Error('MCP_APP_COMPOSER_ATTACHMENT_BUSY');
+            assertGranted(uri);
+            view.composerAttachmentInFlight = true;
+            try {
+              // Keep the identity across View remounts, without copying a resource URI into the draft.
+              const resourceKey = createHash('sha256').update(JSON.stringify([sessionId, clientId, uri])).digest('hex');
+              if (this.deps.hasComposerAttachment) {
+                const present = await this.deps.hasComposerAttachment({ caller, sessionId, viewId, resourceKey, signal, assertCurrent: check });
+                await check();
+                if (present) {
+                  if (requestId) {
+                    const receipts = view.composerDuplicateReceipts;
+                    if (receipts.size >= MAX_COMPOSER_DUPLICATE_RECEIPTS) receipts.delete(receipts.values().next().value!);
+                    receipts.add(requestId);
+                  }
+                  return {};
+                }
+              }
+              const total = view.composerAttachmentTotal;
+              if (total.count >= MCP_APP_COMPOSER_ATTACHMENTS_PER_VIEW || total.bytes >= MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_LIMIT');
+              const now = Date.now();
+              view.composerAttachmentTimes = view.composerAttachmentTimes.filter(at => now - at < MCP_APP_COMPOSER_ATTACHMENT_WINDOW_MS);
+              if (view.composerAttachmentTimes.length >= MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_RATE_LIMIT');
+              view.composerAttachmentTimes.push(now);
+              let bytes: Uint8Array;
+              let mimeType: string | undefined;
+              if (files?.hasResource(uri) && /^(?:cindy-media|library|handoff):/i.test(uri)) {
+                const info = await files.describeGranted(uri);
+                mimeType = info.mimeType;
+                const response = await files.readGranted(uri, signal);
+                const rejected = !response.ok ? 'MCP_APP_COMPOSER_ATTACHMENT_RESOURCE_NOT_FOUND'
+                  : Number(response.headers.get('content-length')) > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES ? 'MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE' : undefined;
+                if (rejected) {
+                  // Release the file stream that an unread body would keep open.
+                  await response.body?.cancel().catch(() => {});
+                  throw new Error(rejected);
+                }
+                bytes = new Uint8Array(await response.arrayBuffer());
+              } else {
+                const client = await currentClient(signal, check);
+                const value = await currentResult(client.readResource({ uri }, { signal }), signal, check);
+                const read = await readResourceBytes(value, uri);
+                bytes = read.bytes;
+                mimeType = read.mimeType;
+              }
+              if (bytes.byteLength < 1 || bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
+              if (total.bytes + bytes.byteLength > MCP_APP_COMPOSER_ATTACHMENT_BYTES_PER_VIEW)
+                throw new Error('MCP_APP_COMPOSER_ATTACHMENT_LIMIT');
+              const validated = validateComposerAttachment(bytes, mimeType ?? 'application/octet-stream');
+              await check();
+              await this.deps.sendComposerAttachment!({
+                caller, sessionId, viewId, resourceKey, name, mimeType: validated.mimeType,
+                size: bytes.byteLength, bytes, assertCurrent: check,
+              });
+              total.count += 1;
+              total.bytes += bytes.byteLength;
+              await check();
+              if (requestId) view.composerAttachmentReceipts.add(requestId);
+              return {};
+            } finally {
+              view.composerAttachmentInFlight = false;
+            }
+          };
+          bridge.setRequestHandler(
+            z.object({ method: z.literal(MCP_APP_COMPOSER_ATTACHMENT_METHOD), params: z.unknown().optional() }),
+            (request, extra) => addAttachment(resource(request.params), extra.signal, assertCurrent),
+          );
+          const drag = view.composerDrag;
+          if (drag) bridge.setRequestHandler(
+            z.object({ method: z.literal(DRAG_TICKET_METHOD), params: z.unknown().optional() }),
+            async request => {
+              const { uri, name } = resource(request.params);
+              const signal = drag.signal;
+              // A suspended View must fail a drop immediately, never wait for its lease to resume.
+              const check = async () => {
+                signal.throwIfAborted();
+                if (view.composerDrag !== drag || view.closing || view.suspended || view.generation !== generation)
+                  throw invalidDragTicket();
+                await this.assertCurrentView(viewId, view, true);
+                await resourceBinding?.assertOperation?.();
+                signal.throwIfAborted();
+              };
+              drag.reserve();
+              await check();
+              assertGranted(uri);
+              return { ticket: drag.issue(() => addAttachment({ uri, name, requestId: undefined }, signal, check)) };
+            },
+          );
+        }
         bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
           await assertCurrent();
           const tools = await currentResult(connection.tools(extra.signal), extra.signal);
@@ -978,7 +1306,8 @@ export class McpAppsHost {
           const modes = bridge.getAppCapabilities()?.availableDisplayModes ??
             context.availableDisplayModes ?? ['inline'];
           const mode =
-            modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode)
+            params.mode === 'inline' ||
+            (modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode))
               ? params.mode
               : (view.context.displayMode ?? 'inline');
           view.context = { ...view.context, displayMode: mode };
@@ -990,6 +1319,11 @@ export class McpAppsHost {
         view.unlisten.push(
           connection.listen((message) => {
             if (view.generation !== generation || !view.initialized || owner !== this.deps.owner()) return;
+            if (view.suspended) {
+              if (['notifications/tools/list_changed', 'notifications/resources/list_changed', 'notifications/prompts/list_changed'].includes(message.method))
+                view.deferredNotifications.set(message.method, message);
+              return;
+            }
             if (message.method === 'notifications/tools/list_changed')
               void bridge.sendToolListChanged(message.params).catch(() => {});
             if (message.method === 'notifications/resources/list_changed')
@@ -1067,11 +1401,23 @@ export class McpAppsHost {
     }
   }
 
+  async redeemComposerAttachmentDrag(caller: string, sessionId: string, ticket: string): Promise<void> {
+    if (!this.deps.composerDrag || !caller.startsWith('renderer:') || !/^[a-f0-9]{48}$/.test(ticket)) throw invalidDragTicket();
+    for (const view of this.views.values()) {
+      const add = view.composerDrag?.take(ticket);
+      if (!add) continue;
+      if (view.caller !== caller || view.sessionId !== sessionId || view.owner !== this.deps.owner()) throw invalidDragTicket();
+      await add();
+      return;
+    }
+    throw invalidDragTicket();
+  }
+
   async assertViewAuthorized(caller: string, sessionId: string | null, id: string): Promise<void> {
     await this.assertCurrentView(id, this.view(caller, sessionId, id));
   }
 
-  private async assertCurrentView(id: string, view: View): Promise<void> {
+  private async assertCurrentView(id: string, view: View, localComposer?: boolean): Promise<void> {
     this.view(view.caller, view.sessionId, id);
     if (view.resourceBinding) {
       await view.resourceBinding.assertCurrent();
@@ -1079,7 +1425,12 @@ export class McpAppsHost {
       return;
     }
     if (!view.record || view.sessionId === null) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
-    const latest = await this.deps.readCard(view.sessionId, view.clientId);
+    let latest: McpAppRecord;
+    try { latest = await this.deps.readCard(view.sessionId, view.clientId, localComposer); }
+    catch (error) {
+      if (this.views.get(id) !== view) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+      throw error;
+    }
     this.view(view.caller, view.sessionId, id);
     if (
       latest.serverId !== view.record.serverId ||
@@ -1094,12 +1445,12 @@ export class McpAppsHost {
   async readPluginFile(viewId: string, token: string, request: Request): Promise<Response> {
     const view = this.views.get(viewId);
     if (!view?.files) return new Response(null, { status: 404 });
-    try { return await view.files.read(token, request); }
+    try { await this.waitUntilActive(viewId, view); return await view.files.read(token, request); }
     catch { return new Response(null, { status: 404 }); }
   }
 
   private async sendResult(id: string, view: View): Promise<void> {
-    if (!view.record || !view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
+    if (view.suspended || !view.record || !view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
     const generation = view.generation;
     const bridge = view.bridge;
     try {
@@ -1115,6 +1466,7 @@ export class McpAppsHost {
     try {
       if (view.record.result) {
         const result = view.files ? await view.files.project(view.record.result) : view.record.result;
+        if (!view.files) collectComposerAttachmentResources(result, view.composerAttachmentResources);
         if (view.generation !== generation || view.resultSent) return;
         view.resultSent = true;
         await bridge.sendToolResult(result as CallToolResult);
@@ -1128,7 +1480,7 @@ export class McpAppsHost {
     }
   }
 
-  private view(caller: string, sessionId: string | null, id: string): View {
+  private ownedView(caller: string, sessionId: string | null, id: string): View {
     const view = this.views.get(id);
     if (
       !view ||
@@ -1137,7 +1489,12 @@ export class McpAppsHost {
       view.owner !== this.deps.owner()
     )
       throw new Error('MCP_APP_VIEW_UNAVAILABLE');
-    const config = this.deps.config(view.serverId);
+    return view;
+  }
+
+  private view(caller: string, sessionId: string | null, id: string): View {
+    const view = this.ownedView(caller, sessionId, id);
+    const config = view.resourceBinding?.config ?? this.deps.config(view.serverId);
     if (!config || this.serverRevision(config) !== view.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
     config.plugin?.assertCurrent(sessionId ?? undefined);
@@ -1145,11 +1502,84 @@ export class McpAppsHost {
     return view;
   }
 
+  private async waitUntilActive(id: string, view: View, closingPoll = false): Promise<void> {
+    while (view.suspended && this.views.get(id) === view) {
+      if (view.resumeWaiters.size >= 32) {
+        await this.disposeView(id, view);
+        throw new Error('MCP_APP_BACKPRESSURE');
+      }
+      const pending = new Promise<void>((resolve, reject) => view.resumeWaiters.add({ resolve, reject }));
+      pending.catch(() => {});
+      await pending;
+    }
+    if (this.views.get(id) !== view || view.owner !== this.deps.owner() || view.closing && !closingPoll && !view.closingSave) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+  }
+
+  /** Local Renderer control only; neither device callers nor App frames can pause another View. */
+  async setSuspended(caller: string, sessionId: string | null, id: string, suspended: boolean): Promise<void> {
+    if (!caller.startsWith('renderer:')) throw new Error('MCP_APP_OWNER_ONLY');
+    const view = this.ownedView(caller, sessionId, id);
+    if (view.closing || view.suspended === suspended) return;
+    if (suspended) { view.composerDrag?.invalidate(); view.suspended = true; return; }
+    view.resuming = true;
+    // Revalidate before releasing any queued calls. Their normal handlers still
+    // enforce current owner, revision, document generation and tool approval.
+    try { await this.assertCurrentView(id, view); }
+    catch (error) { await this.disposeView(id, view); throw error; }
+    view.suspended = false;
+    if (view.composerDrag && view.initialized)
+      await view.transport.send({ jsonrpc: '2.0', method: DRAG_TICKETS_INVALIDATED });
+    view.resumeWaiters.forEach(waiter => waiter.resolve()); view.resumeWaiters.clear();
+    try {
+    while (!view.suspended && !view.closing && this.views.get(id) === view && view.suspendedMessages.length) {
+      const message = view.suspendedMessages.shift()!;
+      view.suspendedBytes -= Buffer.byteLength(JSON.stringify(message));
+      await this.dispatchActive(id, view, message);
+    }
+    } finally { view.resuming = false; }
+    if (view.suspended || view.closing || this.views.get(id) !== view) return;
+    const notifications = [...view.deferredNotifications.values()]; view.deferredNotifications.clear();
+    for (const message of notifications) {
+      if (message.method === 'notifications/tools/list_changed') await view.bridge.sendToolListChanged(message.params);
+      if (message.method === 'notifications/resources/list_changed') await view.bridge.sendResourceListChanged(message.params);
+      if (message.method === 'notifications/prompts/list_changed') await view.bridge.sendPromptListChanged(message.params);
+    }
+    if (view.contextDirty) {
+      view.contextDirty = false;
+      if (view.initialized) view.bridge.setHostContext(view.context);
+    }
+    await this.sendResult(id, view);
+  }
+
   async dispatch(caller: string, sessionId: string | null, id: string, input: unknown): Promise<void> {
     if (JSON.stringify(input).length > MCP_APPS_MAX_BYTES)
       throw new Error('MCP_APP_MESSAGE_TOO_LARGE');
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
     let message = JSONRPCMessageSchema.parse(input);
+    if (view.closing && 'method' in message && !isViewStateSave(message)) return;
+    if ((view.suspended || view.resuming) && 'method' in message) {
+      if (message.method === DRAG_TICKET_METHOD && 'id' in message) {
+        await view.transport.send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'MCP_APP_COMPOSER_DRAG_INVALID' } });
+        return;
+      }
+      // Queue before any card/database read or SDK handler. A hostile page cannot
+      // retain an unbounded number of RPC bodies during its five-second lease.
+      const serialized = JSON.stringify(message);
+      const bytes = Buffer.byteLength(serialized);
+      if (view.suspendedMessages.length >= 32 || view.suspendedBytes + bytes > 1024 * 1024) {
+        await this.disposeView(id, view);
+        throw new Error('MCP_APP_BACKPRESSURE');
+      }
+      view.suspendedMessages.push(JSON.parse(serialized));
+      view.suspendedBytes += bytes;
+      return;
+    }
+    await this.dispatchActive(id, view, message);
+  }
+
+  private async dispatchActive(id: string, view: View, message: JSONRPCMessage): Promise<void> {
+    const { caller, sessionId } = view;
+    this.view(caller, sessionId, id);
     // The stable spec used one content block; newer official SDKs use an array.
     if (
       'method' in message &&
@@ -1165,6 +1595,7 @@ export class McpAppsHost {
     const generation = view.generation;
     await view.documentReady;
     if (view.generation !== generation) return;
+    if (view.closing && 'method' in message && !isViewStateSave(message)) return;
     this.view(caller, sessionId, id);
     if (
       'method' in message &&
@@ -1198,10 +1629,13 @@ export class McpAppsHost {
 
   async poll(caller: string, sessionId: string | null, id: string, after: number) {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error('MCP_APP_INVALID_CURSOR');
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
+    await this.waitUntilActive(id, view, true);
+    this.view(caller, sessionId, id);
     if (after > view.transport.seq) throw new Error('MCP_APP_INVALID_CURSOR');
     await this.assertCurrentView(id, view);
     const events = await view.transport.poll(after);
+    await this.waitUntilActive(id, view, true);
     await this.assertCurrentView(id, view);
     // An authorization read may straddle a new initialize after poll has already
     // taken a snapshot. Do not return that snapshot's old-document replies.
@@ -1209,7 +1643,8 @@ export class McpAppsHost {
   }
 
   context(caller: string, sessionId: string | null, id: string, patch: McpUiHostContext): void {
-    const view = this.view(caller, sessionId, id);
+    const view = this.ownedView(caller, sessionId, id);
+    if (!view.suspended && !view.resuming) this.view(caller, sessionId, id);
     const old = view.context;
     // Tool identity and granted capabilities are host-owned, never renderer overrides.
     const allowed = [
@@ -1226,7 +1661,11 @@ export class McpAppsHost {
     );
     if (view.resourceBinding?.projectContext && Object.hasOwn(patch, 'cindy'))
       update.cindy = view.resourceBinding.projectContext(patch);
-    view.context = { ...old, ...update };
+    const next = { ...old, ...update };
+    const changed = JSON.stringify(next) !== JSON.stringify(old);
+    view.context = next;
+    if (!changed) return;
+    if (view.suspended || view.resuming) { view.contextDirty = true; return; }
     if (view.initialized) view.bridge.setHostContext(view.context);
   }
 
@@ -1264,9 +1703,11 @@ export class McpAppsHost {
   ): void {
     const view = this.view(caller, sessionId, id);
     const appModes = view.bridge.getAppCapabilities()?.availableDisplayModes;
+    // Inline is always allowed.
     if (
-      !view.context.availableDisplayModes?.includes(mode) ||
-      (appModes && !appModes.includes(mode))
+      mode !== 'inline' &&
+      (!view.context.availableDisplayModes?.includes(mode) ||
+        (appModes && !appModes.includes(mode)))
     )
       return;
     view.context = { ...view.context, displayMode: mode };
@@ -1280,19 +1721,74 @@ export class McpAppsHost {
     alreadyNotified = false,
   ): Promise<void> {
     const view = this.view(caller, sessionId, id);
-    // The controller keeps its iframe mounted until this bounded handshake finishes.
-    try {
-      if (view.initialized && !alreadyNotified)
-        await view.bridge.teardownResource({}, { timeout: 1_000 });
-    } catch {
-      /* An unresponsive App must not block leaving a task. */
+    view.composerDrag?.invalidate();
+    view.composerDrag = undefined;
+    const deadline = Date.now() + 1_000;
+    let finalSave: JSONRPCMessage | undefined;
+    let saved: Promise<void> | undefined;
+    if (view.suspended || view.resuming) {
+      view.closing = true;
+      view.resuming = false;
+      const saves = view.suspendedMessages.filter(message => isViewStateSave(message) && 'id' in message && message.id !== undefined);
+      const validSaves: JSONRPCMessage[] = [];
+      const invalidSaves: JSONRPCMessage[] = [];
+      for (const message of saves) {
+        const params = 'params' in message && message.params && typeof message.params === 'object' ? message.params as Record<string, unknown> : undefined;
+        try {
+          if (!params || !Object.hasOwn(params, 'state')) throw viewStateError('CINDY_VIEW_STATE_INVALID');
+          viewStateSnapshot(params.state);
+          validSaves.push(message);
+        } catch {
+          invalidSaves.push(message);
+        }
+      }
+      finalSave = validSaves.at(-1);
+      if (finalSave && 'id' in finalSave && finalSave.id !== undefined) {
+        view.closingSave = true;
+        const saveId = finalSave.id;
+        const aliases = validSaves.slice(0, -1).flatMap(message =>
+          'id' in message && message.id !== undefined ? [message.id] : [],
+        );
+        saved = new Promise(resolve => {
+          view.closingState = { id: saveId, aliases, complete: resolve };
+        });
+      }
+      view.closingStateInvalid = invalidSaves;
+      // Normal closure preserves only the last private snapshot. Revocation uses
+      // disposeView directly and never releases queued writes or tool requests.
+      view.suspendedMessages = []; view.suspendedBytes = 0;
+      view.suspended = false;
+      view.resumeWaiters.forEach(waiter => waiter.reject(new Error('MCP_APP_VIEW_UNAVAILABLE'))); view.resumeWaiters.clear();
     }
-    await this.disposeView(id, view);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Final save and the existing handshake share ONE deadline, not two waits.
+    try {
+      await Promise.race([
+        (async () => {
+          for (const invalid of view.closingStateInvalid ?? []) await this.dispatch(caller, sessionId, id, invalid);
+          view.closingStateInvalid = undefined;
+          if (finalSave) { await this.dispatch(caller, sessionId, id, finalSave); await saved; view.closingSave = false; }
+          if (this.views.get(id) !== view || Date.now() >= deadline) return;
+          if (view.initialized && !alreadyNotified)
+            await view.bridge.teardownResource({}, { timeout: Math.max(1, deadline - Date.now()) });
+        })(),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+      ]);
+    } catch {
+      /* A failed save or unresponsive App must not block leaving a task. */
+    } finally {
+      view.closingSave = false;
+      view.closingStateInvalid = undefined;
+      clearTimeout(timer);
+      await this.disposeView(id, view);
+    }
   }
 
-  private async disposeView(id: string, view: View, notify = false): Promise<void> {
+  private async disposeView(id: string, view: View, notify?: true | 'MCP_PLUGIN_UNAVAILABLE'): Promise<void> {
     if (this.views.get(id) !== view) return;
-    if (notify && view.initialized) {
+    view.composerDrag?.invalidate();
+    view.composerDrag = undefined;
+    if (notify && view.initialized && !view.suspended) {
       try {
         await view.bridge.teardownResource({}, { timeout: 1_000 });
       } catch {
@@ -1300,6 +1796,10 @@ export class McpAppsHost {
       }
     }
     this.views.delete(id);
+    view.closingState?.complete(); view.closingState = undefined;
+    view.suspendedMessages = []; view.suspendedBytes = 0;
+    view.deferredNotifications.clear();
+    view.resumeWaiters.forEach(waiter => waiter.reject(new Error('MCP_APP_VIEW_UNAVAILABLE'))); view.resumeWaiters.clear();
     view.stopContext?.();
     view.files?.close();
     if (!this.views.size) {
@@ -1307,7 +1807,8 @@ export class McpAppsHost {
       this.sweepTimer = undefined;
     }
     view.links.forEach((link) => link.resolve(false));
-    this.deps.disposeDocument?.(id);
+    if (notify === 'MCP_PLUGIN_UNAVAILABLE') this.deps.disposeDocument?.(id, notify);
+    else this.deps.disposeDocument?.(id);
     view.unlisten.forEach((remove) => remove());
     await view.bridge.close();
     await view.transport.close();
@@ -1323,11 +1824,10 @@ export class McpAppsHost {
       if (item.owner === this.deps.owner()) {
         try {
           const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(item.sessionId, item.clientId);
-          const config = this.deps.config(item.serverId);
+          const config = item.assertSource ? undefined : this.deps.config(item.serverId);
           current =
             item.owner === this.deps.owner() &&
-            !!config &&
-            this.serverRevision(config) === item.revision &&
+            (item.assertSource !== undefined || !!config && this.serverRevision(config) === item.revision) &&
             (!card || card.serverId === item.serverId && card.serverRevision === item.revision);
         } catch {
           // Unavailable cards cannot contribute model context.
@@ -1352,11 +1852,10 @@ export class McpAppsHost {
       };
       try {
         const card = item.assertSource ? (await item.assertSource(), undefined) : await this.deps.readCard(sessionId, item.clientId);
-        const config = this.deps.config(item.serverId);
+        const config = item.assertSource ? undefined : this.deps.config(item.serverId);
         if (owner !== this.deps.owner()) return empty;
         if (
-          !config ||
-          this.serverRevision(config) !== item.revision ||
+          (!item.assertSource && (!config || this.serverRevision(config) !== item.revision)) ||
           (card && card.serverRevision !== item.revision)
         ) {
           remove();
@@ -1383,10 +1882,9 @@ export class McpAppsHost {
         );
         if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
         for (const [index, item] of captured.entries()) {
-          const config = this.deps.config(item.serverId);
+          const config = item.assertSource ? undefined : this.deps.config(item.serverId);
           if (
-            !config ||
-            this.serverRevision(config) !== item.revision ||
+            (!item.assertSource && (!config || this.serverRevision(config) !== item.revision)) ||
             (cards[index] && cards[index]!.serverRevision !== item.revision)
           )
             throw new Error('MCP_APP_SERVER_CHANGED');
@@ -1411,7 +1909,7 @@ export class McpAppsHost {
   async revokePluginServers(ids: ReadonlySet<string>): Promise<void> {
     pagePermissionGrants.clearServers(ids);
     const closing: Promise<unknown>[] = [];
-    for (const [id, view] of this.views) if (ids.has(view.serverId)) closing.push(this.disposeView(id, view, true));
+    for (const [id, view] of this.views) if (ids.has(view.serverId)) closing.push(this.disposeView(id, view, 'MCP_PLUGIN_UNAVAILABLE'));
     for (const [id, entry] of this.connections) if (ids.has(entry.connection.config.id)) {
       closing.push(entry.connection.close().then(() => { this.connections.delete(id); }));
     }
@@ -1434,7 +1932,7 @@ export class McpAppsHost {
     await Promise.allSettled(
       views.map(async ([id, view]) => {
         try {
-          if (view.initialized) await view.bridge.teardownResource({}, { timeout: 1_000 });
+          if (view.initialized && !view.suspended) await view.bridge.teardownResource({}, { timeout: 1_000 });
         } catch {
           /* Owner reset must finish even when an App no longer responds. */
         }
@@ -1446,14 +1944,21 @@ export class McpAppsHost {
 
   private async sweep(): Promise<void> {
     for (const [id, view] of this.views) {
-      const config = this.deps.config(view.serverId);
-      if (
-        view.owner !== this.deps.owner() ||
-        !config ||
-        this.serverRevision(config) !== view.serverRevision ||
-        Date.now() - view.lastUsed > 60_000
-      )
-        await this.disposeView(id, view, true);
+      // Retained local Views have their five-second Renderer lease; invalidation
+      // is pushed by the registry/owner lifecycle, not by hidden reads.
+      if (view.suspended && view.owner === this.deps.owner()) continue;
+      let config: AppServerConfig | undefined;
+      try {
+        const current = view.resourceBinding?.config ?? this.deps.config(view.serverId);
+        current?.plugin?.assertCurrent(view.sessionId ?? undefined);
+        config = current;
+      } catch { /* Reclaim resources whose installed instance has been revoked. */ }
+      const sameOwner = view.owner === this.deps.owner();
+      const serverChanged = !config || this.serverRevision(config) !== view.serverRevision;
+      if (!sameOwner || serverChanged || Date.now() - view.lastUsed > 60_000) {
+        const pluginRevoked = sameOwner && serverChanged && view.connection.config.plugin;
+        await this.disposeView(id, view, pluginRevoked ? 'MCP_PLUGIN_UNAVAILABLE' : true);
+      }
     }
     for (const [id, entry] of this.connections)
       if (entry.owner !== this.deps.owner() || entry.connection.isClosed) {

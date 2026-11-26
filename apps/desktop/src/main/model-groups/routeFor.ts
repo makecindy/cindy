@@ -10,22 +10,25 @@ import {
   type ModelGroupsConfig,
 } from '../../shared/modelGroups.js';
 
-function hoursTarget(route: ModelGroupRoute, localHour: number): string | null {
+/** 本机此刻的整点与星期(Date#getDay)。 */
+interface LocalTime { hour: number; day: number }
+
+function hoursTarget(route: ModelGroupRoute, at: LocalTime): string | null {
   for (const item of route.exceptions ?? []) {
-    if (item.when.type === 'hours' && item.use !== 'vision' && modelGroupHoursMatch(item.when, localHour)) return item.use.routeId;
+    if (item.when.type === 'hours' && item.use !== 'vision' && modelGroupHoursMatch(item.when, at.hour, at.day)) return item.use.routeId;
   }
   return null;
 }
 
 /**
- * 时段例外：落在时段里就改走另一条路线，那条路线自己的时段例外接着看。指向的路线不存在或绕回走过的路线时，
+ * 时段例外(可只在一周里的某几天)：落在时段里就改走另一条路线，那条路线自己的时段例外接着看。指向的路线不存在或绕回走过的路线时，
  * 整条改道作废，按原路线照常选。
  */
-function followHours(start: ModelGroupRoute, config: ModelGroupsConfig, localHour: number) {
+function followHours(start: ModelGroupRoute, config: ModelGroupsConfig, at: LocalTime) {
   const visited = new Set([start.id]);
   const via: ModelGroupAppliedException[] = [];
   let route = start;
-  for (let targetId = hoursTarget(route, localHour); targetId; targetId = hoursTarget(route, localHour)) {
+  for (let targetId = hoursTarget(route, at); targetId; targetId = hoursTarget(route, at)) {
     const next = config.routes.find((item) => item.id === targetId);
     if (!next || visited.has(next.id)) return { route: start, via: [] };
     visited.add(next.id);
@@ -48,6 +51,7 @@ export function modelGroupRouteFor(
   | { outcome: 'found'; groupName: string; route: ModelGroupRoute; via: ModelGroupAppliedException[] } {
   const base = findModelGroupRoute(config, selection);
   if (!base) return { outcome: 'missing', groupName: '' };
-  const { route, via } = followHours(base, config, new Date(now).getHours());
+  const date = new Date(now);
+  const { route, via } = followHours(base, config, { hour: date.getHours(), day: date.getDay() });
   return { outcome: 'found', groupName: base.name, route, via };
 }

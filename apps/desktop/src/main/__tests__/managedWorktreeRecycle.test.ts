@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import type { WorktreeMeta } from '../worktree/types';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
@@ -13,6 +14,7 @@ const query = vi.hoisted(() => vi.fn());
 const git = vi.hoisted(() => vi.fn());
 
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../userDataPath', () => ({ getUserDataDir: () => state.userData || state.root, getAppDataDir: () => path.join(state.root, 'app-data') }));
 vi.mock('../worktree/worktreeStore', () => ({
   get: (id: string) => state.registry.get(id) ?? null,
   getAll: () => [...state.registry.values()], getAllPaths: () => [...state.registry.values()].map((m) => m.path),
@@ -25,6 +27,8 @@ vi.mock('../worktree/runtimeLeases', async (original) => ({
   readWorktreeRuntimePaths: vi.fn(async () => state.runtimes),
 }));
 vi.mock('../worktree/contentSnapshot', () => ({
+  SNAPSHOT_REF_PREFIX: 'refs/cindy/worktree-recovery/',
+  listSnapshotRefs: vi.fn(async () => new Map()),
   captureWorktreeContent: snapshot, worktreeContentMatches: baselineMatches,
   worktreeStagedContentMatches: vi.fn(async () => true), releaseSnapshotRef: vi.fn(async () => true),
   // Path lists are covered with real Git; here a resumed removal checks timestamps only.
@@ -33,12 +37,21 @@ vi.mock('../worktree/contentSnapshot', () => ({
 vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
 
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
-import { pruneUnreferencedRecoveryArchives, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
-import { physicalWorktreeKey } from '../worktree/resourceLock';
+import {
+  listPresentRecoveryArchives,
+  pruneUnreferencedRecoveryArchives,
+  readRecycleRecord,
+  removeObsoleteRecoveryArchive,
+  writeRecycleRecord,
+} from '../worktree/recycleJournal';
+import { releaseObsoleteRecoverySnapshots } from '../worktree/recycleMaintenance';
+import * as resourceLock from '../worktree/resourceLock';
 import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
 import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
 import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
+
+const { physicalWorktreeKey } = resourceLock;
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
@@ -83,7 +96,20 @@ describe('shared worktree recycling', () => {
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
 
+  it.each(['owner', 'borrower'] as const)('preserves uncommitted files across later recycle attempts after %s project removal', async (role) => {
+    await requestWorktreeRecycle(meta.sessionId);
+    await requestWorktreeRecycle(role === 'owner' ? meta.sessionId : 'borrower', [meta.path], 'keep');
+    await requestWorktreeRecycle(meta.sessionId);
+    expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('kept');
+    expect(await recycle()).toBe(false);
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    expect(state.registry.has(meta.sessionId)).toBe(true);
+  });
+
   it('limits simultaneous recycling of distinct resources to one', async () => {
+    // #9872 / unit: exercise the real recycle entry and its global queue, holding
+    // work at the first resource-lock boundary. Journal/lock I/O is covered by
+    // the other cases; repeating it here couples the queue assertion to disk load.
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let markEntered!: () => void;
@@ -91,22 +117,25 @@ describe('shared worktree recycling', () => {
     let active = 0;
     let peak = 0;
     let checked = 0;
-    const jobs = Array.from({ length: 12 }, (_, index) => {
-      const candidate = { ...meta, sessionId: `batch-${index}`, path: path.join(path.dirname(meta.path), `batch-${index}`) };
-      state.registry.set(candidate.sessionId, candidate);
-      return recycleManagedWorktree(candidate, { canRemove: async () => {
-        active++; peak = Math.max(peak, active); checked++;
-        markEntered();
-        try { await gate; return false; } finally { active--; }
-      } });
+    const enteredPaths: string[] = [];
+    vi.spyOn(resourceLock, 'withWorktreeResourceLock').mockImplementation(async (value) => {
+      enteredPaths.push(value);
+      active++; peak = Math.max(peak, active); checked++;
+      markEntered();
+      try { await gate; return false; } finally { active--; }
     });
+    const candidates = Array.from({ length: 12 }, (_, index) => ({
+      ...meta, sessionId: `batch-${index}`, path: path.join(path.dirname(meta.path), `batch-${index}`),
+    }));
+    const jobs = candidates.map(candidate => recycleManagedWorktree(candidate, { canRemove: async () => false }));
     // Observe every job immediately and drain them before fixture cleanup,
     // including when an assertion or filesystem operation fails.
     const settled = Promise.allSettled(jobs);
     try {
-      // Journal/lock I/O can exceed waitFor's default 1s on Windows CI.
-      // Synchronize on entry instead; the suite timeout still bounds a hang.
       await Promise.race([entered, settled]);
+      // Let other scheduled jobs try to enter while the first is still held.
+      // Observing only the first arrival can miss a queue that admits two jobs.
+      await setImmediate();
       expect(active).toBe(1);
       expect(checked).toBe(1);
     } finally {
@@ -115,6 +144,7 @@ describe('shared worktree recycling', () => {
     }
     expect(await Promise.all(jobs)).toEqual(Array(12).fill(false));
     expect(checked).toBe(12); expect(peak).toBe(1);
+    expect(enteredPaths).toEqual(candidates.map(candidate => candidate.path));
   });
 
   it('saves new files in the Git snapshot, writes no archive, and drops registration after deletion', async () => {
@@ -156,6 +186,87 @@ describe('shared worktree recycling', () => {
     expect(await pruneUnreferencedRecoveryArchives()).toBe(1);
     expect((await fs.readdir(journal)).filter((entry) => entry.endsWith('.enc')).sort())
       .toEqual([name('referenced'), name('young')].sort());
+    expect([...(await listPresentRecoveryArchives())].sort())
+      .toEqual([name('referenced'), name('young')].sort());
+    expect(await removeObsoleteRecoveryArchive('../outside.tar.gz.enc')).toBe(false);
+    expect(await removeObsoleteRecoveryArchive(name('referenced'))).toBe(true);
+    expect(await removeObsoleteRecoveryArchive(name('referenced'))).toBe(false);
+  });
+
+  it('reconciles real on-disk journal and history files under resource locks without deleting shared or multi-DB non-deleted archives', async () => {
+    await requestWorktreeRecycle(meta.sessionId);
+    const baseRecord = (await readRecycleRecord(meta.path))!;
+    const journal = path.join(state.root, 'worktree-recycle');
+    const sharedEnc = `${baseRecord.id}-a111.tar.gz.enc`;
+    const soloDeletedEnc = `${baseRecord.id}-b222.tar.gz.enc`;
+    await fs.writeFile(path.join(journal, sharedEnc), 'shared encrypted bytes');
+    await fs.writeFile(path.join(journal, soloDeletedEnc), 'deleted encrypted bytes');
+
+    const secondPath = path.join(meta.baseRepo, '.cindy-worktrees', 'two');
+    await fs.mkdir(secondPath, { recursive: true });
+    await requestWorktreeRecycle(meta.sessionId, [secondPath]);
+    const secondMeta = { ...meta, sessionId: 'second-owner', name: 'two', path: secondPath };
+    const secondRecord = {
+      ...baseRecord,
+      id: (await import('../worktree/resourceLock')).worktreeResourceId(await physicalWorktreeKey(secondPath)),
+      generation: 'second-owner:2026-09-08T00:00:00Z',
+      meta: secondMeta,
+    };
+
+    // baseRecord is restored and points to sharedEnc, while secondRecord is removed (archived owner) and ALSO points to sharedEnc.
+    await writeRecycleRecord({
+      ...baseRecord,
+      phase: 'removed',
+      snapshot: { head: 'a'.repeat(40), tree: 'b'.repeat(40), indexTree: 'c'.repeat(40), commit: 'd'.repeat(40), ref: 'refs/cindy/worktree-recovery/one', indexHash: 'e'.repeat(64) },
+      archive: { file: sharedEnc, encryptedKey: '', iv: '', tag: '', files: {} },
+    });
+    await writeRecycleRecord({
+      ...baseRecord,
+      phase: 'restored',
+      archive: { file: sharedEnc, encryptedKey: '', iv: '', tag: '', files: {} },
+    });
+    await writeRecycleRecord({
+      ...secondRecord,
+      phase: 'removed',
+      snapshot: { head: 'a'.repeat(40), tree: 'b'.repeat(40), indexTree: 'c'.repeat(40), commit: 'f'.repeat(40), ref: 'refs/cindy/worktree-recovery/two', indexHash: 'e'.repeat(64) },
+      archive: { file: sharedEnc, encryptedKey: '', iv: '', tag: '', files: {} },
+    });
+
+    // Third resource solely owned by a deleted task, unless another DB disagrees.
+    const thirdPath = path.join(meta.baseRepo, '.cindy-worktrees', 'three');
+    await fs.mkdir(thirdPath, { recursive: true });
+    const thirdRecord = {
+      ...baseRecord,
+      id: (await import('../worktree/resourceLock')).worktreeResourceId(await physicalWorktreeKey(thirdPath)),
+      generation: 'third-owner:2026-09-08T00:00:00Z',
+      meta: { ...meta, sessionId: 'third-owner', name: 'three', path: thirdPath },
+      phase: 'removed' as const,
+      snapshot: { head: 'a'.repeat(40), tree: 'b'.repeat(40), indexTree: 'c'.repeat(40), commit: '1'.repeat(40), ref: 'refs/cindy/worktree-recovery/three', indexHash: 'e'.repeat(64) },
+      archive: { file: soloDeletedEnc, encryptedKey: '', iv: '', tag: '', files: {} },
+    };
+    await writeRecycleRecord(thirdRecord);
+
+    // Multi-DB disagreement on third-owner ('deleted' in DB 1, 'archived' in DB 2) must keep soloDeletedEnc.
+    expect(
+      await releaseObsoleteRecoverySnapshots(async () => [
+        { id: meta.sessionId, status: 'deleted', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'second-owner', status: 'archived', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'third-owner', status: 'deleted', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'third-owner', status: 'archived', source: 'desktop', currentDatabase: false, workingDir: null, worktreePath: null },
+      ]),
+    ).toBe(0);
+    expect([...(await listPresentRecoveryArchives())].sort()).toEqual([sharedEnc, soloDeletedEnc].sort());
+
+    // Once all DBs agree third-owner is deleted, soloDeletedEnc is retired while sharedEnc remains protected by second-owner.
+    expect(
+      await releaseObsoleteRecoverySnapshots(async () => [
+        { id: meta.sessionId, status: 'deleted', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'second-owner', status: 'archived', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'third-owner', status: 'deleted', source: 'desktop', currentDatabase: true, workingDir: null, worktreePath: null },
+        { id: 'third-owner', status: 'deleted', source: 'desktop', currentDatabase: false, workingDir: null, worktreePath: null },
+      ]),
+    ).toBe(1);
+    expect([...(await listPresentRecoveryArchives())]).toEqual([sharedEnc]);
   });
   it('keeps a request waiting when the owner task is no longer archived, even if the directory is gone', async () => {
     removable = false;

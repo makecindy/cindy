@@ -581,13 +581,13 @@ describe('startSubagentTabDiscovery', () => {
       );
       // The gate that hid a Pi task's live children the moment it switched to
       // Claude Code or Codex. Ownership is decided by the list, not the harness.
-      expect(effect).toContain('if (!ownsWindowRoute || !viewVisible || !sessionId) return;');
+      expect(effect).toContain('if (awaitingCreation || !ownsWindowRoute || !viewVisible || !sessionId) return;');
       expect(effect).not.toContain("session?.agentKind !== 'pi'");
       // And the effect no longer re-runs on a harness switch, because it no
       // longer reads one.
       const deps = source.slice(source.indexOf('return startSubagentTabDiscovery({'));
       const depsLine = deps.slice(0, deps.indexOf('\n\n'));
-      expect(depsLine).toContain('}, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);');
+      expect(depsLine).toContain('}, [awaitingCreation, ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);');
       expect(depsLine).toContain('onPresenceChange:');
     });
 

@@ -17,7 +17,7 @@
  * The pool itself is in-memory; on app restart, hydrate() rebuilds it from disk.
  */
 
-import { app, ipcMain, BrowserWindow, dialog } from 'electron';
+import { app, ipcMain, BrowserWindow, dialog, powerMonitor } from 'electron';
 import { t } from '../i18n.desktop.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
@@ -48,6 +48,7 @@ import {
   hostKeyId,
   RemoteHost,
   type AddHostInput,
+  type ConnectOpts,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
@@ -58,6 +59,7 @@ import {
   type ManagedConfigWriteToken,
   type ReadSshConfigResult,
   type RemoteAgentKind,
+  type AgentUnavailableReason,
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
@@ -71,6 +73,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getRemoteClaudeEnv } from './claude-env.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
+import { getCodexCliAuthPath } from '../maker-host/codex-shared-auth.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { piManagerKill, piManagerList, runPiManagerUpgrade } from '../maker-host/pi-manager-client.js';
 import { ensurePiManagerDaemon } from '@cindy/maker-remote-ssh';
@@ -133,10 +136,20 @@ import { prepareRemoteAgentInstall } from './codex-install-lifecycle.js';
 import { getRemoteCodexLiveTurnChecker } from '../maker-host/remote-session-start-ensure.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { RemoteHostHydrationQueue } from './hydration-queue.js';
+import { watchNetworkChanges } from '../device-link/networkChanges.js';
 
 export { redactSshSensitiveText };
 
 const log = createLogger('remote-ssh/ipc');
+
+function formatAgentUnavailableError(reason?: AgentUnavailableReason): string {
+  switch (reason) {
+    case 'environment-unset': return t('settings.remote.agentError.environmentUnset');
+    case 'endpoint-empty': return t('settings.remote.agentError.endpointEmpty');
+    case 'endpoint-unavailable': return t('settings.remote.agentError.endpointUnavailable');
+    default: return t('ipcError.SSH_AGENT_UNAVAILABLE');
+  }
+}
 
 // Shared by manual and silent installation inside their existing per-host install lock.
 async function installRemoteAgent(
@@ -317,6 +330,7 @@ function getPool(): ConnectionPool {
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
       formatHostKeyError,
+      formatAgentUnavailableError,
     });
   }
   return pool;
@@ -383,7 +397,7 @@ export async function isRemoteHostKeyKnown(hostname: string, port: number): Prom
  * first message after launch because pool hydrate only happens lazily when
  * the user visits Settings → Remote.
  */
-export async function ensureRemoteHostReady(id: string): Promise<void> {
+export async function ensureRemoteHostReady(id: string, options?: ConnectOpts): Promise<void> {
   await ensureHydrated();
   const pool = getPool();
   const host = pool.get(id);
@@ -392,7 +406,8 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   }
   if (host.getStatus() === 'ready') return;
   try {
-    await pool.connect(id);
+    if (options) await pool.connect(id, options);
+    else await pool.connect(id);
   } catch (err) {
     const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, redactHostLocalPaths(host.config, msg) ?? msg);
@@ -717,8 +732,9 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
   } catch (error) {
     rememberFailure(error);
   }
+  let mcpInvalidation = Promise.resolve();
   try {
-    invalidateRemoteCodexMcpEndpointState(hostId);
+    mcpInvalidation = invalidateRemoteCodexMcpEndpointState(hostId);
   } catch (error) {
     rememberFailure(error);
   }
@@ -747,6 +763,7 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
 
   const cleanupResults = await Promise.allSettled([
     fileBrowserInvalidation,
+    mcpInvalidation,
     clearAgentProxyTunnelStateAndWait(hostId),
     oldHost?.closeAllRemoteForwards().catch((error) => {
       log.warn('failed to clear remote forwards during endpoint invalidation', {
@@ -846,6 +863,7 @@ type RendererHostConfig = Pick<HostConfig,
   | 'authMethod'
   | 'source'
   | 'managedByCindy'
+  | 'managedAliasConflict'
 > & {
   /** Renderer only needs to know whether an owned identity exists. */
   identityFileConfigured: boolean;
@@ -888,6 +906,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
       : {}),
     source: config.source,
     managedByCindy: config.managedByCindy,
+    ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
   };
 }
 
@@ -1403,7 +1422,7 @@ export async function removeRemoteSshHost(args: unknown) {
       () => removeRemoteMcpForwardPref(id),
     ]) {
       try {
-        cleanup();
+        await cleanup();
       } catch (error) {
         log.warn('failed to clean removed SSH host local state', {
           hostId: id,
@@ -1423,9 +1442,35 @@ export async function removeRemoteSshHost(args: unknown) {
   });
 }
 
+let stopNetworkRecovery: (() => void) | null = null;
+
+/**
+ * Hosts whose live connection dropped and exhausted the bounded reconnect stay
+ * failed without a background loop. A system network change or wake gives them
+ * one more bounded round (RemoteHost.retryAfterNetworkChange); the next use of
+ * a host always reconnects on its own.
+ */
+function startNetworkRecovery(): void {
+  if (stopNetworkRecovery) return;
+  const retry = (reason: 'network' | 'resume') => {
+    const retried = pool?.retryAfterNetworkChange() ?? [];
+    if (retried.length > 0) log.info('ssh network recovery', { reason, hosts: retried });
+  };
+  const stopWatch = watchNetworkChanges(() => retry('network'));
+  const onResume = () => retry('resume');
+  powerMonitor?.on?.('resume', onResume);
+  stopNetworkRecovery = () => {
+    stopWatch();
+    powerMonitor?.off?.('resume', onResume);
+  };
+}
+
 export function registerRemoteSshIpc(): void {
   if (registered) return;
   registered = true;
+  // powerMonitor is only usable after app ready (and absent in non-Electron test runtimes).
+  if (app?.isReady?.()) startNetworkRecovery();
+  else void app?.whenReady?.().then(() => { if (registered) startNetworkRecovery(); });
 
   // Wire pool status → renderer broadcast (once, at registration time).
   // ready 转换时顺带应用 agent-proxy 愿望 (建隧道 + codex env 对账): 这是
@@ -1454,7 +1499,12 @@ export function registerRemoteSshIpc(): void {
       if (host) broadcastStatus(host.snapshot());
     },
     createTunnelHost: (cfg) =>
-      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore(), formatHostKeyError }),
+      new RemoteHost(cfg, {
+        logger: poolLogger,
+        hostKeys: getSharedHostKeyStore(),
+        formatHostKeyError,
+        formatAgentUnavailableError,
+      }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 
@@ -2416,8 +2466,10 @@ export async function startAutoConnectHostsBackground(): Promise<void> {
  * Find the local Codex auth.json. Preference order:
  *   1. xdt-maker's own copy at userData/codex-home/auth.json — what xdt-maker
  *      uses for its own Codex sessions, kept in sync via the reconcile path.
- *   2. System Codex CLI default at ~/.codex/auth.json — if the user only ever
- *      ran `codex login` outside xdt-maker, this is where the token lives.
+ *   2. System Codex CLI login — `CODEX_HOME/auth.json` when the user set an
+ *      absolute CODEX_HOME, otherwise `~/.codex/auth.json` (#8258). This is
+ *      where the token lives if the user only ever ran `codex login` outside
+ *      xdt-maker.
  *
  * Returns null if neither exists. Callers should surface a "log in first"
  * error rather than pushing nothing.
@@ -2425,7 +2477,7 @@ export async function startAutoConnectHostsBackground(): Promise<void> {
 async function resolveLocalCodexAuthPath(): Promise<string | null> {
   const candidates = [
     path.join(app.getPath('userData'), 'codex-home', 'auth.json'),
-    path.join(os.homedir(), '.codex', 'auth.json'),
+    getCodexCliAuthPath(),
   ];
   for (const candidate of candidates) {
     try {
@@ -2560,6 +2612,8 @@ function shellQuoteSh(s: string): string {
 
 /** Tear down all live connections (含 agent-proxy 隧道专用连接). Hook into onQuit. */
 export async function disposeRemoteSshPool(): Promise<void> {
+  stopNetworkRecovery?.();
+  stopNetworkRecovery = null;
   await disposeAllTunnels().catch(() => undefined);
   if (!pool) return;
   await pool.dispose();

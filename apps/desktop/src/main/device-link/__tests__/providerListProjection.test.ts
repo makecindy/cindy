@@ -36,7 +36,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing, setProviderShareAccess } from '../dispatch.desktop';
+import { __testing } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
@@ -51,35 +51,25 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
-// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
-it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
-  const projected = project({ providers: [
-    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
-    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
-  ] });
-  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
-    .toBe(offered ? true : undefined);
-});
-
-// PR #9900, standard: the pool's remote switch does not imply model coverage.
-// Previous upgrade fixtures had empty catalogs and could not expose a lost grant.
+// 2026-11-18 (Dash): remote control and the phone listed the pool plus the old connections merged into
+// it, which the computer's own Settings hides. Only the provider switch decides remote use now, and a
+// merged connection follows its pool, so the catalog keeps it behind the pool whatever the switches or
+// models are. Only same-account readers learn which pool it belongs to.
 it.each([
-  { poolModels: ['model-a'], oldModels: ['model-b'], hidden: false },
-  { poolModels: ['model-a', 'model-b'], oldModels: ['model-b'], hidden: true },
-])('keeps the old remote source until its models are covered: %j', ({ poolModels, oldModels, hidden }) => {
-  setProviderShareAccess({
-    guestAccess: () => null, ensureKnown: async () => {}, hasShares: () => false,
-    remoteModels: id => id === 'openai' ? poolModels : oldModels,
-  });
-  try {
-    const models = { codex: ['model-a', 'model-b'].map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) };
-    const projected = project({ providers: [
-      { id: 'openai', name: 'OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true },
-      { id: 'old-openai', name: 'Old OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
-    ] });
-    expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
-      .toBe(hidden ? true : undefined);
-  } finally { setProviderShareAccess(null); }
+  { pool: false, old: true, sameAccount: true },
+  { pool: true, old: true, sameAccount: true },
+  { pool: false, old: false, sameAccount: true },
+  { pool: true, old: true, sameAccount: false },
+])('keeps a merged connection behind its pool in every remote catalog: %j', ({ pool, old, sameAccount }) => {
+  const models = (ids: string[]) => ({ codex: ids.map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) });
+  const projected = __testing.projectInvokeResultForTunnel('maker:provider:list', { providers: [
+    { id: 'target', name: 'Target', agents: ['codex'], models: models(['model-a']), remoteInvocationEnabled: pool },
+    { id: 'original', name: 'Original', agents: ['codex'], models: models(['model-a', 'model-b']), remoteInvocationEnabled: old,
+      subscriptionPoolAlias: true, subscriptionPoolTarget: 'target' },
+  ] }, false, [], sameAccount) as { providers: Record<string, unknown>[] };
+  const original = projected.providers.find(provider => provider.id === 'original');
+  expect(original?.subscriptionPoolAlias).toBe(true);
+  expect(original?.subscriptionPoolTarget).toBe(sameAccount ? 'target' : undefined);
 });
 
 describe('schedule binding list projection', () => {
@@ -95,6 +85,8 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
+      // The pre-run command never crosses the tunnel.
+      { ...fields, id: 'pr', preRunHook: { command: "node gate.mjs 'https://github.com/o/r/pull/9'" } },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
@@ -104,7 +96,9 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off' },
+      { ...fields, id: 'pr' },
     ]);
+    expect(JSON.stringify(projected)).not.toContain('gate.mjs');
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });
@@ -489,16 +483,44 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
       routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
     };
     const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const work = { ...forged, id: 'zhipu-glm-cn', logoKind: 'work' };
     const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
       (__testing.projectInvokeResultForTunnel(
-        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+        'maker:provider:list', { providers: [enterprise, forged, work] }, supportsFullLogoKinds, [], sameAccount,
       ) as { providers: Record<string, unknown>[] }).providers;
 
     const own = projectFor(true, true);
     expect(own[0].logoKind).toBe('openai-spectrum');
     expect(own[1]).not.toHaveProperty('logoKind');
+    expect(own[2].logoKind).toBe('work');
+    expect(projectFor(true, false)[2].logoKind).toBe('zhipu');
+    expect(projectFor(false, true)[2].logoKind).not.toBe('work');
     expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
     expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
+  });
+
+  // Unit: the real tunnel projection only exposes the optional v2 directory SVG to the same
+  // account. A foreign controller or a user provider with the same field must get no SVG.
+  it('restricts custom artwork to same-account organization suppliers', () => {
+    const customIcon = '<svg/>';
+    const enterprise = { ...xdProviderWithFullRouting(), id: 'byok-test', source: 'organization', customIcon };
+    const forged = { ...enterprise, id: 'user-test', source: 'user' };
+    const payload = { providers: [enterprise, forged] };
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], true))
+      .toMatchObject({ providers: [expect.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+    expect(__testing.projectInvokeResultForTunnel('maker:provider:list', payload, true, [], false))
+      .toMatchObject({ providers: [expect.not.objectContaining({ customIcon }), expect.not.objectContaining({ customIcon })] });
+  });
+
+  // Unit: an uploaded thumbnail belongs to this owner, including for shared GLM models.
+  it('projects a user PNG only to the owner with artwork support', () => {
+    const customIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAH0lEQVR4nO3BAQEAAACCIP+vbkhAAQAAAAAAAAAALwYkMAAB5ewAXAAAAABJRU5ErkJggg==';
+    const view = { providers: [{ id: 'glm', source: 'user', customIcon }] };
+    const read = (supported: boolean, own: boolean) =>
+      (__testing.projectInvokeResultForTunnel('maker:provider:list', view, supported, [], own) as typeof view).providers[0];
+    expect(read(true, true).customIcon).toBe(customIcon);
+    expect(read(false, true)).not.toHaveProperty('customIcon');
+    expect(read(true, false)).not.toHaveProperty('customIcon');
   });
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {

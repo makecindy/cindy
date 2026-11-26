@@ -26,10 +26,13 @@ export interface McpAppsServicePorts {
   review?(sessionId: string, serverId: string, tool: string, args: Record<string, unknown>,
     originDescription?: string, toolDefinition?: Pick<Tool, 'name' | 'description' | 'inputSchema'>): Promise<AutoReviewDecision>;
   allowPendingPage?(sessionId: string, requestId: string): void;
-  authorizeGlobalTool?: McpAppsHostDeps['authorizeTool'];
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
+  composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
+  hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
+  sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
 }
 
@@ -50,6 +53,10 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   };
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
+    composerDrag: ports.composerDrag ? async sessionId => !(await assertSession(sessionId)).session.remoteHostId : undefined,
+    composerCaller: ports.composerCaller,
+    hasComposerAttachment: ports.hasComposerAttachment,
+    sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,
     owner: currentOwner,
     config: readAppServer,
@@ -70,8 +77,9 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
         config.plugin?.assertCurrent(sessionId);
       });
     },
-    readCard: async (sessionId, clientId) => {
+    readCard: async (sessionId, clientId, localComposer) => {
       const { owner, session } = await assertSession(sessionId);
+      if (localComposer && session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
       const [row] = await owner.client.drizzle
         .select({ content: messages.content, meta: messages.agentMeta })
         .from(messages)
@@ -149,10 +157,6 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
       }
     },
     authorizeTool: async (sessionId, tool, args, signal, source) => {
-      if (sessionId === null) {
-        if (!ports.authorizeGlobalTool) throw new Error('MCP_APP_OWNER_ONLY');
-        return ports.authorizeGlobalTool(sessionId, tool, args, signal, source);
-      }
       const { owner, session } = await assertSession(sessionId);
       signal.throwIfAborted();
       if (session.planModeEnabled || session.permissionMode === 'plan')
@@ -257,6 +261,8 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
               ...(assessment
                 ? {
                     autoReviewUnavailable: assessment.unavailable === true,
+                    ...(assessment.unavailable === true && assessment.unavailableReason === 'quota_exhausted'
+                      ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
                     autoReviewReason: assessment.reason,
                   }
                 : {}),

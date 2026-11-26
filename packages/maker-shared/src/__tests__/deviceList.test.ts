@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDeviceListPresentation,
+  cloudComputerEntry,
   deviceAccessState,
   deviceDisplayName,
   isControllableDevice,
@@ -26,6 +27,15 @@ function device(patch: Partial<DeviceListDeviceLike> = {}): DeviceListDeviceLike
 }
 
 describe('shared device list presentation model', () => {
+  // Agent-Net app routing: platform alone incorrectly offered Friend/unknown Apps
+  // as computers. Unit: real list entry points; missing app preserves old Cindy.
+  it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('routes app=%s without offering other Apps as controllable computers', (app) => {
+    const peer = device({ app });
+    const cindy = app === undefined || app === 'cindy';
+    expect(isControllableDevice(peer)).toBe(cindy);
+    expect(toDeviceListItems([peer])).toHaveLength(cindy ? 1 : 0);
+  });
+
   it('requires online, remoteControlEnabled and not self', () => {
     expect(isControllableDevice(device())).toBe(true);
     expect(isControllableDevice(device({ busy: true }))).toBe(true);
@@ -224,4 +234,21 @@ describe('device display names', () => {
     expect(deviceDisplayName('b', 'Studio', 'Computer', [devices[0], devices[0]])).toBe('Studio');
     expect(devices.map((device) => device.deviceId)).toEqual(['b', 'a']);
   });
+});
+
+// Pilot menu, unit: an allowed reply for another membership must never expose its cloud computer.
+it('shows the cloud computer action only for the authorized owner and a current provisioning state', () => {
+  const url = 'https://auth.example.test/console/orgs/org-a/personal/cloud';
+  const allowed = {enabled:true, membershipId:'member-a', organizationId:'org-a', url, computer:null};
+  const action = (row:unknown) => cloudComputerEntry(row,'member-a','org-a')?.action;
+  expect(action(allowed)).toBe('addCloud');
+  expect(cloudComputerEntry({...allowed,computer:{status:'linked'},canAdd:true},'member-a','org-a')).toMatchObject({action:'manageCloud',canAdd:true});
+  expect(action({...allowed,computer:{status:'awaiting_device'}})).toBe('preparingCloud');
+  for (const status of ['linked', 'deleting', 'reinstalling']) {
+    expect(action({...allowed,computer:{status}})).toBe('manageCloud');
+  }
+  for (const patch of [{enabled:false},{membershipId:'member-b'},{organizationId:'org-b'},
+    {url:url+'?token=demo'},{url:'file:///console/orgs/org-a/personal/cloud'},{computer:{status:'unknown'}}]) {
+    expect(action({...allowed,...patch})).toBeUndefined();
+  }
 });

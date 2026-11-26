@@ -100,6 +100,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   current.current = binding;
   useEffect(() => () => { current.current = ''; }, []);
   const panel = page === 'editor' ? editor?.panels.find(item => item.id === editorPanel) : data?.panels.find(item => item.id === page);
+  // The host computer's model groups, from its models form (model-groups.md §6.2).
+  const hostModelGroups = data?.panels.find(item => item.id === 'models')?.modelGroups;
   const dirty = editing && (modelSelection || profileFormDirty(panel ? { ...panel, values: draftBase.current } : undefined, values));
   // Legacy hosts can save a changed route but cannot acknowledge same-value fallback recovery.
   // Task-only edits do not turn an unchanged primary selection into a supported request.
@@ -329,7 +331,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const models = <View style={{ gap: spacing.lg }}>
     {unsupportedModelSelection ? note('hostUpgrade') : null}
     <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={next => { setModelSelection(true); changeValues(next); }}
-      onPick={pickModel} />
+      onPick={pickModel} modelGroups={hostModelGroups} />
     {/* An older host still lists the retired task model fields; they are not shown and go back unchanged. */}
   </View>;
   const afterClosed = () => {
@@ -347,10 +349,12 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelValues.modelChain)[modelIndex]}
+    modelGroups={hostModelGroups}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
     onSelect={route => {
       const chain = readCompanionModelChain(modelValues.modelChain);
-      if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null))) return false;
+      if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId && (item.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
+        && (item.modelGroup ?? null) === (route.modelGroup ?? null))) return false;
       chain[modelIndex] = route; setModelSelection(true); changeValues({ ...modelValues, modelChain: serializeModelRoutes(chain), followsDefault: false }); return true; }} />;
 
   if (Platform.OS === 'ios') return <>{modelPicker}<CompanionProfileNativeView models={models}
@@ -578,19 +582,29 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
   };
   const models = supportsModel ? <CompanionModelChain single deviceId={deviceId} values={modelValues}
     disabled={busy || !online || unconfirmed} onChange={next => { if (!unconfirmed) setModelValues(next); }}
-    onPick={() => setModelStage('closing-form')} /> : null;
+    onPick={() => setModelStage('closing-form')} modelGroups={data?.panels[0]?.modelGroups} /> : null;
   const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={modelChain[0]}
+    modelGroups={data?.panels[0]?.modelGroups}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('form')}
     onSelect={route => { setModelValues({ followsDefault: false, modelChain: serializeModelRoutes([route]) }); return true; }} />;
   if (importing) return <CompanionImportSheet visible={visible} onClose={onClose} onClosed={onClosed} deviceId={deviceId} deviceName={deviceName} online={online} onCreated={onCreated} />;
-  if (Platform.OS === 'ios') return <>{modelPicker}<CompanionCreateNativeView models={models} modelMissing={modelMissing} onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} /></>;
   const panel = data?.panels[0];
   const notice = !online ? t('devices.companionProfile.offline', { deviceName }) : error || duplicate ? t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed') : null;
+  // A grey confirm button with no reason reads as a broken feature: name the two reasons the form
+  // itself cannot show (a host that cannot create a buddy, and an empty name or portrait). Offline,
+  // a duplicate name and an unconfirmed create already have their own notice; a missing model chain
+  // is explained by the model section above, and nothing is claimed before the host has answered.
+  const createHint = notice || modelMissing || loading || !data ? null
+    : !panel?.action || panel.action.disabled ? t('devices.companionProfile.createHostUnsupported')
+    : typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 ? t('devices.companionProfile.createNeedsDetails')
+    : null;
+  if (Platform.OS === 'ios') return <>{modelPicker}<CompanionCreateNativeView models={models} modelMissing={modelMissing} hint={createHint ?? undefined} onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} panel={panel} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} /></>;
   // Same gate as iOS: a live, enabled host action, a name and a portrait.
   const blocked = busy || !online || !panel?.action || !!panel.action.disabled || typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 || duplicate || modelMissing;
   return <>{modelPicker}<CompanionSheet visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {notice ? <Text accessibilityRole={online ? 'alert' : undefined} style={styles.note}>{notice}</Text> : null}
+      {createHint ? <Text style={styles.note} testID="companionCreate.hint">{createHint}</Text> : null}
       {loading ? <ActivityIndicator accessibilityLabel={t('devices.resources.loading')} color={colors.textSecondary} style={styles.spinner} /> : null}
       {panel ? <CompanionProfileForm panel={panel} values={values} onChange={change} disabled={busy || !online || unconfirmed} /> : null}
       {models}

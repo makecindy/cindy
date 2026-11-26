@@ -21,9 +21,24 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
-import { ChannelEvents, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Transport, type TransportOptions } from './types.js';
+import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
+import { PathRouter } from './pathRouter.js';
+import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
+import {
+  AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
+  SESSION_BODY_KIND, SESSION_LANE_KINDS,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PathPreference, type PeerChannel, type PeerPathMetrics, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
+  type TransportOptions,
+} from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
+/**
+ * 发出的 UDP 载荷不超过 1350 字节：VPN、PPPoE、运营商隧道在包外再套一层，整包超过路径 MTU 时被拆成两片，高速时丢包和排队陡增。
+ * 2026-11-16 两台电脑之间的 VPN 上，每秒 12 MB 时 1400 字节的 UDP 丢 32%、往返 10 → 184 毫秒，1372 字节以下不丢，
+ * Agent-Net 回传只跑到线路的一半（docs/benchmarks/agent-net-session-2026-11-13/README.md「真实网络对比」）。
+ * 经 UDP 中转时中转在包外再加 33 字节（上行），核心的包要留出来。收包上限仍是核心默认的 1400：旧版照样发 1400，照样收得下。
+ */
+const SEND_PACKET_SIZE = 1350 - UDP_RELAY_UP_OVERHEAD;
 /** 握手要在这么久内完成，否则放弃这次连接（名册外的节点收不到任何回复）。 */
 const CONNECT_TIMEOUT_MS = 3_000;
 /** 关闭时最多等这么久让对端确认已写入的数据。 */
@@ -31,12 +46,14 @@ const DRAIN_TIMEOUT_MS = 2_000;
 /** 和核心放弃握手的时间（`dead_after_us`）一样长。 */
 const REFUSAL_MEMORY_MS = 30_000;
 const DEFAULT_REPROBE_MS = 10_000;
-/** 核心一次最多同时验证 4 条路径，再多会把先开始的挤掉，所以每轮最多验这么多个，下一轮接着验后面的。 */
-const PROBES_PER_ROUND = 4;
+// 选路的门槛与判断在 pathRouter.ts（原生引擎的传输共用），这里照旧导出给已有的调用方。
+export { AUTO_DIRECT_RECOVER_DELTA_MS, AUTO_DIRECT_RECOVER_RATIO, AUTO_RELAY_DELTA_MS, AUTO_RELAY_RATIO, AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from './pathRouter.js';
 /** 对端给的候选地址最多收这么多个。 */
 const MAX_CANDIDATES = 16;
 const DATA = 0x44;
 const CONTROL = 0x43;
+const SESSION_LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LANE_KINDS).map(([lane, kind]) => [kind, lane as SessionLaneName]));
+export { AGENT_NET_SESSION_V1 };
 
 /** 名册里怎么连上一台设备：UDP 地址、中转上的设备号，有哪个用哪个。 */
 export interface CoreDial {
@@ -53,16 +70,35 @@ class CoreChannel implements PeerChannel {
   private readonly outbound: SendStream;
   private readonly control: SendStream;
   private readonly localCandidates: Address[];
-  private candidates: Address[] = [];
-  /** 下一轮从第几个候选地址验起。 */
-  private nextCandidate = 0;
-  private reprobe: NodeJS.Timeout | null = null;
+  /** Direct or relayed, and when to probe or measure which path (pathRouter.ts, shared with the native engine's transport). */
+  private readonly router: PathRouter<PeerAddress>;
+  private sessionCapable = false;
+  private sessionsDeclared = false;
+  /** What the peer declared besides session support itself (opaque to this layer; see `declareSessions`). */
+  private peerSessionFeatures: string[] = [];
+  private readonly sessionCapableHandlers: Array<() => void> = [];
+  private sessionStreams: Record<SessionLaneName, SendStream> | null = null;
+  private sessionHandler: ((lane: SessionLaneName, bytes: Uint8Array) => void) | null = null;
+  private earlySession: Array<[SessionLaneName, Uint8Array]> = [];
+  private earlySessionBytes = 0;
+  /** Session v2: this channel reads and opens body streams (`SessionWire.openBody`). */
+  readonly sessionBodies = true;
+  /**
+   * Session v2: body streams this side opened, counted in the session's backlog: those on the control and normal lanes until the core
+   * holds none of them, those on the background lane (file blocks) while bytes of them still wait here, as the lanes are counted.
+   */
+  private readonly bodyStreams = new Map<SendStream, SessionLaneName>();
+  private bodyHandler: ((key: number, bytes: Uint8Array | null) => void) | null = null;
+  private earlyBodies: Array<[number, Uint8Array | null]> = [];
+  /** This side declared `AGENT_NET_SESSION_V2`: the peer may open body streams. */
+  private bodiesDeclared = false;
 
   constructor(
     private readonly connection: Connection,
     localCandidates: Address[],
     reprobeMs: number,
     private readonly publicOnly = false,
+    relayAddress: () => PeerAddress | null = () => null,
   ) {
     this.remoteId = hex(connection.remotePublicKey);
     this.outbound = connection.openStream('normal');
@@ -70,10 +106,24 @@ class CoreChannel implements PeerChannel {
     this.control = connection.openStream('interactive');
     this.control.write(Uint8Array.of(CONTROL));
     this.localCandidates = localCandidates;
+    this.router = new PathRouter<PeerAddress>({
+      closed: () => this.events.closed || connection.closed,
+      path: () => this.path(),
+      directAddress: () => { const address = connection.closed ? null : connection.peerAddress(); return address && !isLinkAddress(address) ? address : null; },
+      activeRttMs: () => { const srtt = this.stats()?.srttUs; return typeof srtt === 'number' && srtt > 0 ? srtt / 1000 : null; },
+      relayAddress,
+      probe: (address) => { connection.probe(address); },
+      measure: (address) => { connection.measure(address); },
+      setPreferRelay: (prefer) => connection.setPreferRelay(prefer),
+      writeControl: (line) => this.control.write(Buffer.from(line)),
+    }, reprobeMs);
     this.announceCandidates();
+    connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.router.onProbeRtt(address, isLinkAddress(address), rttUs));
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
       let text = '';
+      // Session v2 body stream: its key (4 bytes) follows the kind byte; they may arrive in separate chunks.
+      let bodyKey: number | null = null, keyBytes: number[] = [];
       stream.on('data', (bytes: Uint8Array) => {
         let chunk = bytes;
         if (kind === null) {
@@ -82,6 +132,18 @@ class CoreChannel implements PeerChannel {
         }
         if (kind === DATA) {
           if (chunk.length) this.events.data(chunk);
+          return;
+        }
+        if (kind === SESSION_BODY_KIND) {
+          // Only after this side declared v2: before that it is a stream kind this node does not take, as on older nodes.
+          if (!this.bodiesDeclared) { this.close(); return; }
+          while (bodyKey === null && chunk.length) { keyBytes.push(chunk[0]); chunk = chunk.subarray(1); if (keyBytes.length === 4) bodyKey = new DataView(Uint8Array.from(keyBytes).buffer).getUint32(0, false); }
+          if (bodyKey !== null && chunk.length) this.sessionBody(bodyKey, chunk);
+          return;
+        }
+        const lane = SESSION_LANE_BY_KIND.get(kind);
+        if (lane) {
+          if (chunk.length) this.sessionData(lane, chunk);
           return;
         }
         if (kind !== CONTROL || text.length + chunk.length > 8192) { this.close(); return; }
@@ -94,52 +156,46 @@ class CoreChannel implements PeerChannel {
       // 对端结束了它的数据流：它要走了，这一端也收尾。
       stream.on('end', () => {
         if (kind === DATA) this.close();
+        if (kind === SESSION_BODY_KIND && bodyKey !== null) this.sessionBody(bodyKey, null);
       });
     });
     connection.on('close', () => {
-      this.stopReprobe();
+      this.router.stop();
       this.events.close();
     });
-    // 还在走中转时每隔一阵再验证一轮：先前没打通，或者直连断了退回了中转。
-    this.reprobe = setInterval(() => {
-      if (this.path() === 'relay') this.probeCandidates();
-    }, reprobeMs);
-    this.reprobe.unref();
+    // 还在走中转时每隔一阵再验证一轮（先前没打通，或者直连断了退回了中转），并定期轻测备用路径往返。
+    this.router.start();
   }
 
   private onControl(line: string): void {
-    let message: { candidates?: unknown };
+    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
     try {
       message = JSON.parse(line);
     } catch {
       return;
     }
+    if (Array.isArray(message.session) && message.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
+      this.sessionCapable = true;
+      this.peerSessionFeatures = message.session
+        .filter((value): value is string => typeof value === 'string' && value !== AGENT_NET_SESSION_V1 && value.length <= 64).slice(0, 16);
+      for (const handler of this.sessionCapableHandlers.splice(0)) handler();
+    }
+    this.router.onPeerPreference(message);
     if (!Array.isArray(message.candidates)) return;
-    this.candidates = message.candidates
+    this.router.setCandidates(message.candidates
       .filter((value): value is Address => !!value && typeof value.address === 'string' && value.address.length <= 128 && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535)
       .filter((value) => !this.publicOnly || !isPrivate(value.address))
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
-      .slice(0, MAX_CANDIDATES);
-    this.nextCandidate = 0;
-    this.probeCandidates();
+      .slice(0, MAX_CANDIDATES));
   }
   announceCandidates(): void {
     if (!this.events.closed && this.localCandidates.length) this.control.write(Buffer.from(`${JSON.stringify({ candidates: this.localCandidates })}\n`));
   }
 
-  private probeCandidates(): void {
-    if (this.events.closed) return;
-    // 公网地址排在前面（查公网地址得到的那些），内网地址在后。装了 Docker 之类的机器有很多内网地址，
-    // 2026-11-05 真实网络测试里公网地址排在第 9 个，被截掉了，两台本来能直连的电脑一直走中转。
-    const count = Math.min(PROBES_PER_ROUND, this.candidates.length);
-    for (let i = 0; i < count; i++) this.connection.probe(this.candidates[(this.nextCandidate + i) % this.candidates.length]);
-    this.nextCandidate = (this.nextCandidate + count) % Math.max(1, this.candidates.length);
-  }
+  pathMetrics(): PeerPathMetrics { return this.router.pathMetrics(); }
 
-  private stopReprobe(): void {
-    if (this.reprobe) clearInterval(this.reprobe);
-    this.reprobe = null;
-  }
+  setPathPreference(preference: PathPreference): void { this.router.setPathPreference(preference); }
+
 
   send(bytes: Uint8Array): void {
     if (this.events.closed) return;
@@ -155,6 +211,109 @@ class CoreChannel implements PeerChannel {
 
   onClose(handler: () => void): void {
     this.events.onClose(handler);
+  }
+
+  onDrain(handler: () => void): void {
+    this.connection.on('drain', handler);
+  }
+
+  /**
+   * Tells the peer this node's upper layer uses sessions. Only then may the peer open session streams: a node that
+   * declared without anyone reading its sessions would leave the peer's `open` waiting for its timeout. Once per
+   * connection; older nodes only read `candidates` from control lines and ignore this one. `features`: what else the
+   * upper layer reads on its sessions, sent along in the same line (older session nodes look only for the version).
+   */
+  declareSessions(features: readonly string[] = []): void {
+    if (this.sessionsDeclared || this.events.closed) return;
+    this.sessionsDeclared = true;
+    this.bodiesDeclared = features.includes(AGENT_NET_SESSION_V2);
+    this.control.write(Buffer.from(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
+  }
+
+  /** The features the peer declared with its session support (empty until it did, or if it declared none). */
+  sessionFeatures(): readonly string[] { return this.peerSessionFeatures; }
+
+  onSessionCapable(handler: () => void): void {
+    if (this.sessionCapable) handler(); else this.sessionCapableHandlers.push(handler);
+  }
+
+  sessionWire(): import('./types.js').SessionWire | null {
+    if (!this.sessionCapable || this.events.closed) return null;
+    if (!this.sessionStreams) {
+      const open = (lane: SessionLaneName) => {
+        const stream = this.connection.openStream(SESSION_PRIORITY[lane]);
+        stream.write(Uint8Array.of(SESSION_LANE_KINDS[lane]));
+        return stream;
+      };
+      this.sessionStreams = { control: open('control'), normal: open('normal'), background: open('background') };
+    }
+    const streams = this.sessionStreams, channel = this;
+    return {
+      write: (lane, bytes) => { if (!this.events.closed) streams[lane].write(bytes); },
+      // 控制与普通通道连核心缓冲里的一起算：慢线路上核心里能排上 1 MiB 推送，只算 JS 这边的话读数一直是 0，业务照样往里灌，交互回复
+      // 排在后面几秒（2026-11-17 审查）。后台通道（文件块）只算 JS 这边的，下载时不压住任务文字。
+      get bufferedAmount() {
+        return streams.control.pendingBytes + streams.control.coreBufferedBytes + streams.normal.pendingBytes + streams.normal.coreBufferedBytes
+          + streams.background.pendingBytes + channel.bodiesBuffered();
+      },
+      onData: (handler) => {
+        this.sessionHandler = handler;
+        for (const [lane, bytes] of this.earlySession.splice(0)) handler(lane, bytes);
+        this.earlySessionBytes = 0;
+      },
+      openBody: (lane, key) => this.openBody(lane, key),
+      onBody: (handler) => {
+        this.bodyHandler = handler;
+        for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
+      },
+      onDrain: (handler) => this.onDrain(handler),
+    };
+  }
+
+  /**
+   * Session v2: bodies count like their lanes: on the control and normal lanes with what the core still buffers, on the background
+   * lane what still waits here. A stream leaves the count once it holds nothing more.
+   */
+  private bodiesBuffered(): number {
+    let total = 0;
+    for (const [stream, lane] of this.bodyStreams) {
+      const buffered = stream.pendingBytes + (lane === 'background' ? 0 : stream.coreBufferedBytes);
+      if (buffered === 0 && stream.handedOver) this.bodyStreams.delete(stream); else total += buffered;
+    }
+    return total;
+  }
+
+  /** Session v2: a stream of its own for one message body (types.ts SESSION_BODY_KIND), at its lane's priority. */
+  private openBody(lane: SessionLaneName, key: number): SessionBodyWriter | null {
+    if (this.events.closed) return null;
+    let stream: SendStream;
+    try { stream = this.connection.openStream(SESSION_PRIORITY[lane]); } catch { return null; }
+    const head = new Uint8Array(5);
+    head[0] = SESSION_BODY_KIND;
+    new DataView(head.buffer).setUint32(1, key, false);
+    stream.write(head);
+    this.bodyStreams.set(stream, lane);
+    return {
+      write: (bytes) => { if (!this.events.closed) stream.write(bytes); },
+      finish: () => stream.finish(),
+      // A core from before abandoned streams (no `conn_abandon`): what was written still goes, the stream ends after it.
+      abandon: () => { if (stream.abandon() === null) stream.finish(); this.bodyStreams.delete(stream); },
+    };
+  }
+
+  private sessionBody(key: number, bytes: Uint8Array | null): void {
+    if (this.bodyHandler) { this.bodyHandler(key, bytes); return; }
+    // Every event counts, an end too: a peer that never attaches its session cannot pile up empty streams for free.
+    this.earlySessionBytes += (bytes?.length ?? 0) + EARLY_BODY_EVENT_BYTES;
+    if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close(); return; }
+    this.earlyBodies.push([key, bytes && bytes.slice()]);
+  }
+
+  private sessionData(lane: SessionLaneName, bytes: Uint8Array): void {
+    if (this.sessionHandler) { this.sessionHandler(lane, bytes); return; }
+    this.earlySessionBytes += bytes.length;
+    if (this.earlySessionBytes > MAX_EARLY_SESSION_BYTES) { this.close(); return; }
+    this.earlySession.push([lane, bytes.slice()]);
   }
 
   stats(): Record<string, number> | null {
@@ -179,11 +338,12 @@ class CoreChannel implements PeerChannel {
 
   close(options?: { drain?: boolean }): void {
     if (this.events.closed) return;
-    this.stopReprobe();
+    this.router.stop();
     this.events.close();
     if (options?.drain === false) { this.connection.close(); return; }
     this.outbound.finish();
     this.control.finish();
+    if (this.sessionStreams) for (const stream of Object.values(this.sessionStreams)) stream.finish();
     void this.connection.closeWhenDrained(DRAIN_TIMEOUT_MS);
   }
 }
@@ -196,10 +356,13 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   const links = new Map<string, Link>();
   const relayIdOf = new Map<number, string>();
   let endpoint: Endpoint;
+  // 中继给了 UDP 凭据时经中继的数据报走 UDP，否则（或 UDP 不通时）走中继 WebSocket，见 relayUdp.ts。
+  let relayUdp: RelayUdpPath | null = null;
+  const relaySends = new RelaySendCounters();
   const linkFor = (relayId: string): Link => {
     let link = links.get(relayId);
     if (!link) {
-      link = endpoint.createLink((datagram) => relay!.uplink.send(relayId, datagram), 1);
+      link = endpoint.createLink((datagram) => { if (!relayUdp?.send(relayId, datagram)) relay!.uplink.send(relayId, datagram); }, 1);
       links.set(relayId, link);
       relayIdOf.set(link.id, relayId);
     }
@@ -228,14 +391,22 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     return false;
   };
   let stun: StunClient | null = null;
-  endpoint = await Endpoint.create({
-    identity: options.identity ?? generateIdentity(),
+  const identity = options.identity ?? generateIdentity();
+  const bindAddress = options.bindAddress ?? '0.0.0.0';
+  const requestedPort = validBindPort(options.bindPort);
+  if (options.bindPort !== undefined && options.bindPort !== 0 && requestedPort === undefined) {
+    options.onLog?.('warn', `agent-net ignoring invalid bindPort=${String(options.bindPort)}; using ephemeral UDP port`);
+  }
+  const createEndpoint = (port: number) => Endpoint.create({
+    identity,
     prologue: PROLOGUE,
+    sendPacketSize: SEND_PACKET_SIZE,
     ...(options.module ? { module: options.module } : {}),
-    bind: { address: options.bindAddress ?? '0.0.0.0' },
+    bind: { address: bindAddress, port },
     udp,
+    udpTraffic: options.udpTraffic,
     accept: { admit },
-    intercept: (datagram) => stun?.intercept(datagram) ?? false,
+    intercept: (datagram) => relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false),
     ...(options.tap
       ? {
           // 只记发出的：每个节点都接了抓包时，线上每个数据报正好记一次。
@@ -244,23 +415,86 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
         }
       : {}),
   });
-  relay?.uplink.onDatagram((relayId, datagram) => linkFor(relayId).deliver(datagram));
+  if (udp && requestedPort !== undefined) {
+    try {
+      endpoint = await createEndpoint(requestedPort);
+      options.onLog?.('info', `agent-net UDP listening on fixed port ${endpoint.address().port}`);
+    } catch (error) {
+      const errCode = (error as NodeJS.ErrnoException | null)?.code;
+      if (errCode !== 'EADDRINUSE' && errCode !== 'EACCES') throw error;
+      endpoint = await createEndpoint(0);
+      options.onLog?.('warn', `agent-net fixed UDP port ${requestedPort} unavailable (${errCode}); fell back to ephemeral port ${endpoint.address().port}`);
+    }
+  } else {
+    endpoint = await createEndpoint(0);
+  }
+  relay?.uplink.onDatagram((relayId, datagram) => { relayUdp?.noteInbound(false); linkFor(relayId).deliver(datagram); });
+  if (udp && relay?.udpCredentials && options.relayUdpServer) {
+    const credentials = relay.udpCredentials;
+    relayUdp = new RelayUdpPath({
+      sendUdp: (to, datagram) => endpoint.sendUdp(to, datagram),
+      server: options.relayUdpServer,
+      credentials: () => credentials(),
+      peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
+      deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
+      // 只算一直走中转的那段，并按连接拆分：直连的历史重传不算进来，单一对端抖动/掉线也不连坐其他健康对端（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sampleDetailed(function* () {
+        for (const channel of channels) {
+          const stats = channel.stats();
+          if (stats) yield {
+            key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0,
+            acknowledgedBytes: stats.acknowledgedBytes ?? 0,
+          };
+        }
+      }()),
+    });
+  }
   const publicOnly = options.publicCandidatesOnly === true;
   const candidates: Address[] = [];
   const channels = new Set<CoreChannel>();
   let closed = false;
   const channelFor = (connection: Connection) => {
-    const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly);
+    const remoteId = hex(connection.remotePublicKey);
+    const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly, () => {
+      const id = relay && options.relayIdOf?.(remoteId);
+      return id ? linkFor(id).address : null;
+    });
     channels.add(channel); connection.once('close', () => channels.delete(channel)); return channel;
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.
   endpoint.on('connection', (connection: Connection) => options.onIncoming(channelFor(connection)));
-  if (udp) void gatherCandidates(endpoint, options.stunServers ?? [], (client) => (stun = client)).then((gathered) => {
-    if (closed) return;
-    candidates.push(...gathered.filter((address) => !publicOnly || !isPrivate(address.address))
-      .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES));
+  let activeStunServers = dedupeStunServers(options.stunServers ?? []);
+  let gathering = 0;
+  let roundFound: Address[] = [];
+  const publishCandidates = () => {
+    const next = normalizeCandidates(roundFound, publicOnly);
+    if (sameCandidateList(candidates, next)) return;
+    candidates.splice(0, candidates.length, ...next);
     for (const channel of channels) channel.announceCandidates();
-  }).catch(() => undefined);
+  };
+  const queryStunServers = (round: number, servers: readonly string[]) => {
+    if (!servers.length || closed || round !== gathering) return;
+    if (!stun) stun = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
+    const client = stun;
+    // 每个 STUN 独立并行查询、先到先公布，避免慢区或被墙的 STUN 阻塞本地与本区公网候选。
+    for (const server of servers) {
+      void client.query(server).then((mapped) => {
+        if (closed || round !== gathering || !mapped) return;
+        roundFound.push(mapped);
+        publishCandidates();
+      }).catch(() => undefined);
+    }
+  };
+  const gather = () => {
+    const round = ++gathering;
+    stun?.close();
+    stun = null;
+    roundFound = localInterfaceCandidates(endpoint);
+    publishCandidates();
+    queryStunServers(round, activeStunServers);
+  };
+  if (udp) gather();
   const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
   return {
     id: hex(endpoint.publicKey),
@@ -290,9 +524,35 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       });
       return channel;
     },
+    networkChanged() {
+      if (closed) return;
+      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集；
+      // 中转 UDP 清掉旧网络的冷却并重新登记、探测。
+      endpoint.localAddressChanged();
+      if (udp) gather();
+      relayUdp?.networkChanged();
+    },
+    setStunServers(servers: readonly string[]) {
+      if (closed) return;
+      const next = dedupeStunServers(servers);
+      const previous = new Set(activeStunServers);
+      const added = next.filter((server) => !previous.has(server));
+      activeStunServers = next;
+      if (udp && added.length) queryStunServers(gathering, added);
+    },
+    relayStalled() { relayUdp?.noteStall(); },
+    relayRoute() {
+      if (!relay || closed) return null;
+      // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。
+      if (relayUdp?.up) return { via: 'udp', rttMs: relayUdp.rttMs };
+      const suspension = relayUdp?.suspension;
+      return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
+    },
     async close() {
       closed = true; stun?.close();
-      endpoint.close();
+      // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。
+      await endpoint.close();
+      relayUdp?.close();
       relay?.uplink.close();
     },
   };
@@ -302,7 +562,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
  * 候选地址：本机 UDP 地址（绑在 `0.0.0.0` 时是各网卡的 IPv4 地址），加上各 STUN 服务器看到的外部地址。
  * 同一台机器问不同的 STUN 服务器可能看到不同的外部地址（国内外分流出口不同），所以每个都问、去重后都给对端。
  */
-async function gatherCandidates(endpoint: Endpoint, stunServers: string[], install: (client: StunClient) => void): Promise<Address[]> {
+function localInterfaceCandidates(endpoint: Endpoint): Address[] {
   const local = endpoint.address();
   const found: Address[] = [];
   if (local.address === '0.0.0.0') {
@@ -312,19 +572,41 @@ async function gatherCandidates(endpoint: Endpoint, stunServers: string[], insta
   } else {
     found.push(local);
   }
-  if (stunServers.length) {
-    const client = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
-    install(client);
-    const mapped = await Promise.all(stunServers.map((server) => client.query(server).catch(() => null)));
-    for (const address of mapped) if (address) found.push(address);
-  }
+  return found;
+}
+
+function normalizeCandidates(found: readonly Address[], publicOnly: boolean): Address[] {
   const seen = new Set<string>();
-  return found.filter((address) => {
-    const key = `${address.address}:${address.port}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return found
+    .filter((address) => {
+      if (publicOnly && isPrivate(address.address)) return false;
+      const key = `${address.address}:${address.port}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
+    .slice(0, MAX_CANDIDATES);
+}
+
+function sameCandidateList(a: readonly Address[], b: readonly Address[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.address === b[index].address && item.port === b[index].port);
+}
+
+function dedupeStunServers(servers: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of servers) {
+    const server = typeof raw === 'string' ? raw.trim() : '';
+    if (!server || seen.has(server)) continue;
+    seen.add(server);
+    out.push(server);
+  }
+  return out;
+}
+
+function validBindPort(port: unknown): number | undefined {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : undefined;
 }
 
 /** 私有地址：局域网、运营商 NAT、链路本地。 */

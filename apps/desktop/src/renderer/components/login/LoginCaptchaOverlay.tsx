@@ -228,12 +228,12 @@ export function LoginCaptchaOverlay({
           borderRadius: 18,
           background: LOGIN_COLORS.panelBg,
           boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}`,
-          padding: '20px 24px 16px',
+          padding: 'var(--space-5) var(--space-6) var(--space-4)',
         }}
       >
         <p
           id="login-captcha-title"
-          className="font-semibold"
+          className="font-medium"
           style={{ fontSize: 16, lineHeight: '24px', color: LOGIN_COLORS.titleText }}
         >
           {t('login.captcha.title')}
@@ -258,7 +258,7 @@ export function LoginCaptchaOverlay({
             </button>
           </div>
         ) : (
-          <div className="relative" style={{ width: 352, height: 240, marginTop: 8 }}>
+          <div className="relative" style={{ width: 352, height: 240, marginTop: 'var(--space-2)' }}>
             {!ready && (
               <p
                 className="absolute inset-0 grid place-items-center"
@@ -277,7 +277,7 @@ export function LoginCaptchaOverlay({
           data-testid="login-captcha-cancel"
           onClick={() => settle(null)}
           className="font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-          style={{ fontSize: 13, marginTop: 12, color: LOGIN_COLORS.secondaryText }}
+          style={{ fontSize: 13, marginTop: 'var(--space-3)', color: LOGIN_COLORS.secondaryText }}
         >
           {t('login.captcha.cancel')}
         </button>

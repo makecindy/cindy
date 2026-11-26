@@ -10,13 +10,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
 
 const fake = vi.hoisted(() => ({ owner: 'owner-a', encryptedOnly: false, relayMode: 'official' as 'official' | 'mixed' | 'v2-only',
-  directory: vi.fn(), mutation: vi.fn(), legacy: vi.fn(), cache: vi.fn() }));
+  directory: vi.fn(), mutation: vi.fn(), legacy: vi.fn(), cache: vi.fn(), noteList: vi.fn() }));
 vi.mock('@/api/client', () => ({ ApiError: class extends Error {
   constructor(readonly code: string, readonly status: number, message: string) { super(message); }
 } }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://devices.example.test' }));
 vi.mock('@/auth/authOwnerGeneration', () => ({ getMobileAuthOwner: () => fake.owner, isMobileAuthOwnerCurrent: (owner: string) => owner === fake.owner }));
-vi.mock('@/device-link/agentNetRuntime', () => ({ isMobileAgentNetActive: () => true }));
+vi.mock('@/device-link/agentNetRuntime', () => ({ isMobileAgentNetActive: () => true, noteMobileAgentNetDeviceList: fake.noteList }));
 vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity: async () => ({ api: { directory: fake.directory, request: fake.mutation } }) }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ generation: 0 }),
   mobileAgentNetRequiresEncryption: () => fake.encryptedOnly || fake.relayMode === 'v2-only' }));
@@ -24,7 +24,7 @@ vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getSelfHostedRelayRoute
   getActiveSelfHostedRelay: () => fake.relayMode === 'official' ? null : { agentNetOnly: fake.relayMode === 'v2-only' },
   isAgentNetOnlyRoute: (route: { agentNetOnly?: boolean } | null) => route?.agentNetOnly === true }));
 vi.mock('@/device-link/agentNetDirectoryCache', () => ({ writeMobileAgentNetDirectory: fake.cache }));
-import { mobileAgentNetDeviceRequest } from '@/device-link/agentNetDeviceApi';
+import { __resetMobileAgentNetNameBackfillForTests, mobileAgentNetDeviceRequest } from '@/device-link/agentNetDeviceApi';
 
 const options = { baseUrl: 'https://devices.example.test' };
 const enrollment = { deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null };
@@ -35,17 +35,30 @@ const encryptedDevice = (deviceId: string, online = true) => ({ certificate: { d
 const request = (path = '/api/device-link/devices', extra = {}) => mobileAgentNetDeviceRequest<{ devices: DeviceView[] }>(path, { ...options, ...extra }, enrollment, fake.legacy);
 beforeEach(() => {
   vi.clearAllMocks(); fake.owner = 'owner-a'; fake.encryptedOnly = false; fake.relayMode = 'official';
+  __resetMobileAgentNetNameBackfillForTests();
   fake.directory.mockResolvedValue([encryptedDevice('new'), encryptedDevice('shared', false)]);
   fake.legacy.mockResolvedValue({ devices: [legacyDevice('old'), legacyDevice('shared')] });
   fake.cache.mockResolvedValue(undefined); fake.mutation.mockResolvedValue({ name: 'Renamed' });
 });
 
-it('merges V1-only devices with V2 presence and preserves an online legacy route', async () => {
+// The displayed V2-only row cannot act as official membership after deletion in V1.
+it('merges V1-only devices with V2 presence and reads membership from the unmerged official list', async () => {
   expect(await request()).toMatchObject({ handled: true, value: { devices: [
     { deviceId: 'old', online: true }, { deviceId: 'shared', name: 'shared', online: true },
     { deviceId: 'new', name: 'V2 new', remoteControlEnabled: false },
   ] } });
   expect(fake.legacy).toHaveBeenCalledTimes(1);
+  expect(fake.noteList).toHaveBeenCalledExactlyOnceWith(['old', 'shared'], expect.any(Number));
+});
+
+// App metadata must reach the shared mobile controllable-device predicate.
+// Unit: real directory adapter; the old fixtures never contained a non-Cindy App.
+it('projects App identity from the encrypted directory, including offline rows', async () => {
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('friend', false), app: 'cindy-friend' },
+    { ...encryptedDevice('shared', false), app: 'cindy-friend' }]);
+  expect(await request()).toMatchObject({ handled: true, value: { devices: [
+    { deviceId: 'old' }, { deviceId: 'shared', app: 'cindy-friend', online: true }, { deviceId: 'friend', app: 'cindy-friend', online: false },
+  ] } });
 });
 
 it.each(['PATCH', 'DELETE'])('keeps a V1-only device on the existing %s management path', async method => {
@@ -133,4 +146,111 @@ it('allows a V2-only device absent from the legacy store but preserves legacy de
   await expect(request('/api/device-link/devices/new', { method: 'PATCH', body: { name: 'Renamed' } })).rejects.toMatchObject({ status: 403 });
   fake.legacy.mockImplementation(async () => { fake.owner = 'owner-b'; return {}; });
   await expect(request('/api/device-link/devices/new', { method: 'DELETE' })).rejects.toThrow('AGENT_NET_OWNER_CHANGED');
+});
+
+// Preserving V1 custom names on mobile mixed-directory reads: uncustomized V2
+// hostnames must not clobber legacy aliases, and V2 is backfilled at most once.
+it('preserves V1 custom names over uncustomized V2 hostnames and backfills V2 once', async () => {
+  fake.legacy.mockResolvedValue({
+    devices: [
+      { ...legacyDevice('work-pc'), name: '办公机', selfName: 'WORK-HOST' },
+      { ...legacyDevice('v2-custom'), name: '旧名', selfName: 'V2-HOST' },
+    ],
+  });
+  fake.directory.mockResolvedValue([
+    { ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' },
+    { ...encryptedDevice('v2-custom', true), name: 'V2新名', selfName: 'V2-HOST' },
+  ]);
+
+  const result = await request();
+  expect(result).toMatchObject({
+    handled: true,
+    value: {
+      devices: [
+        { deviceId: 'work-pc', name: '办公机', selfName: 'WORK-HOST' },
+        { deviceId: 'v2-custom', name: 'V2新名', selfName: 'V2-HOST' },
+      ],
+    },
+  });
+  await vi.waitFor(() => expect(fake.mutation).toHaveBeenCalledTimes(1));
+  expect(fake.mutation).toHaveBeenCalledWith('PATCH', '/devices/work-pc', { name: '办公机' });
+
+  await request();
+  await Promise.resolve();
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
+});
+
+// Official mobile PATCH must drain any in-flight backfill for the same device and
+// also update V1 so clearing or renaming a device cannot be undone by the next read.
+it('drains in-flight backfill and synchronizes official V1 on mobile PATCH', async () => {
+  const events: string[] = [];
+  let finishBackfill!: () => void;
+  fake.legacy
+    .mockResolvedValueOnce({ devices: [{ ...legacyDevice('work-pc'), name: '办公机', selfName: 'WORK-HOST' }] })
+    .mockImplementationOnce(async () => {
+      events.push('legacy-patch');
+      return { deviceId: 'work-pc', name: 'WORK-HOST' };
+    });
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' }]);
+  fake.mutation
+    .mockImplementationOnce((_method, _path, body) => new Promise((resolve) => {
+      events.push(`start:${JSON.stringify(body)}`);
+      finishBackfill = () => {
+        events.push(`end:${JSON.stringify(body)}`);
+        resolve({ name: '办公机' });
+      };
+    }))
+    .mockImplementationOnce(async (_method, _path, body) => {
+      events.push(`start:${JSON.stringify(body)}`);
+      return { name: 'WORK-HOST' };
+    });
+
+  await request();
+  await vi.waitFor(() => expect(events).toEqual(['start:{"name":"办公机"}']));
+
+  const explicitClear = request('/api/device-link/devices/work-pc', { method: 'PATCH', body: { name: null } });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(events).toEqual(['start:{"name":"办公机"}']);
+
+  finishBackfill();
+  await explicitClear;
+  expect(events).toEqual([
+    'start:{"name":"办公机"}',
+    'end:{"name":"办公机"}',
+    'start:{"name":null}',
+    'legacy-patch',
+  ]);
+});
+
+// A directory read started *while* a PATCH { name: null } is mid-flight can observe
+// cleared V2 + stale V1; advancing mobileMutationSeq on mutation completion ensures
+// that torn snapshot never triggers a backfill after the PATCH finishes.
+it('does not backfill a torn snapshot from a read started during an in-flight PATCH', async () => {
+  let finishLegacyPatch!: () => void;
+  let finishReadLegacy!: (value: { devices: DeviceView[] }) => void;
+  fake.directory.mockResolvedValue([{ ...encryptedDevice('work-pc', true), name: 'WORK-HOST', selfName: 'WORK-HOST' }]);
+  fake.mutation.mockResolvedValue({ name: 'WORK-HOST' });
+  fake.legacy
+    .mockImplementationOnce(() => new Promise(resolve => {
+      finishLegacyPatch = () => resolve({ deviceId: 'work-pc', name: 'WORK-HOST' });
+    }))
+    .mockImplementationOnce(() => new Promise<{ devices: DeviceView[] }>(resolve => {
+      finishReadLegacy = resolve;
+    }));
+
+  const patchPromise = request('/api/device-link/devices/work-pc', { method: 'PATCH', body: { name: null } });
+  await vi.waitFor(() => expect(finishLegacyPatch).toBeTypeOf('function'));
+
+  const readDuringPatch = request();
+  await vi.waitFor(() => expect(finishReadLegacy).toBeTypeOf('function'));
+
+  finishLegacyPatch();
+  await patchPromise;
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
+
+  finishReadLegacy({ devices: [{ ...legacyDevice('work-pc'), name: '旧自定义名', selfName: 'WORK-HOST' }] });
+  await readDuringPatch;
+  await Promise.resolve();
+  expect(fake.mutation).toHaveBeenCalledTimes(1);
 });

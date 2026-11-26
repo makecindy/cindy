@@ -18,6 +18,8 @@ import net from 'node:net';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 
+type WindowsManifestReader = (key: string) => string | null;
+
 export interface NativeBindingOptions {
   /** 注册名(身份卡 browserExtension.nativeHost.name)。 */
   hostName: string;
@@ -34,6 +36,8 @@ export interface NativeBindingOptions {
   /** Only an explicit action in the trusted main window may replace another registration. */
   confirmTakeover?(): Promise<boolean>;
   assertCurrent?(): void;
+  /** Undefined selects the portable reader when the desktop addon is unavailable. */
+  loadWindowsManifestReader?(): Promise<WindowsManifestReader | undefined>;
   /** 覆盖浏览器 profile 目录清单(测试用)。 */
   profiles?: string[];
   run?: (
@@ -106,14 +110,12 @@ export function createNativeBinding(options: NativeBindingOptions): NativeBindin
     }
   }
 
-  async function registeredBinary(expectedBinary?: string): Promise<string | null> {
-    const requiredFiles = new Set<string>();
-    if (expectedBinary !== undefined && platform === 'win32') {
-      // reg.exe uses the same failure code for missing keys and failed reads. Read the
-      // actual write targets through Registry.GetValue so access errors cannot look absent.
-      const keys = Buffer.from(JSON.stringify(windowsRegistryKeys.map(key =>
-        key.replace(/^HKCU/, 'HKEY_CURRENT_USER')))).toString('base64');
-      const script = `
+  async function queryWindowsManifests(): Promise<string[]> {
+    // reg.exe uses the same failure code for missing keys and failed reads. Read the
+    // actual write targets through Registry.GetValue so access errors cannot look absent.
+    const keys = Buffer.from(JSON.stringify(windowsRegistryKeys.map(key =>
+      key.replace(/^HKCU/, 'HKEY_CURRENT_USER')))).toString('base64');
+    const script = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $keys = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${keys}')) | ConvertFrom-Json
@@ -126,17 +128,29 @@ $values = @(foreach ($key in $keys) {
 })
 [Console]::Write((ConvertTo-Json -InputObject $values -Compress))
 `;
-      const powershell = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows',
-        'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-      const result = await run!(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive',
-        '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { windowsHide: true, timeout: 10000 }) as { stdout: string };
-      const values: unknown = JSON.parse(result.stdout.trim());
-      if (!Array.isArray(values)) throw new Error('NATIVE_PATH_UNSAFE');
-      for (const file of values) {
-        if (typeof file !== 'string' || !file) throw new Error('NATIVE_PATH_UNSAFE');
-        requiredFiles.add(file);
+    const powershell = path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows',
+      'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const result = await run!(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive',
+      '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 10000 }) as { stdout: string };
+    const values: unknown = JSON.parse(result.stdout.trim());
+    if (!Array.isArray(values) || !values.every(file => typeof file === 'string' && file))
+      throw new Error('NATIVE_PATH_UNSAFE');
+    return values;
+  }
+
+  async function registeredBinary(expectedBinary?: string, reader?: WindowsManifestReader): Promise<string | null> {
+    const requiredFiles = new Set<string>();
+    if (expectedBinary !== undefined && platform === 'win32') {
+      let files: readonly string[];
+      try {
+        files = reader ? windowsRegistryKeys.map(reader).filter(file => file !== null) : await queryWindowsManifests();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as Error).message === 'NATIVE_PATH_UNSAFE') throw error;
+        const timedOut = (error as { killed?: boolean }).killed === true;
+        throw new Error(timedOut ? 'REGISTRY_READ_TIMEOUT' : 'REGISTRY_READ_FAILED');
       }
+      for (const file of files) requiredFiles.add(file);
     }
     const files = new Set([registrationFile, ...requiredFiles,
       ...(platform === 'win32' ? [] : browserProfiles().map(profile =>
@@ -278,26 +292,35 @@ $values = @(foreach ($key in $keys) {
     return [...ids];
   }
 
-  async function installLocked(port: number, extensionIds: readonly string[], takeover: boolean) {
+  async function installLocked(port: number, extensionIds: readonly string[], takeover: boolean, reader?: WindowsManifestReader) {
     try {
       options.assertCurrent?.();
       await privateDirectory(root);
       const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
       const binary = path.join(root, binaryName);
-      const registered = await registeredBinary(binary);
+      const registered = await registeredBinary(binary, reader);
       if (registered !== null && registered !== binary) {
         if (!takeover || !await options.confirmTakeover?.())
           return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_HOST_IN_USE' };
         options.assertCurrent?.();
+      }
+      const source = path.join(options.binaryDir, platform + '-' + arch, binaryName);
+      let content: Buffer;
+      try {
+        content = await fs.readFile(source);
+      } catch (error) {
+        // Only the packaged executable being absent is terminal. ENOENT elsewhere may
+        // be a registration race and must retain its transient recovery behavior.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_BINARY_MISSING' };
+        throw error;
       }
       await privateDirectory(path.join(root, 'connections'));
       // Claim the connection before touching the shared registration, so a binding closing at the
       // same time (plugin update, re-approval, account switch) still sees this one in use.
       config = path.join(root, 'connections', port + '.json');
       await atomic(config, JSON.stringify({ token, extensionIds: [...extensionIds] }));
-      const source = path.join(options.binaryDir, platform + '-' + arch, binaryName);
       // 内容相同时不替换正在运行的 Windows 映像。
-      const content = await fs.readFile(source);
       const old = await fs.readFile(binary).catch(() => null);
       if (!old?.equals(content)) await atomic(binary, content, 0o700);
       const manifest = {
@@ -346,8 +369,8 @@ $values = @(foreach ($key in $keys) {
       const reason =
         code && ['EACCES', 'EPERM', 'ENOENT', 'EROFS', 'EBUSY'].includes(code)
           ? code
-          : (e as Error)?.message === 'NATIVE_PATH_UNSAFE'
-            ? 'NATIVE_PATH_UNSAFE'
+          : ['NATIVE_PATH_UNSAFE', 'REGISTRY_READ_FAILED', 'REGISTRY_READ_TIMEOUT'].includes((e as Error)?.message)
+            ? (e as Error).message
             : 'INSTALL_FAILED';
       return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason };
     }
@@ -356,13 +379,15 @@ $values = @(foreach ($key in $keys) {
   async function install(port: number, extensionIds: readonly string[], request?: { takeover?: boolean }) {
     try {
       await privateDirectory(registrationRoot);
-      return await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
+      // Development builds may need to compile the addon. Only the registry read needs the lock.
+      const reader = platform === 'win32' ? await options.loadWindowsManifestReader?.() : undefined;
+      const result = await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
       { label: 'browser-native-registration' }, async lock => {
         if (!lock.held) return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'REGISTRATION_BUSY' };
-        const result = await installLocked(port, extensionIds, request?.takeover === true);
-        if (!result.ok) state = 'unavailable';
-        return result;
+        return installLocked(port, extensionIds, request?.takeover === true, reader);
       });
+      if (!result.ok) state = 'unavailable';
+      return result;
     } catch (error) {
       state = 'unavailable';
       return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const,

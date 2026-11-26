@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 import {
   countHomeSuggestionSessions,
   isRemoteTaskSuggestionId,
@@ -108,7 +109,21 @@ describe("suggestion route IDs", () => {
 describe("home recommendation connection readiness", () => {
   it("hides both modes after disconnect despite a retained online device snapshot", () => {
     const source = readTextLf(resolve(process.cwd(), "src/session/HomeSurface.tsx"), "utf8");
-    const expression = source.match(/ready: ([\s\S]*?),\n  \}\);\n  const newSessionDeviceOptions/)?.[1];
+    const file = ts.createSourceFile('HomeSurface.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let expression: string | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'taskSuggestionsCandidateMode'
+        && node.initializer && ts.isCallExpression(node.initializer)) {
+        const options = node.initializer.arguments[0];
+        if (options && ts.isObjectLiteralExpression(options)) {
+          const ready = options.properties.find(property => ts.isPropertyAssignment(property)
+            && property.name.getText(file) === 'ready');
+          if (ready && ts.isPropertyAssignment(ready)) expression = ready.initializer.getText(file);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
     expect(expression).toBeTruthy();
     const evaluateReady = new Function("status", "activeConnectionIssue", "recoveringDeviceIds", "selectedDeviceId", `
       const unresponsiveDevices = new Set(), rawDeviceConnectionStates = {};

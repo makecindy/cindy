@@ -1,4 +1,5 @@
 import type { PluginModelPickerOptions, PluginModelPickerResult } from './pluginModelPicker';
+import type { GhostPipeSessionStateRequest, GhostPipeSessionStateResult } from './ghost';
 import { PLUGIN_UI_STATE_BATCH_LIMIT, type PluginUiControlState, type PluginUiInterest, type PluginUiTarget } from './pluginUi';
 type HostMessageListener = (payload: unknown) => void;
 /** Transport only. The execution-side dispatcher checks every request. */
@@ -82,12 +83,19 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     return () => listeners.delete(cb);
   },
   send: (payload: unknown): Promise<unknown> => ports.send(payload),
+  host: {
+    call: (server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> =>
+      ports.send({ type: 'host-tool-request', server, tool, args }),
+  },
   recommendations: (items: unknown[]): Promise<unknown> =>
     ports.send({ type: 'recommendations-update', items }),
   request: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'fetch-request' }),
+  network: Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+    (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'network-request', op }),
+  ])),
   downloads: {
     start: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'start' }),
     cancel: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'cancel' }),
@@ -108,7 +116,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
-  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task'], ['openSession', 'open-session']].map(([name, kind]) => [name,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ports.send({ ...req, type: 'observe-request', kind });
       if (result?.ok === true) return result.data;
@@ -123,7 +131,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     },
   ])),
   tasks: Object.fromEntries(
-    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
+    ['capabilities', 'models', 'imProjects', 'imProjectConfig', 'confirmImPermission', 'followImProject', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
         const result = await ports.send({ ...req, type: 'tasks-request', kind });
         if (result?.ok === true) return result.data;
@@ -170,10 +178,15 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
   // 在任务右侧栏打开 / 聚焦本插件的任务页(taskView);缺省落台前任务,回执带回落点任务。
   taskView: (req: Record<string, unknown> = {}): Promise<unknown> =>
     ports.send({ ...req, type: 'task-view-request' }),
+  sessionStates: (req: Omit<GhostPipeSessionStateRequest, 'type'>): Promise<GhostPipeSessionStateResult> =>
+    ports.send({ ...req, type: 'session-state-request' } satisfies GhostPipeSessionStateRequest),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'workspace-request' }),
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'confirm-request' }),
+  // 主机画的表单弹窗(form 槽):回 { ok, outcome: 'submit' | 'cancel' | 'action', ... }。
+  form: (req: Record<string, unknown>): Promise<unknown> =>
+    ports.send({ ...req, type: 'form-request' }),
 };
   return { api, deliver(payload: unknown) {
     if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'ui-consumers' && 'consumers' in payload && Array.isArray(payload.consumers))

@@ -50,6 +50,20 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  // #9836: a provider access failure stays classified even when redaction removes the original phrase.
+  it('preserves provider 403 from an assistant error through result settlement', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'Authorization: Bearer secret-token, HTTP 403: Forbidden' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const errors = (await drain(queue)).filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data).toMatchObject({ errorStatus: 403, isTerminal: true });
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+  });
+
   it.each(['toolu_child', null])('keeps query failure terminal after an API envelope from %s', async (parent) => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(new UsageTracker());
@@ -700,7 +714,6 @@ describe('Claude Code translator is_error result guard', () => {
 
   it.each([
     { label: '429 rate limit', error_status: 429, error: 'rate_limit_error' },
-    { label: '500 server error', error_status: 500, error: 'api_error' },
     { label: 'connection error', error_status: null, error: 'unknown' },
   ])('does not surface non-overload retry progress ($label)', async ({ error_status, error }) => {
     // 这些类别的 message 不会被 ErrorBanner 本地化，透出等于给所有语言的用户
@@ -725,6 +738,50 @@ describe('Claude Code translator is_error result guard', () => {
 
     const events = await drain(queue);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+  });
+
+  // #8642: production translator must expose repeated HTTP failures without ending
+  // the turn. Existing overload coverage did not cover gateway/server failures.
+  // Unit tier: synthetic SDK input, real translator/queue; no network or waiting.
+  it.each([500, 502, 503, 504])('surfaces HTTP %i retries and preserves recovery', async (errorStatus) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    for (const attempt of [1, 2, 3]) {
+      translateSdkMessage({ type: 'system', subtype: 'api_retry', attempt,
+        max_retries: 10, retry_delay_ms: 1_000, error_status: errorStatus,
+        error: 'api_error Authorization: Bearer secret-token',
+      }, queue, ctx);
+      expect(queue.pending).toBe(Math.max(0, attempt - 1));
+    }
+    translateSdkMessage({ type: 'result', is_error: false, result: 'Recovered.',
+      stop_reason: 'end_turn', total_cost_usd: 0,
+    }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors.map((event) => event.data)).toEqual([2, 3].map((attempt) => expect.objectContaining({
+      message: expect.stringContaining(`Reconnecting... ${attempt}/10`),
+      errorStatus, isTerminal: false, willRetry: true,
+    })));
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+    expect(events.some((event) => event.type === 'text' && (event.data as { text?: string }).text === 'Recovered.')).toBe(true);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(ctx.turn.pendingApiError).toBeNull();
+  });
+
+  it('settles repeated HTTP 500 retries with one terminal error and done', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    translateSdkMessage({ type: 'system', subtype: 'api_retry', attempt: 2,
+      max_retries: 10, retry_delay_ms: 1_000, error_status: 500, error: 'api_error',
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true }, queue, ctx);
+    const events = await drain(queue);
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(2);
+    expect(errors[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+    expect(errors[1].data).toMatchObject({ isTerminal: true, errorStatus: 500 });
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    expect(ctx.turn.pendingApiError).toBeNull();
   });
 
   it('surfaces 529 overload retries as non-terminal progress carrying errorStatus', async () => {
@@ -856,5 +913,72 @@ describe('Claude Code translator is_error result guard', () => {
     const events = await drain(queue);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.some((e) => e.type === 'done')).toBe(true);
+  });
+
+  // 测试价值：依据线上真实 Claude 安全拒绝原例 `This request was flagged for possible cybersecurity risk.` 的补充审阅要求；
+  // 此前仅测 stop_reason='refusal'，漏测 Claude is_error 入口（assistant envelope + result 终态）对该原例的分类与本地插件引用反例；
+  // 生产入口 translateSdkMessage；最小失败输入为该原例的裸文本、API Error JSON 包装及插件引用反例；tier: unit。
+  it.each([
+    ['bare upstream text', 'This request was flagged for possible cybersecurity risk.'],
+    [
+      'API Error JSON envelope',
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This request was flagged for possible cybersecurity risk."}}',
+    ],
+  ] as const)('classifies Claude upstream cybersecurity refusal (%s) as provider-safety-refusal while keeping Done/done accounting', async (_mode, upstreamMessage) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'anthropic');
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'invalid_request',
+        message: { content: [{ type: 'text', text: upstreamMessage }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: upstreamMessage,
+        total_cost_usd: 0.02,
+        usage: { input_tokens: 150, output_tokens: 0 },
+      },
+      queue,
+      ctx,
+    );
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({
+      isTerminal: true,
+      reason: 'provider-safety-refusal',
+      sdkError: 'invalid_request',
+      message: upstreamMessage,
+    });
+    expect(errors[0]?.data).not.toHaveProperty('usageLimit');
+    expect(events.some((e) => e.type === 'text')).toBe(false);
+    expect(events.some((e) => e.type === 'done')).toBe(true);
+  });
+
+  it('does not classify a local plugin error quoting the cybersecurity phrase as provider-safety-refusal', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'anthropic');
+    const localPluginFailure =
+      'Local plugin hook failed while scanning log: "This request was flagged for possible cybersecurity risk."';
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: localPluginFailure,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+      queue,
+      ctx,
+    );
+    const events = await drain(queue);
+    const errorData = events.find((e) => e.type === 'error')?.data as Record<string, unknown>;
+    expect(errorData).toMatchObject({ message: localPluginFailure, isTerminal: true });
+    expect(errorData.reason).toBeUndefined();
   });
 });

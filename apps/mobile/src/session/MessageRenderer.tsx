@@ -1,3 +1,7 @@
+import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
+import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
@@ -29,10 +33,10 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
-import { companionTurnContinuations } from './companionConversationPresentation';
+import { companionTimeGroupRows, companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
-import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
@@ -44,7 +48,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
-import { MessageListRevealContext } from './messageListReveal';
+import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -144,7 +148,7 @@ import {
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { MessageUsageCost } from '@/session/MessageUsageCost';
-import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
+import { messageCostParts } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
@@ -245,6 +249,7 @@ import {
 import {
   groupMobileMarkdownSelectableBlocks,
   mobileMarkdownListMarkerText,
+  mobileMarkdownTableToTsv,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -274,12 +279,14 @@ import {
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
 } from '@/session/chatPathCandidate';
-import { ChatFilePathContext } from '@/session/chatFilePathContext';
+import { ChatFilePathContext, MarkdownLinkActivationContext, useMarkdownLinkActivation } from '@/session/chatFilePathContext';
 import { MailLinkSpan } from '@/session/MailLinkSpan';
 import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
+import { useMarkdownSessionLink } from '@/session/useMarkdownSessionLink';
+import { TableMessageDocument, TableDocumentListContext, TableDocumentRow, useTableDocumentList } from '@/session/TableMessageDocument';
+import { supportsTableMessageDocument } from '@/session/tableMessageHtml';
 import {
   useRemoteDeviceIdentity,
-  useRemoteSessionMessages,
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
@@ -295,10 +302,6 @@ import {
   sourceIdText,
   sourcePluginLabel,
 } from '@/session/messageSourceLabels';
-import {
-  mobileSessionMessageDisplayText,
-  sentSessionMessageChipLabel,
-} from '@/session/sessionMessageText';
 import { buildMobileMarkdownTableColumnWidths } from '@/session/messageTableLayout';
 import { buildPayloadHeaderLayout, buildPayloadModalSafeArea } from '@/session/payloadHeaderLayout';
 import { buildPayloadBodyLayout, type PayloadBodyLayout } from '@/session/payloadBodyLayout';
@@ -370,7 +373,7 @@ import type {
   MobileMediaPlayerKind,
   MobileMediaPlayerStatus,
 } from '@/session/mediaPlayerWebViewHtml';
-import { formatAgentSwitchLocationLabel, formatMobileSystemCard } from '@/session/systemCard';
+import { formatAgentSwitchLocationLabel, formatMobileSystemCard, handoffCoverageKey } from '@/session/systemCard';
 import { MobileBoundaryNotice } from '@/session/MobileBoundaryNotice';
 import {
   getMobileAutoResumePresentation,
@@ -401,6 +404,7 @@ import {
   resolveMobileNearBottomOnScroll,
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
+  shouldRepinMobileFollowOnViewportExpand,
   shouldUnpinMobileFollowOnDrag,
   mobileMessageListNearBottomThreshold,
 } from '@/session/messageScroll';
@@ -434,7 +438,7 @@ import {
   recordMobileMarkdownParse,
   recordMobileMessageRenderItem,
 } from '@/session/mobileMarkdownRenderMetrics';
-import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
+import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -826,7 +830,11 @@ export function MessageRenderer({
     [scrollResetKey, remoteDeviceId, accountGeneration]);
   useEffect(() => () => richContent?.clear(), [richContent]);
   // Match LegendList's key: a new list must never inherit old visibility.
-  const messageListVisibility = useMemo(() => new MessageListVisibility(), [scrollResetKey]);
+  const listRef = useRef<LegendListRef>(null);
+  const messageListVisibility = useMemo(() => new MessageListVisibility(
+    () => listRef.current?.getNativeScrollRef()?.getBoundingClientRect?.(),
+  ), [scrollResetKey]);
+  const tableDocuments = useTableDocumentList(richContent);
   const historyPositioning = useMessageHistoryPositioning();
   const historyPositioningRef = useRef(historyPositioning);
   historyPositioningRef.current = historyPositioning;
@@ -854,7 +862,6 @@ export function MessageRenderer({
   );
   const focusedItemKeyRef = useRef(focusedItemKey);
   focusedItemKeyRef.current = focusedItemKey;
-  const listRef = useRef<LegendListRef>(null);
   const listMetricsRef = useRef<LegendListMetrics>({ footerSize: 0, headerSize: 0 });
   const listTopPaddingRef = useRef(0);
   const listBottomPaddingRef = useRef(0);
@@ -876,6 +883,10 @@ export function MessageRenderer({
   const isDraggingRef = useRef(false);
   const isMomentumScrollingRef = useRef(false);
   const dragStartOffsetYRef = useRef<number | null>(null);
+  // Keyboard dismissal can expand the viewport while the native drag is still active. Keep
+  // that candidate until endDrag, when the final geometry can be evaluated without the drag
+  // ownership guard masking an automatic return to the tail.
+  const pendingViewportExpandPreviousHeightRef = useRef(0);
   // 用户是否主动拖动过(区分「冷开初始布局」与「用户上翻」):自动加载更早只在用户真拖过之后才允许,
   // 否则短会话(只加载了少量最新消息但 hasOlderMessages)冷开时会落在 onStartReachedThreshold 内、
   // 未经用户操作就自动拉历史(review P2)。切会话重置。
@@ -933,6 +944,7 @@ export function MessageRenderer({
     viewportHeight: 0,
   });
   const tailFollowerRef = useRef<MobileTailFollower | null>(null);
+  const inlineEditorCountRef = useRef(0);
   const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
   const processViewport = useProcessDisclosureViewport(() => scrollMetricsRef.current, () => {
     // Short lists normally align to the bottom. Freeze that existing leading space while
@@ -1044,6 +1056,10 @@ export function MessageRenderer({
     tailFollowerRef.current = null;
     initialAnchorDoneRef.current = false;
     reopeningAnchorRef.current = null;
+    if (reopeningFrameRef.current !== null) {
+      cancelAnimationFrame(reopeningFrameRef.current);
+      reopeningFrameRef.current = null;
+    }
     initialRevealGenerationRef.current += 1;
     initialRevealAnimationRef.current?.stop();
     initialRevealAnimationRef.current = null;
@@ -1211,15 +1227,26 @@ export function MessageRenderer({
   const getTailFollower = useCallback(() => {
     if (!tailFollowerRef.current) {
       tailFollowerRef.current = createMobileTailFollower({
-        read: () => ({
-          metrics: scrollMetricsRef.current,
-          stickToLatest: nearBottomRef.current,
-          userControllingScroll: isUserControllingScroll(),
-          preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
-          layoutSettleAt: mvcpSettleAtRef.current,
-          animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
-            ? programmaticScrollSettleAtRef.current : 0,
-        }),
+        read: () => {
+          const nativeMetrics = scrollMetricsRef.current;
+          // A delayed native onScroll from a transiently shorter layout can overwrite
+          // scrollMetricsRef.contentHeight after LegendList has already expanded. Cross-check
+          // with LegendList's laid-out contentLength so the verifier does not falsely settle.
+          const listContentLength = listRef.current?.getState()?.contentLength;
+          const metrics = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+            && listContentLength > nativeMetrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+            ? { ...nativeMetrics, contentHeight: listContentLength }
+            : nativeMetrics;
+          return {
+            metrics,
+            stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
+            userControllingScroll: isUserControllingScroll(),
+            preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
+            layoutSettleAt: mvcpSettleAtRef.current,
+            animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
+              ? programmaticScrollSettleAtRef.current : 0,
+          };
+        },
         seekEnd: (animated) => {
           markProgrammaticScroll(animated);
           return listRef.current?.scrollToEnd({ animated });
@@ -1402,7 +1429,7 @@ export function MessageRenderer({
   }, []);
 
   const scheduleHistoryAnchorRestore = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1426,7 +1453,8 @@ export function MessageRenderer({
     ) => {
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || currentTransaction.userControlledAfterCommit
       ) return;
@@ -1536,7 +1564,7 @@ export function MessageRenderer({
   ]);
 
   const restoreHistoryAnchorOnce = useCallback((generation: number) => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (
       !transaction
@@ -1560,7 +1588,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, scrollToOffsetProgrammatically]);
 
   const scheduleHistoryPrependUserHandoffSettle = useCallback(() => {
-    if (!MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
+    if (!historyPositioningRef.current || !MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR) return;
     const transaction = historyPrependTransactionRef.current;
     if (!transaction || !transaction.userHandoffPending) return;
     if (historyAnchorVerifyFrameRef.current !== null) return;
@@ -1571,7 +1599,8 @@ export function MessageRenderer({
       historyAnchorVerifyFrameRef.current = null;
       const currentTransaction = historyPrependTransactionRef.current;
       if (
-        !currentTransaction
+        !historyPositioningRef.current
+        || !currentTransaction
         || currentTransaction.generation !== generation
         || isDraggingRef.current
         || isMomentumScrollingRef.current
@@ -1813,16 +1842,20 @@ export function MessageRenderer({
   // confirmation. Outbox rows carry the time across restarts.
   const pendingSentAtRef = useRef(new Map<string, number>());
   const companionTimeGroups = useStableValue(
-    useMemo(() => companion ? collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
-      if (item.type === 'pending_send') {
-        const sentAt = item.sentAt ?? localSendStartedAt(item.key);
-        if (sentAt === null) return [];
-        pendingSentAtRef.current.set(item.key, sentAt);
-        return [{ clientId: item.key, createdAt: sentAt }];
-      }
-      return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
-        ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
-    })) : undefined, [companion, items]),
+    useMemo(() => {
+      if (!companion) return undefined;
+      const groups = collectBotMessageTimeGroups(items.flatMap((item): BotTimelineMessage[] => {
+        if (item.type === 'pending_send') {
+          const sentAt = item.sentAt ?? localSendStartedAt(item.key);
+          if (sentAt === null) return [];
+          pendingSentAtRef.current.set(item.key, sentAt);
+          return [{ clientId: item.key, createdAt: sentAt }];
+        }
+        return item.type === 'message' && (item.message.kind === 'user' || item.message.kind === 'assistant' || item.message.companion)
+          ? [{ clientId: item.key, createdAt: pendingSentAtRef.current.get(item.key) ?? localSendStartedAt(item.key) ?? item.message.createdAt }] : [];
+      }));
+      return companionTimeGroupRows(items, groups, companionContinuationKeys);
+    }, [companion, items, companionContinuationKeys]),
     (previous, next) => sameMapEntries(previous, next, (a, b) => a === b),
   );
   const quoteItemsRef = useRef(items);
@@ -1989,6 +2022,18 @@ export function MessageRenderer({
     scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
   }, [scrollToOffsetProgrammatically]);
   const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
+  const [inlineEditorCount, setInlineEditorCount] = useState(0);
+  const keepInlineKeyboard = useCallback(() => {
+    inlineEditorCountRef.current++;
+    nearBottomRef.current = false;
+    tailFollowerRef.current?.reset();
+    setIsAwayFromBottom(true);
+    setInlineEditorCount(count => count + 1);
+    return () => {
+      inlineEditorCountRef.current--;
+      setInlineEditorCount(count => count - 1);
+    };
+  }, [setIsAwayFromBottom]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2170,7 +2215,7 @@ export function MessageRenderer({
   }, [getCurrentHistoryTopOffsetAdjustment, historyProgressKey, onLoadEarlier]);
 
   const flushQueuedLoadEarlier = useCallback(() => {
-    if (!queuedLoadEarlierRef.current) return;
+    if (!historyActiveRef.current || !historyPositioningRef.current || !queuedLoadEarlierRef.current) return;
     // Native MVCP can prepend while iOS is scrolling. Only the app-owned Android anchor
     // needs a quiet gesture boundary; delaying both platforms defeats near-start prefetch.
     if (MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR && (
@@ -2327,6 +2372,29 @@ export function MessageRenderer({
   ]);
   attemptAutoLoadEarlierRef.current = attemptAutoLoadEarlier;
 
+  const repinAfterViewportExpand = useCallback(() => {
+    const previousViewportHeight = pendingViewportExpandPreviousHeightRef.current;
+    pendingViewportExpandPreviousHeightRef.current = 0;
+    if (!previousViewportHeight || !historyActiveRef.current || nearBottomRef.current
+      || readingOlderRef.current
+      || programmaticScrollInFlightRef.current || processViewport.inspecting.current
+      || inlineEditorCountRef.current > 0) {
+      return;
+    }
+    const metrics = scrollMetricsRef.current;
+    if (shouldRepinMobileFollowOnViewportExpand({
+      previousViewportHeight,
+      nextViewportHeight: metrics.viewportHeight,
+      contentHeight: metrics.contentHeight,
+      offsetY: metrics.offsetY,
+    })) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
+  }, [processViewport.inspecting, setHasNewMessages, setIsAwayFromBottom]);
+
   // 近底/跟随态迁移 + 「跳到底部」浮标与新消息红点;metrics 也供 DEV harness 读取。
   // 「解除跟随」的主路径是拖动意图(shouldUnpinMobileFollowOnDrag):拖动中相对起点
   // 上移超过死区立即解除(nearBottomRef 翻 false 即关掉 handleContentSize 的贴底补滚)。
@@ -2337,6 +2405,7 @@ export function MessageRenderer({
     event: NativeSyntheticEvent<NativeScrollEvent>,
     isFinalDragSample = false,
   ) => {
+    messageListVisibility.viewportChanged();
     richContent?.onScroll();
     if (!historyPositioningRef.current) return;
     // Cancellation releases ownership immediately. Only endDrag may still consume its final
@@ -2350,6 +2419,16 @@ export function MessageRenderer({
       viewportHeight: event.nativeEvent.layoutMeasurement.height,
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
+    const previousViewportHeight = scrollMetricsRef.current.viewportHeight;
+    if (isDragSample && !nearBottomRef.current
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight,
+        nextViewportHeight: metrics.viewportHeight,
+        contentHeight: metrics.contentHeight,
+        offsetY: metrics.offsetY,
+      })) {
+      pendingViewportExpandPreviousHeightRef.current = previousViewportHeight;
+    }
     const resumedProcessFollow = processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
       metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
@@ -2414,7 +2493,20 @@ export function MessageRenderer({
       nearBottomRef.current = false;
       setIsAwayFromBottom(true);
     } else {
-      const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
+      const repinnedByViewportExpand = !nearBottomRef.current
+        && !isDragSample
+        && !isMomentumScrollingRef.current
+        && historyTouchStartYRef.current === null
+        && !programmaticScrollInFlightRef.current
+        && !processViewport.inspecting.current
+        && inlineEditorCountRef.current === 0
+        && shouldRepinMobileFollowOnViewportExpand({
+          previousViewportHeight,
+          nextViewportHeight: metrics.viewportHeight,
+          contentHeight: metrics.contentHeight,
+          offsetY: metrics.offsetY,
+        });
+      const preserveHistoryBrowseIntent = !repinnedByViewportExpand && shouldPreserveMobileHistoryBrowseIntent({
         // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
         // final native event must not turn a temporary follow suspension into an unpin.
         historyBrowseIntent: (userScrollForOlderRef.current || processViewport.inspecting.current) && !nearBottomRef.current,
@@ -2426,9 +2518,9 @@ export function MessageRenderer({
       // Outside a drag, layout/MVCP corrections cannot prove user intent. Preserve follow;
       // actual momentum retains the existing direction/distance fallback.
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
-      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current
+      const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current || inlineEditorCountRef.current > 0
         ? false
-        : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
+        : repinnedByViewportExpand || resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,
@@ -2436,14 +2528,27 @@ export function MessageRenderer({
           bottomOverlayHeight,
         });
       nearBottomRef.current = nearBottom;
-      // A genuine downward false→true transition means the user manually returned to the
-      // latest edge. The old history-browsing intent no longer owns follow verification;
-      // a later drag will set it again before any new upward browse.
-      if (!wasNearBottom && nearBottom && scrollDelta > 0) {
+      // A genuine downward false→true transition (or a viewport expansion that clamps the
+      // list back to its end, e.g. dismissing the keyboard) returns to the latest edge.
+      if (!wasNearBottom && nearBottom && (scrollDelta > 0 || repinnedByViewportExpand)) {
         userScrollForOlderRef.current = false;
       }
       setIsAwayFromBottom(!nearBottom);
       if (nearBottom) setHasNewMessages(false);
+    }
+    // Native size anchoring can arrive after a retained history resizes and the
+    // tail verifier has already settled. That late scroll may be the last event:
+    // no subsequent layout/content-size callback will wake follow again. Use the
+    // same bounded controller, never an immediate scroll from onScroll. Its
+    // gesture/history guards and pending-seek ownership still take precedence.
+    const listContentLength = listRef.current?.getState()?.contentLength;
+    const effectiveContentHeight = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+      && listContentLength > metrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+      ? listContentLength : metrics.contentHeight;
+    if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
+      && effectiveContentHeight > 0 && metrics.viewportHeight > 0
+      && effectiveContentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      runStickToLatestVerify();
     }
     acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
@@ -2457,6 +2562,8 @@ export function MessageRenderer({
       if (anchor && !reopeningAnchorRef.current) readingPosition?.write({ anchor, atEnd: nearBottomRef.current });
     }
   }, [
+    isUserControllingScroll,
+    runStickToLatestVerify,
     captureCurrentHistoryAnchor,
     reopeningPosition,
     getCurrentHistoryTopOffsetAdjustment,
@@ -2469,11 +2576,13 @@ export function MessageRenderer({
     handoffHistoryPrependToUser,
     scheduleStickyShareCheck,
     richContent,
+    messageListVisibility,
     processViewport.scroll,
     processViewport.inspecting,
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
+    if (!historyPositioningRef.current) return;
     reopeningAnchorRef.current = null;
     // Android may omit momentum-end when a new finger stops a fling. The new touch owns the
     // ScrollView now, so the old momentum flag must not keep a queued history request suspended.
@@ -2535,6 +2644,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (!historyPositioningRef.current) return;
     richContent?.onScroll();
     reopeningAnchorRef.current = null;
     const nativeMetrics = {
@@ -2546,6 +2656,7 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     isDraggingRef.current = true;
     dragStartOffsetYRef.current = event.nativeEvent.contentOffset.y;
+    pendingViewportExpandPreviousHeightRef.current = 0;
     userScrollForOlderRef.current = true;
     // 新手势 = 允许重新尝试一次自动加载(上次失败 / 无进展的去重记录随手势作废)。
     lastAutoLoadEarlierKeyRef.current = null;
@@ -2564,18 +2675,21 @@ export function MessageRenderer({
     handleScroll(event, true);
     isDraggingRef.current = false;
     dragStartOffsetYRef.current = null;
+    repinAfterViewportExpand();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
     runStickToLatestVerify();
   }, [
     handleScroll,
+    repinAfterViewportExpand,
     runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
   ]);
 
   const handleMomentumScrollBegin = useCallback(() => {
+    if (!historyPositioningRef.current) return;
     isMomentumScrollingRef.current = true;
   }, []);
 
@@ -2596,10 +2710,34 @@ export function MessageRenderer({
   useEffect(() => {
     if (!historyPositioning) {
       tailFollowerRef.current?.reset();
+      // Detached native surfaces may never deliver touch/drag/momentum end.
+      // Release only transient gesture ownership; keep deliberate history intent.
+      isDraggingRef.current = false;
+      isMomentumScrollingRef.current = false;
+      dragStartOffsetYRef.current = null;
+      pendingViewportExpandPreviousHeightRef.current = 0;
+      historyTouchStartYRef.current = null;
+      historyTouchTriggeredRef.current = false;
+      clearProgrammaticScroll();
+      if (historyAnchorVerifyFrameRef.current !== null) {
+        cancelAnimationFrame(historyAnchorVerifyFrameRef.current);
+        historyAnchorVerifyFrameRef.current = null;
+      }
       return;
     }
+    // Returning substitutes for a native gesture-end that never arrived. Keep
+    // the existing transaction owner and resume the same handoff/verification,
+    // including a page committed while hidden or a request queued before blur.
+    const transaction = historyPrependTransactionRef.current;
+    if (transaction?.userHandoffPending) scheduleHistoryPrependUserHandoffSettle();
+    else if (transaction?.pageCommitted && !transaction.anchorStable) {
+      transaction.verifyDeadlineAt = 0;
+      scheduleHistoryAnchorRestore(transaction.generation);
+    }
+    if (queuedLoadEarlierRef.current) scheduleQueuedLoadEarlierFlush();
     getTailFollower().reconcile();
-  }, [historyPositioning, getTailFollower]);
+  }, [historyPositioning, getTailFollower, clearProgrammaticScroll,
+    scheduleHistoryPrependUserHandoffSettle, scheduleHistoryAnchorRestore, scheduleQueuedLoadEarlierFlush]);
 
   const handleStartReached = useCallback(() => {
     attemptAutoLoadEarlier();
@@ -2613,13 +2751,51 @@ export function MessageRenderer({
   }, [attemptAutoLoadEarlier, loadEarlierEvaluationVersion]);
 
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+    messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
-    scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
+    const previous = scrollMetricsRef.current;
+    scrollMetricsRef.current = { ...previous, viewportHeight };
+    if (isDraggingRef.current && !nearBottomRef.current
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })) {
+      pendingViewportExpandPreviousHeightRef.current = previous.viewportHeight;
+    }
+    if (
+      !nearBottomRef.current
+      && !readingOlderRef.current
+      && !isUserControllingScroll()
+      && !programmaticScrollInFlightRef.current
+      && !processViewport.inspecting.current
+      && inlineEditorCountRef.current === 0
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })
+    ) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [markMobileMvcpSettle, runStickToLatestVerify]);
+  }, [
+    isUserControllingScroll,
+    messageListVisibility,
+    markMobileMvcpSettle,
+    processViewport.inspecting,
+    runStickToLatestVerify,
+    setHasNewMessages,
+    setIsAwayFromBottom,
+  ]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2644,6 +2820,7 @@ export function MessageRenderer({
   // 上翻历史时 nearBottomRef=false,不打断。animated:false → 即时跟随、不排队动画。
   // LegendList 内置 maintainScrollAtEnd 已弃用(见 LegendList props 注释),不存在双机制叠加。
   const handleContentSize = useCallback((_width: number, height: number) => {
+    messageListVisibility.viewportChanged();
     reconcileReopeningAnchor();
     markMobileMvcpSettle();
     scrollMetricsRef.current = { ...scrollMetricsRef.current, contentHeight: height };
@@ -2669,6 +2846,7 @@ export function MessageRenderer({
     acknowledgeCompanionReadRef.current();
   }, [
     getTailFollower,
+    messageListVisibility,
     reconcileReopeningAnchor,
     markMobileMvcpSettle,
     restoreHistoryAnchorOnce,
@@ -2679,6 +2857,7 @@ export function MessageRenderer({
   // 没有淡入阶段；持续 resize 或复杂 cell 占满 JS 也不能无限延长隐藏。
   useLayoutEffect(() => {
     if (initialAnchorDoneRef.current) return;
+    if (!historyPositioning) return;
     if (listData.length === 0) {
       initialRevealProgress.setValue(1);
       setListRevealed(true);
@@ -2740,6 +2919,7 @@ export function MessageRenderer({
       scrollToEndProgrammatically(false);
     }
   }, [
+    historyPositioning,
     reopeningPosition,
     reconcileReopeningAnchor,
     markProgrammaticScroll,
@@ -2781,6 +2961,7 @@ export function MessageRenderer({
   // 补滚被 readingOlderRef 挡住,即便被判近底(短会话)也必须在这里补,否则 topPadding
   // 变化两边都不处理、可见消息仍跳(review P1 L683)。
   useEffect(() => {
+    if (!historyPositioning) return;
     const prev = prevTopPaddingRef.current;
     prevTopPaddingRef.current = topPadding;
     const delta = topPadding - prev;
@@ -2794,7 +2975,7 @@ export function MessageRenderer({
     if (!initialAnchorDoneRef.current || nativeScrollEventSequenceRef.current === 0) return;
     const { offsetY } = scrollMetricsRef.current;
     scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
-  }, [reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
+  }, [historyPositioning, reconcileReopeningAnchor, scrollToOffsetProgrammatically, topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -2802,6 +2983,7 @@ export function MessageRenderer({
       lastAppliedFocusKeyRef.current = null;
       return;
     }
+    if (!historyPositioning) return;
     if (lastAppliedFocusKeyRef.current === focusRunKey) return;
     const index = listData.findIndex((item) => item.key === focusedItemKey);
     if (index < 0) return;
@@ -2822,6 +3004,7 @@ export function MessageRenderer({
       }
     }, () => { /* The existing bounded reveal fallback handles a failed native seek. */ });
   }, [
+    historyPositioning,
     focusRunKey,
     focusedItemKey,
     listData,
@@ -2850,11 +3033,14 @@ export function MessageRenderer({
     if (!focusedItemKey && decision.shouldAutoFollow && decision.autoFollowTarget === 'content-end') {
       setHasNewMessages(false);
       setIsAwayFromBottom(false);
+      if (initialAnchorDoneRef.current && historyPositioningRef.current && nearBottomRef.current) {
+        runStickToLatestVerify();
+      }
     } else if (decision.showNewMessageIndicator) {
       setHasNewMessages(true);
     }
     previousItemKeysRef.current = itemKeys;
-  }, [focusedItemKey, itemKeys]);
+  }, [focusedItemKey, itemKeys, runStickToLatestVerify]);
 
   const handleLoadEarlierPress = useCallback(() => {
     userScrollForOlderRef.current = true;
@@ -2918,8 +3104,10 @@ export function MessageRenderer({
     <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
+    <TableDocumentListContext.Provider value={tableDocuments.context}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <MessageListRevealContext.Provider value={revealContextValue}>
+    <MessageListKeepKeyboardContext.Provider value={keepInlineKeyboard}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2931,7 +3119,7 @@ export function MessageRenderer({
         importantForAccessibility={listRevealed ? 'auto' : 'no-hide-descendants'}>
       <LegendList
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={inlineEditorCount > 0 ? 'none' : 'on-drag'}
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
         data={listData}
@@ -2941,6 +3129,8 @@ export function MessageRenderer({
         keyExtractor={(item) => item.key}
         renderItem={renderMessageItem}
         recycleItems={recycleItems}
+        alwaysRender={tableDocuments.alwaysRender}
+        viewabilityConfigCallbackPairs={Platform.OS === 'android' && !companion ? tableDocuments.viewability : undefined}
         estimatedItemSize={MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE}
         drawDistance={MOBILE_MESSAGE_DRAW_DISTANCE}
         // initialScrollAtEnd / initialScrollIndex 的程序化滚动在特定
@@ -3026,7 +3216,7 @@ export function MessageRenderer({
           </View>
         </View>
       ) : null}
-      {hasNewMessages || showJumpToLatest ? (
+      {inlineEditorCount === 0 && (hasNewMessages || showJumpToLatest) ? (
         <MessageScrollToBottomButton hasNewMessages={hasNewMessages} onPress={scrollToBottom}
           style={{ position: 'absolute', bottom: floatingBottomOffset, right: scrollToBottomFabRight }}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
@@ -3073,8 +3263,10 @@ export function MessageRenderer({
       )}
                 </>
               </View>
+    </MessageListKeepKeyboardContext.Provider>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
+    </TableDocumentListContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>
     </ProcessDisclosureViewport.Provider>
@@ -3084,10 +3276,12 @@ export function MessageRenderer({
 
 const RenderItemView = memo(function RenderItemView({
   item,
+  groupTimestamp,
   actions,
   focused = false,
 }: {
   item: MobileMessageRenderItem | MobileWorkChildItem;
+  groupTimestamp?: number;
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused?: boolean;
 }) {
@@ -3224,9 +3418,17 @@ const RenderItemView = memo(function RenderItemView({
               <FileChip key={`${name}:${index}`} name={name} presentationOnly
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
-            renderText={(text, index) => (
+            renderText={(text, index, longMessage) => (
+              // 排队/待发送正文仍是可读内容:待答 ask 卡锁住输入框时,主人要能长按
+              // 选中并复制刚排队的话,再粘到自定义答案里。发送锁不能降级为阅读锁。
+              // 长正文展开后沿用完成态同款有界保护:普通任务回退可选中的 RN Text,
+              // 伙伴用有界文本分组保留部分选字,避免巨型 iOS UITextView 展开后空白。
+              // longMessage 由真实气泡按整条正文实测透传,结构化 atom 与普通正文共用,
+              // 避免在此按单块 token 再判一次长度(单一状态所有者)。
               <MarkdownBody key={`text:${index}`} text={text} streaming={false}
-                selectable={false} pinContentWidth={false}
+                selectable pinContentWidth={false}
+                allowIosUITextView={!longMessage || actions.companion === true}
+                boundTextRuns={longMessage && actions.companion === true}
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
             resolveRemoteMedia={actions.onResolveRemoteMedia}
@@ -3240,8 +3442,6 @@ const RenderItemView = memo(function RenderItemView({
       logUnhandledRenderItem(item);
       break;
   }
-  const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
-    ? actions.companionTimeGroups?.get(item.key) : undefined;
   // Only the first top-level row owns the turn's portrait. Nested details clear
   // companionAvatar, so expanding them cannot repeat it.
   const processAvatar = actions.companion && item.type === 'work_group' && !actions.companionTurnContinuation
@@ -3310,7 +3510,9 @@ const RenderListItemView = memo(function RenderListItemView({
     <LegendListRowContext.Provider value>
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
-      <RenderItemView actions={itemActions} focused={focused} item={item} />
+    <TableDocumentRow rowKey={item.key}>
+      <RenderItemView actions={itemActions} focused={focused} item={item} groupTimestamp={actions.companionTimeGroups?.get(item.key)} />
+    </TableDocumentRow>
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>
     </LegendListRowContext.Provider>
@@ -3527,6 +3729,7 @@ function MessageBubble({
 }) {
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   const { user: viewer } = useAuth();
+  const { selected: wallpaper } = useWallpaper();
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -3657,11 +3860,11 @@ function MessageBubble({
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   // Locale-independent (fixed yyyy-MM-dd HH:mm:ss), so the timestamp alone is the key.
   const absoluteTime = useMemo(() => formatMessageAbsoluteTime(item.message.createdAt), [item.message.createdAt]);
-  const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
-    (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
-  const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? moneySplit ? [moneySplit.conversation.amount > 1e-9 ? formatMessageTurnCost(moneySplit.conversation) : '',
-        ...moneySplit.additional.map(formatMessageTurnCost)].filter(Boolean).join(' + ') : ''
+  const costParts = showCompletedActionBar && item.message.kind === 'assistant' && item.message.turnMoney
+    ? messageCostParts(item.message.turnMoney, item.message.source.agentMeta?.turnUsageDetails)
+    : null;
+  const turnCost = costParts
+    ? [...costParts.conversation, ...costParts.additional].map(formatMessageTurnCost).join(' + ')
     : '';
   // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
   const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
@@ -3954,6 +4157,11 @@ function MessageBubble({
   );
   const bubbleShown = item.message.role !== 'error'
     && (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));
+  const ownBubbleColors = isUser && !item.message.systemCardType && userBubbleColors
+    && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
+    ? userBubbleColors : undefined;
+  const tableFallbackBackground = ownBubbleColors?.background
+    ?? (isUser || hookSource ? colors.surfaceElevated : colors.surface);
   // 气泡是纯 View,不承接任何手势:文本选择走正文原生 Text selectable(长按文字就地选择复制),
   // 气泡上不能挂 Pressable——它会参与触摸协商,干扰正文里表格/代码块横向 ScrollView 的拖动。
   const bubble = (
@@ -3964,11 +4172,11 @@ function MessageBubble({
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
+        !isUser && !item.message.systemCardType && wallpaper !== 'none' && { backgroundColor: 'transparent' },
         actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
-        isUser && !item.message.systemCardType && userBubbleColors
-          && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
-          && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
+        (isUser || hookSource) && wallpaper !== 'none' && !item.message.systemCardType && { backgroundColor: wallpaperRaisedFill(colors.surfaceElevated, mode) },
+        ownBubbleColors && { backgroundColor: ownBubbleColors.background, borderColor: ownBubbleColors.border },
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
@@ -4004,6 +4212,7 @@ function MessageBubble({
       {item.message.systemCardType === 'mcp-app' ? (
         <ViewabilityGatedMcpAppCard deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
           clientId={item.message.source.clientId} title={String(item.message.systemCardData?.title ?? '')}
+          plugin={item.message.systemCardData?.plugin} customMcp={item.message.systemCardData?.customMcp} initialHeight={item.message.systemCardData?.initialHeight}
           fallbackText={String(item.message.systemCardData?.fallbackText ?? '')} />
       ) : item.message.systemCardType ? (
         <MobileSystemCard
@@ -4048,6 +4257,9 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  androidTableSelection={actions.companion !== true && !shareSelectionActive}
+                  tableFallbackBackground={tableFallbackBackground}
+                  richStateKey={`${item.message.source.clientId ?? item.message.key}:text:${index}`}
                   codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
@@ -4064,6 +4276,8 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
+            androidTableSelection={actions.companion !== true && !shareSelectionActive}
+            tableFallbackBackground={tableFallbackBackground}
             codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
@@ -4547,8 +4761,11 @@ function ToolGroupCard({
  * 媒体条 / 结果预览,再点收起。展开态走共享进程内记忆(blockId 前缀 `toolrow-`,
  * 与组级 `tools-` key 空间天然隔离)。无详情可展的行不显示 chevron、不可点击。
  */
-type ToolDetailActions = Pick<MessageActions,
-  | 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia'>;
+type ToolDetailActionKey = 'onRetryImageDelivery' | 'onLoadToolInput' | 'onOpenPayload' | 'onResolveRemoteMedia';
+type ToolDetailActions = Pick<MessageActions, ToolDetailActionKey>;
+/** Hand-picked tool actions must list every key: a dropped optional callback
+ * silently disables it for those rows (process images stopped auto-loading). */
+type ListedToolDetailActions = { [K in ToolDetailActionKey]: MessageActions[K] };
 
 function ToolActionRow({
   actions,
@@ -5150,12 +5367,14 @@ function WorkGroupCard({
   );
   // Tool detail rows do not consume message action/queue/share busy state.
   // Keep their callbacks and streaming flag stable across those unrelated updates.
-  const toolActions = useMemo(() => ({
+  const toolActions = useMemo((): ListedToolDetailActions & Pick<MessageActions, 'isSessionStreaming'> => ({
     onLoadToolInput: actions.onLoadToolInput,
     onRetryImageDelivery: actions.onRetryImageDelivery,
     onOpenPayload: actions.onOpenPayload,
+    onResolveRemoteMedia: actions.onResolveRemoteMedia,
     isSessionStreaming: actions.isSessionStreaming,
-  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload, actions.isSessionStreaming]);
+  }), [actions.onRetryImageDelivery, actions.onLoadToolInput, actions.onOpenPayload,
+    actions.onResolveRemoteMedia, actions.isSessionStreaming]);
   const startedAtIso = isStreaming && item.startedAtMs !== undefined
     ? new Date(item.startedAtMs).toISOString()
     : undefined;
@@ -5744,22 +5963,33 @@ function isEnglishSourceHandoff(handoff: string): boolean {
 
 // session-agent-switch 边界卡 —— 1:1 对齐桌面 SystemCard.tsx 的 AgentSwitchCard:
 // 「分隔线 + 居中药丸」语言(⇄ + 已从 X 切换到 Y + · 目标模型 + 可选 · 已续接原会话),
-// 而非通用盒子卡片。药丸可点展开交接摘要面板(切换时发给新引擎的上下文全文,数据来自
+// 而非通用盒子卡片。药丸可点展开交接内容(切换时发给新引擎的上下文,数据来自
 // desktop 落库 agent_switch 行 content.handoff)。全灰度、走主题 token,无 chromatic 色。
 function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
-  const from = agentSwitchEngineLabel(data?.fromAgentKind);
-  const to = agentSwitchEngineLabel(data?.toAgentKind);
-  const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  const engineFallback = t('models.pluginEngines.genericName');
+  const from = agentSwitchEngineLabel(data?.fromAgentKind, data?.fromEngineName, engineFallback);
+  const to = agentSwitchEngineLabel(data?.toAgentKind, data?.toEngineName, engineFallback);
+  const rawToModel = typeof data?.toModel === 'string' ? data.toModel : '';
+  // 插件引擎的 'default' 是「让引擎自己选」，不把内部取值当模型名显示。
+  const toModel = data?.toAgentKind === 'acp' && rawToModel === 'default'
+    ? t('models.pluginEngines.defaultModel')
+    : rawToModel;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const coverageKey = handoffCoverageKey(data);
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
   const modelOnly = data?.modelOnly === true;
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
     ?? t('message.renderer.agentSwitchLabel', { from, to }));
+  const modelLabel = modelOnly ? '' : toModel;
+  const historyLabel = !coverageKey && (resumed || data?.nativeHistory === 'fallback')
+    ? t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')
+    : '';
+  const accessibilityLabel = [label, modelLabel, historyLabel].filter(Boolean).join(' · ');
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -5769,23 +5999,26 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           onPress={handoff ? () => setExpanded((v) => !v) : undefined}
           disabled={!handoff}
           accessibilityRole={handoff ? 'button' : undefined}
-          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label }) : label}
-          style={styles.agentSwitchPill}
+          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label: accessibilityLabel }) : accessibilityLabel}
+          accessibilityState={handoff ? { expanded } : undefined}
+          style={[styles.agentSwitchPill, handoff ? styles.agentSwitchPillInteractive : undefined]}
         >
           <ArrowLeftRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-          <Text style={styles.agentSwitchPillText} numberOfLines={1}>{label}</Text>
-          {toModel && !modelOnly ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
-            </>
-          ) : null}
-          {resumed || data?.nativeHistory === 'fallback' ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
-            </>
-          ) : null}
+          <Text style={styles.agentSwitchPillText}>
+            {label}
+            {modelLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                <Text style={styles.agentSwitchModel}>{modelLabel}</Text>
+              </>
+            ) : null}
+            {historyLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                {historyLabel}
+              </>
+            ) : null}
+          </Text>
           {handoff ? (
             expanded
               ? (
@@ -5797,11 +6030,12 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
         </Pressable>
         <View style={styles.agentSwitchDivider} />
       </View>
+      {coverageKey ? <Text style={styles.agentSwitchCoverage}>{t(coverageKey)}</Text> : null}
       {expanded && handoff ? (
         <View style={styles.agentSwitchHandoffPanel}>
           <Text style={styles.agentSwitchHandoffTitle}>
             {t(
-              isEnglishSourceHandoff(handoff)
+              coverageKey ? 'message.renderer.handoffContentTitle' : isEnglishSourceHandoff(handoff)
                 ? 'message.renderer.handoffContentDescEnglishSource'
                 : 'message.renderer.handoffContentDesc',
             )}
@@ -5904,6 +6138,8 @@ function MobileAutoResumeActionRow({
       : t('message.systemCard.autoResume.agentReconnect.unnamed')
     : info.groupSwitch
     ? t('message.systemCard.autoResume.groupSwitch')
+    : info.geminiInputRetry
+    ? t('chat.geminiRateLimit.retried')
     : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'
@@ -6095,10 +6331,13 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
   );
 }
 
-// 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
-// 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
-// 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
+// Streaming and rich blocks retain the native renderer. Selectable ordinary
+// Android table messages promote once to one text document, keeping selection
+// across paragraphs/cells; iOS and companion bodies retain native selection.
 function MarkdownBodyBase({
+  androidTableSelection = false,
+  tableFallbackBackground,
+  richStateKey,
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
@@ -6108,10 +6347,13 @@ function MarkdownBodyBase({
   onOpenPayload,
   onOpenSessionLink,
   pinContentWidth = false,
-  selectable,
+  selectable: selectionAllowed,
   streaming,
   text,
 }: {
+  /** Explicit ordinary-task opt-in; group/companion/iOS carriers are unchanged. */
+  androidTableSelection?: boolean;
+  tableFallbackBackground?: ViewStyle['backgroundColor'];
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
@@ -6156,6 +6398,14 @@ function MarkdownBodyBase({
   // LegendList row state throws there, so only list rows use the recycling hook.
   const useRowState = useRowStateHook();
   const [contentWidth, setContentWidth] = useRowState(0);
+  const [nativeBodySize, setNativeBodySize] = useRowState({ width: 0, height: 0 });
+  const [tableReadyRevision, setTableReadyRevision] = useRowState<string | null>(null);
+  const [tableFailedRevision, setTableFailedRevision] = useRowState<string | null>(null);
+  const bodyInstance = useId();
+  const documentKey = richStateKey ?? markdownImageCacheKey ?? bodyInstance;
+  const documentRevision = JSON.stringify([documentKey, text]);
+  const currentDocumentRevision = useRef(documentRevision);
+  useLayoutEffect(() => { currentDocumentRevision.current = documentRevision; }, [documentRevision]);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -6188,6 +6438,36 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const measureTableBootstrap = Platform.OS === 'android' && androidTableSelection;
+  const tableCandidate = measureTableBootstrap && selectionAllowed === true && !streaming
+    && blocks.some(block => block.type === 'table') && supportsTableMessageDocument(blocks);
+  const linkActivation = useMarkdownLinkActivation(tableCandidate, documentRevision);
+  const tableFailed = tableFailedRevision === documentRevision;
+  const mountTableDocument = tableCandidate && !tableFailed && nativeBodySize.width > 0 && nativeBodySize.height > 0;
+  const showTableDocument = mountTableDocument && tableReadyRevision === documentRevision;
+  // Let Android draw the WebView behind the readable native body: alpha zero can
+  // leave an undrawn WebView when it takes over. A promoted table still follows
+  // the available width so its hug bubble can grow after rotation or split view.
+  const tableDocumentStyle: ViewStyle | undefined = !showTableDocument
+    ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, overflow: 'hidden' }
+    : pinContentWidth ? undefined : {
+      width: Math.max(nativeBodySize.width, layout.markdownTableAvailableWidth), maxWidth: '100%',
+    };
+  // The native bootstrap remains readable until the document is ready, with
+  // no selectable duplicate that could lose handles during this one promotion.
+  const selectable = selectionAllowed && !(tableCandidate && !tableFailed);
+  useLayoutEffect(() => {
+    if (!mountTableDocument && tableReadyRevision !== null) setTableReadyRevision(null);
+  }, [mountTableDocument, tableReadyRevision]);
+  const tableReady = useCallback((ready: boolean) => {
+    if (currentDocumentRevision.current !== documentRevision) return;
+    setTableReadyRevision(previous => ready ? documentRevision : previous === documentRevision ? null : previous);
+  }, [documentRevision]);
+  const tableFailedToLoad = useCallback(() => {
+    if (currentDocumentRevision.current !== documentRevision) return;
+    setTableReadyRevision(null);
+    setTableFailedRevision(documentRevision);
+  }, [documentRevision]);
   const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
   // Paragraph layout needs UIKit on iOS. Expanded nested replies use bounded
   // native runs instead of reintroducing the giant UITextView that blanked.
@@ -6425,7 +6705,7 @@ function MarkdownBodyBase({
             />
           </View>
           {showCodeCopyButton ? (
-              <MarkdownCodeCopyButton text={block.text} />
+              <MarkdownBlockCopyButton text={block.text} />
             ) : null}
         </View>
       );
@@ -6444,7 +6724,7 @@ function MarkdownBodyBase({
           style={headingStyle}
           testID="message.markdownHeading"
         >
-          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable))}
+          {renderInlines(block.inlines, singleBlockSpanFor(headingSelectable), headingStyle)}
         </MarkdownSelectableText>
       );
     }
@@ -6495,53 +6775,57 @@ function MarkdownBodyBase({
         minWidth: layout.markdownTableCellMinWidth,
       });
       return (
-        <ScrollView
-          horizontal
-          key={block.key}
-          style={styles.markdownTableScroll}
-          testID="message.markdownTable"
-        >
-          <View style={styles.markdownTable}>
-            <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
-              {columnWidths.map((columnWidth, index) => {
-                const cell = block.header[index] ?? [];
-                return (
-                  <MarkdownSelectableText
-                    adjustVerticalAlignment={false}
-                    allowIosUITextView={singleBlockAllowsIosUITextView}
-                    key={`${block.key}:th:${index}`}
-                    selectable={inlinesSelectable(cell)}
-                    style={[
-                      styles.markdownTableCell,
-                      { width: columnWidth },
-                      styles.markdownTableHeaderCell,
-                    ]}
-                  >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
-                  </MarkdownSelectableText>
-                );
-              })}
-            </View>
-            {block.rows.map((row) => (
-              <View key={row.key} style={styles.markdownTableRow}>
+        <View key={block.key} style={styles.markdownTableScroll}>
+          <ScrollView
+            horizontal
+            style={styles.markdownTableScroll}
+            testID="message.markdownTable"
+          >
+            <View style={styles.markdownTable}>
+              <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
                 {columnWidths.map((columnWidth, index) => {
-                  const cell = row.cells[index] ?? [];
+                  const cell = block.header[index] ?? [];
                   return (
                     <MarkdownSelectableText
                       adjustVerticalAlignment={false}
                       allowIosUITextView={singleBlockAllowsIosUITextView}
-                      key={`${row.key}:td:${index}`}
+                      key={`${block.key}:th:${index}`}
                       selectable={inlinesSelectable(cell)}
-                      style={[styles.markdownTableCell, { width: columnWidth }]}
+                      style={[
+                        styles.markdownTableCell,
+                        { width: columnWidth },
+                        styles.markdownTableHeaderCell,
+                      ]}
                     >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
                     </MarkdownSelectableText>
                   );
                 })}
               </View>
-            ))}
-          </View>
-        </ScrollView>
+              {block.rows.map((row) => (
+                <View key={row.key} style={styles.markdownTableRow}>
+                  {columnWidths.map((columnWidth, index) => {
+                    const cell = row.cells[index] ?? [];
+                    return (
+                      <MarkdownSelectableText
+                        adjustVerticalAlignment={false}
+                        allowIosUITextView={singleBlockAllowsIosUITextView}
+                        key={`${row.key}:td:${index}`}
+                        selectable={inlinesSelectable(cell)}
+                        style={[styles.markdownTableCell, { width: columnWidth }]}
+                      >
+                        {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
+                      </MarkdownSelectableText>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+          {codeCopyEnabled && !streaming ? (
+            <MarkdownBlockCopyButton kind="table" text={mobileMarkdownTableToTsv(block)} />
+          ) : null}
+        </View>
       );
     }
     return (
@@ -6554,11 +6838,20 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
-  return (
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, streaming, styles, t]);
+  return <MarkdownLinkActivationContext.Provider value={linkActivation}>
     <View
       collapsable={false}
-      onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}
+      onLayout={measuresSettledWidth || measureTableBootstrap ? event => {
+        if (measuresSettledWidth) handleSettledWidthLayout(event);
+        if (measureTableBootstrap && !showTableDocument) {
+          const { width, height: rawHeight } = event.nativeEvent.layout;
+          const height = Math.ceil(rawHeight);
+          if (width > 0 && height > 0) {
+            setNativeBodySize(previous => previous.width === width && previous.height === height ? previous : { width, height });
+          }
+        }
+      } : undefined}
       style={[
         styles.markdownBody,
         { maxWidth: '100%' },
@@ -6566,9 +6859,27 @@ function MarkdownBodyBase({
       ]}
       testID="message.markdownBody"
     >
+      {tableCandidate && tableFailed ? <ErrorNotice message={t('message.renderer.tableSelectionUnavailable')}
+        actions={<MessageListActionButton accessibilityLabel={t('message.renderer.retryPreview')}
+          onPress={() => setTableFailedRevision(null)}>
+          <Text style={styles.payloadOpenButtonText}>{t('message.renderer.retryPreview')}</Text>
+        </MessageListActionButton>} /> : null}
+      {mountTableDocument ? <View pointerEvents={showTableDocument ? 'auto' : 'none'}
+        accessibilityElementsHidden={!showTableDocument}
+        importantForAccessibility={showTableDocument ? 'auto' : 'no-hide-descendants'}
+        style={tableDocumentStyle}>
+        <TableMessageDocument documentKey={documentKey} text={text} blocks={blocks} layout={layout}
+          initialHeight={nativeBodySize.height} selectable={selectionAllowed} streaming={streaming}
+          codeCopyEnabled={codeCopyEnabled} onOpenSessionLink={onOpenSessionLink}
+          onReadyChange={tableReady} onFailure={tableFailedToLoad} />
+      </View> : null}
+      {!showTableDocument ? (
       <View
         collapsable={false}
-        style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
+        style={[
+          pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null,
+          mountTableDocument ? { zIndex: 1, backgroundColor: tableFallbackBackground ?? colors.surface } : null,
+        ]}
       >
       {groups.flatMap((group, groupIndex) => {
         const renderedGroup = group.type === 'text_run'
@@ -6586,8 +6897,9 @@ function MarkdownBodyBase({
         ];
       })}
       </View>
+      ) : null}
     </View>
-  );
+  </MarkdownLinkActivationContext.Provider>;
 }
 
 /**
@@ -6781,6 +7093,9 @@ function renderInline(
           </SpanText>
         );
       }
+      const settingsTarget = parseSettingsNavigationUrl(inline.url);
+      if (settingsTarget) return <SettingsLinkSpan key={spanKey(`settings:${index}:${inline.url}`)} target={settingsTarget}
+        label={inline.text} SpanText={SpanText} style={clickableInlineStyle(styles, () => {}, ctx.baseStyle)} />;
       const session = parseSessionDeepLinkUrl(inline.url);
       if (session) {
         return (
@@ -6868,15 +7183,38 @@ function renderInline(
       );
     case 'strikethrough':
       return <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`strike:${index}`)} style={[ctx.baseStyle, styles.markdownStrike]}>{inline.text}</StaticSpan>;
-    case 'math':
-      // inline 公式:原生 Text 流内嵌不了 KaTeX,用 Unicode 近似(上标 ²、
-      // 希腊字母、√ 等)保持文本流/选择/性能;复杂公式的精确渲染走 display
-      // 块的 WebView KaTeX。
+    case 'math': {
+      const mathSegments = tokenizeInlineMath(inline.text);
+      const baseFontSize = StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? typeScale.bodyLarge;
+      const subFontSize =
+        baseFontSize <= typeScale.bodySmall
+          ? typeScale.micro
+          : baseFontSize <= typeScale.subtitle
+            ? typeScale.caption
+            : typeScale.footnote;
       return (
-        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={[ctx.baseStyle, styles.markdownMathInline]}>
-          {latexToUnicodeApproximation(inline.text)}
+        <StaticSpan maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} key={spanKey(`math:${index}`)} style={ctx.baseStyle}>
+          {mathSegments.map((segment, segIndex) => (
+            <StaticSpan
+              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+              key={spanKey(`math:${index}:${segIndex}`)}
+              style={[
+                ctx.baseStyle,
+                segment.kind === 'var'
+                  ? styles.markdownMathVar
+                  : segment.kind === 'sup'
+                    ? styles.markdownMathSup
+                    : segment.kind === 'sub'
+                      ? [segment.italic ? styles.markdownMathVar : styles.markdownMathText, { fontSize: subFontSize }]
+                      : styles.markdownMathText,
+              ]}
+            >
+              {segment.text}
+            </StaticSpan>
+          ))}
         </StaticSpan>
       );
+    }
     case 'image': {
       const managedPreview = ctx.renderManagedImage?.(inline);
       if (managedPreview) {
@@ -6945,34 +7283,17 @@ function MarkdownSessionLinkSpan({
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
 }) {
-  const messages = useRemoteSessionMessages(session.sessionId);
-  const explicit =
-    inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
-  const targetMessage = session.messageClientId
-    ? messages.find((message) =>
-          message.clientId === session.messageClientId || message.id === session.messageClientId
-      )
-    : null;
-  // 消息数组更新(流式 / 列表重渲)时,目标消息没变就不重算摘要。
-  const messageLabel = useMemo(() => {
-    const messageText = targetMessage ? mobileSessionMessageDisplayText(targetMessage) : null;
-    return messageText ? sentSessionMessageChipLabel(messageText) : '';
-  }, [targetMessage]);
-  const title = session.messageClientId
-    ? messageLabel || i18n.t('message.renderer.messageChipFallback')
-    : (explicit
-      ?? sessionLinkTitles?.[session.sessionId]
-      ?? i18n.t('message.renderer.sessionChipFallback'));
+  const link = useMarkdownSessionLink({ inline, session, sessionLinkTitles, onOpenSessionLink });
   // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
   // (clickableInlineStyle 保证两者同源)。
-  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
+  const openSessionLink = link.onPress;
   // 发给模型的上下文范围(条数 / 是否截断)不在气泡里展示:用户无从理解也无从操作。
   return (
     <SpanText
       onPress={openSessionLink}
       style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
     >
-      {`${session.messageClientId ? '❝' : '↳'} ${title}`}
+      {link.text}
     </SpanText>
   );
 }
@@ -7354,13 +7675,16 @@ function MediaPreview({
   }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
-  // decode SVG. Reuse the decoded dimensions without a second image request.
+  // decode SVG. On Android, resizing can decode the same thumbnail at slightly
+  // different dimensions. Only its first load should size the frame.
+  const measuredThumbUri = useRef<string | null>(null);
   const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
     }) => {
-    if (!(width > 0 && height > 0)) return;
+    if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
+    measuredThumbUri.current = thumbUri;
     rememberAttachmentIntrinsicSize({ width, height }, media.url);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize]);
+  }, [media.url, setIntrinsicSize, thumbUri]);
 
   if (media.kind === 'video' && !presentationOnly) {
     return (
@@ -7748,6 +8072,7 @@ export function MessagePayloadModal({
     && isDirectPreviewableMediaUrl(payloadSummary.openTarget.value);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
+  const previewChrome = usePreviewChromeFrame();
   const headerLayout = buildPayloadHeaderLayout({
     canCopy: canCopyPayload,
     canOpen: canOpenPayloadUrl,
@@ -7866,7 +8191,7 @@ export function MessagePayloadModal({
         <View style={[
             styles.payloadModal,
             {
-              paddingTop: safeAreaInsets.top + 64,
+              paddingTop: previewChrome.documentContentTop,
               paddingBottom: safeAreaInsets.bottom,
             },
           ]} testID="message.payloadModal">
@@ -7931,7 +8256,7 @@ export function MessagePayloadModal({
             // Landscape side insets hold the notch or a vertical system bar (Duo).
             paddingLeft: safeAreaInsets.left,
             paddingRight: safeAreaInsets.right,
-            paddingTop: safeAreaInsets.top + 64,
+            paddingTop: previewChrome.documentContentTop,
             },
         ]}
         testID="message.payloadModal"
@@ -9450,8 +9775,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  agentSwitchPillInteractive: {
+    minHeight: 44,
+  },
   agentSwitchPillText: {
     color: colors.textSecondary,
+    flexShrink: 1,
     fontSize: typeScale.micro,
     lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
@@ -9459,15 +9788,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 分隔点:纯语义三级色,不再叠透明度「做淡」(§3 硬规则 1)。
   agentSwitchDot: {
     color: colors.textTertiary,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
   },
   agentSwitchModel: {
-    color: colors.textSecondary,
-    flexShrink: 1,
     fontFamily: monoFont,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.regular,
+  },
+  agentSwitchCoverage: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    textAlign: 'center',
   },
   agentSwitchHandoffPanel: {
     backgroundColor: colors.surface,
@@ -9514,9 +9844,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
   markdownEmphasis: { fontStyle: 'italic' },
-  // inline 公式:Unicode 近似文本以斜体呈现(数学正文的传统排版形态),
-  // 与普通强调的区别只在语义,视觉上沿用 italic 已足够。
-  markdownMathInline: { fontStyle: 'italic' },
+  // inline 公式:按数学排版规则区分变量斜体与符号/数字/函数正体,衬线体对齐 KaTeX
+  // 气质,上标改走西文字体避免中文字体把 ¹²³ 放大成全角尺寸,下标走缩小字号统一基线。
+  markdownMathVar: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'italic',
+  },
+  markdownMathText: {
+    fontFamily: Platform.select({ ios: 'Times New Roman', android: 'serif', default: 'serif' }),
+    fontStyle: 'normal',
+  },
+  markdownMathSup: {
+    fontFamily: Platform.select({ ios: 'Helvetica Neue', android: 'sans-serif', default: undefined }),
+    fontStyle: 'normal',
+  },
   markdownStrike: { textDecorationLine: 'line-through' },
   markdownUnderlineStrike: { textDecorationLine: 'underline line-through' },
   // 行内 code:零底色 + 等宽字体 + 文字压暗(参照 Codex 客户端)。
@@ -10292,7 +10633,8 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const withVisibility = (content: ReactNode, visible: boolean) => (
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>
   );
-  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={props} />, visible);
+  const nativeProps = { ...props, androidTableSelection: false };
+  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={nativeProps} />, visible);
   const parts = useMemo(() => (props.renderRichAnswers ? splitRichAnswer(props.text) : []), [props.text, props.renderRichAnswers]);
   if (!parts.some((part) => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
   return (
@@ -10300,9 +10642,9 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
     ? (
           <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
+        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...nativeProps} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
         ) : (
-          <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />),
+          <MarkdownBodyBase {...nativeProps} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />),
       )}</View>
   );
 }

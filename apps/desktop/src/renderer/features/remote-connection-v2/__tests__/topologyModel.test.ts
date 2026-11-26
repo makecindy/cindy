@@ -21,6 +21,8 @@ import {
 } from '../topologyModel';
 import { SPECK_H, SPECK_W, groupLines, layoutTopology, samplePath, speckKeyframes } from '../topologyGeometry';
 import { SPACING, SPEED, streamFor } from '../TopologyFlow';
+import { remoteSwitchAvailability } from '../agentNetRemoteSwitch';
+import { pathLabel } from '../topologyPresentation';
 import { appendPresenceEvent } from '../useRecentPresence';
 import {
   _resetRemoteConnectionV2ForTests,
@@ -66,6 +68,16 @@ const base = {
   showOffline: false,
 };
 
+// App routing: platform-only nodes incorrectly painted Friend as control-off.
+// Unit, real topology builder: one online Mac, no remote control and no link.
+it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('classifies app=%s without assigning Cindy-only attention to other Apps', app => {
+  const model = buildTopology({ ...base, devices: [device({ deviceId: 'peer', app, remoteControlEnabled: false })], links: [] });
+  const peer = model.nodes[0];
+  expect(peer.app).toBe(app);
+  expect(peer.status).toBe(app === undefined || app === 'cindy' ? 'attention' : 'unlinked');
+  expect(peer.isMobile).toBe(false);
+});
+
 describe('buildTopology:状态五档', () => {
   it('直连 / 经中转 / 未建链 / 要处理 / 离线各归一档,本机不在节点里', () => {
     const model = buildTopology({
@@ -87,7 +99,7 @@ describe('buildTopology:状态五档', () => {
       ],
       unresponsive: ['f'],
     });
-    expect(model.self).toEqual({ name: '我的 Mac', platform: 'darwin' });
+    expect(model.self).toEqual({ name: '我的 Mac', platform: 'darwin', appVersion: '1.0.0' });
     expect(model.nodes.map((n) => [n.id, n.status, n.path, n.rttMs])).toEqual([
       ['a', 'direct', 'direct', 3],
       ['b', 'relay', 'relay', 40],
@@ -110,6 +122,83 @@ describe('buildTopology:状态五档', () => {
     });
     expect(model.byId.get('phone')?.status).toBe('unlinked');
     expect(model.byId.get('pc')?.attention).toBe('unresponsive');
+  });
+
+  // 2026-11-18 MagicLizi: the previous cases always needed an open control link for a path.
+  // Unit regression via buildTopology: one online peer, a confirmed Agent-Net path, no business link.
+  it('shows the Agent-Net path before opening a control link or refreshing the directory', () => {
+    const input = { ...base, devices: [device({ deviceId: 'pc' })], links: [] };
+    const connecting = buildTopology({ ...input, agentNetRoutes: [{ deviceId: 'pc', path: 'connecting', rttMs: null }] });
+    expect(connecting.groups[0]?.key).toBe('connecting');
+    expect(pathLabel(connecting.nodes[0], 'Cindy', (key) => key)).toBe('settings.devices.linkStatus.connecting');
+
+    const relay = buildTopology({
+      ...input,
+      devices: [device({ deviceId: 'pc', online: false })],
+      agentNetRoutes: [{ deviceId: 'pc', path: 'relay', rttMs: 25 }],
+    });
+    expect(relay.nodes[0]).toMatchObject({ status: 'relay', path: 'relay', rttMs: 25, encrypted: true, flow: null });
+    expect(remoteSwitchAvailability(relay.nodes[0])).toEqual({ visible: false });
+    const direct = buildTopology({ ...input, agentNetRoutes: [{ deviceId: 'pc', path: 'direct', rttMs: 9 }] });
+    expect(direct.nodes[0]).toMatchObject({ status: 'direct', path: 'direct', rttMs: 9 });
+    expect(buildTopology(input).nodes[0]).toMatchObject({ status: 'unlinked', path: null, rttMs: null });
+  });
+
+  it('keeps the actual Device Link route while it carries an open control link', () => {
+    const model = buildTopology({
+      ...base,
+      devices: [device({ deviceId: 'pc' })],
+      links: [{ ...link('pc', 'relay', 25, true, 2), encrypted: false }],
+      agentNetRoutes: [{ deviceId: 'pc', path: 'direct', rttMs: 9 }],
+    });
+    expect(model.nodes[0]).toMatchObject({ status: 'relay', rttMs: 25, encrypted: false, flow: 'out', transport: 'websocket' });
+    expect(remoteSwitchAvailability(model.nodes[0])).toEqual({ visible: true, block: null });
+  });
+
+  // 2026-11-19 用户要求：每台电脑之间的链接也显示实际底层传输协议（UDP / WS / WebRTC）。
+  // 生产入口:buildTopology → TopologyNode.transport。覆盖缺口:此前只给中转站写 transport,对端节点没有传输协议字段。
+  // 最小失败输入:混合 Agent-Net 直连/经中转(UDP/WS/未上报) 与 Device Link 直连/经中转(主连接为 Agent-Net UDP 时旧版中转仍须是 WS)及未建链/离线。tier: unit。
+  it('按实际链路协议与路径推导对端底层传输协议,不猜测未知状态', () => {
+    const devices = [
+      device({ deviceId: 'an-direct' }),
+      device({ deviceId: 'an-relay' }),
+      device({ deviceId: 'an-route-direct' }),
+      device({ deviceId: 'dl-direct' }),
+      device({ deviceId: 'dl-relay' }),
+      device({ deviceId: 'unknown-host' }),
+      device({ deviceId: 'connecting' }),
+      device({ deviceId: 'offline', online: false }),
+    ];
+    const links = [
+      { ...link('an-direct', 'direct', 8), encrypted: true },
+      { ...link('an-relay', 'relay', 24), encrypted: true },
+      { ...link('dl-direct', 'direct', 6), encrypted: false },
+      { ...link('dl-relay', 'relay', 52), encrypted: false },
+      link('unknown-host', 'direct', 5),
+    ];
+    const agentNetRoutes = [
+      { deviceId: 'an-route-direct', path: 'direct' as const, rttMs: 4 },
+      { deviceId: 'connecting', path: 'connecting' as const, rttMs: null },
+    ];
+    const udpRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'udp' });
+    expect(Object.fromEntries(udpRelay.nodes.map((n) => [n.id, n.transport]))).toEqual({
+      'an-direct': 'udp',
+      'an-relay': 'udp',
+      'an-route-direct': 'udp',
+      'dl-direct': 'webrtc',
+      'dl-relay': 'websocket',
+      'unknown-host': null,
+      connecting: null,
+      offline: null,
+    });
+
+    const wsRelay = buildTopology({ ...base, devices, links, agentNetRoutes, relayProtocol: 'agent-net', relayTransport: 'websocket' });
+    expect(wsRelay.byId.get('an-relay')?.transport).toBe('websocket');
+    expect(wsRelay.byId.get('an-direct')?.transport).toBe('udp');
+
+    const unknownRelay = buildTopology({ ...base, devices, links, relayProtocol: 'agent-net' });
+    expect(unknownRelay.byId.get('an-relay')?.transport).toBeNull();
+    expect(unknownRelay.byId.get('dl-relay')?.transport).toBe('websocket');
   });
 
   // 用户反馈(2026-11-06):按延迟排,延迟一刷新图块就换位置。组内只按名字排(数字按数值)。

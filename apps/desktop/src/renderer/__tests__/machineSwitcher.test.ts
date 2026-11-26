@@ -20,7 +20,7 @@ import {
   selectRemoteSessionBootstrapFailures,
   selectRemoteSessionBootstrapLoadingDevices,
   shouldShowMachineSwitcher,
-  shouldShowSelectedMachineConnectingPlaceholder,
+  getSelectedMachinePlaceholder,
   shouldWaitForRemoteSessionBootstrap,
 } from '@/features/device-link/useMachineSwitcher';
 import { buildSwitcherDevices, selectableDeviceIds } from '@/features/device-link/switcherDevices';
@@ -107,11 +107,11 @@ describe('selectVisibleSessions', () => {
     },
   );
 
-  it('includes local routine and remote channel tasks with exact ownership, excluding private lanes', () => {
+  it('includes projectless group tasks with routine and channel tasks while excluding private lanes', () => {
     const lane = (role: string, device?: string): Session => ({ ...mkSession(role, device), source: 'bot', companion: { id: 'owner', role } });
     expect(selectVisibleSessions([lane('routine'), lane('canonical')],
-      [lane('channel', 'dev-a'), lane('group', 'dev-a'), lane('thread', 'dev-a')], MACHINE_ALL)
-      .map(row => row.id)).toEqual(['routine', 'channel']);
+      [lane('channel', 'dev-a'), { ...lane('group', 'dev-a'), workspaceKind: 'dialogue', projectDir: null }, lane('thread', 'dev-a')], MACHINE_ALL)
+      .map(row => row.id)).toEqual(['routine', 'channel', 'group']);
   });
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
@@ -305,6 +305,14 @@ describe('机器选择持久化(serialize / parse 往返)', () => {
 });
 
 describe('buildSwitcherDevices', () => {
+  // App routing, unit: a stale synced/rejected shard must not put a controller App
+  // back into the computer switcher. Existing cases excluded only mobile platforms.
+  it.each(['cindy-friend', 'other-app'])('excludes app=%s even with cached projects or a rejected row', app => {
+    expect(buildSwitcherDevices({ fullList: [mkDevice('friend', { app, platform: 'darwin' })],
+      syncedDevices: [{ deviceId: 'friend', deviceName: 'Mac', sessionCount: 1, connected: true }],
+      revoked: new Set(['friend']),
+    })).toEqual([]);
+  });
   it('已连接(已同步)/ 连接中(在线可控未同步)/ 被拒(已撤销)三态分类', () => {
     const result = buildSwitcherDevices({
       fullList: [mkDevice('dev-connected'), mkDevice('dev-connecting'), mkDevice('dev-rejected')],
@@ -380,9 +388,10 @@ describe('buildSwitcherDevices', () => {
     ]);
   });
 
-  it('被拒设备即使不在全量列表也列出(名字回退到可读提示)', () => {
+  it('尚未拿到完整目录时保留被拒设备，名字回退到可读提示', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [],
       revoked: new Set(['gone-dev']),
     });
@@ -400,9 +409,10 @@ describe('buildSwitcherDevices', () => {
     expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected', online: true }]);
   });
 
-  it('仅有断线缓存的设备仍显示,但状态为 connecting', () => {
+  it('尚未拿到完整目录时仍显示断线缓存，状态为 connecting', () => {
     const result = buildSwitcherDevices({
       fullList: [],
+      registeredDeviceIds: null,
       syncedDevices: [
         { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
       ],
@@ -780,23 +790,23 @@ describe('selectRemoteSessionBootstrapLoadingDevices', () => {
   });
 });
 
-describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
+describe('getSelectedMachinePlaceholder', () => {
   const noBootstrapFailures = new Set<string>();
 
   it('在线可控但尚未同步会话 → 显示连接中占位', () => {
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: true }],
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
-    ).toBe(true);
+    ).toBe('connecting');
   });
 
   it('断线但已有缓存会话 → 不显示连接中占位,让侧边栏展示缓存 session', () => {
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['dev-a'],
         devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [
@@ -804,31 +814,54 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
         ],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  it('断线缓存为空 → 仍显示连接中占位', () => {
-    expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+  it('权威空任务列表在断线和重连后更新占位', () => {
+    const placeholder = (online: boolean) => {
+      const syncedDevices = remoteProjectsStore.getDeviceList();
+      return getSelectedMachinePlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
-        syncedDevices: [
-          { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 0, connected: false },
-        ],
-        bootstrapFailedDeviceIds: noBootstrapFailures,
-      }),
-    ).toBe(true);
+        devices: buildSwitcherDevices({
+          fullList: [mkDevice('dev-a', { online })],
+          syncedDevices,
+          revoked: new Set(),
+        }),
+        syncedDevices,
+        bootstrapFailedDeviceIds: remoteProjectsStore.getBootstrapFailedDeviceIds(),
+      });
+    };
+
+    try {
+      expect(placeholder(false)).toBeNull(); // 无分片的离线设备沿用原范围回落。
+      remoteProjectsStore.setDeviceSessions('dev-a', 'Mac A', []);
+      expect(placeholder(true)).toBeNull();
+
+      remoteProjectsStore.markDeviceConnecting('dev-a');
+      expect(placeholder(false)).toBe('connecting');
+
+      remoteProjectsStore.markDeviceDisconnected('dev-a');
+      expect(placeholder(false)).toBe('offline');
+
+      remoteProjectsStore.markBootstrapLoading('dev-a');
+      expect(placeholder(true)).toBe('connecting');
+
+      remoteProjectsStore.setDeviceSessions('dev-a', 'Mac A', []);
+      expect(placeholder(true)).toBeNull();
+    } finally {
+      remoteProjectsStore.clear();
+    }
   });
 
   it('选中设备的 bootstrap 已终态失败 → 停止连接中占位，交给独立错误态', () => {
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['dev-a'],
         devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [],
         bootstrapFailedDeviceIds: new Set(['dev-a']),
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it('多选:全是连接中且无缓存 → 占位;混入本机或已连接设备 → 不占位', () => {
@@ -837,29 +870,29 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
       { deviceId: 'dev-b', name: 'PC B', status: 'connected' as const, online: true },
     ];
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['dev-a'],
         devices,
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
-    ).toBe(true);
+    ).toBe('connecting');
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['dev-a', 'dev-b'],
         devices,
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
-    ).toBe(false);
+    ).toBeNull();
     expect(
-      shouldShowSelectedMachineConnectingPlaceholder({
+      getSelectedMachinePlaceholder({
         rawSelection: ['local', 'dev-a'],
         devices,
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 });
 

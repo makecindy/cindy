@@ -3,7 +3,7 @@ const fixture = vi.hoisted(() => ({ upload: vi.fn(async () => []), download: vi.
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
-vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => ({ projectDir: '/group/project', plans: {} }), save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 // These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
 // journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
@@ -78,7 +78,7 @@ describe('server group feature parity', () => {
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.handle.mockImplementation(response);
-    deps = { ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
+    deps = { validateProjectDir: async (dir: string) => ({ ok: true as const, dir }), ensureLane: vi.fn(async () => ({ ok: true, sessionId: 'lane' })), abortLane: vi.fn(async () => {}),
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;
@@ -329,7 +329,10 @@ describe('server group feature parity', () => {
     const base = fixture.handle.getMockImplementation()!;
     fixture.handle.mockImplementation((route, method, data) => {
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: state }] };
-      if (route.endsWith('/control')) { state = 'stopping'; return { body: {} }; }
+      if (method === 'POST' && route === `/conversations/${roomId}/executions/${execution.id}/control?runEpoch=${execution.epoch}` && data.action === 'stop') {
+        state = 'stopping';
+        return { body: {} };
+      }
       if (route.endsWith(`/executions/${execution.id}`)) {
         if (data.action === 'heartbeat' && state === 'stopping') return { status: 409, body: { error: { code: 'STOP_REQUESTED' } } };
         if (data.action === 'cancel') {

@@ -1,3 +1,5 @@
+import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 import { createHash } from 'node:crypto';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
@@ -151,6 +153,8 @@ export class LiteLlmTextModelClient implements TextModelClient {
     const sendStart = performance.now();
     let firstByteAt: number | null = null;
     let lastTextSnapshot = '';
+    const record = createAuxiliaryUsageRecorder({ source: 'voice-refinement', model: input.model,
+      providerId: this.requestTargetProvider ? 'cindy-voice' : 'xd', transport: 'chat-completions' });
     try {
       const requestBody = JSON.stringify({
         model: input.model,
@@ -214,6 +218,8 @@ export class LiteLlmTextModelClient implements TextModelClient {
       if (!response.ok) {
         const raw = await response.text().catch(() => '');
         const parsed = tryParseJsonObject(raw);
+        const tokens = parseAuxiliaryTokens(parsed, 'chat-completions');
+        if (tokens) await record(tokens);
         throw new Error(textModelErrorMessage(parsed, raw, response.status));
       }
       if (!response.body) {
@@ -222,6 +228,14 @@ export class LiteLlmTextModelClient implements TextModelClient {
 
       const { content, usageSummary, servedModel, rawChars, bodyAt } = await readStreamingChatCompletion({
         body: response.body,
+        onUsage: async (usage, model) => {
+          if (!usage.usagePresent) return;
+          await record({
+            inputTokens: usage.promptTokens === undefined ? undefined : Math.max(0, usage.promptTokens - (usage.cachedTokens ?? 0)),
+            outputTokens: usage.completionTokens, cacheReadTokens: usage.cachedTokens,
+            cacheCreateTokens: usage.cacheCreationTokens,
+          }, model ? { model } : {});
+        },
         onTextProgress: () => armIdleTimeout('response stream'),
         onFirstByte: () => {
           if (firstByteAt === null) firstByteAt = performance.now();
@@ -280,12 +294,14 @@ export class LiteLlmTextModelClient implements TextModelClient {
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      record.close();
     }
   }
 }
 
 async function readStreamingChatCompletion(input: {
   body: NodeReadableStream;
+  onUsage?: (usage: UsageSummary, model?: string) => Promise<void>;
   onTextProgress: () => void;
   onFirstByte: () => void;
   onTextContent: (content: string) => void;
@@ -359,7 +375,16 @@ async function readStreamingChatCompletion(input: {
       }
     }
   } finally {
-    reader.releaseLock();
+    // A transport error can follow a complete JSON data line before its blank delimiter.
+    // Observe only metering/model facts here; never publish partial reply content.
+    const tail = parseSseBlock(buf);
+    if (tail) {
+      const tailUsage = extractUsageSummary(tail.data);
+      if (tailUsage.usagePresent) usageSummary = tailUsage;
+      if (isRecord(tail.data) && typeof tail.data.model === 'string') servedModel = tail.data.model;
+    }
+    try { await input.onUsage?.(usageSummary, servedModel); }
+    finally { reader.releaseLock(); }
   }
 
   if (streamError) throw new Error(streamError);

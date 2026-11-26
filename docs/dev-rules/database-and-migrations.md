@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、
 > migration companion script 或运行期数据库访问之前
+> **适用路径**：`apps/desktop/src/main/localDb/**`、`apps/desktop/drizzle/**`、
+> `apps/desktop/drizzle.config.ts`、`apps/desktop/scripts/validate-migrations.mjs`、
+> `apps/desktop/scripts/lib/migration-freeze.mjs`、`scripts/ci-database-tests.mjs`、
+> `scripts/dev-migration-policy.mjs`
 
 本文只治理 Desktop 的 Drizzle／SQLite。本仓不包含服务端数据库；服务端 migration 以
 对应服务端仓规则为准。
@@ -103,6 +107,12 @@ tier 中的相关测试；删除源码、fixture 变化或无法确定事件基�
   确定性，并为历史 fixture、部分旧 schema 和重复存在的列／索引设计必要的幂等守卫。
 - companion 接收同步 `better-sqlite3` 实例，在受控 migration 事务内使用 `.get()`、
   `.all()`、`.run()` 是契约的一部分；不要把这种同步写法复制到运行期业务代码。
+
+### 历史用量估值的原币修复
+
+0159 纠正旧客户端按固定 6.7 折算的订阅估值。能从旧版内置美元报价或明确换汇标记判断来源的记录在升级时自动恢复。后期的人民币参考估值也可能来自用户自填单价。对这类记录，先核实当时的供应商、模型及原始报价，再由账号所有者确认具体记录。
+
+支持人员可在升级前将确认清单保存为该账号 SQLite 文件旁的 `<数据库文件名>.native-usd-estimates.json`，限制为本人可读写。清单为版本 1 的 JSON 对象，`records` 中每项包含 `id`、毫秒时间戳 `createdAt`、折算后的人民币 `amount`、当轮 `provider` 和按原顺序排列的 `models`。升级逐条复核快照和估值类型。模型日汇总仅在原金额可与已恢复的明细完整对账时迁移；token 计数随原行保留。真实费用和无法核实的币种保留原值。确认清单仅限本机，不进入 Git、日志或支持工单。
 
 ## 未合入 Migration 与本地数据
 

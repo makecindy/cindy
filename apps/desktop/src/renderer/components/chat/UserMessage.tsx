@@ -24,9 +24,8 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -75,6 +74,7 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { ImageLightbox } from './ImageLightbox';
 import {
   joinChatQuoteTextSegments,
@@ -85,6 +85,7 @@ import {
 } from '@/lib/chatQuotes';
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
+import { repeatIndexes, structuredImageOccurrence } from './ImageGalleryContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
@@ -118,9 +119,14 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } from '@/cindy-brain/ghostCommand';
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
-import { GhostSummonCard } from './GhostSummonCard';
+import {
+  GhostFulfillmentContext,
+  GhostSummonCard,
+  type GhostSummonDisplay,
+} from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
+import { OrcaMessageHeading } from './OrcaMessageHeading';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -148,6 +154,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  inputNotice?: 'oversized-input-skipped';
   pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
@@ -195,6 +202,8 @@ interface UserMessageProps {
    *  fork IPC takes (sessionId, clientId) to locate the fork point. When
    *  omitted, the Fork button is not rendered. */
   messageClientId?: string;
+  /** Queued messages carry their stable row id before they have history actions. */
+  clientId?: string;
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to select stop-then-rewind confirmation; fork is allowed from stable history. */
   sessionRunning?: boolean;
@@ -280,7 +289,7 @@ function UserFileChip({
           if (event.button === 1) ctxMenu.onActivate(event, () => onClick(event));
         }}
         onContextMenu={ctxMenu.onContextMenu}
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
       />
       {ctxMenu.menu}
     </>
@@ -444,7 +453,7 @@ function renderContentWithoutPastedText(
           key={`s-${li}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
       line = line.slice(slashMatch[0].length);
@@ -501,7 +510,7 @@ function renderContentWithoutPastedText(
               label={name}
               icon={<Sparkles aria-hidden />}
               tooltip={name}
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else if (ref.endsWith('/')) {
@@ -516,7 +525,7 @@ function renderContentWithoutPastedText(
               icon={<FolderIcon aria-hidden />}
               tooltip={ref}
               tooltipMono
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else {
@@ -566,7 +575,7 @@ function renderContentWithoutPastedText(
                 tooltip={ref}
                 tooltipMono
                 ariaLabel={fileName}
-                className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+                className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
               />
             ),
           );
@@ -772,7 +781,7 @@ export function renderContent(
           key={`slash-chip-${index}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
     }
@@ -786,7 +795,7 @@ export function renderContent(
           tooltipMono
           tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
           ariaLabel={token.display}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
           // 点击打开只读全文(与 composer 侧 pastedTextChip → ToolPayloadLightbox
           // 对齐)。hover tooltip 是 320×256 的小浮层,几百行日志在里面读不了,
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
@@ -850,6 +859,7 @@ export function UserMessage({
   agentKind,
   remoteHostId,
   messageClientId,
+  clientId,
   sessionRunning,
   delivery,
   isFirstUserMessage,
@@ -862,6 +872,7 @@ export function UserMessage({
   sourcePlugin,
   goalBadge,
   blockedByGhost,
+  inputNotice,
 }: UserMessageProps) {
   const { t } = useTranslation();
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
@@ -869,6 +880,9 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 插件引擎任务(agent_kind = 'acp')不读任何内置 Harness 的能力。分叉由主进程从 Cindy 的记录交接；
+  // 回退要改动插件 Agent 自己的历史，仍不支持(docs/plans/acp-plugin-bridge.md)。
+  const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -880,14 +894,14 @@ export function UserMessage({
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
   );
-  const { capabilities } = useAgentCapabilities(makerKind, remoteDeviceId);
+  const { capabilities } = useAgentCapabilities(pluginEngineTask ? null : makerKind, remoteDeviceId);
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote &&
+    !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
@@ -984,9 +998,29 @@ export function UserMessage({
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // A user's bubble records their selection, never the assistant's later calls.
-  const ghostPillForm = ghostDirective?.kind === 'mention';
-  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostDirective;
+  // 本条消息出现真实调用时,用标注行展示完整调用摘要,原软提示保留在展开区。
+  // 判据来自 GhostFulfillmentContext
+  // (MessageStream 从会话历史现算,重启幂等)。
+  const ghostFulfillment = useContext(GhostFulfillmentContext);
+  const ghostCalls = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
+  const ghostFulfilledIds = ghostCalls?.ghostIds;
+  // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
+  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
+  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
+  const ghostSemanticDisplay: GhostSummonDisplay | null =
+    !ghostDirective &&
+    !orcaCommunication &&
+    !hookSource &&
+    ghostFulfilledIds &&
+    ghostFulfilledIds.size > 0
+      ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
+      : null;
+  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
+  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
+  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
+  const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
+  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostFulfilledIds?.size;
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
   const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
@@ -1053,13 +1087,16 @@ export function UserMessage({
   const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
   const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
   // Display decoding must not change an unedited resend's wire bytes.
-  const editSubmitText = forwardedDraftBody !== undefined
-    ? forwardedDraftBody
-    : quotesEncoded
-    ? ghostBody
-    : copyBody !== visibleSource
-      ? visibleSource
-      : undefined;
+  const originalImText = hookSource?.contentFormat === 'user-text'
+    ? hookSource.userText ?? content
+    : undefined;
+  const editSubmitText = forwardedDraftBody ?? (
+    originalImText !== undefined && originalImText !== displayContent
+      ? originalImText
+      : quotesEncoded
+        ? ghostBody
+        : copyBody !== visibleSource ? visibleSource : undefined
+  );
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1165,9 +1202,9 @@ export function UserMessage({
         userSendAt: session.userSendAt,
       });
       // Force chat store to re-fetch messages (server filters rewind_at).
-      makerChatStore.reloadMessages(sessionId);
+      makerChatStore.reloadMessages(sessionId, { rewindFromClientId: messageClientId });
     },
-    [sessionId, draftBody, quoteDraftDocument, images, files],
+    [sessionId, messageClientId, draftBody, quoteDraftDocument, images, files],
   );
 
   // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
@@ -1249,18 +1286,6 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
-  const orcaWorkerRole =
-    automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
-  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
-  const orcaCardTitle =
-    orcaBatchCount
-      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
-      : orcaCommunication?.orcaSource === 'lead'
-        ? t('chat.userMessage.orcaFromLead')
-        : orcaWorkerRole
-          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-          : t('chat.userMessage.orcaFromWorker');
-
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
   const botLetter =
@@ -1310,11 +1335,17 @@ export function UserMessage({
 
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
+  const imageSrcs = hasImages
+    ? images.map((img) => ('url' in img ? img.url : `data:${img.mimeType};base64,${img.base64}`))
+    : [];
+  // Same count the task gallery uses for this message's uploads, so a repeated
+  // upload opens the gallery at the copy that was clicked.
+  const imageRepeats = repeatIndexes(imageSrcs);
   const imageAttachmentNodes =
     !orcaCommunication && hasImages
       ? images.map((img, idx) => {
           const isUrlMode = 'url' in img;
-          const src = isUrlMode ? img.url : `data:${img.mimeType};base64,${img.base64}`;
+          const src = imageSrcs[idx]!;
           const filename = isUrlMode ? img.originalName : (img.originalName ?? `image-${idx + 1}`);
           return (
             <ChatImageView
@@ -1325,6 +1356,7 @@ export function UserMessage({
               sessionId={sessionId}
               annotationSourceUrl={isUrlMode ? img.annotationSourceUrl : undefined}
               annotationStrokes={isUrlMode ? img.annotationStrokes : undefined}
+              galleryOccurrence={structuredImageOccurrence(imageRepeats[idx]!)}
             />
           );
         })
@@ -1351,6 +1383,12 @@ export function UserMessage({
       </div>
     ) : null;
 
+  const historyNotice = inputNotice === 'oversized-input-skipped' ? (
+    <p className="text-12 leading-[1.667] text-[var(--text-secondary)]" data-input-notice="">
+      {t('chat.userMessage.oversizedInputSkipped')}
+    </p>
+  ) : null;
+
   // If there are images, use vertical layout: images on top, text bubble below, right-aligned
   // If no images, render the text bubble alone, right-aligned (existing behavior)
   return (
@@ -1376,7 +1414,7 @@ export function UserMessage({
       <div
         className={cn(
           'flex flex-col gap-2',
-          botLetter
+          botLetter || (simplifiedBotConversation && hookSource)
             ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'w-full items-start')
             : orcaCommunication || hookSource
             ? 'w-full max-w-[560px] items-start'
@@ -1416,7 +1454,7 @@ export function UserMessage({
             />
             <div
               className={cn(
-                'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
+                'w-full rounded-lg border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-card-text)]',
                 'overflow-hidden',
               )}
@@ -1431,8 +1469,7 @@ export function UserMessage({
                 aria-expanded={orcaExpanded}
                 onClick={() => setOrcaExpanded((value) => !value)}
               >
-                <Bot size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                <span className="min-w-0 flex-1 truncate">{orcaCardTitle}</span>
+                <OrcaMessageHeading source={orcaCommunication.orcaSource} origin={automationOrigin} />
                 {orcaExpanded ? (
                   <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 ) : (
@@ -1447,6 +1484,7 @@ export function UserMessage({
                 </div>
               )}
             </div>
+            {historyNotice}
           </>
         ) : botLetter ? (
           <>
@@ -1471,6 +1509,7 @@ export function UserMessage({
             )}
             {imageAttachmentNodes}
             {fileAttachmentNodes}
+            {historyNotice}
             {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
             {letterExpanded && (
               <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
@@ -1501,6 +1540,7 @@ export function UserMessage({
               groupMessageCount={hookSource.contextSnapshot?.groupMessageCount}
               replyMessageCount={hookSource.contextSnapshot?.replyMessageCount}
             />
+            {historyNotice}
             {!hasEmbeddedImPrompt(hookSource) && messageActions}
           </>
         ) : (
@@ -1592,9 +1632,15 @@ export function UserMessage({
                     className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
+                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
+                 caret)。running 由本条消息的真实未返回调用决定;
+                 调用结果全部返回就结束,不等待助手整轮回答。
+                 下方有正文/引用时加分隔线,单独成泡时不加。 */
                       <GhostSummonCard
                         directive={ghostChipDisplay}
                         commandNamespace={ghostCmd?.namespace ?? undefined}
+                        running={ghostCalls?.running ?? false}
+                        {...(messageClientId ? { messageClientId } : {})}
                         className={
                           inlineQuoteCount > 0 || displayBubbleBody.trim()
                             ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
@@ -1701,7 +1747,7 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
-                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId, clientId: messageClientId ?? clientId,
                         disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
                         context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
@@ -1798,10 +1844,13 @@ export function UserMessage({
                     )}
                   </ChatBubble>
                 )}
-                {/* ghost-summon-pill:历史提及保持低调胶囊,留在气泡下方
+                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
                 {ghostPillDisplay && (
-                  <GhostSummonCard directive={ghostPillDisplay} />
+                  <GhostSummonCard
+                    directive={ghostPillDisplay}
+                    {...(messageClientId ? { messageClientId } : {})}
+                  />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条
             error 红条,内容 = 意识返回的文本(直接显示,主机不加框不署名);
@@ -1814,6 +1863,7 @@ export function UserMessage({
                     />
                   </div>
                 )}
+                {historyNotice}
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}

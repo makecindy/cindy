@@ -24,6 +24,39 @@ interface ChatGroupNamedMember {
   id: string; kind: string; state: string; name: string; ownerActorId?: string; ownerName?: string;
 }
 
+/** Language-neutral separator for an enterprise member's default org suffix (`Name · Org`). */
+export const BOT_GROUP_ORG_SEPARATOR = ' · ';
+
+/**
+ * Formats a human member's display name for UI surfaces. When an enterprise member appears in an
+ * external or cross-org group without a custom group nickname (`showOrgName === true`), appends
+ * ` · <orgName>` once. Custom nicknames and non-human members keep their own name unchanged.
+ */
+export function chatGroupHumanDisplayName(member: {
+  name: string;
+  actorKind?: string;
+  kind?: string;
+  nickname?: string | null;
+  orgName?: string | null;
+  showOrgName?: boolean;
+}): string {
+  const name = member.name.trim();
+  const kind = member.actorKind ?? member.kind;
+  if (kind && kind !== 'human') return name;
+  if (member.nickname?.trim() || member.showOrgName !== true) return name;
+  const org = member.orgName?.trim();
+  if (!org) return name;
+  const suffix = `${BOT_GROUP_ORG_SEPARATOR}${org}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
+}
+
+export function chatGroupMentionRoster(members: readonly BotGroupMemberView[]): BotGroupMemberView[] {
+  return members.filter(member => !member.isSelf).map(member => {
+    const name = chatGroupHumanDisplayName(member);
+    return name === member.name ? member : { ...member, name, displayName: member.name };
+  });
+}
+
 /** The server's member.name already includes that room's nickname override. Display only; never infer ownership from names. */
 export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
   const owner = member.kind === 'bot' && member.ownerActorId
@@ -124,6 +157,41 @@ export function mergeBotGroupMessages(
   const bySequence = new Map<number, BotGroupMessageView>();
   for (const message of [...older, ...latest]) bySequence.set(message.sequence, message);
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+}
+
+/** Insert live executions by their original timestamp without reordering persisted messages.
+ * Without a timestamp, use the exact source row when available; older hosts without either precede history.
+ * Never use update/observation time: incremental updates must keep an execution in place.
+ */
+export function interleaveBotGroupWork<M extends { createdAt: number; id?: string; serverMessageId?: string; process?: { executionId: string } }, W extends { startedAt?: number; timelineAt?: number; sourceMessageId?: string; executionId?: string }>(
+  messages: readonly M[], work: readonly W[],
+): Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> {
+  const source = (item: W) => item.sourceMessageId ? messages.find(message =>
+    message.id === item.sourceMessageId || message.serverMessageId === item.sourceMessageId) : undefined;
+  const timestamp = (item: W) => Number.isFinite(item.timelineAt) ? item.timelineAt!
+    : source(item)?.createdAt ?? (Number.isFinite(item.startedAt) ? item.startedAt! : 0);
+  const completed = new Set(messages.flatMap(message => message.process ? [message.process.executionId] : []));
+  const anchored = new Map<M, W[]>();
+  const pending = work.filter(item => !item.executionId || !completed.has(item.executionId))
+    .sort((a, b) => timestamp(a) - timestamp(b)).filter(item => {
+      const request = !Number.isFinite(item.timelineAt) ? source(item) : undefined;
+      if (!request) return true;
+      const list = anchored.get(request) ?? [];
+      list.push(item); anchored.set(request, list);
+      return false;
+    });
+  const result: Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> = [];
+  let index = 0;
+  for (const [messageIndex, message] of messages.entries()) {
+    // Projected failures stay beside their source; their update time is not a history anchor.
+    while (!message.id?.startsWith('execution-failure:') && index < pending.length && timestamp(pending[index]!) < message.createdAt) {
+      result.push({ kind: 'work', value: pending[index++]! });
+    }
+    result.push({ kind: 'message', value: message, index: messageIndex });
+    for (const item of anchored.get(message) ?? []) result.push({ kind: 'work', value: item });
+  }
+  for (; index < pending.length; index++) result.push({ kind: 'work', value: pending[index]! });
+  return result;
 }
 
 /** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
@@ -255,7 +323,7 @@ export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlan
 }
 
 export function canSkipBotGroupPlanStep(plan: BotGroupPlanView, step: BotGroupPlanStepView): boolean {
-  if (plan.kind !== 'talk' || plan.canManage !== true || plan.currentStep === null) return false;
+  if (plan.kind !== 'talk' || plan.canManage !== true || step.canStop !== true || plan.currentStep === null) return false;
   if (plan.supportsPendingSkip === true && ['running', 'waiting'].includes(plan.status)
     && step.position > plan.currentStep && step.status === 'pending') return true;
   return plan.status === 'running' && step.position === plan.currentStep

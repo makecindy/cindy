@@ -120,6 +120,16 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
 }
 
 describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
+  // The desktop assembly does not supply the registry-presence port. This allowlisted,
+  // unregistered channel reaches the original IPC dispatcher in the existing unit fixture.
+  it('preserves the desktop IPC error when the local handler is missing', async () => {
+    const channel = 'model-groups:get';
+    expect(await runInvoke(SRC, { channel, args: [] })).toEqual({
+      ok: false,
+      error: { code: 'IPC_ERROR', message: `[NOT_FOUND] no local IPC handler for channel '${channel}'` },
+    });
+  });
+
   // #7117:生产 runInvoke 必须把 SSH 的 POSIX 路径交给对应主机,而非 Windows fs。
   // 既有覆盖只有本机路径;最小失败输入为不存在于本机的路径 + remoteHostId。
   // tier:unit,SSH/数据库用内存依赖,dispatch 与目录守卫使用真实生产入口。
@@ -304,7 +314,7 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   // 远程 worktree:worktree:create 的 baseRepo 与 create-session 的 workingDir 同口径收敛
   // (决定在被控端哪个仓库下跑 git worktree add)。
-  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 是真实存在目录 → 放行到 handler', async (channel) => {
+  it.each(['worktree:create', 'worktree:sync-branch', 'worktree:checkout'])('%s 的 baseRepo 是真实存在目录 → 放行到 handler', async (channel) => {
     const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
       channel,
@@ -314,7 +324,7 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async (channel) => {
+  it.each(['worktree:create', 'worktree:sync-branch', 'worktree:checkout'])('%s 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async (channel) => {
     const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
       channel,

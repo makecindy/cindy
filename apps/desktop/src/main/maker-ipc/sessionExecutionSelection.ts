@@ -3,7 +3,7 @@ import { resolveSendToSessionExecutionConfig, type SendToSessionExecutionConfig 
 
 export type SessionExecutionSelection = SendToSessionExecutionConfig;
 export interface SessionModelSelection {
-  agentKind?: 'cc' | AgentKind;
+  agentKind?: 'cc' | AgentKind | 'acp';
   model?: string;
   providerId?: string | null;
   effort?: string;
@@ -23,6 +23,7 @@ export function resolveSessionExecutionSelection(params: {
   locationChanged?: boolean;
 }): SessionExecutionSelection {
   const { selection, source, providerRouting } = params;
+  if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
   const model = selection.model ?? source?.model;
   const recover = '请在任务中重新选择模型，或在「设置 → 模型供应商」修复连接后重试。';
@@ -61,20 +62,24 @@ export interface SessionExecutionResolverDeps {
   hasCindyAiApiKey(): boolean;
 }
 
-/** sourceSessionId is Host-resolved from an authenticated call, never plugin-supplied. */
+/**
+ * Only the Host supplies a caller's session ID. Without one, undefined permits the
+ * new-task draft and null resolves the selection from the model catalog alone.
+ */
 export function createSessionExecutionResolver(deps: SessionExecutionResolverDeps) {
-  return async (selection: Selection, sourceSessionId?: string,
+  return async (selection: Selection, sourceSessionId?: string | null,
     existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean | 'ultrafast' },
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
     assertOwner();
+    if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
     let source: SessionExecutionSelection | undefined;
     if (existing) {
       if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
         effort: (existing.effort || undefined) as Effort | undefined, fastMode: (existing.fastMode === 'ultrafast' ? 'ultrafast' : existing.fastMode === true) };
-    } else if (!(selection.agentKind && selection.model && selection.providerId)) {
+    } else if (sourceSessionId !== null && !(selection.agentKind && selection.model && selection.providerId)) {
       source = sourceSessionId ? await deps.readCaller(sourceSessionId) : deps.readDefault();
       assertOwner();
     }

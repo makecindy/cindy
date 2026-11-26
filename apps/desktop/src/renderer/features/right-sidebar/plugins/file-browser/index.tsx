@@ -2,7 +2,7 @@
  * file-browser plugin — RSB 内嵌的精简文件浏览器(对标设计稿 F2 双 Pane)。
  *
  * 设计要点:
- *   - **state 最小化**:`{ selectedFilePath: string | null }`。多文件 tabs / tree
+ *   - **state 最小化**:记录当前相对目录和选中的文件。多文件 tabs / tree
  *     width 等 doc-mode 才有的丰富功能 v1 不引入,避免在右栏狭窄空间内堆 chrome
  *     (plan 5.1 明确 "嵌入式版精简")。
  *   - **selection 不走 URL**:URL 属于会话主路由,plugin 不能污染。selectedFilePath
@@ -18,6 +18,7 @@
  */
 
 import { lazy } from 'react';
+import { pickFileIcon } from '@/components/ui/file-type-icon';
 import { FolderTree } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -30,8 +31,12 @@ const FileBrowserBody = lazy(() =>
 
 /** plugin state shape — 跟 store 序列化结构一致,默认 JSON identity 即可 hydrate。 */
 export interface FileBrowserState {
-  /** 当前选中的 workdir-relative POSIX 路径;null = 没选(渲染空提示)。 */
+  /** 当前选中的 workdir-relative POSIX 路径;null = 显示目录。 */
   selectedFilePath: string | null;
+  /** Keep the chosen HTML view when a guest is evicted or hosted in another window. */
+  previewHtmlPath?: string | null;
+  /** Workdir-relative location retained across task switches and window handoff. */
+  currentDirectory?: string;
   /**
    * 一次性目录定位请求(聊天目录 chip → openDirInSidebarFileBrowser 写入):
    * FileBrowserBody 消费后即清空。hydrateState 必须透传(TabBody 渲染前 state
@@ -76,9 +81,9 @@ function FileBrowserTabPillTitle({
   return <>{basename}</>;
 }
 
-/** TabPill 上的图标 —— 固定 FolderTree(无须随 selection 切换)。 */
-function FileBrowserTabPillIcon() {
-  return <FolderTree size={13} />;
+function FileBrowserTabPillIcon({ state }: { state: FileBrowserState }) {
+  const Icon = state.selectedFilePath ? pickFileIcon(state.selectedFilePath) : FolderTree;
+  return <Icon size={13} />;
 }
 
 const plugin: TabKindPlugin<FileBrowserState> = {
@@ -95,7 +100,7 @@ const plugin: TabKindPlugin<FileBrowserState> = {
   TabPillIcon: FileBrowserTabPillIcon,
   TabBody: FileBrowserBody,
   defaultState: () => ({ ...DEFAULT_STATE }),
-  // hydrateState:做最小兼容 —— 收 unknown,挑出 selectedFilePath 字段,其余忽略。
+  // 只还原页签使用的字段。旧记录缺少目录时，正文从所选文件恢复父目录。
   // 后续 schema 演进时新字段缺失走 default,旧字段忽略,不会因为持久化记录格式漂移
   // 导致组件 crash。
   hydrateState: (raw): FileBrowserState => {
@@ -104,6 +109,8 @@ const plugin: TabKindPlugin<FileBrowserState> = {
     const path = obj.selectedFilePath;
     return {
       selectedFilePath: typeof path === 'string' ? path : null,
+      ...(typeof path === 'string' && obj.previewHtmlPath === path ? { previewHtmlPath: path } : {}),
+      ...(typeof obj.currentDirectory === 'string' ? { currentDirectory: obj.currentDirectory } : {}),
       // 目录定位请求透传(见字段注释);形状不合法按"无请求"。
       ...(typeof obj.revealDirPath === 'string' && obj.revealDirPath
         ? { revealDirPath: obj.revealDirPath }

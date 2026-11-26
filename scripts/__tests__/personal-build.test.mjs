@@ -259,7 +259,10 @@ test('local plugins preserve source versions and compatibility instead of relabe
   assert.equal(packageHash(src), packageHash(dest));
   assert.equal(JSON.parse(fs.readFileSync(path.join(src, 'ghost.json'))).version, '1.2.0');
   put(path.join(dest, 'main.js'), 'changed'); assert.notEqual(packageHash(dest), copied.sha256);
-  fs.symlinkSync(path.join(root, 'dest', 'main.js'), path.join(src, 'link.js'));
+  // Windows file symlinks require an elevated token or Developer Mode. A
+  // junction exercises the same non-regular-entry rejection without either.
+  if (process.platform === 'win32') fs.symlinkSync(dest, path.join(src, 'link'), 'junction');
+  else fs.symlinkSync(path.join(dest, 'main.js'), path.join(src, 'link.js'));
   assert.throws(() => copyPlugin('sample', src, path.join(root, 'rejected'), {}), /non-regular/);
   assert.equal(fs.existsSync(path.join(root, 'rejected')), false);
 });
@@ -453,4 +456,23 @@ test('each preparation captures a new selection; activation checks the fixed sna
  assert.throws(()=>verifyUpgradeSnapshot(f.config,changed),/differs from upgrade snapshot/);
  const old=structuredClone(report);delete old.upgradeSnapshot;
  assert.throws(()=>verifyUpgradeSnapshot(f.config,old),/Missing upgrade snapshot/);
+});
+
+test('browser seeds build native hosts before hashing and reject incomplete packages', t => {
+  const root = tmp(t), source = path.join(root, 'my-browser');
+  put(path.join(source, 'ghost.json'), { id: 'my-browser', version: '1.0.0', browserExtension: { nativeHost: { binary: 'native-host/bin' } } });
+  assert.throws(() => copyPlugin('my-browser', source, path.join(root, 'incomplete')), /Missing Cindy Chrome native host/);
+  put(path.join(root, 'scripts/build-browser-native.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    for (const os of ['darwin', 'linux', 'win32']) for (const arch of ['x64', 'arm64']) {
+      const dir = path.join(process.argv[3], os + '-' + arch);
+      fs.mkdirSync(dir, {recursive:true});
+      fs.writeFileSync(path.join(dir, 'cindy-browser-native' + (os === 'win32' ? '.exe' : '')), 'fixture');
+    }
+  `);
+  const dest = path.join(root, 'complete');
+  const entry = copyPlugin('my-browser', source, dest, { repositoryRoot: root });
+  assert.equal(entry.sha256, packageHash(dest));
+  assert.equal(fs.existsSync(path.join(source, 'native-host/bin')), false);
 });

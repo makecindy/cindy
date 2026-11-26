@@ -35,7 +35,17 @@
   "retryAccess": "Retry Access",
   "recheck": "Check Again",
   "deviceRemovedTitle": "Device removed",
-  "deviceRemovedHint": "Sign out and sign in again to rejoin the device list.",
+  "deviceRemovedHint": "This phone was removed from your account. Tap “Rejoin” to bring it back.",
+  "rejoin": {
+    "action": "Rejoin",
+    "busy": "Rejoining",
+    "doneTitle": "Rejoined",
+    "agentNetUnavailable": "The Agent-Net service can’t restore this phone yet, so it connects without Agent-Net for now.",
+    "failedTitle": "Couldn’t rejoin",
+    "failed": "Check your network and try again.",
+    "unsupported": "The service doesn’t support rejoining yet. Sign out and sign in again.",
+    "agentNetUnsupported": "The Agent-Net service doesn’t support rejoining yet. Turn off “Only use encrypted connections” to bring this phone back without Agent-Net."
+  },
   "authFailedTitle": "Sign-in expired",
   "authFailedHint": "Your sign-in has expired. Sign out and sign in again.",
   "replacedTitle": "Connection replaced",
@@ -65,6 +75,7 @@
     "noCredentials": "{{agent}} can't be used because it isn't signed in on the computer. Sign in through {{appName}} on the computer under Settings → Model Providers, then try again.",
     "noEncryption": "{{agent}} can't be used because secure system storage on the computer is unavailable. Check Keychain on macOS or account encryption on Windows, then restart {{appName}} on the computer.",
     "proxyNotReady": "{{agent}} isn't ready on the computer yet. Try again shortly; if this continues, restart {{appName}} on the computer.",
+    "sharedLinkUnavailable": "{{agent}} can’t be used right now: Codex is signed in on the computer, but {{appName}} can’t reach that login (the link to it can’t be created; on Windows a standard account usually can’t create it). Make sure {{appName}} on the computer may create that link (on Windows, run it once as administrator or turn on developer mode), then try again.",
     "default": "{{agent}} can't be used because its computer sign-in is unavailable. Sign in again through {{appName}} on the computer under Settings → Model Providers. ({{reason}})"
   },
   "remoteError": {

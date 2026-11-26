@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import { createSchedulerRemoteDeps } from '../schedulerDevices.js';
+import { getPluginHostToolCaller, runPluginHostToolCall } from '../hostToolCaller.js';
 
 type Invoke = (
   deviceId: string,
@@ -27,6 +28,25 @@ function setup(invoke = vi.fn<Invoke>(async () => ({ ok: true, result: [] }))) {
 }
 
 describe('desktop scheduler cross-device transport', () => {
+  // Unit, #9801: account-only preSend allowed a plugin revoked while connecting
+  // to send a destructive operation. Preserve the real caller frame and final fence.
+  it('refuses a remote write revoked while the connection is pending', async () => {
+    let enabled = true, connect!: () => void;
+    const waiting = new Promise<void>(resolve => { connect = resolve; });
+    const sent = vi.fn();
+    const invoke = vi.fn<Invoke>(async (_device, _channel, _args, options) => {
+      await waiting; options?.preSend?.(); sent(); return { ok: true, result: null };
+    });
+    const remote = createSchedulerRemoteDeps({ invoke, captureAccess: () => () => {}, listDevices: async () => [],
+      captureInvocationGuard: () => getPluginHostToolCaller()?.assertCurrent });
+    const result = runPluginHostToolCall({ caller: { kind: 'plugin', pluginId: 'reader', dataOwnerId: 'owner', ownerGeneration: 1 },
+      server: 'cindy_scheduler', tool: 'schedule_delete', argsJson: '["schedule"]',
+      assertCurrent: () => { if (!enabled) throw new Error('PERMISSION_DENIED'); } }, () => remote.invoke('other', 'delete', ['schedule']));
+    enabled = false; connect();
+    await expect(result).rejects.toThrow('PERMISSION_DENIED');
+    expect(sent).not.toHaveBeenCalled();
+  });
+
   // PR #8470 / discussion_r4488542876, unit: remote get skipped the local
   // webhook-status callback. Existing get coverage only used plain schedules.
   // The adapter must return the receiver URL, report failed reads, and reject
@@ -114,6 +134,28 @@ describe('desktop scheduler cross-device transport', () => {
       ...(supported && trigger ? ['maker:schedule:webhook-receiver'] : []),
       ...(ok ? [`maker:schedule:${op}`] : []),
     ]);
+  });
+
+  // PR #11881 review r4661510132: an older desktop drops the unknown modelGroup and still reports success, so the
+  // task silently runs the concrete model. Minimal input: create/update carrying a mode against a target with and
+  // without the capability; clearing the mode needs no capability.
+  it.each([
+    { op: 'create' as const, modelGroup: 'daily', supported: true, ok: true },
+    { op: 'create' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: 'daily', supported: false, ok: false },
+    { op: 'update' as const, modelGroup: null, supported: false, ok: true },
+  ])('requires the target to store a model group: $op/$modelGroup/$supported', async ({ op, modelGroup, supported, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsRemoteScheduleDirectoryCheck: true, supportsScheduleModelGroup: supported } : { id: 's1' },
+    }));
+    const patch = { modelGroup };
+    const result = await s.remote.invoke('mac', op, op === 'create' ? [patch] : ['s1', patch]);
+    expect(result.ok).toBe(ok);
+    if (!ok) expect(result).toMatchObject({ code: 'REMOTE_UNSUPPORTED' });
+    const channels = s.invoke.mock.calls.map(([, channel]) => channel);
+    if (ok) expect(channels).toContain(`maker:schedule:${op}`);
+    else expect(channels).not.toContain(`maker:schedule:${op}`);
   });
 
   it('does not write after ownership changes during the webhook receiver check', async () => {

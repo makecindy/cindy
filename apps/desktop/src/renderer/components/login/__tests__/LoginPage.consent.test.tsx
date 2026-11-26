@@ -22,7 +22,7 @@ const loginHook = vi.hoisted(() => ({
     dispatch: vi.fn(async () => true),
     dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
-    enterLocalMode: vi.fn(async (): Promise<void> => undefined),
+    enterLocalMode: vi.fn(async (): Promise<void> => undefined) as (() => Promise<void>) | null,
   },
 }));
 
@@ -241,6 +241,24 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
       identifier: '13800138000',
       captchaToken: undefined,
     });
+  });
+
+  // #10601, unit: real LoginPage; existing consent cases only cover available
+  // local mode. An unavailable action must hide both panel and escape entries.
+  it('hides local entry across login states when local mode is unavailable', async () => {
+    for (const state of [
+      null,
+      { step: 'entry' },
+      await identifierState('providers:cn-social'),
+      { step: 'error', code: 'AUTH_REQUEST_FAILED', recoverTo: 'identifier' },
+    ] as const) {
+      const view = mount(state as AuthFlowState | null, { enterLocalMode: null });
+      expect(screen.queryByTestId('login-skip-entry')).toBeNull();
+      expect(screen.queryByTestId('login-local-mode')).toBeNull();
+      expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+      view.unmount();
+    }
+    expect(enterLocalMode).not.toHaveBeenCalled();
   });
 
   // 2026-07-29 拍板(推翻同年 07-27「跳过登录免协议门」):不登录账号也是在用 Cindy

@@ -973,7 +973,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
-  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir));
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir) || project.sessions.some(session => !!session.companion?.taskProjectDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;
@@ -1336,7 +1336,7 @@ function SearchResultRow({
                 setExpanded(true);
               }}
               className={cn(
-                'flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-left',
+                'flex w-full items-center rounded-lg border border-transparent px-2 py-1.5 text-left',
                 'text-10 leading-none text-[var(--text-tertiary)]',
                 'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text-primary)]',
               )}
@@ -1372,7 +1372,7 @@ function SearchHitRow({
         onSelect();
       }}
       className={cn(
-        'flex w-full items-start rounded-md border border-transparent px-2 py-1.5 text-left',
+        'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',
         'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)]',
       )}
     >

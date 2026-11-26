@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Activity, ArrowDown, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip } from '@/components/ui/tooltip';
+import { GenerationTraceChart } from '@/components/status/GenerationTraceChart';
+import { RunningTokenCount } from './RunningTokenCount';
 import { formatRecentOutputTokenRate, formatRunningTokenCount } from './lib/runningTokenUsage';
 import {
   emptyRateHistory,
@@ -14,6 +16,7 @@ import {
   type RateHistory,
   type TokenSpeedSnapshot,
 } from './lib/runningTokenRateHistory';
+import { formatThinkingShare } from '@cindy/maker-shared/usage-format';
 
 export function useRunningTokenRateHistory(input: {
   /** 会话身份：用于进程内缓存速度历史，切任务再切回不清零（重启应用清零）。 */
@@ -59,12 +62,14 @@ export function useRunningTokenRateHistory(input: {
       Math.max(0, timestamp + RATE_SAMPLE_FRESH_MS - Date.now()));
     return () => clearTimeout(timer);
   }, [history.latestSampleAt, history.latestRate]);
-  const visibleHistory = history.latestSampleAt === undefined ||
-    Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
-    ? { ...history, latestRate: null } : history;
-  return startedAt === null || history.startedAt === startedAt
-    ? visibleHistory
+  // The panel keeps the turn's last measured reading for as long as the turn is shown;
+  // only the status bar treats a reading as live, and only for a minute after it was taken.
+  const current = startedAt === null || history.startedAt === startedAt
+    ? history
     : { ...history, startedAt, baseline: null, latestRate: null };
+  const latestRateFresh = current.latestRate !== null && history.latestSampleAt !== undefined &&
+    Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS;
+  return { ...current, latestRateFresh };
 }
 
 export function RunningTokenRatePopover({
@@ -72,15 +77,18 @@ export function RunningTokenRatePopover({
   rate,
   rateText,
   isTokenCount = false,
+  tokenUsage,
   averageRate,
   outputTokens,
   history,
   onPinnedChange,
 }: {
-  elapsedText: string;
+  elapsedText: string | null;
   rate: string | null;
   rateText: string | null;
   isTokenCount?: boolean;
+  /** Authoritative count; only the visible token fallback interpolates it. */
+  tokenUsage?: number;
   averageRate: string | null;
   outputTokens: number;
   history: RateHistory;
@@ -92,14 +100,16 @@ export function RunningTokenRatePopover({
   useEffect(() => onPinnedChange?.(open), [open, onPinnedChange]);
   const samples = history.samples;
   const firstTime = samples[0]?.durationMs ?? 0;
-  const span = (samples.at(-1)?.durationMs ?? 0) - firstTime;
-  const ceiling = Math.max(1, ...samples.map((sample) => sample.rate));
-  const points = samples.map((sample) => ({
-    x: span > 0 ? 4 + ((sample.durationMs - firstTime) / span) * 108 : 112,
-    y: 44 - (sample.rate / ceiling) * 36,
-  }));
-  const line = points.map((point, index) => `${index ? 'L' : 'M'}${point.x},${point.y}`).join(' ');
-  const last = points.at(-1);
+  const lastTime = samples.at(-1)?.durationMs ?? 0;
+  // A request finishes a moment after the last reading taken while it streamed: keep its mark on the chart.
+  const marks = (history.marks ?? []).map((mark) =>
+    mark.durationMs > lastTime ? { ...mark, durationMs: lastTime } : mark);
+  // This turn's reasoning as a share of its output so far; a new turn starts without one.
+  const thinkingShare = history.markStartedAt === history.startedAt
+    ? formatThinkingShare(history.turnThinkingTokens ?? -1, history.turnThinkingOutputTokens ?? 0)
+    : null;
+  const readingLabel = history.latestKind === 'request' && rate !== null
+    ? t('chat.runningStatus.lastRequestRate') : t('chat.runningStatus.currentRate');
   const card = (
     <div
       aria-description={t('chat.runningStatus.tokenRateDescription')}
@@ -109,7 +119,7 @@ export function RunningTokenRatePopover({
         <div className="col-start-1 row-start-1 min-w-0 self-center">
           <div className="mb-1 flex items-center gap-1.5 text-12 text-[var(--text-secondary)]">
             <Activity size={14} aria-hidden="true" />
-            {t('chat.runningStatus.currentRate')}
+            {readingLabel}
           </div>
           <div className="flex items-baseline gap-1.5 tabular-nums">
             <span className="text-28 font-medium leading-none">{rate ?? '—'}</span>
@@ -118,28 +128,25 @@ export function RunningTokenRatePopover({
             </span>
           </div>
         </div>
-        <svg
-          viewBox="0 0 120 48"
-          className="col-start-2 row-start-1 h-12 w-32 self-center text-[var(--text-primary)]"
-          role="img"
-          aria-label={t('chat.runningStatus.rateHistory')}
+        <GenerationTraceChart
+          points={samples.map((sample) => ({ at: sample.durationMs, rate: sample.rate, settled: sample.kind === 'request' }))}
+          marks={marks}
+          fromMs={firstTime}
+          toMs={lastTime}
+          width={120}
+          speedHeight={44}
+          strokeHeight={14}
+          keepSpeedHeight
+          fixedSize
+          label={t('chat.runningStatus.rateHistory')}
+          className="col-start-2 row-start-1 self-center justify-self-center"
+        />
+        <dl
+          className={`col-span-2 col-start-1 row-start-2 grid gap-2 text-12 tabular-nums [&>div]:flex-col [&>div]:items-start [&>div]:gap-1 ${
+            // Four figures in the width three had: columns take what their text needs, and labels wrap at spaces.
+            thinkingShare === null ? 'grid-cols-3' : 'grid-cols-[repeat(4,minmax(0,auto))] justify-between'
+          }`}
         >
-          <path d="M4 44H112" stroke="currentColor" opacity="0.12" />
-          {points.length > 1 && (
-            <>
-              <path d={`${line} L112,44 L${points[0].x},44 Z`} fill="currentColor" opacity="0.08" />
-              <path
-                d={line}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-            </>
-          )}
-          {last && <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" />}
-        </svg>
-        <dl className="col-span-2 col-start-1 row-start-2 grid grid-cols-3 gap-2 text-12 tabular-nums [&>div]:flex-col [&>div]:items-start [&>div]:gap-1">
           <div className="flex items-center gap-2">
             <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.averageRate')}</dt>
             <dd className="font-medium">
@@ -164,12 +171,18 @@ export function RunningTokenRatePopover({
                 : '—'}
             </dd>
           </div>
+          {thinkingShare !== null && (
+            <div className="flex items-center gap-2">
+              <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.thinkingShare')}</dt>
+              <dd className="font-medium">{thinkingShare}</dd>
+            </div>
+          )}
         </dl>
       </div>
     </div>
   );
   const surface =
-    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]';
+    `w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]`;
   return (
     <Popover
       open={open}
@@ -194,19 +207,22 @@ export function RunningTokenRatePopover({
                   setMode((current) => (current === 'dismissed' ? 'idle' : current))
                 }
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
-                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
                 aria-label={
-                  rateText
-                    ? `${elapsedText} · ${isTokenCount ? rateText : `${t('chat.runningStatus.currentRate')}: ${rateText}`}`
-                    : elapsedText
+                  [elapsedText, rateText && (isTokenCount ? rateText : `${readingLabel}: ${rateText}`)]
+                    .filter(Boolean).join(' · ') || readingLabel
                 }
               >
-                <span>{elapsedText}</span>
+                {elapsedText && <span>{elapsedText}</span>}
                 {rateText && (
                   <>
-                    <span aria-hidden="true">&middot;</span>
+                    {elapsedText && <span aria-hidden="true">&middot;</span>}
                     {isTokenCount && <ArrowDown size={13} aria-hidden="true" />}
-                    <span>{rateText}</span>
+                    <span>
+                      {isTokenCount && tokenUsage !== undefined
+                        ? <RunningTokenCount tokenUsage={tokenUsage} />
+                        : rateText}
+                    </span>
                   </>
                 )}
               </button>

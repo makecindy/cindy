@@ -22,6 +22,7 @@ import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetai
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
 import { resolveAuth } from './credentials.js';
+import type { AgentUnavailableReason } from './sshAuthentication.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
 
 export interface RemoteHostDeps {
@@ -39,6 +40,28 @@ export interface RemoteHostDeps {
   hostKeys?: HostKeyStore;
   /** Localized host-key diagnostics; the standalone package defaults to English. */
   formatHostKeyError?: (details: HostKeyErrorDetails) => string;
+  /** Local SSH key-agent diagnostics, shared by status rows and connect errors. */
+  formatAgentUnavailableError?: (reason?: AgentUnavailableReason) => string;
+}
+
+function agentUnavailableError(
+  cause: Error,
+  format?: RemoteHostDeps['formatAgentUnavailableError'],
+  reason?: AgentUnavailableReason,
+): Error {
+  const defaultMessage = reason === 'environment-unset'
+    ? 'The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.'
+    : reason === 'endpoint-empty'
+      ? 'IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.'
+      : reason === 'endpoint-unavailable'
+        ? 'The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint.'
+        : 'The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key, then retry. See Manage keys for troubleshooting.';
+  const message = format?.(reason) ?? defaultMessage;
+  return Object.assign(new Error(message), {
+    code: 'SSH_AGENT_UNAVAILABLE',
+    agentUnavailableReason: reason,
+    cause,
+  });
 }
 
 export interface HostKeyErrorDetails {
@@ -55,7 +78,16 @@ const KEEPALIVE_COUNT_MAX = 3;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 
-export type StatusListener = (snapshot: HostSnapshot) => void;
+/** Per-call policy. Default keeps existing explicit-connection TOFU behavior. */
+export interface ConnectOpts {
+  allowFirstTrust?: boolean;
+}
+
+function unverifiedHostError(): Error {
+  return Object.assign(new Error('[SSH_HOST_UNVERIFIED]'), { code: 'SSH_HOST_UNVERIFIED' });
+}
+
+export type StatusListener = (snapshot: HostSnapshot, hostKeyRejection?: Error) => void;
 
 export interface ExecOpts {
   /** stdin payload; channel is `end()`-ed after the write. */
@@ -206,6 +238,40 @@ export interface ExecStreamHandle {
    * which sends SIGHUP via SSH session teardown.
    */
   kill(signal?: string): void;
+}
+
+function errnoFields(err: unknown): { code?: string; address?: string } {
+  for (let current: unknown = err, depth = 0; current && typeof current === 'object' && depth < 3; depth += 1) {
+    const row = current as { code?: unknown; address?: unknown; cause?: unknown };
+    if (typeof row.code === 'string') {
+      return { code: row.code, ...(typeof row.address === 'string' ? { address: row.address } : {}) };
+    }
+    current = row.cause;
+  }
+  return {};
+}
+
+function isPrivateLanAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  if (/^(10\.|192\.168\.|169\.254\.)/.test(address)) return true;
+  const second = /^172\.(\d+)\./.exec(address);
+  if (second && Number(second[1]) >= 16 && Number(second[1]) <= 31) return true;
+  return /^(fe80|fc|fd)/i.test(address);
+}
+
+/**
+ * Log-only classification (no user-facing text). macOS reports both an
+ * asleep/powered-off LAN host and a denied Local Network privacy permission as
+ * EHOSTUNREACH ("No route to host"); when even the gateway fails the same way,
+ * the app's Local Network permission is the likely cause.
+ */
+export function connectFailureHint(err: unknown): { hint?: string } {
+  const { code, address } = errnoFields(err);
+  if ((code === 'EHOSTUNREACH' || code === 'ENETUNREACH') && process.platform === 'darwin'
+    && (address === undefined || isPrivateLanAddress(address))) {
+    return { hint: 'lan-unreachable: host asleep/offline, or macOS Local Network permission denied for this app' };
+  }
+  return {};
 }
 
 /**
@@ -368,12 +434,25 @@ export class RemoteHost {
   private connectionEpoch = 0;
   /** The currently running connect attempt, including reconnect attempts. */
   private inFlightConnect: Promise<void> | null = null;
+  // Captured per attempt, never loosened by a concurrent caller. Reconnects
+  // inherit the initiating policy; explicit later connects may choose anew.
+  private connectionTrust = { allowFirstTrust: true, trustedOnFirstUse: false };
+  private hostKeyUnverified = false;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
   private userDisconnected = false;
+  /**
+   * A previously ready connection exhausted its bounded automatic reconnect.
+   * It stays failed (no background loop) until the next use, or one more
+   * bounded round after the system network changes / the machine wakes.
+   */
+  private networkRecoveryArmed = false;
+  /** This connect cycle reached ready at least once (a probe that never connected is not recovered). */
+  private readySinceConnect = false;
   private events = new EventEmitter();
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
   private readonly formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  private readonly formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
   /**
    * Set by the host-key verifier when it rejects a connect, so onError can
    * surface an actionable message instead of ssh2's opaque handshake error.
@@ -395,6 +474,7 @@ export class RemoteHost {
     this.log = deps.logger;
     this.hostKeys = deps.hostKeys;
     this.formatHostKeyError = deps.formatHostKeyError;
+    this.formatAgentUnavailableError = deps.formatAgentUnavailableError;
   }
 
   get config(): HostConfig {
@@ -442,19 +522,35 @@ export class RemoteHost {
    * Open the connection. Idempotent — if already ready/connecting, returns
    * the in-flight promise. Throws on definitive failure (auth, network).
    */
-  async connect(): Promise<void> {
+  async connect(options: ConnectOpts = {}): Promise<void> {
     if (this.status === 'ready') return;
     if (this.status === 'connecting' || this.status === 'authenticating') {
       // Share the actual in-flight attempt instead of waiting only for a
       // future status event. A disconnect can invalidate an attempt after it
       // has emitted its terminal status; joining the Promise guarantees that
       // every caller still receives the cancellation/error outcome.
-      if (this.inFlightConnect) {
-        await this.inFlightConnect;
-      } else {
-        await this.waitForTerminal();
+      const trust = this.connectionTrust;
+      try {
+        if (this.inFlightConnect) {
+          await this.inFlightConnect;
+        } else {
+          await this.waitForTerminal();
+        }
+      } catch (error) {
+        // An explicit connection joining a strict probe must retain its own
+        // normal TOFU path, without upgrading the probe's in-flight verifier.
+        if (options.allowFirstTrust !== false && !trust.allowFirstTrust && !this.userDisconnected
+            && (error as { code?: string }).code === 'SSH_HOST_UNVERIFIED') {
+          return this.connect(options);
+        }
+        throw error;
       }
-      if (this.getStatus() === 'ready') return;
+      if (this.getStatus() === 'ready') {
+        // A simultaneously requested explicit connection may create trust,
+        // but an automatic reader cannot consume that first-trust handshake.
+        if (options.allowFirstTrust === false && trust.trustedOnFirstUse) throw unverifiedHostError();
+        return;
+      }
       // Prefer the last resolveAuth error so the structured `.code` survives
       // (classifyConnectFailure needs it); fall back to the string otherwise.
       if (this.lastAuthError) throw this.lastAuthError;
@@ -467,8 +563,27 @@ export class RemoteHost {
     // status/channel 事件。必须在 doConnect() 前显式清掉 timer 才安全。
     this.clearReconnectTimer();
     this.userDisconnected = false;
+    this.networkRecoveryArmed = false;
+    this.readySinceConnect = false;
     this.reconnectAttempts = 0;
-    await this.startConnectAttempt();
+    await this.startConnectAttempt(options.allowFirstTrust !== false);
+  }
+
+  /**
+   * One more bounded reconnect round for a connection that was ready, dropped
+   * and exhausted its automatic retries. Called on a system network change or
+   * wake; never for user-disconnected, auth or host-key failures, and at most
+   * once per exhaustion (a new exhaustion re-arms it). Returns true if started.
+   */
+  retryAfterNetworkChange(): boolean {
+    if (!this.networkRecoveryArmed || this.status !== 'failed' || this.userDisconnected || this.hostKeyError) {
+      return false;
+    }
+    this.networkRecoveryArmed = false;
+    this.reconnectAttempts = 0;
+    this.log.info('ssh retrying after network change', { id: this.id });
+    this.scheduleReconnect();
+    return true;
   }
 
   /**
@@ -477,6 +592,7 @@ export class RemoteHost {
    */
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
+    this.networkRecoveryArmed = false;
     this.connectionEpoch += 1;
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
@@ -1110,6 +1226,7 @@ export class RemoteHost {
     hostKey: Buffer,
     storeKey: string,
     isCurrentAttempt: () => boolean,
+    trust: { allowFirstTrust: boolean; trustedOnFirstUse: boolean },
   ): Promise<boolean> {
     // A cancelled client must not even touch the shared TOFU store. In
     // particular, updateConfig() may already have published a new endpoint
@@ -1150,6 +1267,11 @@ export class RemoteHost {
     const decision = decideHostKey(stored, presented);
     if (decision === 'match') return true;
     if (decision === 'trust-new') {
+      if (!trust.allowFirstTrust) {
+        this.hostKeyUnverified = true;
+        this.hostKeyError = unverifiedHostError().message;
+        return false;
+      }
       if (!isCurrentAttempt()) return false;
       try {
         await store.set(storeKey, presented, isCurrentAttempt);
@@ -1170,6 +1292,7 @@ export class RemoteHost {
         return false;
       }
       if (!isCurrentAttempt()) return false;
+      trust.trustedOnFirstUse = true;
       this.log.info('ssh host key trusted on first use', {
         id: this.id,
         host: storeKey,
@@ -1215,6 +1338,7 @@ export class RemoteHost {
   }
 
   private async doConnect(): Promise<void> {
+    const trust = this.connectionTrust;
     const attemptEpoch = ++this.connectionEpoch;
     const isCurrentAttempt = (): boolean => attemptEpoch === this.connectionEpoch;
     const cancelledError = (): Error => new Error('SSH connection attempt cancelled');
@@ -1240,6 +1364,7 @@ export class RemoteHost {
     };
     this.setStatus('connecting');
     this.hostKeyError = null;
+    this.hostKeyUnverified = false;
     this.hostKeyMismatch = undefined;
     this.lastAuthError = null;
 
@@ -1248,13 +1373,17 @@ export class RemoteHost {
       auth = await resolveAuth(attemptConfig);
     } catch (err) {
       if (!isCurrentAttempt()) throw cancelledError();
-      const msg = (err as Error).message;
+      const authError = (err as { code?: string }).code === 'SSH_AGENT_UNAVAILABLE'
+        ? agentUnavailableError(err as Error, this.formatAgentUnavailableError,
+          (err as Error & { agentUnavailableReason?: AgentUnavailableReason }).agentUnavailableReason)
+        : err;
+      const msg = (authError as Error).message;
       this.lastError = msg;
       // Keep the full error so concurrent connect() joiners can rethrow it
       // with its structured `.code` intact (see lastAuthError + connect()).
-      this.lastAuthError = err instanceof Error ? err : new Error(msg);
+      this.lastAuthError = authError instanceof Error ? authError : new Error(msg);
       this.setStatus('failed');
-      throw err;
+      throw authError;
     }
 
     // disconnect() may have run while local credentials were being resolved.
@@ -1280,7 +1409,7 @@ export class RemoteHost {
           verify(false);
           return;
         }
-        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt).then(
+        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt, trust).then(
           (valid) => verify(isCurrentAttempt() ? valid : false),
           () => verify(false),
         );
@@ -1299,6 +1428,7 @@ export class RemoteHost {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let agentError: Error | undefined;
 
       const onReady = () => {
         if (settled) return;
@@ -1312,6 +1442,8 @@ export class RemoteHost {
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
         this.reconnectAttempts = 0;
+        this.networkRecoveryArmed = false;
+        this.readySinceConnect = true;
         this.setStatus('ready');
         this.log.info('ssh ready', { id: this.id, auth: auth.label });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
@@ -1329,6 +1461,9 @@ export class RemoteHost {
           return;
         }
         if (settled) {
+          // ssh2 may emit a generic authentication failure after its local
+          // agent error. Keep the actionable diagnosis for this failed attempt.
+          if (agentError) return;
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
           return;
@@ -1339,18 +1474,25 @@ export class RemoteHost {
         // Otherwise swap opaque "All configured authentication methods failed"
         // for a hint pointing at ssh-copy-id / identity file. The host row
         // subtitle + connect-failure toast both surface this verbatim.
+        // ssh2 tags local agent initialization/signing errors itself. Do not
+        // infer this from message text, which may also come from the server.
+        agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
+          ? agentUnavailableError(err, this.formatAgentUnavailableError,
+            attemptConfig.sshAuthentication?.identityAgent !== undefined ? 'endpoint-unavailable' : undefined)
+          : undefined;
         this.lastError = this.hostKeyError
           ? this.hostKeyError
-          : isAuthFailure(err.message)
-            ? authFailureHint(attemptConfig)
-            : err.message;
+          : agentError
+            ? agentError.message
+            : isAuthFailure(err.message)
+              ? authFailureHint(attemptConfig)
+              : err.message;
         this.client = null;
         this.setStatus('failed');
-        this.log.warn('ssh connect failed', { id: this.id, error: err.message });
+        this.log.warn('ssh connect failed', { id: this.id, error: err.message, ...connectFailureHint(err) });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
-        const rejectErr = new Error(this.lastError);
-        if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
+        const rejectErr = agentError ?? this.hostKeyRejection() ?? new Error(this.lastError);
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
         reject(rejectErr);
@@ -1374,6 +1516,9 @@ export class RemoteHost {
           return;
         }
         // Post-ready close — schedule reconnect unless user-initiated.
+        // A local agent failure has already failed this connect attempt; do
+        // not treat its subsequent close as a lost established connection.
+        if (agentError) return;
         this.handlePostReadyClose();
       };
 
@@ -1399,7 +1544,8 @@ export class RemoteHost {
   }
 
   /** Start and register a connect attempt so concurrent callers can join it. */
-  private startConnectAttempt(): Promise<void> {
+  private startConnectAttempt(allowFirstTrust = this.connectionTrust.allowFirstTrust): Promise<void> {
+    this.connectionTrust = { allowFirstTrust, trustedOnFirstUse: false };
     const attempt = this.doConnect();
     this.inFlightConnect = attempt;
     void attempt.then(
@@ -1444,6 +1590,7 @@ export class RemoteHost {
       return;
     }
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.networkRecoveryArmed = this.readySinceConnect;
       this.setStatus('failed');
       return;
     }
@@ -1472,8 +1619,17 @@ export class RemoteHost {
         if (this.userDisconnected || this.hostKeyError) return;
         if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
+        } else if (!(this.lastError && isAuthFailure(this.lastError))) {
+          // Stay failed without a background loop; the next use, a network
+          // change or wake gets one more bounded round.
+          this.networkRecoveryArmed = this.readySinceConnect;
+          this.log.warn('ssh reconnect exhausted', {
+            id: this.id,
+            error: (err as Error).message,
+            ...connectFailureHint(err),
+          });
         } else {
-          this.log.error('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
+          this.log.warn('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
         }
       });
     }, delay);
@@ -1505,7 +1661,15 @@ export class RemoteHost {
     if (this.status === next) return;
     this.status = next;
     this.statusChangedAt = Date.now();
-    this.events.emit('status', this.snapshot());
+    this.events.emit('status', this.snapshot(), next === 'failed' ? this.hostKeyRejection() : undefined);
+  }
+
+  private hostKeyRejection(): Error | undefined {
+    if (this.hostKeyUnverified) return unverifiedHostError();
+    if (this.hostKeyMismatch) {
+      return Object.assign(new Error(this.hostKeyError ?? undefined), { code: 'SSH_HOST_KEY_MISMATCH' });
+    }
+    return undefined;
   }
 
   /** Wait until status leaves {connecting, authenticating}. */

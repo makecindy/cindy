@@ -5,7 +5,7 @@
  *   别人分享给你的，与模型列表里的远程供应商同一个来源，勾选即可加入，不需要再申请；
  * - 「分享链接」：在组所在电脑走现有申请流程；远程管理时引导去那台电脑申请，避免在查看端领用。
  */
-import { Check } from 'lucide-react';
+
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -32,6 +32,7 @@ import {
   type ProviderGroupMember,
 } from '../../../shared/providerGroup';
 import { groupProviderGroupItems } from './providerGroupPresentation';
+import { Checkbox } from '@/components/ui/checkbox';
 
 type Tab = 'available' | 'link';
 
@@ -219,6 +220,9 @@ export function ProviderGroupAddDialog({
               )}
             </div>
             <ProviderShareDialogFooter>
+              <Button variant="secondary" size="md" disabled={saving} onClick={onClose}>
+                {t('providerGroup.add.cancel')}
+              </Button>
               <Button
                 variant="cta"
                 size="md"
@@ -227,9 +231,6 @@ export function ProviderGroupAddDialog({
                 onClick={() => void submit()}
               >
                 {t('providerGroup.add.confirm')}
-              </Button>
-              <Button variant="secondary" size="md" disabled={saving} onClick={onClose}>
-                {t('providerGroup.add.cancel')}
               </Button>
             </ProviderShareDialogFooter>
           </>
@@ -241,11 +242,11 @@ export function ProviderGroupAddDialog({
                 : t('providerGroup.add.linkDescription', { provider: providerName })}
             </p>
             <ProviderShareDialogFooter>
-              <Button variant="cta" size="md" disabled={Boolean(deviceId)} onClick={() => setPasteOpen(true)}>
-                {t('providerGroup.add.pasteLink')}
-              </Button>
               <Button variant="secondary" size="md" onClick={onClose}>
                 {t('providerGroup.add.cancel')}
+              </Button>
+              <Button variant="cta" size="md" disabled={Boolean(deviceId)} onClick={() => setPasteOpen(true)}>
+                {t('providerGroup.add.pasteLink')}
               </Button>
             </ProviderShareDialogFooter>
           </>
@@ -291,17 +292,9 @@ function CandidateRow({
   const lines = [...detail, member ? t('providerGroup.add.alreadyMember') : null].filter(Boolean);
   const content = (
     <>
-      <span
-        aria-hidden="true"
-        className={cn(
-          // 与消息分享选择框同一套圆形勾选(pill 档)。
-          'flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
-          checked
-            ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-            : 'border border-[var(--border-default)]',
-        )}
-      >
-        {checked && <Check size={12} strokeWidth={2.5} />}
+      {/* Shared Checkbox (DESIGN.md §4, B-10) in a 20px slot that aligns nested rows. */}
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        <Checkbox checked={checked} disabled={member || disabled} onChange={onToggle} />
       </span>
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-13 text-[var(--text-primary)]">{title}</span>
@@ -312,17 +305,11 @@ function CandidateRow({
     </>
   );
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      disabled={member || disabled}
+    <label
       data-testid="provider-group-candidate"
-      onClick={onToggle}
       className={cn(
         'flex w-full text-left transition-colors',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
-        member ? 'cursor-default opacity-60' : 'hover:bg-sidebar-item-hover',
+        member ? 'cursor-default opacity-60' : 'cursor-pointer hover:bg-sidebar-item-hover',
         nested ? 'pl-4' : 'items-center gap-3 px-4 py-2.5',
         className,
       )}
@@ -335,6 +322,6 @@ function CandidateRow({
           </span>
         </>
       ) : content}
-    </button>
+    </label>
   );
 }

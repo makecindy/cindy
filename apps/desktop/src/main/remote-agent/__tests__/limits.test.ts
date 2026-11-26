@@ -7,6 +7,10 @@ import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRemoteAgentHost, type RemoteAgentHostDeps } from '../host/runHost';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
+import { createProviderGroupRouter } from '../../provider-group/router';
+import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
+import type { ProviderGroupConfig } from '../../../shared/providerGroup';
 
 let root: string;
 let limits: RemoteAgentLimits;
@@ -68,12 +72,129 @@ function request(runId = randomUUID(), extra: Record<string, unknown> = {}) {
   } } };
 }
 describe('provider computer session limits', () => {
+  it('recovers guest allocation after idle relays fill their shared authenticated controller quota', async () => {
+    limits = { perDevice: 2, total: 3, idleMinutes: 30 };
+    const started = whenStarted(2);
+    const host = makeHost({}, started.onStarted);
+    const first = request(undefined, { relay: 'aaaaaaaaaaaaaaaa' });
+    await host.handle('group-computer', first);
+    await host.handle('group-computer', request(undefined, { relay: 'bbbbbbbbbbbbbbbb' }));
+    await started.promise;
+    const failure = await host.handle('group-computer', request(undefined, { relay: 'cccccccccccccccc' }))
+      .catch(error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ message: expect.stringContaining('[DEVICE_LIMIT]') });
+    expect(host.limitUsage()).toEqual({ total: 2, devices: 1, largestDevice: 2 });
+    const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: ['executor', 'spare'].map(id => ({
+      key: `device:${id}:provider`, kind: 'device', agentDeviceId: id, providerId: 'provider', limit: 4, weight: 1, paused: false,
+    })) };
+    const router = createProviderGroupRouter({ readGroup: () => config, listBindings: () => ({}),
+      isTurnRunning: () => false, now: () => 1_000, random: () => 0,
+      // Only catalog transport is faked: both real production scheduler and
+      // real executor capacity handling are used. Idle handles report zero load.
+      directory: { resolveMembers: async () => config.members.map(member => ({ member, label: member.key,
+        state: 'ok' as const, reportedRunning: 0, view: { id: 'provider', connected: true,
+          agents: ['claude-code'], models: { 'claude-code': [{ id: 'm' }] } } })) } as never,
+    });
+    const relay = createProviderGroupGuestRelay({ scope: () => ({ router,
+      externalLoad: createProviderGroupExternalLoad({ now: () => 1_000 }), isCurrent: () => true }),
+      readGroup: () => config, connect: () => ({ invoke: args => host.handle('group-computer', args[0]), poller: {} as never }),
+      now: () => 1_000, log: { warn() {} } });
+    const plan = { kind: 'claude-code' as const, providerId: 'provider', model: 'm', exclude: new Set<string>() };
+    relay.noteStartFailure('provider', { memberKey: config.members[0].key, agentDeviceId: 'executor',
+      providerId: 'provider', sameAccount: true }, failure);
+    expect(await relay.plan(plan)).toMatchObject({ agentDeviceId: 'spare' });
+    await host.handle('group-computer', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });
+    expect(await relay.plan(plan)).toMatchObject({ agentDeviceId: 'executor' });
+  });
+  // Unit: real host open → replacement of an idle logical session. Previously
+  // only same-runId retries were tested; a reconnect uses a NEW runId, and at
+  // capacity could never reach startRun's superseded-instance cleanup.
+  it.each([undefined, 'aaaaaaaaaaaaaaaa'])('replaces its own idle session at capacity (relay=%s)', async relay => {
+    limits = { perDevice: 1, total: 1, idleMinutes: 30 };
+    const started = whenStarted(1);
+    const host = makeHost({}, started.onStarted);
+    const first = request(undefined, { sessionId: 'logical-session', ...(relay ? { relay } : {}) });
+    await host.handle('a', first);
+    await started.promise;
+    // setInteractionResolver runs at the end of startup; let its finally settle.
+    await new Promise(resolve => setImmediate(resolve));
+    await expect(host.handle('a', request(undefined, { sessionId: 'logical-session', ...(relay ? { relay } : {}) })))
+      .resolves.toEqual({});
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    expect(host.limitUsage().total).toBe(1);
+  });
   it('keeps defaults and advertises the configured limit', async () => {
     expect(DEFAULT_REMOTE_AGENT_LIMITS).toEqual({ perDevice: 16, total: 64, idleMinutes: 30 });
     const host = makeHost();
     expect(await host.handle('a', { op: 'caps' })).toMatchObject({ maxRuns: 2 });
     limits = { perDevice: 70, total: 100 };
     expect(await host.handle('a', { op: 'caps' })).toMatchObject({ maxRuns: 70 });
+  });
+  it('reports authenticated device and total capacity including idle and closing instances', async () => {
+    limits = { perDevice: 1, total: 2 };
+    const started = whenStarted(1);
+    const host = makeHost({}, started.onStarted);
+    const first = request();
+    await host.handle('a', first);
+    await started.promise;
+    expect(await host.handle('a', { op: 'caps' })).toMatchObject({ runCapacityAvailable: false });
+    expect(await host.handle('b', { op: 'caps' })).toMatchObject({ runCapacityAvailable: true });
+    let release!: () => void;
+    vi.mocked(handles[0].close).mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+    const closing = host.handle('a', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });
+    expect(await host.handle('a', { op: 'caps' })).toMatchObject({ runCapacityAvailable: false });
+    release();
+    await closing;
+    expect(await host.handle('a', { op: 'caps' })).toMatchObject({ runCapacityAvailable: true });
+    await host.handle('b', request());
+    await host.handle('c', request());
+    expect(await host.handle('a', { op: 'caps' })).toMatchObject({ runCapacityAvailable: false });
+  });
+  it.each(['busy', 'other-controller', 'other-relay', 'denied-provider'] as const)
+    ('does not evict an ineligible instance to reconnect (%s)', async reason => {
+      limits = { perDevice: 1, total: 1 };
+      const started = whenStarted(1);
+      let allowed = true;
+      const host = makeHost({ providerAccess: { resolve: async () => allowed ? 'p' : null,
+        isAllowed: () => allowed } }, started.onStarted);
+      await host.handle('a', request(undefined, { sessionId: 'same-session', relay: 'aaaaaaaaaaaaaaaa' }));
+      await started.promise;
+      await new Promise(resolve => setImmediate(resolve));
+      if (reason === 'busy') handles[0].isTurnRunning = () => true;
+      if (reason === 'denied-provider') allowed = false;
+      await expect(host.handle(reason === 'other-controller' ? 'b' : 'a', request(undefined,
+        { sessionId: 'same-session', relay: reason === 'other-relay' ? 'bbbbbbbbbbbbbbbb' : 'aaaaaaaaaaaaaaaa' })))
+        .rejects.toThrow(reason === 'denied-provider' ? 'PROVIDER_NOT_ALLOWED' : reason === 'other-controller' ? 'TOTAL_LIMIT' : 'DEVICE_LIMIT');
+      expect(handles[0].close).not.toHaveBeenCalled();
+      expect(host.limitUsage().total).toBe(1);
+    });
+  it('keeps the replacement reservation behind the old native close and rechecks permission afterwards', async () => {
+    limits = { perDevice: 1, total: 1 };
+    const started = whenStarted(1);
+    let allowed = true;
+    const host = makeHost({ providerAccess: { resolve: async () => 'p', isAllowed: () => allowed } }, started.onStarted);
+    await host.handle('a', request(undefined, { sessionId: 'same-session' }));
+    await started.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    const closing = whenStarted(1);
+    let release!: () => void;
+    vi.mocked(handles[0].close).mockImplementation(() => {
+      closing.onStarted();
+      return new Promise<void>(resolve => { release = resolve; });
+    });
+    const replacing = host.handle('a', request(undefined, { sessionId: 'same-session' }));
+    // Attach the rejection assertion before settling the deferred close.
+    const result = expect(replacing).rejects.toThrow('PROVIDER_NOT_ALLOWED');
+    try {
+      await closing.promise;
+      expect(host.limitUsage().total).toBe(1);
+      await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
+      allowed = false;
+    } finally { release(); }
+    await result;
+    expect(host.limitUsage().total).toBe(0);
+    expect(handles).toHaveLength(1);
   });
   it('combines shares and direct connections from one authenticated device', async () => {
     const host = makeHost();
@@ -119,6 +240,8 @@ describe('provider computer session limits', () => {
     limits = { perDevice: 1, total: 1 };
     expect(host.limitUsage().total).toBe(2);
     expect(handles.every(h => vi.mocked(h.close).mock.calls.length === 0)).toBe(true);
+    await expect(host.handle('a', request(undefined, { sessionId: first.runId }))).rejects.toThrow('[DEVICE_LIMIT]');
+    expect(handles.every(h => vi.mocked(h.close).mock.calls.length === 0)).toBe(true);
     await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
     await host.handle('a', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });
     expect(host.limitUsage().total).toBe(1);
@@ -143,10 +266,55 @@ describe('provider computer session limits', () => {
     await host.handle('a', request());
     expect(host.limitUsage().total).toBe(1);
   });
+  // Unit regression: open ACKs before startHosted completes. Closing during
+  // startup must not free capacity while that native process is still starting
+  // or closing; the existing close test only covers an installed handle.
+  it('retains capacity through cancelled startup and the late native close', async () => {
+    limits = { perDevice: 1, total: 1 };
+    const entered = whenStarted(1);
+    const closingNative = whenStarted(1);
+    let releaseStart!: () => void;
+    let releaseClose!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    const closeGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    const host = makeHost({ startHosted: async input => {
+      entered.onStarted();
+      await startGate;
+      return {
+        id: input.hostSessionId, agentKind: input.kind, model: input.options.model,
+        close: async () => { closingNative.onStarted(); await closeGate; },
+      } as AgentSessionHandle;
+    } });
+    const first = request();
+    try {
+      await host.handle('a', first);
+      await entered.promise;
+      await host.handle('a', { op: 'close', runId: first.runId, mode: 'close', reason: 'navigation' });
+      expect(host.limitUsage()).toEqual({ total: 1, devices: 1, largestDevice: 1 });
+      await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
+      releaseStart();
+      await closingNative.promise;
+      await expect(host.handle('b', request())).rejects.toThrow('[TOTAL_LIMIT]');
+      releaseClose();
+      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
+      await expect(host.handle('b', request())).resolves.toEqual({});
+    } finally {
+      releaseStart();
+      releaseClose();
+      await host.dispose();
+    }
+  });
   it('returns a slot after agent startup failure', async () => {
     limits = { perDevice: 1, total: 1 };
-    const host = makeHost({ startHosted: async () => { throw new Error('startup failed'); } });
+    const entered = whenStarted(1);
+    const host = makeHost({ startHosted: async () => {
+      entered.onStarted();
+      throw new Error('startup failed');
+    } });
     await host.handle('a', request());
+    // Preparation performs real IO; measure slot cleanup after the failing
+    // startup is actually reached, retaining waitFor's original 1s budget.
+    await entered.promise;
     await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
     await expect(host.handle('a', request())).resolves.toEqual({});
   });

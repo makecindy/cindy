@@ -28,6 +28,7 @@ interface FakeWindow {
   emitWebContents: (event: string, ...args: unknown[]) => void;
   emitWindow: (event: string) => void;
   setFullscreenState: (fullscreen: boolean) => void;
+  setAppHidden: (hidden: boolean) => void;
 }
 
 function fakeWindow(id: number, minimized = false): FakeWindow {
@@ -36,6 +37,7 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
   let destroyed = false;
   let visible = false;
   let fullscreen = false;
+  let appHidden = false;
   const send = vi.fn();
   const webContents = {
     id,
@@ -86,7 +88,7 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     setTitle: vi.fn(),
     isMinimized: () => minimized,
     isFullScreen: () => fullscreen,
-    isVisible: () => visible,
+    isVisible: () => visible && !appHidden,
     isDestroyed: () => destroyed,
     webContents,
     send,
@@ -99,6 +101,9 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     emitWindow: (event) => listeners.get(event)?.(),
     setFullscreenState: (nextFullscreen) => {
       fullscreen = nextFullscreen;
+    },
+    setAppHidden: (hidden) => {
+      appHidden = hidden;
     },
   };
   return win;
@@ -436,6 +441,28 @@ describe('ResourceUsageWindowController', () => {
     expect(owner.focus).not.toHaveBeenCalled();
   });
 
+  // Unit: native macOS reproduction—login completes while app.hide() makes
+  // isVisible false, then app.show() resurrects the cleared window. Existing
+  // hide tests only cover per-window visibility, not application-level hiding.
+  it('keeps an explicitly closed window hidden when the whole app returns', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'darwin');
+    controller.prewarm();
+    const win = windows[0]!;
+    markPrewarmed(controller, win);
+    controller.open(mainSender);
+    win.setAppHidden(true);
+    expect(win.isVisible()).toBe(false);
+    win.focus.mockClear();
+    controller.hideWithOwner();
+    win.setAppHidden(false);
+    expect(win.isVisible()).toBe(false);
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.open(mainSender);
+    expect(win.isVisible()).toBe(true);
+    expect(windows).toHaveLength(1);
+  });
+
   it('tracks a pending macOS fullscreen entry without hiding the resource window', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;
@@ -593,6 +620,25 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.show).not.toHaveBeenCalled();
     controller.markPresentationReady(windows[0]!.webContents);
     expect(windows[0]?.show).toHaveBeenCalledOnce();
+  });
+
+  // Unit regression: reloading a visible Windows tray used the ordinary hide
+  // animation, leaving the layer transparent when the custom show restored it.
+  it('uses the surface hide policy when restoring a visible window after reload', () => {
+    const win = fakeWindow(1);
+    const nativeWin = win as unknown as BrowserWindow;
+    const hideWindow = vi.fn((window: BrowserWindow) => window.hide());
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => nativeWin, isOpenSender: () => true, hideWindow,
+    });
+    controller.open(win.webContents);
+    markPrewarmed(controller, win);
+    win.emitWebContents('did-start-loading');
+    expect(hideWindow).toHaveBeenCalledWith(nativeWin);
+    expect(win.isVisible()).toBe(false);
+    markPrewarmed(controller, win);
+    expect(win.isVisible()).toBe(true);
+    controller.dispose();
   });
 
   it('replaces a failed renderer while preserving a pending open', () => {

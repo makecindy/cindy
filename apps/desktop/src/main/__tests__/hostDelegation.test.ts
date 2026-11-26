@@ -198,6 +198,24 @@ describe('host proxy round trip', () => {
 });
 
 describe('createHostClient', () => {
+  it('requires the selected trusted owner window and preserves preload confirmation objects', async () => {
+    const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+    const client = { request: vi.fn(async () => ({ handled: true })) };
+    const ipcMain = { removeHandler() {}, handle: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+      handlers.set(channel, listener);
+    } };
+    const window = {} as IpcMainInvokeEvent;
+    registerHostDelegatedIpc({ client, ipcMain });
+    await expect(handlers.get('ghosts:confirm:resolve')!(window, { requestId: 'r1', confirmed: true }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(client.request).not.toHaveBeenCalled();
+    registerHostDelegatedIpc({ client, ipcMain, authorizePluginApproval: event => event === window });
+    await expect(handlers.get('ghosts:confirm:resolve')!({} as IpcMainInvokeEvent, { requestId: 'r1', confirmed: true }))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    await expect(handlers.get('ghosts:confirm:resolve')!(window, { requestId: 'r1', confirmed: true }))
+      .resolves.toEqual({ handled: true });
+    expect(client.request).toHaveBeenCalledExactlyOnceWith('/api/ghosts/confirm/resolve', { requestId: 'r1', confirmed: true });
+  });
   it('pins requests to the original Host instance and refuses redirects', async () => {
     const fetchMock = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchMock);
@@ -400,6 +418,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     const sidebarChanges: unknown[] = [];
     let projectAliasesNotified = false;
     const errors: unknown[] = [];
+    const pluginPushes: unknown[] = [];
 
     const server = http.createServer((req, res) => {
       try {
@@ -413,7 +432,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":1,"type":"settings_changed","domain":"appearance","value":{"theme":"dark"}}\n\n');
           res.write('data: {"seq":2,"type":"session_changed","action":"create","sessionId":"s1"}\n\n');
           res.write('data: {"seq":3,"type":"message_created","sessionId":"s1","messageId":"m1"}\n\n');
-          res.write('data: {"seq":4,"type":"project_aliases_changed"}\n\n');
+          res.write('data: {"seq":4,"type":"project_aliases_changed","catalogChanged":true}\n\n');
           res.write('data: {"seq":5,"type":"input_projection","projection":{"sessionId":"s1","turnInProgress":true}}\n\n');
           res.write('data: {"seq":6,"type":"interaction_request","sessionId":"s1","request":{"requestId":"r1"}}\n\n');
           res.write('data: {"seq":7,"type":"text","sessionId":"s1"}\n\n');
@@ -421,6 +440,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
           res.write('data: {"seq":9,"type":"error_persisted","sessionId":"s1","persistId":"err"}\n\n');
           res.write('data: {"seq":10,"type":"subagent_runs_changed","sessionId":"s1"}\n\n');
           res.write('data: {"seq":11,"type":"right_sidebar_tabs_changed","sessionId":"s1"}\n\n');
+          res.write('data: {"seq":12,"type":"plugin_push","channel":"ghosts:changed","payload":{"ghosts":[]}}\n\n');
         } else {
           res.writeHead(404);
           res.end();
@@ -441,6 +461,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       broadcast: (payload) => broadcasts.push(payload),
       onInputProjection: (payload) => projections.push(payload),
       onInteractionRequest: (payload) => interactions.push(payload),
+      onPluginPush: (channel, payload) => pluginPushes.push({ channel, payload }),
       onSettingsChanged: (domain, value) => settingsChanged.push({ domain, value }),
       onSessionChanged: (event) => sessionEvents.push(event),
       onMessageCreated: (event) => messageEvents.push(event),
@@ -448,8 +469,8 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
       onErrorPersisted: (event) => historyChanges.push(event),
       onSubagentRunsChanged: (event) => historyChanges.push(event),
       onRightSidebarTabsChanged: (event) => sidebarChanges.push(event),
-      onProjectAliasesChanged: () => {
-        projectAliasesNotified = true;
+      onProjectAliasesChanged: event => {
+        projectAliasesNotified = event.catalogChanged === true;
       },
       onError: (err) => {
         console.error('SSE bridge error:', err);
@@ -470,6 +491,7 @@ describe('claimProxiedChannels and unsupported fallbacks', () => {
     expect(broadcasts).toEqual([{ seq: 7, type: 'text', sessionId: 's1' }]);
     expect(projections).toEqual([{ sessionId: 's1', turnInProgress: true }]);
     expect(interactions).toEqual([{ sessionId: 's1', request: { requestId: 'r1' } }]);
+    expect(pluginPushes).toEqual([{ channel: 'ghosts:changed', payload: { ghosts: [] } }]);
     expect(settingsChanged).toEqual([{ domain: 'appearance', value: { theme: 'dark' } }]);
     expect(sessionEvents).toEqual([{ seq: 2, type: 'session_changed', action: 'create', sessionId: 's1' }]);
     expect(messageEvents).toEqual([{ seq: 3, type: 'message_created', sessionId: 's1', messageId: 'm1' }]);
@@ -499,4 +521,21 @@ it('delegates browser settings only from the trusted renderer and keeps Host aut
   await expect(handlers.get('browser-backend:set-kind')!(trusted, { kind: 'user-browser' })).resolves.toEqual({ ok: true, active: 'user-browser' });
   expect(request).toHaveBeenCalledWith('/api/browser-backend/set-kind', { kind: 'user-browser' });
   expect(local).not.toHaveBeenCalled();
+});
+
+// Unit: the project channel must never forward Renderer input to the generic owner write route.
+it('routes a delegated project mutation through its window-bound authorization adapter', async () => {
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  const ipcMain = { removeHandler() {}, handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) { handlers.set(channel, fn); } };
+  const client = { request: vi.fn(async () => ({})) };
+  const event = {} as IpcMainInvokeEvent;
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const channel = 'sidebar-settings:set-project-info';
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {} });
+  await expect(handlers.get(channel)!(event, input)).rejects.toThrow('PERMISSION_DENIED');
+  const forwardProjectWrite = vi.fn(async () => ({}));
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {}, forwardProjectWrite });
+  await handlers.get(channel)!(event, input);
+  expect(forwardProjectWrite).toHaveBeenCalledWith(client, event, input);
+  expect(client.request).not.toHaveBeenCalled();
 });

@@ -22,6 +22,8 @@ export interface ProvidersSnapshot {
   ownerGeneration: number;
   providers: ProviderView[];
   providerOrder: string[];
+  disabledProviders?: Record<string, boolean>;
+  hiddenProviders?: Record<string, boolean>;
 }
 
 let cachedProviders: ProvidersSnapshot | null = null;
@@ -84,6 +86,8 @@ export async function loadProvidersSnapshot(): Promise<ProvidersSnapshot> {
     ownerGeneration: result.ownerGeneration,
     providers: result.providers,
     providerOrder: result.providerOrder,
+    disabledProviders: result.disabledProviders,
+    hiddenProviders: result.hiddenProviders,
   };
 }
 

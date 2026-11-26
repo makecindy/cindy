@@ -417,6 +417,16 @@ export function getRecentModelsOwner(): string | null {
   return activeDataOwnerId;
 }
 
+/**
+ * Main 经收藏同一条 owner 围栏桥(useModelFavoritesHost)只读本分区的最近使用,供插件
+ * `/model-preferences` 使用。只读:不记录、不调和;归属不一致直接抛,由桥回 failed。
+ * 读落盘真相(与 accessHostModelFavorites 同口径),usedAt 不出 renderer。
+ */
+export function accessHostRecentModels(ownerId: string | null): readonly ModelConfigCopy[] {
+  if (activeDataOwnerId !== ownerId) throw new Error('Recent models owner not ready');
+  return freshState().items.map(({ usedAt: _usedAt, ...config }) => config);
+}
+
 /** 测试用 —— 重置缓存 / owner / 订阅者 / op-log + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
   const keyBeforeReset = storageKey();

@@ -9,14 +9,19 @@
  * 切不了的写原因。见 agentNetRemoteSwitch.ts。
  */
 
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check } from 'lucide-react';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
+import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
+import { ArrowUpCircle, Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
+import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 
 import {
   probePeer,
@@ -28,21 +33,112 @@ import {
   type RemoteSwitchStep,
   type RemoteSwitchTarget,
 } from './agentNetRemoteSwitch';
+import {
+  canProbePeerUpdate,
+  isNonDevAppVersion,
+  peerUpdateStore,
+  probePeerUpdate,
+  SELF_UPDATE_TARGET_ID,
+  syncPeerUpdateVersion,
+  type PeerUpdateConfirmTarget,
+  type PeerUpdateEntry,
+} from './peerAppUpdate';
 import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
-import { flowLabel, formatRtt, pathLabel, platformLabel, protocolLabel, relativeTime } from './topologyPresentation';
+import { ProtocolMark } from './ProtocolMark';
+import {
+  flowLabel,
+  formatRtt,
+  pathLabel,
+  peerTransportLabel,
+  platformLabel,
+  protocolKind,
+  protocolKindLabel,
+  protocolLabel,
+  relativeTime,
+  relayTransportLabel,
+  selfProtocolKind,
+} from './topologyPresentation';
 
 /** 卡片里的「路径」只写怎么连;要处理的原因写在「状态」里。 */
 function routeOf(node: TopologyNode): TopologyNode {
   return node.attention ? { ...node, attention: null } : node;
 }
 
-function Row({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
+function Row({
+  label,
+  value,
+  valueClassName,
+  children,
+}: {
+  label: string;
+  /** 纯文字值，也用作悬停提示;给了 children 时只作提示 */
+  value: string;
+  valueClassName?: string;
+  children?: ReactNode;
+}) {
   return (
-    <div className="flex items-baseline justify-between gap-3 text-12">
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.45]">
       <span className="shrink-0 text-[var(--text-tertiary)]">{label}</span>
-      <span className={cn('min-w-0 truncate text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
-        {value}
+      <span className={cn('min-w-0 break-words text-right', valueClassName ?? 'text-[var(--text-primary)]')} title={value}>
+        {children ?? value}
+      </span>
+    </div>
+  );
+}
+
+/** 连接方式:「协议 · 底层传输协议」(如 Agent-Net · UDP),与路径拆开避免长中转名把信息截断。 */
+function ConnectionRow({ node }: { node: TopologyNode }) {
+  const { t } = useTranslation();
+  const kind = protocolKind(node);
+  const protocol = protocolLabel(node, t);
+  const transport = peerTransportLabel(node, t);
+  if (!kind || !protocol) return null;
+  const text = [protocol, transport].filter(Boolean).join(' · ');
+  return (
+    <Row label={t('settings.remoteControl.v2.popover.protocol')} value={text}>
+      <span className="inline-flex flex-wrap items-center justify-end gap-1">
+        <ProtocolMark kind={kind} label={protocol} className="shrink-0" />
+        {transport ? <span className="shrink-0 text-[var(--text-secondary)]">· {transport}</span> : null}
+      </span>
+    </Row>
+  );
+}
+
+function RouteOptionRow({
+  active,
+  label,
+  rttText,
+  available,
+}: {
+  active: boolean;
+  label: string;
+  rttText: string;
+  available: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.35]">
+      <span className={cn('flex min-w-0 items-start gap-2', active ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
+        <span
+          className={cn(
+            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+            active ? 'bg-[var(--status-success)]' : 'border border-[var(--border-default)]',
+          )}
+          aria-hidden
+        />
+        <span className="min-w-0 break-words">{label}</span>
+      </span>
+      <span
+        className={cn(
+          'shrink-0 tabular-nums',
+          active
+            ? 'font-medium text-[var(--text-primary)]'
+            : available
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--text-tertiary)]',
+        )}
+      >
+        {rttText}
       </span>
     </div>
   );
@@ -51,16 +147,18 @@ function Row({ label, value, valueClassName }: { label: string; value: string; v
 function Heading({
   name,
   sub,
+  subAccessory,
   platform,
   isMobile,
 }: {
   name: string;
   sub: string;
+  subAccessory?: ReactNode;
   platform: string | null;
   isMobile: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
+    <div className="flex min-w-0 items-start gap-2.5">
       {/* 与拓扑同一套外形:电脑方块,手机带「灵动岛」的竖条 */}
       <span className="flex size-8 shrink-0 items-center justify-center" aria-hidden>
         <span
@@ -74,17 +172,104 @@ function Heading({
           <PlatformGlyph platform={platform} isMobile={isMobile} size={isMobile ? 12 : 15} />
         </span>
       </span>
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]" title={name}>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="break-words text-13 font-medium leading-[1.35] text-[var(--text-primary)]" title={name}>
           {name}
         </span>
         {sub ? (
-          <span className="truncate text-12 text-[var(--text-secondary)]" title={sub}>
-            {sub}
-          </span>
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
+              {sub}
+            </span>
+            {subAccessory}
+          </div>
         ) : null}
       </div>
     </div>
+  );
+}
+
+const selectPeerUpdates = () => peerUpdateStore.getSnapshot().entries;
+
+function VersionUpdateAction({
+  targetId,
+  isSelf,
+  deviceName,
+  observedVersion,
+  busyFallback,
+  platformFallback,
+  enabled,
+  onUpdate,
+}: {
+  targetId: string;
+  isSelf: boolean;
+  deviceName: string;
+  observedVersion: string | null | undefined;
+  busyFallback: boolean;
+  platformFallback: string | null;
+  enabled: boolean;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
+}) {
+  const { t } = useTranslation();
+  const updateEntries = useSyncExternalStore(peerUpdateStore.subscribe, selectPeerUpdates);
+
+  useEffect(() => {
+    syncPeerUpdateVersion(targetId, observedVersion);
+  }, [targetId, observedVersion]);
+
+  useEffect(() => {
+    if (enabled && onUpdate) {
+      void probePeerUpdate(targetId, { observedVersion });
+    }
+  }, [enabled, onUpdate, targetId, observedVersion]);
+
+  if (!enabled || !onUpdate) return null;
+  const entry: PeerUpdateEntry | undefined = updateEntries.get(targetId);
+  if (!entry) return null;
+
+  if (entry.kind === 'updating') {
+    const tipText = t(
+      entry.phase === 'relaunching'
+        ? 'settings.remoteControl.v2.peerUpdate.relaunching'
+        : 'settings.remoteControl.v2.peerUpdate.downloading',
+      { version: entry.targetVersion },
+    );
+    return (
+      <Tip text={tipText} side="top">
+        <span
+          className="inline-flex size-4 shrink-0 items-center justify-center text-[var(--status-info)]"
+          aria-label={tipText}
+        >
+          <Spinner size={12} aria-hidden />
+        </span>
+      </Tip>
+    );
+  }
+
+  if (entry.kind !== 'available') return null;
+
+  const tipText = t('settings.remoteControl.v2.peerUpdate.availableTip', { version: entry.targetVersion });
+  return (
+    <Tip text={tipText} side="top">
+      <button
+        type="button"
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--status-info)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        aria-label={tipText}
+        onClick={() =>
+          onUpdate({
+            targetId,
+            isSelf,
+            deviceName,
+            currentVersion: entry.currentVersion,
+            targetVersion: entry.targetVersion,
+            busy: entry.busy || busyFallback,
+            platform: entry.platform ?? platformFallback ?? undefined,
+          })
+        }
+      >
+        <ArrowUpCircle size={13} aria-hidden />
+      </button>
+    </Tip>
   );
 }
 
@@ -225,24 +410,48 @@ function useSwitchArea(
 export function DeviceNodePopover({
   node,
   relayName,
+  onDelete,
   onRemoteDesktop,
   switchEntry = null,
   onSwitch,
+  onPathPreferenceChange,
+  onUpdate,
 }: {
   node: TopologyNode;
   relayName: string;
+  onDelete?: () => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }) {
   const { t } = useTranslation();
+  const [optimisticPref, setOptimisticPref] = useState<{ id: string; value: DeviceLinkPeerPathPreference; seq: number } | null>(null);
+  const prefSeqRef = useRef(0);
   const switchArea = useSwitchArea(node, switchEntry, onSwitch);
   const running = switchEntry?.kind === 'running' ? switchEntry : null;
   const reconnecting = running !== null && running.step !== 'request';
+  const serverPref: DeviceLinkPeerPathPreference = node.pathPreference ?? 'auto';
+  const selectedPref: DeviceLinkPeerPathPreference =
+    optimisticPref && optimisticPref.id === node.id ? optimisticPref.value : serverPref;
+  useEffect(() => {
+    if (optimisticPref && (optimisticPref.id !== node.id || optimisticPref.value === serverPref)) {
+      setOptimisticPref(null);
+    }
+  }, [optimisticPref, node.id, serverPref]);
+  const showRoutePanel =
+    node.encrypted === true &&
+    node.status !== 'offline' &&
+    !reconnecting &&
+    node.path !== null;
+  const directRttMs = node.directRttMs ?? (node.path === 'direct' ? node.rttMs : null);
+  const relayRttMs = node.relayRttMs ?? (node.path === 'relay' ? node.rttMs : null);
+  const directSelectable = directRttMs !== null || node.path === 'direct' || selectedPref === 'direct';
   const sub = [
     node.modelLabel,
     platformLabel(node.platform),
-    node.appVersion?.trim() ? t('settings.remoteControl.v2.popover.version', { version: node.appVersion.trim() }) : null,
+    node.appVersion?.trim() ? `${appLabel(node.app, t)} ${node.appVersion.trim()}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -263,24 +472,45 @@ export function DeviceNodePopover({
       : node.status !== 'offline' && node.busy
         ? 'text-[var(--warning-accent)]'
         : undefined;
+  const canDelete = node.status === 'offline' && !running && !!onDelete;
   const canRemoteDesktop =
-    node.status !== 'offline' && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
+    node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
+  const displayName = deviceLabel(node, t);
+  const canUpdate = canProbePeerUpdate(node) && !running;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={node.name} sub={sub} platform={node.platform} isMobile={node.isMobile} />
+      <Heading
+        name={displayName}
+        sub={sub}
+        subAccessory={
+          <VersionUpdateAction
+            targetId={node.id}
+            isSelf={false}
+            deviceName={displayName}
+            observedVersion={node.appVersion}
+            busyFallback={node.busy}
+            platformFallback={node.platform}
+            enabled={canUpdate}
+            onUpdate={onUpdate}
+          />
+        }
+        platform={node.platform}
+        isMobile={node.isMobile}
+      />
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
-        {node.status !== 'offline' ? (
+        {node.status !== 'offline' && !reconnecting ? <ConnectionRow node={node} /> : null}
+        {node.status !== 'offline' && !showRoutePanel ? (
           <Row
             label={t('settings.remoteControl.v2.popover.path')}
-            value={reconnecting ? t('settings.remoteControl.v2.peerSwitch.reconnecting') : [protocolLabel(node, t), pathLabel(routeOf(node), relayName, t)].filter(Boolean).join(' · ')}
+            value={reconnecting ? t('settings.remoteControl.v2.peerSwitch.reconnecting') : pathLabel(routeOf(node), relayName, t)}
           />
         ) : null}
         {node.flow ? (
           <Row label={t('settings.remoteControl.v2.popover.activity')} value={flowLabel(node.flowText ?? node.flow, t)} />
         ) : null}
-        {node.rttMs !== null ? (
+        {!showRoutePanel && node.rttMs !== null ? (
           <Row
             label={t('settings.remoteControl.v2.popover.latency')}
             value={`${formatRtt(node.rttMs, t)} · ${t('settings.remoteControl.v2.popover.rttNote')}`}
@@ -303,11 +533,76 @@ export function DeviceNodePopover({
           </span>
         ) : null}
       </div>
+      {showRoutePanel ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-11 font-medium text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.v2.popover.routePreference')}
+            </span>
+            <span className="text-11 text-[var(--text-tertiary)]">
+              {t('settings.remoteControl.v2.popover.rttNote')}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <RouteOptionRow
+              active={node.path === 'direct'}
+              label={t('settings.remoteControl.v2.path.direct')}
+              rttText={directRttMs !== null ? formatRtt(directRttMs, t) : t('settings.remoteControl.v2.popover.routeUnavailable')}
+              available={directRttMs !== null}
+            />
+            <RouteOptionRow
+              active={node.path === 'relay'}
+              label={t('settings.remoteControl.v2.path.relay', { name: relayName })}
+              rttText={relayRttMs !== null ? formatRtt(relayRttMs, t) : t('settings.remoteControl.v2.popover.routeMeasuring')}
+              available={relayRttMs !== null}
+            />
+          </div>
+          {onPathPreferenceChange ? (
+            <SegmentedControl<DeviceLinkPeerPathPreference>
+              value={selectedPref}
+              aria-label={t('settings.remoteControl.v2.popover.routePreference')}
+              height={28}
+              optionHeight={24}
+              fullWidth
+              options={[
+                { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
+                {
+                  value: 'direct',
+                  label: t('settings.remoteControl.v2.popover.routeDirect'),
+                  disabled: !directSelectable,
+                  title: !directSelectable ? t('settings.remoteControl.v2.popover.routeDirectUnavailableHint') : undefined,
+                },
+                { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
+              ]}
+              onValueChange={(next) => {
+                const seq = ++prefSeqRef.current;
+                setOptimisticPref({ id: node.id, value: next, seq });
+                Promise.resolve(onPathPreferenceChange(node, next)).then(
+                  (ok) => {
+                    if (ok === false) {
+                      setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                    }
+                  },
+                  () => {
+                    setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                  },
+                );
+              }}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {switchArea.body ? (
         <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">{switchArea.body}</div>
       ) : null}
-      {canRemoteDesktop || switchArea.action ? (
-        <div className="flex justify-end gap-2">
+      {canDelete || canRemoteDesktop || switchArea.action ? (
+        <div className="flex flex-wrap justify-end gap-2">
+          {canDelete ? (
+            <Button tone="danger-surface" size="sm" compact onClick={onDelete}>
+              <Trash2 size={14} aria-hidden />
+              {t('settings.devices.delete')}
+            </Button>
+          ) : null}
           {canRemoteDesktop ? (
             <Button variant={switchArea.action ? 'secondary' : 'primary'} size="sm" compact onClick={() => onRemoteDesktop(node)}>
               {t('remoteDesktop.title')}
@@ -325,6 +620,7 @@ export function HubNodePopover({
   linkStatus,
   issue,
   standby,
+  onUpdate,
 }: {
   model: TopologyModel;
   linkStatus: DeviceLinkLinkStatus;
@@ -332,25 +628,52 @@ export function HubNodePopover({
   issue: string | null;
   /** 本机另一个 Cindy 实例占着远程连接 */
   standby: boolean;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }) {
   const { t } = useTranslation();
+  // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
+  const kind = selfProtocolKind(model, linkStatus);
+  const protocol = protocolKindLabel(kind, t);
+  // 与中转的连接：在线时写经中转的数据走 UDP 还是 WS,往返是那条路的(用户要求 2026-11-18)。
+  const online = linkStatus === 'online';
+  const relayStatus = [
+    t(`settings.devices.linkStatus.${linkStatus}`),
+    online ? relayTransportLabel(model.relay, t) : null,
+    online && model.relay.rttMs !== null ? formatRtt(model.relay.rttMs, t) : null,
+  ].filter(Boolean).join(' · ');
+  const selfName = model.self?.name || t('settings.devices.thisDevice');
+  const selfVersion = model.self?.appVersion?.trim() || null;
+  const selfSub = [
+    platformLabel(model.self?.platform ?? null),
+    selfVersion ? `${appLabel('cindy', t)} ${selfVersion}` : null,
+  ].filter(Boolean).join(' · ');
   return (
     <div className="flex flex-col gap-3">
       <Heading
-        name={model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer')}
-        sub={platformLabel(model.self?.platform ?? null)}
+        name={selfName}
+        sub={selfSub}
+        subAccessory={
+          <VersionUpdateAction
+            targetId={SELF_UPDATE_TARGET_ID}
+            isSelf
+            deviceName={selfName}
+            observedVersion={selfVersion}
+            busyFallback={false}
+            platformFallback={model.self?.platform ?? null}
+            enabled={isNonDevAppVersion(selfVersion)}
+            onUpdate={onUpdate}
+          />
+        }
         platform={model.self?.platform ?? null}
         isMobile={false}
       />
       <div className="flex flex-col gap-1.5">
-        <Row
-          label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })}
-          value={
-            model.relay.rttMs !== null && linkStatus === 'online'
-              ? `${t(`settings.devices.linkStatus.${linkStatus}`)} · ${formatRtt(model.relay.rttMs, t)}`
-              : t(`settings.devices.linkStatus.${linkStatus}`)
-          }
-        />
+        {kind && protocol ? (
+          <Row label={t('settings.remoteControl.v2.popover.protocol')} value={protocol}>
+            <ProtocolMark kind={kind} label={protocol} className="justify-end" />
+          </Row>
+        ) : null}
+        <Row label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })} value={relayStatus} />
         {issue ? <span className="text-12 text-[var(--error-fg)]">{issue}</span> : null}
         {standby ? <span className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.standbyHint')}</span> : null}
       </div>
