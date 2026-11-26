@@ -17,7 +17,7 @@ function provider(id: string, extra: Record<string, unknown> = {}): ProviderView
 }
 
 function group(members: Array<Record<string, unknown>>) {
-  return { strategy: 'least', autoSwitch: true, members: [{ kind: 'local' }, ...members] };
+  return { strategy: 'expiring', autoSwitch: true, members: [{ kind: 'local' }, ...members] };
 }
 
 describe('collectRemoteProviderGroups', () => {
@@ -68,7 +68,7 @@ describe('collectRemoteProviderGroups', () => {
 
   it('also hides the remote members of groups this computer created', () => {
     const local = {
-      strategy: 'least' as const,
+      strategy: 'expiring' as const,
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
@@ -110,7 +110,7 @@ describe('providerGroupMemberOfRoute', () => {
   });
   // Mini 上的组：Mini 自己、Studio、这台电脑(desk)、Kai 分享来的一台。
   const config: ProviderGroupConfig = {
-    strategy: 'least',
+    strategy: 'expiring',
     autoSwitch: true,
     members: [
       member('local', null, 'anthropic'),

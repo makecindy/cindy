@@ -16,7 +16,7 @@ import {
   type SubscriptionPoolConfig,
   type SubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
-import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
+import { DEFAULT_ROUTE_STRATEGY, routeStrategyOf } from '../../shared/routeStrategy.js';
 import { legacyCodexAccountHome } from '../maker-host/codex-account-path.js';
 import { getUserDataDir } from '../userDataPath.js';
 
@@ -51,7 +51,7 @@ function normalizeLongLivedToken(raw: unknown): SubscriptionLongLivedTokenRecord
   };
 }
 export const defaultPool = (): SubscriptionPoolConfig => ({
-  strategy: 'least',
+  strategy: DEFAULT_ROUTE_STRATEGY,
   accounts: [{ ...DEFAULT_SUBSCRIPTION_ACCOUNT }],
 });
 interface PoolFile {
@@ -89,7 +89,7 @@ export function normalizePoolFile(raw: unknown): PoolFile {
       ...(Array.isArray(pool.dismissedLogins) ? { dismissedLogins: pool.dismissedLogins.filter(
         key => typeof key === 'string' && /^[a-f0-9]{64}$/.test(key),
       ) } : {}),
-      strategy: PROVIDER_GROUP_STRATEGIES.includes(pool.strategy) ? pool.strategy : 'least',
+      strategy: routeStrategyOf(pool.strategy),
       accounts: pool.accounts
         .filter((a) => a && accountIdValid(a.id) && !seen.has(a.id) && seen.add(a.id))
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)

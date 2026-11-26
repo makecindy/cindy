@@ -2,7 +2,7 @@ import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
   SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
-  type SessionWire, type Transport, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics,
+  type SessionWire, type Transport, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics, type UdpRebindReason,
 } from './types.js';
 import { PathRouter } from './pathRouter.js';
 import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } from './portableBytes.js';
@@ -44,6 +44,10 @@ interface Poll {
   relayRoute?: RelayRoute | null;
   /** `relay-udp-health` builds: bytes sent and received on the engine's UDP socket so far. */
   udpTraffic?: [number, number] | null;
+  /** `udp-rebind` builds: the engine's current bound UDP port. */
+  udpPort?: number | null;
+  /** `udp-rebind` builds: monotonic generation + port + reason whenever the engine rebound its UDP socket. */
+  udpRebind?: { gen: number; port: number; reason: string } | null;
 }
 /** A poll as the engine reports it: bytes as base64 `data` (`poll`), or as the `len` of the next bytes after the header (`io`). */
 type WireBytes = { data?: string; len?: number };
@@ -91,6 +95,10 @@ function readPoll(wire: WirePoll, payload: Uint8Array | null): Poll {
   return { ...wire, packets, connections };
 }
 const SUSPENSION_REASONS = new Set(['data-silence', 'request-timeouts', 'unacked-sends']);
+const REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function readRebindReason(value: unknown): UdpRebindReason | null {
+  return typeof value === 'string' && REBIND_REASONS.has(value as UdpRebindReason) ? (value as UdpRebindReason) : null;
+}
 /** The engine's `relayRoute`, kept only in the shape the socket reports (types.ts `RelayRoute`). */
 function readRoute(value: unknown): RelayRoute | null {
   if (!value || typeof value !== 'object') return null;
@@ -252,6 +260,8 @@ export class NativeTransport implements Transport {
   private udpRefresh: ReturnType<typeof setInterval> | null = null;
   /** `relay-udp-health`: the route the engine last reported for relayed datagrams (`relayRoute`). */
   private route: RelayRoute | null = null;
+  /** `udp-rebind`: last rebind generation observed from `poll` so each rebind notifies discovery/logs once. */
+  private lastRebindGen = 0;
   private refreshingAddresses = false;
   private constructor(
     private readonly engine: NativeEnginePort,
@@ -502,6 +512,7 @@ export class NativeTransport implements Transport {
   networkChanged(): void {
     if (this.closed || !this.enhanced) return;
     void this.call({ op: 'migrate' }).catch(() => undefined);
+    for (const channel of this.channels.values()) channel.onLocalNetworkChanged();
     // Everything in flight goes again from the new address: poll for it now.
     this.wake();
     void this.refreshUdpServer();
@@ -748,6 +759,25 @@ export class NativeTransport implements Transport {
     if (traffic && Array.isArray(result.udpTraffic) && result.udpTraffic.every(value => Number.isSafeInteger(value) && value >= 0)) {
       Atomics.store(traffic, 0, BigInt(result.udpTraffic[0])); Atomics.store(traffic, 1, BigInt(result.udpTraffic[1]));
     }
+    const rebind = result.udpRebind;
+    if (rebind && Number.isInteger(rebind.gen) && rebind.gen > this.lastRebindGen
+      && Number.isInteger(rebind.port) && rebind.port > 0 && rebind.port <= 65535) {
+      const reason = readRebindReason(rebind.reason);
+      if (reason) {
+        this.lastRebindGen = rebind.gen;
+        this.identity.udpPort = rebind.port;
+        this.dial.udp = { address: '0.0.0.0', port: rebind.port };
+        this.mapped = [];
+        this.updateCandidates();
+        for (const channel of this.channels.values()) channel.onLocalNetworkChanged();
+        this.options.onLocalPortChanged?.(rebind.port, reason);
+      }
+    } else if (typeof result.udpPort === 'number' && Number.isInteger(result.udpPort) && result.udpPort > 0 && result.udpPort <= 65535
+      && result.udpPort !== this.identity.udpPort) {
+      this.identity.udpPort = result.udpPort;
+      this.dial.udp = { address: '0.0.0.0', port: result.udpPort };
+      this.updateCandidates();
+    }
     if (Array.isArray(result.mapped)) {
       const mapped = result.mapped.filter(value => value && typeof value.address === 'string' && value.address.length <= 128
         && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
@@ -917,6 +947,8 @@ class NativeChannel implements PeerChannel {
     this.control.push(utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n'));
     this.owner.wake();
   }
+  /** Local network changed: drop stale direct RTT / auto-switch cooldown and re-probe direct if currently relayed. */
+  onLocalNetworkChanged(): void { this.router?.onLocalNetworkChanged(); }
   send(bytes: Uint8Array): void {
     if (this.events.closed) throw new Error('NATIVE_CONNECTION_CLOSED');
     this.owner.reserve(bytes.length);

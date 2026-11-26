@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import type { VendorPrefs } from '@/state/newMakerDraft';
+import type { NewMakerDraft, VendorPrefs } from '@/state/newMakerDraft';
 import { NEW_MAKER_DRAFT_KEY } from './newMakerDraftKeys';
 
 export interface AlternateDraftModel {
@@ -11,6 +11,31 @@ export interface AlternateDraftModel {
   fast: boolean | 'ultrafast';
   favoriteUid: string | null;
   agentDevice?: { deviceId: string; name: string } | null;
+}
+
+/**
+ * Overlay a one-task built-in model override onto the saved draft without mutating it.
+ * Clear alternate routing modes (plugin model, model group, plugin engine) for this task
+ * so stale saved choices cannot hijack or block submission of the selected built-in model.
+ */
+export function applyAlternateDraftModel(
+  savedDraft: NewMakerDraft,
+  alternate: AlternateDraftModel | null,
+): NewMakerDraft {
+  if (!alternate) return savedDraft;
+  return {
+    ...savedDraft,
+    vendor: alternate.vendor,
+    agentDeviceId: alternate.agentDevice?.deviceId ?? null,
+    agentDeviceName: alternate.agentDevice?.name ?? null,
+    pluginModel: null,
+    modelGroup: null,
+    pluginEngine: null,
+    lastByVendor: {
+      ...savedDraft.lastByVendor,
+      [alternate.vendor]: { ...savedDraft.lastByVendor[alternate.vendor], ...alternate.prefs },
+    },
+  };
 }
 
 // One window's unfinished drafts survive page navigation, without changing saved defaults.

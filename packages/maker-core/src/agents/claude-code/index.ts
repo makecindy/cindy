@@ -8227,10 +8227,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (nativeAutoReviewUnavailable) return;
         nativeAutoReviewUnavailable = true;
         autoReviewDecisionCache.clear();
+        // Arming Plan during a running turn applies to the next message. The
+        // live ordinary turn still needs the Cindy reviewer on this Query.
         if (
           mutablePermissionMode === 'auto'
-          && !mutablePlanMode
           && !planTurnActive
+          && (!mutablePlanMode || (turnInFlight && !sdkInPlanMode))
           && !controlRequestsBlocked()
         ) {
           await q.setPermissionMode('default');

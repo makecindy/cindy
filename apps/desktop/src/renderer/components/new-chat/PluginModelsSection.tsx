@@ -5,9 +5,15 @@
  * 插件。选中后新任务第一条消息发出前问一次插件用哪个真实模型，之后任务不再换；手动选普通模型
  * 即取消。行样式与模型行一致：18px 图标盒、名字 14/500、说明 12 次级色，选中整行底色不加勾。
  */
-import { Plug } from 'lucide-react';
+import { Plug, Star } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
+import {
+  pluginModelFavoriteKey,
+  togglePluginModelFavorite,
+  usePluginModelFavorites,
+} from '@/features/cc-agent/pluginModelFavorites';
 import { cn } from '@/lib/utils';
 import type { GhostPickerModel } from '../../../shared/ghost';
 
@@ -45,15 +51,27 @@ export function PluginModelsSection({
   picker,
   query,
   onPicked,
+  variant = 'all',
+  allowFavorites = true,
 }: {
   picker: PluginModelsPickerProps;
   query: string;
   onPicked(): void;
+  variant?: 'all' | 'favorites';
+  allowFavorites?: boolean;
 }) {
-  const visible = matchPluginModels(picker.models, query);
+  const { t } = useTranslation();
+  const favorites = usePluginModelFavorites();
+  const starEnabled = allowFavorites;
+  const visible = variant === 'favorites'
+    ? (starEnabled
+        ? favorites.flatMap((key) => picker.models.filter((model) => pluginModelFavoriteKey(model) === key))
+        : [])
+    : matchPluginModels(picker.models, query);
   const groups = new Map<string, GhostPickerModel[]>();
   for (const model of visible) groups.set(model.pluginId, [...(groups.get(model.pluginId) ?? []), model]);
   if (groups.size === 0) return null;
+  const translate = typeof t === 'function' ? t : ((key: string) => key);
   return (
     <>
       {[...groups.entries()].map(([pluginId, models]) => (
@@ -63,6 +81,11 @@ export function PluginModelsSection({
           </div>
           {models.map((model) => {
             const selected = picker.active?.pluginId === pluginId && picker.active.id === model.id;
+            const favKey = pluginModelFavoriteKey(model);
+            const favorite = starEnabled && favorites.includes(favKey);
+            const starLabel = favorite
+              ? translate('newChat.modelSelector.unified.removeFavorite')
+              : translate('newChat.modelSelector.unified.addFavorite');
             const choose = () => {
               picker.onSelect(model);
               onPicked();
@@ -93,6 +116,28 @@ export function PluginModelsSection({
                     <PluginModelIcon model={model} size={16} />
                   </span>
                   <span className="min-w-0 truncate font-medium leading-5">{model.name}</span>
+                  {starEnabled && (
+                    <button
+                      type="button"
+                      data-plugin-model-favorite={`${pluginId}:${model.id}`}
+                      aria-pressed={favorite}
+                      title={starLabel}
+                      aria-label={starLabel}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        togglePluginModelFavorite(model);
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      className={cn(
+                        'ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
+                        favorite
+                          ? 'text-[var(--favorite-star)] opacity-100'
+                          : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
+                      )}
+                    >
+                      <Star size={14} fill={favorite ? 'currentColor' : 'none'} aria-hidden />
+                    </button>
+                  )}
                 </div>
                 {model.description && (
                   <div

@@ -41,6 +41,7 @@ import {
 import { bindPoolExecutionRoute, getSessionSubscriptionAccount, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
+import { classifyTurnOverload } from '../goal-host/usageLimit.js';
 import { readProviderBillingCode } from '@cindy/maker-shared/error-redaction';
 import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -298,7 +299,7 @@ function wrapHandle(
                 if (billingCode) await observe({ ok: false, code: 'QUOTA_EXCEEDED', billingCode }).catch(() => {});
                 else if (error.errorStatus === 401) await observe({ ok: false, code: 'AUTH_INVALID' }).catch(() => {});
                 else if (error.errorStatus === 429) await observe({ ok: false, code: 'RATE_LIMITED' }).catch(() => {});
-                else if (error.errorStatus === 529) await observe({ ok: false, code: 'RATE_LIMITED' },
+                else if (error.errorStatus === 529 || classifyTurnOverload(event.data)) await observe({ ok: false, code: 'RATE_LIMITED' },
                   undefined, PROVIDER_GROUP_FAILURE_COOLDOWN_MS).catch(() => {});
                 if (turn && !turn.rejection && (billingCode || error.errorStatus === 401)) {
                   turn.rejection = billingCode ? { ok: false, code: 'QUOTA_EXCEEDED', billingCode } : { ok: false, code: 'AUTH_INVALID' };

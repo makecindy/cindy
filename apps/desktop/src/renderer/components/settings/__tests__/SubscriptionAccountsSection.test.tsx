@@ -30,7 +30,7 @@ const resetsAt = Date.now() / 1000 + 3600;
 const view: SubscriptionPoolView = {
   providerId: 'anthropic',
   configured: true,
-  strategy: 'least',
+  strategy: 'expiring',
   accounts: [
     { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test',
       plan: 'max', planTier: 'max_20x', usage: { claude: { source: 'oauth-endpoint', updatedAt: Date.now(),
@@ -198,7 +198,7 @@ describe('SubscriptionAccountsSection usage', () => {
       apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
     });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-      providerId, configured: true, strategy: 'least',
+      providerId, configured: true, strategy: 'expiring',
       accounts: [apiAccount('key-target', providerId), apiAccount('key-member', 'other-key-fixture')],
     });
     render(<SubscriptionAccountsSection providerId={providerId} kind="openai" />);
@@ -399,7 +399,8 @@ describe('SubscriptionAccountsSection usage', () => {
     await screen.findByRole('alert');
     expect(screen.getByText('This computer')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
-    await screen.findByText('first@example.test');
+    // 读到之后账号区收成一行：名字在那一行和收起的账号列表里各有一处。
+    await screen.findAllByText('first@example.test');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
     expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
@@ -488,21 +489,23 @@ describe('SubscriptionAccountsSection usage', () => {
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(accounts.length);
   });
-  it('shows the strategy only when there are accounts to choose between', async () => {
+  // 2026-11-24：几个账号是一条自动路由，选法只在「智能路由」里改；账号区只说明现状。
+  it('states the strategy only when there are accounts to choose between, without a second control', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
       ...view,
-      strategy: 'weight',
+      strategy: 'weighted',
       accounts: [view.accounts[0]],
     });
     const { unmount } = render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(1);
-    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByTestId('route-strategy-note')).toBeNull();
     expect(screen.queryByLabelText('providerGroup.member.weightAria')).toBeNull();
     expect(screen.getByLabelText('providerGroup.member.limitAria')).toBeTruthy();
     unmount();
-    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weight' });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weighted' });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
+    expect((await screen.findByTestId('route-strategy-note')).textContent).toContain('modelGroups.auto.assignedBy');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
     // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
     const [first, second] = screen.getAllByTestId('subscription-account');
@@ -536,7 +539,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
   const pluginView = (methods: NonNullable<SubscriptionPoolView['pluginEngine']>['methods']): SubscriptionPoolView => ({
     providerId,
     configured: true,
-    strategy: 'least',
+    strategy: 'expiring',
     pluginEngine: { engineKey: 'zcode-plugin:zcode', methods },
     accounts: [{
       id: 'default', paused: false, limit: 4, weight: 1, directory: '', status: 'ready', running: 0,

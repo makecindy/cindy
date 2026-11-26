@@ -32,6 +32,7 @@ import piSystemPrompt from './pi-system-prompt.md?raw';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import { auxiliaryRouteRefId } from '../../shared/auxiliaryModelChain.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
@@ -48,6 +49,11 @@ export interface AgentRuntimeConfigPorts {
   ripgrepCandidates(key: string): string[];
   /** Codex executable whose package directories Windows puts on PATH. */
   codexBinaryPath(): string | undefined;
+  /**
+   * Subagent 选的是一条智能路由时(存为 route:<路由 id>)，路由里本机、没停用的 Claude Code 来源，路由此刻会选的排第一。
+   * 不提供(Node Host 没有智能路由)时这种设置不注入覆写，Subagent 用 Claude Code 自己的默认。
+   */
+  subagentRouteMembers?(routeId: string): readonly { providerId: string; model: string }[];
 }
 
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
@@ -105,9 +111,30 @@ export function claudeUpstreamEndpoint(): string {
 function resolveSubagentModelForRoute(
   providerId: string | null | undefined,
   credentialMode?: string,
+  routeMembers?: AgentRuntimeConfigPorts['subagentRouteMembers'],
 ): string | undefined {
-  const saved = readSubagentModelSettings().claudeCode ?? undefined;
-  if (!saved) return undefined;
+  const stored = readSubagentModelSettings().claudeCode ?? undefined;
+  if (!stored) return undefined;
+  const routeId = auxiliaryRouteRefId(stored);
+  if (routeId === null) return resolveSavedSubagentModel(stored, providerId, credentialMode);
+  // 选的是一条路由：子代理跑在主任务的来源上，只能用路由里同一个供应商的成员(按路由会选的先后)；
+  // 主任务的来源说不清(没有路由上下文)时按排第一的。都用不了就不注入，用 Claude Code 自己的默认。
+  const parent = providerId
+    ?? (credentialMode === 'gateway-key' ? 'xd' : credentialMode === 'oauth-bearer' ? 'anthropic' : null);
+  const members = routeMembers?.(routeId) ?? [];
+  const usable = parent ? members.filter((member) => member.providerId === parent) : providerId === undefined ? members : [];
+  for (const member of usable) {
+    const model = resolveSavedSubagentModel(member.model, providerId, credentialMode);
+    if (model) return model;
+  }
+  return undefined;
+}
+
+function resolveSavedSubagentModel(
+  saved: string,
+  providerId: string | null | undefined,
+  credentialMode?: string,
+): string | undefined {
   // Claude 订阅会话由 CLI 用本机登录直连 Anthropic,子代理请求不经 proxy 按模型路由:
   // 只有 Anthropic 一方模型能用,其它覆写(chatgpt/ / xai/ / 用户来源的裸 id)不注入。
   if (credentialMode === 'oauth-bearer' && !isAnthropicWireModel(saved)) return undefined;
@@ -350,7 +377,7 @@ export function createAgentRuntimeConfigs(ports: AgentRuntimeConfigPorts) {
     Object.defineProperty(config, 'subagentModel', {
       // 无路由上下文的兜底口径(subagentModelForRoute 缺席的消费方用):目录里该模型
       // 的所有拷贝都被停用才丢弃覆写。
-      get: () => resolveSubagentModelForRoute(undefined),
+      get: () => resolveSubagentModelForRoute(undefined, undefined, ports.subagentRouteMembers),
       enumerable: true,
       configurable: false,
     });
@@ -360,7 +387,7 @@ export function createAgentRuntimeConfigs(ports: AgentRuntimeConfigPorts) {
     // 时,Anthropic 家有启用拷贝也不能豁免。env-builder 每次 spawn 传入会话来源。
     // 同步热路径,只用同步源(active catalog + override store)。
     config.subagentModelForRoute = (providerId, credentialMode) =>
-      resolveSubagentModelForRoute(providerId, credentialMode);
+      resolveSubagentModelForRoute(providerId, credentialMode, ports.subagentRouteMembers);
     return config;
   }
 
