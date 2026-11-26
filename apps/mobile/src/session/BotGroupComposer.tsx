@@ -159,8 +159,10 @@ export function BotGroupComposer({
   useEffect(() => {
     if (!draftId) return;
     let live = true;
-    // After an app restart only the disk copy is left; typing first wins over it.
-    if (!textRef.current) void readComposerDraft(draftId).then((stored) => {
+    // After an app restart only the disk copy is left; typing first wins over it. Text typed while the draft id
+    // was still loading (its account's generation) is saved now instead.
+    if (draftEditedRef.current && textRef.current) persistDraft(textRef.current);
+    else if (!textRef.current) void readComposerDraft(draftId).then((stored) => {
       if (live && stored && !draftEditedRef.current && !textRef.current) setText(stored);
     });
     // Leaving the app may end it before the debounced write lands.

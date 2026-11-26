@@ -102,6 +102,10 @@ import {
   mutateMobileAccountVault,
   patchMobileAccountMetadata,
   readMobileAccountVault,
+  ensureMobileGroupDraftEpoch,
+  invalidateMobileGroupDraftEpochs,
+  onMobileGroupDraftEpochsInvalidated,
+  readMobileGroupDraftEpochs,
   reconcileMobileActiveAuthSession,
   rememberMobilePassportSession,
   rememberMobileResourceSession,
@@ -129,7 +133,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
-import { clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
+import { connectBotGroupDraftEpochs } from '@/session/botGroupComposerDraft';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -155,6 +159,8 @@ import {
 import { probeBetaChannel } from '@/update/fetchLatestRelease';
 
 WebBrowser.maybeCompleteAuthSession();
+// Group chat drafts take their generation from the account record (mobileAccountVault groupDraftEpochs).
+connectBotGroupDraftEpochs({ ensure: ensureMobileGroupDraftEpoch, read: readMobileGroupDraftEpochs, subscribe: onMobileGroupDraftEpochsInvalidated });
 
 const AUTH_SESSION_KEY = 'cindy.mobile.auth.session.v1';
 const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy.mobile.auth.refreshToken';
@@ -1195,6 +1201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setAccountDeletionRestored(deletionWasRestored);
               });
             },
+            { sessionRecordPresent: previousPersistedSessionRaw !== null },
           );
           return true;
         } catch (error) {
@@ -1444,10 +1451,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 throw removalError;
               }
               refreshSavedAccountsSnapshotBestEffort();
-              // The rejected account is known even when no cached user is (cold start); its group drafts go with it.
-              if (authGenerationRef.current === generation) {
-                await clearBotGroupComposerDraftsForAccounts([rejectedAccountKey]).catch(() => undefined);
-              }
             }
             if (authGenerationRef.current !== generation) return null;
             await terminateSessionImplRef.current(isAccountUnavailableAuthError(error) ? 'ACCOUNT_UNAVAILABLE' : 'SESSION_EXPIRED');
@@ -2720,7 +2723,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const client = authClientFor(did, realm);
         let pair: Awaited<ReturnType<CindyAuthClient['refresh']>> | null = null;
         let resourcePairStored = false;
-        let rejectedSessionRemoved = false;
         if (resource) {
           try {
             const refreshed = await client.refresh(resource.refreshToken);
@@ -2766,7 +2768,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (removal === 'stale') {
               throw authCodeError('AUTH_FLOW_SUPERSEDED');
             }
-            rejectedSessionRemoved = removal === 'removed';
           }
         }
 
@@ -2774,14 +2775,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const passport = initialVault.passports[
             passportVaultKey(realm, metadata.passportId)
           ];
-          if (!passport) {
-            // The saved account's session was rejected and removed, with no passport to continue it: it ended,
-            // so its group drafts go too.
-            if (rejectedSessionRemoved && authGenerationRef.current === generationAtStart) {
-              await clearBotGroupComposerDraftsForAccounts([accountKey]).catch(() => undefined);
-            }
-            throw authCodeError('SAVED_ACCOUNT_REAUTH_REQUIRED');
-          }
+          if (!passport) throw authCodeError('SAVED_ACCOUNT_REAUTH_REQUIRED');
           const accountPair = await refreshMobilePassportSingleFlight(
             client,
             realm,
@@ -2893,6 +2887,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     setAccountGeneration((value) => value + 1);
                   });
                 },
+                { sessionRecordPresent: previousSessionRaw !== null },
               );
             } catch (error) {
               await restorePersistedAuthSessionRaw(previousSessionRaw);
@@ -3102,11 +3097,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsBusy(false);
         }
       };
-      // 会话到期或账号不可用只结束当前账号：清它的群聊草稿，其他已保存账号的保留。
+      // Ends only this account: void its group drafts without holding up the credential clear. If that write
+      // fails, the next session installed for the account voids them (orphan-session rule, mobileAccountVault).
       const endedAccountKey = getMobileAuthOwner().accountKey || (userRef.current
         ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
         : '');
-      run = clearLocalSession().then(() => clearBotGroupComposerDraftsForAccounts([endedAccountKey]).catch(() => undefined));
+      void invalidateMobileGroupDraftEpochs([endedAccountKey]).catch(() => {
+        console.warn('[auth] group draft invalidation pending');
+      });
+      run = clearLocalSession();
       terminalLogoutInFlightRef.current = run;
       setIsBusy(true);
       run.then(clearIfCurrent, clearIfCurrent);
@@ -3150,7 +3149,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearReceipt: () => persistAccountDeletionReceipt(null),
       }),
     );
-    // 主动退出不清群聊草稿：同一账号、同一认证域重新登录后恢复，草稿键带认证域账号 key，换账号读不到。
     await clearLocalSession({ persistedAuthAlreadyCleared: true });
     setSavedAccounts([]);
     if (!did) return;
@@ -3339,10 +3337,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 清理，不再调用普通 logout，以免覆盖或依赖已撤销的会话。receipt 已在
       // challenge 返回前持久化，不做可能阻断本地登出的冗余二次写入。
       await serializeRefreshTokenMutation(async () => {
-        // Deleting the passport removes every membership saved under it (the vault transaction reports which);
-        // their group drafts go with them.
-        let deletedAccountKeys: string[] = [];
-        const currentAccountKey = getMobileAuthOwner().accountKey;
         const deletedOwnerIsCurrent =
           activeAuthRealmRef.current === deletedRealm &&
           userRef.current?.passportId === deletedPassportId;
@@ -3351,16 +3345,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // owner check, vault cleanup and runtime clear so a newly selected
           // account can never be cleared by this older deletion response.
           try {
-            deletedAccountKeys = await removeMobilePassport(deletedRealm, deletedPassportId);
+            await removeMobilePassport(deletedRealm, deletedPassportId);
           } finally {
             await deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined);
             await clearLocalSession({ persistedAuthAlreadyCleared: true });
-            await clearBotGroupComposerDraftsForAccounts([currentAccountKey, ...deletedAccountKeys]).catch(() => undefined);
           }
           return;
         }
-        deletedAccountKeys = await removeMobilePassport(deletedRealm, deletedPassportId);
-        await clearBotGroupComposerDraftsForAccounts(deletedAccountKeys).catch(() => undefined);
+        await removeMobilePassport(deletedRealm, deletedPassportId);
       });
       refreshSavedAccountsSnapshotBestEffort();
       return status;

@@ -13,6 +13,8 @@ const native = vi.hoisted(() => ({
   storage: new Map<string, string>(),
   asyncStorage: new Map<string, string>(),
   removeGate: Promise.resolve() as Promise<void>,
+  failGetAllKeys: 0,
+  failMultiRemove: 0,
   confirmDeletion: vi.fn(),
   refreshAccount: vi.fn(),
   accountMemberships: vi.fn(),
@@ -42,12 +44,20 @@ const native = vi.hoisted(() => ({
 }));
 
 vi.mock('expo-router', () => ({ useRouter: () => ({ replace: native.replaceRoute }) }));
+vi.mock('expo-crypto', () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => native.asyncStorage.get(key) ?? null,
   setItem: async (key: string, value: string) => { native.asyncStorage.set(key, value); },
   removeItem: async (key: string) => { native.asyncStorage.delete(key); },
-  getAllKeys: async () => [...native.asyncStorage.keys()],
-  multiRemove: async (keys: readonly string[]) => { await native.removeGate; for (const key of keys) native.asyncStorage.delete(key); },
+  getAllKeys: async () => {
+    if (native.failGetAllKeys > 0) { native.failGetAllKeys -= 1; throw new Error('storage unavailable'); }
+    return [...native.asyncStorage.keys()];
+  },
+  multiRemove: async (keys: readonly string[]) => {
+    await native.removeGate;
+    if (native.failMultiRemove > 0) { native.failMultiRemove -= 1; throw new Error('storage unavailable'); }
+    for (const key of keys) native.asyncStorage.delete(key);
+  },
   multiGet: async (keys: readonly string[]) => keys.map(key => [key, native.asyncStorage.get(key) ?? null]),
   multiSet: async (pairs: readonly [string, string][]) => { for (const [key, value] of pairs) native.asyncStorage.set(key, value); },
   clear: async () => { native.asyncStorage.clear(); },
@@ -172,9 +182,9 @@ vi.mock('@/update/fetchLatestRelease', () => ({}));
 
 import { AuthApiError, accountVaultKey, passportVaultKey } from '@cindy/auth-client';
 import { ApiError } from '@/api/client';
-import { MOBILE_ACCOUNT_VAULT_KEY } from '../mobileAccountVault';
+import { MOBILE_ACCOUNT_VAULT_KEY, ensureMobileGroupDraftEpoch, invalidateMobileGroupDraftEpochs } from '../mobileAccountVault';
 import { AuthProvider, useAuth } from '../AuthContext';
-import { getMobileAuthOwner, setMobileAuthOwner } from '../authOwnerGeneration';
+import { setMobileAuthOwner } from '../authOwnerGeneration';
 import { botGroupComposerDraftId } from '@/session/botGroupComposerDraft';
 import { flushComposerDraftWrites, readComposerDraft, saveComposerDraft, __testing as composerDraftTesting } from '@/session/composerDraftStore';
 import AddAccountScreen from '../../../app/add-account';
@@ -251,6 +261,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
     native.storage.clear(); native.chatFiles.clear(); native.asyncStorage.clear(); native.removeGate = Promise.resolve();
+    native.failGetAllKeys = 0; native.failMultiRemove = 0;
     native.removeChatFile.mockReset().mockImplementation(async (key: string) => { native.chatFiles.delete(key); });
     native.writeSecure.mockReset().mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
     native.logoutCleanup.mockReset();
@@ -300,137 +311,310 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     }));
   }
 
-  // Unit regression (review of #13286): ending one account's session cleared every saved account's
-  // group drafts. Two saved accounts, real AuthProvider entries: a session that ends clears only that
-  // account's drafts; signing out keeps them (maintainer decision on #13286).
-  describe('group composer drafts of two saved accounts', () => {
+  // Unit regression (review of #13286): a group draft must not come back once its account's session ended, even when
+  // deleting it from AsyncStorage fails or the app restarts; signing out keeps it for the same account and realm
+  // (maintainer decision). Real AuthProvider entries; the account record decides through draft generations.
+  describe('group composer drafts of saved accounts', () => {
+    const currentKey = accountVaultKey('cn', membership.id);
     const otherKey = accountVaultKey('cn', 'other');
-    const draftKey = (accountKey: string) => composerDraftTesting.storageKeyForSession(
-      botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!);
     const siblingKey = accountVaultKey('cn', 'sibling');
     const memberOnlyKey = accountVaultKey('cn', 'member-only');
-    async function signInWithTwoSavedAccounts(sibling = false) {
+    let run = 0;
+    beforeEach(() => { run += 1; });
+    const epochOf = (accountKey: string) => `run${run}-${accountKey}`;
+    const draftIdOf = (accountKey: string, epoch = epochOf(accountKey)) =>
+      botGroupComposerDraftId({ accountKey, epoch, deviceId: 'mac', groupId: 'g1' })!;
+    const storedKey = (accountKey: string, epoch?: string) => composerDraftTesting.storageKeyForSession(draftIdOf(accountKey, epoch));
+    const epochsNow = (): Record<string, string> => JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!).groupDraftEpochs ?? {};
+    /** What the group chat would show for this account now: its current generation, created as the screen would. */
+    async function draftShownFor(accountKey: string): Promise<string | null> {
+      const epoch = await ensureMobileGroupDraftEpoch(accountKey, () => `fresh-${run}-${accountKey}`);
+      return epoch ? readComposerDraft(draftIdOf(accountKey, epoch)) : null;
+    }
+    const drain = () => act(async () => { for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const other = { ...membership, id: 'other', passportId: 'other-passport' };
+    const otherPassport = () => ({ realm: 'cn', passportId: 'other-passport', accountRefreshToken: 'other-passport-refresh',
+      memberships: [{ ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' }] });
+
+    async function signInWithSavedAccounts(options: { sibling?: boolean; otherPassport?: boolean } = {}) {
       seedSession(membership.id);
       const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
       vault.resources[otherKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'other-refresh',
         metadata: { ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' } };
-      // Another membership under the signed-in passport.
-      if (sibling) vault.resources[siblingKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'sibling-refresh',
+      // Another membership under the signed-in passport, and one saved only on that passport.
+      if (options.sibling) vault.resources[siblingKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'sibling-refresh',
         metadata: { ...membership, id: 'sibling', membershipId: 'sibling' } };
-      // A membership saved only on the passport, with no resource session of its own.
-      if (sibling) vault.passports[passportVaultKey('cn', 'passport')] = { realm: 'cn', passportId: 'passport',
+      if (options.sibling) vault.passports[passportVaultKey('cn', 'passport')] = { realm: 'cn', passportId: 'passport',
         accountRefreshToken: 'passport-refresh', memberships: [{ ...membership, id: 'member-only', membershipId: 'member-only' }] };
+      if (options.otherPassport) vault.passports[passportVaultKey('cn', 'other-passport')] = otherPassport();
+      const keys = [currentKey, otherKey, ...(options.sibling ? [siblingKey, memberOnlyKey] : [])];
+      vault.groupDraftEpochs = Object.fromEntries(keys.map(key => [key, epochOf(key)]));
       native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      // A normal signed-in device: the session record is there (without it the start is a repair, see below).
+      native.storage.set(sessionKey, JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'fixture-refresh' }));
       native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
       await restartProvider();
       expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
-      for (const accountKey of [accountVaultKey('cn', membership.id), otherKey, ...(sibling ? [siblingKey, memberOnlyKey] : [])]) {
-        saveComposerDraft(botGroupComposerDraftId({ accountKey, deviceId: 'mac', groupId: 'g1' })!, `draft of ${accountKey}`);
-      }
+      for (const accountKey of keys) saveComposerDraft(draftIdOf(accountKey), `draft of ${accountKey}`);
       await flushComposerDraftWrites();
     }
 
-    it('keeps the other account\'s draft when the current session expires', async () => {
-      await signInWithTwoSavedAccounts();
+    it('voids only the expired account\'s drafts when its session ends', async () => {
+      await signInWithSavedAccounts();
       await act(async () => { await auth.terminateSession('SESSION_EXPIRED'); });
-      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
-      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+      await drain();
+      expect(currentKey in epochsNow()).toBe(false);
+      expect(native.asyncStorage.has(storedKey(currentKey))).toBe(false);
+      expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
     });
 
-    it('clears the drafts of every membership of a deleted account and keeps another account\'s', async () => {
-      await signInWithTwoSavedAccounts(true);
+    it('voids every membership of a deleted account and keeps another account\'s', async () => {
+      await signInWithSavedAccounts({ sibling: true });
       native.confirmDeletion.mockResolvedValue({ status: 'scheduled' });
       await act(async () => { await auth.confirmAccountDeletion({ challengeId: 'c', receiptToken: 'r', code: '123456' }); });
-      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
-      expect(native.asyncStorage.has(draftKey(siblingKey))).toBe(false);
-      expect(native.asyncStorage.has(draftKey(memberOnlyKey))).toBe(false);
-      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+      await drain();
+      for (const key of [currentKey, siblingKey, memberOnlyKey]) {
+        expect(key in epochsNow()).toBe(false);
+        expect(native.asyncStorage.has(storedKey(key))).toBe(false);
+      }
+      expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
     });
 
-    // Unit regression (review of #13286): a cold start whose refresh is rejected has no cached user, so the
-    // session clear had no account key; the rejected account is known and its drafts must still go.
-    it('clears the rejected account\'s draft on a cold-start refresh rejection without a cached user', async () => {
-      await signInWithTwoSavedAccounts();
+    it('voids the rejected account on a cold-start refresh rejection without a cached user', async () => {
+      await signInWithSavedAccounts();
       await act(async () => root.unmount());
-      // A new process: no cached profile and no published owner.
       native.storage.delete(profileKey);
       setMobileAuthOwner(null);
       native.refresh.mockRejectedValue(new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked'));
       root = createRoot(document.createElement('div'));
       await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
+      await drain();
       expect(auth.initialized && !auth.isAuthenticated).toBe(true);
-      expect(native.asyncStorage.has(draftKey(accountVaultKey('cn', membership.id)))).toBe(false);
-      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+      expect(currentKey in epochsNow()).toBe(false);
+      expect(epochsNow()[otherKey]).toBe(epochOf(otherKey));
     });
 
-    // Maintainer decision on #13286: signing out keeps group drafts on the device; the same account in the same
-    // realm gets them back after signing in again, another account or the other realm never reads them.
-    it('keeps drafts when signing out and restores them only for the same account and realm', async () => {
-      await signInWithTwoSavedAccounts();
-      const currentKey = accountVaultKey('cn', membership.id);
+    // Maintainer decision on #13286: signing out keeps group drafts; the same account in the same realm gets its current
+    // drafts back, under a generation that was already replaced once; a voided generation never comes back.
+    it('keeps the current drafts of a re-generated account through sign-out and back in, for that account and realm only', async () => {
+      await signInWithSavedAccounts();
+      await act(async () => { await invalidateMobileGroupDraftEpochs([currentKey]); });
+      const replaced = await ensureMobileGroupDraftEpoch(currentKey, () => `second-${run}`);
+      expect(replaced).toBe(`second-${run}`);
+      saveComposerDraft(draftIdOf(currentKey, replaced!), 'current draft');
+      await flushComposerDraftWrites();
+      const actual = await vi.importActual<typeof import('../mobileAccountVault')>('../mobileAccountVault');
+      native.logoutCleanup.mockImplementation(actual.clearMobileLoginCredentialsForLogout);
       await act(async () => { await auth.logout(); });
-      expect(native.asyncStorage.get(draftKey(currentKey))).toBe(`draft of ${currentKey}`);
-      expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
-
-      const signInAgain = async (realm: 'cn' | 'global') => {
-        await act(async () => root.unmount());
-        const key = accountVaultKey(realm, membership.id);
-        native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify({ version: 1, activeAccountKey: key, passports: {},
-          resources: { [key]: { realm, metadata: { ...membership, membershipId: membership.id }, lastUsedAt: 1, refreshToken: 'again' } } }));
-        native.storage.delete(profileKey);
-        native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
-        root = createRoot(document.createElement('div'));
-        await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
-        expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
-        return readComposerDraft(botGroupComposerDraftId({ accountKey: getMobileAuthOwner().accountKey, deviceId: 'mac', groupId: 'g1' })!);
-      };
-      expect(await signInAgain('cn')).toBe(`draft of ${currentKey}`);
-      expect(await signInAgain('global')).toBeNull();
+      expect(epochsNow()[currentKey]).toBe(replaced);
+      await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+      native.exchange.mockResolvedValue({ status: 'ok', accessToken: 'fixture-access', refreshToken: 'again', expiresIn: 3600, membership });
+      await start();
+      await emitLink(callbackUrl());
+      expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+      expect(await draftShownFor(currentKey)).toBe('current draft');
+      expect(await draftShownFor(accountVaultKey('global', membership.id))).toBeNull();
     });
 
-    // Unit regression (review of #13286): switching to a saved account whose session is rejected and cannot be
-    // continued ends that account, so its drafts go; the signed-in account keeps its own. When a passport can
-    // continue the session, the account did not end and keeps its drafts.
-    it.each([false, true])('clears a saved account\'s drafts only when switching finds it ended (passport: %s)', async withPassport => {
-      await signInWithTwoSavedAccounts();
-      const currentKey = accountVaultKey('cn', membership.id);
-      if (withPassport) {
-        const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
-        vault.passports[passportVaultKey('cn', 'other-passport')] = { realm: 'cn', passportId: 'other-passport',
-          accountRefreshToken: 'other-passport-refresh', memberships: [{ ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' }] };
-        native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
-      }
-      const other = { ...membership, id: 'other', passportId: 'other-passport' };
+    it.each([
+      ['no passport: the rejected session was its last', { otherPassport: false }, (): void => undefined, 'SAVED_ACCOUNT_REAUTH_REQUIRED', true],
+      ['passport rejected with REFRESH_TOKEN_EXPIRED', { otherPassport: true },
+        (): void => { native.refreshAccount.mockRejectedValue(new AuthApiError('REFRESH_TOKEN_EXPIRED', 401, 'expired')); }, 'REFRESH_TOKEN_EXPIRED', true],
+      ['passport refreshed but B is no longer a member', { otherPassport: true }, (): void => {
+        native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'other-passport-refresh' });
+        native.accountMemberships.mockResolvedValue([]);
+      }, 'MEMBERSHIP_DISABLED', true],
+      ['passport refresh hits a network error', { otherPassport: true },
+        (): void => { native.refreshAccount.mockRejectedValue(new AuthApiError('NETWORK_ERROR', 0, 'offline')); }, 'NETWORK_ERROR', false],
+      ['passport continues the session', { otherPassport: true }, (): void => {
+        native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'other-passport-refresh' });
+        native.accountMemberships.mockResolvedValue([other]);
+        native.exchangeMembership.mockResolvedValue({ membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' });
+      }, null, false],
+    ] as const)('switching to a saved account whose session is rejected: %s', async (_name, setup, arrange, failureCode, voided) => {
+      await signInWithSavedAccounts(setup);
       native.refresh.mockImplementation(async (token: string) => {
         if (token === 'other-refresh') throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked');
         return { membership, accessToken: 'fixture-access', refreshToken: 'rotated' };
       });
-      native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'other-passport-refresh' });
-      native.accountMemberships.mockResolvedValue([other]);
-      native.exchangeMembership.mockResolvedValue({ membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' });
-      // Hold the disk removal: the switch must not report its failure before the ended account's drafts are gone.
-      // (Await the switch itself; act()'s thenable does not chain, so `expect(act(...)).rejects` would not wait.)
+      arrange();
+      // Hold every AsyncStorage removal: voiding must not depend on deletion.
       let releaseRemoval!: () => void;
       native.removeGate = new Promise<void>((resolve) => { releaseRemoval = resolve; });
-      let failure: unknown = null;
-      let settled = false;
-      const switching = auth.switchAccount(otherKey).catch((error: unknown) => { failure = error; }).finally(() => { settled = true; });
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-      if (!withPassport) expect(settled).toBe(false);
+      let failure: { code?: string } | null = null;
+      await act(async () => { await auth.switchAccount(otherKey).catch((error: { code?: string }) => { failure = error; }); });
+      expect(failure === null ? null : (failure as { code?: string }).code).toBe(failureCode);
+      expect(otherKey in epochsNow()).toBe(!voided);
+      if (voided) expect(await draftShownFor(otherKey)).toBeNull();
+      else expect(await readComposerDraft(draftIdOf(otherKey))).toBe(`draft of ${otherKey}`);
       releaseRemoval();
-      await act(async () => { await switching; });
-      const otherDraftId = botGroupComposerDraftId({ accountKey: otherKey, deviceId: 'mac', groupId: 'g1' })!;
-      if (withPassport) {
-        expect(failure).toBeNull();
-        await act(async () => { await flushComposerDraftWrites(); });
-        expect(native.asyncStorage.get(draftKey(otherKey))).toBe(`draft of ${otherKey}`);
+      await drain();
+      expect(epochsNow()[currentKey]).toBe(epochOf(currentKey));
+      expect(native.asyncStorage.get(storedKey(currentKey))).toBe(`draft of ${currentKey}`);
+    });
+
+    it.each([
+      ['B is no longer a member', (): void => {
+        native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'passport-refresh' });
+        native.accountMemberships.mockResolvedValue([]);
+      }, true],
+      ['the passport is rejected with REFRESH_TOKEN_EXPIRED', () =>
+        native.refreshAccount.mockRejectedValue(new AuthApiError('REFRESH_TOKEN_EXPIRED', 401, 'expired')), true],
+      ['the passport refresh hits a network error', () =>
+        native.refreshAccount.mockRejectedValue(new AuthApiError('NETWORK_ERROR', 0, 'offline')), false],
+      ['B is still a member', (): void => {
+        native.refreshAccount.mockResolvedValue({ accountToken: 'account-access', accountRefreshToken: 'passport-refresh' });
+        native.accountMemberships.mockResolvedValue([{ ...membership, id: 'member-only' }]);
+      }, false],
+    ] as const)('syncing saved accounts when B is listed only on a passport and %s', async (_name, arrange, voided) => {
+      await signInWithSavedAccounts({ sibling: true });
+      arrange();
+      await act(async () => { await auth.syncSavedAccounts(); });
+      await drain();
+      expect(memberOnlyKey in epochsNow()).toBe(!voided);
+      expect(native.asyncStorage.has(storedKey(memberOnlyKey))).toBe(!voided);
+      for (const key of [currentKey, siblingKey, otherKey]) expect(epochsNow()[key]).toBe(epochOf(key));
+    });
+
+    // Maintainer review of 735df6e1de (point 1): termination clears the session first; when the separate generation
+    // write fails, the account record still names the account with no session record, and installing a session
+    // for it again voids the drafts.
+    it.each(['restart', 'sign in again in the same process'] as const)('voids a terminated account\'s drafts when its first account-record write fails (%s)', async (then) => {
+      await signInWithSavedAccounts();
+      let failVault = true;
+      native.writeSecure.mockImplementation(async (key: string, value: string) => {
+        if (key === MOBILE_ACCOUNT_VAULT_KEY && failVault) { failVault = false; throw new Error('keychain write failed'); }
+        native.storage.set(key, value);
+      });
+      native.resourceRequest.mockRejectedValue(new ApiError('ACCOUNT_UNAVAILABLE', 401, 'unavailable'));
+      await act(async () => {
+        await expect(auth.apiFetch('/resource', { baseUrl: 'https://resource.example.invalid' })).rejects.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' });
+      });
+      await drain();
+      expect(failVault).toBe(false);
+      expect(native.storage.has(sessionKey)).toBe(false);
+      expect(auth.isAuthenticated).toBe(false);
+      expect(epochsNow()[currentKey]).toBe(epochOf(currentKey));
+      if (then === 'restart') {
+        await restartProvider();
       } else {
-        // By the time the caller sees the failure the ended account's draft is gone, in memory and on disk.
-        expect(failure).toMatchObject({ code: 'SAVED_ACCOUNT_REAUTH_REQUIRED' });
-        expect(native.asyncStorage.has(draftKey(otherKey))).toBe(false);
-        expect(await readComposerDraft(otherDraftId)).toBeNull();
+        await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+        native.exchange.mockResolvedValue({ status: 'ok', accessToken: 'fixture-access', refreshToken: 'again', expiresIn: 3600, membership });
+        await start();
+        await emitLink(callbackUrl());
       }
-      expect(native.asyncStorage.get(draftKey(currentKey))).toBe(`draft of ${currentKey}`);
+      expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+      expect(currentKey in epochsNow()).toBe(false);
+      expect(await draftShownFor(currentKey)).toBeNull();
+      expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
+    });
+
+    // Maintainer review of 735df6e1de (point 2): with the draft still on disk because the first storage operation
+    // failed, a restart (fresh storage modules) must not read it back.
+    it.each([
+      ['termination', 'getAllKeys'], ['termination', 'multiRemove'],
+      ['deletion', 'getAllKeys'], ['deletion', 'multiRemove'],
+    ] as const)('never reads back the drafts of a single account after %s when the first %s fails', async (entry, failing) => {
+      await signInWithSavedAccounts();
+      if (failing === 'getAllKeys') native.failGetAllKeys = 1; else native.failMultiRemove = 1;
+      if (entry === 'termination') {
+        await act(async () => { await auth.terminateSession('SESSION_EXPIRED'); });
+      } else {
+        native.confirmDeletion.mockResolvedValue({ status: 'scheduled' });
+        await act(async () => { await auth.confirmAccountDeletion({ challengeId: 'c', receiptToken: 'r', code: '123456' }); });
+      }
+      await drain();
+      expect(native.storage.has(sessionKey)).toBe(false);
+      expect(native.asyncStorage.get(storedKey(currentKey))).toBe(`draft of ${currentKey}`);
+      // The same account signs in again after a restart. The chat reads its drafts under the account's current
+      // generation; that id has never been in memory, so the read goes to disk, where only the voided one is.
+      const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+      vault.resources[currentKey] ??= { realm: 'cn', lastUsedAt: 1, refreshToken: 'again', metadata: { ...membership, membershipId: membership.id } };
+      vault.activeAccountKey = currentKey;
+      native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      native.storage.set(sessionKey, JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'again' }));
+      native.refresh.mockResolvedValue({ membership, accessToken: 'fixture-access', refreshToken: 'again-rotated' });
+      await restartProvider();
+      expect(auth.isAuthenticated && auth.user?.id === membership.id).toBe(true);
+      expect(epochsNow()[currentKey]).toBeUndefined();
+      expect(await draftShownFor(currentKey)).toBeNull();
+      expect(epochsNow()[currentKey]).not.toBe(epochOf(currentKey));
+      expect(native.asyncStorage.get(storedKey(otherKey))).toBe(`draft of ${otherKey}`);
+    });
+
+    // Maintainer review of 735df6e1de (point 3): drafts go only after the write commits; a rolled-back write keeps them.
+    it('keeps every draft when switching rolls the account record back', async () => {
+      await signInWithSavedAccounts({ otherPassport: true });
+      native.refresh.mockImplementation(async (token: string) => token === 'other-refresh'
+        ? { membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' }
+        : { membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
+      native.writeSecure.mockImplementation(async (key: string, value: string) => {
+        if (key === sessionKey && value.includes('other-rotated')) throw new Error('session write failed');
+        native.storage.set(key, value);
+      });
+      await act(async () => { await auth.switchAccount(otherKey).catch(() => undefined); });
+      await drain();
+      expect(auth.user?.id).toBe(membership.id);
+      for (const key of [currentKey, otherKey]) {
+        expect(epochsNow()[key]).toBe(epochOf(key));
+        expect(native.asyncStorage.get(storedKey(key))).toBe(`draft of ${key}`);
+      }
+    });
+  });
+
+  // Draft generations live in the account record but never change how signing in works: the normal flows write and
+  // delete exactly the same credential items as before them (counts measured on 44b291c0d7), with or without drafts.
+  describe('credential writes of the normal flows', () => {
+    const tally = () => {
+      const out: Record<string, number> = {};
+      for (const [key] of native.writeSecure.mock.calls) out[`w:${key}`] = (out[`w:${key}`] ?? 0) + 1;
+      for (const [key] of native.deleteSecure.mock.calls) out[`d:${key}`] = (out[`d:${key}`] ?? 0) + 1;
+      return out;
+    };
+    const reset = () => { native.writeSecure.mockClear(); native.deleteSecure.mockClear(); };
+    const otherKey = accountVaultKey('cn', 'other');
+    const other = { ...membership, id: 'other', passportId: 'other-passport' };
+
+    it.each([false, true])('cold start, switch, sign-out and sign-in write as before (group drafts in use: %s)', async (withDrafts) => {
+      seedSession(membership.id);
+      const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+      vault.resources[otherKey] = { realm: 'cn', lastUsedAt: 0, refreshToken: 'other-refresh',
+        metadata: { ...membership, id: 'other', membershipId: 'other', passportId: 'other-passport' } };
+      if (withDrafts) vault.groupDraftEpochs = { [accountVaultKey('cn', membership.id)]: 'e1', [otherKey]: 'e2' };
+      native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      native.storage.set(sessionKey, JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'fixture-refresh' }));
+      native.refresh.mockImplementation(async (token: string) => token === 'other-refresh'
+        ? { membership: other, accessToken: 'other-access', refreshToken: 'other-rotated' }
+        : { membership, accessToken: 'fixture-access', refreshToken: 'rotated' });
+
+      reset(); await restartProvider();
+      expect(auth.isAuthenticated).toBe(true);
+      expect(tally()).toEqual({ 'd:cindy.mobile.auth.accountRefreshToken': 1, 'd:xdt.mobile.pendingOAuth': 1, 'd:xdt.mobile.refreshToken': 1,
+        'd:xdt.mobile.userProfile': 1, [`w:${MOBILE_ACCOUNT_VAULT_KEY}`]: 1, [`w:${sessionKey}`]: 1, [`w:${profileKey}`]: 1 });
+
+      reset(); await act(async () => { await auth.switchAccount(otherKey); });
+      expect(auth.user?.id).toBe('other');
+      expect(tally()).toEqual({ 'd:cindy.mobile.auth.accountDeletionReceipt': 1, [`w:${MOBILE_ACCOUNT_VAULT_KEY}`]: 2,
+        [`w:${sessionKey}`]: 1, [`w:${profileKey}`]: 1 });
+
+      const actual = await vi.importActual<typeof import('../mobileAccountVault')>('../mobileAccountVault');
+      native.logoutCleanup.mockImplementation(actual.clearMobileLoginCredentialsForLogout);
+      reset(); await act(async () => { await auth.logout(); });
+      expect(auth.isAuthenticated).toBe(false);
+      expect(tally()).toEqual({ 'd:cindy.mobile.auth.accountDeletionReceipt': 1, 'd:cindy.mobile.auth.accountRefreshToken': 1,
+        'd:cindy.mobile.auth.pendingOAuth': 1, 'd:cindy.mobile.auth.refreshToken': 1, [`d:${sessionKey}`]: 1, [`d:${profileKey}`]: 2,
+        'd:xdt.mobile.pendingOAuth': 1, 'd:xdt.mobile.refreshToken': 1, 'd:xdt.mobile.userProfile': 1,
+        [`w:${MOBILE_ACCOUNT_VAULT_KEY}`]: 1, 'w:cindy.mobile.auth.pendingOAuth': 1 });
+
+      await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+      native.exchange.mockResolvedValue({ status: 'ok', accessToken: 'fixture-access', refreshToken: 'fresh', expiresIn: 3600, membership });
+      reset(); await start(); await emitLink(callbackUrl());
+      expect(auth.isAuthenticated).toBe(true);
+      expect(tally()).toEqual({ 'd:cindy.mobile.auth.accountDeletionReceipt': 1, 'd:cindy.mobile.auth.pendingOAuth': 1,
+        [`w:${MOBILE_ACCOUNT_VAULT_KEY}`]: 1, 'w:cindy.mobile.auth.pendingOAuth': 2, [`w:${sessionKey}`]: 1, [`w:${profileKey}`]: 1 });
+      const stored = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+      if (withDrafts) expect(stored.groupDraftEpochs).toEqual({ [accountVaultKey('cn', membership.id)]: 'e1', [otherKey]: 'e2' });
+      else expect('groupDraftEpochs' in stored).toBe(false);
     });
   });
 

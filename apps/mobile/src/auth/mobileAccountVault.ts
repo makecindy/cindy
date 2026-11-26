@@ -42,6 +42,12 @@ export interface MobileAccountVault {
   resources: Record<string, MobileStoredResourceSession>;
   passports: Record<string, MobileStoredPassportSession>;
   signedOutAt?: number;
+  /**
+   * Group chat draft generation per account key (random, never reused). A group draft is readable only under its
+   * account's current generation, so removing an entry here voids that account's drafts in the same write that
+   * ended its session. Absent until a group chat first needs one; never part of any credential decision.
+   */
+  groupDraftEpochs?: Record<string, string>;
 }
 
 export interface MobileSavedAccount extends StoredAccountMetadata {
@@ -147,7 +153,114 @@ function parseMobileAccountVaultRecord(
     ...(typeof value.signedOutAt === 'number'
       ? { signedOutAt: value.signedOutAt }
       : {}),
+    ...groupDraftEpochsField(parseGroupDraftEpochs(value.groupDraftEpochs)),
   };
+}
+
+/** Lenient on purpose: a damaged draft field drops only the drafts, never the credentials around it. */
+function parseGroupDraftEpochs(value: unknown): Record<string, string> {
+  const epochs: Record<string, string> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return epochs;
+  for (const [accountKey, epoch] of Object.entries(value)) {
+    if (accountKey && typeof epoch === 'string' && epoch) epochs[accountKey] = epoch;
+  }
+  return epochs;
+}
+
+function groupDraftEpochsField(epochs: Record<string, string>): { groupDraftEpochs?: Record<string, string> } {
+  return Object.keys(epochs).length > 0 ? { groupDraftEpochs: epochs } : {};
+}
+
+/** Accounts that can still continue: a saved Resource session, or a membership listed under a saved passport. */
+function continuableAccountKeys(vault: MobileAccountVault): Set<string> {
+  const keys = new Set(Object.keys(vault.resources));
+  for (const passport of Object.values(vault.passports)) {
+    for (const membership of passport.memberships) keys.add(accountVaultKey(passport.realm, membership.membershipId));
+  }
+  return keys;
+}
+
+export interface InvalidatedGroupDraftEpoch {
+  accountKey: string;
+  epoch: string;
+}
+
+/**
+ * Pure: the group draft generations after one account-record write.
+ *
+ * - An account that could continue before the write and cannot after it (its last Resource session and passport
+ *   listing are gone) loses its generation.
+ * - Orphan session: installing a session record while none exists, on a record that names a current account and
+ *   is not signed out, means that account's session was ended (session termination deletes only the session
+ *   record). Its generation goes. Signing out leaves `signedOutAt`, so it never counts.
+ * - `invalidate` lists accounts whose session ended without changing the record (termination).
+ *
+ * Generations are only removed here, never created: an account gets a new one when a group chat first needs it.
+ */
+export function settleGroupDraftEpochs(input: {
+  before: MobileAccountVault;
+  after: MobileAccountVault;
+  sessionRecordPresent?: boolean;
+  invalidate?: readonly string[];
+}): { epochs: Record<string, string>; invalidated: InvalidatedGroupDraftEpoch[] } {
+  const epochs = { ...(input.after.groupDraftEpochs ?? {}) };
+  const ended = new Set(input.invalidate ?? []);
+  const continuableAfter = continuableAccountKeys(input.after);
+  for (const accountKey of continuableAccountKeys(input.before)) {
+    if (!continuableAfter.has(accountKey)) ended.add(accountKey);
+  }
+  if (
+    input.sessionRecordPresent === false &&
+    typeof input.before.signedOutAt !== 'number' &&
+    input.before.activeAccountKey
+  ) {
+    ended.add(input.before.activeAccountKey);
+  }
+  const invalidated: InvalidatedGroupDraftEpoch[] = [];
+  for (const accountKey of ended) {
+    const epoch = epochs[accountKey];
+    if (!epoch) continue;
+    delete epochs[accountKey];
+    invalidated.push({ accountKey, epoch });
+  }
+  return { epochs, invalidated };
+}
+
+/** Never throws into a credential write: if settling fails the drafts go, the credentials do not. */
+function applyGroupDraftEpochs(
+  vault: MobileAccountVault,
+  settle: () => ReturnType<typeof settleGroupDraftEpochs>,
+): InvalidatedGroupDraftEpoch[] {
+  try {
+    const { epochs, invalidated } = settle();
+    if (Object.keys(epochs).length > 0) vault.groupDraftEpochs = epochs;
+    else delete vault.groupDraftEpochs;
+    return invalidated;
+  } catch {
+    const lost = Object.entries(vault.groupDraftEpochs ?? {}).map(([accountKey, epoch]) => ({ accountKey, epoch }));
+    delete vault.groupDraftEpochs;
+    return lost;
+  }
+}
+
+type GroupDraftEpochListener = (invalidated: readonly InvalidatedGroupDraftEpoch[]) => void;
+const groupDraftEpochListeners = new Set<GroupDraftEpochListener>();
+
+/** Called after a write that voided generations has committed (including `afterPersist`); never before. */
+export function onMobileGroupDraftEpochsInvalidated(listener: GroupDraftEpochListener): () => void {
+  groupDraftEpochListeners.add(listener);
+  return () => groupDraftEpochListeners.delete(listener);
+}
+
+function notifyGroupDraftEpochsInvalidated(invalidated: readonly InvalidatedGroupDraftEpoch[]): void {
+  if (invalidated.length === 0) return;
+  for (const listener of groupDraftEpochListeners) {
+    try {
+      listener(invalidated);
+    } catch {
+      // Draft cleanup is best effort; it never fails the credential write that already committed.
+    }
+  }
 }
 
 export function parseMobileAccountVault(raw: string | null): MobileAccountVault {
@@ -173,7 +286,12 @@ async function writeMobileAccountVault(vault: MobileAccountVault): Promise<void>
 export function transactMobileAccountVault<T>(
   operation: (vault: MobileAccountVault) => T | Promise<T>,
   afterPersist: (result: T) => void | Promise<void> = () => undefined,
-  options: { recoverInvalidForExplicitLogin?: boolean } = {},
+  options: {
+    recoverInvalidForExplicitLogin?: boolean;
+    /** Set by writes that install a session record: whether one existed before (see settleGroupDraftEpochs). */
+    sessionRecordPresent?: boolean;
+    invalidateGroupDrafts?: readonly string[];
+  } = {},
 ): Promise<T> {
   return enqueueMobileVaultOperation(async () => {
     // A SecureStore read failure is not an empty vault. Propagate it so a
@@ -190,7 +308,14 @@ export function transactMobileAccountVault<T>(
       // every valid child we can parse; malformed top-level JSON starts fresh.
       vault = parseMobileAccountVault(raw);
     }
+    const before = parseMobileAccountVault(raw);
     const result = await operation(vault);
+    const invalidated = applyGroupDraftEpochs(vault, () => settleGroupDraftEpochs({
+      before,
+      after: vault,
+      sessionRecordPresent: options.sessionRecordPresent,
+      invalidate: options.invalidateGroupDrafts,
+    }));
     await writeMobileAccountVault(vault);
     try {
       // Keep the vault queue owned until every related durable write and
@@ -202,6 +327,7 @@ export function transactMobileAccountVault<T>(
       else await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, raw, LOGIN_CREDENTIAL_STORAGE);
       throw error;
     }
+    notifyGroupDraftEpochsInvalidated(invalidated);
     return result;
   });
 }
@@ -248,6 +374,19 @@ export function reconcileMobileActiveAuthSession(input: {
         }
       : null;
     if (!session && activeSession) {
+      // Orphan session: the record names a current account but its session record is gone, which is what
+      // session termination leaves. Void that account's group drafts before the session comes back; only when
+      // it has a generation, so a launch without group drafts writes exactly as before.
+      const repaired: MobileAccountVault = { ...vault };
+      const invalidated = applyGroupDraftEpochs(repaired, () => settleGroupDraftEpochs({
+        before: vault,
+        after: repaired,
+        sessionRecordPresent: false,
+      }));
+      if (invalidated.length > 0) {
+        await writeMobileAccountVault(repaired);
+        notifyGroupDraftEpochsInvalidated(invalidated);
+      }
       await input.writePersistedSession(
         activeSession.refreshToken,
         activeSession.realm,
@@ -285,6 +424,8 @@ export async function clearMobileAccountVault(
     const raw = await getSecureItem(MOBILE_ACCOUNT_VAULT_KEY);
     const vault = emptyMobileAccountVault();
     vault.signedOutAt = Date.now();
+    // Signing out keeps group draft generations: the same account in the same realm gets its drafts back.
+    Object.assign(vault, groupDraftEpochsField(parseMobileAccountVault(raw).groupDraftEpochs ?? {}));
     await writeMobileAccountVault(vault);
     try {
       await afterPersist();
@@ -533,6 +674,7 @@ export async function commitMobileLoginSessions(
     )[];
   },
   afterPersist: () => void | Promise<void>,
+  options: { sessionRecordPresent?: boolean } = {},
 ): Promise<string | null> {
   const passportId = input.passportId;
   const key = passportId
@@ -574,13 +716,14 @@ export async function commitMobileLoginSessions(
       return key;
     },
     afterPersist,
-    { recoverInvalidForExplicitLogin: true },
+    { recoverInvalidForExplicitLogin: true, sessionRecordPresent: options.sessionRecordPresent },
   );
 }
 
 export async function commitMobileSavedAccountActivation(
   accountKey: string,
   commitTransition: () => void | Promise<void>,
+  options: { sessionRecordPresent?: boolean } = {},
 ): Promise<void> {
   await transactMobileAccountVault(
     (vault) => {
@@ -592,6 +735,7 @@ export async function commitMobileSavedAccountActivation(
       vault.activeAccountKey = accountKey;
     },
     commitTransition,
+    { sessionRecordPresent: options.sessionRecordPresent },
   );
 }
 
@@ -664,23 +808,15 @@ export async function removeMobileSavedAccount(accountKey: string): Promise<void
   });
 }
 
-/** Removes a passport and every membership saved under it; returns the account keys that went with it. */
-export async function removeMobilePassport(realm: AuthRegion, passportId: string): Promise<string[]> {
-  return mutateMobileAccountVault((vault) => {
-    const removed = new Set<string>();
-    const passportKey = passportVaultKey(realm, passportId);
-    for (const membership of vault.passports[passportKey]?.memberships ?? []) {
-      removed.add(accountVaultKey(realm, membership.membershipId));
-    }
-    delete vault.passports[passportKey];
+export async function removeMobilePassport(realm: AuthRegion, passportId: string): Promise<void> {
+  await mutateMobileAccountVault((vault) => {
+    delete vault.passports[passportVaultKey(realm, passportId)];
     for (const [key, resource] of Object.entries(vault.resources)) {
       if (resource.realm === realm && resource.metadata.passportId === passportId) {
-        removed.add(key);
         delete vault.resources[key];
         if (vault.activeAccountKey === key) vault.activeAccountKey = null;
       }
     }
-    return [...removed];
   });
 }
 
@@ -709,4 +845,60 @@ export async function removeMobilePassportSessionIfCurrent(
     delete vault.passports[key];
     return true;
   });
+}
+
+/** Current group draft generations, or null when the record cannot be read (never a guessed default). */
+export async function readMobileGroupDraftEpochs(): Promise<Record<string, string> | null> {
+  try {
+    const vault = await readMobileAccountVault({ strict: true });
+    return { ...(vault.groupDraftEpochs ?? {}) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This account's group draft generation, creating one only when it has none. Null when the account cannot
+ * continue, the device is signed out, or the record cannot be read or written: the caller then keeps drafts in
+ * memory only. A missing generation is never filled with a default, so a voided one cannot come back.
+ */
+export async function ensureMobileGroupDraftEpoch(
+  accountKey: string,
+  createEpoch: () => string,
+): Promise<string | null> {
+  if (!accountKey) return null;
+  let current: MobileAccountVault;
+  try {
+    current = await readMobileAccountVault({ strict: true });
+  } catch {
+    return null;
+  }
+  if (typeof current.signedOutAt === 'number' || !continuableAccountKeys(current).has(accountKey)) return null;
+  const existing = current.groupDraftEpochs?.[accountKey];
+  if (existing) return existing;
+  try {
+    return await transactMobileAccountVault((vault) => {
+      if (typeof vault.signedOutAt === 'number' || !continuableAccountKeys(vault).has(accountKey)) return null;
+      const stored = vault.groupDraftEpochs?.[accountKey];
+      if (stored) return stored;
+      const epoch = createEpoch();
+      vault.groupDraftEpochs = { ...(vault.groupDraftEpochs ?? {}), [accountKey]: epoch };
+      return epoch;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Voids these accounts' group drafts for a session that ended without changing the record (termination). Writes
+ * only when one of them has a generation. Callers must not wait on it before clearing credentials: if it fails,
+ * the orphan-session rule voids the generation when a session for the account is installed again.
+ */
+export async function invalidateMobileGroupDraftEpochs(accountKeys: readonly string[]): Promise<void> {
+  const keys = accountKeys.filter(Boolean);
+  if (keys.length === 0) return;
+  const epochs = await readMobileGroupDraftEpochs();
+  if (epochs && !keys.some(key => epochs[key])) return;
+  await transactMobileAccountVault(() => undefined, () => undefined, { invalidateGroupDrafts: keys });
 }

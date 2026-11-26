@@ -8,7 +8,7 @@ import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
-import { botGroupComposerDraftId, clearBotGroupComposerDraftsForAccounts } from '@/session/botGroupComposerDraft';
+import { botGroupComposerDraftId, connectBotGroupDraftEpochs, type InvalidatedBotGroupDraftEpoch } from '@/session/botGroupComposerDraft';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
 import { __testing as composerDraftTesting, clearComposerDraftsWithPrefix, flushComposerDraftWrites } from '@/session/composerDraftStore';
@@ -515,12 +515,37 @@ beforeEach(async () => {
   h.confirm.mockResolvedValue(true);
   h.userId = 'owner'; h.accountGeneration = 1; h.storageRead = Promise.resolve();
   setMobileAuthOwner('owner', 'global');
+  // Stands in for the account record AuthContext connects: a fresh generation per account on first use.
+  draftEpochs.values.clear();
+  draftEpochs.pending = null;
+  connectBotGroupDraftEpochs({
+    ensure: async (accountKey) => {
+      await draftEpochs.pending;
+      if (!draftEpochs.values.has(accountKey)) draftEpochs.values.set(accountKey, `epoch-${++draftEpochs.created}`);
+      return draftEpochs.values.get(accountKey)!;
+    },
+    read: async () => Object.fromEntries(draftEpochs.values),
+    subscribe: (listener) => { draftEpochs.listener = listener; return () => { draftEpochs.listener = null; }; },
+  });
   await clearComposerDraftsWithPrefix('bot-group:');
   h.storage.clear();
   node = document.createElement('div');
   root = createRoot(node);
 });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
+
+const draftEpochs = {
+  values: new Map<string, string>(),
+  created: 0,
+  pending: null as Promise<void> | null,
+  listener: null as null | ((invalidated: readonly InvalidatedBotGroupDraftEpoch[]) => void),
+};
+/** The account record voided this account's generation (its session ended) and the write committed. */
+async function endDraftSession(accountKey: string) {
+  const epoch = draftEpochs.values.get(accountKey);
+  draftEpochs.values.delete(accountKey);
+  if (epoch) await act(async () => { draftEpochs.listener?.([{ accountKey, epoch }]); await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
 
 describe('group timeline', () => {
   // Unit / A04：从生产群页面打开图表，关闭或离开群后不应保留查看器；仅替换原生弹层边界。
@@ -1723,7 +1748,7 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     await signIn('b');
     await render(data, 'ready', undefined, '');
-    await act(async () => { await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'b')]); });
+    await endDraftSession(accountVaultKey('global', 'b'));
     await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
     await signIn('owner');
     await render(data, 'ready', undefined, '');
@@ -1780,7 +1805,7 @@ describe('group composer', () => {
     h.chat.act.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     await click('botGroup.composer.send');
     await act(async () => { root.render(null); });
-    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'owner')]);
+    await endDraftSession(accountVaultKey('global', 'owner'));
     await act(async () => { fail(new Error('[NOT_CONNECTED] offline')); });
     await render(data, 'ready', undefined, '');
     expect(h.row.value).toBe('');
@@ -1799,7 +1824,7 @@ describe('group composer', () => {
     await type('到');
     await click('botGroup.composer.send');
     await act(async () => { root.render(null); });
-    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('global', 'owner')]);
+    await endDraftSession(accountVaultKey('global', 'owner'));
     await signIn('owner');
     await render(data, 'ready', undefined, '');
     await type('又');
@@ -1813,8 +1838,9 @@ describe('group composer', () => {
   // Unit regression: after an app restart only the stored copy is left; it must fill the input,
   // and typing before the read finishes must win.
   it('restores a stored draft after an app restart unless the user already typed', async () => {
+    draftEpochs.values.set(accountVaultKey('global', 'owner'), 'before-restart');
     const stored = (groupId: string) => h.storage.set(composerDraftTesting.storageKeyForSession(
-      botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), deviceId: 'mac', groupId })!), '重启前的草稿');
+      botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), epoch: 'before-restart', deviceId: 'mac', groupId })!), '重启前的草稿');
     stored('g7');
     await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g7');
     await act(async () => {});
@@ -1827,6 +1853,29 @@ describe('group composer', () => {
     await act(async () => { h.row.onChangeText('新打的字'); });
     await act(async () => { release(); });
     expect(h.row.value).toBe('新打的字');
+  });
+
+  // Unit regression (review of #13286): the draft id waits for the account's generation from the account record;
+  // text typed before it arrives must be saved once it does, not lost, and a voided generation's draft never shows.
+  it('saves text typed before the draft generation arrives, and never shows a voided generation\'s draft', async () => {
+    let release!: () => void;
+    draftEpochs.pending = new Promise(resolve => { release = resolve; });
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    await act(async () => { h.row.onChangeText('先打的字'); });
+    await act(async () => { release(); });
+    await act(async () => { await flushComposerDraftWrites(); });
+    const epoch = draftEpochs.values.get(accountVaultKey('global', 'owner'))!;
+    const id = botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'owner'), epoch, deviceId: 'mac', groupId: 'g9' })!;
+    expect(h.storage.get(composerDraftTesting.storageKeyForSession(id))).toBe('先打的字');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g2');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    expect(h.row.value).toBe('先打的字');
+    await act(async () => { root.render(null); });
+    await endDraftSession(accountVaultKey('global', 'owner'));
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    await act(async () => {});
+    expect(h.row.value).toBe('');
+    expect(h.storage.has(composerDraftTesting.storageKeyForSession(id))).toBe(false);
   });
 
   // Both Chat Server entry paths must carry the selected original through the real composer.

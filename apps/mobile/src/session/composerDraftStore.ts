@@ -175,6 +175,24 @@ export async function clearComposerDraftsWithPrefix(idPrefix: string): Promise<v
   }
 }
 
+/** Ids of drafts stored on disk (text or document) that start with `idPrefix`; empty when keys cannot be listed. */
+export async function listComposerDraftIds(idPrefix: string): Promise<string[]> {
+  const keys = await AsyncStorage.getAllKeys().catch(() => [] as readonly string[]);
+  const ids = new Set<string>();
+  for (const key of keys) {
+    const encoded = key.startsWith(`${STORAGE_KEY_PREFIX}.`) ? key.slice(STORAGE_KEY_PREFIX.length + 1)
+      : key.startsWith(`${DOCUMENT_STORAGE_KEY_PREFIX}.`) ? key.slice(DOCUMENT_STORAGE_KEY_PREFIX.length + 1) : null;
+    if (encoded === null) continue;
+    try {
+      const id = decodeURIComponent(encoded);
+      if (id.startsWith(idPrefix)) ids.add(id);
+    } catch {
+      // Not one of ours.
+    }
+  }
+  return [...ids];
+}
+
 export async function flushComposerDraftWrites(sessionId?: string): Promise<void> {
   const normalizedSessionId = sessionId === undefined ? undefined : normalizeSessionId(sessionId);
   if (sessionId !== undefined && !normalizedSessionId) return;

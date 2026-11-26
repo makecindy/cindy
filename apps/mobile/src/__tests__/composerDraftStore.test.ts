@@ -23,6 +23,18 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const vault = vi.hoisted(() => ({
+  epochs: null as Record<string, string> | null,
+  listener: null as null | ((invalidated: readonly { accountKey: string; epoch: string }[]) => void),
+}));
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'uuid' }));
+/** Stands in for the account record that AuthContext connects in the app. */
+const fakeEpochSource = () => ({
+  ensure: async () => null,
+  read: async () => vault.epochs,
+  subscribe: (listener: NonNullable<typeof vault.listener>) => { vault.listener = listener; return () => { vault.listener = null; }; },
+});
+
 describe('composerDraftStore', () => {
   it.each(['both', 'text-only', 'new-draft'] as const)('reconciles a committed send after a crash with %s remaining', async (state) => {
     const { __testing, reconcileCommittedComposerDraft, readComposerDraft, readComposerDocumentDraft } = await import('@/session/composerDraftStore');
@@ -346,23 +358,54 @@ describe('composerDraftStore', () => {
     expect(store.has(__testing.storageKeyForSession(id))).toBe(false);
   });
 
-  // Unit regression (review of #13286): ending one account's session must keep another saved
-  // account's group draft; the key is realm-qualified, so the same member id in two realms differs.
-  it('clears one account\'s group drafts and keeps the other account\'s, across realms', async () => {
+  // Unit regression (review of #13286): voiding one account's draft generation drops only that generation's drafts,
+  // after the account record committed; the same account's newer generation and another realm keep theirs.
+  it('drops exactly the voided generation of one account, across realms and generations', async () => {
     const { accountVaultKey } = await import('@cindy/auth-client');
-    const { botGroupComposerDraftId, clearBotGroupComposerDraftsForAccounts } = await import('@/session/botGroupComposerDraft');
-    const { __testing, flushComposerDraftWrites, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
-    const cn = botGroupComposerDraftId({ accountKey: accountVaultKey('cn', 'same'), deviceId: 'mac', groupId: 'g1' })!;
-    const global = botGroupComposerDraftId({ accountKey: accountVaultKey('global', 'same'), deviceId: 'mac', groupId: 'g1' })!;
-    expect(cn).not.toBe(global);
-    saveComposerDraft(cn, 'cn draft');
+    const { botGroupComposerDraftId, connectBotGroupDraftEpochs } = await import('@/session/botGroupComposerDraft');
+    connectBotGroupDraftEpochs(fakeEpochSource());
+    const { __testing, flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
+    const cnKey = accountVaultKey('cn', 'same');
+    const id = (accountKey: string, epoch: string) => botGroupComposerDraftId({ accountKey, epoch, deviceId: 'mac', groupId: 'g1' })!;
+    const voided = id(cnKey, 'old');
+    const newer = id(cnKey, 'new');
+    const global = id(accountVaultKey('global', 'same'), 'old');
+    expect(new Set([voided, newer, global]).size).toBe(3);
+    expect(botGroupComposerDraftId({ accountKey: cnKey, epoch: null, deviceId: 'mac', groupId: 'g1' })).toBeNull();
+    saveComposerDraft(voided, 'voided draft');
+    saveComposerDraft(newer, 'newer draft');
     saveComposerDraft(global, 'global draft');
     await flushComposerDraftWrites();
-    await clearBotGroupComposerDraftsForAccounts([accountVaultKey('cn', 'same')]);
-    expect(readComposerDraftSync(cn)).toBeNull();
-    expect(store.has(__testing.storageKeyForSession(cn))).toBe(false);
-    expect(readComposerDraftSync(global)).toBe('global draft');
+    vault.listener!([{ accountKey: cnKey, epoch: 'old' }]);
+    await vi.waitFor(() => expect(store.has(__testing.storageKeyForSession(voided))).toBe(false));
+    expect(readComposerDraftSync(voided)).toBeNull();
+    expect(await readComposerDraft(voided)).toBeNull();
+    expect(store.get(__testing.storageKeyForSession(newer))).toBe('newer draft');
     expect(store.get(__testing.storageKeyForSession(global))).toBe('global draft');
+  });
+
+  it('sweeps stored group drafts whose generation is no longer current, and skips when the record is unreadable', async () => {
+    const { accountVaultKey } = await import('@cindy/auth-client');
+    const { botGroupComposerDraftId, connectBotGroupDraftEpochs, sweepStaleBotGroupDrafts, __testing: draftTesting } = await import('@/session/botGroupComposerDraft');
+    connectBotGroupDraftEpochs(fakeEpochSource());
+    const { __testing } = await import('@/session/composerDraftStore');
+    const key = accountVaultKey('cn', 'sweep');
+    const current = botGroupComposerDraftId({ accountKey: key, epoch: 'current', deviceId: 'mac', groupId: 'g1' })!;
+    const stale = botGroupComposerDraftId({ accountKey: key, epoch: 'voided', deviceId: 'mac', groupId: 'g1' })!;
+    // Written before generations existed: account, computer, group, topic.
+    const legacy = `bot-group:${[key, 'mac', 'g1', ''].map(encodeURIComponent).join(':')}`;
+    const task = 'session-1';
+    for (const draftId of [current, stale, legacy, task]) store.set(__testing.storageKeyForSession(draftId), draftId);
+    vault.epochs = null;
+    draftTesting.resetStaleSweep();
+    await sweepStaleBotGroupDrafts();
+    expect(store.size).toBe(4);
+    vault.epochs = { [key]: 'current' };
+    await sweepStaleBotGroupDrafts();
+    await vi.waitFor(() => expect(store.has(__testing.storageKeyForSession(stale))).toBe(false));
+    expect(store.has(__testing.storageKeyForSession(legacy))).toBe(false);
+    expect(store.get(__testing.storageKeyForSession(current))).toBe(current);
+    expect(store.get(__testing.storageKeyForSession(task))).toBe(task);
   });
 
   it('orders a new persistent write after an in-flight clear', async () => {
