@@ -2,8 +2,8 @@
  * Badges (DESIGN.md §4 Badges): short non-interactive labels and counts.
  *
  * - Badge: a pill label such as "Recommended", "Beta", "Customized" or a version. Gray chip by
- *   default (`sm`: 11px text, 8px sides, about 18px tall). `xs` (10px) is for counts and dense
- *   lists, `md` (12px) for chat cards such as the plan bubble. Text keeps its own case; there is no
+ *   default (`sm`: 11px text, 8px sides, about 18px tall). `xs` (10px, 8px sides, 16px tall) is for
+ *   compact rows, Chinese and Latin alike; `md` (12px) for chat cards such as the plan bubble. Text keeps its own case; there is no
  *   uppercase variant. `outline` trades the fill for a 1px border without changing the height.
  * - CountBadge: a 16px round number for unread or pending counts. The visible number is capped
  *   (`99+`); screen readers read `label` instead (the badge is a labelled image).
@@ -20,7 +20,7 @@ export type BadgeTone = 'neutral' | 'outline' | 'accent' | 'plan';
 export type BadgeSize = 'xs' | 'sm' | 'md';
 
 const SIZE_CLASS: Record<BadgeSize, string> = {
-  xs: 'gap-0.5 px-1.5 text-10 leading-[1.4]',
+  xs: 'gap-0.5 px-2 text-10 leading-[1.4]',
   sm: 'gap-1 px-2 text-11 leading-[1.45]',
   md: 'gap-1 px-2 text-12 leading-[1.5]',
 };

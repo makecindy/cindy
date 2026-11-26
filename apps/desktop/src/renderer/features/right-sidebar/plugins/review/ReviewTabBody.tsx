@@ -4740,12 +4740,12 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <Badge>
+          <Badge size="xs">
             {changeChip}
           </Badge>
         )}
         {diff.kind !== 'text' && (
-          <Badge>
+          <Badge size="xs">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
           </Badge>
         )}

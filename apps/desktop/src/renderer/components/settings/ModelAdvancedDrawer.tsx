@@ -740,7 +740,7 @@ export function ModelAdvancedDrawer({
                                   {AGENT_LABEL[agent]}
                                 </span>
                                 {agent === recommendedAgent && (
-                                  <Badge>
+                                  <Badge size="xs">
                                     {t('newChat.modelSelector.unified.recommended')}
                                   </Badge>
                                 )}

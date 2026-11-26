@@ -211,7 +211,7 @@ function ProviderRow({
             {label}
           </span>
           {badge && (
-            <Badge tone="outline">
+            <Badge size="xs" tone="outline">
               {badge}
             </Badge>
           )}

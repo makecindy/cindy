@@ -1301,7 +1301,7 @@ function SearchResultRow({
                 </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
-                <Badge>
+                <Badge size="xs">
                   {t(`ccAgent.search.kind.${item.matchKind}`)}
                 </Badge>
               </Tip>

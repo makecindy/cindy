@@ -120,7 +120,7 @@ export function TeammateSearchResults({
               {match.archived ? (
                 <span className="shrink-0 text-10 leading-none text-[var(--text-tertiary)]">{t('bots.archived')}</span>
               ) : null}
-              <Badge>
+              <Badge size="xs">
                 {match.kind === 'group' ? t('bots.groupChat.sidebar.title') : t('bots.title')}
               </Badge>
             </span>

@@ -36,12 +36,12 @@ export function SkillTagList({ tags, maxVisible = 3, className }: SkillTagListPr
   return (
     <div className={cn('flex min-w-0 items-center gap-1 overflow-hidden', className)} role="list">
       {visibleTags.map((tag) => (
-        <Badge key={`${tag.slug}:${tag.name}`} role="listitem" title={tag.name} className="max-w-20">
+        <Badge size="xs" key={`${tag.slug}:${tag.name}`} role="listitem" title={tag.name} className="max-w-20">
           <span className="truncate">{tag.name}</span>
         </Badge>
       ))}
       {hiddenTags.length > 0 ? (
-        <Badge
+        <Badge size="xs"
           role="listitem"
           title={hiddenTags.map((tag) => tag.name).join(', ')}
           aria-label={hiddenTags.map((tag) => tag.name).join(', ')}

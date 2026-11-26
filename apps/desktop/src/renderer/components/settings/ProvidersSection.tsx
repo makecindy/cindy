@@ -2419,7 +2419,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
         {t('settings.providers.xd.title')}
       </span>
       {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
-      <Badge tone="outline">
+      <Badge size="xs" tone="outline">
         {t('settings.providers.xdSignin.badge')}
       </Badge>
     </button>

@@ -930,7 +930,7 @@ function OptionRow({ icon, label, sub, badge, onClick }: {
         <span className="flex items-center gap-2">
           <span className="truncate text-14 font-medium text-[var(--text-primary)]">{label}</span>
           {badge ? (
-            <Badge tone="outline">
+            <Badge size="xs" tone="outline">
               {badge}
             </Badge>
           ) : null}

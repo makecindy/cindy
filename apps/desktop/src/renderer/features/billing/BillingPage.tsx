@@ -1279,7 +1279,7 @@ export function BillingSettingsSection({
                 description={t('billing.giftCardPurchase.list.description')}
                 badge={
                   giftCards.state.nextCursor === null ? (
-                    <Badge>
+                    <Badge size="xs">
                       {t('billing.giftCardPurchase.list.count', { count: giftCards.state.cards.length })}
                     </Badge>
                   ) : undefined
@@ -1329,7 +1329,7 @@ export function BillingSettingsSection({
             title={t('billing.orders.title')}
             description={t('billing.orders.description')}
             badge={
-              <Badge>
+              <Badge size="xs">
                 {t('billing.orders.count', { count: orderHistory.records.length })}
               </Badge>
             }
@@ -1585,7 +1585,7 @@ function SubscriptionOverviewCard({
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <h4 className="text-14 font-medium text-[var(--text-primary)]">{facts.name}</h4>
-                <Badge>
+                <Badge size="xs">
                   {t(`billing.subscriptionStatus.${facts.status}`)}
                 </Badge>
               </div>
@@ -2041,7 +2041,7 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
       title={t('billing.usage.promotionalDetails.title')}
       badge={
         <div className="flex flex-wrap items-center gap-2">
-          <Badge>
+          <Badge size="xs">
             {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
           </Badge>
           {pageCount > 1 && (
@@ -2141,7 +2141,7 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
 function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantState }) {
   const { t } = useTranslation();
   return (
-    <Badge>
+    <Badge size="xs">
       {t(`billing.usage.promotionalDetails.states.${state}`)}
     </Badge>
   );
@@ -2864,12 +2864,12 @@ function BillingOfferDialog({
                                 {(currentPlan || unavailableReason) && (
                                   <div className="min-w-0">
                                     {currentPlan && (
-                                      <Badge className="bg-[var(--surface)]">
+                                      <Badge size="xs" className="bg-[var(--surface)]">
                                         {t('billing.catalog.currentPlan')}
                                       </Badge>
                                     )}
                                     {unavailableReason && (
-                                      <Badge>
+                                      <Badge size="xs">
                                         {t(
                                           `billing.catalog.unavailableReasons.${unavailableReason}`,
                                         )}

@@ -68,7 +68,7 @@ export function ConversationStream({
             <div key={item.id}>
               {item.controlAction ? (
                 <div className="mb-1 flex justify-end">
-                  <Badge>
+                  <Badge size="xs">
                     {t(`rightSidebar.subagents.controlBadges.${item.controlAction}`)}
                   </Badge>
                 </div>
