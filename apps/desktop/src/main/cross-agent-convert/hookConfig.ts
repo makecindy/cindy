@@ -37,17 +37,24 @@ export async function readHookJson(file: string): Promise<Record<string, unknown
 }
 
 /** TOML 只读：转换不重写用户的原生配置、注释或其它设置。语法错误交给调用方处理。 */
-export async function readCodexTomlHooks(codexDir: string): Promise<Record<string, unknown>> {
+export async function readCodexTomlHooks(codexDir: string, requireValidEvents = false): Promise<Record<string, unknown>> {
   try {
     const parsed = parseToml(await fs.readFile(path.join(codexDir, 'config.toml'), 'utf8'));
-    if (!isPlainObject(parsed.hooks)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed.hooks).filter(
-        ([, groups]) =>
-          Array.isArray(groups) &&
-          groups.every((group) => isPlainObject(group) && Array.isArray(group.hooks)),
-      ),
-    );
+    if (parsed.hooks === undefined) return {};
+    if (!isPlainObject(parsed.hooks)) {
+      if (requireValidEvents) throw new Error('Invalid hooks table in config.toml');
+      return {};
+    }
+    const events: Record<string, unknown> = Object.create(null);
+    for (const [name, groups] of Object.entries(parsed.hooks)) {
+      if (Array.isArray(groups) && groups.every(group => isPlainObject(group) && Array.isArray(group.hooks))) {
+        events[name] = groups;
+      } else if (requireValidEvents && /^[A-Z]/.test(name)) {
+        // Native options such as hooks.state are not lifecycle events.
+        throw new Error('Invalid hook event in config.toml: ' + name);
+      }
+    }
+    return events;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;

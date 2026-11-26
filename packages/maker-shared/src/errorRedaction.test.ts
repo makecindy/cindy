@@ -7,8 +7,10 @@ import {
   isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
   isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
@@ -486,7 +488,7 @@ describe('agent error envelopes shared by desktop and mobile', () => {
       'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] select the native connection',
     )).toBe(true);
   });
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SUBSCRIPTION_ACCOUNTS_FULL'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: ", 'LAZY_CREATE_FAILED: ']) {
         expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
@@ -525,6 +527,11 @@ describe('subscription account startup guidance', () => {
     });
   it('keeps old ambiguous failures cause-neutral and rejects unrelated messages', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: No subscription account is available', t)).toBe('chat.subscriptionAccountError.poolUnavailable');
+    expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=1900000000000\notherAccountSignedOut=true', t, 'zh-CN'))
+      .toBe(['chat.subscriptionAccountError.poolModelLimited', 'chat.subscriptionAccountError.poolRetryUntil',
+        new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(1900000000000)),
+        'chat.subscriptionAccountError.poolOtherSignedOut'].join(' '));
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
   });
@@ -572,5 +579,58 @@ describe('Gemini minute-limit retry advice', () => {
     expect(parse({ message: 'Prepaid balance exhausted' })).toBeNull();
     expect(parse({ details: [...error.details, { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
       violations: [{ quotaMetric: metric, quotaId: 'InputTokensPerDay' }] }] })).toBeNull();
+  });
+});
+
+// 测试价值：依据供应商安全拦截准确解释且不换号换模型绕过的产品要求；此前缺少跨引擎共享的精确安全拦截识别器，
+// 既漏识 JSON/流式拦截又可能误把本地插件或权限文本当成上游安全拦截；失效后果是把安全拦截当普通故障切号重发或把插件报错说成安全违规；
+// 生产入口 isProviderSafetyRefusalError / extractNonSecretErrorSignals；最小失败输入为 OpenAI/Anthropic/Gemini 安全拦截负载与本地插件伪例；tier: unit。
+describe('isProviderSafetyRefusalError', () => {
+  it.each([
+    ['stable reason', 'opaque error', PROVIDER_SAFETY_REFUSAL_REASON],
+    ['Claude cybersecurity flag (exact log original)', 'This request was flagged for possible cybersecurity risk.', undefined],
+    ['Claude API Error JSON cybersecurity flag', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This request was flagged for possible cybersecurity risk."}}', undefined],
+    ['Claude SDK retry wrapper cybersecurity flag', 'SDK API request failed: This request was flagged for possible cybersecurity risk. (HTTP 400, retry 1/2)', undefined],
+    [
+      'Pi nested gateway JSON cybersecurity flag',
+      `400: ${JSON.stringify({
+        message: JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            message: 'This request was flagged for possible cybersecurity risk.',
+          },
+        }),
+      })}`,
+      undefined,
+    ],
+    ['OpenAI JSON code', '{"error":{"type":"invalid_request_error","code":"content_policy_violation","message":"Blocked"}}', undefined],
+    ['Codex stream safety_violation JSON with status suffix', '{"type":"error","error":{"code":"safety_violation","message":"Output blocked"}} (HTTP 400)', undefined],
+    ['Codex flattened output stream block', "OpenAI's safety system blocked the output stream (safety_violation).", undefined],
+    ['OpenAI usage policy refusal', 'Invalid prompt: your prompt was flagged as potentially violating our usage policy.', undefined],
+    ['Anthropic content filtering policy', 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}', undefined],
+    ['Gemini safety finish reason', '{"candidates":[{"finishReason":"PROHIBITED_CONTENT"}]}', undefined],
+  ] as const)('matches upstream provider safety block: %s', (_label, message, reason) => {
+    expect(isProviderSafetyRefusalError(message, reason)).toBe(true);
+    expect(extractNonSecretErrorSignals(message).usageLimit).toBe(false);
+  });
+
+  it.each([
+    'Synthetic local plugin startup failed: safety_violation label in plugin metadata.',
+    'Local plugin hook failed while scanning log: "This request was flagged for possible cybersecurity risk."',
+    'Tool execution failed: grep matched {"error":{"code":"safety_violation"}} in fixture.json',
+    'User note: why did someone say This request was flagged for possible cybersecurity risk.?',
+    JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'invalid_argument',
+        message: 'Synthetic plugin blocked the output stream.',
+      },
+    }),
+    'Permission denied by user',
+    '[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call.',
+    "You've hit your usage limit. Try again at 3:05 PM.",
+    'HTTP 429 Too Many Requests: rate_limit_exceeded',
+  ])('does not misclassify ordinary chat quotes, plugin/tool errors, or quota errors: %s', (message) => {
+    expect(isProviderSafetyRefusalError(message)).toBe(false);
   });
 });

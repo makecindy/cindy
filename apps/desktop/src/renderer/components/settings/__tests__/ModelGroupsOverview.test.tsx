@@ -3,7 +3,8 @@
 // 2026-11-13 主人试用反馈：关系图里的来源只在被选中过之后才显示余量，同一个订阅账号的其它来源一片空白。
 // 余量现在来自打开总览时只看不选的解析(与「试一下」同一份)，从没被选中过的来源也要显示。
 // 真实入口：ModelGroupsOverview 渲染 + window.electronAPI.modelGroups 的 resolve / decisions。Tier: unit。
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
@@ -12,7 +13,9 @@ import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../sha
 const i18nValue = { t: (key: string) => key, i18n: { language: 'en' } };
 vi.mock('react-i18next', () => ({ useTranslation: () => i18nValue }));
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null }));
+vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null, ModelSelector: () => null }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: vi.fn() }) }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({}) }));
 // 与真实 hook 一样返回稳定的函数(真实实现经 useCallback)。
 const namesOf = (candidate: { model: string; providerId: string }) => ({
   provider: undefined, modelName: candidate.model, sourceName: candidate.providerId,
@@ -21,9 +24,12 @@ const namesOf = (candidate: { model: string; providerId: string }) => ({
 vi.mock('@/features/model-groups/modelGroupsClient', () => ({
   modelGroupWhyText: () => '',
   useModelGroupCandidateNames: () => namesOf,
+  useModelGroups: () => ({ config, loaded: true }),
 }));
 
 import { ModelGroupsOverview } from '../ModelGroupsOverview';
+import { ModelGroupsSection } from '../ModelGroupsSection';
+import { SettingsEscapeHarness } from './SettingsEscapeHarness';
 
 const SOL = { agentKind: 'codex', providerId: 'openai', model: 'sol' } as const;
 const TERRA = { agentKind: 'codex', providerId: 'openai', model: 'terra' } as const;
@@ -48,4 +54,26 @@ describe('ModelGroupsOverview source quota', () => {
     await waitFor(() => expect(screen.getAllByText('97%')).toHaveLength(2));
     expect(resolve).toHaveBeenCalledWith({ selection: { type: 'route', id: 'r1' }, dryRun: true });
   });
+});
+
+// Unit: the overview quota test does not navigate. Enter a route from a
+// scrolled list, scroll its detail independently, then return to the list.
+it.each(['button', 'Escape'])('opens a route at the top and restores the model group list position on %s', async (action) => {
+  Object.assign(window, { electronAPI: { modelGroups: {
+    decisions: vi.fn().mockResolvedValue([]), resolve: vi.fn().mockResolvedValue({ trace: [] }),
+  } } });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const scrollRef = createRef<HTMLDivElement>();
+  render(<SettingsEscapeHarness><div ref={scrollRef}><ModelGroupsSection scrollRef={scrollRef} /></div></SettingsEscapeHarness>);
+  const container = scrollRef.current!;
+  container.scrollTop = 560;
+  fireEvent.click(screen.getByRole('button', { name: 'modelGroups.overview.openRoute' }));
+  expect(await screen.findByTestId('model-group-route-detail')).toBeTruthy();
+  expect(container.scrollTop).toBe(0);
+
+  container.scrollTop = 120;
+  if (action === 'Escape') fireEvent.keyDown(document.body, { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: 'modelGroups.settings.back' }));
+  expect(await screen.findByTestId('model-groups-settings')).toBeTruthy();
+  expect(container.scrollTop).toBe(560);
 });

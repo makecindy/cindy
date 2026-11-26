@@ -31,6 +31,8 @@ import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
 import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
+import type { PeerUpdateConfirmTarget } from './peerAppUpdate';
+import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
@@ -116,6 +118,10 @@ export interface RemoteConnectionTopologyProps {
   /** 远程切换连接方式(原型):各设备的切换状态与发起切换。 */
   switches?: ReadonlyMap<string, RemoteSwitchEntry>;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
+  /** 手动切换本机到指定设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
+  /** 点击版本号旁更新图标：由外层弹出二次确认再触发目标（或本机）内置更新。 */
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }
 
 /**
@@ -324,6 +330,8 @@ export function RemoteConnectionTopology({
   ready = true,
   switches,
   onSwitch,
+  onPathPreferenceChange,
+  onUpdate,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
@@ -458,6 +466,7 @@ export function RemoteConnectionTopology({
           }}
           aria-hidden
         >
+          {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
           <span className="line-clamp-2 max-w-full break-words rounded bg-[var(--settings-theme-card-bg)] px-1">{model.relay.name}</span>
           {model.relay.protocol && relayProtocol ? (
             <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1">
@@ -467,6 +476,7 @@ export function RemoteConnectionTopology({
           {relayPath ? (
             <span
               className={cn(
+                // 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记）
                 'whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1 tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
@@ -596,7 +606,7 @@ export function RemoteConnectionTopology({
               </span>
             </button>
           </PopoverTrigger>
-          <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-64 p-3">
+          <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-80 p-3.5">
             <DeviceNodePopover
               node={node}
               relayName={model.relay.name}
@@ -607,6 +617,8 @@ export function RemoteConnectionTopology({
               })}
               switchEntry={switchEntry}
               onSwitch={onSwitch}
+              onPathPreferenceChange={onPathPreferenceChange}
+              onUpdate={onUpdate}
             />
           </PopoverContent>
         </Popover>,
@@ -661,12 +673,13 @@ export function RemoteConnectionTopology({
             <PlatformGlyph platform={model.self?.platform ?? null} isMobile={false} size={22} />
           </button>
         </PopoverTrigger>
-        <PopoverContent side="bottom" align="center" className="w-64 p-3">
+        <PopoverContent side="bottom" align="center" className="w-72 p-3.5">
           <HubNodePopover
             model={model}
             linkStatus={linkStatus}
             issue={issue}
             standby={standby}
+            onUpdate={onUpdate}
           />
         </PopoverContent>
       </Popover>
@@ -675,6 +688,7 @@ export function RemoteConnectionTopology({
         style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP, HUB_TEXT_W, HUB_NAME_H, animate)}
         aria-hidden
       >
+        {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
         <span className="max-w-full truncate rounded bg-[var(--settings-theme-card-bg)] px-1.5 text-12 font-medium leading-[1.5] text-[var(--text-primary)]">
           {selfName}
         </span>
@@ -686,6 +700,7 @@ export function RemoteConnectionTopology({
           style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP + HUB_NAME_H, HUB_TEXT_W, HUB_PROTOCOL_H, animate)}
           aria-hidden
         >
+          {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
           <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
             <ProtocolMark
               kind={selfProtocol}

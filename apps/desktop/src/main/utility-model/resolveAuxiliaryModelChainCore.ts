@@ -109,8 +109,7 @@ function readEnvUtilityChain(): string[] | null {
   return null;
 }
 
-function getEffectiveAuxiliaryModelChain(): EffectiveAuxiliaryModelChain {
-  const custom = readAuxiliaryModelSettings().models;
+function getEffectiveAuxiliaryModelChain(custom: readonly string[] = readAuxiliaryModelSettings().models): EffectiveAuxiliaryModelChain {
   if (custom.length > 0) {
     return { source: 'custom', refs: [...custom] };
   }

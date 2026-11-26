@@ -28,6 +28,7 @@ type CatalogState = {
   catalog?: SpeechVoiceCatalog;
 };
 type Props = {
+  label: string;
   botId: string;
   route: SpeechModelSelection;
   protocol?: SpeechProtocol;
@@ -42,6 +43,7 @@ type Props = {
 };
 
 export function SpeechVoicePicker({
+  label,
   botId,
   route,
   protocol,
@@ -210,13 +212,13 @@ export function SpeechVoicePicker({
 
   return (
     <div className="min-w-0 space-y-3">
-      <FormField label={t('bots.voiceMode.voice')}>
+      <FormField label={label}>
         {(control) => (
           <div className="flex min-w-0 items-center gap-2">
             <SpeechVoiceMenu
               key={routeKey}
               {...control}
-              label={t('bots.voiceMode.voice')}
+              label={label}
               value={
                 showManual
                   ? MANUAL

@@ -2088,6 +2088,16 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     });
   }
 
+  it('uses App authorization for approved GitHub requests without returning its token to the plugin', async () => {
+    const readApp = vi.fn(async () => 'synthetic-app-access');
+    const { slot, fetchImpl } = makeGithubSlot({ readGhCliToken: async () => null, readSecret: () => null, readGithubAppToken: readApp });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl.mock.calls[0][1].headers).toMatchObject({ Authorization: 'Bearer synthetic-app-access' });
+    expect(JSON.stringify(result)).not.toContain('synthetic-app-access');
+    expect(readApp).toHaveBeenCalledOnce();
+  });
+
   it('本机 gh token 优先于保险库 PAT，且令牌不回流沙箱', async () => {
     const readSecret = vi.fn(() => 'github_pat_fallback');
     const { slot, fetchImpl } = makeGithubSlot({

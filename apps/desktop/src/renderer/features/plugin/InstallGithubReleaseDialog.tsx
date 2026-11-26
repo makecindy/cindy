@@ -1,12 +1,14 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { DownloadMeter } from '@/components/ui/download-meter';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import type { DownloadProgress } from '../../../shared/downloadProgress';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { extractIpcError } from '@/utils/ipcError';
 
@@ -15,7 +17,7 @@ export function InstallGithubReleaseDialog({ onClose, onInstalled }: {
   onInstalled: (instanceId: string) => void;
 }) {
   const { t } = useTranslation();
-  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -56,40 +58,49 @@ export function InstallGithubReleaseDialog({ onClose, onInstalled }: {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 p-4"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[70vh] w-[calc(100%-2rem)] max-w-[440px] flex-col overflow-hidden p-6"
+          style={WINDOW_NO_DRAG_STYLE}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            inputRef.current?.focus({ preventScroll: true });
+          }}
           onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
           onInteractOutside={(event) => event.preventDefault()}
         >
-          <Dialog.Title className="text-15 font-medium text-[var(--confirm-title)]">
+          <Dialog.Title className="shrink-0 text-18 font-medium text-[var(--confirm-title)]">
             {t('settings.ghosts.page.githubInstall.title')}
           </Dialog.Title>
-          <Dialog.Description className="mt-1 text-13 text-[var(--confirm-desc)]">
-            {t('settings.ghosts.page.githubInstall.description')}
-          </Dialog.Description>
-          <form className="mt-4 flex flex-col gap-2" onSubmit={(event) => { event.preventDefault(); void install(); }}>
-            <label htmlFor={inputId} className="text-13">{t('settings.ghosts.page.githubInstall.url')}</label>
-            <Input
-              id={inputId}
-              type="text"
-              inputMode="url"
-              spellCheck={false}
-              autoComplete="off"
-              maxLength={512}
-              placeholder="https://github.com/owner/repo"
-              disabled={busy}
-              value={url}
-              onChange={(value) => { setUrl(value); setStatus(null); }}
-            />
-            {busy && progress && <DownloadMeter label={t('settings.ghosts.page.githubInstall.title')} progress={progress} />}
-            {message && <ErrorNotice role="alert" message={message} />}
-            <div className="mt-2 flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={busy}>
+          <form className="mt-4 flex min-h-0 flex-col" onSubmit={(event) => { event.preventDefault(); void install(); }}>
+            <div className="-mx-1 flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-1">
+              <Dialog.Description className="text-pretty text-13 leading-[1.54] text-[var(--confirm-desc)]">
+                {t('settings.ghosts.page.githubInstall.description')}
+              </Dialog.Description>
+              <FormField label={t('settings.ghosts.page.githubInstall.url')}>
+                {(control) => <Input
+                  {...control}
+                  inputRef={inputRef}
+                  type="text"
+                  inputMode="url"
+                  spellCheck={false}
+                  autoComplete="off"
+                  maxLength={512}
+                  placeholder="https://github.com/owner/repo"
+                  disabled={busy}
+                  value={url}
+                  onChange={(value) => { setUrl(value); setStatus(null); }}
+                />}
+              </FormField>
+              {busy && progress && <DownloadMeter label={t('settings.ghosts.page.githubInstall.title')} progress={progress} />}
+              {message && <ErrorNotice role="alert" message={message} />}
+            </div>
+            <div className="mt-4 flex shrink-0 flex-wrap justify-end gap-2">
+              <Button type="button" variant="secondary" palette="confirmation" size="lg" onClick={onClose} disabled={busy}>
                 {t('settings.ghosts.installConsent.cancel')}
               </Button>
               {(status === 'sign-in' || status === 'forbidden' || status === 'not-found') && (
-                <Button type="button" variant="secondary" size="sm" onClick={() => {
+                <Button type="button" variant="secondary" palette="confirmation" size="lg" onClick={() => {
                   void window.electronAPI.ghosts.installGithubRelease('sign-in')
                     .then((opened) => { if (opened !== true) setStatus('unavailable'); })
                     .catch(() => setStatus('unavailable'));
@@ -97,7 +108,7 @@ export function InstallGithubReleaseDialog({ onClose, onInstalled }: {
                   {t('settings.ghosts.detail.githubRelease.connect')}
                 </Button>
               )}
-              <Button type="submit" variant="primary" size="sm" disabled={busy || !url.trim()}>
+              <Button type="submit" variant="primary" palette="confirmation" size="lg" disabled={busy || !url.trim()}>
                 {t(busy ? 'settings.ghosts.page.githubInstall.loading' : 'settings.ghosts.page.githubInstall.submit')}
               </Button>
             </div>

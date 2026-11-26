@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit } from '../botCandidateRecovery';
-import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
+import {
+  canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit,
+  modelGroupFailureScope,
+} from '../botCandidateRecovery';
+import { InterruptedTurnAutoResumeGuard, isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
 
@@ -431,4 +434,284 @@ it.each([
   ['{"error":{"code":"rate_limit_exceeded"}}', false],
 ])('classifies the connection scope of 429 %s', (message, expected) => {
   expect(isModelGroupConnectionOutOfCredit({ errorStatus: 429, message })).toBe(expected);
+});
+
+// 生产入口与可观察结果：isBotCandidateUnavailable 与 createInterruptedTurnAutoResumeHooks 判定插件引擎终态是否切备用路由。
+// 依据：docs/product-rules/cindy-bots-runtime.md §5，插件进程退出/缺登录/上游限流切备用模型，用户拒绝/超窗不切。
+// 覆盖缺口：既有测试只覆盖内置引擎的 turn-failed 与 provider_* 原因，未覆盖 ACP 的三种终态 reason。
+// 最小失败输入与 tier：unit，纯内存信号表驱动。
+it.each([
+  [{ reason: 'acp-agent-exited', message: 'The agent process ended unexpectedly.' }, true],
+  [{ reason: 'acp-auth-required', message: 'The agent needs you to sign in again.' }, true],
+  [{ reason: 'acp-request-failed', errorStatus: 429, message: 'Rate limit exceeded' }, true],
+  [{ reason: 'acp-request-failed', message: 'User denied permission' }, false],
+  [{ reason: 'acp-request-failed', message: 'Prompt too long for context window' }, false],
+] as const)('classifies plugin engine failure %j for companion candidate fallback = %s', async (signals, expected) => {
+  expect(isBotCandidateUnavailable(signals)).toBe(expected);
+  const h = harness();
+  expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(expected);
+});
+
+// model-groups.md §4.1 (2026-11-24): a model-group task retries a transient failure on the same source twice, then
+// switches; a source or connection failure switches at once, without the auto-resume backoff.
+// Production entry: createInterruptedTurnAutoResumeHooks → maybeApplySessionRuntimeFallback(groupRecovery).
+// Minimal failing input: a 503 on a model-group task switching source on its first retry. tier: unit.
+describe('model group failure handling', () => {
+  it.each([
+    ['a gateway 503', { errorStatus: 503 }, 'transient'],
+    ['an overload', { reason: 'upstream-overload' }, 'transient'],
+    ['a provider 5xx', { reason: 'provider_server_error' }, 'transient'],
+    ['an idle upstream', { reason: 'upstream_response_idle_timeout' }, 'transient'],
+    ['a turn without events', { reason: 'turn_no_event_timeout' }, 'transient'],
+    ['a stalled Codex reconnect', { reason: 'codex_reconnect_stalled' }, 'transient'],
+    ['a short rate limit', { errorStatus: 429, sdkError: 'rate_limit' }, 'transient'],
+    ['a short rate limit enriched with usageLimit by translator', { errorStatus: 429, sdkError: 'rate_limit', usageLimit: true, message: '429 Too Many Requests: rate_limit_exceeded' }, 'transient'],
+    ['a Codex rateLimitExceeded tag', { codexErrorInfo: 'rateLimitExceeded', errorStatus: 429, usageLimit: true, message: 'Too Many Requests' }, 'transient'],
+    ['a rate limit reported only as text', { message: 'rate limit exceeded' }, 'transient'],
+    ['an unclassified upstream error', { message: 'weird upstream boom' }, 'transient'],
+    ['an unclassified failed turn', { reason: 'turn-failed', message: 'weird upstream boom' }, 'transient'],
+    ['out of credit', { errorStatus: 402 }, 'connection'],
+    ['an account quota', { usageLimit: true }, 'connection'],
+    ['a Claude subscription window limit with usageResetAt', { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 1_900_000_000_000, message: "You've hit your session limit" }, 'connection'],
+    ['a Codex usageLimitExceeded tag', { codexErrorInfo: 'usageLimitExceeded', errorStatus: 429, usageLimit: true, message: 'usage_limit_reached' }, 'connection'],
+    ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
+    ['an unauthorized key', { errorStatus: 401 }, 'connection'],
+    ['an ACP agent quota', { reason: 'acp-usage-limit' }, 'connection'],
+    // Seen on a Pi task with a dead Agnes AI key: the status only exists as the text's prefix.
+    ['a dead key reported only as text', { sdkError: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}',
+      message: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}' }, 'connection'],
+    ['a removed model', { reason: 'model_unavailable' }, 'model'],
+    ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
+    ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],
+    ['a prompt too long for any source', { errorStatus: 400, message: 'prompt too long' }, null],
+    ['a structured context error', { reason: 'turn-failed', codexErrorInfo: 'contextWindowExceeded' }, null],
+    ['a statusless content block', { reason: 'turn-failed', message: 'content_policy_violation' }, null],
+    ['a misalignment policy block', { codexErrorInfo: 'misalignmentPolicyViolation', errorStatus: 403 }, null],
+    ['a provider safety refusal reason', { reason: 'provider-safety-refusal', errorStatus: 403, message: 'Output blocked by content filtering policy' }, null],
+    ['a rejected approval', { reason: 'acp-request-failed', message: 'User denied permission' }, null],
+    ['a local permission denial', { sdkError: 'permission_error' }, null],
+    ['a provider permission denial', { sdkError: 'permission_error', errorStatus: 403 }, 'model'],
+    ['a malformed request', { reason: 'turn-failed', errorStatus: 422 }, null],
+    ['an unknown control failure', { reason: 'user-cancelled' }, null],
+  ] as const)('sorts %s', (_name, signals, scope) => {
+    expect(modelGroupFailureScope(signals as never)).toBe(scope);
+  });
+
+  function groupHarness(policy: 'enabled' | 'disabled' = 'enabled', interruptedResumeEnabled = true) {
+    const item = { clientId: 'input', createOpts: {} };
+    const scheduled: Array<() => Promise<void>> = [];
+    const delays: number[] = [];
+    const fallback = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ session: null, outcome: 'unchanged' }));
+    const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const guard = new InterruptedTurnAutoResumeGuard({
+      isEnabled: () => policy === 'disabled' || interruptedResumeEnabled,
+      log,
+      random: () => 0.5,
+    });
+    let lastDispatchedToken: number | undefined;
+    const resume = vi.fn(async (sessionId: string, token: number, ..._extra: unknown[]) => {
+      guard.noteAttemptEvent(sessionId, token);
+      lastDispatchedToken = token;
+      return 'resumed';
+    });
+    const finalize = vi.fn();
+    const hooks = createInterruptedTurnAutoResumeHooks({
+      inputCoordinator: { isExecutionPaused: vi.fn(() => false), isAutoResumeAttemptCurrent: vi.fn(() => true),
+        autoRetryLastError: resume },
+      interruptedTurnAutoResumeGuard: guard,
+      maybeApplySessionRuntimeFallback: fallback,
+      autoResumeBookkeeping: {
+        beginAttempt: vi.fn(), finalizeSuppressedError: finalize,
+        schedule: (_id: string, _token: number, delay: number, run: (attempt: { isCurrent(): boolean }) => Promise<void>) => {
+          delays.push(delay);
+          scheduled.push(() => run({ isCurrent: () => true }));
+        },
+      },
+      saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
+      getStableSessionForTurnBoundary: () => ({}),
+      pendingContinuationOnlyAutoResumeRebuilds: new WeakMap(),
+      log,
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts: object) => opts === item.createOpts ? policy : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => interruptedResumeEnabled,
+      },
+      providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
+      pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
+      autoResumeAttemptToken: () => null,
+    } as never);
+    let lastResume: unknown;
+    const fail = async (signals: Record<string, unknown>, onContinuedInput = false) => {
+      const failedItem = onContinuedInput ? { ...item, autoResume: true, autoResumeInfo: lastResume } : item;
+      const progress = (hooks.onResumableTurnError as (...args: unknown[]) => unknown)('s', signals, failedItem);
+      lastResume = progress;
+      if (!progress) return null;
+      await scheduled.shift()!();
+      const call = fallback.mock.calls.at(-1)!;
+      return { requireRouteChange: call[3], recovery: call[5] as { retrySameSource?: boolean; accountUnavailable: boolean } };
+    };
+    return { fail, fallback, delays, resume, finalize, noteProgress: () => guard.noteProgress('s', lastDispatchedToken) };
+  }
+
+  // Unit: an accepted CONTINUE that stalls again gets another chance only after
+  // real output. Enabled model groups keep their own source-switch retry budget.
+  it.each([
+    ['disabled', false, 1], ['disabled', true, 2], ['enabled', false, 2],
+  ] as const)('recovers repeated reconnect with group=%s progress=%s', async (policy, progress, expectedSends) => {
+    const h = groupHarness(policy);
+    const signals = { reason: 'codex_reconnect_stalled' };
+    await h.fail(signals);
+    if (progress) expect(h.noteProgress()).toBe(true);
+    await h.fail(signals, true);
+    expect(h.resume).toHaveBeenCalledTimes(expectedSends);
+  });
+
+  // Product §4.1–4.5 / #12440: the hooks now run with the production guard instead of an
+  // always-allow fake. Two transient failures on each of A and B must still let C receive the retry.
+  it('retries a transient failure on the same source twice before switching, and gives the new source its own retries', async () => {
+    const h = groupHarness();
+    const sameSource: boolean[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      // The third failure switches source; the group then fails transiently on the new one too.
+      h.fallback.mockResolvedValueOnce({ session: null, outcome: i % 3 === 2 ? 'switched' : 'unchanged' });
+      sameSource.push((await h.fail({ errorStatus: 503 }))!.recovery.retrySameSource === true);
+    }
+    expect(sameSource).toEqual([true, true, false, true, true, false]);
+    expect(h.resume).toHaveBeenCalledTimes(6);
+    expect(h.delays).toEqual([3000, 6000, 0, 3000, 6000, 0]);
+  });
+
+  it('gives the same source a fresh retry after substantive output', async () => {
+    const h = groupHarness();
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    await h.fail(signals);
+    expect(h.noteProgress()).toBe(true);
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    expect(h.delays.at(-1)).toBe(3000);
+  });
+
+  // §4.1 / #12440, unit: the real guard and hooks used on a terminal provider
+  // error must retry twice in place before switching, even with ordinary auto-resume off.
+  // Previously an unclassified error stopped and a typed stream interruption switched at once.
+  it.each([
+    ['an unclassified provider error', { message: 'weird upstream boom' }],
+    ['an interrupted stream', { reason: 'upstream-stream-interrupted', message: 'Response API in-stream error' }],
+  ] as const)('retries twice and then switches on %s', async (_name, signals) => {
+    const h = groupHarness('enabled', false);
+    for (let retry = 0; retry < 2; retry += 1) {
+      expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    }
+    h.fallback.mockResolvedValueOnce({
+      session: null, outcome: 'switched', sourceSwitch: { from: 'Model · A', to: 'Model · B' },
+    });
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: true, recovery: { retrySameSource: false } });
+    expect(h.delays).toEqual([3000, 6000, 0]);
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 3, {
+      agentSwitch: { from: 'Model · A', to: 'Model · B', cause: 'failed' },
+    }]);
+  });
+
+  // 测试价值：依据 #12440 与 model-groups.md §4.1（429 临时频率限制应同源重试两次再切换，且不封禁整条连接；
+  // 供应商安全拦截不得触发换源绕过）；此前单测手造 429 未带 translator 实产的 usageLimit:true，漏掉了真实 429 被误判成
+  // connection 立即换源且报成 usage-limit 的回归；生产入口 createInterruptedTurnAutoResumeHooks / isBotCandidateUnavailable；
+  // 最小失败输入为带 usageLimit:true 的 429 信号与安全拦截信号；tier: unit。
+  it('retries a translator-enriched 429 twice on the same source before switching with cause overload', async () => {
+    const h = groupHarness('enabled', false);
+    const rateLimitSignals = {
+      errorStatus: 429,
+      sdkError: 'rate_limit',
+      usageLimit: true,
+      codexErrorInfo: 'rateLimitExceeded',
+      message: '429 Too Many Requests: rate_limit_exceeded',
+    };
+    for (let retry = 0; retry < 2; retry += 1) {
+      expect(await h.fail(rateLimitSignals)).toMatchObject({
+        requireRouteChange: false,
+        recovery: { retrySameSource: true, accountUnavailable: false },
+      });
+    }
+    h.fallback.mockResolvedValueOnce({
+      session: null, outcome: 'switched', sourceSwitch: { from: 'GPT · A', to: 'GPT · B' },
+    });
+    expect(await h.fail(rateLimitSignals)).toMatchObject({
+      requireRouteChange: true,
+      recovery: { retrySameSource: false, accountUnavailable: false },
+    });
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 3, {
+      agentSwitch: { from: 'GPT · A', to: 'GPT · B', cause: 'overload' },
+    }]);
+  });
+
+  it.each([
+    { codexErrorInfo: 'misalignmentPolicyViolation', errorStatus: 403, message: 'Forbidden' },
+    { reason: 'provider-safety-refusal', errorStatus: 403, message: 'Output blocked by content filtering policy' },
+    { errorStatus: 403, message: '{"error":{"code":"safety_violation","message":"Blocked"}}' },
+  ])('never treats a provider safety refusal as a replaceable candidate or auto-resumable failure (%j)', async (signals) => {
+    const h = groupHarness();
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+    expect(await h.fail(signals)).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
+  it('leaves a deterministic failure visible even if it carries an ordinarily retryable status', async () => {
+    const h = groupHarness();
+    expect(await h.fail({ codexErrorInfo: 'cyberPolicy', errorStatus: 503 })).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
+  it.each(['exhausted', 'failed', 'unchanged'])('surfaces the error after two retries when choosing a new source returns %s', async outcome => {
+    const h = groupHarness();
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    await h.fail(signals);
+    h.fallback.mockResolvedValueOnce({ session: null, outcome });
+    await h.fail(signals);
+    expect(h.resume).toHaveBeenCalledTimes(2);
+    expect(h.finalize).toHaveBeenCalledWith('s', 3, { surfaceBanner: true });
+  });
+
+  it('keeps same-source continuation for a disabled model group without invoking catalog fallback', async () => {
+    const h = groupHarness('disabled');
+    const signals = { errorStatus: 503 };
+    await h.fail(signals);
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    expect(h.resume).toHaveBeenCalledTimes(2);
+  });
+
+  it('a disabled model group does not inherit global fallback when interrupted-turn resume is off', async () => {
+    const h = groupHarness('disabled', false);
+    expect(await h.fail({ errorStatus: 503 })).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a removed model', { reason: 'model_unavailable' }, false],
+    ['out of credit', { errorStatus: 402 }, true],
+  ] as const)('switches source at once on %s, skipping the connection only when it is the connection that failed', async (_name, signals, wholeConnection) => {
+    const h = groupHarness();
+    const { requireRouteChange, recovery } = (await h.fail(signals))!;
+    expect(requireRouteChange).toBe(true);
+    expect(recovery).toMatchObject({ retrySameSource: false, accountUnavailable: wholeConnection });
+    expect(h.delays).toEqual([0]);
+  });
+
+  it.each([
+    ['an account quota', { usageLimit: true }, 'usage-limit'],
+    ['a dead login', { reason: 'provider_auth_or_access' }, 'auth'],
+    ['a removed model', { reason: 'model_unavailable' }, 'unavailable'],
+    ['a dead key reported only as text', { message: '401: {"message":"Invalid token"}' }, 'auth'],
+  ] as const)('says on the continuation which source it moved to after %s', async (_name, signals, cause) => {
+    const h = groupHarness();
+    h.fallback.mockResolvedValueOnce({ session: null, outcome: 'switched', sourceSwitch: { from: 'Claude · A', to: 'GPT · B' } });
+    await h.fail(signals);
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 1, { agentSwitch: { from: 'Claude · A', to: 'GPT · B', cause } }]);
+  });
+
+  it('records nothing extra when the source stayed', async () => {
+    const h = groupHarness();
+    await h.fail({ errorStatus: 503 });
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 1]);
+  });
 });

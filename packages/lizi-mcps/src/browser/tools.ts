@@ -713,6 +713,9 @@ function recipeUnsupportedByBackend(recipe: Recipe, deps: BrowserMcpDeps): strin
   return undefined;
 }
 
+/** Discovery marks, once per listing, why a recipe flagged `runnable:false` would be refused. */
+const RECIPE_NOT_RUNNABLE_HINT = `标 runnable:false 的配方需要当前浏览器没有的能力(调试协议、页面脚本或读取网络请求),调用会被拒绝;改用普通浏览器操作完成。${BACKEND_SWITCH_HINT}`;
+
 // Forwards validated MCP args straight to the runtime. `extract` (MCP-only
 // sugar) is rewritten in the handler before this is reached, so every `action`
 // arriving here is a real BrowserControlAction.
@@ -729,6 +732,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
   const results = new BrowserResultCache();
   const discovered = new Map<string, string>();
   const learningHints = new Set<string>();
+  // Suggestions and discovery follow the same gate `recipe` applies before running one.
+  const runnable = (recipe: Recipe) => !recipeUnsupportedByBackend(recipe, deps);
   const textResult = (value: Record<string, unknown>, source?: { profile?: string; targetId?: string }) => resultText(results.digest(value, source));
   // Session-local evidence and repair budget: never share successful trials
   // between agents, and never retain caller inputs or page contents here.
@@ -1299,18 +1304,24 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           }
           if (args.site && args.intent) {
             return { content: [{ type: 'text', text: resultText({ ok: true, action: 'siteguide',
-              site: args.site, recipes: suggestRecipes(recipeReg, args.site.toLowerCase(), args.intent, args.profile) }) }] };
+              site: args.site, recipes: suggestRecipes(recipeReg, args.site.toLowerCase(), args.intent, args.profile, undefined, runnable) }) }] };
           }
+          let blockedCount = 0;
           const recipeInputsOf = (ids: string[] | undefined, compact = false) =>
             (ids ?? []).map((id) => {
               const r = recipeReg.get(id);
               const spec = r?.recipe.inputs ?? {};
+              // Listed for discovery, but marked: the current browser would refuse to run it.
+              const blocked = !!r && !runnable(r.recipe);
+              if (blocked) blockedCount++;
               if (compact && id.startsWith('opencli:')) return {
                 id, access: r?.recipe.access,
                 ...(r?.recipe.validation ? { state: r.recipe.validation.state } : {}),
+                ...(blocked ? { runnable: false } : {}),
               };
               return {
                 id,
+                ...(blocked ? { runnable: false } : {}),
                 // Surface the author's description at discovery time — it carries
                 // input constraints (e.g. "id must be passed as a string") that the
                 // bare input-name list cannot express.
@@ -1360,6 +1371,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                     siteCount: sites.length,
                     recipeCount: recipeReg.size,
                     hint: '按 site 查询完整参数、默认值及 read/write 分类。',
+                    ...(blockedCount ? { runnableHint: RECIPE_NOT_RUNNABLE_HINT } : {}),
                     sites,
                     ...(recipesWithoutGuide.length ? { recipesWithoutGuide } : {}),
                   }),
@@ -1373,6 +1385,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (!entry) {
             return errorResult('siteguide', `no siteguide for "${args.site}" (available: ${[...registry.keys()].join(', ') || 'none'})`);
           }
+          const recipes = recipeInputsOf(entry.guide.recipes);
           return {
             content: [
               {
@@ -1382,7 +1395,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                   action: 'siteguide',
                   provenance: entry.provenance,
                   data: entry.guide,
-                  recipes: recipeInputsOf(entry.guide.recipes),
+                  ...(blockedCount ? { runnableHint: RECIPE_NOT_RUNNABLE_HINT } : {}),
+                  recipes,
                 }),
               },
             ],
@@ -1731,7 +1745,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               const site = new URL(url).hostname;
               if (targetKey && args.action !== 'snapshot') experiences.start(targetKey, url);
               const user = await resolveUserLayer(deps);
-              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url);
+              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url, runnable);
               // A homepage must not consume the later post-specific suggestion.
               // Deduplicate by suggested capabilities, not every individual URL.
               const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '', suggestions.map(s => s.id)]);

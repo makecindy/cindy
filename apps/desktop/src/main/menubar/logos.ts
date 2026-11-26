@@ -6,6 +6,7 @@
  * instead of a borrowed brand.
  */
 
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 import {
   PROVIDER_LOGO_PATHS,
   resolveProviderLogoKind,
@@ -30,6 +31,9 @@ const svg = (body: string): string =>
 
 const filled = (d: string, evenOdd = false): string =>
   svg(`<path fill="#000"${evenOdd ? ' fill-rule="evenodd"' : ''} d="${d}"/>`);
+
+// Silhouette of makecindy/cindy-antigravity-plugin's icon.png (blob 99877890).
+export const ANTIGRAVITY_LOGO = filled(ANTIGRAVITY_MARK_PATH);
 
 const BRAND_SVG: Partial<Record<ProviderLogoKind, string>> = {
   anthropic: filled(ANTHROPIC_MARK_PATH),
@@ -68,11 +72,13 @@ export function familyLogo(family: MenubarFamily): string {
   if (family === 'kimi') return providerLogo('kimi-coding', 'Kimi Code');
   if (family === 'codex') return logoForKind('openai', 'Codex');
   if (family === 'opencode-go') return providerLogo('opencode-go', 'OpenCode Go');
+  if (family === 'plugin') return monogramLogo('P');
   return logoForKind('xai', 'Grok');
 }
 
 /** Agent identity marks for task rows and the usage chart legend. */
 export const MENUBAR_HARNESS_LOGOS: Record<MenubarHarness, string> = {
+  acp: MENUBAR_CINDY_LOGO,
   'claude-code': filled(CLAUDE_CODE_MARK_PATH, true),
   codex: svg(
     '<g transform="translate(12 12) scale(1.1) translate(-12 -12)">' +

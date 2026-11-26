@@ -208,6 +208,12 @@
     "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
   },
   "subscriptionAccountError": {
+    "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+    "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
+    "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
+    "poolRetryUntil": "Réessayez après {{resetAt}}.",
+    "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
+    "poolUnavailable": "Aucun compte d’abonnement disponible pour ce modèle. Changez de modèle ou vérifiez les comptes sur l’ordinateur qui exécute la tâche.",
     "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles.",
     "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles.",
     "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",

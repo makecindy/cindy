@@ -29,6 +29,9 @@ export interface HostAgentSkillListPorts {
 export function createHostAgentSkillList(ports: HostAgentSkillListPorts) {
   return async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
+    // A plugin-engine task's `/` menu (`acp`): plugin engines do not run on this Host, so it has no
+    // Skills to offer, and must not fall back to Claude's list.
+    if (rawKind === 'acp') return { success: false, error: "Agent 'acp' is not registered" };
     const kind: AgentKind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const maker = ports.maker();
     if (!maker || !ports.hasAgent(kind)) return { success: false, error: `Agent '${kind}' is not registered` };

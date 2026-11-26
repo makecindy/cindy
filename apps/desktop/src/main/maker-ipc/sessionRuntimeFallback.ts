@@ -1,11 +1,13 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { effectiveSourceIdForModel } from '@cindy/model-providers';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { getDesktopProviderService as getProviderServiceType } from '../maker-host/createDesktopProviderService.js';
-import type { RuntimeFallbackResult } from './botCandidateRecovery.js';
+import type { ModelGroupRecovery, RuntimeFallbackResult } from './botCandidateRecovery.js';
+
+export type { ModelGroupRecovery } from './botCandidateRecovery.js';
 import { hasExplicitSessionTaskModel } from './botDelegationHistory.js';
 import { isRemoteModelSwitchRouteChangeError } from './runtimeSetModel.js';
 import type { MakerSessionAgentSwitchHandlerDeps } from './sessionAgentSwitchHandler.js';
@@ -14,15 +16,17 @@ import {
   acceptSessionRuntimeMutation,
   cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
+  getSessionRuntimeControlSnapshot,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
   sessionRuntimeControlOwnerEpochMatches,
+  type FallbackRouteProfile,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
 
 type FallbackPick = Parameters<typeof pickSessionRuntimeFallback>[0];
-type ModelGroupRecovery = { accountUnavailable: boolean; hasImages: boolean };
 export type SessionRuntimeFallbackContext = ModelGroupRecovery | { hasImages: boolean };
+export type { FallbackRouteProfile } from './sessionRuntimeControl.js';
 
 /** The runtime selection a fallback candidate is applied through (the desktop: applySessionRuntimeSelection). */
 export type FallbackRuntimeSelection = (
@@ -34,7 +38,7 @@ export type FallbackRuntimeSelection = (
     source: 'fallback';
     sessionLockHeld: true;
     expectedGeneration: number;
-    previousProfile: SessionRuntimeProfile;
+    previousProfile: FallbackRouteProfile;
     effortExplicit: boolean;
     fastExplicit: boolean;
   },
@@ -60,14 +64,16 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     control: { pending: unknown; generation: number; visitedRoutes: FallbackPick['visitedRoutes']; fallbackHop: number };
   } | null>;
   canApplyAutomaticRuntimeSelection(sessionId: string, generation: number): boolean;
-  readBotFallbackCandidate(sessionId: string, current: SessionRuntimeProfile): Promise<{
+  readBotFallbackCandidate(sessionId: string, current: FallbackRouteProfile): Promise<{
     isBot: boolean;
-    candidate: SessionRuntimeProfile | null;
+    candidate: FallbackRouteProfile | null;
     routeLocked?: boolean;
   }>;
   readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
     bindCommittedRoute?(profile: SessionRuntimeProfile): void;
+    /** Display names of the failed source and the candidate («model · source»). */
+    labels?: { from: string; to: string };
   } | null>;
   readSessionAgentDeviceId(sessionId: string): Promise<string | null | undefined>;
   readSessionRuntimeFallbackSettings(): { enabled: boolean };
@@ -112,7 +118,35 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     let runtimeSession: RuntimeSession | null = null;
     let blockAutoResumeForModelWindowConfirmation = false;
     try {
-      const profiles = await readSessionRuntimeProfiles(sessionId);
+      let profiles: {
+        effective: FallbackRouteProfile;
+        control: { pending: unknown; generation: number; visitedRoutes: FallbackPick['visitedRoutes']; fallbackHop: number };
+      } | null = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) {
+        const [pluginRow] = await getDbClient()
+          .drizzle.select({
+            agentDeviceId: sessions.agentDeviceId,
+            model: sessions.model,
+            providerId: sessions.providerId,
+            effort: sessions.effort,
+          })
+          .from(sessions)
+          .where(and(eq(sessions.id, sessionId), eq(sessions.source, 'bot'), eq(sessions.status, 'active'), eq(sessions.agentKind, 'acp')))
+          .limit(1);
+        if (pluginRow) {
+          profiles = {
+            effective: {
+              agentKind: 'acp',
+              agentDeviceId: pluginRow.agentDeviceId,
+              model: pluginRow.model,
+              providerId: pluginRow.providerId?.trim() || null,
+              effort: pluginRow.effort,
+              fastMode: false,
+            },
+            control: getSessionRuntimeControlSnapshot(sessionId),
+          };
+        }
+      }
       if (!profiles || !isCurrent()) return { session: null, outcome: 'superseded' };
       // A previously accepted Agent/fallback mutation owns the next boundary.
       // Do not let a later infrastructure retry replace that pending intent.
@@ -123,20 +157,28 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
+      // Model-group inputs either stay on their source or choose from their group (model-groups.md §4).
+      const groupRecovery = recovery && 'accountUnavailable' in recovery ? recovery : undefined;
+      if (groupRecovery?.retrySameSource) return { session: null, outcome: 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
       const botFallback = await readBotFallbackCandidate(sessionId, profiles.effective);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
-      let currentForFallback = profiles.effective;
-      let candidate = botFallback.candidate;
-      const groupRecovery = recovery && 'accountUnavailable' in recovery ? recovery : undefined;
-      const group = groupRecovery && !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
+      let currentForFallback: FallbackRouteProfile = profiles.effective;
+      let candidate: FallbackRouteProfile | null = botFallback.candidate;
+      const group = groupRecovery && !botFallback.isBot && profiles.effective.agentKind !== 'acp'
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (groupRecovery && !group) return { session: null, outcome: 'exhausted' };
       if (group) candidate = group.candidate;
+      let groupLabels = group?.labels;
+      const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({
+        session, outcome: 'switched', ...(group && groupLabels ? { sourceSwitch: groupLabels } : {}),
+      });
       if (!botFallback.isBot && !group) {
+        if (profiles.effective.agentKind === 'acp') return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
         if (await readSessionAgentDeviceId(sessionId)) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
         if (requireRouteChange) return { session: null, outcome: 'exhausted' };
         if (episodeAttempt < 2 || !readSessionRuntimeFallbackSettings().enabled) return { session: null, outcome: 'unchanged' };
@@ -144,18 +186,19 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           allowSideEffects: false,
           catalog: getActiveCatalog(),
         });
+        const builtinEffective = profiles.effective;
         currentForFallback =
-          profiles.effective.providerId === null
+          builtinEffective.providerId === null
             ? {
-                ...profiles.effective,
+                ...builtinEffective,
                 providerId: effectiveSourceIdForModel(
                   providers,
                   null,
-                  profiles.effective.model,
-                  profiles.effective.agentKind,
+                  builtinEffective.model,
+                  builtinEffective.agentKind,
                 ),
               }
-            : profiles.effective;
+            : builtinEffective;
         candidate = pickSessionRuntimeFallback({
             providers,
             current: currentForFallback,
@@ -173,7 +216,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         pendingSessionRuntimeFallbackRebuilds.set(runtimeSession, attemptToken);
       }
       const recordFailedCandidate = async (
-        failed: SessionRuntimeProfile,
+        failed: FallbackRouteProfile,
       ): Promise<boolean> => {
         let recorded = false;
         try {
@@ -203,16 +246,17 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         return recorded;
       };
       const advanceConfiguredRoute = async (
-        failed: SessionRuntimeProfile,
+        failed: FallbackRouteProfile,
       ): Promise<boolean> => {
         if (!await recordFailedCandidate(failed) || !isCurrent()) return false;
-        if (group && groupRecovery) {
+        if (group && groupRecovery && currentForFallback.agentKind !== 'acp') {
           const latest = await readSessionRuntimeProfiles(sessionId);
           if (!latest || latest.control.pending || latest.control.generation !== profiles.control.generation ||
               !canApplyAutomaticRuntimeSelection(sessionId, latest.control.generation)) return false;
           const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
             latest.control.visitedRoutes, groupRecovery, latest.control.generation);
           candidate = next?.candidate ?? null;
+          groupLabels = next?.labels;
           return candidate !== null;
         }
         if (!botFallback.isBot) return false;
@@ -249,7 +293,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           );
           // A live override can leave the saved session on its original route.
           // Move the durable group binding only when the session row moved too.
-          if (result.persistedRoute && !result.deferred && !result.superseded &&
+          if (selected.agentKind !== 'acp' && result.persistedRoute && !result.deferred && !result.superseded &&
               sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
             group?.bindCommittedRoute?.({
               ...selected,
@@ -268,7 +312,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           }
           return result;
         });
-        if (selected.agentKind !== currentForFallback.agentKind
+        const pluginEngineChanges = selected.agentKind === 'acp' && selected.providerId !== currentForFallback.providerId;
+        if (selected.agentKind !== currentForFallback.agentKind || pluginEngineChanges
           || (selected.agentDeviceId ?? null) !== (currentForFallback.agentDeviceId ?? null)) {
           try {
             const result = await withSendToSessionLock(sessionId, async () => {
@@ -284,8 +329,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 fastMode: selected.fastMode,
                 applyNow: true,
               });
-              if (switched.switched) {
-                group?.bindCommittedRoute?.(selected);
+              if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
+                if (selected.agentKind !== 'acp') group?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',
@@ -317,7 +362,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             toProviderId: selected.providerId,
             toModel: selected.model,
           });
-          return { session: runtimeSession, outcome: 'switched' };
+          return switchedResult(runtimeSession);
         }
         let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
         try {
@@ -373,7 +418,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           toModel: selected.model,
           applied: !result.superseded,
         });
-        return { session: runtimeSession, outcome: result.superseded ? 'superseded' : 'switched' };
+        return result.superseded ? { session: runtimeSession, outcome: 'superseded' } : switchedResult(runtimeSession);
       }
       return { session: runtimeSession, outcome: 'exhausted' };
     } catch (error) {

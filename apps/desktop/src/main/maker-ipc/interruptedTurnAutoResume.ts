@@ -34,6 +34,7 @@ import {
   isOverloadErrorMessage,
   UPSTREAM_OVERLOAD_REASON,
 } from '@cindy/maker-core';
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 
 /** 判定输入。字段全部可选：不同 agent / 不同失败路径能提供的信号不一样。 */
 export interface InterruptedTurnErrorSignals {
@@ -45,6 +46,8 @@ export interface InterruptedTurnErrorSignals {
   reason?: string;
   /** 从错误里抽出的 HTTP 状态码。 */
   errorStatus?: number;
+  /** Tool items whose completion had not been observed at reconnect timeout. */
+  pendingToolCount?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
   outputLimit?: OutputLimitDetails;
@@ -56,6 +59,18 @@ export interface InterruptedTurnErrorSignals {
   providerGroupUsageLimit?: ProviderGroupUsageLimit;
   /** Codex app-server 的结构化错误 tag(如 `usageLimitExceeded`)。 */
   codexErrorInfo?: string;
+}
+
+/** Only bounded host facts enter the hidden continuation. Provider error text stays in history. */
+export function codexReconnectRecoveryNote(signals: Pick<InterruptedTurnErrorSignals, 'pendingToolCount' | 'errorStatus'>): string {
+  const status = signals.errorStatus;
+  const http = status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599
+    ? ` (HTTP ${status})` : '';
+  return `The model connection stalled during reconnection${http}.`
+    + (signals.pendingToolCount && signals.pendingToolCount > 0
+      ? ' Cindy had unconfirmed tool results at the time of interruption.' : '')
+    + ' Review the recorded tool results and diagnose any reported failure. If a call has no result,'
+    + ' verify its effects before attempting it again. Continue the unfinished work.';
 }
 
 /**
@@ -227,6 +242,14 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // first so a future stable reason cannot accidentally re-enable auto-resume.
   if (isOAuthAccountPoolUnavailableError(signals)) return false;
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
+  if (
+    signals.codexErrorInfo === 'cyberPolicy' ||
+    signals.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    signals.sdkError === 'content_filter' ||
+    isProviderSafetyRefusalError(typeof signals.message === 'string' ? signals.message : '', reason)
+  ) {
+    return false;
+  }
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
   //
@@ -253,7 +276,13 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // quota or invalid-request rejection must not become retryable just because
   // its explanation mentions temporary unavailability or also carries a 5xx.
   // 账号限额要等周期重置，秒级重连只会再撞一次（由 usageLimitAutoResume 等到重置后续跑）。
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded') return false;
+  if (
+    signals.usageLimit === true ||
+    signals.codexErrorInfo === 'usageLimitExceeded' ||
+    signals.codexErrorInfo === 'rateLimitExceeded'
+  ) {
+    return false;
+  }
   const status = signals.errorStatus;
   if (status !== undefined && status >= 400 && status < 500) return false;
   if ([
@@ -380,7 +409,7 @@ export interface InterruptedTurnResumeProgress {
   attemptToken: number;
   /** 本次人工介入周期内第几次自动重连。 */
   episodeAttempt: number;
-  /** 本次人工介入周期的硬上限。 */
+  /** 本次人工介入周期的硬上限（模型组按候选上限计）。 */
   maxEpisodeAttempts: number;
 }
 
@@ -417,7 +446,8 @@ interface SessionGuardState {
 
 export interface InterruptedTurnAutoResumeGuardDeps {
   /** kill switch（interrupted-turn-auto-resume-store，默认开启）。 */
-  isEnabled: () => boolean;
+  /** Whether this session's interrupted turns are auto-resumed (a model-group task can be on while the setting is off). */
+  isEnabled: (sessionId: string) => boolean;
   log: GuardLogger;
   /** 可注入时钟，单测用；默认 Date.now。 */
   now?: () => number;
@@ -527,6 +557,11 @@ export class InterruptedTurnAutoResumeGuard {
     s.consecutiveAttempts = 0;
     s.exhaustedWarned = false;
     return true;
+  }
+
+  /** A confirmed source change starts a fresh consecutive retry budget, but keeps the episode total. */
+  noteSourceSwitched(sessionId: string, attemptToken: number): void {
+    this.noteProgress(sessionId, attemptToken);
   }
 
   /**
@@ -639,9 +674,13 @@ export class InterruptedTurnAutoResumeGuard {
    * 返回 resume 时已内部累加计数并置 pendingResume，调用方负责在 `delayMs` 后实际
    * 补发，并在补发前**再复核一次**会话状态（退避窗口内用户介入的概率不低）。
    */
-  onInterruptedTurn(sessionId: string, erroredAt: number): InterruptedTurnResumeDecision {
+  onInterruptedTurn(
+    sessionId: string,
+    erroredAt: number,
+    options?: { enabled?: boolean; maxConsecutiveAttempts?: number; maxEpisodeAttempts?: number },
+  ): InterruptedTurnResumeDecision {
     const s = this.state(sessionId);
-    if (!this.deps.isEnabled()) {
+    if (!(options?.enabled ?? this.deps.isEnabled(sessionId))) {
       this.deps.log.debug('interrupted-turn auto-resume disabled by kill switch', { sessionId });
       return { action: 'skip', why: 'disabled' };
     }
@@ -658,10 +697,12 @@ export class InterruptedTurnAutoResumeGuard {
       });
       return { action: 'skip', why: 'superseded' };
     }
+    const maxEpisodeAttempts = options?.maxEpisodeAttempts ?? INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS;
+    const maxConsecutiveAttempts = options?.maxConsecutiveAttempts ?? INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS;
     const exhaustedReason =
-      s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS
+      s.episodeAttempts >= maxEpisodeAttempts
         ? 'episode'
-        : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+        : s.consecutiveAttempts >= maxConsecutiveAttempts
           ? 'consecutive'
           : null;
     if (exhaustedReason) {
@@ -695,9 +736,9 @@ export class InterruptedTurnAutoResumeGuard {
     this.deps.log.debug('interrupted-turn auto-resume granted', {
       sessionId,
       attempt,
-      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      maxAttempts: maxConsecutiveAttempts,
       episodeAttempt: s.episodeAttempts,
-      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
+      maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
       attemptToken,
       delayMs,
@@ -705,9 +746,9 @@ export class InterruptedTurnAutoResumeGuard {
     return {
       action: 'resume',
       attempt,
-      maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      maxAttempts: maxConsecutiveAttempts,
       episodeAttempt: s.episodeAttempts,
-      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
+      maxEpisodeAttempts,
       sessionTotal: s.sessionTotalResumes,
       attemptToken,
       delayMs,

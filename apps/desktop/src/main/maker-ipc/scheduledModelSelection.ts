@@ -193,23 +193,36 @@ export function assertScheduledHarnessSupported(
   }
 }
 
+function scheduledModelProviderId(
+  selection: ScheduledModelSelection,
+  providers: ProviderView[],
+): string | null {
+  return selection.providerId ??
+    // If admission removed every implicit source, retain the existing source only
+    // for rejection classification; the selectable-model check below still applies.
+    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
+    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
+}
+
 /** Saved selections may outlive catalog effort/Fast support; resolve the actual route first. */
 export function resolveScheduledModelSelection(
   selection: ScheduledModelSelection,
   providers: ProviderView[],
 ): ScheduledModelSelection {
-  const providerId = selection.providerId ??
-    // If admission removed every implicit source, retain the existing source only
-    // for rejection classification; the selectable-model check below still applies.
-    effectiveSourceIdForModel(providers, null, selection.model, selection.agentKind) ??
-    actualSourceIdForModel(providers, null, selection.model, selection.agentKind);
-  const provider = connectedProvidersForAgent(providers, selection.agentKind)
-    .find((candidate) => candidate.id === providerId);
+  const providerId = scheduledModelProviderId(selection, providers);
+  const connected = connectedProvidersForAgent(providers, selection.agentKind);
+  const provider = connected.find((candidate) => candidate.id === providerId);
   const model = findCatalogModel(provider, selection.model, selection.agentKind, { exact: true });
   // Payment admission is not evidence that a saved model has been removed.
   // Preserve the local guard's error class so restoration cannot replace it.
   if (model?.availability === 'requires_payment') {
     throwIpcError('INVALID_PARAMS', `Scheduled model "${selection.model}" requires payment from provider "${providerId ?? 'default'}"`);
+  }
+  // A legacy implicit choice has no source to classify until a catalog contains it.
+  // Unknown eligible catalogs cannot prove removal; never guess a replacement source.
+  const candidates = provider ? [provider] : providerId === null ? connected : [];
+  if (!model && candidates.some(candidate => candidate.subscriptionReadUnavailable && !candidate.removed)) {
+    throwIpcError('MODEL_CATALOG_UNCONFIRMED', 'The model list could not be confirmed. The saved model selection has been kept.');
   }
   if (!provider || !model ||
     !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
@@ -221,6 +234,37 @@ export function resolveScheduledModelSelection(
     effort: resolveCompatibleSessionRuntimeEffort(model, selection.effort),
     fastMode: model.supportsFastMode === true && (selection.fastMode !== 'ultrafast' || (selection.agentKind === 'codex' && model.supportsUltrafastMode === true)) ? selection.fastMode : false,
   };
+}
+
+/** One read-only recovery attempt, shared with the provider's existing discovery flight.
+ * Never change the saved route or replay a send; only resolve the same selection again.
+ */
+export async function resolveScheduledModelSelectionWithRefresh(
+  selection: ScheduledModelSelection,
+  deps: {
+    readProviders: () => Promise<ProviderView[]>;
+    refreshProvider: (providerId: string) => Promise<unknown>;
+    assertCurrent: () => void;
+  },
+): Promise<ScheduledModelSelection> {
+  let providers = await deps.readProviders();
+  deps.assertCurrent();
+  const providerId = scheduledModelProviderId(selection, providers);
+  const candidates = connectedProvidersForAgent(providers, selection.agentKind).filter(provider =>
+    (providerId === null || provider.id === providerId) && !provider.removed &&
+    provider.subscriptionAccountPool === 'openai' &&
+    !findCatalogModel(provider, selection.model, selection.agentKind, { exact: true }));
+  if (candidates.length) {
+    // The native discovery routine retains the last success and marks failed reads.
+    // If recovery itself throws, re-read that state rather than treating it as removal.
+    await Promise.all(candidates.map(async provider => {
+      try { await deps.refreshProvider(provider.id); } catch { deps.assertCurrent(); }
+    }));
+    deps.assertCurrent();
+    providers = await deps.readProviders();
+    deps.assertCurrent();
+  }
+  return resolveScheduledModelSelection(selection, providers);
 }
 
 /** Resolve against the bound execution computer; the runner owns inactive-target recovery. */

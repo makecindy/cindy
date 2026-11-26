@@ -4,6 +4,7 @@ import {
   buildForkOriginHandoff,
   composeForkOriginHandoff,
   buildHandoff,
+  buildUserReplayHandoff,
   buildHandoffText,
   createAgentHandoffPendingRegistry,
   describeHandoffUserSource,
@@ -111,6 +112,175 @@ describe('extractAgentIslandPromptText', () => {
 });
 
 describe('buildHandoffText', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：buildHandoffText 的用户历史重放正文；新会话能看到附件引用与查看方式。
+  // - Bug 依据：现场 9f2be7a3 的换 Harness 交接丢失图片引用；协议规则要求不重放原生字节。
+  // - 缺口：旧测试只覆盖 text，未覆盖 stringifyUserContent 的 images/files 元数据。
+  // - 最小失败输入：一条带受管图片 URL 的用户信封；tier=unit。
+  it('keeps image and file references without reading attachment bytes', () => {
+    const text = buildHandoffText([msg('user', {
+      text: '这个改服务端能兼容吗',
+      images: [
+        { originalName: 'clipboard-shot.png', url: 'cindy-media://blobs/abc.png' },
+        { originalName: 'inline.png', url: 'data:image/png;base64,AA==' },
+      ],
+      files: [{ name: 'contract.pdf', path: '/tmp/contract.pdf' }],
+    })], opts);
+    expect(text).toContain('这个改服务端能兼容吗');
+    expect(text).toContain('clipboard-shot.png · cindy-media://blobs/abc.png');
+    expect(text).toContain('inline.png');
+    expect(text).toContain('file contract.pdf');
+    expect(text).not.toContain('/tmp/contract.pdf');
+    expect(text).toContain('media tool resolve_local_path');
+    expect(text).toContain('ask the user to send the image again');
+    expect(text).not.toContain('base64');
+  });
+
+  it.each([
+    ['a single image', { text: '看这张图', images: [{ originalName: 'shot.png', url: 'xdt-image://task/shot.png' }], files: [] }],
+    ['a file attachment', { text: '读这个文件', images: [], files: [{ name: 'notes.txt', path: '/work/notes.txt' }] }],
+  ])('keeps references for %s', (_label, content) => {
+    const text = buildHandoffText([msg('user', content)], opts);
+    expect(text).toContain(content.text);
+    expect(text).toContain(content.images[0]?.originalName ?? content.files[0]?.name);
+    const location = content.images[0]?.url;
+    if (location) expect(text).toContain(location);
+    else expect(text).not.toContain(content.files[0]?.path);
+  });
+
+  it('cleans attachment fields into single-line bounded references', () => {
+    const text = buildHandoffText([msg('user', {
+      text: '正文',
+      images: [{
+        originalName: 'bad\n[name].png',
+        url: 'cindy-media://blobs/line\n[break].png',
+      }],
+      files: [{ name: 'doc\n[private].pdf', path: '/work/one;  two\r\n\t[private].pdf' }],
+    })], opts);
+    expect(text).toContain('bad name.png');
+    expect(text).toContain('cindy-media://blobs/line break.png');
+    expect(text).toContain('doc private.pdf');
+    expect(text).not.toContain('/work/');
+    expect(text).not.toContain('bad\n[name]');
+  });
+
+  it('keeps the user request when the attachment marker cannot fit the budget', () => {
+    const content = {
+      text: '这条请求必须保留，即使附件清单太长。',
+      images: Array.from({ length: 4 }, (_, i) => ({
+        originalName: `image-${i}-${'n'.repeat(110)}.png`,
+        url: `cindy-media://blobs/${'u'.repeat(280)}-${i}.png`,
+      })),
+      files: [],
+    };
+    const text = buildHandoffText([msg('user', content)], { ...opts, targetContextWindow: 2_000 });
+    expect(text).toContain(content.text);
+    expect(text).not.toContain('[Attachment references:');
+  });
+
+  it('adds the newest attachment marker first after preserving both user requests', () => {
+    const images = (label: string) => Array.from({ length: 4 }, (_, index) => ({
+      originalName: label + index + 'a'.repeat(100) + '.png',
+      url: 'cindy-media://blobs/' + 'a'.repeat(270) + index + '.png',
+    }));
+    const result = buildHandoff([
+      msg('user', { text: 'Initial request', images: images('old-'), files: [] }),
+      msg('user', { text: 'Latest correction', images: images('new-'), files: [] }, 1),
+    ], { ...opts, sessionId: 'priority', targetContextWindow: 5_000 });
+    expect(result.handoffCoverage).toBe('condensed');
+    expect(result.handoff).toContain('Initial request');
+    expect(result.handoff).toContain('Latest correction\n[Attachment references:');
+    expect(result.handoff).toContain('image new-3');
+    expect(result.handoff).not.toContain('image old-0');
+    expect(estimateHandoffTokens(result.handoff)).toBeLessThanOrEqual(1_500);
+  });
+
+  // The complete replay can fit the estimated character cap while four
+  // Chinese file names put it over the 2,400-token share of an 8K window.
+  it('keeps the complete ASCII request when attachment names exceed the token budget', () => {
+    const request = 'Initial instruction: use staging only.\n' + 'x'.repeat(3_000)
+      + '\nFinal correction: keep the archive read-only.';
+    const options = { ...opts, sessionId: 'attachment-budget', targetContextWindow: 8_000 };
+    const files = Array.from({ length: 4 }, (_, i) => ({
+      name: '附件'.repeat(57) + i + '.txt',
+      path: '/guest/private-' + i + '.txt',
+    }));
+    const result = buildHandoff([msg('user', { text: request, images: [], files })], options);
+    expect(result.handoffCoverage).toBe('condensed');
+    expect(result.handoff).toContain(request);
+    expect(result.handoff).not.toContain('[Attachment references:');
+    expect(estimateHandoffTokens(result.handoff)).toBeLessThanOrEqual(2_400);
+  });
+
+  it('keeps the body for the 2,000-token long-name and long-address case', () => {
+    const text = buildHandoffText([msg('user', {
+      text: '不要丢掉这条用户请求',
+      images: [{
+        originalName: 'n'.repeat(120),
+        url: `cindy-media://blobs/${'u'.repeat(280)}`,
+      }],
+      files: [],
+    })], { ...opts, targetContextWindow: 2_000 });
+    expect(text).toContain('不要丢掉这条用户请求');
+  });
+
+  it('uses a bounded placeholder instead of emitting a truncated image address', () => {
+    const longName = `${'n'.repeat(200)}.png`;
+    const longUrl = `cindy-media://blobs/${'u'.repeat(400)}`;
+    const text = buildHandoffText([msg('user', {
+      text: '图片地址过长',
+      images: [{ originalName: longName, url: longUrl }],
+      files: [],
+    })], opts);
+    expect(text).toContain('managed address too long; search history for it');
+    expect(text).not.toContain(longUrl.slice(0, 300));
+    const markerName = text.match(/image (.+?) · managed address too long/)?.[1];
+    expect(markerName).toHaveLength(120);
+  });
+
+  it('keeps a literal marker in user text separate from the generated marker during condensation', () => {
+    const literal = '用户原文包含 [Attachment references: 这只是文字]，不能当作附件标记。';
+    const messages = [
+      msg('user', { text: literal, images: [], files: [] }),
+      msg('tool_result', { fullText: 'tool result omitted by caller' }),
+      msg('user', { text: '查看这张图', images: [{ originalName: 'latest.png', url: 'cindy-media://blobs/latest.png' }], files: [] }),
+    ];
+    const text = buildHandoffText(messages, { ...opts, targetContextWindow: 8_000, includeToolResults: false });
+    expect(text).toContain('(Some records omitted');
+    expect(text).toContain(literal);
+    expect(text).toContain('image latest.png · cindy-media://blobs/latest.png');
+  });
+
+  it('does not add a blank line when an image-only user message is replayed', () => {
+    const text = buildHandoffText([msg('user', {
+      text: '',
+      images: [{ originalName: 'only.png', url: 'cindy-media://blobs/only.png' }],
+      files: [],
+    })], opts);
+    expect(text).toContain('[User]\n[Attachment references:');
+    expect(text).not.toContain('[User]\n\n[Attachment references:');
+  });
+
+  it('caps attachment references and keeps the original text with a tight budget', () => {
+    const content = {
+      text: '原始请求仍然要保留',
+      images: Array.from({ length: 8 }, (_, i) => ({ originalName: `shot-${i}.png`, url: `xdt-image://task/${i}.png` })),
+    };
+    const text = buildHandoffText([msg('user', content)], { ...opts, targetContextWindow: 2_000 });
+    expect(text).toContain('原始请求仍然要保留');
+    expect(text).toContain('and 4 more');
+    expect(text).not.toContain('shot-7.png');
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(600);
+  });
+
+  it.each([
+    'plain legacy text',
+    JSON.stringify([{ type: 'text', text: 'SDK block' }]),
+    { text: 'without attachments' },
+  ])('does not add a marker to old content shape %j', content => {
+    const text = buildHandoffText([msg('user', content)], opts);
+    expect(text).not.toContain('Attachment references');
+  });
   const opts = { fromLabel: 'Claude Code', toLabel: 'Codex' };
 
   // #9973, unit: the production handoff dropped the middle of an early request
@@ -739,7 +909,7 @@ describe('createAgentHandoffPendingRegistry', () => {
     // fork 出子会话后、首发前切引擎:切换流程走 setPendingHandoff 直接写内存,
     // 不经 DB fallback。没有这层组合,来源标记会被整条跳过。
     const query = vi.fn(async () => null);
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK-ORIGIN\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK-ORIGIN\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(query, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
     expect(await reg.peek('s1')).toBe('FORK-ORIGIN\n\nSWITCH-HANDOFF');
@@ -747,12 +917,38 @@ describe('createAgentHandoffPendingRegistry', () => {
   });
 
   it('decorate 结果回写缓存:重试 peek 不重跑 DB 查询,也不会叠加', async () => {
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
     expect(await reg.peek('s1')).toBe('FORK\n\nSWITCH-HANDOFF');
     // 首发被拒 → 未 consume → 重试再 peek
     expect(await reg.peek('s1')).toBe('FORK\n\nSWITCH-HANDOFF');
+    expect(decorate).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit through the send-side pending registry and the real fork composer.
+  // Unlike the prefix-only decorator test, the long history cannot be restored
+  // by replacing a suffix. Only this replay's client ID may omit a message.
+  it('deduplicates a retried message by ID even after decorating a long fork', async () => {
+    const current = 'unique-retry-input';
+    const options = { fromLabel: 'Codex', toLabel: 'Pi', sessionId: 'fork', targetContextWindow: 500_000 };
+    const source = [
+      { role: 'user' as const, clientId: 'older', content: 'earlier-identical-text', createdAt: 1 },
+      { role: 'assistant' as const, content: 'history '.repeat(110_000), createdAt: 2 },
+      { role: 'user' as const, clientId: 'retry-id', content: current, createdAt: 3 },
+    ];
+    const { handoff } = buildHandoff(source, options);
+    const replay = buildUserReplayHandoff(source, options, 'retry-id')!;
+    const decorate = vi.fn(async () => (note: string) => composeForkOriginHandoff('parent', note));
+    const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
+    reg.set('fork', handoff, undefined, replay);
+    const full = await reg.peek('fork', 'different-id');
+    expect(full).toContain(current);
+    expect(full?.endsWith(handoff)).toBe(false);
+    const retry = await reg.peek('fork', 'retry-id');
+    expect(retry).toBe(composeForkOriginHandoff('parent', replay.text));
+    expect(retry).not.toContain(current);
+    expect(await reg.peek('fork', 'different-id')).toBe(full);
     expect(decorate).toHaveBeenCalledTimes(1);
   });
 
@@ -782,9 +978,9 @@ describe('createAgentHandoffPendingRegistry', () => {
 
   it('decorate 失败不写缓存,下次 peek 仍重试组合', async () => {
     let fail = true;
-    const decorate = vi.fn(async (_sid: string, handoff: string) => {
+    const decorate = vi.fn(async () => {
       if (fail) throw new Error('db down');
-      return `FORK\n\n${handoff}`;
+      return (handoff: string) => `FORK\n\n${handoff}`;
     });
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'SWITCH-HANDOFF');
@@ -911,7 +1107,7 @@ describe('createAgentHandoffPendingRegistry', () => {
   });
 
   it('consume 后不触发 decorate(消费语义不被组合钩子破坏)', async () => {
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `X${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `X${handoff}`);
     const reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
     reg.set('s1', 'H');
     await reg.peek('s1');
@@ -922,7 +1118,7 @@ describe('createAgentHandoffPendingRegistry', () => {
 
   it('DB fallback 缓存的值不再 decorate:首发未 accepted 的重试不会拿到两份来源标记', async () => {
     const query = vi.fn(async () => 'COMPOSED-BY-QUERY');
-    const decorate = vi.fn(async (_sid: string, handoff: string) => `FORK\n\n${handoff}`);
+    const decorate = vi.fn(async () => (handoff: string) => `FORK\n\n${handoff}`);
     const reg = createAgentHandoffPendingRegistry(query, undefined, decorate);
     expect(await reg.peek('s1')).toBe('COMPOSED-BY-QUERY');
     // 未 accepted → 未 consume → 重试再 peek，仍是同一份，不叠加
@@ -935,7 +1131,7 @@ describe('createAgentHandoffPendingRegistry', () => {
     const reg = createAgentHandoffPendingRegistry(
       async () => 'COMPOSED-BY-QUERY',
       undefined,
-      async (_sid: string, handoff: string) => `FORK\n\n${handoff}`,
+      async () => (handoff: string) => `FORK\n\n${handoff}`,
     );
     await reg.peek('s1');
     reg.set('s1', 'SWITCH-HANDOFF');

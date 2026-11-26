@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "Voltar a obter conteúdo multimédia remoto",
     "retryFetch": "Voltar a obter",
     "openMedia": "Abrir conteúdo multimédia",
+    "playAudio": "Reproduzir áudio",
     "readCurrentRemoteFile": "Ler ficheiro remoto atual",
     "retryFilePreview": "Recarregar pré-visualização do ficheiro",
     "readCurrentFile": "Ler ficheiro atual",
@@ -195,6 +196,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "Guardar imagem",
+    "imageSaved": "Imagem guardada",
+    "saveFailed": "Não foi possível guardar a imagem. Tente novamente.",
     "originalUnavailable": "Imagem original indisponível",
     "retryOriginal": "Recarregar imagem original",
     "loadingOriginal": "A carregar a imagem original…",
@@ -461,6 +465,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "Recuar 10 segundos",
+    "audioForwardTen": "Avançar 10 segundos",
+    "audioMute": "Silenciar",
+    "audioUnmute": "Ativar som",
+    "audioSpeed": "Velocidade de reprodução",
+    "audioOutput": "Saída de áudio",
+    "fetchAudio": "Obter do computador",
+    "pauseAudio": "Pausar áudio",
+    "audioProgress": "Posição de reprodução",
     "more": "Mais ações",
     "retry": "Tentar novamente",
     "image": "Imagem",

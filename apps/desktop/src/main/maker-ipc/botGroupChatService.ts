@@ -94,7 +94,8 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
+/** `permissionSynced`: the lane was reused and its permission reconciled just now (`syncLanePermission`). */
+type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string; permissionSynced?: boolean } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -152,6 +153,8 @@ export interface BotGroupChatServiceDeps {
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
+    /** Set by the host only after resolving the visible Cindy task for this room or thread. */
+    groupAssistantTask?: true;
     targetSessionId: string;
     message: string;
     persistedContent: string;
@@ -210,7 +213,7 @@ export interface BotGroupChatServiceDeps {
    * A task this computer runs, for its group card: title, state and recorded pull request; null
    * when the task is gone (bot-group-chat.md §10).
    */
-  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
+  readGroupTaskStatus?: (taskId: string, options?: { model?: boolean }) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string; model?: string } | null>;
   /** Main-owned exact input liveness, including queue/steering and automatic recovery. No I/O. */
   isGroupInputLive?: (sessionId: string, clientId: string) => boolean;
   /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */

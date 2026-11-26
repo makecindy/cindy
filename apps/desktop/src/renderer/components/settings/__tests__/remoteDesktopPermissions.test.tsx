@@ -32,3 +32,47 @@ it('shows independent permission rows, opens only the selected permission, and r
   await vi.advanceTimersByTimeAsync(3000);
   expect(permissions).toHaveBeenCalledTimes(count);
 });
+it('offers a separate system window only for the pane the host could not finish', async () => {
+  const openPermission = vi.fn();
+  const permissions = vi.fn(async () => ({
+    screenRecording: 'missing', accessibility: 'missing', separateWindowRetries: ['accessibility'],
+  }));
+  Object.assign(window, { electronAPI: { remoteDesktop: { permissions, openPermission } } });
+  render(<RemoteDesktopPermissions />);
+  fireEvent.click(await screen.findByRole('button', { name: /remoteDesktop.accessibility\s*remoteDesktop.openPermissionInNewWindow/ }));
+  await act(async () => {});
+  expect(openPermission).toHaveBeenCalledExactlyOnceWith('accessibility');
+});
+
+// Local settings must identify the running bundle when two installed apps share
+// a display name. Opening the guide alone must never open Finder or a TCC prompt.
+it('reveals the exact local installation only when requested', async () => {
+  const appBundlePath = '/Users/test/Applications/Cindy Personal.app';
+  const showItemInFolder = vi.fn().mockResolvedValue({ success: true });
+  Object.assign(window, { electronAPI: { showItemInFolder, remoteDesktop: {
+    permissions: vi.fn().mockResolvedValue({ screenRecording: 'missing', accessibility: 'missing', appBundlePath }),
+  } } });
+  render(<RemoteDesktopPermissions />);
+  const reveal = await screen.findByRole('button', { name: /remoteDesktop.revealCurrentApp/ });
+  expect(showItemInFolder).not.toHaveBeenCalled();
+  fireEvent.click(reveal);
+  expect(showItemInFolder).toHaveBeenCalledExactlyOnceWith({ filePath: appBundlePath });
+});
+
+// macOS 27.3 beta 2 (26C5047e), measured with a probe allowed to control one chosen app:
+// system-wide (HID) keyboard and mouse events are dropped even for that app, so remote
+// control needs the whole Mac. Older macOS must keep its own Accessibility help unchanged.
+it.each([
+  ['26.4.0', {}, 'remoteDesktop.accessibilityHelp'],
+  ['27.3.0', {}, 'macControlPermission.reviewWholeMac'],
+  ['27.3.0', { accessibilityChosenAppsOnly: true }, 'macControlPermission.chosenAppsOnly'],
+  // The flag is only meaningful where macOS has per-app control.
+  ['27.2.0', { accessibilityChosenAppsOnly: true }, 'remoteDesktop.accessibilityHelp'],
+])('on macOS %s %j explains the keyboard and mouse permission with %s', async (osRelease, extra, help) => {
+  Object.assign(window, { electronAPI: { platform: 'darwin', osRelease, remoteDesktop: {
+    permissions: vi.fn().mockResolvedValue({ screenRecording: 'granted', accessibility: 'missing', ...extra }),
+  } } });
+  render(<RemoteDesktopPermissions />);
+  expect(await screen.findByText(help)).toBeTruthy();
+  expect(screen.queryByText('macControlPermission.review')).toBeNull();
+});
