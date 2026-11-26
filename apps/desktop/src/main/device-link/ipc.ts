@@ -5,6 +5,7 @@
  * ipcMain.handle 只做 adapter),__tests__ 用内存 harness 直接调 handler body。
  */
 
+import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { promises as pluginFileFs } from 'node:fs';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
@@ -1669,7 +1670,7 @@ export async function handleMirrorCachePutSessionList(
   // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
-    const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const source = device as { deviceId?: unknown; deviceName?: unknown; projectAliases?: unknown; sessions?: unknown };
     const sessions: Record<string, unknown>[] = [];
     if (Array.isArray(source.sessions)) {
       for (
@@ -1687,6 +1688,8 @@ export async function handleMirrorCachePutSessionList(
       deviceName: typeof source.deviceName === 'string'
         ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
         : undefined,
+      ...(source.projectAliases && withinStructuralBudget(source.projectAliases)
+        ? { projectAliases: cachedProjectAliases(source.projectAliases) } : {}),
       sessions,
     };
   });

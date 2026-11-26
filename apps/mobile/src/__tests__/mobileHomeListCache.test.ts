@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheHomeListSnapshot, getCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { hydrateRemoteProjectAliases, refreshRemoteProjectAliases, remoteProjectAliasesSnapshot, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
+import { resolveProjectAliasForSessions } from '@cindy/maker-shared/project-alias-sync';
 import type { RemoteSession } from '@/session/types';
 
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem,贴近真实 RN API(与 mobileSessionMessageCache.test 同套路)。
@@ -60,6 +62,26 @@ describe('mobileHomeListCache', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // Unit regression: a persisted row must display its last synced name before a host responds.
+  it('restores the cold list name and persists an authoritative clear', async () => {
+    const row = makeSession('s1', 'mac');
+    const live = { platform: 'darwin', ownerStamp: { dataOwnerId: USER_ID, ownerGeneration: 1 },
+      aliases: [{ projectKey: 'local:/repo/demo', alias: 'My project' }] };
+    setRemoteProjectAliasesAccount(USER_ID, 1);
+    await refreshRemoteProjectAliases('mac', async () => live);
+    await cacheHomeListSnapshot(USER_ID, [row]);
+    setRemoteProjectAliasesAccount(USER_ID, 2);
+    const [device] = await getCachedHomeListSnapshot(USER_ID);
+    hydrateRemoteProjectAliases(USER_ID, 'mac', device.projectAliases!);
+    const label = () => resolveProjectAliasForSessions(device.sessions, remoteProjectAliasesSnapshot(), 'mac');
+    expect(label()).toBe('My project');
+    await refreshRemoteProjectAliases('mac', async () => ({ ...live, aliases: [] }));
+    hydrateRemoteProjectAliases(USER_ID, 'mac', device.projectAliases!);
+    expect(label()).toBeNull();
+    await cacheHomeListSnapshot(USER_ID, [row]);
+    expect((await getCachedHomeListSnapshot(USER_ID))[0].projectAliases).toBeUndefined();
   });
 
   it('retains lane ownership, creator avatars and snooze deadlines across cold starts', async () => {

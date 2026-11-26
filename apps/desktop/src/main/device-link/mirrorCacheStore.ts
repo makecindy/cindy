@@ -1,3 +1,4 @@
+import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 /**
  * mirrorCacheStore —— 控制端「远程会话镜像」的本地冷缓存(落盘)。
@@ -88,6 +89,7 @@ const SESSION_LIST_FILE = 'session-list.json';
 export interface CachedDeviceSessions {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: Record<string, unknown>[];
 }
 
@@ -238,6 +240,7 @@ const SESSION_FIELD_WHITELIST = [
   'title',
   'workingDir',
   'projectDir',
+  'remoteHostId',
   'workspaceKind',
   'worktreePath',
   'model',
@@ -284,6 +287,7 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
   const companion = input.companion;
   if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
     out.companion = { id: companion.id, role: companion.role,
+      ...(typeof companion.taskProjectDir === 'string' ? { taskProjectDir: companion.taskProjectDir } : {}),
       ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
       ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
@@ -313,7 +317,7 @@ export function normalizeDeviceSessions(
       typeof item.deviceName === 'string' && item.deviceName.trim()
         ? truncateText(item.deviceName.trim())
         : deviceId;
-    devices.push({ deviceId, deviceName, sessions });
+    devices.push({ deviceId, deviceName, sessions, projectAliases: cachedProjectAliases(item.projectAliases) });
   }
   return devices
     .sort((a, b) => lastActivityTime(b.sessions[0]) - lastActivityTime(a.sessions[0]))

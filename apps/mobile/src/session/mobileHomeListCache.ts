@@ -1,3 +1,5 @@
+import { projectAliasesForCache } from './remoteProjectAliases';
+import { cachedProjectAliases, projectAliasesForSessionList } from '@cindy/maker-shared/project-alias-sync';
 import { normalizeHomeDisplayOrder, type HomeDisplayOrder } from './homeProjectOrder';
 import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -34,6 +36,7 @@ const HOME_LIST_PERSIST_DEBOUNCE_MS = 1200;
 export interface CachedHomeDeviceSnapshot {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: RemoteSession[];
 }
 
@@ -82,6 +85,9 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
   // 账号的快照写回。写前写后各核对一次,写后发现被作废则删掉刚落盘的产物。
   const epoch = writeEpoch;
   const grouped = groupSessionsByDevice(sessions);
+  for (const device of grouped) {
+    device.projectAliases = projectAliasesForSessionList(projectAliasesForCache(userId, device.deviceId), device.sessions);
+  }
   for (const perDeviceLimit of SHRINK_STEPS) {
     const devices = normalizeSnapshotDevices(grouped, perDeviceLimit);
     if (devices.length === 0) {
@@ -196,7 +202,7 @@ function normalizeSnapshotDevices(
     const deviceName = typeof item.deviceName === 'string' && item.deviceName.trim()
       ? item.deviceName.trim()
       : deviceId;
-    devices.push({ deviceId, deviceName, sessions });
+    devices.push({ deviceId, deviceName, sessions, projectAliases: cachedProjectAliases(item.projectAliases) });
   }
   return devices
     .sort((a, b) => lastActivityTime(b.sessions[0]).localeCompare(lastActivityTime(a.sessions[0])))

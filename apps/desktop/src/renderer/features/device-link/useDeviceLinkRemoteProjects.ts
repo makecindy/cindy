@@ -1105,6 +1105,9 @@ export function useDeviceLinkRemoteProjects(
       // 在 listDevices 离线时也纠正不了,于是那台设备会一直留在侧边栏(review: codex P1)。
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
+      for (const device of usable) {
+        if (device.projectAliases) remoteProjectAliases.hydrate(device.deviceId, device.projectAliases);
+      }
       remoteProjectsStore.hydrateFromCache(usable);
       // 种入的分片是 connecting。link 已上线时由 bootstrap / reseed 接手;否则按已知的连接
       // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
@@ -1614,10 +1617,12 @@ export function useDeviceLinkRemoteProjects(
     // 之前退出,下次离线冷启动就会把那条已归档 / 已删除的会话又 hydrate 回侧边栏
     // (review: codex P1)。订阅覆盖所有 mutation(snapshot / patch / 改名 / 断连 / 移除),
     // 去抖 1200ms 合并高频变更,main 侧还有内容指纹去重 —— 内容没变根本不落盘。
-    const offShardChange = remoteProjectsStore.subscribe(() => {
+    const schedulePersist = () => {
       if (disposed) return;
       scheduleSessionListPersist(collectSessionListSnapshot);
-    });
+    };
+    const offShardChange = remoteProjectsStore.subscribe(schedulePersist);
+    const offAliasesChange = remoteProjectAliases.subscribe(schedulePersist);
 
     return () => {
       disposed = true;
@@ -1648,6 +1653,7 @@ export function useDeviceLinkRemoteProjects(
       offRename();
       offRemoval();
       offShardChange();
+      offAliasesChange();
       offResponsiveness();
       unresponsiveDevicesStore.clearAll();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。
