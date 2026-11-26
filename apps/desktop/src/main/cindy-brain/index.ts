@@ -5779,27 +5779,25 @@ function customMediaAgents(provider: Provider, model: ProviderMediaModel, respec
 function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
-    if (
-      provider.id === 'xd' ||
-      isProviderDisabled(access, provider.id) ||
-      (!getImageChannelRegistry().isProviderReady(provider.id) &&
-        !(provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method)))
-    ) {
+    if (!provider.imageModels?.length || provider.id === 'xd' || isProviderDisabled(access, provider.id)) {
       return [];
     }
-    return (provider.imageModels ?? []).flatMap((model) => {
-      const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const channel = getImageChannelRegistry().readyChannel(provider.id);
+    if (!guideDriven && !channel) return [];
+    return provider.imageModels.flatMap((model) => {
+      if (isModelDisabled(access, provider.id, model.id)) return [];
       const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
+      if (guideDriven && !sourceAgents.length) return [];
+      const modelReady = channel !== undefined && channel.isModelReady?.(model.id) !== false;
       if (
-        (guideDriven && !sourceAgents.length) ||
-        (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
-        isModelDisabled(access, provider.id, model.id) ||
+        (!guideDriven && !modelReady) ||
         (respectDisplaySwitch && !guideDriven &&
           !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, undefined, 'image'))
       ) {
         return [];
       }
-      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
+      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : channel?.supportsEdit !== false;
       // Legacy/provider catalogs may only carry id/name. The channel registry is
       // the executable capability source in that case: every registered image
       // channel accepts text generation, and editable channels additionally
@@ -5823,8 +5821,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities
           providerId: provider.id,
           mode: 'image_generation' as const,
           ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
-          imageProtocol: getImageChannelRegistry().isProviderReady(provider.id, model.id)
-            ? getImageChannelRegistry().resolve(provider.id, model.id).imageProtocol : undefined,
+          imageProtocol: modelReady ? channel.imageProtocol : undefined,
           modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
