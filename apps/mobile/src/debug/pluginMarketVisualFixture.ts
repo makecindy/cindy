@@ -41,7 +41,7 @@ export function rescriptVisualCheckOperation(operationId: string, behavior: Visu
 /**
  * Demo Uncertain Sync in the pending-check scenarios (begin's reply is lost; the first lookup hits a protocol error, so
  * the attempt becomes a pending check): `lateConsent` then shows a consent this phone never showed ("The computer is
- * waiting for you"), `lateResult` a success ("Open"), `unreadResult` a success whose first installed read fails
+ * waiting for you"), `lateResult` a success ("Go to Installed"), `unreadResult` a success whose first installed read fails
  * ("Read again").
  */
 const PENDING_CHECK_SCENARIOS: PluginMarketVisualScenario[] = ["lateConsent", "lateResult", "unreadResult"];

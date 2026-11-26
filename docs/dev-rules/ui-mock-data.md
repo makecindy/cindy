@@ -179,7 +179,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 已卸载 | `cindy://plugins?checks=uninstalled`（Demo Weather Board 的卸载） |
   | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，列表里两条：点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装；电脑在 Simulator 拿到位置之后才回答 Agenda 的确认，页面中途的查询不会让 Agenda 先拿回位置） |
   | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |
-  | 更新完成且回执过期后核实（「已安装」+ 打开） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
+  | 更新完成且回执过期后核实（「已安装」+「去已安装」） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
   | 成功，但未能证实（本机换装同版本，`unattributed`，「去已安装」） | `cindy://plugins?checks=reinstalled` |
   | 成功，但电脑端版本较旧（两个归属字段都没有，有「去已安装」） | `cindy://plugins?checks=legacyHost` |
   | 成功，但电脑上现在没有这个插件（之后被卸载） | `cindy://plugins?checks=goneSince` |

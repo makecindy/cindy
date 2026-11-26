@@ -81,7 +81,7 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     case "uninstalled": { const c = await seedOne(WEATHER, "succeeded", MAC, "uninstall"); return () => { void c?.reconcile(); }; }
     // An uninstall whose receipt the computer forgot: cannot be confirmed (the plugin is still there), "Stop tracking" only.
     case "unprovableUninstall": { const c = await seedOne(WEATHER, "gone", MAC, "uninstall"); return () => { void c?.reconcile(); }; }
-    // An update that took effect and whose receipt expired: verified from the computer's record of it ("Installed", Open).
+    // An update that took effect and whose receipt expired: verified from the computer's record of it ("Installed", Go to Installed).
     case "updateGone": { const c = await seedOne(READING, "gone", MAC, "update"); return () => { void c?.reconcile(); }; }
     // A consent waiting for this phone while another operation holds the computer: "View and decide" says it must wait.
     case "decideBlocked": {

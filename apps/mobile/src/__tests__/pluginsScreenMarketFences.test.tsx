@@ -11,11 +11,11 @@ import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginManagementSlot";
 /**
- * Proven as this install: concluded as done with its instance read from the computer. Nothing opens a result's instance:
+ * Proven as this install: concluded as done from the computer's facts. Nothing opens a result's instance:
  * the list of checks says how it ended and leads to the installed list ("Go to Installed").
  */
 const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
-  && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
+  && conclusion.readback === "verified");
 // The plugins page's market read fences and lost-receipt facts (the order matrices); the rest of the page's cases are in
 // pluginsScreen.test.tsx, and the success-read cases in pluginsScreenSuccessRead.test.tsx. Split to keep each file within
 // the unit budget; all share pluginsScreenHarness.tsx.
@@ -151,7 +151,7 @@ describe("market read fences and lost-receipt facts", () => {
     queuedWire((request) => {
       if (request.input?.read === "capabilities") return { catalogPaging: true };
       if (request.actionId === "management:market-detail") return { ...item, installState: installed ? "installed" : "not-installed", ...attributed(installed), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
-      // The read-back after the install fails, so there is no instance to open (the case with no instanceKey).
+      // The read-back after the install fails, so the record cannot say it is done.
       if (request.actionId === "management:snapshot" && request.input?.read === "installed") {
         if (installed) throw new Error("[TIMEOUT] read-back timed out");
         return managementSnapshot(false);
@@ -479,7 +479,7 @@ describe("market read fences and lost-receipt facts", () => {
     // carried on), so the page does not move for it: it is proven and listed at the top.
     await act(async () => { readC.release(); });
     await settle(14);
-    expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified", instanceKey: "_root__demo" })]);
+    expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified" })]);
   });
   // Maintainer review 04:20: a newer installed snapshot replaces the facts, so the older facts must not settle the result
   // (since controller rule ④ the facts are the installed snapshot itself; no market detail is read on them).
@@ -1392,7 +1392,8 @@ describe("market read fences and lost-receipt facts", () => {
       }));
     });
 
-    /* 测试价值（推送前自查第二轮，2026-11-26：已装详情里的更新与页面批准也只看那一次读取的结论）
+    /* 测试价值（推送前自查第二轮，2026-11-26：已装详情里的更新与页面批准也只看那一次读取的结论；维护者 16:53 去掉
+     *   「从记录打开」后，详情不再算看过，结果列在顶部直到在记录面板里看过，用例按此改写）
      * - 生产入口与可观察结果：真实 PluginsScreen 的已装详情（菜单的「更新」、页面批准提示、详情自己的「核实结果」），
      *   生产 client / controller / 记录存储；观察详情是否重读、顶部提示是否还列着、提示了哪句话。
      * - 依据：维护者 23:03 第 1、2 条与 01:21（更新走同一条只读核实路径、「打开」只按当前事实）；自查第二轮在本改动的
@@ -1402,7 +1403,7 @@ describe("market read fences and lost-receipt facts", () => {
      * - 最小失败输入：见各用例名；首条为对照（普通更新，改前改后都通过）。
      * - tier: unit（jsdom，内存 Host）。
      */
-    describe("an update or a page approval from the installed detail: shown by the detail that is on screen", () => {
+    describe("an update or a page approval from the installed detail: the detail is brought up to date, the result is listed until seen in the list", () => {
       type Hold = (label: string) => Promise<boolean> | undefined;
       function host(options: { ui?: boolean } = {}) {
         const plugin: any = { instanceKey: "demo", namespace: null, enabled: true,
@@ -1900,7 +1901,7 @@ describe("the store's read of a success: only the newest read issued settles it"
     reads[1](true);
     page.view = false; await render();
     const answer = async (index: number, ok = true) => { await act(async () => { reads[index](ok); }); await settle(10); };
-    const conclusion = () => { const [item]: any[] = __retainedForTests.conclusions(); return { result: item.result, readback: item.readback, instanceKey: item.instanceKey }; };
+    const conclusion = () => { const [item]: any[] = __retainedForTests.conclusions(); return { result: item.result, readback: item.readback }; };
     return { host, reads, page, render, answer, conclusion };
   }
   it("\"Read again\" while the first read is out; the newer read says the plugin is gone; the first read's reply (still proving it) lands last: gone", async () => {
@@ -1910,17 +1911,17 @@ describe("the store's read of a success: only the newest read issued settles it"
     expect(w.reads).toHaveLength(3);
     w.host.there = false;
     await w.answer(2);                       // the newest read: uninstalled since
-    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone", instanceKey: undefined });
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone" });
     w.host.there = true;
     await w.answer(0);                       // the first read's reply lands last
-    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone", instanceKey: undefined });
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "gone" });
   });
   it("the computer goes offline while the read is out (it ends as not read); that read's own reply lands after all: still not read", async () => {
     const w = await installed();
     w.page.online = false; await w.render();
-    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed" });
     await w.answer(0);
-    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
+    expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed" });
   });
 });
 

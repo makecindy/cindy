@@ -818,7 +818,7 @@ export function createPluginManagementController(client: PluginManagementClient,
      */
     /**
      * The operation this controller ran, once it has a final result (dispatcher O-2): what `pluginOperationOpens` needs
-     * to decide whether a view opens an instance after it. Null while not final, or when no entry of the page started it.
+     * to decide whether it is proven done on the computer. Null while not final, or when no entry of the page started it.
      */
     /** Whether the consent on screen can be allowed here (`pluginConsentAllowance`; null without one). */
     consentAllowance,

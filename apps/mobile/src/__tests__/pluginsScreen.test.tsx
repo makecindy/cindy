@@ -12,11 +12,11 @@ import { __testing as slotTesting, pluginManagementSlotFor } from "@/plugins/plu
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 import { CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from "./hostPluginInstallFacts";
 /**
- * Proven as this install: concluded as done with its instance read from the computer. The page never opens a result by
- * itself; the person opens it from the list of checks ("Open plugin"), which the tests of that list cover.
+ * Proven as this install: concluded as done from the computer's facts. The page never opens a result; the list of
+ * checks says how it ended and leads to that computer's installed list ("Go to Installed").
  */
 const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
-  && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
+  && conclusion.readback === "verified");
 /** What the page draws at the top now (the stand-in keeps the props of a notice that is no longer drawn). */
 async function topNotice() {
   fixture.props.delete("plugins.slotHolder");

@@ -1859,7 +1859,7 @@ describe('confirmation sheet wording', () => {
 // (hostPluginInstallFacts.ts). Minimal failing inputs on 5983ba71dd: a same-version reinstall by the computer or
 // another controller still opened after a final receipt; only the catalog's next release (sample ①) lost "Open".
 // Tier: unit (pure).
-describe('whether a finished operation opens an instance', () => {
+describe('whether a finished operation is proven done on the computer now', () => {
   const finished = (entry: 'market-install' | 'update' | 'page-approval' | 'uninstall' | 'enable' | 'task-settings', instanceKey?: string) =>
     ({ operationId: 'operation-1', entry, who: { instanceKey }, detail: entry === 'market-install' || entry === 'update' ? detail : undefined });
   const updated: ManagedPlugin = { ...plugin, manifest: { ...plugin.manifest, version: '2' } };

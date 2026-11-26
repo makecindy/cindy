@@ -11,12 +11,12 @@ import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginManagementSlot";
 /**
- * Proven as this install: concluded as done with its instance read from the computer. Nothing opens a result's instance:
+ * Proven as this install: concluded as done from the computer's facts. Nothing opens a result's instance:
  * the list of checks says how it ended and leads to the installed list ("Go to Installed"). "Open plugin" was removed
  * with that entry (maintainer, 2026-11-26 16:53); where the review-round notes below mention it, they record history.
  */
 const provenDemo = () => __retainedForTests.conclusions().some((conclusion) => (conclusion.result === "succeeded" || conclusion.result === "installed")
-  && conclusion.readback === "verified" && conclusion.instanceKey === "_root__demo");
+  && conclusion.readback === "verified");
 // The plugins page's "a market install's success: one read of the computer" cases, moved unchanged out of
 // pluginsScreenMarketFences.test.tsx (same describe path) to keep each file within the per-file unit budget
 // (engineering-conventions §3.2); both share pluginsScreenHarness.tsx. Tier: unit (jsdom, in-memory Host).
@@ -642,7 +642,7 @@ describe("market read fences and lost-receipt facts", () => {
         state.complete = true;
         await click("plugins.checks.verify");
         await settle(20);
-        expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified", instanceKey: "_root__demo" })]);
+        expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified" })]);
         expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
         // Only the original operation was ever looked up (maintainer review 15:22 #3).
         const begun = requests.find((request) => request.actionId === "management:begin")!.input?.operationId;
@@ -1114,8 +1114,8 @@ describe("market read fences and lost-receipt facts", () => {
         await settle(20);
         hold.release("begin");
         await settle(40);
-        expect(__retainedForTests.conclusions().map((item: any) => [item.result, item.readback, item.instanceKey]))
-          .toEqual([["succeeded", "verified", "_root__demo"]]);
+        expect(__retainedForTests.conclusions().map((item: any) => [item.result, item.readback]))
+          .toEqual([["succeeded", "verified"]]);
       });
       it("begin is still queued when its lookup says NOT_FOUND; it is then refused before the write (known not sent): a plain failure", async () => {
         let dequeue!: () => void;

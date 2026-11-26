@@ -168,7 +168,7 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
   });
   // Pre-push review, rounds 5 and 6: after `checks=recordMissing` (the mock computer cannot read its market) or
   // `checks=legacyHost` (it answers as an older one), a `market=` scenario kept that computer, so the documented market
-  // paths ("install, then Open plugin"; `market=readbackFailed` then "Read again") ended as "could not read" or "older
+  // paths ("install, then Go to Installed"; `market=readbackFailed` then "Read again") ended as "could not read" or "older
   // computer". Minimal failing input on 7951455227 (recordMissing) and 84ddb5043c (legacyHost): the seed, then
   // `market=normal`. Tier: unit.
   it.each(["recordMissing", "legacyHost"] as const)("a market scenario after checks=%s answers as a current computer that can read its market", async (seed) => {

@@ -18,16 +18,16 @@ export interface FinishedPluginOperation {
 }
 
 /**
- * Why a finished operation offers no "Open" (the success, when there was one, stays a past result): `gone`, no instance
+ * Why a finished operation is not proven done (the success, when there was one, stays a past result): `gone`, no instance
  * of it on the computer now; `unconfirmed`, an instance is there and the computer's record of it is not attributed to
- * this operation (V2.10 ②: another install since, or a conflict); `legacy`, an older computer gives no evidence (③: the
- * person opens it from the installed list); `unread`, an instance is there but this response has no installed record of
+ * this operation (V2.10 ②: another install since, or a conflict); `legacy`, an older computer gives no evidence (③);
+ * `unread`, an instance is there but this response has no installed record of
  * the plugin at all (the computer could not read its catalog or the plugin's market then, or its market data has not
  * caught up with an install that just committed): nothing can be concluded from it, it has to be read again.
  */
 export type PluginOperationNotOpened = "gone" | "unconfirmed" | "legacy" | "unread";
 export type PluginOperationOpens = { open: true; instanceKey: string } | { open: false; reason: PluginOperationNotOpened };
-/** What the list of checks and the installed detail say for each reason (plugins.json, 12 languages). */
+/** What the list of checks says for each reason (plugins.json, 12 languages). */
 export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = {
   gone: "plugins.checks.result.goneSince",
   unconfirmed: "plugins.checks.result.unconfirmed",
@@ -37,17 +37,16 @@ export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = 
 type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "installState" | "installedOperationId" | "installedOperationAttribution">;
 
 /**
- * Whether a finished install, update or page approval offers "Open" for an instance, and which (dispatcher O-2, R-1,
- * R-2; contract V2.10). The one decision for every place that opens one after an operation: the list of checks (after
- * a final receipt, and after the receipt was gone), the market row that started an install, and the installed detail
- * after an update. It reads only the newest facts read from the computer: a success receipt is a past result and never
- * makes an instance openable, however recent. The caller has already fenced the account and the computer.
+ * Whether a finished install, update or page approval is proven done on the computer now, and by which instance
+ * (dispatcher O-2, R-1, R-2; contract V2.10). The one decision for the records' conclusions (after a final receipt, and
+ * after the receipt was gone). It reads only the newest facts read from the computer: a success receipt is a past
+ * result and never proves an instance, however recent. The caller has already fenced the account and the computer.
  * Install and update: the computer's record of this plugin (same market id; `pluginInstallEvidence`) is ① for this
  * operation and the attempt's instance (ghostId, namespace), and that instance is in the installed snapshot (an update:
  * the instance it started from). The instance is found by the record's own identity: record and instance come from the
  * same response, and the computer fills in the namespace of an install only once it is there (an item read before the
  * install can lack it). The record's catalog `releaseId` / `version` are not compared, nor versions at all: ① pins the
- * installed package. Without ①, an instance of the plugin being there only chooses the sentence, never an "Open".
+ * installed package. Without ①, an instance of the plugin being there only chooses the sentence.
  * Page approval: the instance it started from, its pages approved now.
  */
 export function pluginOperationOpens(operation: FinishedPluginOperation, facts: {

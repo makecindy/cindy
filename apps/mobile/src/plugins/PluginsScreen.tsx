@@ -655,9 +655,8 @@ function PluginDirectory() {
     </View>
   );
   // Unfinished operations (maintainer reviews 17:43, 18:45): every computer's slot holder and every pending check, one
-  // line per operation, in a notice at the top while any is open. Only the line of the installed detail on screen is
-  // left out (that detail shows its own operation). "View" opens their list, drawn from what each kept, never from
-  // the directory or the market (PluginPendingChecksSheet).
+  // line per operation, in a notice at the top while any is open. "View" opens their list, drawn from what each kept,
+  // never from the directory or the market (PluginPendingChecksSheet).
   const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
   const checks = usePluginPendingChecks(targetOnline, focused, targets.map((candidate) => candidate.deviceId));
   const conclusions = usePluginCheckConclusions();
@@ -667,7 +666,7 @@ function PluginDirectory() {
     ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
       .map((token) => ({ key: "slot:" + token.id, entry: token.entry, who: token.who })),
     // A success the person has not been shown yet (maintainer review 03:52): its read of the computer is out or failed,
-    // or it settled with nobody there to show it. Listed until it is shown (opened, or seen in the list of checks).
+    // or it settled. Listed until the person has seen it in the list of checks (and closed that list).
     ...conclusions.filter((item) => pluginConclusionListed(item) && !checks.some((check) => check.operationId === item.operationId))
       .map((item) => ({ key: item.operationId, entry: item.entry, who: item.who, concluded: item.readback })),
   ];
@@ -939,8 +938,8 @@ function PluginDirectory() {
   const knownTarget = (deviceId: string) => targets.some((candidate) => candidate.deviceId === deviceId);
   // The page never moves, and prompts nothing, for a result (pre-push review 2026-11-26, four rounds: every way of
   // opening or announcing a result by itself took the person away from something, and leaving a consent cancels it).
-  // However an operation ended, its result is listed at the top; the person opens it from "Open plugin" in the list of
-  // checks. Here only the installed list is read again, once per operation, so it shows what the result says.
+  // However an operation ended, its result is listed at the top and its record says it in the list of checks. Here only
+  // the installed list is read again, once per operation, so it shows what the result says.
   const refreshedFor = useRef<Set<string> | undefined>(undefined);
   refreshedFor.current ??= new Set(conclusions.map((item) => item.operationId));
   useEffect(() => {
@@ -1150,7 +1149,7 @@ function PluginDirectory() {
     tell("plugins.notice.title.managementFailed");
   }, [management.state?.outcome, management.state?.operationId, selected?.row.key, focused, auth.accountGeneration, connectionEpoch]);
   /**
-   * "Go to Installed" (an older computer's result, V2.10 ③; maintainer review 03:52): back to the directory the way its
+   * "Go to Installed" (a record whose plugin may still be there; maintainer review 16:53): back to the directory the way its
    * back step goes (the readme, settings, the installed detail and the market detail close; an installed detail's late
    * reads are fenced), on the record's computer, in the installed segment. Nothing particular opens.
    */
@@ -1412,7 +1411,7 @@ function PluginDirectory() {
       <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
         listed={knownTarget} onDecide={decide}
         onClose={() => setChecksOpen(false)}
-        // An older computer's result (V2.10 ③): the installed list, where the person opens the plugin themselves.
+        // The record's computer's installed list: the person manages the plugin from its current instance there.
         onShowInstalled={showInstalledOf} />
       <View style={styles.layout}>
         {wide || (!selected && !marketDetail) ? directory : null}

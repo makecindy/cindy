@@ -188,7 +188,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                     {over.readAgain ? (
                       <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
                         accessibilityState={{ disabled: !online }}
-                        onPress={() => { void retryPluginCheckReadback(over.readAgain!); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
+                        onPress={() => retryPluginCheckReadback(over.readAgain!)} style={[styles.button, styles.primary, !online && styles.unavailable]}>
                         <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.readAgain")}</Text>
                       </Pressable>
                     ) : null}
