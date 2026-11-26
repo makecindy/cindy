@@ -659,7 +659,7 @@ describe('group timeline', () => {
 
   // PR #8818 / component: Chinese-only broadcast coverage missed localized
   // labels colliding with a member name. Use the real send parser and Timeline:
-  // a sender-locale broadcast must stay inert in English, while its qualified @ can open.
+  // a sender-locale broadcast must stay inert even when a qualified member shares its prefix.
   it.each([['es', 'es'], ...SUPPORTED_LOCALES.map(lng => [lng, 'en'])])('keeps %s teammate broadcasts out of personal identity when read in %s', async (senderLocale, readerLocale) => {
     h.translate = (key, options) => i18n.t(key, { ...options, lng: readerLocale });
     const name = i18n.t('groupChat.mention.allBots', { lng: senderLocale });
@@ -675,14 +675,12 @@ describe('group timeline', () => {
     })] });
     data.members[0] = { ...data.members[0]!, name, nickname: name, ownerName: 'Ana', isOwned: false, actorKind: 'bot' };
     await render(data);
-    const spans = [...node.querySelectorAll('span')];
-    const broadcast = spans.find(span => span.textContent === `@${name}`)!;
-    expect(broadcast).toBeDefined();
-    await act(async () => broadcast.click());
+    // With both intents present, the reserved alias also matches the start of
+    // the qualified spelling. The receipt cannot prove the personal range.
+    const bubble = byId('botGroup.message.user')!;
+    expect(bubble.querySelectorAll('span[role="link"]')).toHaveLength(0);
+    expect(bubble.textContent).toContain(content);
     expect(byId('botGroup.mention.identity')).toBeNull();
-    await act(async () => spans.find(span => span.textContent === `@${qualified}`)!.click());
-    expect(byId('botGroup.mention.identity')?.textContent).toContain(qualified);
-    await click('botGroup.mention.identity.close');
     // A legacy projection without targets still must not turn a broadcast into
     // the uniquely named member via the server's name fallback.
     data.messages[0]!.mentions = { all: false, botIds: [] };
@@ -1703,26 +1701,38 @@ describe('group composer', () => {
     { draft: '', names: ['Ann', 'Ann Lee'], typedAfter: 'Lee, can you check?', recipients: ['mimi'], labels: ['@Ann'] },
     { draft: '@Team', names: ['Ann', 'Team @Ann', 'Team'], typedAfter: '', recipients: ['xiaoman', 'mimi'], labels: ['@Team', '@Ann'] },
     { draft: '@Team', names: ['Ann', 'Team @Ann'], typedAfter: '', recipients: ['mimi'], labels: ['@Ann'] },
-  ])('sends and renders the avatar pick with members $names', async ({ draft, names, typedAfter, recipients, labels }) => {
+    { draft: '@Team', names: ['Ann', 'Team @Ann'], typedAfter: '', recipients: ['mimi', 'abu'], labels: [], twoPicks: true },
+  ])('sends and renders the avatar pick with members $names ($recipients)', async ({ draft, names, typedAfter, recipients, labels, twoPicks }) => {
     const data = group();
     const chat = group({
       openPlan: null,
       members: data.members.slice(0, names.length).map((member, index) => ({ ...member, name: names[index]! })),
-      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
+      messages: [
+        message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' }),
+        message('m2', 2, { authorBotId: 'abu', authorName: names[1], content: 'Another reply' }),
+      ],
     });
     await render(chat);
     if (draft) await type(draft);
     await act(async () => holdAvatar('mimi'));
+    if (twoPicks) await act(async () => holdAvatar('abu'));
     if (typedAfter) await type(h.row.value + typedAfter);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       mentions: { all: false, botIds: recipients },
     }));
     const { text: content, mentions } = h.chat.act.mock.lastCall[1];
-    await render({ ...chat, messages: [...chat.messages, message('sent', 2, { authorKind: 'user', content, mentions })] });
+    await render({ ...chat, messages: [...chat.messages, message('sent', 3, { authorKind: 'user', content, mentions })] });
     const bubble = byId('botGroup.message.user')!;
     const links = [...bubble.querySelectorAll('span[role="link"]')];
     expect(links.map(link => link.textContent)).toEqual(labels);
+    if (twoPicks) {
+      const plain = [...bubble.querySelectorAll('span[data-style]')].find(span => !span.children.length && span.textContent === '@Team @Ann @Team @Ann');
+      expect(plain).toBeDefined();
+      expect(JSON.parse(plain!.getAttribute('data-style')!).color).toBeUndefined();
+      await act(async () => (plain as HTMLElement).click());
+      expect(byId('botGroup.mention.identity')).toBeNull();
+    }
     if (draft && labels.length === 1) {
       const unaddressed = [...bubble.querySelectorAll('span[data-style]')].find(span => span.textContent === '@Team ');
       expect(unaddressed).toBeDefined();

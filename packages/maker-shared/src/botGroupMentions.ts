@@ -337,24 +337,30 @@ export interface BotGroupTextSegment {
   mention: boolean;
 }
 
+/** Find every possible range for one label, including nested occurrences. */
+export function botGroupMentionRanges(text: string, rawLabel: string): { start: number; end: number }[] {
+  const label = rawLabel.trim();
+  if (!label) return [];
+  const ranges: { start: number; end: number }[] = [];
+  const needle = `@${label}`;
+  for (let start = text.indexOf(needle); start >= 0; start = text.indexOf(needle, start + 1)) {
+    const end = start + needle.length;
+    if (isMentionStart(text, start) && endsAtBoundary(label, text[end])) ranges.push({ start, end });
+  }
+  return ranges;
+}
+
 /** Split message text so `@name` tokens can be shown as mention chips. */
 export function splitBotGroupMentionSegments(
   text: string,
   labels: readonly string[],
-  preferredLabels: readonly string[] = [],
 ): BotGroupTextSegment[] {
-  const preferred = new Set(preferredLabels.map(label => label.trim()));
   const entries = [...new Set(labels.map((label) => label.trim()).filter(Boolean))]
     .sort((a, b) => b.length - a.length)
     .map((label) => ({ label, all: false, botIds: [], aliasIds: [] }));
-  // Confirmed recipient/broadcast labels must be found before fallback names
-  // can consume their text, including a recipient starting at a later '@'.
-  const reserved = preferred.size
-    ? scanMentionRanges(text, entries.filter(entry => preferred.has(entry.label)))
-    : [];
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
-  for (const token of scanMentionRanges(text, entries, reserved)) {
+  for (const token of scanMentionRanges(text, entries)) {
     if (token.start > cursor) segments.push({ text: text.slice(cursor, token.start), mention: false });
     segments.push({ text: text.slice(token.start, token.end), mention: true });
     cursor = token.end;

@@ -32,6 +32,7 @@ import { MessageListVisibilityContext, useMessageListItemVisible } from './messa
 
 type Styles = ReturnType<typeof makeStyles>;
 type BodyOptions = {
+  mentionSource?: string;
   /** 仅完整群正文启用，其它回看入口维持原行为。 */
   richContent?: boolean;
   active?: boolean;
@@ -105,7 +106,7 @@ function renderInlines(inlines: readonly MobileMarkdownInline[], styles: Styles,
   const visibleText = runs.map(run => run.text).join('');
   // Most group text has no mention. Keep its native styled run directly:
   // scanning labels and nesting another selectable span adds work per cell/run.
-  const segments = context && visibleText.includes('@') ? splitMobileBotGroupMentionSegments(visibleText, context.labels, context).map(segment => {
+  const segments = context && visibleText.includes('@') ? splitMobileBotGroupMentionSegments(visibleText, context.labels, context, options.mentionSource).map(segment => {
     const start = offset;
     offset += segment.text.length;
     return { ...segment, start, end: offset, label: segment.text,
@@ -297,7 +298,7 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
   const diagramLabel = t('message.renderer.openDiagramDetail');
   return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
-      context={touch.context} richContent={richContent} interactive={interactive}
+      context={touch.context} mentionSource={content} richContent={richContent} interactive={interactive}
       active={block.type === 'mermaid' || block.type === 'math' ? active : undefined}
       onOpenDiagram={block.type === 'mermaid' ? onOpenDiagram : undefined} />)}</View>;
 }

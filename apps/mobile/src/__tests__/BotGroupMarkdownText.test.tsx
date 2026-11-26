@@ -350,8 +350,14 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     expect(links()).toHaveLength(0);
     await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
     expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    const markdown = '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~';
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
-      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+      content: markdown, mentionContext: context,
+    })));
+    // One saved ID does not identify which source occurrence was selected.
+    expect(links()).toHaveLength(0);
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: markdown, mentionContext: { ...context, members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } },
     })));
     expect(links().map(span => span.textContent)).toEqual(['@Ann']);
     expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
