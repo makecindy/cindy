@@ -98,8 +98,8 @@ describe('createWorktree naming authority', () => {
       if (args[0] === 'rev-parse' && args[1] === '--git-path') {
         return { stdout: '.git/info/exclude\n', stderr: '' };
       }
-      if (args[0] === 'rev-parse' && (args[1] === '--git-dir' || args[1] === '--git-common-dir')) {
-        return { stdout: '.git\n', stderr: '' };
+      if (args[0] === 'rev-parse' && (args.includes('--git-dir') || args.includes('--git-common-dir'))) {
+        return { stdout: `${path.join(cwd ?? baseRepo, '.git')}\n`, stderr: '' };
       }
       if (args[0] === 'branch' && args[1] === '--format=%(refname:short)') {
         return { stdout: 'main\n', stderr: '' };
@@ -634,6 +634,45 @@ describe('createWorktree naming authority', () => {
     expect(storeMap.has('bg-unconfirmed')).toBe(true);
     expect(gitExecMock).not.toHaveBeenCalledWith(
       expect.arrayContaining(['worktree', 'remove']),
+      baseRepo,
+    );
+  });
+
+  it('quarantines an incomplete-checkout rollback before force removal and restores if files appear', async () => {
+    const { GitExecError } = await import('../worktree/gitExec');
+    const wp = path.join(baseRepo, '.cindy-worktrees', 'rb-race');
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let statusCalls = 0;
+
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { signal?: AbortSignal }) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            reject(new GitExecError({ stderr: 'cancelled', cleanupUnconfirmed: false } as unknown as ConstructorParameters<typeof GitExecError>[0]));
+          }, { once: true });
+        });
+      }
+      if (args[0] === 'status' && args[1] === '--porcelain=v1') {
+        statusCalls += 1;
+        // First check (at live path) looks clean; after quarantine move, a concurrent write is present.
+        return Promise.resolve({
+          stdout: statusCalls === 1 ? ' D README.md\0' : ' D README.md\0?? concurrent.txt\0',
+          stderr: '',
+        });
+      }
+      return previousGit(args, cwd, opts);
+    });
+    storeSetMock.mockRejectedValueOnce(new Error('persist failed'));
+
+    await expect(create('rb-race', 'rb-race-session')).resolves.toMatchObject({ ok: false });
+
+    const moveCalls = gitExecMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'move');
+    expect(moveCalls).toHaveLength(2);
+    const quarantinePath = moveCalls[0]?.[0]?.[3];
+    expect(moveCalls[0]?.[0]).toEqual(['worktree', 'move', wp, quarantinePath]);
+    expect(moveCalls[1]?.[0]).toEqual(['worktree', 'move', quarantinePath, wp]);
+    expect(gitExecMock).not.toHaveBeenCalledWith(
+      expect.arrayContaining(['worktree', 'remove', '--force']),
       baseRepo,
     );
   });

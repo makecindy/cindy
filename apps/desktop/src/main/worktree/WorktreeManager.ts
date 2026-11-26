@@ -670,7 +670,39 @@ async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
         const incompleteCheckout = Boolean(snap.backgroundCheckout && !snap.backgroundCheckoutCompleted);
         if (!multibox && incompleteCheckout) {
           if (await isIncompleteCheckoutWorktreeDirty(wp)) return;
-          await gitExec(['worktree', 'remove', '--force', wp], baseRepo);
+          // Quarantine the worktree before `--force` removal so concurrent writes to
+          // the original path cannot race the final dirty check.
+          const quarantinePath = `${wp}.xdt-removing-${randomUUID()}`;
+          await gitExec(['worktree', 'move', wp, quarantinePath], baseRepo);
+          const restoreQuarantine = async (): Promise<void> => {
+            try {
+              await gitExec(['worktree', 'move', quarantinePath, wp], baseRepo);
+            } catch (restoreErr) {
+              log.warn(
+                `[worktree] failed to restore quarantined rollback worktree ${quarantinePath}:`,
+                restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+              );
+            }
+          };
+          try {
+            const liveKeys = await loadLiveSessionPathKeys();
+            if (
+              hasKeepSentinel(quarantinePath)
+              || hasLiveSessionReference({ path: wp, quarantinePath }, liveKeys)
+              || (await listNonReproducibleIgnoredFiles(baseRepo, quarantinePath)).length > 0
+              || (await isIncompleteCheckoutWorktreeDirty(quarantinePath))
+            ) {
+              await restoreQuarantine();
+              return;
+            }
+            await gitExec(['worktree', 'remove', '--force', quarantinePath], baseRepo);
+          } catch (quarantineErr) {
+            log.warn(
+              `[worktree] rollback quarantined remove failed for ${quarantinePath}:`,
+              quarantineErr instanceof Error ? quarantineErr.message : String(quarantineErr),
+            );
+            await restoreQuarantine();
+          }
           return;
         }
         // Both forms refuse dirty worktrees without force.

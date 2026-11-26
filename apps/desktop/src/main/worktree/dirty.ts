@@ -18,9 +18,55 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   }
 }
 
+async function hasInitializedSubmodule(
+  worktreePath: string,
+  indexEnv: Record<string, string>,
+): Promise<boolean> {
+  const { stdout: gitDirRaw } = await gitExec(
+    ['rev-parse', '--path-format=absolute', '--git-dir'],
+    worktreePath,
+    { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' } },
+  );
+  const gitDir = gitDirRaw.trim();
+  if (!gitDir) return true;
+  try {
+    await fs.lstat(path.join(gitDir, 'modules'));
+    // Initialized submodule gitdirs under `<gitdir>/modules` would be deleted by
+    // `git worktree remove --force`, including child-only commits and ignored files.
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+  }
+
+  const { stdout: stageEntries } = await gitExec(
+    ['ls-files', '--stage', '-z'],
+    worktreePath,
+    { extraEnv: indexEnv },
+  );
+  const worktreeRoot = path.resolve(worktreePath);
+  for (const entry of stageEntries.split('\0')) {
+    if (!entry.startsWith('160000 ')) continue;
+    const tabIdx = entry.indexOf('\t');
+    if (tabIdx < 0) return true;
+    const relpath = entry.slice(tabIdx + 1);
+    const subPath = path.resolve(worktreeRoot, relpath);
+    if (!subPath.startsWith(`${worktreeRoot}${path.sep}`)) return true;
+    try {
+      const stat = await fs.lstat(subPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return true;
+      const children = await fs.readdir(subPath);
+      if (children.length > 0) return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Check whether a worktree whose initial staged background checkout never completed
- * has any real user modifications, staged additions/edits, or untracked files.
+ * has any real user modifications, staged additions/edits, untracked files, or
+ * initialized submodules.
  *
  * `git worktree add --no-checkout` followed by an aborted or failed background
  * `git checkout HEAD -- .` leaves `.git/index` empty/partial, so plain
@@ -28,9 +74,11 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
  * partially unpacked HEAD files as `??`. Without mutating the real index:
  *  1. Verify the real index has no staged additions/modifications (`AMCRTU`).
  *  2. Populate a temporary `GIT_INDEX_FILE` from `HEAD` via `git read-tree HEAD`.
- *  3. Run `git status --porcelain=v1 -z --untracked-files=all` against that temporary
- *     index and accept only working-tree-missing tracked files (` D <path>`).
- * Any modified/untracked/staged/unmerged entry or git error fails closed (`true`).
+ *  3. Reject any initialized submodule (`<gitdir>/modules` or non-empty gitlink dir).
+ *  4. Run `git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none`
+ *     against that temporary index and accept only working-tree-missing tracked files
+ *     (` D <path>`).
+ * Any modified/untracked/staged/unmerged/submodule entry or git error fails closed (`true`).
  */
 export async function isIncompleteCheckoutWorktreeDirty(worktreePath: string): Promise<boolean> {
   let tmpDir: string | null = null;
@@ -50,8 +98,9 @@ export async function isIncompleteCheckoutWorktreeDirty(worktreePath: string): P
       GIT_INDEX_FILE: tmpIndex,
     };
     await gitExec(['read-tree', 'HEAD'], worktreePath, { extraEnv: indexEnv });
+    if (await hasInitializedSubmodule(worktreePath, indexEnv)) return true;
     const { stdout } = await gitExec(
-      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'],
       worktreePath,
       { extraEnv: indexEnv },
     );
