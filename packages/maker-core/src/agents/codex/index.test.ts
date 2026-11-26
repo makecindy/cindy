@@ -33858,8 +33858,9 @@ describe('CodexAgent reconnect-stall watchdog', () => {
   });
 
   // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
-  // Existing watchdog cases omit native structured gateway status (unit, fake clock).
-  it('retains the latest safe upstream status through watchdog settlement and clears it for the next turn', async () => {
+  // One started command with no completion must survive interrupt cleanup as an
+  // unconfirmed result; a later turn must not inherit it or the gateway status (unit, fake clock).
+  it('retains the pending tool count and latest safe upstream status through watchdog settlement and clears them for the next turn', async () => {
     vi.useFakeTimers();
     try {
       const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-diagnostics');
@@ -33870,14 +33871,20 @@ describe('CodexAgent reconnect-stall watchdog', () => {
           additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
         },
       } as never);
+      handlers.itemStarted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build' },
+      } as never);
       reconnect('turn-1', 1, 502);
       await vi.advanceTimersByTimeAsync(60_000);
       reconnect('turn-1', 2, 503);
       reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
       await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        reason: 'codex_reconnect_stalled', errorStatus: 503, pendingToolCount: 1, isTerminal: true,
         message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+      }) }));
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        message: expect.stringContaining('unconfirmed tool results'),
       }) }));
       expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
       const priorEnd = seen.length;
@@ -33889,6 +33896,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
       expect(terminal).toBeDefined();
       expect(terminal!.data).not.toHaveProperty('errorStatus');
+      expect(terminal!.data).not.toHaveProperty('pendingToolCount');
       expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
       await handle.close();
     } finally { vi.useRealTimers(); }

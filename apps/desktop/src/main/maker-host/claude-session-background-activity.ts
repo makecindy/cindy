@@ -40,6 +40,7 @@
 
 import type { ResponseObserver } from '@cindy/anthropic-compat-proxy';
 import type { AgentEvent } from '@cindy/maker-core';
+import { classifyBackgroundCommand } from '@cindy/maker-core/background-command-kind';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('claude-bg-activity');
@@ -231,6 +232,15 @@ function evaluate(sessionId: string, st: SessionActivityState): void {
   if (next) armOffTimer(sessionId, st);
 }
 
+function isPluginServiceCommand(data: Record<string, unknown>): boolean {
+  if (!data.input || typeof data.input !== 'object') return false;
+  const input = data.input as Record<string, unknown>;
+  if (input.IsDaemon === true) return true;
+  // ACP 的 kind 可省略，Antigravity 的命令行字段本身也能识别命令调用。
+  const command = input.CommandLine ?? (data.acpKind === 'execute' ? input.command : undefined);
+  return typeof command === 'string' && classifyBackgroundCommand(command) === 'service';
+}
+
 /**
  * 插件引擎(ACP)任务的事件:记下未完成的工具调用与回合外输出,再重评。
  * 只给 agentKind === 'acp' 的任务调用;回合内的工具调用也要记,回合结束时仍未完成的
@@ -243,7 +253,9 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
   let st = states.get(sessionId);
   if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
     st ??= ensureState(sessionId);
-    st.engineOpenTools.add(data.toolUseId);
+    // 同一调用可能先报开始、后补全输入，此时重新判定它是否属于待完成工作。
+    if (isPluginServiceCommand(data)) st.engineOpenTools.delete(data.toolUseId);
+    else st.engineOpenTools.add(data.toolUseId);
   } else if (event.type === 'tool_result' && st) {
     const ids = Array.isArray(data.toolUseIds) ? data.toolUseIds : [data.toolUseId];
     for (const id of ids) if (typeof id === 'string') st.engineOpenTools.delete(id);
