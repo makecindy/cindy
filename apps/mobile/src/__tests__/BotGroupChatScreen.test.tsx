@@ -36,6 +36,11 @@ const h = vi.hoisted(() => ({
   appStateListeners: new Set<(state: string) => void>(),
   closeSettings: null as null | (() => void),
   row: null as any,
+  accessibility: new Map<string, {
+    actions?: readonly { name: string; label?: string }[];
+    tap?: () => void;
+    action?: (event: { nativeEvent: { actionName: string } }) => void;
+  }>(),
   inputFocus: vi.fn(),
   inputBlur: vi.fn(),
   inputFocused: false,
@@ -128,8 +133,14 @@ vi.mock('react-native', () => {
       h.keyboardAvoidingView = props;
       return el('div', null, children);
     },
-    Pressable: ({ children, onPress, onLongPress, disabled, testID, accessibilityLabel }: any) => el('button',
-      { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress, onContextMenu: onLongPress },
+    Pressable: ({ children, onPress, onLongPress, disabled, testID, accessibilityLabel, accessibilityRole, accessibilityHint,
+      accessibilityActions, onAccessibilityAction, onAccessibilityTap }: any) => el('button',
+      { 'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-description': accessibilityHint, role: accessibilityRole,
+        disabled, onClick: onPress, onContextMenu: onLongPress,
+        ref: testID && (onAccessibilityAction || onAccessibilityTap) ? (element: HTMLButtonElement | null) => {
+          if (element) h.accessibility.set(testID, { actions: accessibilityActions, tap: onAccessibilityTap, action: onAccessibilityAction });
+          else h.accessibility.delete(testID);
+        } : undefined },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
@@ -1694,6 +1705,50 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '@Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
+    }));
+  });
+
+  it.each(['ios', 'android'])('adds bot mentions from the %s screen-reader actions while a touch tap leaves the draft unchanged', async platform => {
+    h.platform.OS = platform;
+    const data = group();
+    await render(group({
+      openPlan: null,
+      members: [...data.members.slice(0, 2).map(member => ({ ...member, name: 'Ann' })),
+        { botId: 'person', actorKind: 'human', name: 'Person', avatar: '', avatarColor: '', status: 'active' }],
+      messages: [
+        message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' }),
+        message('m2', 2, { authorBotId: 'person', authorName: 'Person', authorKind: 'user', isSelf: false, content: 'Human reply' }),
+      ],
+      round: { status: 'running', speakers: [{ botId: 'abu', activity: 'reply', sessionId: null }], canContinue: false },
+    }));
+    const messageAvatar = 'botGroup.avatarMention.mimi';
+    const runningAvatar = 'botGroup.avatarMention.abu';
+    expect(byId('botGroup.row.m2')?.textContent).toContain('Human reply');
+    expect(byId('botGroup.avatarMention.person')).toBeNull();
+    await type('A draft');
+    await click(messageAvatar);
+    await click(runningAvatar);
+    expect(h.row.value).toBe('A draft');
+
+    for (const id of [messageAvatar, runningAvatar]) {
+      const node = h.accessibility.get(id);
+      await act(async () => {
+        if (platform === 'ios') node?.tap?.();
+        else if (node?.actions?.some(action => action.name === 'activate')) node.action?.({ nativeEvent: { actionName: 'activate' } });
+      });
+      const expected = id === messageAvatar ? 'A draft @Ann ' : 'A draft @Ann @Ann ';
+      expect(h.row.value).toBe(expected);
+      expect(byId(id)?.getAttribute('role')).toBe('button');
+      expect(byId(id)?.getAttribute('aria-description')).toBe('groupChat.mention.avatarHint');
+      expect(node?.actions).toContainEqual({ name: 'longpress', label: 'groupChat.mention.label' });
+    }
+
+    await act(async () => h.accessibility.get(messageAvatar)?.action?.({ nativeEvent: { actionName: 'longpress' } }));
+    expect(h.row.value).toBe('A draft @Ann @Ann @Ann ');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: 'A draft @Ann @Ann @Ann', mentions: { all: false, botIds: ['mimi', 'abu'] },
     }));
   });
 

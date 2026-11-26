@@ -45,6 +45,7 @@
     "all": "Everyone",
     "allHint": "People only",
     "label": "Mention a buddy",
+    "avatarHint": "Mentions this buddy at the end of the draft.",
     "allBots": "All buddies",
     "allBotsHint": "Buddies only"
   },

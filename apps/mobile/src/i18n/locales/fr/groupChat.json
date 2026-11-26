@@ -46,6 +46,7 @@
     "all": "Tout le monde",
     "allHint": "Personnes uniquement",
     "label": "Mentionner un ami",
+    "avatarHint": "Mentionne cet ami à la fin du brouillon.",
     "allBots": "Tous les amis",
     "allBotsHint": "Amis uniquement"
   },

@@ -45,6 +45,7 @@
     "all": "全員",
     "allHint": "人のみ",
     "label": "仲間をメンション",
+    "avatarHint": "この仲間を下書きの末尾にメンションします。",
     "allBots": "すべての仲間",
     "allBotsHint": "仲間のみ"
   },

@@ -45,6 +45,7 @@
     "all": "모두",
     "allHint": "사람만",
     "label": "동반자 멘션",
+    "avatarHint": "초안 끝에 이 동반자를 멘션합니다.",
     "allBots": "모든 동반자",
     "allBotsHint": "동반자만"
   },

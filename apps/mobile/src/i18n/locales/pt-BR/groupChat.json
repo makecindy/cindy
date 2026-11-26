@@ -46,6 +46,7 @@
     "all": "Todos",
     "allHint": "Apenas pessoas",
     "label": "Mencionar um amigo",
+    "avatarHint": "Menciona este amigo no fim do rascunho.",
     "allBots": "Todos os amigos",
     "allBotsHint": "Apenas amigos"
   },

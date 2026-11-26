@@ -46,6 +46,7 @@
     "all": "Todos",
     "allHint": "Solo personas",
     "label": "Menciona a un amigo",
+    "avatarHint": "Menciona a este amigo al final del borrador.",
     "allBots": "Todos los amigos",
     "allBotsHint": "Solo amigos"
   },

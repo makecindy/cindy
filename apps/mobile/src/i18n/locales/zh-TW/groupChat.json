@@ -45,6 +45,7 @@
     "all": "所有人",
     "allHint": "僅真人",
     "label": "點名夥伴",
+    "avatarHint": "在草稿末尾點名這位夥伴。",
     "allBots": "所有夥伴",
     "allBotsHint": "僅夥伴"
   },

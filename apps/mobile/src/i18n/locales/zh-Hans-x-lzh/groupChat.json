@@ -45,6 +45,7 @@
     "all": "众人",
     "allHint": "仅真人",
     "label": "点名同伴",
+    "avatarHint": "于草稿末点名此同伴。",
     "allBots": "诸同伴",
     "allBotsHint": "仅同伴"
   },

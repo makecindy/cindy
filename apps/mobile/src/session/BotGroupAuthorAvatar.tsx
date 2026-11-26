@@ -1,4 +1,4 @@
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupMemberView } from '@cindy/maker-shared/botGroupChat';
 import { isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
@@ -24,8 +24,16 @@ export function BotGroupAuthorAvatar({ deviceId, identity, online, style, member
     testID={`botGroup.avatarMention.${member.botId}`}
     hitSlop={MENTION_HIT_SLOP}
     accessibilityLabel={identity.name}
-    accessibilityActions={[{ name: 'longpress', label: t('groupChat.mention.label') }]}
-    onAccessibilityAction={({ nativeEvent }) => { if (nativeEvent.actionName === 'longpress') mention(); }}
+    accessibilityRole="button"
+    accessibilityHint={t('groupChat.mention.avatarHint')}
+    accessibilityActions={[
+      { name: 'longpress', label: t('groupChat.mention.label') },
+      ...(Platform.OS === 'android' ? [{ name: 'activate' }] : []),
+    ]}
+    onAccessibilityTap={mention}
+    onAccessibilityAction={({ nativeEvent }) => {
+      if (nativeEvent.actionName === 'activate' || nativeEvent.actionName === 'longpress') mention();
+    }}
     onLongPress={mention}>
     {avatar}
   </Pressable>;
