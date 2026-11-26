@@ -1469,7 +1469,8 @@ function PluginDirectory() {
       {/* Above both panes (a row on wide screens): one line across, never a column of its own. */}
       {holderNotice}
       {promptDialog}
-      {decidingCheck ? (
+      {/* Not while the installed detail's own sheet shows the same operation's consent (one sheet for one consent). */}
+      {decidingCheck && !(selected && detailOpen && focused && online && management.controller === decidingCheck.controller) ? (
         <PluginManagementConfirmation
           key={JSON.stringify(["check", decidingCheck.operationId, auth.accountGeneration, connectionEpoch])}
           state={decidingCheck.state}

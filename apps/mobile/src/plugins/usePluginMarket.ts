@@ -155,7 +155,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return !!host && isOnline(host);
   };
   const autoPick = onlineId(remembered) ? remembered : targets.find((host) => isOnline(host))?.deviceId;
-  useEffect(() => { if (!visible) setPinned(undefined); }, [visible]);
+  // (Cleared when the visit ends: the list is not shown and no market detail is open; see below `liveDetail`.)
   const visibleNow = useRef(visible);
   visibleNow.current = visible;
   useEffect(() => { if (visible && preferenceRead && !has(pinned) && autoPick) setPinned(autoPick); }, [visible, preferenceRead, pinned, autoPick, targets]);
@@ -438,7 +438,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const [detail, setDetail] = useState<PluginMarketDetailState | null>(null);
   const liveDetail = useRef(detail);
   liveDetail.current = detail;
-  // (A pick kept for a market detail that outlived the list goes with that detail.)
+  // The visit ends when the list is not shown and no market detail is open: its automatic pick goes then. While a
+  // market detail is open (beside another list on a wide screen, or under another screen for a moment) the pick stays,
+  // or the market would move to another computer and drop that detail.
   useEffect(() => { if (!visible && !detail) setPinned(undefined); }, [visible, !detail]);
   const detailRead = useRef(0);
   const readDetail = useCallback(async (item: ManagedMarketItem, host: RemoteResourceHostTarget) => {
@@ -662,7 +664,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       return { kind: "waiting" };
     }
     const check = checkFor(item.pluginId);
-    if (check) return check.waiting || check.state.outcome === "unknown" ? { kind: "unknown" } : { kind: "installing" };
+    // A pending check: not confirmed, waiting for the person's answer on the computer (as its own attempt says while
+    // its consent is up), or under way.
+    if (check) return check.waiting || check.state.outcome === "unknown" ? { kind: "unknown" }
+      : check.state.outcome === "confirmation" ? { kind: "waiting" } : { kind: "installing" };
     if (item.installState === "not-installed" && pluginMarketSourceUnverified(item)) return { kind: "sourceUnverified" };
     const failure = deviceId ? rowErrors[errorKey(deviceId, item.pluginId)] : undefined;
     if (failure) return { kind: "failed", messageKey: failure };

@@ -170,7 +170,10 @@ function pendingChecksOf(ownerKey: string): PluginPendingCheck[] {
     list.push({ ...check, state: controller.getState(), shown: !!entry.listener, controller,
       ...(gone ? { unprovable: { present: !!now, ...(check.entry === "page-approval" && now ? { pagesApproved: now.uiCapabilityApproved === true } : {}) } } : {}),
       ...(recordMissing ? { recordMissing } : {}),
-      awaitingYou: controller.consentUnseen() && !entry.listener,
+      // A consent no sheet of this phone shows now (a view merely attached does not: the installed detail's sheet only
+      // shows while that detail is what is open). Read when asked: a sheet marking its consent changes it without a
+      // change of the controller's state.
+      get awaitingYou() { return controller.consentUnseen(); },
       canStop: controller.idle(),
       verify: async () => { entry.settling = undefined; await controller.reconcile(); },
       decide: () => controller.ensureHold(),
@@ -449,6 +452,8 @@ function retain(scope: string, entry: ManagementEntry) {
     const step = nextDetachedStep(entry.controller);
     if (step === "letGo") letGo(scope, entry);
     else if (step === "cancel") void entry.controller.cancel();
+    // Kept, with no view on it: a consent it showed earlier is on no screen now.
+    else if (step === "keep") entry.controller.consentOffScreen();
   };
   entry.stopWatching = entry.controller.subscribe(review);
   entry.review = review;

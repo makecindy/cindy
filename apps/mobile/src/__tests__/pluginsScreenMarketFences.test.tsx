@@ -7,6 +7,8 @@ import * as expoCrypto from "expo-crypto";
 import PluginsScreen from "@/plugins/PluginsScreen";
 import { __retainedForTests, retryPluginCheckReadback, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "@/plugins/usePluginManagement";
 import { PluginPendingChecksSheet } from "@/plugins/PluginPendingChecksSheet";
+import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
+import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
 import { pluginManagementSlotFor, pluginOperationHold } from "@/plugins/pluginManagementSlot";
 /**
  * Proven as this install: concluded as done with its instance read from the computer. The page never opens a result by
@@ -2441,6 +2443,26 @@ describe("market read fences and lost-receipt facts", () => {
           onScreenByItself: !!byId("plugins.management.allow"), waitsForViewAndDecide: check.controller.consentUnseen() })
           .toEqual({ request: "consent-2", written: ["answer:screen-operation"], onScreenByItself: false, waitsForViewAndDecide: true });
       });
+      // Pre-push review, round 10 (failed on f2f5038007: the row said "Installing" while the list said the computer was
+      // waiting for the person; nothing was being installed).
+      it("the market row's own consent was on screen; background and back, lookups stop (the row ends); the list's \"Check result\" finds the consent again: the row says it waits for the person, as the list does", async () => {
+        const world: World = fresh();
+        wire(world);
+        fixture.platform = "android";
+        fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.install.${demo.pluginId}`);
+        world.operation = () => { throw hostError("INVALID_RESPONSE"); };
+        await appState("background"); await appState("active");
+        await settle(40);
+        world.operation = undefined;
+        await click("plugins.slotHolder.show"); await click("plugins.checks.verify");
+        await settle(40);
+        const rowText = [...element.querySelectorAll("span")].map((span) => span.textContent).filter((text) => /^plugins\.market\.(waiting|installing|resultUnknownDetail)$/.test(text ?? ""));
+        expect({ list: sheet().includes("plugins.checks.status.awaitingYou"), rowText }).toEqual({ list: true, rowText: ["plugins.market.waiting"] });
+      });
       const installedRow = () => ({ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
         item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
       it("an install's read is still out; the person opens that plugin's installed detail and flips its switch; the read proves the install while the switch is written; the detail is read again after the write: seen", async () => {
@@ -2874,6 +2896,95 @@ describe("market read fences and lost-receipt facts", () => {
         if (leaves) { await act(async () => fixture.props.get("header").onBack()); await settle(14); }
         fixture.online = true; await act(async () => root.render(createElement(PluginsScreen))); await settle(40);
         expect({ writes: writes(world.requests), update: world.ops.get("operation-0001")!.phase }).toEqual({ writes: ["begin:operation-0001"], update: "confirmation" });
+      }));
+      // Pre-push review, round 10. The market's pick for this visit was dropped as soon as its list was not shown, also
+      // with a market detail still open: the market moved to the other computer and dropped that detail (the first
+      // three rows and the next test's first row failed on f2f5038007).
+      const rerenderPage = async () => { await act(async () => root.render(createElement(PluginsScreen))); await settle(20); };
+      async function notesInstalledFromItsMarketDetailOnPc(width: number, macBack: boolean) {
+        const world = computer();
+        fixture.platform = "android"; fixture.width = width; fixture.realConfirmation = true;
+        fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+        fixture.offlineDevices.add("mac");
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(14);
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(20);
+        if (macBack) fixture.offlineDevices.delete("mac");                                      // Mac is back; the market stays on PC for this visit
+        await rerenderPage();
+        await click(`plugins.market.row.${world.notes.pluginId}`);
+        await click("plugins.market.detailInstall");
+        await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
+        await settle(40);
+        const detail = () => { const text = allById("plugins.market.detail")[0]?.textContent ?? null; return { detail: text !== null, installed: (text ?? "").includes("plugins.market.alreadyInstalled") }; };
+        expect(detail()).toEqual({ detail: true, installed: true });
+        return detail;
+      }
+      it.each([["narrow", 390, true], ["wide", 900, true], ["control (Mac stays away): narrow", 390, false]] as const)("%s, two computers; the market picked PC while Mac was away, Mac is back; Notes is installed from its market detail and the install ends; another screen comes in front and the person comes back: the market detail is still there, on PC", async (_name, width, macBack) => numbered(async () => {
+        const detail = await notesInstalledFromItsMarketDetailOnPc(width, macBack);
+        fixture.focused = false; await rerenderPage();
+        fixture.focused = true; await rerenderPage(); await settle(30);
+        expect(detail()).toEqual({ detail: true, installed: true });
+      }));
+      it.each([["", true], ["control (Mac stays away): ", false]] as const)("%swide, two computers; the market picked PC while Mac was away, Mac is back; Notes is installed from its market detail and the install ends; then the list is switched to Installed: the market detail on screen stays", async (_name, macBack) => numbered(async () => {
+        const detail = await notesInstalledFromItsMarketDetailOnPc(900, macBack);
+        await act(async () => fixture.props.get("segment").onChange("installed"));
+        await settle(30);
+        expect(detail()).toEqual({ detail: true, installed: true });
+      }));
+      // Pre-push review, round 10 (both failed on f2f5038007: the computer waited for an answer while the phone neither
+      // showed the consent nor offered "View and decide" for it).
+      const cancelsWritten = (world: any) => writes(world.requests).filter((write: string) => write.startsWith("cancel"));
+      async function updateConsentOnScreen(width: number, platform: string) {
+        const world = computer();
+        fixture.platform = platform; fixture.width = width; fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await settle(14);
+        if (platform === "ios") await act(async () => fixture.props.get("directory").onDetail(row()));
+        else await act(async () => fixture.props.get("pressable.plugins.detailsFor").onPress());
+        await settle(20);
+        const detailMenu = platform === "ios" ? fixture.props.get("header").rightToolbar : fixture.props.get("header").right;
+        await act(async () => { void detailMenu.props.onAction("update"); });
+        await settle(30);
+        expect({ writes: writes(world.requests), consent: allById("plugins.management.allow").length > 0 }).toEqual({ writes: ["begin:operation-0001"], consent: true });
+        return world;
+      }
+      it("wide: an update's consent was shown; Mac drops; the person opens another plugin; Mac returns (the consent waits for \"View and decide\"); the person taps Demo's row (its own page opens): the consent is still reachable from the list", async () => numbered(async () => {
+        const world = await updateConsentOnScreen(900, "ios");
+        fixture.online = false; await rerenderPage();
+        const other = { ...row(), key: "mac:other", item: { ...row().item, ref: { collectionId: "plugins", kind: "plugin", id: "other" }, display: { title: "Other" } } };
+        await act(async () => fixture.props.get("directory").onDetail(other));
+        await settle(30);
+        fixture.online = true; await rerenderPage(); await settle(40);
+        expect({ cancels: cancelsWritten(world), waits: __retainedForTests.checks().map((check: any) => [check.state.outcome, check.awaitingYou]) }).toEqual({ cancels: [], waits: [["confirmation", true]] });
+        const withPage = { ...row(), item: { ...row().item, actions: [{ id: "open:panel", label: "Open" }, { id: "disable", label: "Enabled" }] } };
+        await act(async () => fixture.props.get("directory").onOpen(withPage));           // Demo's own page: its controller is attached again
+        await settle(30);
+        await click("plugins.slotHolder.show");
+        expect({ cancels: cancelsWritten(world), phase: world.ops.get("operation-0001")!.phase, decide: allById("plugins.checks.decide").length })
+          .toEqual({ cancels: [], phase: "confirmation", decide: 1 });
+      }));
+      it("narrow: the update's consent is allowed and the computer asks a second consent, shown in the same sheet; the person goes back: nothing is cancelled, and the list offers \"View and decide\" for it", async () => numbered(async () => {
+        const world = await updateConsentOnScreen(390, "android");
+        const original = fixture.wire.getMockImplementation()!;
+        const second = (operationId: string) => ({ operationId, phase: "confirmation", consent: { requestId: "consent-2", initiator: "user", origin: "market",
+          facts: { kind: "update", ghostId: "demo", name: "Demo", version: "2", previousVersion: "1", added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } });
+        fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+          const id = args?.[0]?.actionId;
+          if (id === "management:answer" || id === "management:operation") {
+            world.requests.push({ device, actionId: id, input: args![0].input });
+            return transportSend(options, async () => ({ effects: [], result: second(args![0].input.operationId) }));
+          }
+          return original(device, channel, args, options);
+        });
+        await act(async () => allById("plugins.management.allow").filter((button) => !button.disabled).at(-1)!.click());
+        await settle(30);
+        expect(fixture.props.get("observedManagement").state.receipt.consent.requestId).toBe("consent-2");
+        await act(async () => fixture.props.get("header").onBack());
+        await settle(30);
+        expect(writes(world.requests)).toEqual(["begin:operation-0001", "answer:operation-0001"]);
+        await click("plugins.slotHolder.show");
+        expect({ decide: allById("plugins.checks.decide").length, awaitingYou: __retainedForTests.checks().map((check: any) => check.awaitingYou) }).toEqual({ decide: 1, awaitingYou: [true] });
       }));
     });
 
@@ -3426,5 +3537,160 @@ describe("the store's read of a success: only the newest read issued settles it"
     expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
     await w.answer(0);
     expect(w.conclusion()).toEqual({ result: "succeeded", readback: "failed", instanceKey: undefined });
+  });
+});
+
+/* 测试价值（推送前自查第十轮，2026-11-26）
+ * - 生产入口与可观察结果：聊天里的页面批准提示（PluginUiEnablePrompt，生产 controller / client），只替换传输；观察写出的
+ *   begin / cancel。
+ * - 依据：聊天发起的操作不是插件页的待核实记录，视图走开后没有任何地方能再答复它，所以离开它展示过的确认仍要取消
+ *   （主干在销毁时取消）。上一版把「结果暂时未知就不算展示过」用在了所有操作上，这个入口的确认会留在电脑上没人管。
+ * - 最小失败输入：见用例名；对照行改前也通过，另一行在 f2f5038007 上失败。tier: unit（jsdom，内存 Host）。
+ */
+describe("the chat's page-approval prompt (an operation no entry of the plugins page started)", () => {
+  const plugin: any = { instanceKey: "demo", namespace: null, enabled: true,
+    manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1", tools: [{ name: "open" }], mcpApps: { ui: { resources: [{ uri: "ui://form", file: "ui/form.html" }], tools: { open: { resourceUri: "ui://form" } } } } },
+    approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
+  const snapshot = () => JSON.parse(JSON.stringify({ version: 1, settingsPage: true, uiCapabilityApproval: true, ghosts: [plugin],
+    market: { items: [], unavailableCustomSourceNames: [], unavailableReason: null, customSourceNames: [] } }));
+  const consent = (operationId: string) => ({ operationId, phase: "confirmation", consent: { requestId: "consent-1", initiator: "user", origin: "market",
+    facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } });
+  it.each([["control: nothing else happens", false], ["the app goes to the background and back, and the person leaves the chat while the lookup on return is still out", true]] as const)(
+    "the consent is on screen; %s; the person leaves the chat: the consent is cancelled once", async (_name, blip) => {
+      let lookup: Promise<void> | undefined, release = () => {};
+      const requests = marketWire(async (request) => {
+        switch (request.actionId) {
+          case "management:snapshot": return snapshot();
+          case "management:begin": return consent(request.input.operationId);
+          case "management:operation": if (lookup) await lookup; return consent(request.input.operationId);
+          case "management:cancel": return { operationId: request.input.operationId, phase: "cancelled" };
+          default: throw new Error("unexpected " + request.actionId);
+        }
+      });
+      fixture.platform = "android"; fixture.realConfirmation = true;
+      const written = () => requests.filter((request) => /management:(begin|answer|cancel)/.test(request.actionId ?? "")).map((request) => request.actionId!.replace("management:", ""));
+      await act(async () => root.render(createElement(PluginUiEnablePrompt, { deviceId: "mac", deviceName: "Mac", online: true, active: true })));
+      await settle(20);
+      await act(async () => { fixture.props.get("plugins.uiApproval").actions[0].onPress(); });
+      await settle(30);
+      const controller = fixture.props.get("observedManagement").controller;
+      expect({ written: written(), outcome: controller.getState().outcome, shown: controller.mayCancel() }).toEqual({ written: ["begin"], outcome: "confirmation", shown: true });
+      if (blip) {
+        lookup = new Promise<void>((resolve) => { release = resolve; });
+        await act(async () => { fixture.appStateListeners.forEach((listener) => listener("background")); }); await settle(14);
+        await act(async () => { fixture.appStateListeners.forEach((listener) => listener("active")); }); await settle(14);
+        expect(controller.getState()).toMatchObject({ outcome: "unknown", busy: true });
+      }
+      await act(async () => root.render(createElement("div")));
+      await settle(14);
+      release();
+      await settle(40);
+      expect({ written: written(), kept: __retainedForTests.size(), listed: __retainedForTests.checks().length })
+        .toEqual({ written: ["begin", "cancel"], kept: 0, listed: 0 });
+    });
+});
+
+/* 测试价值（推送前自查第十轮，2026-11-26：展示过、视图走开、又没被取消的确认）
+ * - 生产入口与可观察结果：生产的记录存储 + controller + client + 记录面板与确认面板，只替换传输；观察写出的请求与面板上
+ *   有没有「查看并决定」。
+ * - 依据：plugin-mobile-implementation.md「记录面板」一条末尾：没有任何面板在显示的确认，在记录面板里只读等待
+ *   「查看并决定」。
+ * - 现有覆盖缺口与最小失败输入：三种走法在 c6efda5691 到 f2f5038007 上都停在「等待确认 / 核实结果」，面板不提供它：
+ *   已答复后电脑要第二个确认；离开时的取消在写出前被拒；位置被别的操作占着、取消写不出去。tier: unit（jsdom，内存 Host）。
+ */
+describe("a consent that was shown, left, and not cancelled waits in the list for \"View and decide\"", () => {
+  const detail = { ...marketItem("demo", "Demo"), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1", kind: "chip" } };
+  const byId = (id: string) => element.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+  type Host = { begin?: (request: any) => unknown; answer?: (request: any) => unknown; operation?: (request: any) => unknown; refuseCancel?: boolean; loseBegin?: boolean };
+  function wire(host: Host) {
+    const written: string[] = [], asked: string[] = [];
+    fixture.realManagement = true;
+    fixture.wire.mockImplementation(async (_device: string, channel: string, args?: any[], options?: any) => {
+      options?.preSend?.();
+      if (channel.endsWith(":manifest")) { options?.onRequestWritten?.();
+        return { protocolVersion: 1, collections: [{ id: "plugins", actions: [{ id: "management:snapshot", label: "Manage" }] }] }; }
+      const request = args?.[0] ?? {};
+      const action = String(request.actionId).replace("management:", "");
+      if (["begin", "answer", "cancel"].includes(action)) asked.push(action);
+      if (action === "cancel" && host.refuseCancel) { options?.onNotSent?.(); throw new Error("[LINK_NOT_OPEN] refused before the first write"); }
+      options?.onRequestWritten?.();
+      if (["begin", "answer", "cancel"].includes(action)) written.push(action);
+      if (action === "snapshot") return { effects: [], result: { version: 1, ghosts: [], market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } } };
+      if (action === "market-detail") return { effects: [], result: detail };
+      if (action === "begin") { if (host.loseBegin) throw new Error("[TIMEOUT] remote invoke timed out"); return { effects: [], result: host.begin!(request) }; }
+      if (action === "answer") return { effects: [], result: host.answer!(request) };
+      if (action === "operation") return { effects: [], result: host.operation!(request) };
+      if (action === "cancel") return { effects: [], result: { operationId: request.input.operationId, phase: "cancelled" } };
+      throw new Error("unexpected " + action);
+    });
+    return { written, asked };
+  }
+  let management: ReturnType<typeof usePluginManagement>;
+  /** What the page mounts for one operation: the hook and its confirmation sheet (which marks the consent it shows). */
+  function View() {
+    management = usePluginManagement("mac", true, true, "probe", false, "installed");
+    return management.state && management.controller
+      ? createElement(PluginManagementConfirmation, { state: management.state, controller: management.controller, deviceName: "Mac", active: true }) : null;
+  }
+  function Page({ view }: { view: boolean }) {
+    const checks = usePluginPendingChecks(() => true, true, ["mac"]);
+    const conclusions = usePluginCheckConclusions();
+    return createElement("div", null, view ? createElement(View) : null,
+      createElement(PluginPendingChecksSheet, { visible: true, conclusions, isOnline: () => true, canOpen: () => true,
+        lines: checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
+        onDecide: () => false, onClose: () => {}, onOpenChecked: () => {}, onShowInstalled: () => {} }));
+  }
+  const render = async (view: boolean) => { await act(async () => root.render(createElement(Page, { view }))); await settle(20); };
+  async function install() {
+    await render(true);
+    const slot = pluginManagementSlotFor();
+    const token = slot.tryAcquire("market-install", { name: "Demo", deviceId: "mac", deviceName: "Mac", pluginId: "market/demo", ghostId: "demo" })!;
+    await act(async () => { void management.controller!.install(detail as any, undefined, pluginOperationHold(slot, token)); });
+    await settle(30);
+  }
+  const consent2 = (request: any) => ({ ...demoConsent(request), consent: { ...demoConsent(request).consent, requestId: "consent-2" } });
+  const listed = () => { const check: any = __retainedForTests.checks()[0];
+    return { outcome: check?.state.outcome, request: check?.state.receipt?.consent?.requestId, awaitingYou: check?.awaitingYou, decide: !!byId("plugins.checks.decide") }; };
+  it("Allow is written, the computer asks again, that consent is shown, the view goes: not cancelled (it was answered once), and the list offers it", async () => {
+    const sent = wire({ begin: demoConsent, answer: consent2, operation: consent2 });
+    await install();
+    await act(async () => { await management.controller!.answer(true); });
+    await settle(20);
+    expect(management.state).toMatchObject({ outcome: "confirmation", receipt: { consent: { requestId: "consent-2" } }, answerHeld: null });
+    await render(false);                                             // the view goes; the page stays
+    expect(sent.written).toEqual(["begin", "answer"]);
+    expect(listed()).toEqual({ outcome: "confirmation", request: "consent-2", awaitingYou: true, decide: true });
+  });
+  it("the cancel for leaving is refused before its first write; \"Check result\" finds the same consent again: the list offers it", async () => {
+    const sent = wire({ begin: demoConsent, operation: demoConsent, refuseCancel: true });
+    await install();
+    expect(management.state).toMatchObject({ outcome: "confirmation" });
+    await render(false);
+    expect({ asked: sent.asked, written: sent.written }).toEqual({ asked: ["begin", "cancel"], written: ["begin"] });
+    await act(async () => { await __retainedForTests.checks()[0].verify(); });
+    await settle(30);
+    await render(false);
+    expect(sent.asked).toEqual(["begin", "cancel"]);                 // never a second cancel
+    expect(listed()).toMatchObject({ outcome: "confirmation", awaitingYou: true, decide: true });
+  });
+  it("another plugin took the computer's slot; \"Check result\" finds a consent, it is shown, the view goes: nothing can be cancelled, and the list offers it", async () => {
+    const host: Host = { loseBegin: true, operation: () => ({ phase: "nonsense" }) };
+    const sent = wire(host);
+    await install();                                                 // begin is written, its reply lost
+    expect(management.state).toMatchObject({ outcome: "unknown" });
+    await act(async () => { await management.controller!.reconcile(); });   // a protocol error: lookups stop
+    await settle(20);
+    const slot = pluginManagementSlotFor();
+    expect(slot.holder("mac")).toBeNull();
+    expect(slot.tryAcquire("uninstall", { name: "Other", deviceId: "mac", deviceName: "Mac", instanceKey: "_root__other", ghostId: "other" })).not.toBeNull();
+    host.operation = demoConsent;
+    await act(async () => { await management.controller!.reconcile(); });   // "Check result": the computer waits for an answer
+    await settle(20);
+    expect(management.state).toMatchObject({ outcome: "confirmation" });
+    expect(management.controller!.consentUnseen()).toBe(false);      // its view is showing it
+    await render(false);
+    await render(false);
+    expect({ asked: sent.asked, written: sent.written }).toEqual({ asked: ["begin"], written: ["begin"] });
+    expect(listed()).toMatchObject({ outcome: "confirmation", awaitingYou: true, decide: true });
   });
 });

@@ -185,3 +185,110 @@ describe("a success's read settles only on a snapshot read after the result (mai
     expect(c.getState().finalReadback).toBeUndefined();
   });
 });
+
+/* 测试价值（推送前自查第九、十轮，2026-11-26：结果跨过一次连接变化）
+ * - 生产入口与可观察结果：真实 controller + client（只替换传输）；结果到达后的 `finalReadback`、发布的快照、聊天提示的恢复。
+ * - 依据：回执按操作号落地，不因连接代次丢弃；跟在它后面的读取与判断也按落地那一刻的连接算。
+ * - 现有覆盖缺口：上面的排列里，重连后的查询在 begin 到达后一律答 succeeded，生成不出「查询说 running、随后写入自己的回包
+ *   说 succeeded」，收尾也只断言不是 pending；把那次读取改回沿用请求的旧代次，上面 456 条仍然全过。
+ * - 最小失败输入：第一条在 8a456c9f59 到 30ef70ed32 上失败（读取答复了却被丢弃，`finalReadback` 为 failed）；第二条的
+ *   后一行在 f2f5038007 上失败（另一条待批准的提示没有恢复，错误码为空）。tier: unit（纯 controller，node）。
+ */
+describe('a result that crossed a connection change', () => {
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((yes) => { resolve = yes; }); return { promise, resolve }; }
+  it('Allow is out; the app is away for a moment and the lookup on return says running; Allow\'s own reply then says succeeded: the read after the result lands', async () => {
+    setMobileAuthOwner('owner');
+    const before: ManagedPlugin = { ...installed, manifest: { ...manifest, version: '1' } };
+    const update = { ...detail, installState: 'update-available' as const, enabled: true };
+    let updated = false, snapshots = 0;
+    const answer = deferred<unknown>(), lookups: Array<ReturnType<typeof deferred<unknown>>> = [];
+    const facts = (): PluginManagementSnapshot => ({ version: 1, ghosts: [updated ? installed : before],
+      market: { items: [{ ...update, installState: updated ? 'installed' : 'update-available',
+        ...(updated ? { installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const } : {}) }],
+        unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
+    const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+      options?.preSend?.(); options?.onRequestWritten?.();
+      if (channel.endsWith(':manifest')) return capability;
+      const request = args?.[0] as { actionId: string };
+      const result = await (async () => {
+        switch (request.actionId) {
+          case 'management:snapshot': snapshots += 1; return facts();
+          case 'management:market-detail': return update;
+          case 'management:begin': return { operationId: 'operation-1', phase: 'confirmation', consent: { requestId: 'consent-1', initiator: 'user', origin: 'market',
+            facts: { kind: 'update', ghostId: 'demo', name: 'Demo', version: '2', previousVersion: '1', added: [], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } } };
+          case 'management:answer': return answer.promise;
+          case 'management:operation': { const lookup = deferred<unknown>(); lookups.push(lookup); return lookup.promise; }
+          default: throw new Error('unexpected ' + request.actionId);
+        }
+      })();
+      return { effects: [], result };
+    }) as unknown as PluginManagementInvoke;
+    const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }),
+      { createOperationId: () => 'operation-1', scheduler: { set: () => 1, clear: () => undefined } });
+    try {
+      await c.refresh();
+      void c.install(update, before);
+      await flush();
+      expect(c.getState().outcome).toBe('confirmation');
+      void c.answer(true);
+      await flush();
+      c.setOnline(false); c.setOnline(true);            // away and back: the operation is looked up
+      await flush();
+      lookups[0].resolve({ operationId: 'operation-1', phase: 'running' });
+      await flush();
+      expect(c.getState().outcome).toBe('running');
+      updated = true;                                   // the computer finishes; Allow's own reply says so
+      const read = snapshots;
+      answer.resolve({ operationId: 'operation-1', phase: 'succeeded' });
+      await flush();
+      expect(c.getState().outcome).toBe('succeeded');
+      expect(snapshots - read).toBe(1);                 // the read after the result went out and came back
+      expect({ finalReadback: c.getState().finalReadback, version: c.getState().snapshot?.ghosts[0]?.manifest.version })
+        .toEqual({ finalReadback: 'read', version: '2' });
+    } finally { c.dispose(); }
+  });
+  const needsUi = { instanceKey: '_root__demo', namespace: null, enabled: true,
+    approval: { state: 'approved', revision: '12345678-1234-4123-8123-123456789abc' },
+    manifest: { schemaVersion: 3, id: 'demo', name: 'Demo', version: '1', kind: 'chip', tools: [{ name: 'run' }],
+      mcpApps: { ui: { resources: [{ uri: 'ui://run', file: 'page.html' }], tools: { run: {} } } } } };
+  const itemA = { instanceKey: '_root__demo', name: 'Demo', approvalToken: 'approved:12345678-1234-4123-8123-123456789abc' };
+  const itemB = { instanceKey: '_root__other', name: 'Other', approvalToken: 'approved:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+  it.each([['control: no connection change', false], ['the app was away for a moment while begin was out', true]] as const)(
+    'the chat\'s page approval succeeds, its read fails, a display read sent just before names another pending plugin; %s: that prompt is recovered and the error is said', async (_name, blip) => {
+      setMobileAuthOwner('owner');
+      let beginReply: (() => void) | undefined, failSnapshot = false;
+      const invoke = (async (_id: string, channel: string, args?: unknown[], options?: { preSend?: () => void; onRequestWritten?: () => void }) => {
+        options?.preSend?.(); options?.onRequestWritten?.();
+        if (channel.endsWith(':manifest')) return capability;
+        const request = args?.[0] as { actionId: string };
+        if (request.actionId === 'management:snapshot') {
+          if (failSnapshot) throw new Error('[TIMEOUT] remote invoke timed out');
+          return { effects: [], result: { version: 1, ghosts: [needsUi], uiCapabilityApproval: true,
+            market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } } };
+        }
+        if (request.actionId === 'management:begin') { await new Promise<void>((resolve) => { beginReply = resolve; });
+          return { effects: [], result: { operationId: 'operation-1', phase: 'succeeded' } }; }
+        if (request.actionId === 'management:operation') return new Promise(() => undefined);   // the lookup after the reconnect stays out
+        throw new Error('unexpected ' + request.actionId);
+      }) as unknown as PluginManagementInvoke;
+      const displays: Array<(value: unknown) => void> = [];
+      const c = createPluginManagementController(createPluginManagementClient({ deviceId: 'host-1', invoke }), {
+        readDisplay: () => new Promise((resolve) => { displays.push(resolve as (value: unknown) => void); }) as never,
+        createOperationId: () => 'operation-1', scheduler: { set: () => undefined, clear: () => undefined } });
+      try {
+        void c.refresh(); await flush();
+        displays[0]({ capability: 'supported', snapshot: null, uiConsent: { version: 1, uiCapabilityApproval: true, item: itemA } }); await flush();
+        void c.approveUiFromConsent(itemA as never); await flush();
+        expect(beginReply).toBeDefined();
+        if (blip) { c.setOnline(false); c.setOnline(true); await flush(); }
+        void c.refresh(); await flush();                               // a display read goes out (a change notification)
+        failSnapshot = true;
+        beginReply!(); await flush();                                  // succeeded; the read after it times out
+        displays.at(-1)!({ capability: 'supported', snapshot: null, uiConsent: { version: 1, uiCapabilityApproval: true, item: itemB } }); await flush();
+        expect(c.getState()).toMatchObject({ outcome: 'succeeded', finalReadback: 'failed' });
+        expect({ prompt: c.getState().uiConsent?.item?.instanceKey, errorCode: c.getState().errorCode })
+          .toEqual({ prompt: itemB.instanceKey, errorCode: 'TIMEOUT' });
+      } finally { c.dispose(); }
+    });
+});

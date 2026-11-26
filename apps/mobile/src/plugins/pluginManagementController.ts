@@ -277,8 +277,11 @@ export function createPluginManagementController(client: PluginManagementClient,
     // A consent counts as shown only while it stays on screen. Once the result is something else (also only unknown
     // for now: the computer dropped, the app was in the background, lookups stopped), no sheet shows it any more; a
     // view that goes away after that did not leave a consent, so the same consent found again later is not cancelled
-    // for it. The sheet that puts it on screen again marks it again (`markConsentShown`).
-    if (state.outcome !== 'confirmation') shownConsent = null;
+    // for it. The sheet that puts it on screen again marks it again (`markConsentShown`). Only for operations the
+    // plugins page keeps as a pending check (found again, they wait in its list for "View and decide"). One started
+    // elsewhere (the chat's page prompt) is kept by nobody once its view goes: it keeps the earlier rule, so leaving
+    // it still cancels the consent it showed instead of leaving it on the computer with nothing here to answer it.
+    if (state.outcome !== 'confirmation' && opEntry) shownConsent = null;
     // Facts about a missing receipt belong to that unknown result only.
     if ((patch.outcome !== undefined && patch.outcome !== 'unknown') || patch.operationId !== undefined) {
       state.missingReceiptFacts = null;
@@ -403,7 +406,10 @@ export function createPluginManagementController(client: PluginManagementClient,
     const consumed = receipt.phase === 'succeeded' && uiConsentOperation ? receiver : undefined;
     // Keep only the latest in-flight display read displaced by this successful
     // receipt. It is a fallback for failed readback, never a new remote request.
-    const displacedDisplay = consumed && pendingDisplay?.token === token
+    // (As of now, not as of the request that brought the receipt: a receipt lands by its operation id whatever the
+    // connection did since, and what follows it is judged by the connection as it is.)
+    const landed = epoch;
+    const displacedDisplay = consumed && pendingDisplay?.token === landed
       && pendingDisplay.sequence === snapshotSequence ? pendingDisplay.promise : undefined;
     const prompt: Partial<PluginManagementState> = {};
     if (receipt.phase === 'succeeded' && uiConsentOperation && receiver) {
@@ -430,18 +436,18 @@ export function createPluginManagementController(client: PluginManagementClient,
       // connection did since (the app was in the background for a moment, the computer dropped and came back), and so
       // must the read that follows it. With the request's own token that read was thrown away and the result's read
       // counted as failed, though every read had answered.
-      const readback = readSnapshot(epoch), readbackSequence = snapshotSequence;
+      const readback = readSnapshot(landed), readbackSequence = snapshotSequence;
       try {
         await readback;
       } catch (error) {
-        if (current(token) && state.finalReadback !== 'read') publish({ errorCode: pluginManagementErrorCode(error) });
+        if (current(landed) && state.finalReadback !== 'read') publish({ errorCode: pluginManagementErrorCode(error) });
         if (displacedDisplay && consumed) {
           try {
             const display = await displacedDisplay;
             const item = display.uiConsent?.item;
             // A later read/operation still wins. Only an unrelated pending item
             // can be recovered; the committed instance revision cannot revive.
-            if (current(token) && snapshotSequence === readbackSequence && item
+            if (current(landed) && snapshotSequence === readbackSequence && item
               && (item.instanceKey !== consumed.instanceKey || item.approvalToken !== pluginApprovalToken(consumed))) {
               publish({ ...display });
             }
@@ -747,9 +753,23 @@ export function createPluginManagementController(client: PluginManagementClient,
     approveUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'approve-ui', installed }),
     deferUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'defer-ui', installed }),
     answer, cancel, reconcile, mayCancel,
+    /** `cancel()` would write now: the consent may be cancelled and this operation holds (or takes back) its computer's slot. */
+    canCancelNow: () => mayCancel() && opGuard(),
     /** The confirmation sheet put this consent on screen (see `shownConsent`). */
     markConsentShown(requestId: string) {
+      // (Nothing is published for it: a sheet marks its consent in its own effect, before the page holds the entry for
+      // that sheet in a later effect of the same commit; a change announced in between would read as a view that left.)
       if (!disposed && state.outcome === 'confirmation' && state.receipt?.consent?.requestId === requestId) shownConsent = requestId;
+    },
+    /**
+     * No view shows this operation's consent any more and nothing was cancelled for it (it was answered once already,
+     * or it was not on screen when its view went): found waiting on the computer, it is the person's to open again
+     * from the list of checks.
+     */
+    consentOffScreen() {
+      if (disposed || !shownConsent || !opEntry) return;
+      shownConsent = null;
+      publish({});
     },
     /** A consent is on the computer that this phone never showed (found by a lookup): the person has to open it. */
     consentUnseen: () => state.outcome === 'confirmation' && !!state.receipt?.consent && state.receipt.consent.requestId !== shownConsent
@@ -844,7 +864,9 @@ export function nextDetachedStep(controller: PluginManagementController): Detach
   const state = controller.getState();
   if (!controller.hasOpenOperation()) return "letGo";
   if (!controller.idle()) return "wait";
-  if (state.outcome === "confirmation" && !state.answerHeld && state.online && controller.mayCancel()) return "cancel";
+  // (Only when the cancel would be written: with the computer's slot held by another operation it would not, and
+  // the consent then waits in the list of checks like any other no view shows.)
+  if (state.outcome === "confirmation" && !state.answerHeld && state.online && controller.canCancelNow()) return "cancel";
   // Maintainer review 18:45: an operation an entry of the plugins page wrote stays a pending check whatever else happens
   // (offline, lookups stopped, the receipt gone): only a final result, a result settled from the computer's facts, or
   // the person's "Stop tracking" ends it.
