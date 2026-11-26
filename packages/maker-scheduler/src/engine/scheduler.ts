@@ -1215,6 +1215,9 @@ export class Scheduler extends EventEmitter {
           for (const scheduleId of this.invalidScheduleIds) {
             if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
           }
+          for (const scheduleId of this.consecutiveDeferrals.keys()) {
+            if (!activeIds.has(scheduleId)) this.consecutiveDeferrals.delete(scheduleId);
+          }
           for (const sch of actives) {
             // 存储能应答、批量结果仍含同版本的 active 行 = 那次过期写入没落地
             // (可能是永不 settle 的孤儿)。压制登记只有 settle/stop 才清,不淘汰
@@ -1531,10 +1534,14 @@ export class Scheduler extends EventEmitter {
         if (this.isSupersededSnapshot(current)) return true;
         this.refreshAutomaticDispatchSchedules(current);
         if (current.status === 'active') this.activeSchedules.set(current.id, current);
-        else this.activeSchedules.delete(schedule.id);
+        else {
+          this.activeSchedules.delete(schedule.id);
+          this.consecutiveDeferrals.delete(schedule.id);
+        }
       } else {
         // 回读拿到空(行被删掉):缓存里这一条也要下去。
         this.activeSchedules.delete(schedule.id);
+        this.consecutiveDeferrals.delete(schedule.id);
       }
       if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     } catch (err) {
@@ -1581,7 +1588,10 @@ export class Scheduler extends EventEmitter {
           if (this.isStaleExpireResult(late)) return;
           this.refreshAutomaticDispatchSchedules(late);
           if (late.status === 'active') this.activeSchedules.set(late.id, late);
-          else this.activeSchedules.delete(late.id);
+          else {
+            this.activeSchedules.delete(late.id);
+            this.consecutiveDeferrals.delete(late.id);
+          }
           this.emitEvent({ type: 'changed', scheduleId: late.id });
           return;
         }
@@ -1603,7 +1613,10 @@ export class Scheduler extends EventEmitter {
             if (this.isSupersededSnapshot(current)) return;
             this.refreshAutomaticDispatchSchedules(current);
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
-            else this.activeSchedules.delete(current.id);
+            else {
+              this.activeSchedules.delete(current.id);
+              this.consecutiveDeferrals.delete(current.id);
+            }
           },
           () => undefined,
         );
@@ -2090,11 +2103,10 @@ export class Scheduler extends EventEmitter {
       this.updateInflightAttempt(runId, 'finalizing');
     }
 
-    // 卡死守卫已经强制收口过这条 run(槽位收回、run 落 failed、schedule 重排)。
-    // 迟到的 settle 不能再写任何东西,否则会把用户已看到的失败覆写回 success
-    // 并二次重排 nextFireAt。
+    // 卡死守卫已经强制收口过这条 run(槽位收回、run 落 failed、schedule 重排、顺延计数已在收口时重置)。
+    // 迟到的 settle 不能再写任何东西(含 consecutiveDeferrals),否则会把用户已看到的失败覆写回 success,
+    // 或清掉后续新一轮已经积累的顺延计数。
     if (this.consumeAbandonedRun(runId)) {
-      this.consecutiveDeferrals.delete(schedule.id);
       this.silencedRuns.delete(runId);
       return;
     }
@@ -2142,7 +2154,11 @@ export class Scheduler extends EventEmitter {
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
       return;
     }
-    this.consecutiveDeferrals.delete(schedule.id);
+    // pause/delete/stop 已在对应边界清零 consecutiveDeferrals;仅非外部中断(含守卫 abort)才清零,
+    // 避免超时后迟到返回的中断 run 抹掉恢复后新一轮已经积累的顺延计数。
+    if (!controller.signal.aborted || stallAborted) {
+      this.consecutiveDeferrals.delete(schedule.id);
+    }
 
     // 整段"写 run 行 + 广播终态"包在 try 里:任何一次 storage.updateRun 抛存储瞬时错误
     // 都不能把下面的 schedule 重排一起吞掉 —— claimDueFire 已清空 nextFireAt,异常直接
@@ -2578,9 +2594,8 @@ export class Scheduler extends EventEmitter {
     }
     finishedAt = this.clock.now();
 
-    // 语义同 fireOneInner:被卡死守卫强制收口过的 run,迟到 settle 整体丢弃。
+    // 语义同 fireOneInner:被卡死守卫强制收口过的 run,迟到 settle 整体丢弃(不动 consecutiveDeferrals)。
     if (this.consumeAbandonedRun(runId)) {
-      this.consecutiveDeferrals.delete(schedule.id);
       this.silencedRuns.delete(runId);
       return { runId };
     }
@@ -2636,7 +2651,9 @@ export class Scheduler extends EventEmitter {
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
       return { runId, deferred: true };
     }
-    this.consecutiveDeferrals.delete(schedule.id);
+    if (!controller.signal.aborted || stallAborted) {
+      this.consecutiveDeferrals.delete(schedule.id);
+    }
 
     if (stallAborted) {
       // 语义同 fireOneInner:守卫中断记 failed(可见)而不是 aborted(伪装成用户操作);
@@ -4399,6 +4416,7 @@ export class Scheduler extends EventEmitter {
     }
     this.runIdToBoundSessionId.delete(runId);
     this.silencedRuns.delete(runId);
+    this.consecutiveDeferrals.delete(scheduleId);
     const noProgressMs = now - attempt.lastProgressAt;
     this.logger?.error?.('scheduler: force-releasing stalled run slot (runner never settled)', {
       schedulerInstanceId: this.schedulerInstanceId,
