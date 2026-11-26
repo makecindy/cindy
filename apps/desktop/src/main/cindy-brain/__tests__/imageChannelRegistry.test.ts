@@ -41,6 +41,16 @@ describe('ImageChannelRegistry', () => {
     expect(() => registry.register('xd', channel(true))).toThrow(/already registered/);
   });
 
+  it('reads Guide protocol metadata before credentials are ready while execution stays blocked', () => {
+    const registry = new ImageChannelRegistry();
+    const ready = vi.fn(() => false);
+    registry.register('gemini', { ...channel(false), ready, imageProtocol: 'gemini' });
+    expect(registry.protocolForProvider('gemini')).toBe('gemini');
+    expect(registry.protocolForProvider('unknown')).toBeUndefined();
+    expect(ready).not.toHaveBeenCalled();
+    expect(() => registry.resolve('gemini')).toThrow(/凭证未就绪/);
+  });
+
   it('isProviderEditReady: supportsEdit: false 的来源不进编辑就绪', () => {
     const registry = new ImageChannelRegistry();
     registry.register('xd', channel(true));            // 省略 supportsEdit → true

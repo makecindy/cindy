@@ -15,11 +15,11 @@
 
 import { z } from 'zod';
 
-import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
+import { EFFORT, EXECUTION_MODE, SCHEDULE_AGENT_KIND, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { classifySchedulerError } from './errors.js';
 import { isLocalDevice, runOnDevice } from './_devices.js';
-import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
+import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -36,6 +36,7 @@ export function registerScheduleCreateTool(
     category: 'scheduler',
     description:
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
+      '单条 GitHub PR 或 GitLab MR 可设置 prTrigger={url,change}，change 可选 any、merged、review、ci；GitHub 可用 manual=true 仅按事件触发。GitLab 需 recurring=true、manual=false，按周期检查 MR，仅发现跟进事项或状态变化时唤醒任务。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
       '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
@@ -94,8 +95,12 @@ export function registerScheduleCreateTool(
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),
-      agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
-      modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=不按时间自动触发（nextFireAt 为空），仍可立即运行；配合 webhookTrigger 即仅由事件触发。false 或省略=按 cronExpr / intervalMs 定时触发，可与 Webhook 并存。cronExpr / timezone 仍必填并保留，便于以后恢复定时；适用于 agent 和 script 执行方式。'),
+      agentKind: z.enum(SCHEDULE_AGENT_KIND).describe('claude-code / codex / pi；acp = 插件提供的执行引擎(取 schedule_list_models 的 pluginEngines)'),
+      modelAgentKind: z.enum(SCHEDULE_AGENT_KIND).optional().describe('显式模型选择的引擎；绑定普通桌面任务仅在下次执行时临时切换，结束后恢复原引擎与模型(支持内置与本机/远程插件引擎互切)。插件引擎：modelAgentKind 传 acp(新建任务时 agentKind 也传 acp)，providerId 传 pluginEngines[].providerId，model 传其 models[].id(default = 由引擎自己选)；若使用另一台电脑的插件引擎同时传对应 agentDeviceId / modelAgentDeviceId；支持每次新建任务(可用 worktree)或绑定普通桌面任务，不支持持续会话与脚本模式'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
       modelAgentDeviceId: z.string().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
       kind: z
@@ -126,6 +131,12 @@ export function registerScheduleCreateTool(
         .enum(EFFORT)
         .optional()
         .describe('codex effort 档位；非白名单值会被 INVALID_ARGS 拦下。heartbeat 模式留空沿用绑定会话'),
+      modelGroup: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('可选：用户的模型组(模式) id，取 schedule_list_models 返回的 modelGroups[].id。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)；同时传的 model / providerId 是模式里都用不了时沿用的模型。用户要求「用某个模式」时才设，脚本任务不用'),
       workingDir: z
         .string()
         .optional()
@@ -158,6 +169,7 @@ export function registerScheduleCreateTool(
         .nullable()
         .optional()
         .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
+      prTrigger: schedulePrTriggerSchema,
       webhookTrigger: z
         .strictObject({
           events: z
@@ -244,7 +256,7 @@ export function registerScheduleCreateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = rest as CreateScheduleInput;
-        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps, input.webhookTrigger);
         if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           const { agentDeviceId: _local, ...localInput } = input;
           input = localInput;
@@ -299,6 +311,11 @@ export function registerScheduleCreateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
+        }
+        const caller = getSessionContext?.().sessionId;
+        if (caller && deps.getSessionProject && !input.targetSessionId && input.workingDir && input.workspaceKind !== 'dialogue') {
+          const source = await deps.getSessionProject(caller);
+          if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
         return scheduler.create(input);
       });

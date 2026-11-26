@@ -59,12 +59,13 @@ const bots = [{ id: uuid(3), local: 'nova', name: 'Nova' }, { id: uuid(4), local
 interface FakeMessage {
   id: string; seq: string; authorId: string; author: { kind: string; name: string }; deleted: boolean; origin: string;
   threadRootId: string | null; mentions: string[]; createdAt: string;
-  content: Array<{ type: string; text?: string; mediaId?: string; caption?: string }>;
+  content: Array<{ type: string; text?: string; mediaId?: string; caption?: string; namespace?: string; schemaRevision?: number; data?: Record<string, unknown>; fallback?: string }>;
 }
 interface FakeExecution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string; requester_id: string;
   context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'chat' | 'owner'; access_revision: number;
   plan_id?: string; plan_step?: number;
+  failure_code?: string;
 }
 
 let ids = 100;
@@ -125,7 +126,7 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
   }
   if (path.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', name: 'Product room', response_mode: 'all', speaking_mode: 'auto',
     created_at: '2026-10-13T00:00:00Z', updated_at: '2026-10-13T00:00:00Z', revision: 1, archived: false },
-  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name }))], messages: [], cursor: '1' } };
+  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name, state: 'joined' }))], messages: [], cursor: '1' } };
   if (path === `/conversations/${roomId}/messages` && method === 'POST') { directPosts++; return { body: { id: uuid(++ids) } }; }
   if (path === `/conversations/${roomId}/messages`) return { body: list(url.searchParams) };
   const single = path.match(/\/messages\/([^/]+)$/)?.[1];
@@ -136,17 +137,23 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
   }
   const executionId = path.match(/\/executions\/([^/]+)$/)?.[1];
   if (executionId && method === 'POST') {
+    if (body?.action === 'fail') {
+      executions.get(executionId)!.status = 'failed';
+      executions.get(executionId)!.failure_code = String(body.detail).replace('cindy-runtime-error:', '');
+    }
     if (body?.action === 'complete') {
       executions.get(executionId)!.status = 'completed';
       completed.push({ executionId, body: body! });
       const source = messages.find(m => m.id === executions.get(executionId)?.source_message_id)!;
-      const text = (body.content as Array<{ text?: string }> | undefined)?.[0]?.text;
+      const text = (body.content as FakeMessage['content'] | undefined)?.find(block => block.type === 'text')?.text;
       if (text) post(text, { by: bots.findIndex(bot => bot.id === executions.get(executionId)!.bot_id), threadRootId: source.threadRootId ?? undefined })
         .content = body.content as FakeMessage['content'];
     }
     return { body: {} };
   }
   if (path.endsWith('/executions') && listExecutions) return { body: [...executions.values()].map(e => ({ ...e })) };
+  if (path.endsWith('/execution-failures')) return { body: [...executions.values()].filter(e => e.status === 'failed'
+    && url.searchParams.get('sourceIds')?.split(',').includes(e.source_message_id) && !hidden.has(e.source_message_id)).map(e => ({ ...e })) };
   if (path.endsWith('/members') || path.endsWith('/executions') || path.includes('/plans')) return { body: [] };
   return { body: {} };
 }
@@ -175,6 +182,137 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     .filter(input => !local || input.targetSessionId === `lane-${local}`);
   const payload = (message: string) => JSON.parse(message.split('<untrusted-data>\n')[1].split('\n</untrusted-data>')[0]);
   const settle = (local: string, resultText: string) => service.settleLaneTurn({ sessionId: `lane-${local}`, activeInputClientId: null, outcome: 'done', resultText });
+
+  // #11097 / unit: real claim -> failed settlement -> peer follow-up dispatch.
+  // Existing context tests exercise text changes, not failures without messages.
+  it.each([false, true])('refreshes peer failures even with unchanged incremental history (Thread=%s)', async inThread => {
+    deps.readLaneContext = () => ({ key: 'native-context', contextTokens: 1000 });
+    const root = post('共同目标');
+    const location = inThread ? { threadRootId: root.id } : {};
+    trigger(post('@Nova 安排工作', { mentions: [bots[0].id], ...location }));
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle('nova', '@Pico 完成工作');
+    const assignment = post('@Pico 完成工作', { by: 0, mentions: [bots[1].id], ...location });
+    const [failed] = trigger(assignment);
+    await vi.advanceTimersByTimeAsync(30000);
+    await service.settleLaneTurn({ sessionId: 'lane-pico', activeInputClientId: null, outcome: 'error', resultText: '', failureCode: 'AUTH_REQUIRED' });
+    expect(failed.status).toBe('failed');
+    trigger(post('@Nova 进展如何', { mentions: [bots[0].id], ...location }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(inputs('nova')).toHaveLength(2);
+    const state = payload(inputs('nova').at(-1)!.message).peerExecutionFailures;
+    expect(state.failures).toEqual([expect.objectContaining({ sourceMessageId: assignment.id, botName: 'Pico', code: 'AUTH_REQUIRED', epoch: 1 })]);
+    await settle('nova', 'Pico 本次失败');
+    // Retry, cancellation and success are not current failures. The text is unchanged.
+    failed.epoch++;
+    failed.status = 'running';
+    trigger(post('@Nova 再确认', { mentions: [bots[0].id], ...location }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(inputs('nova')).toHaveLength(3);
+    expect(payload(inputs('nova').at(-1)!.message).peerExecutionFailures.failures).toEqual([]);
+    expect(inputs('nova').at(-1)!.message).not.toContain('AUTH_REQUIRED');
+  });
+
+  it.each([false, true])('only queries failures for visible sources in this lane (Thread=%s)', async inThread => {
+    const root = post('root');
+    const location = inThread ? { threadRootId: root.id } : {};
+    const visible = post('assignment', location);
+    const other = post('other thread', { threadRootId: uuid(91) });
+    const deleted = post('deleted', location); deleted.deleted = true;
+    const inaccessible = post('not authorized', location); hidden.add(inaccessible.id);
+    const future = post('future', location);
+    const rows = [visible, other, deleted, inaccessible, future].map((m, n) => ({ id: uuid(600 + n), conversation_id: roomId,
+      source_message_id: m.id, bot_id: bots[1].id, epoch: 2, status: 'failed', failure_code: 'NETWORK_ERROR', detail: 'private token and API body' }));
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/execution-failures?')
+      ? { body: [...rows, { ...rows[0], conversation_id: uuid(98) }, { ...rows[0], status: 'cancelled' }] }
+      : handle(route, method, body, actor));
+    const request = post('status?', { mentions: [bots[0].id], ...location });
+    future.seq = '9999';
+    trigger(request);
+    await vi.advanceTimersByTimeAsync(2000);
+    const data = payload(inputs('nova')[0].message).peerExecutionFailures;
+    expect(data.failures).toHaveLength(1);
+    expect(data.failures[0]).toMatchObject({ sourceMessageId: visible.id, code: 'NETWORK_ERROR' });
+    for (const m of [other, deleted, inaccessible, future]) expect(data.sourceMessageIds).not.toContain(m.id);
+    expect(inputs('nova')[0].message).not.toContain('private token');
+  });
+
+  it.each([404, 503, 403])('handles failure query HTTP %s without stale status or unauthorized dispatch', async status => {
+    const source = post('assignment');
+    const failure = { id: uuid(600), conversation_id: roomId, source_message_id: source.id, bot_id: bots[1].id,
+      status: 'failed', epoch: 1, failure_code: 'MODEL_UNAVAILABLE' };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/execution-failures?')
+      ? { status, body: { error: { code: status === 403 ? 'FORBIDDEN' : 'UNAVAILABLE' } } }
+      : route.endsWith('/executions') ? { body: [failure] } : handle(route, method, body, actor));
+    trigger(post('status?', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    if (status === 403) expect(inputs()).toHaveLength(0);
+    else {
+      const data = payload(inputs('nova')[0].message).peerExecutionFailures;
+      expect(data.coverage).toBe(status === 404 ? 'recent-executions' : 'unavailable');
+      expect(data.failures).toHaveLength(status === 404 ? 1 : 0);
+    }
+    expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/executions'))).toHaveLength(status === 404 ? 1 : 0);
+  });
+
+  // #11097 / unit: a remote stop/revocation during a slow status read must
+  // still be caught by the final lease check, even without a pushed change.
+  it.each([409, 403])('rechecks the lease after a delayed failure snapshot (HTTP %s)', async status => {
+    let release: ((value: { body: unknown[] }) => void) | undefined;
+    let stopped = false;
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route.includes('/execution-failures?')) return new Promise(resolve => { release = resolve; });
+      if (route.includes('/executions/') && body?.action === 'heartbeat' && stopped) {
+        return { status, body: { error: { code: status === 409 ? 'STALE_EXECUTION' : 'FORBIDDEN' } } };
+      }
+      return handle(route, method, body, actor);
+    });
+    trigger(post('status?', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(release).toBeDefined();
+    expect(inputs()).toHaveLength(0);
+    stopped = true;
+    release!({ body: [] });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(inputs()).toHaveLength(0);
+  });
+
+  it('projects stamped imported failures as historical categories, never raw diagnostics', async () => {
+    const legacy = post('private diagnostic', { by: 1 });
+    legacy.origin = 'import';
+    legacy.content.push({ type: 'card', namespace: 'cindy.local-history', schemaRevision: 1,
+      data: { kind: 'notice', authorKind: 'system', authorName: 'Pico', runtimeFailureCode: 'AUTH_REQUIRED' } });
+    const lookalike = post('ordinary text'); lookalike.content.push(legacy.content[1]);
+    trigger(post('what happened?', { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const input = inputs('nova')[0];
+    const history = payload(input.message).messages;
+    expect(history.find((m: { id: string }) => m.id === legacy.id).historicalExecutionFailure).toEqual({ code: 'AUTH_REQUIRED', botName: 'Pico' });
+    expect(history.find((m: { id: string }) => m.id === lookalike.id).historicalExecutionFailure).toBeUndefined();
+    expect(input.message).not.toContain('private diagnostic');
+  });
+
+  // #11097 review / unit: a failed queue speaker has no result message, but the
+  // next speaker must still receive the real failure through its dispatch input.
+  it.each([false, true])('passes a failed talk speaker to the next speaker (Thread=%s)', async inThread => {
+    const root = post('discussion');
+    const request = post('everyone answer', inThread ? { threadRootId: root.id } : {});
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: 'everyone answer',
+      steps: bots.map((bot, position) => ({ position, botId: bot.id, botName: bot.name, task: 'answer', status: 'running' })) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    const [failed] = trigger({ ...request, mentions: [bots[0].id] }, { plan_id: planId, plan_step: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await service.settleLaneTurn({ sessionId: 'lane-nova', activeInputClientId: null, outcome: 'error', resultText: '', failureCode: 'MODEL_UNAVAILABLE' });
+    expect(failed.status).toBe('failed');
+    plan.steps[0].status = 'failed';
+    trigger({ ...request, mentions: [bots[1].id] }, { plan_id: planId, plan_step: 1 });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(inputs('pico')).toHaveLength(1);
+    expect(payload(inputs('pico')[0].message).peerExecutionFailures.failures).toEqual([
+      expect.objectContaining({ botName: 'Nova', sourceMessageId: request.id, planId, code: 'MODEL_UNAVAILABLE' }),
+    ]);
+  });
 
   // Regression: automatic talk queues dropped the candidate list before a follow-up.
   // Unlike existing quote/file tests, inspect each speaker's actual dispatch (unit).
@@ -364,6 +502,93 @@ describe('Chat Server Thread context reaches the Agent input', () => {
       excerpt: 'snapshot words', attachmentCount: files.count, attachmentName: files.name, sequence: Number(original.seq) }) as never);
     return message;
   }
+
+  // #13022 / unit: exercise the completed reply, including an interleaved message and a
+  // deleted target. Composer and context coverage alone cannot detect a missing outbound card.
+  // A refused quote also must not strip a real teammate mention from the published reply.
+  it.each(['mention', 'quote', 'personal reply', 'deleted', 'refused'] as const)('publishes one authorized reply target (%s)', async kind => {
+    const personal = kind === 'personal reply';
+    const original = post('previous answer', { by: personal ? 'owner' : 0 });
+    const request = post('question', { mentions: [bots[0].id] });
+    if (kind !== 'mention') quoting(request, original);
+    if (personal) {
+      request.authorId = uuid(++ids);
+      request.mentions = [];
+      const [execution] = trigger({ ...request, mentions: [bots[0].id] });
+      queue.clear();
+      Object.assign(execution, { mask_kind: 'reply', mask_owner_id: ownerId, requester_id: request.authorId });
+      fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { personalMask: 1 } } };
+        if (route === '/mask/executions/claim') {
+          if (actor !== bots[0].id || execution.status !== 'queued') return { body: { execution: null } };
+          execution.status = 'running';
+          return { body: { execution } };
+        }
+        return handle(route, method, body, actor);
+      });
+    } else {
+      trigger(request);
+      if (kind === 'refused') fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { groupTeammateMentions: 1 } } };
+        if (body?.action === 'complete' && body.content.some((block: FakeMessage['content'][number]) => block.namespace === 'cindy.quote')) {
+          return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+        }
+        return handle(route, method, body, actor);
+      });
+    }
+    post('unrelated');
+    await vi.advanceTimersByTimeAsync(2000);
+    if (kind === 'deleted') original.deleted = true;
+    const answer = kind === 'refused' ? '@Pico answer' : 'answer';
+    await settle('nova', answer);
+    if (kind === 'refused') {
+      expect(completed[0].body.mentions).toEqual([bots[1].id]);
+      const attempts = fixture.handle.mock.calls.flatMap(([, , body]) => body?.action === 'complete' ? [body] : []);
+      expect(attempts.map(body => body.operationId)).toEqual([completed[0].body.operationId, completed[0].body.operationId]);
+    }
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks.filter(b => b.type === 'text')).toEqual([{ type: 'text', text: answer }]);
+    const quotes = blocks.filter(b => b.namespace === 'cindy.quote');
+    if (kind === 'deleted' || kind === 'refused') expect(quotes).toEqual([]);
+    else {
+      const target = kind === 'mention' ? request : original;
+      expect(quotes).toEqual([expect.objectContaining({ data: expect.objectContaining({ messageId: target.id }),
+        fallback: expect.stringContaining(target.content[0].text!) })]);
+    }
+  });
+
+  // #13022 / unit: a serialized reply can fit on its own but exceed Chat Server's
+  // 64 KiB content limit with a quote. Check the first completion, before any fallback.
+  it('keeps a deliverable reply within the content limit when its quote would overflow', async () => {
+    trigger(post('问'.repeat(280), { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const answer = 'output:' + '\u001b'.repeat(10800);
+    await settle('nova', answer);
+    const sent = completed[0].body.content as FakeMessage['content'];
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeLessThanOrEqual(65536);
+    expect(sent.find(block => block.type === 'text')?.text).toBe(answer);
+    expect(sent.some(block => block.namespace === 'cindy.work-record')).toBe(true);
+  });
+
+  // #13022 / unit: two request inputs arrive out of order in the talk plan, interleaved
+  // with group history. Assert target and visible addressee at the completion endpoint.
+  it('quotes the newest delivered discussion input and names its author in the reply', async () => {
+    const source = post('start');
+    const first = post('first addition');
+    const latest = post('second addition');
+    post('unrelated');
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: source.id, request_text: 'start',
+      note_message_ids: [latest.id, first.id], steps: [{ position: 0, botId: bots[0].id, botName: 'Nova', status: 'running' }] };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger({ ...source, mentions: [bots[0].id] }, { plan_id: planId, plan_step: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle('nova', 'answer');
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks[0].data?.messageId).toBe(latest.id);
+    expect(blocks[1].text).toContain('Alex');
+    expect(blocks[1].text).toContain('answer');
+  });
 
   it('names the quoted file for the Agent, from the original when read and from the snapshot otherwise', async () => {
     const live = post('', { media: ['live-plan.pdf'] });

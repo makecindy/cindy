@@ -7,7 +7,6 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import {
   installedGhostLogicalIdentity,
   installedGhostStoragePart,
-  type PluginLogicalIdentity,
 } from '../../../shared/pluginIdentity';
 import { getWorkdirDisabledGhostIds, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
@@ -19,6 +18,7 @@ import {
 } from '@/lib/composerDraftStore';
 import type { PluginSkillSetupPaletteEntry } from '@/lib/slashCommands';
 import { toast } from '@/lib/toast';
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { readPluginRecommendationSnapshot } from './pluginHomeSuggestions';
 import {
   getPendingPluginSuggestion,
@@ -69,34 +69,6 @@ export function pluginSkillSetupStates(
   });
 }
 
-/**
- * Where to make `pluginId` usable: its installed page, or its single market listing.
- * An expected identity restricts recommendations to that verified source.
- * null = no single trusted source (do not silently choose between publishers).
- */
-export async function pluginSetupRoute(
-  ghost: InstalledGhost | undefined,
-  pluginId: string,
-  expectedIdentity?: PluginLogicalIdentity,
-): Promise<string | null> {
-  if (expectedIdentity && expectedIdentity.ghostId !== pluginId) return null;
-  if (ghost && expectedIdentity) {
-    const actual = installedGhostLogicalIdentity(ghost);
-    if (actual.ghostId !== expectedIdentity.ghostId || actual.namespace !== expectedIdentity.namespace)
-      return null;
-  }
-  if (ghost) return `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-  const market = await window.electronAPI.pluginMarket.lookup([pluginId]);
-  const matches = market.items.filter(
-    (item) =>
-      item.ghostId === pluginId &&
-      item.installState !== 'conflict' &&
-      // Missing namespace is unknown, never an implicit root match.
-      (!expectedIdentity || item.namespace === expectedIdentity.namespace),
-  );
-  return matches.length === 1 ? `/plugins?market=${encodeURIComponent(matches[0].pluginId)}` : null;
-}
-
 /** Put `/<skill> ` at the start of a composer doc, keeping what the user had written. */
 export function prependSlashSkill(
   doc: JSONContent | null | undefined,
@@ -130,9 +102,10 @@ export function fillSlashSkillIntoDraft(draftKey: string, skillName: string): vo
 }
 
 /**
- * `/` palette setup rows for one composer, plus the return leg: after install or
- * enable, GhostPluginPage navigates back to `returnTo` with the nonce, and the
- * composer whose owner/target matches fills `/<skill> ` without sending.
+ * `/` palette setup rows for one composer. Picking one installs or turns on the
+ * plugin right here and fills `/<skill> ` without sending. When that has to happen
+ * on the plugin page, GhostPluginPage navigates back to `returnTo` with the nonce,
+ * and the composer whose owner/target matches fills it.
  * Callers pass enabled=false where the Gmail flow is excluded (SSH, device link).
  */
 export function usePluginSkillSetup(params: {
@@ -177,6 +150,7 @@ export function usePluginSkillSetup(params: {
   const current = useRef({ ownerId, targetKey });
   current.current = { ownerId, targetKey };
   const flight = useRef(false);
+  const { run: runPluginInPlace } = usePluginInPlace();
   const returnTo = `${location.pathname}${location.search}`;
 
   const onSelect = useCallback(
@@ -198,12 +172,6 @@ export function usePluginSkillSetup(params: {
           if (canFill?.() !== false) fillSlashSkillIntoDraft(draftKey, skillName);
           return;
         }
-        const route = await pluginSetupRoute(ghost, setup.ghostId);
-        if (!stillCurrent()) return;
-        if (!route) {
-          toast.info(t('newChat.pluginSuggestions.unavailable'));
-          return;
-        }
         const request: PluginSuggestionRequest = {
           suggestion: {
             id: `plugin-skill:${setup.ghostId}:${skillName}`,
@@ -220,15 +188,32 @@ export function usePluginSkillSetup(params: {
           returnTo,
           skillName,
         };
-        const nonce = startPendingPluginSuggestion(request);
-        navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
+        // Install or turn it on right here; only what cannot be settled here goes to the
+        // plugin page, which comes back and fills the Skill afterwards.
+        await runPluginInPlace(
+          {
+            ghostId: setup.ghostId,
+            ...(ghost ? { namespace: installedGhostLogicalIdentity(ghost).namespace } : {}),
+            workingDir,
+          },
+          {
+            isCurrent: stillCurrent,
+            onReady: () => {
+              if (canFill?.() !== false) fillSlashSkillIntoDraft(draftKey, skillName);
+            },
+            onPage: (route) => {
+              const nonce = startPendingPluginSuggestion(request);
+              navigate(`${route}${route.includes('?') ? '&' : '?'}recommendation=${encodeURIComponent(nonce)}`);
+            },
+          },
+        );
       } catch {
         if (mounted.current) toast.error(t('newChat.pluginSuggestions.unavailable'));
       } finally {
         flight.current = false;
       }
     },
-    [active, canFill, draftKey, navigate, ownerId, returnTo, t, targetKey, workingDir],
+    [active, canFill, draftKey, navigate, ownerId, runPluginInPlace, returnTo, t, targetKey, workingDir],
   );
 
   useEffect(() => {

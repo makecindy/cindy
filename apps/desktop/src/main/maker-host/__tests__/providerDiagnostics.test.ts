@@ -10,15 +10,62 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { channel } from 'node:diagnostics_channel';
+import { app, safeStorage } from 'electron';
+import * as googleAdapter from '@earendil-works/pi-ai/api/google-generative-ai';
+import * as vertexAdapter from '@earendil-works/pi-ai/api/google-vertex';
+import * as bedrockAdapter from '@earendil-works/pi-ai/api/bedrock-converse-stream';
+
+// Retain real adapters for existing native SDK regressions; expose configurable
+// wrappers only for the transport-conversion boundary fixtures below.
+vi.mock('@earendil-works/pi-ai/api/google-generative-ai', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-generative-ai')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/google-vertex', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-vertex')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/bedrock-converse-stream', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/bedrock-converse-stream')>(),
+}));
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const usageLog = vi.hoisted(() => ({
+  record: vi.fn<(tokens: unknown, route: unknown) => Promise<void>>(async () => {}),
+}));
+vi.mock('../../usage/auxiliaryUsage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../usage/auxiliaryUsage.js')>();
+  const create = (attribution: Record<string, unknown> = {}) =>
+    Object.assign(
+      async (tokens: unknown, route: Record<string, unknown> = {}) =>
+        usageLog.record(tokens, { ...attribution, ...route }),
+      { close: () => {} },
+    );
+  return {
+    ...actual,
+    createAuxiliaryUsageRecorder: create,
+    withAuxiliaryUsage: async (
+      attribution: Record<string, unknown>,
+      run: (record: ReturnType<typeof create>) => Promise<unknown>,
+    ) => run(create(attribution)),
+  };
+});
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
+  desktopMakerLogger: { ...probeLog, child: () => probeLog },
 }));
 
 import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
 
 import { classifyProviderError } from '../../../shared/providerErrors.js';
+import {
+  captureOpenAiGroupApiResponse,
+  captureOpenAiGroupDirectRecovery,
+  isOpenAiGroupAccountUnavailable,
+  openAiGroupAccountResult,
+  selectOpenAiGroupProbe,
+  testOpenAiGroupApiAccount,
+} from '../../provider-group/localOpenAiAccounts.js';
+import { setCustomProviderKeyReader } from '../provider-route.js';
 import {
   buildProbeRequest,
   runProviderProbe,
@@ -28,6 +75,7 @@ import {
   testProviderConnection,
 } from '../provider-diagnostics.js';
 import { probeProviderProtocols } from '../provider-protocol-probe.js';
+import { fetchProviderModels } from '../provider-model-fetch.js';
 import { setCustomProviders } from '../active-catalog.js';
 import {
   __resetModelVisibilityMirrorForTest,
@@ -40,10 +88,32 @@ afterEach(() => {
   setDiagnosticsKeyReader(() => null);
   __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  usageLog.record.mockClear();
   setDiagnosticsOAuthTokenReader(() => null);
 });
 
 describe('classifyProviderError', () => {
+  // Unit: the API-key pool must quarantine billing refusals, while an ordinary
+  // 429 stays retryable. Existing coverage only exercises HTTP 402 and bare 429.
+  it.each([
+    { code: 'credit_balance_exhausted' },
+    { code: 'organization_spend_limit_exceeded' },
+    { code: 'project_spend_limit_exceeded' },
+    { code: 'organization_usage_limit_exceeded' },
+    { code: 'insufficient_quota' },
+    { type: 'insufficient_quota' },
+  ])('classifies HTTP 429 billing evidence $code$type', (error) => {
+    expect(classifyProviderError({ status: 429, bodyText: JSON.stringify({ error }) }))
+      .toMatchObject({ code: 'QUOTA_EXCEEDED', retryable: false });
+  });
+
+  it('preserves a structured rate-limit code ahead of a compatibility type', () => {
+    expect(classifyProviderError({
+      status: 429,
+      bodyText: JSON.stringify({ error: { code: 'rate_limit_exceeded', type: 'insufficient_quota' } }),
+    })).toMatchObject({ code: 'RATE_LIMITED', retryable: true });
+  });
+
   it('按 status 归类明确错误', () => {
     expect(classifyProviderError({ status: 401 }).code).toBe('AUTH_INVALID');
     expect(classifyProviderError({ status: 402 }).code).toBe('QUOTA_EXCEEDED');
@@ -102,6 +172,46 @@ describe('classifyProviderError', () => {
         code: 'CONTEXT_TOO_LONG', retryable: false,
       });
     }
+  });
+
+  // #9470: unit, real classifier. Existing field-pattern coverage missed Google's
+  // quoted Unknown name rejection; raw and JSON-escaped messages reach consumers.
+  it.each([400, 422])('%i recognizes explicit Unknown name payload rejections', (status) => {
+    const message = 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field. Unknown name "max_tokens": Cannot find field.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'WIRE_INCOMPATIBLE', retryable: false,
+      });
+    }
+  });
+
+  // #9470 P2: unit, real classifier; field order and JSON escaping must not
+  // turn a rejected request field into a missing model (no live gateway covered).
+  it.each([400, 422])('%i ignores rejected field names when matching model errors', (status) => {
+    for (const fields of [['model', 'messages'], ['anthropic_version', 'model', 'messages']]) {
+      const message = 'Invalid JSON payload received. '
+        + fields.map((field) => `Unknown name "${field}": Cannot find field.`).join(' ');
+      for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+        expect(classifyProviderError({ status, bodyText })).toMatchObject({
+          code: 'WIRE_INCOMPATIBLE', retryable: false,
+        });
+      }
+    }
+  });
+
+  it.each([
+    [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
+    [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
+    [400, 'Unknown name "customer"', 'UNKNOWN'],
+    [401, 'Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid API key. Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid model name. Invalid JSON payload received. Unknown name "messages"', 'MODEL_NOT_FOUND'],
+    [400, 'insufficient_quota. Invalid JSON payload received. Unknown name "messages"', 'QUOTA_EXCEEDED'],
+    [400, 'prompt is too long. Invalid JSON payload received. Unknown name "messages"', 'CONTEXT_TOO_LONG'],
+    [500, 'Invalid JSON payload received. Unknown name "messages"', 'UPSTREAM_ERROR'],
+  ] as const)('preserves classification for %i / %s', (status, bodyText, code) => {
+    expect(classifyProviderError({ status, bodyText }).code).toBe(code);
   });
 
   it.each([
@@ -371,7 +481,359 @@ function fakeResponse(status: number, body = ''): Response {
   return new Response(body, { status });
 }
 
+function fakeOpenAiList(ids: string[]): Response {
+  return fakeResponse(200, JSON.stringify({ object: 'list', data: ids.map(id => ({ object: 'model', id })) }));
+}
+
+function completedOpenAiProbe(): Response {
+  return fakeResponse(200, '{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}');
+}
+
+// Unit regression: the account-group test used projected picker metadata and
+// missed the official Responses off mapping. Use real local catalog records
+// through the saved probe so the model rank and actual payload are both checked.
+it.each([
+  { agent: 'codex', models: ['gpt-4.1', 'gpt-5.4-mini'], expected: 'gpt-5.4-mini', disable: true },
+  { agent: 'pi', models: ['gpt-4.1', 'gpt-5.4-mini'], expected: 'gpt-5.4-mini', disable: true },
+  { agent: 'codex', models: ['gpt-5-nano', 'gpt-5.4-mini', 'gpt-4.1-nano'], expected: 'gpt-4.1-nano', disable: false },
+  { agent: 'codex', models: ['gpt-5-nano'], expected: 'gpt-5-nano', disable: false },
+  { agent: 'codex', models: ['unknown-fixture-model'], expected: 'unknown-fixture-model', disable: false },
+] as const)('probes $expected on $agent with disableReasoning=$disable', async ({ agent, models, expected, disable }) => {
+  const id = 'openai-group-model-choice';
+  const provider = buildUserProvider({ id, name: 'Test OpenAI', auth: { method: 'apiKey' }, runtimes: {
+    [agent]: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+      requestPath: '/responses', models: models.map(modelId => ({ id: modelId, name: modelId })) },
+  } });
+  setCustomProviders([provider]);
+  setDiagnosticsKeyReader(() => 'synthetic-key');
+  expect(selectOpenAiGroupProbe(provider, agent)).toMatchObject({ agent, model: { id: expected }, disableReasoning: disable });
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
+    init?.method === 'GET' ? fakeOpenAiList([...models]) : completedOpenAiProbe());
+  await expect(testOpenAiGroupApiAccount(id, fetcher, agent)).resolves.toEqual({ ok: true });
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    'https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses',
+  ]);
+  expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+    model: expected, input: 'ping', max_output_tokens: 16, stream: false, store: false,
+    ...(disable ? { reasoning: { effort: 'none' } } : {}),
+  });
+});
+
+const reasoningOnlyProbeResponse = {
+  object: 'response',
+  status: 'incomplete',
+  error: null,
+  incomplete_details: { reason: 'max_output_tokens' },
+  output: [{ type: 'reasoning', id: 'rs_fixture', summary: [] }],
+  usage: {
+    input_tokens: 4, input_tokens_details: { cached_tokens: 0 },
+    output_tokens: 16, output_tokens_details: { reasoning_tokens: 16 }, total_tokens: 20,
+  },
+};
+
+// Unit using the saved account-group entry and the existing discovery transport.
+// The 21:56 incident showed the cheapest preset is not necessarily available.
+it('uses fresh official discovery for the same key and project, and probes only configured models', async () => {
+  const id = 'openai-discovered-access';
+  let key = 'FAKE-group-original';
+  const configure = (project: string) => setCustomProviders([buildUserProvider({
+    id, name: 'Fixture', auth: { method: 'apiKey' }, runtimes: { codex: {
+      baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+      headers: { 'OpenAI-Project': project }, models: [
+        { id: 'gpt-4.1-nano', name: 'GPT-4.1 nano' }, { id: 'gpt-5-nano', name: 'GPT-5 nano' },
+      ],
+    } },
+  })]);
+  configure('project-a');
+  setDiagnosticsKeyReader(() => key);
+  let listed = ['gpt-5-nano', 'unconfigured-cheap-model'];
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
+    init?.method === 'GET' ? fakeOpenAiList(listed) : completedOpenAiProbe());
+  await fetchProviderModels({ agent: 'codex', baseUrl: 'https://api.openai.com/v1',
+    apiKey: key, headers: { 'OpenAI-Project': 'project-a' } }, fetcher);
+  const check = () => testOpenAiGroupApiAccount(id, fetcher);
+  await expect(check()).resolves.toEqual({ ok: true });
+  expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'POST']);
+  expect(JSON.parse(String(fetcher.mock.lastCall?.[1]?.body)).model).toBe('gpt-5-nano');
+
+  listed = ['unconfigured-cheap-model'];
+  configure('project-b');
+  await expect(check()).resolves.toEqual({ ok: false, code: 'NO_TEST_MODEL' });
+  expect(fetcher.mock.lastCall?.[1]?.method).toBe('GET');
+  expect(new Headers(fetcher.mock.lastCall?.[1]?.headers).get('openai-project')).toBe('project-b');
+  listed = ['gpt-4.1-nano'];
+  key = 'FAKE-group-rotated';
+  await expect(check()).resolves.toEqual({ ok: true });
+  expect(JSON.parse(String(fetcher.mock.lastCall?.[1]?.body)).model).toBe('gpt-4.1-nano');
+  expect(new Headers(fetcher.mock.lastCall?.[1]?.headers).get('authorization')).toBe('Bearer FAKE-group-rotated');
+
+  listed = [];
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5 * 60_000 + 1);
+  try {
+    await expect(check()).resolves.toEqual({ ok: false, code: 'NO_TEST_MODEL' });
+    expect(fetcher.mock.lastCall?.[1]?.method).toBe('GET');
+  } finally { clock.mockRestore(); }
+  expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'POST', 'GET', 'GET', 'POST', 'GET']);
+});
+
+// Unit against the same provider with and without listing permissions. A
+// concrete model rejection with stale/unknown catalog evidence never blocks its key.
+it.each([403, 200])('tries a different configured model on the next click after a 404 (list status %s)', async listStatus => {
+  const id = `openai-after-model-rejection-${listStatus}`;
+  setCustomProviders([buildUserProvider({ id, name: 'Fixture', auth: { method: 'apiKey' }, runtimes: {
+    codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses', models: [
+      { id: 'gpt-4.1-nano', name: 'GPT-4.1 nano' }, { id: 'gpt-5-nano', name: 'GPT-5 nano' },
+    ] },
+  } })]);
+  setDiagnosticsKeyReader(() => 'FAKE-project-key');
+  const generated: string[] = [];
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    if (init?.method === 'GET') return listStatus === 200
+      ? fakeOpenAiList(['gpt-4.1-nano', 'gpt-5-nano'])
+      : fakeResponse(403, '{"error":{"code":"insufficient_permissions"}}');
+    const model = JSON.parse(String(init?.body)).model;
+    generated.push(model);
+    return model === 'gpt-4.1-nano'
+      ? fakeResponse(404, '{"error":{"code":"model_not_found"}}')
+      : completedOpenAiProbe();
+  });
+  await expect(testOpenAiGroupApiAccount(id, fetcher)).resolves.toEqual({ ok: false, code: 'MODEL_NOT_FOUND' });
+  expect(generated).toEqual(['gpt-4.1-nano']);
+  expect(isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(false);
+  await expect(testOpenAiGroupApiAccount(id, fetcher)).resolves.toEqual({ ok: true });
+  expect(generated).toEqual(['gpt-4.1-nano', 'gpt-5-nano']);
+  expect(fetcher.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'POST', 'GET', 'POST']);
+});
+
+// Unit with the same key installed for two runtimes, against different projects.
+// Coalescing these simultaneous tests would incorrectly report one project's result for both.
+it('separates simultaneous probes using one key with different project headers', async () => {
+  const id = 'openai-same-key-two-projects';
+  const runtime = (project: string) => ({
+    baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const,
+    headers: { 'OpenAI-Project': project }, models: [{ id: 'gpt-4.1-nano', name: 'GPT-4.1 nano' }],
+  });
+  setCustomProviders([buildUserProvider({ id, name: 'Fixture', auth: { method: 'apiKey' },
+    runtimes: { codex: runtime('a'), pi: runtime('b') } })]);
+  setDiagnosticsKeyReader(() => 'FAKE-shared-project-key');
+  setCustomProviderKeyReader(() => 'FAKE-shared-project-key');
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    if (init?.method === 'GET') return fakeOpenAiList(['gpt-4.1-nano']);
+    return new Headers(init?.headers).get('openai-project') === 'a'
+      ? fakeResponse(403, '{"error":{"code":"model_access_denied"}}') : completedOpenAiProbe();
+  });
+  try {
+    await expect(Promise.all([testOpenAiGroupApiAccount(id, fetcher, 'codex'), testOpenAiGroupApiAccount(id, fetcher, 'pi')]))
+      .resolves.toEqual([{ ok: false, code: 'MODEL_NOT_FOUND' }, { ok: true }]);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) =>
+      new Headers(init?.headers).get('openai-project')).sort()).toEqual(['a', 'b']);
+    await expect(testOpenAiGroupApiAccount(id, fetcher, 'pi')).resolves.toEqual({ ok: true });
+    await expect(testOpenAiGroupApiAccount(id, fetcher, 'codex')).resolves.toEqual({ ok: false, code: 'NO_TEST_MODEL' });
+  } finally {
+    setCustomProviderKeyReader(() => null);
+  }
+});
+
+// Unit via the saved account-group test with injected fetch. The 21:38 gpt-5-nano
+// report was a 200 wire error with no recorded body. Existing completed-text tests
+// missed a budget-limited Responses result whose output was all reasoning.
+it('releases the tested OpenAI key after a budget-limited probe with actual output', async () => {
+  const id = 'openai-group-probe';
+  setCustomProviders([buildUserProvider({ id, name: 'Test OpenAI', auth: { method: 'apiKey' }, runtimes: {
+    codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+      models: [{ id: 'gpt-5-nano', name: 'GPT-5 nano' }] },
+  } })]);
+  setDiagnosticsKeyReader(() => 'synthetic-key');
+  const fetcher = vi.fn<typeof fetch>()
+    .mockImplementationOnce(async () => fakeOpenAiList(['gpt-5-nano']))
+    .mockImplementationOnce(async () => fakeResponse(429, '{"error":{"code":"credit_balance_exhausted"}}'))
+    .mockImplementationOnce(async () => fakeResponse(200, '{}'))
+    .mockImplementationOnce(async () => fakeResponse(200, JSON.stringify(reasoningOnlyProbeResponse)));
+  await expect(testOpenAiGroupApiAccount(id, fetcher)).resolves.toMatchObject({
+    ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted',
+  });
+  expect(isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(true);
+  expect(isOpenAiGroupAccountUnavailable(id, 'pi')).toBe(false);
+  await expect(testOpenAiGroupApiAccount(id, fetcher)).resolves.toMatchObject({ ok: false, code: 'INVALID_PROBE_RESPONSE' });
+  expect(isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(true);
+  await expect(Promise.all([testOpenAiGroupApiAccount(id, fetcher), testOpenAiGroupApiAccount(id, fetcher)]))
+    .resolves.toEqual([{ ok: true }, { ok: true }]);
+  expect(isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(false);
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    'https://api.openai.com/v1/models', ...Array(3).fill('https://api.openai.com/v1/responses'),
+  ]);
+  expect(JSON.parse(String(fetcher.mock.calls[3]?.[1]?.body))).toEqual({
+    model: 'gpt-5-nano', input: 'ping', max_output_tokens: 16, stream: false, store: false,
+  });
+  expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ outputTokens: 16 }), expect.anything());
+});
+
+// Unit via the production probe: HTTP success without usable generation must
+// remain distinct from a genuine request-field error and from credential errors.
+it.each([
+  ['zero output tokens', 200, JSON.stringify({ ...reasoningOnlyProbeResponse, usage: { output_tokens: 0 } }), 'PROBE_NO_OUTPUT'],
+  ['missing output tokens', 200, JSON.stringify({ ...reasoningOnlyProbeResponse, usage: undefined }), 'PROBE_NO_OUTPUT'],
+  ['non-numeric output tokens', 200, JSON.stringify({ ...reasoningOnlyProbeResponse, usage: { output_tokens: '16' } }), 'PROBE_NO_OUTPUT'],
+  ['completed without text', 200, JSON.stringify({ status: 'completed', output: [] }), 'PROBE_NO_OUTPUT'],
+  ['content filter with output usage', 200, JSON.stringify({
+    ...reasoningOnlyProbeResponse, incomplete_details: { reason: 'content_filter' },
+  }), 'PROBE_REFUSED'],
+  ['refusal with output usage', 200, JSON.stringify({
+    ...reasoningOnlyProbeResponse, output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'fixture' }] }],
+  }), 'PROBE_REFUSED'],
+  ['failed with output usage', 200, JSON.stringify({
+    ...reasoningOnlyProbeResponse, status: 'failed', error: { code: 'server_error' },
+  }), 'UPSTREAM_ERROR'],
+  ['malformed JSON', 200, '{"status":', 'INVALID_PROBE_RESPONSE'],
+  ['empty body', 200, '', 'INVALID_PROBE_RESPONSE'],
+  ['malformed output', 200, JSON.stringify({ ...reasoningOnlyProbeResponse, output: [null] }), 'INVALID_PROBE_RESPONSE'],
+  ['unknown request field', 400, '{"error":{"message":"Unknown parameter: fixture"}}', 'WIRE_INCOMPATIBLE'],
+  ['invalid credential', 401, '{"error":{"code":"invalid_api_key"}}', 'AUTH_INVALID'],
+  ['payment required', 402, '', 'QUOTA_EXCEEDED'],
+  ['rate limited', 429, '{"error":{"code":"rate_limit_exceeded"}}', 'RATE_LIMITED'],
+] as const)('classifies an account-group probe with %s', async (_name, status, body, code) => {
+  const fetcher = vi.fn<typeof fetch>(async () => fakeResponse(status, body));
+  await expect(runProviderProbe({
+    agent: 'codex', baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5-nano',
+    wireProtocol: 'openai-responses', requireResponsesGeneration: true,
+  }, fetcher)).resolves.toMatchObject({ ok: false, status, code });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+// Unit through the production error observer's account-health entry. Older
+// successful responses must never clear a newer billing failure on one key.
+it('keeps billing holds per key and uses Retry-After only for rate limits', async () => {
+  const [first, second] = ['limited-openai-one', 'limited-openai-two'];
+  setCustomProviders([first!, second!].map(id => buildUserProvider({
+    id, name: id, auth: { method: 'apiKey' }, runtimes: {
+      codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-4.1-mini', name: 'Mini' }] },
+    },
+  })));
+  const accountOne = first!;
+  const accountTwo = second!;
+  const old = captureOpenAiGroupApiResponse(accountOne, 'codex')!;
+  const billing = captureOpenAiGroupApiResponse(accountOne, 'codex')!;
+  await billing({ ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' });
+  expect(await old({ ok: true })).toBe(false);
+  expect(isOpenAiGroupAccountUnavailable(accountOne, 'codex')).toBe(true);
+  expect(isOpenAiGroupAccountUnavailable(accountTwo, 'codex')).toBe(false);
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  try {
+    await captureOpenAiGroupApiResponse(accountTwo, 'codex')!({ ok: false, code: 'RATE_LIMITED' }, now + 5000);
+    await captureOpenAiGroupApiResponse(accountTwo, 'codex')!({ ok: false, code: 'RATE_LIMITED' });
+    expect(isOpenAiGroupAccountUnavailable(accountTwo, 'codex')).toBe(true);
+    clock.mockReturnValue(now + 31 * 60_000);
+    expect(isOpenAiGroupAccountUnavailable(accountTwo, 'codex')).toBe(false);
+    expect(isOpenAiGroupAccountUnavailable(accountOne, 'codex')).toBe(true);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+// Unit through the real provider observer, atomic store and explicit probe.
+// The hold survives group observations and competing tests; only a verified
+// direct request started after the hold, or a test, may remove it.
+it.each(['billing', 'auth'] as const)('requires fresh direct success or an explicit test of the same credential after %s rejection', async kind => {
+  const id = `accept-shared-slot-${kind}`;
+  const otherId = `accept-other-key-${kind}`;
+  const model = { id: 'gpt-4.1-mini', name: 'Mini', reasoning: false };
+  const runtime = { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const,
+    models: [model] };
+  const connections = [id, otherId].map(providerId => buildUserProvider({
+    id: providerId, name: providerId, auth: { method: 'apiKey' }, runtimes: { codex: runtime, pi: runtime },
+  }));
+  const keys = (provider: string, agent: string) => provider === id ? 'FAKE-shared-acceptance' : `FAKE-independent-${agent}`;
+  const unavailable = (agent: 'codex' | 'pi') => isOpenAiGroupAccountUnavailable(id, agent);
+  const decline = kind === 'auth' ? { ok: false, code: 'AUTH_INVALID' } as const
+    : { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' } as const;
+  const completed = () => fakeResponse(200, '{"status":"completed","output":[{"content":[{"type":"output_text","text":"ok"}]}]}');
+  const encryption = vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true);
+  setCustomProviders(connections);
+  setCustomProviderKeyReader(keys);
+  setDiagnosticsKeyReader(keys);
+  try {
+    expect(captureOpenAiGroupDirectRecovery(id, 'codex', model.id)).toBeUndefined();
+    await captureOpenAiGroupApiResponse(id, 'pi')!(decline);
+    expect(unavailable('codex')).toBe(true);
+    expect(unavailable('pi')).toBe(true);
+    expect(openAiGroupAccountResult(connections[0]!)).toEqual({ checks: [{ agent: 'codex', blocked: true, result: decline }] });
+    await captureOpenAiGroupApiResponse(id, 'codex')!({ ok: true });
+    expect(unavailable('codex')).toBe(true);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    try { expect(unavailable('pi')).toBe(true); } finally { clock.mockRestore(); }
+    await captureOpenAiGroupApiResponse(otherId, 'pi')!(decline);
+    expect(isOpenAiGroupAccountUnavailable(otherId, 'codex')).toBe(false);
+    expect(isOpenAiGroupAccountUnavailable(otherId, 'pi')).toBe(true);
+    expect(openAiGroupAccountResult(connections[1]!)).toEqual({ checks: [{ agent: 'codex' }, { agent: 'pi', blocked: true, result: decline }] });
+    const verifyOther = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer FAKE-independent-pi');
+      return completed();
+    });
+    await expect(testOpenAiGroupApiAccount(otherId, verifyOther, 'pi')).resolves.toEqual({ ok: true });
+    expect(isOpenAiGroupAccountUnavailable(otherId, 'pi')).toBe(false);
+    expect(unavailable('pi')).toBe(true);
+    await expect(testOpenAiGroupApiAccount(id, async () => fakeResponse(200, '{}'))).resolves.toMatchObject({ ok: false });
+    expect(unavailable('pi')).toBe(true);
+
+    let finish!: (value: Response) => void;
+    let started!: () => void;
+    const dispatched = new Promise<void>(resolve => { started = resolve; });
+    const pending = testOpenAiGroupApiAccount(id, (_url, init) => {
+      if (init?.method === 'GET') return Promise.resolve(fakeOpenAiList([model.id]));
+      return new Promise(resolve => {
+        finish = resolve;
+        started();
+      });
+    });
+    await dispatched;
+    const overlappingDirect = captureOpenAiGroupDirectRecovery(id, 'pi', model.id)!;
+    await captureOpenAiGroupApiResponse(id, 'pi')!(decline);
+    finish(completed());
+    await expect(pending).resolves.toEqual(decline);
+    expect(await overlappingDirect()).toBe(false);
+    expect(unavailable('pi')).toBe(true);
+
+    // reset-modules: a fresh module and file reader model restarting the app.
+    vi.resetModules();
+    const roots = await import('../../userDataPath.js');
+    roots.configureUserDataDir(app.getPath('userData'));
+    roots.configureAppDataDir(app.getPath('appData'));
+    const restarted = await import('../../provider-group/localOpenAiAccounts.js');
+    (await import('../active-catalog.js')).setCustomProviders(connections);
+    (await import('../provider-route.js')).setCustomProviderKeyReader(keys);
+    (await import('../provider-diagnostics.js')).setDiagnosticsKeyReader(keys);
+    expect(restarted.isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(true);
+    expect(restarted.isOpenAiGroupAccountUnavailable(id, 'pi')).toBe(true);
+    const direct = restarted.captureOpenAiGroupDirectRecovery(id, 'pi', model.id);
+    expect(await direct?.()).toBe(true);
+    expect(restarted.isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(false);
+    await restarted.captureOpenAiGroupApiResponse(id, 'pi')!(decline);
+    await expect(restarted.testOpenAiGroupApiAccount(id, async () => completed(), 'pi')).resolves.toEqual({ ok: true });
+    expect(restarted.isOpenAiGroupAccountUnavailable(id, 'codex')).toBe(false);
+    expect(restarted.isOpenAiGroupAccountUnavailable(id, 'pi')).toBe(false);
+  } finally {
+    encryption.mockRestore();
+    setCustomProviderKeyReader(() => null);
+  }
+}, 10_000);
+
 describe('runProviderProbe（注入 fetch，不联网）', () => {
+  // #9470: production probe result and log must carry the classifier's code.
+  it('reports an Unknown name field rejection as wire incompatible', async () => {
+    const r = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(400, JSON.stringify({ error: {
+        message: 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field.',
+      } })),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 400 });
+    expect(probeLog.warn.mock.calls[0]?.[1]).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', model: 'm', status: 400,
+    });
+  });
+
   it('2xx → ok + latency', async () => {
     const r = await runProviderProbe(
       { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
@@ -450,6 +912,64 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
+  });
+
+  it('records trailing usage from a later network chunk and keeps the served model', async () => {
+    const frames = [
+      { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+      {
+        model: 'served-model',
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 40 },
+          completion_tokens: 2,
+        },
+      },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encode = new TextEncoder();
+        for (const frame of frames)
+          controller.enqueue(encode.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const result = await runProviderProbe(
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'requested-alias',
+        wireProtocol: 'openai-chat',
+        apiKey: 'fake',
+      },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
+
+  it('keeps observed usage when a probe stream disconnects after its first payload', async () => {
+    let step = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const frames = [
+          { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+          { model: 'served-model', usage: { prompt_tokens: 100, completion_tokens: 2 } },
+        ];
+        if (step === frames.length) { controller.error(new Error('socket disconnected')); return; }
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frames[step++])}\n\n`));
+      },
+    });
+    await expect(runProviderProbe({ agent: 'codex', baseUrl: 'https://x.example', modelId: 'alias', wireProtocol: 'openai-chat', apiKey: 'fake' },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))).rejects.toThrow('socket disconnected');
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 2 }), expect.objectContaining({ model: 'served-model' }));
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -1122,6 +1642,41 @@ it('probes Google using generateContent instead of falling through to Responses'
 
 
 describe('native SDK connection probes', () => {
+  // #11007 review regression: unlike the direct-fetch matrix, this unit test
+  // enters the real native SDK, which resolves transport failures as messages.
+  // Minimal failure is a fetch rejection with a certificate code in its cause.
+  it.each(['saved', 'adhoc'] as const)('preserves certificate diagnostics when the native SDK consumes a %s rejection', async kind => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    setCustomProviders([buildUserProvider({ id: 'native-certificate', name: 'Native certificate',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
+        models: [{ id: row.id, name: row.name, piApi: 'openai-responses' }] } },
+    })]);
+    setDiagnosticsOAuthTokenReader(() => 'fixture-token');
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('private endpoint'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }) });
+    });
+    const result = await testProviderConnection(kind === 'saved'
+      ? { kind, providerId: 'native-certificate', agent: 'pi' }
+      : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api: 'openai-responses',
+        catalogPresetId: 'github-copilot', apiKey: 'fixture-token' } }, fetcher);
+    expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain('private endpoint');
+  });
+
+  it.each([
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'],
+    ['ABORT_ERR', 'TIMEOUT'],
+  ])('keeps native transport failure %s distinct from certificate errors', async (networkCode, code) => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw Object.assign(new Error('transport failed'), { code: networkCode }); });
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      api: 'openai-responses', nativeModel: row, apiKey: 'fixture-token' }, fetcher)).toMatchObject({ ok: false, code });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each(['saved', 'adhoc', 'header-only'] as const)('uses the Vertex SDK for a %s connection, not the public Gemini path', async kind => {
     const row = PROVIDER_MODEL_CATALOG.providers['google-vertex'][0];
     const baseUrl = 'https://us-central1-aiplatform.googleapis.com';
@@ -1248,6 +1803,39 @@ describe('automatic Pi protocol connection test', () => {
     { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]);
   const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('does not overcount cumulative prompt/cache snapshots in native probing', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      sse([
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 20 },
+            completion_tokens: 1,
+          },
+        },
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 40 },
+            completion_tokens: 2,
+          },
+        },
+      ]),
+    );
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: true });
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
 
   it('uses native streaming and stops on the first successful generation', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => chat());
@@ -1506,4 +2094,231 @@ it.each([false, true])('checks connection values across catalog rebuilds (target
   release('fake-refreshed');
   expect(await pending).toMatchObject(targetChanged ? { ok: false, code: 'AUTH_INVALID' } : { ok: true });
   expect(fetcher).toHaveBeenCalledTimes(targetChanged ? 0 : 1);
+});
+
+/** #11007 unit regression: existing tests only covered shallow connection failures.
+ * Exercise all three public settings operations with direct, nested and aggregate
+ * certificate failures; assert safe diagnostics and no automatic request replay.
+ * Real TLS handshake reproduction is a separate loopback experiment, not a mock claim.
+ */
+describe('provider certificate diagnostics (#11007)', () => {
+  const spec = { agent: 'codex' as const, baseUrl: 'https://provider.example',
+    modelId: 'synthetic-model', wireProtocol: 'openai-responses' as const, apiKey: 'synthetic-key' };
+  const certificate = () => Object.assign(new Error('private endpoint and credential must not escape'),
+    { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+  it.each([
+    ['direct', () => certificate()],
+    ['fetch cause', () => new TypeError('fetch failed', { cause: certificate() })],
+    ['nested aggregate', () => new TypeError('fetch failed', { cause: new AggregateError([
+      new Error('transport wrapper', { cause: certificate() }),
+    ]) })],
+  ])('%s errors reach all settings operations without replay or sensitive details', async (_shape, makeError) => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw makeError(); });
+    const expected = { ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject(expected);
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject(expected);
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ...expected, decision: 'blocked' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
+    'CERT_NOT_YET_VALID', 'CERT_REVOKED', 'CERT_UNTRUSTED', 'CERT_REJECTED',
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_PURPOSE', 'INVALID_CA', 'PATH_LENGTH_EXCEEDED', 'CERT_CHAIN_TOO_LONG',
+    'UNABLE_TO_GET_CRL', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+    'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY', 'CERT_SIGNATURE_FAILURE', 'CRL_SIGNATURE_FAILURE',
+    'CRL_NOT_YET_VALID', 'CRL_HAS_EXPIRED', 'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+    'ERROR_IN_CERT_NOT_AFTER_FIELD', 'ERROR_IN_CRL_LAST_UPDATE_FIELD', 'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+    'HOSTNAME_MISMATCH',
+  ])('%s is a non-retryable certificate failure', networkErrorCode => {
+    expect(classifyProviderError({ networkErrorCode })).toEqual({
+      code: 'CERT_ERROR', retryable: false, detail: networkErrorCode,
+    });
+  });
+
+  it.each([
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'], ['ERR_TLS_INVALID_PROTOCOL_VERSION', 'UNKNOWN'],
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'], ['ENOTFOUND', 'UPSTREAM_UNREACHABLE'],
+    ['ETIMEDOUT', 'TIMEOUT'], ['OUT_OF_MEM', 'UNKNOWN'],
+  ])('preserves non-certificate failure %s', async (networkErrorCode, code) => {
+    const error = new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('private message'), { code: networkErrorCode }),
+    ]) });
+    const fetcher = async () => { throw error; };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: false, code });
+  });
+
+  it('terminates cyclic causes and keeps explicit cancellation distinct from certificate errors', async () => {
+    const cycle = new Error('private cyclic message');
+    cycle.cause = cycle;
+    const cyclicFetch = async () => { throw cycle; };
+    expect(await fetchProviderModels(spec, cyclicFetch)).toMatchObject({ ok: false, code: 'UNKNOWN' });
+    const aborted = new Error('cancelled', { cause: certificate() });
+    aborted.name = 'AbortError';
+    expect(await runProviderProbe(spec, async () => { throw aborted; })).toMatchObject({ ok: false, code: 'TIMEOUT' });
+  });
+});
+
+// #11007 review / unit: these SDKs reject injected fetch. Model their actual
+// Node transport diagnostics before the SDK discards cause; no sockets or cloud
+// credentials. Existing Copilot tests only cover the injected-fetch adapter.
+describe.each([
+  ['google', 'google-generative-ai', googleAdapter, 'undici:request:create', 'undici:request:error'],
+  ['google-vertex', 'google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['amazon-bedrock', 'bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('SDK-owned transport certificate diagnostics: %s', (preset, api, adapter, startName, errorName) => {
+  it.each(['saved', 'adhoc'] as const)('preserves the %s probe code before SDK error conversion', async kind => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('SDK must own its transport'); });
+    const start = channel(startName), failed = channel(errorName);
+    const previous = [start.hasSubscribers, failed.hasSubscribers];
+    const observed = new Set<unknown>();
+    const listener = (message: unknown) => { observed.add(message); };
+    failed.subscribe(listener);
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation((_model, _context, options = undefined) => ({
+      result: async () => {
+        expect(options).not.toHaveProperty('fetch');
+        const request = startName.startsWith('undici:')
+          ? { origin: new URL(row.upstream.replace('{location}', 'us-central1')).origin }
+          : { protocol: new URL(row.upstream).protocol, getHeader: () => new URL(row.upstream).host };
+        start.publish({ request });
+        await Promise.resolve();
+        failed.publish({ request, error: Object.assign(new Error('private SDK endpoint'), { code: 'INVALID_PURPOSE' }) });
+        return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    setCustomProviders([buildUserProvider({ id: 'native-owned', name: 'Native', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: preset,
+        models: [{ id: row.id, name: row.name, piApi: api }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'fixture-key');
+    try {
+      const result = await testProviderConnection(kind === 'saved'
+        ? { kind, providerId: 'native-owned', agent: 'pi' }
+        : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api,
+          catalogPresetId: preset, apiKey: 'fixture-key' } }, fetcher);
+      expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+      expect(JSON.stringify(result)).not.toContain('private SDK endpoint');
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(sdk).toHaveBeenCalledOnce();
+      // Capture must leave pre-existing diagnostics subscribers operational.
+      const late = { request: {}, error: Object.assign(new Error('late'), { code: 'INVALID_CA' }) };
+      failed.publish(late);
+      expect(observed.has(late)).toBe(true);
+    } finally { sdk.mockRestore(); failed.unsubscribe(listener); }
+    expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+  });
+});
+
+// #11007: async request errors may arrive outside the creating async context.
+// Two simultaneous native probes must not borrow each other's safe error code.
+it('isolates concurrent SDK-owned requests and removes observers after settlement', async () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.google[0];
+  const start = channel('undici:request:create'), failed = channel('undici:request:error');
+  const previous = [start.hasSubscribers, failed.hasSubscribers];
+  const complete: Array<() => void> = [];
+  let index = 0;
+  const sdk = vi.spyOn(googleAdapter, 'streamSimple').mockImplementation(() => ({
+    result: () => {
+      const request = { origin: new URL(row.upstream).origin };
+      const code = index++ === 0 ? 'INVALID_PURPOSE' : 'ECONNREFUSED';
+      start.publish({ request });
+      return new Promise(resolve => complete.push(() => {
+        failed.publish({ request, error: Object.assign(new Error('private'), { code }) });
+        resolve({ stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+      }));
+    },
+  }) as never);
+  try {
+    const spec = { agent: 'pi' as const, baseUrl: row.upstream, modelId: row.id,
+      api: 'google-generative-ai' as const, apiKey: 'fixture' };
+    const first = runProviderProbe(spec), second = runProviderProbe(spec);
+    expect(complete).toHaveLength(2);
+    // An unrelated request must not enter either probe, even while both await.
+    const unrelated = {};
+    start.publish({ request: unrelated });
+    failed.publish({ request: unrelated, error: { code: 'CERT_HAS_EXPIRED' } });
+    complete[0](); complete[1]();
+    expect(await first).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+    expect(await second).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE', detail: 'ECONNREFUSED' });
+  } finally { sdk.mockRestore(); }
+  expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+});
+
+// #11007 review: ADC/IAM credential lookup errors belong to auth, not the
+// provider base URL. Simulate the actual SDK conversion after those events.
+describe.each([
+  ['google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('credential lookups during %s probes', (api, adapter, startName, errorName) => {
+  it.each(['INVALID_CA', 'ENOTFOUND', 'ETIMEDOUT'])('does not project credential %s onto the provider', async code => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const baseUrl = row.upstream.replace('{location}', 'us-central1');
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation(() => ({
+      result: async () => {
+        const request = api === 'google-vertex'
+          ? { origin: 'https://oauth2.googleapis.com' }
+          : { protocol: 'http:', getHeader: () => '169.254.169.254' };
+        channel(startName).publish({ request });
+        channel(errorName).publish({ request, error: { code } });
+        return { stopReason: 'error', errorMessage: '401 Unauthorized', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    try {
+      expect(await runProviderProbe({ agent: 'pi', baseUrl, modelId: row.id,
+        nativeModel: row, api })).toMatchObject({ ok: false, code: 'AUTH_INVALID', status: 401 });
+      expect(sdk).toHaveBeenCalledOnce();
+    } finally { sdk.mockRestore(); }
+  });
+});
+
+it.each([
+  'bedrock-runtime.eu-west-1.amazonaws.com',
+  'bedrock-runtime.us-east-1.api.aws',
+  'bedrock-runtime.cn-north-1.api.amazonwebservices.com.cn',
+])('retains diagnostics for a Bedrock runtime selected by the SDK: %s', async host => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const request = { protocol: 'https:', getHeader: () => host };
+      channel('http.client.request.start').publish({ request });
+      channel('http.client.request.error').publish({ request, error: { code: 'INVALID_CA' } });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
+});
+
+it('retains the cause of a default Bedrock HTTP/2 stream TLS failure', async () => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const created = channel('http2.client.stream.created'), failed = channel('http2.client.stream.error');
+  const previous = [created.hasSubscribers, failed.hasSubscribers];
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const stream = {};
+      created.publish({ stream,
+        headers: { ':scheme': 'https', ':authority': new URL(row.upstream).host } });
+      failed.publish({ stream,
+        error: Object.assign(new Error('stream cancelled', { cause: { code: 'INVALID_CA' } }), { code: 'ERR_HTTP2_STREAM_CANCEL' }) });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
+  expect([created.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
 });

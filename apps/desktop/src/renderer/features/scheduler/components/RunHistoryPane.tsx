@@ -1,3 +1,5 @@
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { schedulePrTriggers, isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 /**
@@ -23,14 +25,15 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import type { AgentKind, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
-import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
+import { cronToConfig, formatIntervalDuration, summarizeConfig } from '../lib/cronCodexPreset';
 import { describeDestination, humanizeAgentKind } from '../lib/formatters';
 import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
@@ -67,6 +70,12 @@ export function RunHistoryPane({
   connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
+  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称；另一台电脑时从该电脑目录读取)。
+  const pluginEngineIdentity = usePluginEngineIdentity(
+    s.agentKind === 'acp' ? s.providerId : null,
+    (s.modelAgentDeviceId || s.agentDeviceId) || undefined,
+  );
+  const pluginEngineName = s.agentKind === 'acp' ? pluginEngineIdentity.name : undefined;
   const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
@@ -94,14 +103,15 @@ export function RunHistoryPane({
   );
   const sessionReferences = useSessionReferences(runSessionIds);
   const sessionAgentMap = useMemo(() => {
-    const m = new Map<string, AgentKind>();
+    const m = new Map<string, ScheduleAgentKind>();
     for (const sess of allSessions) {
-      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi' : 'codex');
+      m.set(sess.id, sess.agentKind === 'cc' ? 'claude-code' : sess.agentKind === 'pi' ? 'pi'
+        : (sess.agentKind as string) === 'acp' ? 'acp' : 'codex');
     }
     return m;
   }, [allSessions]);
   const resolveRunAgent = useCallback(
-    (run: ScheduleRun): AgentKind => {
+    (run: ScheduleRun): ScheduleAgentKind => {
       if (!run.sessionId) return s.agentKind;
       const referenceAgent = sessionReferences.get(run.sessionId)?.agentKind;
       return (
@@ -157,6 +167,7 @@ export function RunHistoryPane({
         description: t('scheduler.confirm.deleteRun.description'),
         confirmText: t('scheduler.confirm.deleteRun.confirm'),
         cancelText: t('scheduler.confirm.deleteRun.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -217,11 +228,18 @@ export function RunHistoryPane({
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
   const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(s.cronExpr), t);
-  const cronText = s.webhookTrigger
-    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
+  const rules = schedulePrTriggers(s);
+  // GitHub PR: owner/repo#N; GitLab MR: group/project!N.
+  const prText = rules.map(rule => `${rule.url.replace(/^https:\/\/github\.com\//, '').replace('/pull/', '#')
+    .replace(/^https:\/\/[^/]+\//, '').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const eventTitle = t(s.webhookTrigger?.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title');
+  const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
+    ? s.manual ? eventTitle : `${timingText} · ${eventTitle}`
     : timingText;
-  const agentText = humanizeAgentKind(s.agentKind);
+  const agentText = s.agentKind === 'acp'
+    ? pluginEngineName ?? t('newChat.pluginEngines.genericName')
+    : humanizeAgentKind(s.agentKind);
   const dest = describeDestination(s, t);
   // title 兜底显示完整路径，悬浮即可看到 — basename 视觉简洁，hover/title 看全量
   const titleText = `${cronText} · ${agentText} · ${dest.prefix}${dest.workingDir ?? ''}`;
@@ -240,7 +258,7 @@ export function RunHistoryPane({
   return (
     <section className="flex min-w-0 flex-1 flex-col">
       {/* Pane header */}
-      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-[18px]">
+      <header className="flex shrink-0 items-start justify-between gap-3 px-6 pt-4">
         <div className="flex min-w-0 flex-col gap-1.5">
           <h2 className="truncate text-lg font-medium text-[var(--msg-assistant-text)]">
             {s.name}
@@ -259,6 +277,7 @@ export function RunHistoryPane({
                 onClick={() => void handleOpenWorkingDir()}
                 title={dest.workingDir}
                 className={cn(
+                  // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                   'rounded text-[var(--cmd-palette-item-meta)] underline-offset-2 transition-colors',
                   'hover:text-[var(--msg-assistant-text)] hover:underline',
                 )}
@@ -314,6 +333,8 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        {rules.some(rule => isGithubPrTriggerUrl(rule.url)) && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual}
+          repositories={rules.filter(rule => isGithubPrTriggerUrl(rule.url)).map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
         {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (

@@ -1,7 +1,7 @@
 ## 4.23 交互页面 MCP Apps（mcpApps.ui）
 
 需要独立页面、输入框/任务栏入口、消息展示或宿主草稿操作时，继续使用同一个 MCP Apps 资源，
-并阅读[插件界面扩展](plugin-host-ui.md)。该增量尚未发布，不能按本章历史版本下限判断支持。
+并阅读[插件界面扩展](plugin-host-ui.md)。
 
 交互页面让一次工具结果变成可操作的页面。AI 根据用户意图打开页面；之后用户填写表单、
 查询数据或点击按钮，由页面脚本调用插件工具完成，不必每次等 AI 再说一句。页面使用
@@ -389,6 +389,36 @@ React 的 `app` 在连接前传 null，已连接后传 App；连接前用户已�
 JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" />`（按文件位置调整）。
 它只提供编辑器类型，不是模块实现，也不能让旧宿主获得新能力。React 项目沿用已有的 JSX 类型。
 
+### 9.3 加入当前任务输入框
+
+`addToComposer(app, { uri, name })` 将附件加入当前任务的输入框，由用户决定何时发送。
+按钮默认隐藏（HTML 中加 `hidden`）。在 `await app.connect()` 成功后检查宿主能力。
+只有执行电脑上的本机可写卡片支持这个操作。同一卡片的同一 URI 已在输入框里时，重复添加会保留已有附件；用户移除后可重新添加。
+
+```js
+if (app.getHostCapabilities()?.experimental?.['cindy/composer-attachment']) {
+  const helper = await import('@cindy/ext-apps/composer-attachment').catch(() => null);
+  if (helper) {
+    button.addEventListener('click', async () => {
+      try { await helper.addToComposer(app, { uri: link.uri, name: link.name }); }
+      catch { button.textContent = '添加失败，重试'; }
+    });
+    button.hidden = false;
+    if (app.getHostCapabilities().experimental['cindy/composer-attachment'].drag?.version === 1 &&
+        typeof helper.bindComposerAttachmentDrag === 'function') {
+      const unbind = helper.bindComposerAttachmentDrag(app, preview, { uri: link.uri, name: link.name });
+      // 换资源或卸载时解除绑定，避免继续拖出上一项。
+      cleanup.push(unbind);
+    }
+  }
+}
+```
+
+`preview` 是资源对应的元素，`cleanup` 是页面卸载时逐一调用的清理函数列表。拖到同一窗口、同一任务的可写输入框后，资源会加入附件栏。按钮同时保留，便于键盘操作或在拖拽不可用时添加。目前 macOS 与 Windows 在 Electron 42 上支持拖拽，页面按宿主声明的 `drag?.version === 1` 启用。不要自己往拖动数据里写文件路径、URI 或文本回退。
+
+`link` 取自本卡片的输入、结果或本页已批准的工具结果。传资源的 URI 和文件名即可，宿主会从插件服务读取并检查内容。
+支持图片、PDF 和纯文本，单件最多 64 MiB。文件内容、本地路径及 `file:`、HTTP、`ui://` 地址均不能作为附件 URI。
+
 ### 10. 硬性规则与验收
 
 | 必须做到 | 原因和写法 |
@@ -432,3 +462,12 @@ JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" 
 | 文件交接、暂存、预览、确认 | [文件导入说明](examples/interactive-pages/README.md#文件导入) |
 | 文件、下载、进度及其他 SDK 方法 | [files 能力全集](examples/interactive-pages/files/) |
 | 字段限制、方法能力与常见错误 | [按需参考](examples/interactive-pages/REFERENCE.md) |
+
+### 宿主标题和全屏按钮
+
+标题与来源由宿主负责；作者不能通过页面名改变安装来源标签。
+资源的 `hostFullscreenButton?: boolean` 缺省 true，设为 false 只隐藏宿主全屏按钮，
+不限制页面自己的 `requestDisplayMode`。自定义 MCP 对应资源 `_meta["cindy/host-fullscreen-button"]`。
+旧宿主忽略该字段；依赖隐藏行为时先核验实际发布版本再设置 `minCindyVersion`。
+页签/全屏按 `{width,height}` 给固定可用区域，页面须保留内部滚动；
+对话/弹层/折叠区按 `{width,maxHeight}` 自动内容高度。布局与入口细则见 [插件界面扩展](plugin-host-ui.md)。

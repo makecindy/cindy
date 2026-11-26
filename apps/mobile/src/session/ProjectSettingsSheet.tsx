@@ -1,6 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  isExplicitProjectRepositoryAddress,
+  parseProjectRepository,
+  projectCreationFolderName,
+} from "@cindy/maker-shared/project-alias-sync";
+import { createMobileMakerTransport } from "@/device-link/mobileMakerTransport";
+import { useOrcaWorkerDirectoryPicker } from "./useOrcaWorkerDirectoryPicker";
+import { OrcaWorkerDirectoryPicker } from "./OrcaWorkerDirectoryPicker";
+import { ProjectDirectoriesEditor } from "./ProjectDirectoriesEditor";
+import {
+  resolveProjectDirectories,
+  type ProjectDirectory,
+} from "@cindy/maker-shared/project-alias-sync";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Pressable, StyleSheet, View } from "react-native";
-import { ChevronDown, Pencil, Copy, Check, Monitor } from "lucide-react-native";
+import { ChevronDown, Pencil, Check, Monitor } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import * as Clipboard from "expo-clipboard";
 import {
@@ -20,6 +33,7 @@ import {
   defaultProjectLetters,
   defaultProjectColor,
   resolveProjectIcon,
+  projectAliasComparisonKey,
   validProjectIcon,
 } from "@cindy/maker-shared/project-alias-sync";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
@@ -32,7 +46,15 @@ import {
   MainWindowActionButton,
   MainWindowOptionButton,
 } from "@/components/MobilePrimitives";
-import { useTheme, radius, spacing, typeScale, lineHeight, fontWeight, iconSize } from "@/theme";
+import {
+  useTheme,
+  radius,
+  spacing,
+  typeScale,
+  lineHeight,
+  fontWeight,
+  iconSize,
+} from "@/theme";
 import { FormSheet } from "./FormSheet";
 import {
   useRemoteProjectAliases,
@@ -47,12 +69,16 @@ import {
 export function ProjectSettingsSheet({
   deviceId,
   deviceName,
-  projectKey,
+  projectKey: existingKey,
   title,
-  directory,
+  directory: initialDirectory,
+  create = false,
+  onCreated,
   visible,
   onClose,
 }: {
+  create?: boolean;
+  onCreated?(directory: string): void;
   deviceId: string;
   deviceName?: string | null;
   projectKey: string;
@@ -82,15 +108,61 @@ export function ProjectSettingsSheet({
     }
   };
   const { invoke } = useDeviceLink();
+  const [directory, setDirectory] = useState(initialDirectory);
+  const projectKey = create ? `local:${directory}` : existingKey;
   const snapshot = useRemoteProjectAliases().get(deviceId);
   const automatic = useAutomaticProjectIcon(
     projectKey,
     deviceId,
-    (snapshot?.settingsVersion ?? 0) >= 4,
+    !create && !!directory && (snapshot?.settingsVersion ?? 0) >= 4,
   );
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
-  const [editingName, setEditingName] = useState(false);
+  const nameEdited = useRef(!!title.trim());
+  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [source, setSource] = useState<"local" | "repository">("local");
+  const repositoryExpanded = source === "repository";
+  const chooseSource = (next: "local" | "repository") => {
+    if (next === source) return;
+    setSource(next);
+    setRepositoryUrl("");
+    setDirectory("");
+    setDirectories([]);
+    setError(null);
+  };
+  const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
+  const automaticDirectory = repositoryCreation && !directory;
+  const directoryPreview = automaticDirectory
+    ? `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`
+    : directory;
+  const changeRepository = (value: string) => {
+    const previous = parseProjectRepository(repositoryUrl);
+    const next = parseProjectRepository(value);
+    setRepositoryUrl(value);
+    setError(null);
+    if (next && (!name.trim() || name === previous?.name))
+      setName(next.name.slice(0, 80));
+  };
+  const changeName = (value: string) => {
+    nameEdited.current = !!value.trim();
+    // Names such as Design/2027 must not silently become GitHub repositories.
+    const address = isExplicitProjectRepositoryAddress(value);
+    const repository =
+      repositoryCreation && address ? parseProjectRepository(value) : null;
+    if (repository) {
+      if (source !== "repository") chooseSource("repository");
+      setError(null);
+      setRepositoryUrl(value.trim());
+      setName(repository.name.slice(0, 80));
+    } else setName(value.slice(0, 80));
+  };
+
+  const [directories, setDirectories] = useState<readonly ProjectDirectory[]>(
+    [],
+  );
+  const [initialDirectories, setInitialDirectories] = useState<
+    readonly ProjectDirectory[]
+  >([]);
   const [icon, setIcon] = useState<string | null>(null);
   const [initial, setInitial] = useState<{
     name: string;
@@ -99,10 +171,60 @@ export function ProjectSettingsSheet({
   useEffect(() => {
     if (snapshot && !initial) {
       const value = resolveProjectIcon(snapshot, projectKey);
-      setInitial({ name: title, icon: value });
+      const comparison = projectAliasComparisonKey(
+        projectKey,
+        snapshot.platform,
+      );
+      const savedName =
+        snapshot.aliases.find(
+          (row) =>
+            projectAliasComparisonKey(row.projectKey, snapshot.platform) ===
+            comparison,
+        )?.alias ?? title;
+      setInitial({ name: savedName, icon: value });
+      setName(savedName);
       setIcon(value);
+      const roots = resolveProjectDirectories(snapshot, projectKey) ?? [];
+      setDirectories(roots);
+      setInitialDirectories(roots);
     }
   }, [snapshot, initial, title, projectKey]);
+  const initializedCreationKey = useRef(projectKey);
+  useEffect(() => {
+    if (
+      !create ||
+      !snapshot ||
+      !initial ||
+      initializedCreationKey.current === projectKey
+    )
+      return;
+    initializedCreationKey.current = projectKey;
+    const comparison = projectAliasComparisonKey(projectKey, snapshot.platform);
+    const savedName =
+      snapshot.aliases.find(
+        (row) =>
+          projectAliasComparisonKey(row.projectKey, snapshot.platform) ===
+          comparison,
+      )?.alias ?? "";
+    const savedIcon = resolveProjectIcon(snapshot, projectKey);
+    const savedDirectories =
+      resolveProjectDirectories(snapshot, projectKey) ?? [];
+    if (directory) {
+      setName((current) =>
+        !current.trim() || !nameEdited.current
+          ? savedName || projectDirectoryName(directory).slice(0, 80)
+          : current,
+      );
+    }
+    setIcon((current) => (current === initial.icon ? savedIcon : current));
+    setDirectories((current) =>
+      JSON.stringify(current) === JSON.stringify(initialDirectories)
+        ? savedDirectories
+        : current,
+    );
+    setInitial({ name: savedName, icon: savedIcon });
+    setInitialDirectories(savedDirectories);
+  }, [create, projectKey, directory, snapshot, initial, initialDirectories]);
   const [stage, setStage] = useState<"profile" | "icon">("profile");
   const [mode, setMode] = useState<"symbols" | "emoji" | "letters" | "image">(
     "symbols",
@@ -123,6 +245,14 @@ export function ProjectSettingsSheet({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [owner] = useState(getMobileAuthOwner);
+  useEffect(() => {
+    if (!visible) return;
+    void refreshRemoteProjectAliases(
+      deviceId,
+      () => invoke(deviceId, PROJECT_ALIASES_GET_CHANNEL, []),
+      () => isMobileAuthOwnerCurrent(owner),
+    );
+  }, [deviceId, invoke, owner, visible]);
   const lock = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -131,9 +261,14 @@ export function ProjectSettingsSheet({
       mounted.current = false;
     };
   }, []);
-  const available = !!initial && (snapshot?.settingsVersion ?? 0) >= 2;
+  const available =
+    !!initial && (snapshot?.settingsVersion ?? 0) >= (create ? 6 : 2);
   const dirty =
-    !!initial && (name.trim() !== initial.name || icon !== initial.icon);
+    !!initial &&
+    ((create && (!!directory.trim() || !!repositoryUrl.trim())) ||
+      name.trim() !== initial.name ||
+      icon !== initial.icon ||
+      JSON.stringify(directories) !== JSON.stringify(initialDirectories));
   const disabled = busy || imageBusy || !available;
   const close = () => {
     if (busy || imageBusy) return;
@@ -157,22 +292,54 @@ export function ProjectSettingsSheet({
       lock.current ||
       !available ||
       !dirty ||
+      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isMobileAuthOwnerCurrent(owner)
     )
       return;
     Keyboard.dismiss();
+    if (
+      repositoryCreation &&
+      repositoryExpanded &&
+      !parseProjectRepository(repositoryUrl)
+    ) {
+      setError(label("invalidRepository"));
+      return;
+    }
     lock.current = true;
     setBusy(true);
     setError(null);
-    const value: { name?: string; icon?: string | null } = {};
+    const value: {
+      name?: string;
+      icon?: string | null;
+      directories?: readonly ProjectDirectory[];
+    } = {};
     if (name.trim() !== initial!.name)
       value.name = name.trim() === defaultName ? "" : name.trim();
+    if (create && !directory && name.trim()) value.name = name.trim();
     if (icon !== initial!.icon) value.icon = icon;
+    if (
+      (create &&
+        resolveProjectDirectories(snapshot, projectKey) === undefined) ||
+      JSON.stringify(directories) !== JSON.stringify(initialDirectories)
+    )
+      value.directories = directories;
     try {
-      await invoke(deviceId, PROJECT_SETTINGS_SET_CHANNEL, [
-        { projectKey, field: "profile", value, ...snapshot.ownerStamp },
-      ]);
+      const result = (await invoke(deviceId, PROJECT_SETTINGS_SET_CHANNEL, [
+        {
+          create,
+          projectKey,
+          ...(create && repositoryUrl.trim()
+            ? { repositoryUrl: repositoryUrl.trim() }
+            : {}),
+          field: "profile",
+          value,
+          ...snapshot.ownerStamp,
+        },
+      ])) as { createdProjectKey?: string };
+      const createdDirectory = result?.createdProjectKey?.startsWith("local:")
+        ? result.createdProjectKey.slice(6)
+        : directory;
       if (!isMobileAuthOwnerCurrent(owner)) return;
       await refreshRemoteProjectAliases(
         deviceId,
@@ -180,9 +347,10 @@ export function ProjectSettingsSheet({
         () => isMobileAuthOwnerCurrent(owner),
         true,
       );
+      if (create) onCreated?.(createdDirectory);
       onClose();
     } catch {
-      if (mounted.current) setError(label("failed"));
+      if (mounted.current) setError(label(create ? "createFailed" : "failed"));
     } finally {
       lock.current = false;
       if (mounted.current) setBusy(false);
@@ -252,12 +420,45 @@ export function ProjectSettingsSheet({
       if (mounted.current) setImageBusy(false);
     }
   };
+  const [formVisible, setFormVisible] = useState(true);
+  const [browseTarget, setBrowseTarget] = useState<"main" | "additional">(
+    "additional",
+  );
+  const maker = useMemo(
+    () => createMobileMakerTransport({ deviceId, invoke }),
+    [deviceId, invoke],
+  );
+  const picker = useOrcaWorkerDirectoryPicker({
+    deviceId,
+    maker,
+    scope: existingKey,
+    formEpoch: 0,
+    canonicalDirectory: true,
+    workingDir: directory,
+    setSheetOpen: setFormVisible,
+    onChoose: (path) => {
+      if (!path) return;
+      if (browseTarget === "main") setDirectory(path);
+      else
+        setDirectories((previous) =>
+          path === directory ||
+          previous.length >= 10 ||
+          previous.some((item) => item.path === path)
+            ? previous
+            : [...previous, { path, access: "write" }],
+        );
+    },
+  });
+  const browse = (target: "main" | "additional") => {
+    setBrowseTarget(target);
+    picker.openDirectoryPicker();
+  };
   const draw = (value: string | null, size: number) => (
     <ProjectIcon
       value={value}
       projectKey={projectKey}
       projectName={name.trim() || defaultName}
-      automaticEnabled={(snapshot?.settingsVersion ?? 0) >= 4}
+      automaticEnabled={!!directory && (snapshot?.settingsVersion ?? 0) >= 4}
       deviceId={deviceId}
       size={size}
     />
@@ -281,529 +482,599 @@ export function ProjectSettingsSheet({
       .includes(query.toLowerCase().trim()),
   );
   return (
-    <FormSheet
-      visible={visible}
-      title={label(stage === "profile" ? "title" : "chooseIcon")}
-      onClose={close}
-      preventDismiss={busy || imageBusy || dirty || stage === "icon"}
-      leadingAction={{
-        label: label("cancel"),
-        onPress: close,
-        disabled: busy || imageBusy,
-      }}
-      trailingAction={{
-        label: label(stage === "icon" ? "applyIcon" : "save"),
-        busy: busy || imageBusy,
-        disabled: disabled || (stage === "profile" ? !dirty : pickerInvalid),
-        onPress: () => {
-          if (stage === "icon") {
-            Keyboard.dismiss();
-            setIcon(pickerIcon);
-            setStage("profile");
-            setError(null);
-          } else void save();
-        },
-      }}
-    >
-      <View style={styles.content}>
-        {error || !available ? (
-          <Text accessibilityRole="alert" style={[styles.note, noteColor]}>
-            {error ?? label("unavailable")}
-          </Text>
-        ) : null}
-        {stage === "profile" ? (
-          <>
-            <View style={styles.hero}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={label("changeIcon")}
-                disabled={disabled}
-                onPress={() => {
-                  Keyboard.dismiss();
-                  setEditingName(false);
-                  setPickerIcon(icon);
-                  setPickerColor(
-                    (snapshot?.settingsVersion ?? 0) >= 3
-                      ? (parseProjectSymbol(icon)?.color ??
-                          parseProjectLetters(icon)?.color ??
-                          defaultProjectColor(name.trim() || defaultName))
-                      : "default",
-                  );
-                  setMode(
-                    isProjectImage(icon) || isProjectImageDraft(icon)
-                      ? "image"
-                      : icon?.startsWith("text:")
-                        ? "letters"
-                        : icon && !icon.includes(":")
-                          ? "emoji"
-                          : "symbols",
-                  );
-                  setLetters(parseProjectLetters(icon)?.text ?? "");
-                  setCustomEmoji("");
-                  setColorOpen(false);
-                  setQuery("");
-                  setError(null);
-                  setStage("icon");
-                }}
-              >
-                <View style={tileStyle}>
-                  {draw(
-                    icon,
-                    isProjectImage(icon) || isProjectImageDraft(icon) ? 72 : 40,
-                  )}
-                  <View
-                    style={[
-                      styles.editBadge,
-                      { backgroundColor: colors.surfaceChip },
-                    ]}
-                  >
-                    <Pencil size={iconSize.sm} color={colors.textSecondary} />
+    <>
+      <FormSheet
+        visible={visible && formVisible}
+        title={label(
+          stage === "profile"
+            ? create
+              ? "createTitle"
+              : "title"
+            : "chooseIcon",
+        )}
+        onClose={close}
+        preventDismiss={busy || imageBusy || dirty || stage === "icon"}
+        leadingAction={{
+          label: label("cancel"),
+          onPress: close,
+          disabled: busy || imageBusy,
+        }}
+        trailingAction={{
+          label: label(
+            stage === "icon" ? "applyIcon" : create ? "createAction" : "save",
+          ),
+          busy: busy || imageBusy,
+          disabled:
+            disabled ||
+            (stage === "profile"
+              ? !dirty ||
+                (create &&
+                  (snapshot?.settingsVersion ?? 0) < 7 &&
+                  !directory.trim())
+              : pickerInvalid),
+          onPress: () => {
+            if (stage === "icon") {
+              Keyboard.dismiss();
+              setIcon(pickerIcon);
+              setStage("profile");
+              setError(null);
+            } else void save();
+          },
+        }}
+      >
+        <View style={styles.content}>
+          {error || !available ? (
+            <Text accessibilityRole="alert" style={[styles.note, noteColor]}>
+              {error ?? label("unavailable")}
+            </Text>
+          ) : null}
+          {stage === "profile" ? (
+            <>
+              {repositoryCreation && (
+                <View style={{ gap: spacing.sm }}>
+                  <View style={styles.tabs}>
+                    {(["local", "repository"] as const).map((item) => (
+                      <MainWindowOptionButton
+                        key={item}
+                        variant="segmented"
+                        label={label(`sourceShort_${item}`)}
+                        accessibilityLabel={label(`source_${item}`)}
+                        selected={source === item}
+                        disabled={disabled}
+                        style={{ flex: 1 }}
+                        onPress={() => chooseSource(item)}
+                      />
+                    ))}
                   </View>
+                  <Text style={[styles.note, noteColor]}>
+                    {label(`sourceHint_${source}`)}
+                  </Text>
                 </View>
-              </Pressable>
-              <View style={styles.grow}>
-                {editingName ? (
+              )}
+
+              <View style={styles.hero}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={label("changeIcon")}
+                  disabled={disabled}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setPickerIcon(icon);
+                    setPickerColor(
+                      (snapshot?.settingsVersion ?? 0) >= 3
+                        ? (parseProjectSymbol(icon)?.color ??
+                            parseProjectLetters(icon)?.color ??
+                            defaultProjectColor(name.trim() || defaultName))
+                        : "default",
+                    );
+                    setMode(
+                      isProjectImage(icon) || isProjectImageDraft(icon)
+                        ? "image"
+                        : icon?.startsWith("text:")
+                          ? "letters"
+                          : icon && !icon.includes(":")
+                            ? "emoji"
+                            : "symbols",
+                    );
+                    setLetters(parseProjectLetters(icon)?.text ?? "");
+                    setCustomEmoji("");
+                    setColorOpen(false);
+                    setQuery("");
+                    setError(null);
+                    setStage("icon");
+                  }}
+                >
+                  <View style={tileStyle}>
+                    {draw(
+                      icon,
+                      isProjectImage(icon) || isProjectImageDraft(icon)
+                        ? 48
+                        : 28,
+                    )}
+                    <View
+                      style={[
+                        styles.editBadge,
+                        { backgroundColor: colors.surfaceChip },
+                      ]}
+                    >
+                      <Pencil size={iconSize.sm} color={colors.textSecondary} />
+                    </View>
+                  </View>
+                </Pressable>
+                <View style={styles.grow}>
+                  <Text style={[styles.path, textColor]}>
+                    {label("createNamePlaceholder")}
+                  </Text>
                   <TextInput
                     accessibilityLabel={label("name")}
                     value={name}
-                    onChangeText={setName}
-                    maxLength={80}
+                    onChangeText={changeName}
+                    maxLength={repositoryCreation ? 4096 : 80}
                     editable={!disabled}
-                    placeholder={defaultName}
+                    placeholder={
+                      repositoryCreation
+                        ? label("createNamePlaceholder")
+                        : defaultName || label("name")
+                    }
                     placeholderTextColor={colors.textPlaceholder}
                     autoFocus
                     selectTextOnFocus
                     returnKeyType="done"
-                    onBlur={() => setEditingName(false)}
                     onSubmitEditing={() => {
                       Keyboard.dismiss();
-                      setEditingName(false);
                     }}
                     style={[
                       styles.nameInput,
-                      styles.title,
+                      styles.path,
                       textColor,
                       { borderColor: colors.border },
                     ]}
                   />
-                ) : (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={label("name")}
-                    disabled={disabled}
-                    onPress={() => setEditingName(true)}
-                    style={styles.nameButton}
-                  >
-                    <Text
-                      numberOfLines={2}
-                      style={[styles.title, textColor, { flexShrink: 1 }]}
-                    >
-                      {name.trim() || defaultName}
-                    </Text>
-                    <Pencil size={iconSize.sm} color={colors.textSecondary} />
-                  </Pressable>
-                )}
-                {name !== defaultName && (
-                  <Pressable
-                    disabled={disabled}
-                    onPress={() => setName(defaultName)}
-                    accessibilityRole="button"
-                    style={[styles.reset, { alignSelf: "flex-start" }]}
-                  >
-                    <Text style={[styles.note, noteColor]}>
-                      {label("reset")}
-                    </Text>
-                  </Pressable>
-                )}
+                </View>
               </View>
-            </View>
-            <Text style={[styles.note, noteColor]}>{label("nameHint")}</Text>
-            {(snapshot?.settingsVersion ?? 0) >= 4 &&
-              (icon === null || automatic.result?.candidate) && (
-                <View style={{ gap: spacing.sm }}>
-                  {icon === null && (
-                    <Text style={[styles.note, noteColor]}>
-                      {automatic.loading
-                        ? label("autoLoading")
-                        : automatic.result?.image && !automatic.result.candidate
-                          ? `${label("autoSource")}: ${automatic.result.source}`
-                          : label("autoNone")}
-                    </Text>
-                  )}
-                  {automatic.result?.candidate && automatic.result.image && (
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={disabled}
-                      onPress={() => setIcon(automatic.result!.image)}
-                      style={styles.colorRow}
-                    >
-                      {draw(automatic.result.image, 32)}
-                      <Text style={[styles.path, textColor]}>
-                        {label("githubAvatar")}
+              {!create && (
+                <Text style={[styles.note, noteColor]}>
+                  {label("nameHint")}
+                </Text>
+              )}
+              {!!directory &&
+                (snapshot?.settingsVersion ?? 0) >= 4 &&
+                (icon === null || automatic.result?.candidate) && (
+                  <View style={{ gap: spacing.sm }}>
+                    {icon === null && (
+                      <Text style={[styles.note, noteColor]}>
+                        {automatic.loading
+                          ? label("autoLoading")
+                          : automatic.result?.image &&
+                              !automatic.result.candidate
+                            ? `${label("autoSource")}: ${automatic.result.source}`
+                            : label("autoNone")}
                       </Text>
-                    </Pressable>
+                    )}
+                    {automatic.result?.candidate && automatic.result.image && (
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={disabled}
+                        onPress={() => setIcon(automatic.result!.image)}
+                        style={styles.colorRow}
+                      >
+                        {draw(automatic.result.image, 32)}
+                        <Text style={[styles.path, textColor]}>
+                          {label("githubAvatar")}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                )}
+              {repositoryCreation && repositoryExpanded && (
+                <View style={{ gap: spacing.sm }}>
+                  <Text style={[styles.note, noteColor]}>
+                    {label("repository")}
+                  </Text>
+                  <TextInput
+                    autoFocus
+                    value={repositoryUrl}
+                    onChangeText={changeRepository}
+                    editable={!disabled}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    accessibilityLabel={label("repository")}
+                    placeholder={label("repositoryHint")}
+                    placeholderTextColor={colors.textPlaceholder}
+                    style={inputStyle}
+                  />
+                  {busy && repositoryUrl && (
+                    <Text style={[styles.note, noteColor]}>
+                      {label("cloning")}
+                    </Text>
                   )}
                 </View>
               )}
-            <View style={styles.location}>
-              <View style={styles.computer}>
-                <Monitor size={iconSize.md} color={colors.textSecondary} />
-                <Text style={[styles.note, noteColor]}>
-                  {deviceName || label("thisComputer")}
-                </Text>
-              </View>
-              <View style={styles.directoryRow}>
-                <View style={styles.grow}>
+              <View style={styles.location}>
+                <View style={styles.computer}>
+                  <Monitor size={iconSize.md} color={colors.textSecondary} />
                   <Text style={[styles.note, noteColor]}>
-                    {label("directory")}
-                  </Text>
-                  <Text selectable style={[styles.path, textColor]}>
-                    {directory}
+                    {deviceName || label("thisComputer")}
                   </Text>
                 </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={label(copied ? "copied" : "copy")}
-                  style={styles.copy}
-                  onPress={() =>
+                <ProjectDirectoriesEditor
+                  mainDirectory={directoryPreview}
+                  automatic={automaticDirectory}
+                  onChooseMainDirectory={
+                    repositoryCreation && source === "local"
+                      ? () => browse("main")
+                      : undefined
+                  }
+                  showHint={!create}
+                  copied={copied}
+                  onMainDirectoryChange={
+                    create && !automaticDirectory
+                      ? (path) => {
+                          setDirectory(path);
+                        }
+                      : undefined
+                  }
+                  onCopy={() =>
                     void Clipboard.setStringAsync(directory)
                       .then(() => setCopied(true))
                       .catch(() => setError(label("failed")))
                   }
-                >
-                  {copied ? (
-                    <Check size={iconSize.lg} color={colors.textSecondary} />
-                  ) : (
-                    <Copy size={iconSize.lg} color={colors.textSecondary} />
-                  )}
-                </Pressable>
-              </View>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.pickerHero}>
-              <View style={[tileStyle, styles.pickerPreview]}>
-                {draw(
-                  pickerIcon,
-                  isProjectImage(pickerIcon) || isProjectImageDraft(pickerIcon)
-                    ? 48
-                    : 28,
-                )}
-              </View>
-              <Text
-                numberOfLines={1}
-                style={[styles.path, styles.grow, textColor]}
-              >
-                {name.trim() || defaultName}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                disabled={pickerIcon === null || disabled}
-                onPress={() => {
-                  setLetters("");
-                  setCustomEmoji("");
-                  setPickerIcon(null);
-                  setPickerColor("default");
-                }}
-                style={styles.reset}
-              >
-                <Text style={[styles.note, noteColor]}>{label("reset")}</Text>
-              </Pressable>
-            </View>
-            <View style={styles.tabs}>
-              {(["symbols", "emoji", "letters", "image"] as const).map(
-                (item) => (
-                  <MainWindowOptionButton
-                    key={item}
-                    label={label(item)}
-                    variant="segmented"
-                    density="compact"
-                    style={styles.grow}
-                    selected={mode === item}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setMode(item);
-                      if (item === "letters") {
-                        const next =
-                          letters ||
-                          defaultProjectLetters(name.trim() || defaultName);
-                        setLetters(next);
-                        if (validProjectIcon(`text:${next}`))
-                          setPickerIcon(letterValue(next));
-                      }
-                      setColorOpen(false);
-                      setError(null);
-                    }}
-                  />
-                ),
-              )}
-            </View>
-            {((mode === "symbols" && (snapshot?.settingsVersion ?? 0) >= 3) ||
-              (mode === "letters" &&
-                (snapshot?.settingsVersion ?? 0) >= 5)) && (
-              <View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t("taskTags.color")}
-                  accessibilityValue={{ text: colorLabel(pickerColor) }}
-                  accessibilityState={{ expanded: colorOpen }}
+                  allowAdd={(snapshot?.settingsVersion ?? 0) >= 6}
+                  value={directories}
+                  onChange={setDirectories}
                   disabled={disabled}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setColorOpen(!colorOpen);
-                  }}
-                  style={styles.colorRow}
-                >
-                  <Text style={[styles.note, noteColor]}>
-                    {t("taskTags.color")}
-                  </Text>
-                  <View style={[styles.colorValue, styles.grow]}>
-                    <View
-                      style={[
-                        styles.colorSwatch,
-                        {
-                          borderWidth: 1,
-                          borderColor: colors.border,
-                          backgroundColor:
-                            pickerColor === "default"
-                              ? colors.textPrimary
-                              : projectIconColor(colors, pickerColor),
-                        },
-                      ]}
-                    />
-                    <Text style={[styles.path, textColor, { flexShrink: 1 }]}>
-                      {colorLabel(pickerColor)}
-                    </Text>
-                    <ChevronDown
-                      size={iconSize.md}
-                      color={colors.textSecondary}
-                      style={{
-                        transform: [{ rotate: colorOpen ? "180deg" : "0deg" }],
-                      }}
-                    />
-                  </View>
-                </Pressable>
-                {colorOpen && (
-                  <View style={{ gap: spacing.sm }}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={colorLabel("default")}
-                      accessibilityState={{
-                        selected: pickerColor === "default",
-                      }}
-                      disabled={disabled}
-                      onPress={() => {
-                        Keyboard.dismiss();
-                        chooseColor("default");
-                      }}
-                      style={{
-                        minHeight: 44,
-                        alignSelf: "flex-start",
-                        maxWidth: "100%",
-                        paddingHorizontal: spacing.sm,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: spacing.sm,
-                        borderRadius: radius.pill,
-                      }}
-                    >
-                      <View
-                        style={[
-                          styles.colorRing,
-                          {
-                            borderColor:
-                              pickerColor === "default"
-                                ? colors.textPrimary
-                                : "transparent",
-                          },
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.colorSwatch,
-                            { backgroundColor: colors.textPrimary },
-                          ]}
-                        />
-                      </View>
-                      <Text style={[styles.path, textColor, { flexShrink: 1 }]}>
-                        {colorLabel("default")}
-                      </Text>
-                      {pickerColor === "default" && (
-                        <Check size={iconSize.sm} color={colors.textPrimary} />
-                      )}
-                    </Pressable>
-                    <View
-                      style={styles.grid}
-                      accessibilityLabel={t("taskTags.color")}
-                    >
-                      {PROJECT_ICON_COLORS.filter(
-                        (color) => color !== "default",
-                      ).map((color) => (
-                        <View key={color} style={styles.colorCell}>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={colorLabel(color)}
-                            accessibilityState={{
-                              selected: pickerColor === color,
-                            }}
-                            disabled={disabled}
-                            onPress={() => {
-                              Keyboard.dismiss();
-                              chooseColor(color);
-                            }}
-                            style={styles.colorTarget}
-                          >
-                            <View
-                              style={[
-                                styles.colorRing,
-                                {
-                                  borderColor:
-                                    pickerColor === color
-                                      ? colors.textPrimary
-                                      : "transparent",
-                                },
-                              ]}
-                            >
-                              {
-                                <View
-                                  style={[
-                                    styles.colorSwatch,
-                                    {
-                                      borderWidth: 1,
-                                      borderColor: colors.border,
-                                      backgroundColor: projectIconColor(
-                                        colors,
-                                        color,
-                                      ),
-                                    },
-                                  ]}
-                                />
-                              }
-                            </View>
-                          </Pressable>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
+                  onBrowse={
+                    projectKey.startsWith("remote:")
+                      ? undefined
+                      : () => browse(directoryPreview ? "additional" : "main")
+                  }
+                />
               </View>
-            )}
-            {mode === "symbols" ? (
-              <TextInput
-                accessibilityLabel={label("search")}
-                placeholder={label("search")}
-                placeholderTextColor={colors.textPlaceholder}
-                value={query}
-                onChangeText={setQuery}
-                style={inputStyle}
-              />
-            ) : null}
-            {mode === "emoji" ? (
-              <TextInput
-                accessibilityLabel={label("customEmoji")}
-                placeholder={label("customEmoji")}
-                placeholderTextColor={colors.textPlaceholder}
-                value={customEmoji}
-                maxLength={32}
-                onChangeText={(value) => {
-                  setCustomEmoji(value);
-                  if (validProjectIcon(value) && !value.includes(":"))
-                    setPickerIcon(value);
-                }}
-                style={inputStyle}
-              />
-            ) : null}
-            {mode === "image" && (
-              <View style={styles.imagePage}>
-                <View style={[tileStyle, styles.imagePreview]}>
+            </>
+          ) : (
+            <>
+              <View style={styles.pickerHero}>
+                <View style={[tileStyle, styles.pickerPreview]}>
                   {draw(
                     pickerIcon,
                     isProjectImage(pickerIcon) ||
                       isProjectImageDraft(pickerIcon)
-                      ? 112
-                      : 48,
+                      ? 48
+                      : 28,
                   )}
                 </View>
-                <MainWindowActionButton
-                  action={{
-                    label: label("upload"),
-                    onPress: () => void upload(),
-                    disabled,
-                    tone: "secondary",
-                  }}
-                />
-                <Text style={[styles.note, noteColor, { textAlign: "center" }]}>
-                  {label("imageHint")}
+                <Text
+                  numberOfLines={1}
+                  style={[styles.path, styles.grow, textColor]}
+                >
+                  {name.trim() || defaultName}
                 </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={pickerIcon === null || disabled}
+                  onPress={() => {
+                    setLetters("");
+                    setCustomEmoji("");
+                    setPickerIcon(null);
+                    setPickerColor("default");
+                  }}
+                  style={styles.reset}
+                >
+                  <Text style={[styles.note, noteColor]}>{label("reset")}</Text>
+                </Pressable>
               </View>
-            )}
-            {mode === "letters" ? (
-              <>
+              <View style={styles.tabs}>
+                {(["symbols", "emoji", "letters", "image"] as const).map(
+                  (item) => (
+                    <MainWindowOptionButton
+                      key={item}
+                      label={label(item)}
+                      variant="segmented"
+                      density="compact"
+                      style={styles.grow}
+                      selected={mode === item}
+                      onPress={() => {
+                        Keyboard.dismiss();
+                        setMode(item);
+                        if (item === "letters") {
+                          const next =
+                            letters ||
+                            defaultProjectLetters(name.trim() || defaultName);
+                          setLetters(next);
+                          if (validProjectIcon(`text:${next}`))
+                            setPickerIcon(letterValue(next));
+                        }
+                        setColorOpen(false);
+                        setError(null);
+                      }}
+                    />
+                  ),
+                )}
+              </View>
+              {((mode === "symbols" && (snapshot?.settingsVersion ?? 0) >= 3) ||
+                (mode === "letters" &&
+                  (snapshot?.settingsVersion ?? 0) >= 5)) && (
+                <View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("taskTags.color")}
+                    accessibilityValue={{ text: colorLabel(pickerColor) }}
+                    accessibilityState={{ expanded: colorOpen }}
+                    disabled={disabled}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setColorOpen(!colorOpen);
+                    }}
+                    style={styles.colorRow}
+                  >
+                    <Text style={[styles.note, noteColor]}>
+                      {t("taskTags.color")}
+                    </Text>
+                    <View style={[styles.colorValue, styles.grow]}>
+                      <View
+                        style={[
+                          styles.colorSwatch,
+                          {
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            backgroundColor:
+                              pickerColor === "default"
+                                ? colors.textPrimary
+                                : projectIconColor(colors, pickerColor),
+                          },
+                        ]}
+                      />
+                      <Text style={[styles.path, textColor, { flexShrink: 1 }]}>
+                        {colorLabel(pickerColor)}
+                      </Text>
+                      <ChevronDown
+                        size={iconSize.md}
+                        color={colors.textSecondary}
+                        style={{
+                          transform: [
+                            { rotate: colorOpen ? "180deg" : "0deg" },
+                          ],
+                        }}
+                      />
+                    </View>
+                  </Pressable>
+                  {colorOpen && (
+                    <View style={{ gap: spacing.sm }}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={colorLabel("default")}
+                        accessibilityState={{
+                          selected: pickerColor === "default",
+                        }}
+                        disabled={disabled}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          chooseColor("default");
+                        }}
+                        style={{
+                          minHeight: 44,
+                          alignSelf: "flex-start",
+                          maxWidth: "100%",
+                          paddingHorizontal: spacing.sm,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: spacing.sm,
+                          borderRadius: radius.pill,
+                        }}
+                      >
+                        <View
+                          style={[
+                            styles.colorRing,
+                            {
+                              borderColor:
+                                pickerColor === "default"
+                                  ? colors.textPrimary
+                                  : "transparent",
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.colorSwatch,
+                              { backgroundColor: colors.textPrimary },
+                            ]}
+                          />
+                        </View>
+                        <Text
+                          style={[styles.path, textColor, { flexShrink: 1 }]}
+                        >
+                          {colorLabel("default")}
+                        </Text>
+                        {pickerColor === "default" && (
+                          <Check
+                            size={iconSize.sm}
+                            color={colors.textPrimary}
+                          />
+                        )}
+                      </Pressable>
+                      <View
+                        style={styles.grid}
+                        accessibilityLabel={t("taskTags.color")}
+                      >
+                        {PROJECT_ICON_COLORS.filter(
+                          (color) => color !== "default",
+                        ).map((color) => (
+                          <View key={color} style={styles.colorCell}>
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={colorLabel(color)}
+                              accessibilityState={{
+                                selected: pickerColor === color,
+                              }}
+                              disabled={disabled}
+                              onPress={() => {
+                                Keyboard.dismiss();
+                                chooseColor(color);
+                              }}
+                              style={styles.colorTarget}
+                            >
+                              <View
+                                style={[
+                                  styles.colorRing,
+                                  {
+                                    borderColor:
+                                      pickerColor === color
+                                        ? colors.textPrimary
+                                        : "transparent",
+                                  },
+                                ]}
+                              >
+                                {
+                                  <View
+                                    style={[
+                                      styles.colorSwatch,
+                                      {
+                                        borderWidth: 1,
+                                        borderColor: colors.border,
+                                        backgroundColor: projectIconColor(
+                                          colors,
+                                          color,
+                                        ),
+                                      },
+                                    ]}
+                                  />
+                                }
+                              </View>
+                            </Pressable>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+              {mode === "symbols" ? (
                 <TextInput
-                  accessibilityLabel={label("letters")}
-                  placeholder="Aa"
+                  accessibilityLabel={label("search")}
+                  placeholder={label("search")}
                   placeholderTextColor={colors.textPlaceholder}
-                  value={letters}
-                  maxLength={2}
+                  value={query}
+                  onChangeText={setQuery}
+                  style={inputStyle}
+                />
+              ) : null}
+              {mode === "emoji" ? (
+                <TextInput
+                  accessibilityLabel={label("customEmoji")}
+                  placeholder={label("customEmoji")}
+                  placeholderTextColor={colors.textPlaceholder}
+                  value={customEmoji}
+                  maxLength={32}
                   onChangeText={(value) => {
-                    setLetters(value);
-                    if (validProjectIcon(`text:${value}`))
-                      setPickerIcon(letterValue(value));
+                    setCustomEmoji(value);
+                    if (validProjectIcon(value) && !value.includes(":"))
+                      setPickerIcon(value);
                   }}
                   style={inputStyle}
                 />
-                <Text style={[styles.note, noteColor]}>
-                  {label("lettersHint")}
-                </Text>
-              </>
-            ) : mode !== "image" ? (
-              <View style={styles.grid}>
-                {(mode === "symbols"
-                  ? symbols.map((item) =>
-                      projectSymbolValue(item.name, pickerColor),
-                    )
-                  : PROJECT_EMOJIS
-                ).map((value) => (
-                  <View key={value} style={styles.cell}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        parseProjectSymbol(value)?.name ?? value
-                      }
-                      accessibilityState={{ selected: pickerIcon === value }}
-                      disabled={disabled}
-                      onPress={() => {
-                        setCustomEmoji("");
-                        setPickerIcon(value);
-                      }}
-                      style={[
-                        styles.choice,
-                        {
-                          backgroundColor:
-                            pickerIcon === value
-                              ? colors.surfaceChip
-                              : "transparent",
-                          borderColor:
-                            pickerIcon === value
-                              ? colors.textSecondary
-                              : "transparent",
-                        },
-                      ]}
-                    >
-                      {draw(value, 24)}
-                    </Pressable>
+              ) : null}
+              {mode === "image" && (
+                <View style={styles.imagePage}>
+                  <View style={[tileStyle, styles.imagePreview]}>
+                    {draw(
+                      pickerIcon,
+                      isProjectImage(pickerIcon) ||
+                        isProjectImageDraft(pickerIcon)
+                        ? 112
+                        : 48,
+                    )}
                   </View>
-                ))}
-              </View>
-            ) : null}
-            {mode === "symbols" && symbols.length === 0 ? (
-              <Text style={[styles.note, noteColor]}>{label("noResults")}</Text>
-            ) : null}
-          </>
-        )}
-      </View>
-    </FormSheet>
+                  <MainWindowActionButton
+                    action={{
+                      label: label("upload"),
+                      onPress: () => void upload(),
+                      disabled,
+                      tone: "secondary",
+                    }}
+                  />
+                  <Text
+                    style={[styles.note, noteColor, { textAlign: "center" }]}
+                  >
+                    {label("imageHint")}
+                  </Text>
+                </View>
+              )}
+              {mode === "letters" ? (
+                <>
+                  <TextInput
+                    accessibilityLabel={label("letters")}
+                    placeholder="Aa"
+                    placeholderTextColor={colors.textPlaceholder}
+                    value={letters}
+                    maxLength={2}
+                    onChangeText={(value) => {
+                      setLetters(value);
+                      if (validProjectIcon(`text:${value}`))
+                        setPickerIcon(letterValue(value));
+                    }}
+                    style={inputStyle}
+                  />
+                  <Text style={[styles.note, noteColor]}>
+                    {label("lettersHint")}
+                  </Text>
+                </>
+              ) : mode !== "image" ? (
+                <View style={styles.grid}>
+                  {(mode === "symbols"
+                    ? symbols.map((item) =>
+                        projectSymbolValue(item.name, pickerColor),
+                      )
+                    : PROJECT_EMOJIS
+                  ).map((value) => (
+                    <View key={value} style={styles.cell}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          parseProjectSymbol(value)?.name ?? value
+                        }
+                        accessibilityState={{ selected: pickerIcon === value }}
+                        disabled={disabled}
+                        onPress={() => {
+                          setCustomEmoji("");
+                          setPickerIcon(value);
+                        }}
+                        style={[
+                          styles.choice,
+                          {
+                            backgroundColor:
+                              pickerIcon === value
+                                ? colors.surfaceChip
+                                : "transparent",
+                            borderColor:
+                              pickerIcon === value
+                                ? colors.textSecondary
+                                : "transparent",
+                          },
+                        ]}
+                      >
+                        {draw(value, 24)}
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {mode === "symbols" && symbols.length === 0 ? (
+                <Text style={[styles.note, noteColor]}>
+                  {label("noResults")}
+                </Text>
+              ) : null}
+            </>
+          )}
+        </View>
+      </FormSheet>
+      <OrcaWorkerDirectoryPicker
+        directoryOnly
+        picker={picker}
+        deviceId={deviceId}
+        workingDir={directory}
+        mode="path"
+      />
+    </>
   );
 }
 const styles = StyleSheet.create({
@@ -865,8 +1136,8 @@ const styles = StyleSheet.create({
   },
   imagePreview: { width: 112, height: 112 },
   preview: {
-    width: 72,
-    height: 72,
+    width: 48,
+    height: 48,
     borderRadius: radius.container,
     overflow: "hidden",
     alignItems: "center",

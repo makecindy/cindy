@@ -6,11 +6,12 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { useTheme } from '@/theme';
 import { NativeMcpAppHost, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './NativeMcpAppSurface';
+import { getMobileHeights } from './mcpAppMeasuredHeights';
 import { McpAppView } from './mcpAppView';
 
 const Context = createContext<{
   foreground: boolean;
-  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>): McpAppView;
+  open(deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number): McpAppView;
 } | null>(null);
 export const useMcpAppViews = () => useContext(Context);
 export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
@@ -18,29 +19,32 @@ export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
 /** Hosts stay at the app root; native slots place their content inline inside
  * the real navigation screen. No root overlay, coordinates or touch interception. */
 export function McpAppViewsProvider({ children }: { children: ReactNode }) {
-  const { invoke } = useDeviceLink();
+  const { invoke, getUserCloseEpoch, onUserClose } = useDeviceLink();
   const views = useRef(new Set<McpAppView>());
   const mounted = useRef(true);
   const [, refresh] = useState(0);
-  const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
+  const [foreground, setForeground] = useState(AppState.currentState !== 'background');
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
-  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>) => {
+  const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
       () => { views.current.delete(view); changed(); }, async (url) => {
         const parsed = new URL(url);
         if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password)
           throw new Error('MCP_APP_INVALID_LINK');
         await Linking.openURL(parsed.href);
-      }, getMobileAuthOwner().generation);
+      }, getMobileAuthOwner().generation, placeholder, isPlugin, getUserCloseEpoch, onUserClose);
     views.current.add(view);
     changed();
-    void view.open(context);
+    void view.open(context, () => mounted.current && AppState.currentState !== 'background' && quotaVisible());
     return view;
-  }, [invoke, changed]);
+  }, [invoke, changed, getUserCloseEpoch, onUserClose]);
   useEffect(() => {
     mounted.current = true;
     const subscription = AppState.addEventListener('change', (state) => {
       const active = state === 'active';
+      if (!active) void getMobileHeights()?.flush();
+      // iOS can briefly become inactive both before and after backgrounding.
+      if (state === 'inactive') return;
       if (!active) for (const view of views.current) void view.close();
       setForeground(active);
     });
@@ -74,6 +78,11 @@ function McpAppWebView({ view }: { view: McpAppView }) {
   if (!document || !nativeDocument) return null;
   return <WebView ref={bind} source={nativeDocument.source}
     style={{ height: view.state.height, backgroundColor: colors.surface }}
+    // size-changed owns the viewport height; the message list owns scrolling.
+    // In particular, keyboard insets must not turn an inline card into a scroller.
+    scrollEnabled={false} bounces={false}
+    automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never"
+    showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false}
     originWhitelist={['*']} allowFileAccess={false} allowUniversalAccessFromFileURLs={false}
     sharedCookiesEnabled={false} thirdPartyCookiesEnabled={false}
     incognito={Platform.OS === 'ios'} cacheEnabled={false} domStorageEnabled

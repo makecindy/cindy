@@ -57,7 +57,7 @@
   "remoteHostOfflineNote": "O compartilhamento é encerrado quando o computador do anfitrião fica offline. Reinicie o compartilhamento e envie um novo convite após reconectar.",
   "tabCurrent": "Tarefa atual",
   "tabOwned": "Compartilhadas por mim",
-  "startIntro": "Convide alguém para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
+  "startIntro": "Convide um colega para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
   "runsOnThisDevice": "Executado neste dispositivo",
   "inviteNotice": "Qualquer pessoa com o convite pode participar após fazer login, com o mesmo acesso ao Agent que o anfitrião.",
   "offlineAutoClose": "O compartilhamento é encerrado automaticamente quando o anfitrião fica offline.",

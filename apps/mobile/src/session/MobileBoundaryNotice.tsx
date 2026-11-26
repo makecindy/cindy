@@ -52,6 +52,7 @@ export function MobileBoundaryNotice({ type, data }: {
         )}
         <View style={styles.divider} />
       </View>
+      {card.handoffNotice ? <Text style={styles.handoffNotice}>{card.handoffNotice}</Text> : null}
       {expanded && hasDetail ? (
         <View style={styles.detail}>
           {card.subtitle ? <Text style={styles.detailTitle}>{card.subtitle}</Text> : null}
@@ -87,6 +88,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     fontVariant: ['tabular-nums'],
+  },
+  handoffNotice: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    textAlign: 'center',
   },
   detail: {
     backgroundColor: colors.surfaceElevated,

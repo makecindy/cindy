@@ -10,11 +10,15 @@ import { Button } from '@/components/ui/button';
 
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, X } from 'lucide-react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgressMap, type PluginInstallProgressState } from './lib/pluginInstallProgress';
 import { isBatchFinished, type UpdateAllRow } from './lib/updateAllModel';
 
 interface UpdateAllDialogProps {
@@ -26,8 +30,20 @@ interface UpdateAllDialogProps {
 }
 
 /** 单行状态徽标(纯文字 + 图标,不用彩色圆点——绿色专职未读语义)。 */
-function RowStatus({ row }: { row: UpdateAllRow }) {
+function RowStatus({ row, progress }: { row: UpdateAllRow; progress?: PluginInstallProgressState }) {
   const { t } = useTranslation();
+  // 正在更新或失败的这一行:圆环表示下了多少,文字写当前步骤或失败原因。
+  if (progress && (row.status === 'installing' || row.status === 'failed')) {
+    return (
+      <PluginInstallRing
+        label={row.name}
+        progress={progress}
+        size={16}
+        failure={row.errorText}
+        className="max-w-[220px]"
+      />
+    );
+  }
   if (row.status === 'done') {
     return (
       <span className="flex items-center gap-1.5 text-12 text-[var(--card-status-done)]">
@@ -73,64 +89,76 @@ export function UpdateAllDialog({
 }: UpdateAllDialogProps) {
   const { t } = useTranslation();
   const finished = isBatchFinished(rows);
+  const closeLabel = t('settings.ghosts.detail.closeDialog');
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const progressByPluginId = usePluginInstallProgressMap();
+  const doneCount = rows.filter((row) => row.status === 'done').length;
   return (
     <Dialog.Root open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={WINDOW_NO_DRAG_STYLE}
         />
         <Dialog.Content
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus({ preventScroll: true });
+          }}
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[70vh] w-[calc(100%-2rem)] max-w-[560px] flex-col overflow-hidden p-6 text-[var(--text-primary)] focus:outline-none"
           style={WINDOW_NO_DRAG_STYLE}
         >
-          <div className="flex items-start gap-4 border-b-[0.5px] border-[var(--border-default)] px-6 py-5">
+          <div className="flex shrink-0 items-start gap-3">
             <div className="min-w-0 flex-1">
-              <Dialog.Title className="text-18 font-medium">
+              <Dialog.Title ref={titleRef} tabIndex={-1} className="text-18 font-medium text-[var(--confirm-title)]">
                 {t('settings.ghosts.updateAll.title', { count: rows.length })}
               </Dialog.Title>
-              <Dialog.Description className="mt-1 text-13 leading-5 text-[var(--text-tertiary)]">
-                {t('settings.ghosts.updateAll.description')}
-              </Dialog.Description>
             </div>
-            <Dialog.Close
-              aria-label={t('settings.ghosts.detail.closeDialog')}
-              className="grid size-9 shrink-0 place-items-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <X size={17} aria-hidden="true" />
-            </Dialog.Close>
+            <Tip text={closeLabel}>
+              <Dialog.Close asChild>
+                <Button variant="secondary" tone="quiet" size="lg" className="w-9 px-0" aria-label={closeLabel}>
+                  <X size={17} aria-hidden="true" />
+                </Button>
+              </Dialog.Close>
+            </Tip>
           </div>
-          <div className="overflow-y-auto px-6 py-2">
+          <div className="mt-4 min-h-0 overflow-y-auto overscroll-contain">
+            <Dialog.Description className="mb-4 text-pretty text-13 leading-[1.5385] text-[var(--confirm-desc)]">
+              {t('settings.ghosts.updateAll.description')}
+            </Dialog.Description>
             {rows.map((row) => (
               <div
                 key={row.pluginId}
-                className="border-b-[0.5px] border-[var(--border-default)] py-3.5 last:border-b-0"
+                className="border-b border-[var(--border-default)] py-3 last:border-b-0"
               >
                 <div className="flex items-center gap-3">
                   <GhostPluginIcon
                     iconDataUrl={iconByGhostId.get(row.ghostId)}
                     iconId={row.ghostId}
                     iconName={row.name}
-                    size="menu"
+                    size="sm"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-13 font-medium leading-5">{row.name}</p>
-                    <p className="text-11 text-[var(--text-tertiary)]">
+                    <p className="break-words text-14 font-medium leading-[1.43]">{row.name}</p>
+                    <p className="mt-1 break-words text-12 tabular-nums text-[var(--text-tertiary)]">
                       {t('settings.ghosts.updateAll.versionRange', {
                         from: row.fromVersion,
                         to: row.toVersion,
                       })}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <RowStatus row={row} />
+                  <div className="flex max-w-[45%] shrink-0 items-center gap-2 break-words">
+                    <RowStatus row={row} progress={progressByPluginId.get(row.pluginId)} />
                   </div>
                 </div>
               </div>
             ))}
           </div>
-          <div className="flex items-center justify-end gap-2 border-t-[0.5px] border-[var(--border-default)] px-6 py-4">
+          <div className="mt-4 flex shrink-0 flex-wrap items-center justify-between gap-3">
+            <span className="text-12 tabular-nums text-[var(--text-tertiary)]">
+              {t('settings.ghosts.updateAll.progressCount', { done: doneCount, total: rows.length })}
+            </span>
             <Button
               variant={finished ? 'cta' : 'secondary'}
               size="lg"

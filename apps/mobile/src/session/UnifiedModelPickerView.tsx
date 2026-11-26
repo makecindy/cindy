@@ -22,6 +22,7 @@ import {
   Search,
   SlidersHorizontal,
   Star,
+  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";
@@ -57,9 +58,13 @@ import {
 } from "./contextSheetModel";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
 import type {
+  UnifiedMobileModelGroupRow,
   UnifiedMobilePickerViewProps,
+  UnifiedMobilePluginEngineGroup,
+  UnifiedMobilePluginEngineRow,
   UnifiedMobileRow,
 } from "./UnifiedModelPickerSheet";
+import { PluginEngineMark } from "./PluginEngineMark";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 
 type Page = "sources" | "harness" | null;
@@ -107,6 +112,7 @@ function Row({
   title,
   subtitle,
   subtitleLines = 1,
+  notice,
   value,
   leading,
   trailing,
@@ -119,6 +125,7 @@ function Row({
   title: string;
   subtitle?: string | null;
   subtitleLines?: number;
+  notice?: string;
   value?: string | null;
   leading?: ReactNode;
   trailing?: ReactNode;
@@ -134,7 +141,7 @@ function Row({
     <Pressable
       accessibilityLabel={
         accessibilityLabel ??
-        [title, subtitle, value].filter(Boolean).join(", ")
+        [title, subtitle, notice, value].filter(Boolean).join(", ")
       }
       accessibilityRole="button"
       accessibilityState={{ selected: !!selected, disabled: !!disabled }}
@@ -157,6 +164,7 @@ function Row({
             {subtitle}
           </Text>
         ) : null}
+        {notice ? <Text style={styles.rowNotice}>{notice}</Text> : null}
       </View>
       {value ? (
         <Text numberOfLines={1} style={styles.rowValue}>
@@ -194,9 +202,63 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const [effortExpanded, setEffortExpanded] = useState(false);
   const searchRef = useRef<TextInputInstance>(null);
   const modelListRef = useRef<FlatList>(null);
+  const pluginEngineGroupList = p.pluginEngines?.groups;
+  const modelGroupList = p.modelGroups;
+  const favoritesGroup = useMemo(
+    () => p.groups.find((group) => group.key === "favorites"),
+    [p.groups],
+  );
+  const otherGroups = useMemo(
+    () => p.groups.filter((group) => group.key !== "favorites"),
+    [p.groups],
+  );
   const modelItems = useMemo(
-    () =>
-      p.groups.flatMap((group) => [
+    () => [
+      // 收藏区恒置顶(混排内置模型与插件引擎收藏)。
+      ...(favoritesGroup
+        ? [
+            { kind: "header" as const, key: `header:${favoritesGroup.key}`, group: favoritesGroup },
+            ...(favoritesGroup.items ?? favoritesGroup.rows.map((row) => ({ kind: "model" as const, row }))).map(
+              (item, index) =>
+                item.kind === "pluginEngine"
+                  ? {
+                      kind: "pluginModel" as const,
+                      key: `${favoritesGroup.key}:${item.row.key}`,
+                      row: item.row,
+                      separator: index > 0,
+                    }
+                  : {
+                      kind: "model" as const,
+                      key: `${favoritesGroup.key}:${item.row.key}`,
+                      row: item.row,
+                      separator: index > 0,
+                    },
+            ),
+          ]
+        : []),
+      // 模型组(被控电脑上的)列在插件引擎与内置模型之前。
+      ...(modelGroupList?.rows.length
+        ? [
+            { kind: "modelGroupHeader" as const, key: "header:model-groups", title: modelGroupList.title },
+            ...modelGroupList.rows.map((row, index) => ({
+              kind: "modelGroup" as const,
+              key: `model-group:${row.id}`,
+              row,
+              separator: index > 0,
+            })),
+          ]
+        : []),
+      // 插件引擎分组列在内置模型之前。
+      ...(pluginEngineGroupList ?? []).flatMap((group) => [
+        { kind: "pluginHeader" as const, key: `header:${group.key}`, group },
+        ...group.rows.map((row, index) => ({
+          kind: "pluginModel" as const,
+          key: `${group.key}:${row.key}`,
+          row,
+          separator: index > 0,
+        })),
+      ]),
+      ...otherGroups.flatMap((group) => [
         { kind: "header" as const, key: `header:${group.key}`, group },
         ...group.rows.map((row, index) => ({
           kind: "model" as const,
@@ -205,7 +267,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           separator: index > 0,
         })),
       ]),
-    [p.groups],
+    ],
+    [favoritesGroup, otherGroups, pluginEngineGroupList, modelGroupList],
   );
   useEffect(() => {
     modelListRef.current?.scrollToOffset({ offset: 0, animated: false });
@@ -213,7 +276,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const initialScrollPending = useRef(true);
   const initialScrollAttempts = useRef(0);
   const initialScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const selectedIndex = modelItems.findIndex(item => item.kind === "model" && item.row.selected);
+  const selectedIndex = modelItems.findIndex(item =>
+    (item.kind === "model" || item.kind === "pluginModel") && item.row.selected);
   const cancelInitialScroll = () => {
     initialScrollPending.current = false;
     if (initialScrollTimer.current !== null) clearTimeout(initialScrollTimer.current);
@@ -242,7 +306,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   useEffect(() => {
     setPage(null);
     setEffortExpanded(false);
-  }, [p.visible, p.options?.row.key]);
+  }, [p.visible, p.options?.row.key, p.pluginEngineOptions?.row.key]);
   useEffect(() => {
     if (p.visible) setSnap("half");
   }, [p.visible]);
@@ -258,7 +322,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const level = (id: string) =>
     t(`models.options.effortLevels.${id}`, { defaultValue: id });
   const options = p.options;
-  const showSecondary = !!options || !!page;
+  const pluginOptions = p.pluginEngineOptions;
+  const showSecondary = !!options || !!pluginOptions || !!page;
   useEffect(() => {
     if (showSecondary) searchRef.current?.blur();
   }, [showSecondary]);
@@ -382,6 +447,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       selected={p.filter === item.id}
       subtitle={item.quota?.label}
       subtitleLines={item.quota?.members?.length ? 0 : 1}
+      notice={item.sourceUnavailableReason}
       testID={`${p.testID}.source.${item.id}`}
       title={item.remote?.providerLabel ?? item.label}
     />
@@ -671,6 +737,259 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </>
     ) : null;
 
+  const pluginEngineSettingsPage = pluginOptions ? (
+    <>
+      {pluginOptions.context ? (
+        <Text style={styles.footnote} testID={`${p.testID}.context`}>
+          {pluginOptions.context}
+        </Text>
+      ) : null}
+      {pluginOptions.onEditFavorite ? (
+        <Group>
+          <Row
+            title={t("models.unified.editFavorite")}
+            onPress={pluginOptions.onEditFavorite}
+            disabled={p.busy || pluginOptions.favoritesDisabled}
+            testID={`${p.testID}.editFavorite`}
+          />
+        </Group>
+      ) : null}
+      {pluginOptions.editingFavorite ? (
+        <Text style={styles.footnote}>
+          {t("models.unified.editFavoriteHint")}
+        </Text>
+      ) : null}
+      {pluginOptions.efforts.length > 1 ? (
+        <Group>
+          <View>
+            <NativePullDownMenu
+              disabled={p.busy}
+              actions={pluginOptions.efforts.map((effort) => ({
+                id: effort,
+                title: level(effort),
+                state: effort === pluginOptions.effort ? "on" : "off",
+                disabled: p.busy,
+              }))}
+              onAction={(id) => {
+                const next = pluginOptions.efforts.find((item) => item === id);
+                if (!p.busy && next) pluginOptions.onChangeEffort(next);
+              }}
+              testID={`${p.testID}.effortMenu`}
+            >
+              <Row
+                accessibilityLabel={`${t("models.options.reasoningEffort")}, ${pluginOptions.effort ? level(pluginOptions.effort) : ""}`}
+                disabled={p.busy}
+                onPress={() => {
+                  if (!nativeMenu) setEffortExpanded((open) => !open);
+                }}
+                leading={icon(Brain)}
+                testID={`${p.testID}.effort`}
+                title={t("models.options.reasoningEffort")}
+                trailing={
+                  <ChevronsUpDown
+                    color={colors.textTertiary}
+                    size={iconSize.sm}
+                    strokeWidth={iconStroke.regular}
+                  />
+                }
+                value={pluginOptions.effort ? level(pluginOptions.effort) : null}
+              />
+            </NativePullDownMenu>
+            {!nativeMenu && effortExpanded
+              ? pluginOptions.efforts.map((effort) => (
+                  <Row
+                    disabled={p.busy}
+                    key={effort}
+                    onPress={() => {
+                      pluginOptions.onChangeEffort(effort);
+                      setEffortExpanded(false);
+                    }}
+                    selected={effort === pluginOptions.effort}
+                    testID={`${p.testID}.effort.${effort}`}
+                    title={level(effort)}
+                  />
+                ))
+              : null}
+          </View>
+        </Group>
+      ) : null}
+      {pluginOptions.editingFavorite ? (
+        <Group>
+          <Row
+            title={t("models.unified.saveFavorite")}
+            onPress={() => pluginOptions.onSaveEdit?.()}
+            disabled={p.busy || pluginOptions.favoritesDisabled}
+            testID={`${p.testID}.saveFavorite`}
+          />
+          <Row
+            title={t("models.unified.cancelEdit")}
+            onPress={() => pluginOptions.onCancelEdit?.()}
+            disabled={p.busy}
+            testID={`${p.testID}.cancelEdit`}
+          />
+        </Group>
+      ) : (
+        <>
+          <Group title={t("models.unified.currentConfiguration")}>
+            <Row
+              disabled={p.busy || pluginOptions.favoritesDisabled}
+              leading={icon(Star, pluginOptions.isFavorite)}
+              onPress={pluginOptions.onFavorite}
+              testID={`${p.testID}.favorite`}
+              title={t(
+                pluginOptions.isFavorite
+                  ? "models.unified.savedConfiguration"
+                  : "models.unified.favoriteConfiguration",
+              )}
+              subtitle={pluginOptions.configurationSummary}
+            />
+          </Group>
+          <Text style={styles.footnote}>
+            {t(
+              pluginOptions.isFavorite
+                ? "models.unified.removeFavoriteHint"
+                : "models.unified.saveFavoriteHint",
+            )}
+          </Text>
+        </>
+      )}
+      {pluginOptions.notice ? (
+        <Text
+          style={styles.footnote}
+          accessibilityLiveRegion="polite"
+          testID={`${p.testID}.notice`}
+        >
+          {pluginOptions.notice}
+        </Text>
+      ) : null}
+    </>
+  ) : null;
+
+  // 模型组行：组图标 + 组名，下方是来源数 · 选法；选中的打勾。点了由被控电脑按组的规则选来源。
+  const modelGroupRow = (row: UnifiedMobileModelGroupRow) => (
+    <Pressable
+      key={row.id}
+      accessibilityLabel={[row.title, row.subtitle].filter(Boolean).join(", ")}
+      accessibilityRole="button"
+      accessibilityState={{ selected: row.selected, disabled: p.busy }}
+      disabled={p.busy}
+      onPress={() => p.modelGroups?.onSelect(row.id)}
+      style={({ pressed }) => [styles.modelMain, pressed && styles.pressed]}
+      testID={`${p.testID}.modelGroup.${row.id}`}
+    >
+      <View style={styles.leading}>
+        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      </View>
+      <View style={styles.rowMain}>
+        <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
+        {row.subtitle ? <Text numberOfLines={1} style={styles.rowSubtitle}>{row.subtitle}</Text> : null}
+      </View>
+      {row.selected ? (
+        <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
+      ) : null}
+    </Pressable>
+  );
+
+  // 插件引擎的模型行：引擎图标 + 模型名(+ 思考深度)；不可用的引擎可见但不能选，下方是插件给的说明。
+  // 选中且该模型有档位时，下面多一行思考深度选择(只改档位，不关闭选择器)；行尾入口打开配置与收藏页。
+  const pluginEngineRow = (row: UnifiedMobilePluginEngineRow) => {
+    const disabled = p.busy || row.disabled;
+    const onPluginOptions = !row.disabled ? p.pluginEngines?.onOptions : undefined;
+    return (
+      <View key={row.key}>
+        <View style={styles.modelRow}>
+          <Pressable
+            accessibilityLabel={[row.title, row.effortLabel, row.subtitle, row.notice].filter(Boolean).join(", ")}
+            accessibilityRole="button"
+            accessibilityState={{ selected: row.selected, disabled }}
+            disabled={disabled}
+            onPress={() => p.pluginEngines?.onSelect(row)}
+            style={({ pressed }) => [styles.modelMain, row.disabled && styles.rowDisabled, pressed && styles.pressed]}
+            testID={`${p.testID}.pluginEngine.${row.key}`}
+          >
+            <View style={styles.leading}>
+              <PluginEngineMark iconDataUrl={row.iconDataUrl} size={iconSize.action} />
+            </View>
+            <View style={styles.rowMain}>
+              <View style={styles.titleLine}>
+                <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
+                {row.effortLabel ? <Text numberOfLines={1} style={styles.meta}>{row.effortLabel}</Text> : null}
+              </View>
+              {row.subtitle ? <Text numberOfLines={1} style={styles.rowSubtitle}>{row.subtitle}</Text> : null}
+              {row.notice ? <Text style={styles.rowNotice}>{row.notice}</Text> : null}
+            </View>
+            {row.favorite ? (
+              <Star
+                color={colors.textSecondary}
+                fill={colors.textSecondary}
+                size={iconSize.md}
+                strokeWidth={iconStroke.regular}
+              />
+            ) : null}
+            {row.selected ? (
+              <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
+            ) : null}
+          </Pressable>
+          {onPluginOptions ? (
+            <Pressable
+              accessibilityLabel={t("models.picker.configureAccessibility", {
+                model: row.title,
+              })}
+              accessibilityRole="button"
+              accessibilityState={{ disabled }}
+              disabled={disabled}
+              onPress={() => onPluginOptions(row)}
+              style={({ pressed }) => [
+                styles.optionsButton,
+                pressed && styles.pressed,
+              ]}
+              testID={`${p.testID}.pluginEngine.${row.key}.optionsButton`}
+            >
+              <SlidersHorizontal
+                color={colors.textSecondary}
+                size={iconSize.action}
+                strokeWidth={iconStroke.regular}
+              />
+            </Pressable>
+          ) : null}
+        </View>
+        {row.selected && !row.favorite && row.efforts.length ? (
+          <NativePullDownMenu
+            disabled={p.busy}
+            actions={row.efforts.map((effort) => ({
+              id: effort,
+              title: level(effort),
+              state: effort === row.effort ? "on" : "off",
+              disabled: p.busy,
+            }))}
+            onAction={(id) => {
+              const effort = row.efforts.find((item) => item === id);
+              if (!p.busy && effort) p.pluginEngines?.onSelect(row, effort);
+            }}
+            testID={`${p.testID}.pluginEngine.${row.key}.effortMenu`}
+          >
+            <Row
+              accessibilityLabel={`${t("models.options.reasoningEffort")}, ${row.effortLabel}`}
+              disabled={p.busy}
+              onPress={() => {
+                if (!usesNativePullDownMenu()) {
+                  const next = row.efforts[(row.efforts.indexOf(row.effort ?? row.efforts[0]!) + 1) % row.efforts.length];
+                  if (next) p.pluginEngines?.onSelect(row, next);
+                }
+              }}
+              leading={icon(Brain)}
+              testID={`${p.testID}.pluginEngine.${row.key}.effort`}
+              title={t("models.options.reasoningEffort")}
+              trailing={<ChevronsUpDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
+              value={row.effortLabel || null}
+            />
+          </NativePullDownMenu>
+        ) : null}
+      </View>
+    );
+  };
+  const pluginEngineGroups = p.pluginEngines?.groups ?? [];
+
   const modelRow = (row: UnifiedMobileRow) => {
     const agentLabel = mobileAgentLabel(row.config.agent);
     const disabled = p.busy || row.disabled;
@@ -682,6 +1001,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             row.remoteDevice?.name,
             agentLabel,
             row.subtitle,
+            row.sourceUnavailableReason,
             row.config.fast ? t("models.options.fastMode") : null,
             row.quotaLabel,
           ]
@@ -738,6 +1058,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               <Text numberOfLines={1} style={styles.rowSubtitle}>
                 {row.subtitle}
               </Text>
+            ) : null}
+            {row.sourceUnavailableReason ? (
+              <Text style={styles.rowNotice}>{row.sourceUnavailableReason}</Text>
             ) : null}
             {row.quotaLabel ? (
               <Text numberOfLines={1} style={styles.quotaText}>
@@ -802,10 +1125,53 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </Pressable>}
     </View>
   );
+  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
+    <View style={styles.quotaHeading}>
+      <Text style={styles.groupLabel}>{group.title}</Text>
+      {group.quota?.summary ? (
+        <Text
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          style={[
+            styles.quotaText,
+            group.quota.level === "crit"
+              ? styles.quotaResetCrit
+              : group.quota.level === "warn"
+                ? styles.quotaResetWarn
+                : null,
+          ]}
+        >
+          {group.quota.summary}
+        </Text>
+      ) : null}
+    </View>
+  );
+
   const listPage =
     Platform.OS === "android" ? null : (
       <>
-        {p.groups.map((group) => (
+        {favoritesGroup ? (
+          <Group
+            key={favoritesGroup.key}
+            testID={`${p.testID}.group.${favoritesGroup.key}`}
+            heading={groupHeading(favoritesGroup)}
+          >
+            {(favoritesGroup.items ?? favoritesGroup.rows.map((row) => ({ kind: "model" as const, row }))).map(
+              (item) => (item.kind === "pluginEngine" ? pluginEngineRow(item.row) : modelRow(item.row)),
+            )}
+          </Group>
+        ) : null}
+        {p.modelGroups?.rows.length ? (
+          <Group testID={`${p.testID}.group.model-groups`} title={p.modelGroups.title}>
+            {p.modelGroups.rows.map(modelGroupRow)}
+          </Group>
+        ) : null}
+        {pluginEngineGroups.map((group) => (
+          <Group key={group.key} testID={`${p.testID}.group.${group.key}`} heading={pluginGroupHeading(group)}>
+            {group.rows.map(pluginEngineRow)}
+          </Group>
+        ))}
+        {otherGroups.map((group) => (
           <Group
             key={group.key}
             testID={`${p.testID}.group.${group.key}`}
@@ -814,7 +1180,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             {group.rows.map(modelRow)}
           </Group>
         ))}
-        {!p.groups.length ? (
+        {!p.groups.length && !pluginEngineGroups.length && !p.modelGroups?.rows.length ? (
           <Text style={styles.empty} testID={`${p.testID}.empty`}>
             {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
           </Text>
@@ -882,7 +1248,25 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       </Text>
                     }
                     renderItem={({ item }) =>
-                      item.kind === "header" ? (
+                      item.kind === "modelGroupHeader" ? (
+                        <View style={styles.group} testID={`${p.testID}.group.model-groups`}>
+                          <Text style={styles.groupLabel}>{item.title}</Text>
+                        </View>
+                      ) : item.kind === "modelGroup" ? (
+                        <View>
+                          {item.separator ? <View style={styles.separator} /> : null}
+                          {modelGroupRow(item.row)}
+                        </View>
+                      ) : item.kind === "pluginHeader" ? (
+                        <View style={styles.group} testID={`${p.testID}.group.${item.group.key}`}>
+                          {pluginGroupHeading(item.group)}
+                        </View>
+                      ) : item.kind === "pluginModel" ? (
+                        <View>
+                          {item.separator ? <View style={styles.separator} /> : null}
+                          {pluginEngineRow(item.row)}
+                        </View>
+                      ) : item.kind === "header" ? (
                         <View
                           style={styles.group}
                           testID={`${p.testID}.group.${item.group.key}`}
@@ -933,7 +1317,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 ? harnessPage
                 : options
                   ? settingsPage
-                  : null}
+                  : pluginOptions
+                    ? pluginEngineSettingsPage
+                    : null}
           </SheetSurface>
         </View>
       ) : null}
@@ -1050,6 +1436,12 @@ function makeStyles(colors: ThemeColors) {
     rowSubtitle: {
       color: colors.textSecondary,
       fontSize: typeScale.caption,
+      fontWeight: fontWeight.regular,
+      lineHeight: lineHeight.caption,
+    },
+    rowNotice: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
       fontWeight: fontWeight.regular,
       lineHeight: lineHeight.caption,
     },

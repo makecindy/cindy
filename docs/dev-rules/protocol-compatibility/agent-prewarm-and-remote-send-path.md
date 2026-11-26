@@ -12,6 +12,14 @@ user / desktop / plugin / side-chat、状态 active、非协同、Agent 在本�
 10 分钟未发送即关闭；设置变更关掉了它时，下一次请求会重新启动；任何真实发送会接管它。旧被控端返回 CHANNEL_NOT_ALLOWED，控制端静默忽略，
 下一次发送照常冷启动；旧控制端不调用，行为不变。
 
+同一通道带 purpose: 'pi-skill-dispatch' 时表示用户已发送项目 Skill。Desktop 和 Node Host 在任务发送锁内核验实际引擎和目录，等 Pi 可用后才返回 accepted 和 piRuntimePrepared: true。旧 Desktop 可能只返回 accepted；新版控制端不能据此发送未展开的命令，会保留草稿。Node Host 从任务记录恢复配置，不接受控制端覆盖授权，也不因普通打字请求启动进程。未实现该入口的旧 Node Host 仍可能返回 NOT_FOUND；控制端保留草稿并显示错误。此变化不需要更新中转。
+
+显式发送 Skill 时，`pendingPiRoute` 只能应用与任务上已登记的模型和位置相符的意图。对同账号远控登记的路线，
+两端沿用发送时的窗口核实与重建，拒绝控制端提供的 `confirmedContextWindow`。窗口核实失败时保留旧路线和原生记录。
+`pendingPiRoute.nextInputChars` 可带别名展开前的输入长度，按非负安全整数解析，只用于为待发内容留空间；
+它不能提高重放预算或证明模型窗口。字段缺失时沿用默认重放留白。
+`pendingRouteApplied: true` 只在意图已应用且 Pi 准备成功后返回。
+
 Desktop 新建页的未发送任务：本机普通项目 / 对话草稿开始输入时，任务先建出来（`local-db:sessions:create`
 带 `provisional: true`，只接受本机普通任务），出现在本机任务列表、标题随输入变化，并按上面的规则预热；
 清空输入经本机专用的 `maker:session:discard-provisional` 真正删除（仍未发送且无消息才删），第一次发送前经
@@ -28,3 +36,16 @@ projection 见过 `inputDeliveryVersion: 1`、并从 projection / enqueue 回包
 projection 后重发（被控端拒绝时尚未收下，不产生重复）。旧被控端不回 `inputDeliveryVersion`，
 Mobile 始终走原流程。Mobile 学到的这些结论绑定 device-link 连接代次，重连后清空并重新确认。
 没有新的 push、数据库迁移或 Mobile 原生指纹变化。
+
+桌面被控端在队列快照中用可选的 `withdrawnQueueClientIds` 携带本会话最近 32 个显式撤回的待发消息 ID。
+同一 ID 再次入队时移出该列表。桌面控制端收到后清掉对应的待发气泡、临时消息及回执等待；
+已经入库的消息继续按历史显示。旧端缺省该字段时沿用原有的队列与入库回执处理。
+可选的 `queueSnapshot` 带宿主实例标识和递增序号，控制端忽略同一实例的旧快照，遇到不同实例时向该设备重新取数。
+队列恢复成功后快照才携带当前派发的消息 ID（空值表示没有）。控制端错过撤回推送时，须先确认消息已离开队列、插话和派发，
+随后按 ID 查历史也明确返回不存在，才结束回执等待并移除临时气泡。旧被控端继续使用原有回执流程。
+
+`withdrawnQueueClientIds` 和 `queueSnapshot` 位于现有队列查询回包与队列推送的业务载荷中。
+官方与自建中转均按现有帧转发签名载荷，字段由两端桌面客户端解释。旧控制端忽略新增字段，
+新控制端连接旧被控端时沿用原有回执流程，因此已部署的自建中转可继续使用现有帧格式、能力协商和内核。
+本次验证通过共享客户端测试（1,382 项）、自建中转测试（62 项）及真实进程回环互通测试（2 项）。
+回环场景覆盖客户端加入、签名通信和自动重连；撤回气泡本身由桌面队列回归用例验证。

@@ -1,5 +1,8 @@
 ## 4.6 订阅:旁听事件 + 钩子处理消息(subscribe 能力)
 
+工具输入、结果与错误使用独立的 [`tool-execution` 主题](plugin-tool-observation.md)，
+不改变以下消息、状态或旧元数据主题的内容边界。
+
 新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，在安装或更新确认中展示。
 接受即整体授予该版本的全部已知能力。已启用且整体安装批准有效的插件按 manifest 声明接收事件，不另存 topic 批准，也没有详情补批或调用时确认。旧 receipt 的分项批准字段读取时忽略。
 
@@ -26,6 +29,43 @@
 补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
 首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。
 停用、卸载、移除声明、更新安装或账号切换后，旧缓冲不会继续投递给新安装或新账号。
+
+### 查询会话状态（Desktop）
+
+重启、错过归档事件或收到 `dropped` 后，电子脑可用 `cindy.sessionStates({ sessionIds })`
+对账，对应管子消息 `{ type: 'session-state-request', sessionIds }`。插件须已安装、已启用、
+整体安装批准有效，且 `subscribe.topics` 包含 `session`。不需要 `control` 或 `history`，
+也没有额外确认。
+
+- 每次传 1–100 个 id；每个 id 由 1–64 个 ASCII 字母、数字或连字符组成。任一项不合法就拒绝整批。
+- 成功返回 `{ ok: true, sessions: [{ sessionId, status }] }`。顺序和重复项与请求一致，每项只有这两个键。
+- `active` 表示在用，`archived` 表示已归档，`deleted` 表示本机仍留有已删除记录。
+  未知 id（包括已清除的删除记录）与范围外统一返回 `out_of_scope`，不能据此推断是否删除。
+- 只读当前账号的本机会话记录，沿用 `did-session-created`／`did-session-archived` 的用户主会话资格。
+  SSH 远端执行或 Agent 在同账号另一台电脑上执行，不改变本机记录的查询资格。协同会话（含 Orca Lead
+  和 Worker）、后台自动化和本机没有记录的会话均返回 `out_of_scope`，不会向其他设备取数。
+- 失败返回 `{ ok: false, errorCode, message }`，没有 `sessions`。错误码：
+  `PERMISSION_DENIED`（未获资格或查询期间被撤权）、`INVALID_REQUEST`（参数无效）、
+  `HOST_NOT_READY`（账号或数据库尚未就绪／在途上下文已切换）、`INTERNAL`（状态读取失败）。
+  调用通道拒绝、传输失败也不是会话状态。
+
+旧版 Desktop 没有 `cindy.sessionStates`，调用前检查该方法。方法存在时，不能把拒绝或查询
+失败当成旧版，也不能把失败当成 `active`。该接口仅支持 Desktop，独立 Node Host 未接入。
+
+```js
+async function reconcileSessionStates(sessionIds) {
+  if (typeof cindy.sessionStates !== 'function') return { outcome: 'unsupported' };
+  try {
+    const result = await cindy.sessionStates({ sessionIds });
+    if (!result.ok) return { outcome: 'failed', errorCode: result.errorCode };
+    return { outcome: 'ok', sessions: result.sessions };
+  } catch {
+    return { outcome: 'failed' };
+  }
+}
+```
+
+### 元数据旁听与消息钩子
 
 以下为原有元数据旁听与消息钩子，行为保持：一种事件模型,两个类型:
 - **监听(`did-`)** = 纯数据通知,事后告诉你发生了什么,你改变不了流程——适合做
@@ -172,3 +212,21 @@ cindy.onHostMessage(function (msg) {
   改,而不是单纯说不;
 - **权限最重**:声明 hooks 在插件详情里是最重的一条(「可读取、拦截或改写你
   发出的消息」),用户会看得很清楚,只在真需要时申请。
+
+### 原生恢复边界
+
+在 `subscribe.topics` 声明 `native-recovery`，并在 `onHostMessage` 监听 `did-native-recovery`。
+仅本机 Claude Code、Codex、Pi 的普通任务提供此主题。引擎会话启动时按已启用且获整体安装批准的订阅注册。
+事件实时投递给该版本已运行的插件。需要持续接收时，可声明 `launch: "resident"`。
+
+`data` 包含 `{sessionId,engine,nativeEvent,metadata}`。字段按原生事件提供，仅含下表列出的状态。
+
+| 引擎 | `nativeEvent` 与 `metadata` |
+| --- | --- |
+| Claude Code | `PreCompact`、`PostCompact` 带 `trigger`，`Stop` 带 `stop_hook_active`，`StopFailure` 带错误分类 `error`。使用当前 SDK 提供的事件。 |
+| Codex | `contextCompaction`，当前轮的 `turn/completed` 带 `status`，原生 `error` 带 `willRetry`。 |
+| Pi | `auto_retry_start` 可带 `attempt`，`auto_retry_end` 带 `success`，`compaction_start`，`compaction_end` 和 `agent_settled` 带 `aborted`。 |
+
+此主题用于观察。消息、压缩摘要、转录路径、原生错误详情和模型凭据不进入事件。
+主动重试任务或手动压缩可调用 [`control_session`](plugin-queue-control.md)。
+此主题不提供自动重试开关、任意上下文改写、文件检查点或继续执行裁决。

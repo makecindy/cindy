@@ -6,7 +6,7 @@ import { buildUserProvider, type Provider } from '@cindy/model-providers';
 import { createCustomImageChannel, registerCustomImageChannels } from '../customImageChannel.js';
 import { pruneDynamicImageChannels } from '../byokImageChannel.js';
 import { ImageChannelRegistry } from '../imageChannelRegistry.js';
-import { customMediaAgents, customMediaGuideProtocol, resolveCustomMediaConnection } from '../customMediaConnection.js';
+import { customMediaAgents, customMediaGuideProtocol, resolveCustomMediaConnection, mediaGuideModel, mediaGuideScope, mediaGuideTarget } from '../customMediaConnection.js';
 
 const MODEL = 'team/gpt-image-2.5-sunburst';
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -84,6 +84,22 @@ function harness(initial = provider()) {
 }
 
 describe('standalone custom OpenAI Images', () => {
+  // Native catalogs contain media outside chat runtimes. Their Guide identity
+  // stays stable across caller harnesses; custom HTTP retains per-runtime keys (unit).
+  it.each(['openai', 'gemini', 'xai', 'codex-account'])('resolves the native %s Guide target without a chat declaration', (id) => {
+    const native = { id, source: id === 'codex-account' ? 'user' : 'builtin',
+      auth: { method: 'oauth', native: 'codex' }, models: {}, routing: {},
+      imageModels: [{ id: MODEL, name: 'Image' }] } as unknown as Provider;
+    const target = { providerId: id, agent: 'codex' as const, modelId: MODEL };
+    expect(mediaGuideModel(native, target)).toMatchObject({ mode: 'image_generation' });
+    expect(mediaGuideScope(native, target)).toEqual(expect.any(String));
+    expect(mediaGuideTarget(native, target)).toEqual({ ...target, agent: 'pi' });
+    expect(mediaGuideScope({ ...native, id: 'xd' }, { ...target, providerId: 'xd' })).toBeNull();
+    const relay = provider();
+    const custom = { providerId: relay.id, agent: 'pi' as const, modelId: MODEL };
+    expect(mediaGuideTarget(relay, custom)).toBe(custom);
+    expect(mediaGuideScope(relay, custom)).not.toBe(mediaGuideScope(relay, { ...custom, agent: 'codex' }));
+  });
   // Regression: aggregate ownership must not replace the selected runtime's
   // protocol or advertise another runtime's image/video input capability.
   it.each(['image_generation', 'video_generation'] as const)('discovers each declared %s protocol with multiple owners', (mode) => {

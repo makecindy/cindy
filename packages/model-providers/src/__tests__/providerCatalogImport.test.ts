@@ -19,6 +19,26 @@ const shard = (value: string) =>
   `// ../ai/src/providers/data/new-vendor.json\nvar vendor_default = ${value};\nstartApplication();`;
 
 describe("Pi source import", () => {
+  // #10434, unit: regenerate through the production converter, preserving Pi's
+  // on/off serializer map while removing its implementation-only high UI tier.
+  it('imports the official MiMo V2.6 Chat switch without changing other routes', () => {
+    const mimo = { ...model, id: 'mimo-v2.6-pro', provider: 'xiaomi',
+      baseUrl: 'https://api.xiaomimimo.com/v1', thinkingLevelMap: { ...model.thinkingLevelMap, off: 'off' } };
+    const first = toCindyCatalog({ xiaomi: [mimo] }, 'fixture');
+    expect(first.providers.xiaomi[0]).toMatchObject({ reasoning: true, thinkingToggle: true,
+      efforts: [], defaultEffort: null, execution: { pi: { thinkingLevelMap: mimo.thinkingLevelMap } } });
+    expect(toCindyCatalog({ xiaomi: [mimo] }, 'fixture', { previous: first })).toEqual(first);
+    // A later explicit negative capability must clear the retained switch.
+    expect(toCindyCatalog({ xiaomi: [{ ...mimo, reasoning: false }] }, 'updated', { previous: first })
+      .providers.xiaomi[0]).toMatchObject({ reasoning: false, thinkingToggle: false, efforts: [], defaultEffort: null });
+    for (const changed of [{ ...mimo, baseUrl: 'https://proxy.example/v1' },
+      { ...mimo, id: 'mimo-v2.7-pro' }, { ...mimo, api: 'openai-responses' },
+      { ...mimo, provider: 'another-provider' }]) {
+      expect(toCindyCatalog({ [changed.provider]: [changed] }, 'fixture').providers[changed.provider][0])
+        .toMatchObject({ efforts: ['high'] });
+    }
+  });
+
   // #10356 review, unit: the pinned Pi tariff's zero cacheRead overwrote our
   // corrected snapshot on refresh. Existing generic cost tests do not cover
   // this channel contract. Exercise fresh imports and same-route regeneration.

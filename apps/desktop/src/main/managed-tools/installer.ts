@@ -1,50 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { download, type DownloadOptions } from '../downloader/index.js';
+import {
+  createDownloadProgressReporter,
+  download,
+  type DownloadOptions,
+} from '../downloader/index.js';
 import { createLogger } from '../logger.js';
 import { replaceFile } from '../utils/replaceFile.js';
 import type { ToolArtifact, ToolInstallProgress } from './types.js';
-import { extractToolArchive, safeArchivePath, MAX_ARCHIVE_BYTES } from './archive.js';
+import { extractToolArchive, MAX_ARCHIVE_BYTES } from './archive.js';
+
+import {
+  installedTool,
+  toolInstallKey as key,
+  toolInstallRecordPath as recordPath,
+} from './installed.js';
+export { installedTool } from './installed.js';
 
 const log = createLogger('managed-tools');
-const key = (artifact: ToolArtifact) => {
-  for (const part of [artifact.id, artifact.version, artifact.host]) {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part)) throw new Error('Invalid tool identity');
-  }
-  if (!/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error('Invalid tool digest');
-  safeArchivePath(artifact.executable);
-  return `${artifact.id}-${artifact.version}-${artifact.host}-${artifact.sha256.slice(0, 12)}`;
-};
-const recordPath = (root: string, artifact: ToolArtifact) =>
-  path.join(root, 'tools', key(artifact), 'current.json');
-
-/** A record references only a complete immutable generation, never an in-progress extraction. */
-export async function installedTool(
-  root: string,
-  artifact: ToolArtifact,
-): Promise<string | undefined> {
-  try {
-    const record = JSON.parse(await readFile(recordPath(root, artifact), 'utf8'));
-    if (
-      record.sha256 !== artifact.sha256 ||
-      typeof record.generation !== 'string' ||
-      !/^[a-f0-9-]{36}$/.test(record.generation)
-    )
-      return;
-    const executable = path.join(
-      root,
-      'tools',
-      key(artifact),
-      record.generation,
-      ...artifact.executable.split('/'),
-    );
-    if ((await stat(executable)).isFile()) return executable;
-  } catch {
-    /* Missing/corrupt records are not installed tools. */
-  }
-}
-
 /** Installs to Cindy's private directory; never invokes a system installer or writes global config.
  * Generations stay immutable so a failed repair cannot break an existing consumer. A concurrent
  * instance may promote another valid generation; either result has the same pinned contents.
@@ -72,9 +46,29 @@ export async function installTool(
   const target = path.join(parent, generation);
   const recordTemp = path.join(parent, `${generation}.json.tmp`);
   let promoted = false;
-  let lastProgressAt = 0;
+  // Throttled: a fast connection must not produce thousands of chat-store updates per second.
+  const reporter = createDownloadProgressReporter({
+    initialPhase: 'downloading',
+    throttleMs: 150,
+    emit: (progress) => {
+      if (signal.aborted) return;
+      onProgress({
+        status: progress.phase === 'installing' ? 'installing' : 'downloading',
+        ...(progress.loaded > 0
+          ? {
+              progress: {
+                loaded: progress.loaded,
+                total: progress.total,
+                percent: progress.percent,
+              },
+            }
+          : {}),
+        download: progress,
+      });
+    },
+  });
   try {
-    onProgress({ status: 'downloading' });
+    onProgress({ status: 'downloading', download: reporter.snapshot() });
     // Each attempt has its own writable archive. The downloader retries/resumes in this
     // attempt without sharing mutable .part files with another Cindy process.
     await (deps.download ?? download)({
@@ -84,24 +78,11 @@ export async function installTool(
       targetPath: path.join(staging, 'archive'),
       signal,
       logger: log,
-      onProgress: ({ loaded, total, percent }) => {
-        const now = Date.now();
-        // A fast connection must not produce thousands of chat-store updates per second.
-        if (signal.aborted || (now - lastProgressAt < 150 && loaded !== total)) return;
-        lastProgressAt = now;
-        onProgress({
-          status: 'downloading',
-          progress: {
-            loaded,
-            total,
-            percent: percent === null ? null : Math.max(0, Math.min(100, percent)),
-          },
-        });
-      },
+      ...reporter.callbacks,
       retry: { maxAttempts: 4 },
     });
     signal.throwIfAborted();
-    onProgress({ status: 'installing' });
+    reporter.setPhase('installing');
     await mkdir(payload);
     await (deps.extract ?? extractToolArchive)(
       path.join(staging, 'archive'),

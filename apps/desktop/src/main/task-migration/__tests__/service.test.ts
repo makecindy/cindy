@@ -480,7 +480,8 @@ describe('resumable cross-computer copy', () => {
     vi.mocked(moveSessionProjectFromHost).mockResolvedValueOnce({
       ok: true,
       sessionId: 'fork',
-      workingDir: '/another',
+      workingDir: '/repo/.cindy-worktrees/task',
+      projectDir: '/another',
       workspaceKind: 'project',
     });
     const result = await state.context.run({ device: 'A', peer: 'B' }, () =>
@@ -494,7 +495,7 @@ describe('resumable cross-computer copy', () => {
     );
     expect(result).toMatchObject({
       deviceId: 'A',
-      projectMove: { sessionId: 'fork', workingDir: '/another', workspaceKind: 'project' },
+      projectMove: { sessionId: 'fork', workingDir: '/repo/.cindy-worktrees/task', projectDir: '/another', workspaceKind: 'project' },
     });
     expect(state.snapshot).not.toHaveBeenCalled();
     expect(state.imports).not.toHaveBeenCalled();
@@ -1124,6 +1125,19 @@ describe('resumable cross-computer copy', () => {
     state.rows.get('A')!.get('separate-worker')!.payload = JSON.stringify([{ text: 'pending' }]);
     await expect(start()).rejects.toThrow('MIGRATION_TASK_QUEUED');
     expect(state.exported).not.toHaveBeenCalled();
+  });
+
+  // #9346, unit: Stop metadata is not queued work; unknown data still blocks copying.
+  it('copies an empty stopped task but rejects a message or unknown metadata beside the marker', async () => {
+    const row = state.rows.get('A')!.get('fork')!;
+    const marker = { type: 'orca-report-stop', version: 1 };
+    for (const other of [{ text: 'pending' }, { type: 'unknown' }, { ...marker, clientId: 'input' }]) {
+      row.payload = JSON.stringify([marker, other]);
+      await expect(start()).rejects.toThrow('MIGRATION_TASK_QUEUED');
+    }
+    row.payload = JSON.stringify([marker]);
+    await start();
+    expect((await settled()).stage).toBe('complete');
   });
 
   it.each(['receiving', 'committed', 'imported'])(

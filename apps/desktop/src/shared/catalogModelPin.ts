@@ -15,17 +15,33 @@ export interface CatalogModelPinRoute {
   providerId: string;
   agentKind: CatalogModelPinAgentKind;
   model: string;
+  /** Retained experimental remote pins remain readable but are not executable by local one-shot consumers. */
+  agentDeviceId?: string;
 }
 
 const CATALOG_MODEL_PIN_AGENTS = new Set<CatalogModelPinAgentKind>(['codex', 'claude-code', 'pi']);
 
 /** Encode an exact provider × runtime × model route. */
 export function encodeCatalogModelPin(route: CatalogModelPinRoute): string {
+  if (route.agentDeviceId) {
+    return `remote-cat:${encodeURIComponent(route.agentDeviceId)}:${encodeCatalogModelPin({ ...route, agentDeviceId: undefined })}`;
+  }
   return `${CATALOG_MODEL_PIN_PREFIX}${encodeURIComponent(route.providerId)}:${route.agentKind}:${route.model}`;
 }
 
-/** Decode a catalog pin; malformed or unsupported-runtime values return null. */
+/** Decode persisted identity, not execution support. Remote pins are retained for removal only. */
 export function decodeCatalogModelPin(raw: string): CatalogModelPinRoute | null {
+  if (raw.startsWith('remote-cat:')) {
+    const separator = raw.indexOf(':', 'remote-cat:'.length);
+    if (separator < 0) return null;
+    try {
+      const agentDeviceId = decodeURIComponent(raw.slice('remote-cat:'.length, separator));
+      const local = raw.slice(separator + 1);
+      if (!agentDeviceId || /[\u0000-\u001f\u007f]/.test(agentDeviceId) || !local.startsWith(CATALOG_MODEL_PIN_PREFIX)) return null;
+      const route = decodeCatalogModelPin(local);
+      return route ? { ...route, agentDeviceId } : null;
+    } catch { return null; }
+  }
   if (!raw.startsWith(CATALOG_MODEL_PIN_PREFIX)) return null;
   const rest = raw.slice(CATALOG_MODEL_PIN_PREFIX.length);
   const firstSep = rest.indexOf(':');

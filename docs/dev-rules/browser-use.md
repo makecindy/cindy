@@ -1,5 +1,17 @@
 # Browser Use：三种浏览器后端的共同规则
 
+> **读取时机**：新增或修改 Browser Use（专用浏览器、侧边栏、「我的浏览器」）的工具层、配方目录、
+> 外链处理或任一浏览器后端之前
+> **适用路径**：`packages/lizi-mcps/src/browser/**`、`packages/browser-control-runtime/**`、
+> `packages/opencli-vendor/**`、`apps/desktop/src/main/browser-recipes/**`、
+> `apps/desktop/src/main/mcp-integrations/**/browser*`、
+> `apps/desktop/src/main/mcp-integrations/browser-*/**`、
+> `apps/desktop/src/main/{rsb-browser-bridge,browser-extension}/**`、
+> `apps/desktop/src/main/browser-backend-settings-store*`、
+> `apps/desktop/src/main/cindy-brain/browserExtensionSlot.ts`、
+> `apps/desktop/src/shared/{browserBackend,rsbBrowserBridge}.ts`、
+> `apps/desktop/src/renderer/features/right-sidebar/plugins/web-browser/**`
+
 Browser Use 有三种执行端，由用户在 Browser Use 设置里选：专用浏览器（独立实例，`external`）、
 侧边栏（`rsb-webview`）和「我的浏览器」（经官方 Cindy Chrome 扩展控制用户自己的 Chrome，
 `user-browser`，契约见[插件安全与编写](plugin-security-and-authoring.md)）。本文只放三端共同
@@ -42,6 +54,11 @@ A 读取基线 Git 版本，B 使用当前工具发现和配方但保留基线�
 URL 路径匹配程度、只读用途排序；`recommendationPaths` 是字面路径段加 `:参数` 的前缀模板，
 不执行正则或脚本。推荐不会自动执行配方，也不代表授权。推荐去重包含候选集合，避免访问
 首页后吞掉后续帖子页的不同候选，同时不为每条帖子重复推送同一组。
+
+推荐与执行共用同一道能力门控（`recipeUnsupportedByBackend`）：当前后端跑不了的配方（例如「我的浏览器」
+没有调试接口时的 opencli 适配器）不进入导航推荐和带 `intent` 的站点指南查询，也不占推荐名额；
+完整站点指南仍列出它们，但标 `runnable:false`，并在结果里附一次 `runnableHint`。2026-11-25 实测：
+「我的浏览器」打开携程页面时每页都推荐适配器，调用后全部被拒。
 
 X 公开单帖的 `x-tweet` 可返回原图 URL；有图片时输出 `imageReading.status=not_viewed`
 和下一步说明，无图片时不附加。任务依赖图片内容时继续下载并用原生图片工具查看，或在
@@ -366,6 +383,15 @@ bundle id 投递打开链接事件，外部链接会落到 Cindy 的实例。采
 回归位于 `browser-extension/__tests__/bridge.test.ts`、浏览器后端的 `user-browser-backend.test.ts` /
 `health-service.test.ts` 与设置页的 `ComputerUseSection.browserHealth.test.tsx`，覆盖过期空列表、
 首次读取前已过期、恢复、等待到期、未配对及探测失败。
+
+### 没有 Chrome 时先装浏览器（2026-11-16）
+
+「我的浏览器」对用户就是本机的 Chrome（Edge、Brave、Chromium 同样可用，扩展从 Chrome 网上应用店安装）。
+未连接时，若 `listInstalledChromium` 一个也找不到，健康状态报 `browser-missing`：设置页先显示
+「先安装 Chrome」与「下载 Chrome」（打开 Chrome 官方下载页），装好后原有轮询自动进入装插件／
+装扩展的步骤。该判断只替换 `plugin-missing` 与 `extension-disconnected`；`plugin-updating`、
+`plugin-selection-required` 与 `status-failed` 保持原样；安装位置读取异常时按“已安装”处理，
+不挡住后续指引。回归在 `health-service.test.ts` 与 `ComputerUseSection.browserHealth.test.tsx`。
 
 ## 插件更新时的浏览器连接（2026-11-07）
 

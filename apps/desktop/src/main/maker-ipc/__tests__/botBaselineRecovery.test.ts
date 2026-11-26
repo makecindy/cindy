@@ -4,11 +4,20 @@ import ts from 'typescript';
 import type { ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { checkDeviceRoute } from '../../remote-agent/controller/deviceRouteCheck';
+import { readDeviceProviderCatalog } from '../../remote-agent/controller/deviceCatalog';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, resolveScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
 import { readSshCodexModelList } from '../../remote-ssh/codex-model-list';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import { projectSessionRuntimeControl } from '../sessionRuntimeControl';
+import { createSessionRuntimeProjection } from '../sessionRuntimeProjection';
+import { assertModelRouteUsableWith, type ModelRouteAdmissionPorts } from '../modelRouteAdmission';
+import type { ModelRouteVerdict } from '../../maker-host/model-route-guard';
+import type { AgentKind } from '@cindy/maker-core';
+
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }),
+}));
 
 // Regression for #7177/#7428: an unavailable frozen selection used to reject
 // every input before dispatch, despite a usable saved companion configuration.
@@ -238,7 +247,7 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   const route = { agentDeviceId: null, agentKind: 'pi', model: 'saved', providerId: 'gateway', effort: null, fastMode: false };
   const apply = vi.fn(async () => path === 'same-harness-staged'
     ? { deferred: true, superseded: false, pendingUntilSend: true } : { effectiveProviderId: 'xai' });
-  const switchAgent = vi.fn(async () => {});
+  const switchAgent = vi.fn(async () => ({ switched: false, agentKind: 'pi', model: 'saved', engineReady: true }));
   const stage = registeredFunction('stageSessionRouteSelection', {
     readSessionAgentDeviceId: async () => path === 'back-to-task-device' ? 'other-device' : null,
     performSessionAgentSwitch: switchAgent, agentSwitchDeps: {},
@@ -255,14 +264,15 @@ it.each(['same-harness', 'same-harness-staged', 'cross-harness', 'back-to-task-d
   }
 });
 it.each(['claude-code', 'codex', 'pi'] as const)('restores all projected axes after recovering a legacy baseline to %s', (agentKind) => {
-  const project = registeredFunction('projectScheduledPreferences', {
-    projectSessionRuntimeControl, makerToDbAgentKind: (kind: string) => kind,
-  });
+  // projectScheduledPreferences moved out of register.ts (sessionRuntimeProjection.ts): call it directly.
+  const { projectScheduledPreferences: project } = createSessionRuntimeProjection({ broadcastSessionPatched: () => {} });
   const baseline = { agentKind: 'codex' as const, model: 'old', providerId: 'removed', effort: null, fastMode: false };
-  const legacy = project('projection-test', baseline);
+  // A saved baseline always has its scope id (parseScheduledModelBaseline requires one); the projection ignores it.
+  const saved = { ...baseline, scopeId: 'projection-scope' };
+  const legacy = project('projection-test', saved);
   expect(legacy.runtimeBaselineRecoveryPending).toBe(true);
   expect(legacy.runtimeEffective).toEqual(baseline); // Does not assert a different/available source.
-  expect(project('projection-test', { ...baseline, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
+  expect(project('projection-test', { ...saved, pendingBotProfileVersion: 2 }).runtimeBaselineRecoveryPending).toBe(false);
   const recovered = { ...baseline, agentKind, model: 'saved-model', providerId: 'saved' };
   const cleared = { ...legacy, ...projectSessionRuntimeControl('projection-test', recovered) };
   expect(cleared.runtimeBaselineRecoveryPending).toBe(false); // Shallow-merged patches cannot retain the offer.
@@ -291,13 +301,14 @@ describe('SSH baseline restoration through production profile application', () =
     const resolveScheduledExecutionSelection = registeredFunction('resolveScheduledExecutionSelection', {
       getSessionRowSnapshotStrict: async () => ({ providerId: 'openai', agentKind: 'codex',
         remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }),
+      dbToMakerEngineKind: (kind: string) => kind,
     });
     const apply = registeredFunction('applyScheduledProfile', {
       resolveScheduledExecutionSelection,
       applyScheduledModelSelection, createScheduledModelSelectionResolver, resolveScheduledModelSelection,
       readSshCodexModelList, listSshCodexProviders: ssh,
       agentSwitchDeps: { getSessionRow: async () => ({ agentKind: 'codex', status: 'active', remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }) },
-      dbToMakerAgentKind: (kind: string) => kind,
+      dbToMakerEngineKind: (kind: string) => kind,
       isSessionInTurn: () => false, maker: { getSession: () => undefined },
       readUsableAgentDeviceProviders: vi.fn(() => { throw new Error('must not query another computer'); }),
       assertModelRouteUsable: local, resolveScheduledModelSelectionLive: local,
@@ -338,6 +349,104 @@ describe('SSH baseline restoration through production profile application', () =
     expect(ssh).toHaveBeenCalledWith('ssh-builder');
     expect(local).not.toHaveBeenCalled();
   });
+
+  // Greptile P1 regression (production applyScheduledProfile): restoring permissionMode must work
+  // both when switching back from a plugin engine (switchHarness) AND when an intermediate built-in
+  // automation already returned to the owner's engine with the narrowed permissionMode (!needsSwitch).
+  it.each(['switch-back-from-acp', 'same-engine-after-intermediate-switch'] as const)(
+    'restores saved permissionMode via production applyScheduledProfile (%s)',
+    async (mode) => {
+      let currentAgentKind = mode === 'switch-back-from-acp' ? 'acp' : 'cc';
+      let currentPermissionMode = 'default';
+      const setPermissionMode = vi.fn(async (next: string) => { live.stablePermissionModeState = { mode: next }; });
+      const live = {
+        isTurnRunning: () => false,
+        stablePermissionModeState: { mode: 'default' },
+        setPermissionMode,
+        setPlanMode: vi.fn(async () => {}),
+      };
+      const persistSessionFields = vi.fn(async (_id: string, patch: { permissionMode?: string }) => {
+        if (patch.permissionMode) currentPermissionMode = patch.permissionMode;
+      });
+      const performSessionAgentSwitch = vi.fn(async (_deps: unknown, params: { permissionMode?: string }) => {
+        currentAgentKind = 'cc';
+        if (params.permissionMode) {
+          currentPermissionMode = params.permissionMode;
+          live.stablePermissionModeState = { mode: params.permissionMode };
+        }
+        return { switched: true, agentKind: 'claude-code', model: 'claude-sonnet-4-6', engineReady: true };
+      });
+      const baseline: ScheduledModelSelection = {
+        agentKind: 'claude-code',
+        agentDeviceId: null,
+        model: 'claude-sonnet-4-6',
+        providerId: 'anthropic',
+        effort: 'high',
+        fastMode: false,
+        permissionMode: 'acceptEdits',
+      };
+      const apply = registeredFunction('applyScheduledProfile', {
+        resolveScheduledExecutionSelection: async (_id: string, route: ScheduledModelSelection) => route,
+        applyScheduledModelSelection,
+        createScheduledModelSelectionResolver,
+        readSshCodexModelList,
+        listSshCodexProviders: vi.fn(),
+        agentSwitchDeps: {
+          getSessionRow: async () => ({
+            agentKind: currentAgentKind,
+            providerId: currentAgentKind === 'acp' ? 'acp-plugin:agy:agy' : 'anthropic',
+            permissionMode: currentPermissionMode,
+            status: 'active',
+            source: 'desktop',
+            remoteHostId: null,
+            agentDeviceId: null,
+          }),
+        },
+        dbToMakerEngineKind: (kind: string) => (kind === 'cc' ? 'claude-code' : kind),
+        isSessionInTurn: () => false,
+        maker: { getSession: () => live },
+        readUsableAgentDeviceProviders: vi.fn(),
+        assertModelRouteUsable: async () => undefined,
+        shouldApplyExclusiveProviderRerouteLive: () => false,
+        resolveScheduledModelSelectionLive: async (route: ScheduledModelSelection) => route,
+        admitPluginEngineSwitchTarget: vi.fn(),
+        listPluginEngineViews: () => [],
+        isScheduledBaselinePermissionMode: (v: unknown) => typeof v === 'string',
+        getDbClient: () => ({
+          drizzle: {
+            select: () => ({
+              from: () => ({
+                where: () => ({
+                  limit: async () => [{ planMode: false }],
+                }),
+              }),
+            }),
+          },
+        }),
+        sessions: { planModeEnabled: 'plan_mode_enabled', id: 'id' },
+        eq: () => true,
+        performSessionAgentSwitch,
+        persistSessionFields,
+        applySessionRuntimeSelection: async () => ({ deferred: false, superseded: false }),
+        runtimeSelectionRequiresModelWindowConfirmation: () => false,
+      });
+
+      await apply('task-1', baseline);
+      expect(currentPermissionMode).toBe('acceptEdits');
+      expect(live.stablePermissionModeState.mode).toBe('acceptEdits');
+      if (mode === 'switch-back-from-acp') {
+        expect(performSessionAgentSwitch).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ targetAgentKind: 'claude-code', permissionMode: 'acceptEdits' }),
+        );
+        expect(persistSessionFields).not.toHaveBeenCalled();
+      } else {
+        expect(performSessionAgentSwitch).not.toHaveBeenCalled();
+        expect(setPermissionMode).toHaveBeenCalledWith('acceptEdits');
+        expect(persistSessionFields).toHaveBeenCalledWith('task-1', { permissionMode: 'acceptEdits' });
+      }
+    },
+  );
 });
 // #7471 review: entry existence in checkDeviceRoute does not establish payment
 // admission. Exercise the remote catalog resolver inside the real restore scope.
@@ -382,8 +491,11 @@ it.each([
 describe('production restoration rejection classification', () => {
   const throwIpcError = (code: Parameters<typeof createIpcError>[0], message: string): never => { throw createIpcError(code, message); };
   it.each(['explicit-source-unavailable', 'explicit-source-disabled', 'model-retired', 'payment-required'])('%s retains ordinary semantics and marks only recoverable restoration failures', async (reason) => {
-    const guard = registeredFunction('assertModelRouteUsable', { throwIpcError,
-      verdictForModelRoute: async () => ({ kind: 'reject', reason }), describeModelRouteRejection: () => reason });
+    // assertModelRouteUsable moved out of register.ts (modelRouteAdmission.ts): call it with the verdict as its port.
+    const ports: ModelRouteAdmissionPorts = { listSshCodexProviders: vi.fn(),
+      verdictForModelRoute: async () => ({ kind: 'reject', reason } as ModelRouteVerdict) };
+    const guard = (agent: AgentKind, model: string, providerId: string | null, remoteHostId?: string | null,
+      unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE') => assertModelRouteUsableWith(ports, agent, model, providerId, remoteHostId, unavailableCode);
     await expect(guard('pi', 'saved', 'old')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     await expect(guard('pi', 'saved', 'old', undefined, 'MODEL_SELECTION_UNAVAILABLE')).rejects.toMatchObject({
       code: reason === 'payment-required' ? 'INVALID_PARAMS' : 'MODEL_SELECTION_UNAVAILABLE',
@@ -391,13 +503,15 @@ describe('production restoration rejection classification', () => {
   });
   it.each(['not-offered', 'REMOTE_AGENT_SHARE_REMOVED', 'REMOTE_AGENT_SHARE_PAUSED', 'unreachable', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])(
     'classifies remote %s before IPC downgrade, retaining transient errors', async (rejection) => {
-      const read = registeredFunction('readUsableAgentDeviceProviders', { throwIpcError, checkDeviceRoute,
-        remoteBackgroundInvoke: vi.fn(), isProviderShareAgentDeviceId: () => false,
+      const readUsableAgentDeviceCatalog = registeredFunction('readUsableAgentDeviceCatalog', {
+        throwIpcError, checkDeviceRoute, readDeviceProviderCatalog,
+        isProviderShareAgentDeviceId: () => false,
         isDeviceLinkInvoke: () => true, log: { warn: vi.fn() },
-        readDeviceProviderViews: async () => {
-          if (rejection === 'not-offered') return [];
-          throw new Error(rejection === 'unreachable' ? 'offline' : '[' + rejection + ']');
-        } });
+        remoteBackgroundInvoke: async () => rejection === 'not-offered'
+          ? { ok: true, result: { providers: [] } }
+          : { ok: false, error: { message: rejection === 'unreachable' ? 'offline' : '[' + rejection + ']' } },
+      });
+      const read = registeredFunction('readUsableAgentDeviceProviders', { readUsableAgentDeviceCatalog });
       await expect(read('device', 'pi', 'model', 'old')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       await expect(read('device', 'pi', 'model', 'old', 'MODEL_SELECTION_UNAVAILABLE')).rejects.toMatchObject({
         code: rejection === 'not-offered' || rejection === 'REMOTE_AGENT_SHARE_REMOVED'

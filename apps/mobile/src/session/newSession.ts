@@ -1,3 +1,6 @@
+import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
+import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
@@ -13,6 +16,7 @@ import {
 import { i18n } from '@/i18n';
 import type {
   CreateSessionOptions,
+  MobileMakerTransport,
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
@@ -61,6 +65,7 @@ export interface NewSessionDraft {
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
   firstMessage: string;
+  selectedSkill?: { name: string; invocation: string; context: string } | null;
   extraDirs?: string[];
   /**
    * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
@@ -68,6 +73,70 @@ export interface NewSessionDraft {
    * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
    */
   agentDeviceId?: string | null;
+  /**
+   * 插件提供的执行引擎(Desktop docs/plans/acp-plugin-bridge.md)：只在提交时由选中的引擎写入
+   * (applyPluginEnginePick)，不进持久草稿。存在时任务按 agent_kind = 'acp' 创建，内置的
+   * agentKind / model / providerId / Fast 不发；engine 只来自被控电脑的 listPluginEngines。
+   */
+  pluginEngine?: NewSessionPluginEngine | null;
+}
+
+/** 新任务选中的插件引擎(已按引擎规则校准：模型、思考深度、权限模式)。 */
+export interface NewSessionPluginEngine {
+  providerId: string;
+  model: string;
+  /** '' = 引擎自己决定。 */
+  effort: string;
+  permissionMode: string;
+}
+
+/** 提交时把选中的插件引擎写进要创建的草稿；没有选插件引擎时原样返回。 */
+export function applyPluginEnginePick(
+  draft: NewSessionDraft,
+  pick: NewSessionPluginEngine | null,
+): NewSessionDraft {
+  if (!pick) return draft;
+  // 插件引擎只在被控电脑本机运行：不带另一台电脑的 Agent 位置。
+  return { ...draft, pluginEngine: pick, agentDeviceId: null };
+}
+
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind,
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
+export async function resolveNewSessionSkillDraft(
+  draft: NewSessionDraft,
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+): Promise<NewSessionDraft> {
+  const skill = draft.selectedSkill;
+  if (!skill) return draft;
+  const token = leadingSlashInvocation(draft.firstMessage);
+  if (!token || (token.name !== skill.name && token.name !== skill.invocation)) return draft;
+  const workingDir = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
+  const context = buildComposerPaletteCacheKey(draft.agentDeviceId || deviceId, draft.agentKind, workingDir);
+  let invocation = skill.invocation;
+  if (context !== skill.context) {
+    // The controlled computer's catalog describes only its own engine.
+    invocation = skill.name;
+    if (!draft.agentDeviceId) {
+      invocation = await lookupMobileSkillInvocation(maker, draft.agentKind, workingDir, skill.name);
+    }
+  }
+  return {
+    ...draft,
+    firstMessage: draft.firstMessage.slice(0, token.start) + '/' + invocation + draft.firstMessage.slice(token.end),
+    selectedSkill: { ...skill, context, invocation },
+  };
 }
 
 /**
@@ -120,11 +189,34 @@ export interface NewSessionDeviceOption {
   name: string;
 }
 
+export const BUILTIN_AGENT_PERMISSION_MODES: Record<NewSessionAgentKind, readonly string[]> = {
+  'claude-code': ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  codex: ['ask', 'auto', 'bypassPermissions'],
+  pi: ['ask', 'auto', 'bypassPermissions'],
+};
+
+/** 将跨引擎统一的权限选择解析为指定内置 Agent 支持的权限档（ask <-> default，不支持时安全回落）。 */
+export function resolvePermissionModeForNewSessionAgent(
+  agentKind: NewSessionAgentKind,
+  preferred: string | null | undefined,
+  supportedIds?: readonly string[],
+): string {
+  const options = supportedIds && supportedIds.length > 0
+    ? supportedIds
+    : BUILTIN_AGENT_PERMISSION_MODES[agentKind];
+  return resolvePermissionModeForOptions(preferred, options, 'ask');
+}
+
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
   /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
   workspaceKind: NewSessionWorkspaceKind | null;
+  /**
+   * 跨内置 Harness / 插件引擎统一的最近一次新建任务权限选择；
+   * 切换任意内置引擎或插件引擎时优先沿用它，不支持时按目标引擎安全回落。
+   */
+  lastPermissionMode?: string | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
@@ -136,6 +228,11 @@ export interface NewSessionStoredPreferences {
    * 按设备归属,避免把一台电脑的路径套到另一台;没有记忆的设备沿用最近项目默认逻辑。
    */
   workingDirByDevice: Record<string, string>;
+  /**
+   * 每台被控电脑上次在新建页显式选择的工作区模式(deviceId → 'project' | 'dialogue')。
+   * 按账号与设备保存，切换电脑时按目标电脑自己的记忆恢复项目或对话。
+   */
+  workspaceKindByDevice: Record<string, NewSessionWorkspaceKind>;
   /**
    * 每台被控电脑上、每个 agent 上次在新建页显式选的另一台电脑或分享来的模型
    * (被控电脑 deviceId → agent → 选择)。选回被控电脑自己的模型即清掉;打开新建页时恢复,
@@ -241,7 +338,7 @@ export function validateNewSessionDraft(
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
     return i18n.t('session.new.enterProjectPath');
   }
-  if (!draft.model.trim()) return i18n.t('session.new.enterModel');
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return i18n.t('session.new.enterModel');
   if (!hasFirstMessagePayload(draft, content)) return i18n.t('session.new.enterFirstMessageOrAttachment');
   return null;
 }
@@ -258,7 +355,7 @@ export function isNewSessionDraftMissingPayloadOnly(
   content: NewSessionDraftContentState = {},
 ): boolean {
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) return false;
-  if (!draft.model.trim()) return false;
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return false;
   return !hasFirstMessagePayload(draft, content);
 }
 
@@ -1091,11 +1188,77 @@ export function pickInitialNewSessionWorkspace(
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
-export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateSessionOptions {
+/**
+ * Resolve the initial workspace mode when the new-task screen opens for a settled device.
+ * Uses the device's own remembered workspace mode first, falling back to the legacy global
+ * workspaceKind when that device has no per-device entry.
+ */
+export function resolveInitialNewSessionWorkspaceKind(input: {
+  deviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workspaceKind' | 'workspaceKindByDevice'> | null;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): NewSessionWorkspaceKind | null {
+  const deviceId = input.deviceId.trim();
+  if (deviceId) {
+    const deviceKind =
+      input.workspaceKindOverrides?.[deviceId]
+      ?? input.preferences?.workspaceKindByDevice?.[deviceId]
+      ?? null;
+    if (deviceKind) return deviceKind;
+  }
+  return input.preferences?.workspaceKind ?? null;
+}
+
+/**
+ * Resolve the target device's workspace when switching computers in the new-task form.
+ * Restores that device's own last chosen project or explicit dialogue instead of letting
+ * another computer's dialogue mode hide this device's remembered project.
+ */
+export function resolveWorkspaceForDeviceSwitch(input: {
+  currentWorkspaceKind: NewSessionWorkspaceKind;
+  targetDeviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workingDirByDevice' | 'workspaceKindByDevice'> | null;
+  workingDirOverrides?: Record<string, string>;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): { workspaceKind: NewSessionWorkspaceKind; workingDir: string } {
+  const rememberedKind =
+    input.workspaceKindOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workspaceKindByDevice?.[input.targetDeviceId]
+    ?? null;
+  const rememberedDir =
+    input.workingDirOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workingDirByDevice?.[input.targetDeviceId]
+    ?? null;
+  if (rememberedKind === 'dialogue') {
+    return { workspaceKind: 'dialogue', workingDir: '' };
+  }
+  if (rememberedDir?.trim()) {
+    return { workspaceKind: 'project', workingDir: rememberedDir };
+  }
+  if (rememberedKind === 'project') {
+    return { workspaceKind: 'project', workingDir: '' };
+  }
+  return {
+    workspaceKind: input.currentWorkspaceKind,
+    workingDir: '',
+  };
+}
+
+export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   const effort = draft.effort.trim();
   const providerId = draft.providerId?.trim();
-  const base = {
+  const engine = draft.pluginEngine;
+  // 插件引擎任务：Desktop 只接受带 acp-plugin: 标识、不带远程字段的 'acp'；没有 Fast。
+  const base = engine ? {
+    agentKind: 'acp' as const,
+    workspaceKind: draft.workspaceKind,
+    model: engine.model || 'default',
+    permissionMode: engine.permissionMode,
+    fastMode: false,
+    effort: engine.effort,
+    providerId: engine.providerId,
+  } : {
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
@@ -1111,7 +1274,9 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
   return {
     ...base,
     workingDir: draft.workingDir.trim(),
-    ...(extraDirs.length > 0 ? { extraDirs } : {}),
+    ...(projectDir ? { projectDir } : {}),
+    // 插件引擎不接受额外目录(与桌面一致，桌面对插件引擎隐藏这一项)。
+    ...(extraDirs.length > 0 && !engine ? { extraDirs } : {}),
   };
 }
 

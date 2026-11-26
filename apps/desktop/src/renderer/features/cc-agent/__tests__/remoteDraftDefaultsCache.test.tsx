@@ -1,6 +1,8 @@
+import { nextRemoteDraftEngine, resetRemoteDraftEngineFollow } from '../remoteDraftEngineFollow';
 // @vitest-environment jsdom
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from '../useRemoteDraftDefaults';
 import type { AgentKind, AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { ProviderView } from '@cindy/model-providers';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -9,14 +11,16 @@ import { forgetRemoteDraftDefaults, getRemoteDraftDefaults, rememberRemoteDraftD
 
 // Unit regression: mount the production read/selection/push hooks, with only
 // the Electron transport replaced. Covers cache reuse and authoritative writes.
-function usePageDefaults(bindings: Parameters<typeof useRemoteDraftDefaults>[0] & { capabilities: AgentCapabilities }) {
+type ProviderCatalog = { providers?: ProviderView[]; providersError?: string };
+function usePageDefaults(bindings: Parameters<typeof useRemoteDraftDefaults>[0] & { capabilities: AgentCapabilities } & ProviderCatalog) {
   const remoteDefaults = useRemoteDraftDefaults(bindings);
   useRemoteDraftSelection({
     remoteDefaults, usesDeviceCatalog: true, catalogDeviceId: bindings.effectiveDeviceLinkDeviceId,
-    capabilityAgentKind: bindings.capabilityAgentKind, agentCatalogProviders: [], capabilities: bindings.capabilities,
-    capabilitiesLoading: false, deviceProvidersUnsupported: true, deviceProvidersLoading: false,
+    capabilityAgentKind: bindings.capabilityAgentKind, agentCatalogProviders: bindings.providers ?? [], capabilities: bindings.capabilities,
+    capabilitiesLoading: false, deviceProvidersUnsupported: !bindings.providers, deviceProvidersLoading: false,
     deviceDraftDefaultsReady: remoteDefaults.remoteDraftState.status === 'ready',
     deviceDraftDefaults: remoteDefaults.remoteDraftState.value, isAgentDeviceDraft: false,
+    deviceProvidersError: bindings.providersError ?? null,
   });
   useRemoteDraftPush({ ...bindings, remoteDefaults, effectiveAgentDeviceId: undefined, agentCatalogProviders: [] });
   return { ...remoteDefaults, touch: () => { remoteDefaults.dlRuntimeTouchedRef.current = true; } };
@@ -26,7 +30,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 beforeEach(() => setDataOwnerGeneration('cache-test'));
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); });
-function mount(deviceId = 'host', agent: AgentKind = 'codex') {
+function mount(deviceId = 'host', agent: AgentKind = 'codex', catalog: ProviderCatalog = {}) {
   act(() => root?.unmount());
   let resolveRead!: (value: unknown) => void;
   let rejectRead!: (error: unknown) => void;
@@ -42,6 +46,7 @@ function mount(deviceId = 'host', agent: AgentKind = 'codex') {
     dataOwnerId: getDataOwnerGeneration().dataOwnerId,
     dataOwnerGeneration: getDataOwnerGeneration().generation,
     capabilities: { availableModels: ['chosen', 'new-choice', 'manual'].map(id => ({ id, displayName: id, efforts: [], contextWindow: 100_000, defaultEffort: null })), permissionModes: [], effortLevels: [], hasFastMode: false },
+    ...catalog,
   };
   let state!: State;
   function Harness() { state = usePageDefaults(bindings); return null; }
@@ -146,4 +151,52 @@ it('refreshes after relay reconnection without hiding the cached choice', async 
   expect(page.invoke).toHaveBeenCalledTimes(2);
   expect(page.state.remoteDraftState.status).toBe('ready');
   expect(page.state.dlSel?.model).toBe('new-choice');
+});
+
+// #10731 P1，unit：缓存已就绪不代表本次引擎已确认；旧用例只验证模型配置缓存。
+// 最小失败时序：缓存 Claude，重新进入后本次 RPC 返回 Codex。
+it('follows the freshly confirmed engine rather than settling on a cached engine', async () => {
+  resetRemoteDraftEngineFollow();
+  rememberRemoteDraftDefaults('engine-refresh', 'pi', { ...defaults('chosen'), selectedAgentKind: 'claude-code' });
+  const page = mount('engine-refresh', 'pi');
+  const follow = () => nextRemoteDraftEngine({
+    ownerId: getDataOwnerGeneration().dataOwnerId, deviceId: 'engine-refresh', currentVendor: 'pi',
+    defaultsReady: page.state.confirmedEngineRef.current !== null,
+    selectedAgentKind: page.state.confirmedEngineRef.current?.selectedAgentKind,
+  });
+  expect(follow()).toBeNull();
+  await act(async () => page.resolveRead({ ...defaults('chosen'), selectedAgentKind: 'codex' }));
+  expect(follow()).toBe('codex');
+  resetRemoteDraftEngineFollow();
+});
+
+// 测试价值:挂载真实的读取/播种 hook;可观察结果是草稿种下的模型(dlSel)。托管云实例按已连接
+// 目录播种:目录读失败时等它恢复,目录变化时重新校准;其它电脑照常按 capabilities
+// 播种、不因目录变化改选。最小失败输入:非云电脑上一次失败的 provider:list / 一次目录变化。tier:unit。
+const CLOUD_DEVICE = 'cloud-device-0123456789abcdef01234567';
+const codexCatalog = (...models: string[]): ProviderView[] => [{
+  id: 'gateway', name: 'gateway', source: 'user', connected: true, agents: ['codex'], auth: { method: 'none' },
+  routing: { codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+  models: { codex: models.map(id => ({ id, name: id, contextWindow: 100_000, efforts: [], defaultEffort: null, effortsUnknown: false })) },
+}];
+
+it.each([
+  { deviceId: 'host', seeded: 'chosen' },
+  { deviceId: CLOUD_DEVICE, seeded: undefined },
+])('a failed provider list holds the seed only on a managed cloud instance: $deviceId', ({ deviceId, seeded }) => {
+  rememberRemoteDraftDefaults(deviceId, 'codex', defaults('chosen'));
+  const page = mount(deviceId, 'codex', { providers: [], providersError: 'offline' });
+  expect(page.state.dlSel?.model).toBe(seeded);
+});
+
+it.each([
+  { deviceId: 'host', after: 'chosen' },
+  { deviceId: CLOUD_DEVICE, after: 'manual' },
+])('a changed provider catalog recalibrates only a managed cloud instance: $deviceId', ({ deviceId, after }) => {
+  rememberRemoteDraftDefaults(deviceId, 'codex', defaults('chosen'));
+  const page = mount(deviceId, 'codex', { providers: codexCatalog('chosen', 'manual') });
+  expect(page.state.dlSel?.model).toBe('chosen');
+  page.bindings.providers = codexCatalog('manual');
+  page.render();
+  expect(page.state.dlSel?.model).toBe(after);
 });

@@ -20,7 +20,7 @@
   },
   "version": "1.0.0",
   "releaseNotes": "新增图片编辑工具。", // 可选；更新说明要求见 §7.3
-  "minCindyVersion": "1.2.3", // 示例；v3 必填:本插件实际依赖的首个 Cindy 正式版本(SemVer)
+  "minCindyVersion": "1.2.3", // 示例；v3 必填，填写规则见下文(SemVer)
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:插件只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(详情页会如实标注"常驻运行",绝大多数插件不需要,仅订阅型/需秒响应的场景用)
   "command": "画图",            // 推荐:用户 $画图 显式点名(与已装插件查重,冲突拒装)。
@@ -59,21 +59,23 @@
   // left / right / top / bottom)/ "window"(弹成独立窗口);只是左侧导航入口的默认打开方式,
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
+  "githubRelease": "example/plugin", // Optional desktop update source for a local install with settingsHtml.
   "showTaskPreferences": true,     // 可选:是否显示宿主「模型与任务」卡,缺省/true 显示,false 隐藏;见 §4.8
+  "imEntrance": true,              // 可选:IM 入口插件(需同时声明 agent.tasks 与 agent.targets)。只影响展示:「设置 → IM 机器人」列出本插件,并在没开官方机器人时也显示「项目与模型」;不新增权限。见 plugin-agent-tasks.md「IM 共用项目与模型」
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 ```
 
-`schemaVersion: 3` 必须填写 `minCindyVersion`。它写本插件实际依赖的首个 Cindy
-正式版本；Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
+`schemaVersion: 3` 必须填写 `minCindyVersion`。用到新能力时，填开发测试所用的 Cindy 版本；
+Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
 官方市场会优先向旧客户端投影最近的兼容历史版本，没有兼容版本时不展示该插件。
 Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` 追加筛选或确认弹窗；
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
-准确填写：它供发布服务选择兼容 release，也记录插件真实依赖的首个 Host 版本。
+准确填写：它供发布服务选择兼容 release，也记录插件已验证的 Host 版本下限。
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
-`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅配额，以及本机/同账号已授权电脑的已记录用量、供应商组状态和可见成员信息）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
 
 可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
 已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。
@@ -82,7 +84,6 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 `[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
 安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
 顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
-该能力尚未发布，开发示例不能作为正式版版本下限的依据。
 
 ### whenToUse:只写发现线索,不写使用规则
 
@@ -203,8 +204,11 @@ node secretBindings key、setup kv key——都不能使用 `__proto__`、`const
 
 v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `slots`。带详单的字段是 `tools`、`cindy`、
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
-`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
+`browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`form`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
+`harnesses` 声明插件提供的任务执行引擎(ACP Agent),每项指向 `node.entries` 里的一个入口,见
+[§4.6.4](plugin-harnesses.md)。
+`fileOpener` 声明插件接管打开的文件类型(须同时声明 `node`),见 [§4.25](plugin-file-opener.md)。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
@@ -235,7 +239,7 @@ UI 和 Agent 发送都先进入 10 秒倒计时，卡片可撤销或立即发送
 
 v3 未识别的顶层字段会原样保留，但旧版 Cindy 不展示、不给这个未知 Host 能力、也不因此阻止安装。
 当未来 Cindy 识别该字段后，它才会进入正常的能力展示与运行时守门。插件若依赖新能力，
-应同时把 `minCindyVersion` 提高到首个支持版本；仅由插件包自己完成的逻辑不要发明
+应同时按本章规则更新 `minCindyVersion`；仅由插件包自己完成的逻辑不要发明
 Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再写。
 当前 Agent tool-call 内，插件工具是否执行由外层 `ghost_call` 的 Agent 授权决定；
 普通网络和 workdir 文件操作按上文的 `callId` 绑定复用 Agent 授权。CLI 继续由
@@ -257,6 +261,9 @@ Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再
 向项目、已有任务或伙伴投递内容时另声明 `"agent": { "tasks": true, "targets": true }`（§4.11.3）。
 `targets` 是独立权限，安装/更新确认单列，需 Host 显式批准；旧 tasks 批准不授予目标访问。
 新包的 targets 必须是布尔值，targets:true 缺 tasks:true 时拒装。
+要读取并修改用户的**模型收藏**、读取**最近使用的模型**（例如在自己的页面里画一份与 Cindy
+一致的模型选择器），另写 `"agent": { "modelPreferences": true }`（§4.0.3c）。它不依赖 tasks，
+安装/更新确认与详情页单列一行权限，更新新增即「权限变多」；必须是布尔值，否则拒装。
 
 **node 工作进程详单**(声明 node 时必写,详见 §4.12):
 
@@ -289,7 +296,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "preview": {
-  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;语法同 network.hosts;能在右侧栏打开的预览网站白名单,详情页逐条展示
+  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;只接受普通域名模式或预览允许的回环名；不是完整 origin；详情页逐条展示
 }
 ```
 
@@ -334,7 +341,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "network": {
-  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";详情页逐条展示给用户
+  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条；普通域名仅 HTTPS:443；完整 origin 可声明端口；HTTP/WS 只限字面量私网/回环与 localhost，且不注入凭证
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
@@ -344,7 +351,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
-      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省只覆盖普通域名，完整 origin 必须显式写出，凭证只走 HTTPS/WSS
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)
@@ -356,6 +363,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "oauth": {                                      // source:"oauth" 时必填(其它来源禁写):主机托管 OAuth 授权详单(见 §4.7)
       "authorizeUrl": "https://accounts.example.com/authorize",  // 授权页(https;域名必须命中 hosts 白名单)
       "tokenUrl": "https://accounts.example.com/token",          // code/refresh 交换端点(https;域名必须命中 hosts)。注:个别服务商(如 xAI)的新版 consent 页不再 302 回 loopback,而是页面 JS 跨源投递授权 code——主机允许的投递来源 = authorizeUrl/tokenUrl 的 origin + hosts 白名单命中的 https 域;consent 页与授权端点不同域时,把 consent 域(如 accounts.x.ai)也声明进 hosts 即可
+      "deviceAuthorizationUrl": "https://accounts.example.com/device",  // 可选:设备码登录端点(RFC 8628;https,域名须命中 hosts)。声明后主机改走「申请验证码 → 用户在确认页确认 → 轮询 tokenUrl」,不起 loopback、服务商后台不用登记重定向 URL;与 tokenBroker / brokerBounce 互斥。authorizeUrl 仍必填(旧版 Cindy 忽略本字段、退回授权码流程),详见 §4.7.3
       "clientId": "xxx.apps.example.com",           // 可选:内置 OAuth 客户端 ID(用户零配置开箱即用;用户在设置页自填的覆盖内置,清除自填即回落)
       "clientIdAlternatives": ["xxx-global.apps.example.com"],  // 可选 ≤8 条:仅 tokenBroker 模式;插件按 app-context 选 App 时,connect 只接受默认值或这里声明的公开 ID
       "clientSecret": "xxx",                        // 可选(须与 clientId 成对):内置 client 的 secret;桌面应用的 client 凭证本非机密,纯 PKCE 服务商可省略
@@ -419,13 +427,20 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
 
 ### 决策与重排声明
 
-`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+`cindy.models` 是可选的模型能力类目，支持 `decisions`、`rerank` 和 `media_request`：
 
 ```json
-{ "cindy": { "models": ["decisions", "rerank"] } }
+{ "cindy": { "models": ["media_request"] } }
 ```
 
 只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
-调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」和 [§4.0.4 媒体直调](plugin-media.md)。新增
+`media_request` 要走现有安装或更新审批。使用此能力时通过
 `minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
 或账号失效当成不支持而绕过。
+
+### GitHub Release updates for locally installed plugins
+
+With `settingsHtml` present, set `githubRelease` to the GitHub.com repository in owner/repository form. Publish a GitHub Release tagged `v<version>` with an attached `<plugin-id>-<version>.cindy` asset. The package manifest must retain the plugin ID and repository and declare the same version as the tag. A draft does not appear. A published pre-release is labeled in settings.
+
+Users first import a package declaring the source. They then check and install updates from the host section of the plugin settings. Private repositories require GitHub authorization with read access to repository contents. The host checks GitHub?s asset digest and uses the existing plugin update confirmation flow. Existing installed packages without this field continue to work.

@@ -27,12 +27,13 @@ describe('NewMakerDraftRoute remote first-message send', () => {
     remoteFence,
   );
   const remotePending = source.indexOf('setPending(remoteSessionId, {', remoteFence);
-  const remoteNavigate = source.indexOf('navigate(`/cc-agent/${remoteSessionId}`', remoteFence);
+  const remoteNavigate = source.indexOf('navigate(`/cc-agent/${presetSessionId}`');
 
-  it('hands ordinary remote text to the store outbox before navigating, not to SessionView', () => {
+  it('hands ordinary remote text to the store outbox even when the preview route has already been left', () => {
     expect(remoteFence).toBeGreaterThan(-1);
     expect(remoteSend).toBeGreaterThan(remoteFence);
-    expect(remoteNavigate).toBeGreaterThan(remoteSend);
+    expect(remoteNavigate).toBeGreaterThan(-1);
+    expect(remoteNavigate).toBeLessThan(remoteSend);
     // 视图交接只剩退路:排在直接发送之后。
     expect(remotePending).toBeGreaterThan(remoteSend);
     expect(source.slice(remoteFence, remoteSend)).toContain(
@@ -66,7 +67,7 @@ describe('NewMakerDraftRoute remote first-message send', () => {
       preflight,
     );
     expect(preflight).toBeGreaterThan(remoteSend);
-    expect(preflight).toBeLessThan(remoteNavigate);
+    expect(preflight).toBeGreaterThan(remoteNavigate);
     expect(subscribe).toBeGreaterThan(preflight);
     expect(source.slice(subscribe, subscribe + 160)).toContain('`session:${remoteSessionId}`');
     // 订阅不得挡在 navigate 前面以 await 的形式出现在发送调用之外。
@@ -110,7 +111,7 @@ describe('NewMakerDraftRoute remote first-message send', () => {
       'remoteProjectsStore.clearPendingFirstSend(remoteSessionId);\n            }',
       remoteSend,
     );
-    expect(fallback).toBeGreaterThan(remoteNavigate);
+    expect(fallback).toBeGreaterThan(remoteSend);
     expect(fallback).toBeLessThan(remotePending);
   });
 });

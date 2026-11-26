@@ -1,6 +1,7 @@
 /** Read-only, owner-scoped directory continuity. Never used for execution grants or mutations. */
 import { createHash } from 'node:crypto';
 import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMetadataContinuity, isProviderAccessDeniedError,
+  PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS,
   type Envelope, type InvokeResultPayload, type MetadataContinuityScope } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -10,6 +11,14 @@ import { PROVIDER_GROUP_IPC } from '../../shared/providerGroup.js';
 
 const log = createLogger('device-link:metadata');
 const READ_CHANNELS = new Set<string>(MODEL_CATALOG_READ_CHANNELS);
+/**
+ * Directory reads every picker, group, bot and Orca reader shares. One snapshot answers all of
+ * them for REMOTE_CATALOG_FRESH_MS, so per-consumer TTLs no longer multiply reads to one host.
+ * Agent run status and provider-group views stay live: they describe changing state, not a catalog.
+ */
+const FRESH_WINDOW_CHANNELS = new Set<string>([
+  'maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents',
+]);
 
 const TEMPORARY_CODES = new Set([
   'NETWORK_ERROR', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_OFFLINE',
@@ -418,12 +427,30 @@ export function invalidateProviderDirectoryContinuity(): void {
 /** Main can distinguish a stale in-flight directory response from a fresh one. */
 export function providerDirectoryGeneration(): number { return directoryGeneration; }
 
+/**
+ * 目录快照的预算 = 它**最旧**那部分行还能信多久。
+ *
+ * 完整目录:每行都是刚读到的 → 满额(30 分钟)。
+ * 部分目录:并进来的旧行来自上一次**完整**目录,只到 `rememberedUntilMs` 为止可信。
+ * 不能让一次部分成功给旧行续一整份预算:「完整目录 29 分钟前 → 部分读 → 两条腿
+ * 都失败」之后,旧设备会被再显示约 30 分钟(Greptile review #9360「旧目录被重新计时」)。
+ */
+function directoryRemainingTrustMs(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return PROVIDER_METADATA_TRUST_MS;
+  const rememberedUntilMs = (value as { rememberedUntilMs?: unknown }).rememberedUntilMs;
+  if (typeof rememberedUntilMs === 'number' && Number.isFinite(rememberedUntilMs)) {
+    return Math.max(0, rememberedUntilMs - Date.now());
+  }
+  return PROVIDER_METADATA_TRUST_MS;
+}
+
 function directoryScope(): MetadataContinuityScope {
   const base = scope();
   const captured = directoryGeneration;
   const capturedDenial = directoryDenialGeneration;
   return { ...base, current: () => base.current() && captured === directoryGeneration
-    && capturedDenial === directoryDenialGeneration };
+    && capturedDenial === directoryDenialGeneration,
+  remainingTrustMs: directoryRemainingTrustMs };
 }
 
 /** Other bounded routing snapshots share the same known-permission invalidation fence. */
@@ -431,11 +458,21 @@ export function captureProviderMetadataContinuityScope(target: string): () => bo
   return scope(() => true, target).current;
 }
 
+export interface ProviderMetadataReadOptions {
+  /**
+   * The caller keeps its own short cache and treats each of its reads as the host's current answer
+   * (provider-group retirement decisions). It still gets the bounded continuity fallback, but
+   * never the shared fresh-window answer.
+   */
+  ownFreshness?: true;
+}
+
 /** Only the two explicit metadata reads below may use a snapshot. In particular caps, pick,
  * delegation checks, usage writes and Agent operations always reach their real authority. */
 export async function invokeProviderMetadataContinuity(
   target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
   allowed: () => boolean = () => true,
+  options?: ProviderMetadataReadOptions,
 ): Promise<InvokeResultPayload> {
   const groupView = channel === PROVIDER_GROUP_REMOTE_CHANNEL && args.length === 1
     && !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'view';
@@ -444,7 +481,7 @@ export async function invokeProviderMetadataContinuity(
   const originalSource = targetGenerations.get(target)?.source;
   const captured = scopeFacts(target);
   try {
-    return await readProviderMetadataOnce(target, channel, args, request, allowed);
+    return await readProviderMetadataOnce(target, channel, args, request, allowed, options);
   } catch (error) {
     // Retry only an obsolete successful read, once, within the original authority.
     // Never classify arbitrary scope/denial errors as transient or reuse its result.
@@ -453,7 +490,7 @@ export async function invokeProviderMetadataContinuity(
       logScopeChange(target, channel, captured, allowed);
       throw error;
     }
-    return readProviderMetadataOnce(target, channel, args, request, allowed);
+    return readProviderMetadataOnce(target, channel, args, request, allowed, options);
   }
 }
 
@@ -491,7 +528,7 @@ function logScopeChange(target: string, channel: string, before: ScopeFacts, all
 
 async function readProviderMetadataOnce(
   target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
-  allowed: () => boolean,
+  allowed: () => boolean, options?: ProviderMetadataReadOptions,
 ): Promise<InvokeResultPayload> {
   const resource = createHash('sha256').update(JSON.stringify([target, channel, args])).digest('hex');
   const capturedScope = scope(allowed, target, { liveFallback: true });
@@ -554,6 +591,7 @@ async function readProviderMetadataOnce(
     if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
     return readProviderMetadataContinuity(value)?.remainingMs ?? 0;
   };
+  if (FRESH_WINDOW_CHANNELS.has(channel) && !options?.ownFreshness) capturedScope.freshForMs = REMOTE_CATALOG_FRESH_MS;
   let failure: InvokeResultPayload | undefined;
   try {
     const result = await reader.read(capturedScope, resource, async () => {

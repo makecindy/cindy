@@ -28,6 +28,8 @@ export const BOT_SETTINGS_OPS = [
   'project.retryRepository',
   'lifecycle.run',
   'models.default',
+  // 2026-11-26: the controller's model settings page sets this computer's default buddy model in place.
+  'models.setDefault',
   'memory.list',
   'memory.read',
   'memory.update',
@@ -79,6 +81,7 @@ export type BotSettingsOp = (typeof BOT_SETTINGS_OPS)[number];
 export const BOT_SETTINGS_HOST_OPS: readonly BotSettingsOp[] = [
   'caps',
   'models.default',
+  'models.setDefault',
   'autonomy.get',
   'autonomy.set',
   'autonomy.reset',

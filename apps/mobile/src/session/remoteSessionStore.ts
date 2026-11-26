@@ -1,6 +1,6 @@
 import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
-import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
@@ -77,10 +77,19 @@ import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { sessionAgentSwitchIntentPatch } from '@/session/sessionAgentSwitch';
 import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { setRemoteSessionStoreSizeSource } from '@/debug/jankMetrics';
+import {
+  projectSessionWithOfflineInboxIntent,
+  type OfflineInboxIntent,
+} from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getMobileOfflineInboxIntent,
+  subscribeMobileOfflineInboxIntents,
+} from '@/session/offlineInboxIntents';
 
 interface DeviceShard {
   deviceId: string;
@@ -1440,12 +1449,13 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // List-only projection. Detail consumers keep reading mergedSessions, including
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
-const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUsdIsApproximate', 'totalTokenUsage']);
 // These fields cannot change shard ownership, visibility or retention. Timestamps
 // still update this task's live-row anchor; titles still reconcile local previews.
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
+  intent: OfflineInboxIntent | undefined;
   projected: RemoteSession;
 }>();
 
@@ -1453,17 +1463,23 @@ function reconcileHomeSessions(): void {
   const activeSessionIds = new Set<string>();
   const next = visibleSessions.map((session) => {
     activeSessionIds.add(session.id);
+    const intent = getMobileOfflineInboxIntent(
+      session.canonicalDeviceId ?? session.deviceLinkDeviceId,
+      session.id,
+    );
     const cached = homeSessionProjectionCache.get(session.id);
-    if (cached?.source === session) return cached.projected;
+    if (cached?.source === session && cached.intent === intent) return cached.projected;
 
-    const projected = { ...session };
+    let projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
+    delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
+    projected = projectSessionWithOfflineInboxIntent(projected, intent);
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
       : projected;
-    homeSessionProjectionCache.set(session.id, { source: session, projected: stableProjected });
+    homeSessionProjectionCache.set(session.id, { source: session, intent, projected: stableProjected });
     return stableProjected;
   });
   for (const sessionId of homeSessionProjectionCache.keys()) {
@@ -1473,6 +1489,11 @@ function reconcileHomeSessions(): void {
   homeSessions = next;
   bumpHomeStatusVersion();
 }
+
+subscribeMobileOfflineInboxIntents(() => {
+  reconcileHomeSessions();
+  emit();
+});
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
@@ -1841,6 +1862,7 @@ function preserveSessionRuntimeFields(
     'companion',
     'taskTeammate',
     'agentSwitchIntent',
+    'pluginEngineSwitchIntent',
     'runtimeGeneration',
     'runtimeBaseline',
     'runtimeEffective',
@@ -4813,7 +4835,12 @@ export const remoteSessionStore = {
           localRow as unknown as Record<string, unknown> | undefined,
         );
         if (Object.keys(filtered).length > 0) {
-          this.applySessionPatch(deviceId, sessionId, filtered as Partial<RemoteSession>);
+          // 意图投影拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)，既有内置链路
+          // 永远看不到 targetAgentKind = 'acp'。
+          const split = Object.prototype.hasOwnProperty.call(filtered, 'agentSwitchIntent')
+            ? { ...filtered, ...sessionAgentSwitchIntentPatch(filtered.agentSwitchIntent) }
+            : filtered;
+          this.applySessionPatch(deviceId, sessionId, split as Partial<RemoteSession>);
         }
       }
       return;
@@ -4959,7 +4986,11 @@ export const remoteSessionStore = {
         bumpDeviceSessionListMutationEpoch(deviceId);
         this.applySessionPatch(deviceId, sessionId, {
           totalMoney,
-          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount }
+            : totalCostUsd !== null && totalCostUsd >= 0 ? { totalCostUsd } : {}),
+          ...(typeof payload.totalCostUsdIsApproximate === 'boolean' && {
+            totalCostUsdIsApproximate: payload.totalCostUsdIsApproximate,
+          }),
         });
       } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         bumpDeviceSessionListMutationEpoch(deviceId);
@@ -5402,7 +5433,7 @@ export const remoteSessionStore = {
         : (isTurnStart ? true : current.generationReliable);
       // 速度属于产生它的那一轮：新一轮清掉，没带字段的帧沿用最近一次（含收尾平均）。
       // 标记不可靠又不带速度的帧，表示电脑端撤回了速度（休眠／时钟异常）。
-      const tokenSpeed = readTokenSpeedSnapshot(data?.tokenSpeed)
+      const tokenSpeed = receiveTokenSpeedSnapshot(data?.tokenSpeed, isTurnStart ? undefined : current.tokenSpeed)
         ?? (isTurnStart || data?.generationReliable === false ? undefined : current.tokenSpeed);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流
@@ -6358,6 +6389,14 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Native deep links must resolve hidden/detail-only sessions after the mirror hydrates. */
+export function useRemoteSessionLinkTarget(sessionId: string): RemoteSession | null {
+  const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
+    session.id === sessionId,
+  ) ?? null, [sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(read, read);
+}
+
 /** Link chips observe only their visible targets, not every task's activity. */
 export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
   const read = useCallback(() => {
@@ -6393,12 +6432,13 @@ export function useRemoteHomeSessions(): RemoteSession[] {
   );
 }
 
-export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalTokenUsage'>;
+export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalCostUsdIsApproximate' | 'totalTokenUsage'>;
 const EMPTY_SESSION_USAGE: RemoteSessionUsage = {};
 
 function sessionUsageEqual(a: RemoteSessionUsage, b: RemoteSessionUsage): boolean {
   return a.totalTokenUsage === b.totalTokenUsage
     && a.totalCostUsd === b.totalCostUsd
+    && a.totalCostUsdIsApproximate === b.totalCostUsdIsApproximate
     && a.totalMoney?.amount === b.totalMoney?.amount
     && a.totalMoney?.currency === b.totalMoney?.currency
     && a.totalMoney?.kind === b.totalMoney?.kind
@@ -6415,7 +6455,7 @@ export function useRemoteSessionUsage(sessionId: string, enabled = true): Remote
   const readUsage = useCallback(() => {
     const session = enabled ? sessionById(sessionId) : undefined;
     const next: RemoteSessionUsage = session
-      ? { totalCostUsd: session.totalCostUsd, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
+      ? { totalCostUsd: session.totalCostUsd, totalCostUsdIsApproximate: session.totalCostUsdIsApproximate, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
       : EMPTY_SESSION_USAGE;
     if (sessionUsageEqual(previousRef.current, next)) return previousRef.current;
     previousRef.current = next;

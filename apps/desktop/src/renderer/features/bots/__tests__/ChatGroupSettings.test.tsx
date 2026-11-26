@@ -19,6 +19,7 @@ vi.mock('../botPronounContext', () => ({
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => null }));
 vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: () => null }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }) }));
 vi.mock('../BotsHomeView', () => ({
@@ -136,11 +137,44 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+
+// Unit: the real management page must expose the permission only to managers;
+// invitation-menu tests previously covered read-only canInvite, not changing it.
+it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  fireEvent.click(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberInvites: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberInvites: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides member invitation controls from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+  view.update({ ...group(true), supportsMemberInvites: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
 // Component: a human member edits a personal preference, independently of the
 // manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member move their group Cindy to a named computer', async () => {
+  const initial = { ...group(), assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'Studio' }, { id: 'win', name: 'Windows' }] };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const picker = () => screen.getByRole('combobox', { name: key('assistantComputer') });
+  expect(picker().textContent).toContain('Studio');
+  fireEvent.click(picker());
+  fireEvent.click(screen.getByRole('option', { name: 'Windows' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'assistantDevice', deviceId: 'win' } }));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, assistantDeviceId: 'win' }} /></MemoryRouter>);
+  expect(picker().textContent).toContain('Windows');
+});
+
 it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
   const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
   const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
@@ -151,6 +185,21 @@ it('lets an ordinary member choose notifications and follows the confirmed cross
   expect(mocks.refresh).toHaveBeenCalledOnce();
   rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
   expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
+});
+// Unit regression for #13029: the displayed group default is not a personal choice.
+it('saves the currently displayed inherited mode as an explicit preference', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'mentions' as const, notificationModeInherited: true };
+  const view = renderAt(initial);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') });
+  expect(control.textContent).toContain(key('notifications.mentions'));
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  await waitFor(() => expect(control.hasAttribute('disabled')).toBe(false));
+  view.update({ ...initial, notificationModeInherited: false });
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  expect(mocks.manage).toHaveBeenCalledTimes(1);
 });
 it('keeps the confirmed notification value during saving and after rejection', async () => {
   let finish!: (value: { ok: false; errorCode: string }) => void;
@@ -264,6 +313,27 @@ it('lets a member change their own nickname while group management and another o
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'nickname', actorId: 'me', nickname: 'Group name' } }));
   await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
 });
+// Unit: real companion page, ordinary member + owned companion. Existing tests covered grants
+// and manager removal only; this checks cancellation, failed retry, and active-request confirmation.
+it('lets an ordinary member withdraw their own companion, keeping failed removal retryable', async () => {
+  const value = group(true); value.members[1]!.role = 'member';
+  value.round = { status: 'running', speakers: [{ botId: 'bot', sessionId: 'lane', activity: 'reply' }], canContinue: false };
+  renderAt(value, 'companion:bot');
+  mocks.confirm.mockResolvedValueOnce(false);
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce());
+  expect(mocks.manage).not.toHaveBeenCalled();
+  mocks.manage.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_FAILED' });
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  expect(screen.getByTestId('location').textContent).toContain('companion');
+  expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ confirmText: key('stopAndRemove'),
+    description: `${key('removeOwnHint')}:Partner\n\n${key('removeOwnActiveHint')}` }));
+  fireEvent.click(row(key('removeOwn')));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('groupSettingsPage'));
+  expect(mocks.manage).toHaveBeenLastCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'bot', action: 'remove' } });
+});
+
 it('lets a companion owner manage a group owned by their companion', async () => {
   const view = renderAt(group(true), 'companion:bot');
   const radios = screen.getAllByRole('radio') as HTMLButtonElement[];
@@ -309,7 +379,7 @@ it('labels reply and speaking modes with the same words as the local group setti
 it('keeps reply mode and 分工 settings for single-speaker groups and saves mention-only replies', async () => {
   renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
   expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
-  expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
+  expect(screen.queryByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeNull();
   expect(screen.getByText(key('projectFolder'))).toBeTruthy();
   fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
   fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
@@ -366,11 +436,6 @@ it.each([
     replyMode: 'all', autoContinue: false, organizerBotId: 'bot',
     members: enabled === undefined ? members : [...members, cindy], ...(enabled === undefined ? {} : { supportsGroupAssistant: true, assistantEnabled: enabled }) }, 'manage');
   expect(screen.getByText(replyHint)).toBeTruthy();
-  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
-  expect(sectionOf(organizer)).toBe(key('work'));
-  fireEvent.click(organizer);
-  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Partner']);
-  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
   fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
   expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
   const toggle = screen.queryByTestId('bot-group-assistant');

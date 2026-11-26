@@ -3,7 +3,7 @@
  * 组的调度单位仍是「电脑 + 供应商」；这里只把这台电脑上每个账号的额度分开列出，与供应商详情页的账号区同一份数据。
  * 账号管理通道只对本机和同账号电脑开放；旧电脑没有这个通道时读取失败，组里继续显示原来的单张卡。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useLiveQuotaForeground } from '@/components/settings/useProviderSubscriptionCard';
@@ -14,7 +14,6 @@ import {
 } from '@/components/status/QuotaHoverCard';
 import {
   buildSubscriptionAccountUsageCard,
-  type UsageCardAccount,
 } from '@/components/status/usageCardModel';
 import {
   getDataOwnerGeneration,
@@ -26,6 +25,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
   isUnusedDefaultAccount,
   type SubscriptionAccountView,
@@ -41,7 +41,7 @@ export type GroupMemberAccount = {
   number: number;
 };
 
-function listedAccounts(raw: unknown, providerId: SubscriptionProvider): GroupMemberAccount[] {
+function listedAccounts(raw: unknown, providerId: string): GroupMemberAccount[] {
   const view = raw as { providerId?: unknown; accounts?: unknown } | null | undefined;
   if (view?.providerId !== providerId || !Array.isArray(view.accounts)) return [];
   return (view.accounts as SubscriptionAccountView[]).flatMap((account, index) =>
@@ -54,8 +54,14 @@ export function useGroupMemberAccounts(
   providerId: string | null,
   deviceId: string | null,
   enabled: boolean,
+  options?: { poolKind?: SubscriptionProvider },
 ): { accounts: GroupMemberAccount[] | null; loading: boolean } {
-  const pool = enabled && providerId && isSubscriptionProvider(providerId) ? providerId : null;
+  const pool = enabled && providerId && (
+    options?.poolKind
+      ? isSubscriptionPoolProviderIdShape(providerId)
+      : isSubscriptionProvider(providerId)
+  ) ? providerId : null;
+  const changeProviderId = options?.poolKind ?? pool;
   const observed = useLiveQuotaForeground(pool !== null) && pool !== null ? pool : null;
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     observed && deviceId ? deviceId : undefined,
@@ -63,6 +69,9 @@ export function useGroupMemberAccounts(
   );
   const owner = getDataOwnerGeneration();
   const key = `${deviceId ?? ''}\n${pool ?? ''}`;
+  // Reconnect/visibility replaces the observer while its real RPC can still be
+  // pending. Keep that flight until settlement, scoped to the exact identity.
+  const activeRead = useRef<{ key: string; result: Promise<unknown> } | null>(null);
   const [loaded, setLoaded] = useState<{
     key: string;
     owner: typeof owner;
@@ -75,57 +84,77 @@ export function useGroupMemberAccounts(
   useEffect(() => {
     if (!observed) return;
     let disposed = false;
-    let latest = 0;
+    let pending = false;
+    let queued = false;
+    const readKey = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, observed]);
     const refresh = async () => {
-      const request = ++latest;
+      if (disposed || !isDataOwnerGenerationCurrent(owner)) return;
+      if (pending) { queued = true; return; }
+      pending = true;
       try {
-        const command = { action: 'read', providerId: observed } as const;
-        const result = deviceId
-          ? await window.electronAPI.deviceLink.invoke(deviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [
-              command,
-            ])
-          : await window.electronAPI.subscriptionAccounts.command(command);
-        if (disposed || request !== latest || !isDataOwnerGenerationCurrent(owner)) return;
+        let reading = activeRead.current;
+        if (reading?.key === readKey) {
+          // A resumed observation still needs a fresh answer after the old RPC.
+          queued = true;
+        } else {
+          const command = { action: 'read', providerId: observed } as const;
+          reading = { key: readKey, result: deviceId
+            ? window.electronAPI.deviceLink.invoke(deviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [command])
+            : window.electronAPI.subscriptionAccounts.command(command) };
+          activeRead.current = reading;
+          const settled = () => { if (activeRead.current === reading) activeRead.current = null; };
+          void reading.result.then(settled, settled);
+        }
+        const result = await reading.result;
+        // A change received during this read supersedes it; show the queued
+        // current snapshot rather than briefly reviving removed/paused accounts.
+        if (disposed || queued || !isDataOwnerGenerationCurrent(owner)) return;
         setLoaded({ key, owner, accounts: listedAccounts(result, observed) });
       } catch {
-        if (disposed || request !== latest || !isDataOwnerGenerationCurrent(owner)) return;
+        if (disposed || queued || !isDataOwnerGenerationCurrent(owner)) return;
         // 旧电脑不支持账号列表时，首读失败后才用原来的单张卡；刷新失败保留已读到的列表。
         setLoaded(previous => previous?.key === key && previous.owner === owner
           ? previous
           : { key, owner, accounts: null });
+      } finally {
+        pending = false;
+        if (queued && !disposed && isDataOwnerGenerationCurrent(owner)) {
+          queued = false;
+          void refresh();
+        }
       }
     };
     void refresh();
     const timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    const matchesChange = (payloadProviderId: unknown) =>
+      payloadProviderId === observed || payloadProviderId === changeProviderId;
     const offChanged = deviceId
       ? window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
           if (push.deviceId === deviceId && push.channel === 'subscription-accounts:changed' &&
-              (push.payload as { providerId?: unknown } | null)?.providerId === observed &&
+              matchesChange((push.payload as { providerId?: unknown } | null)?.providerId) &&
               isDeviceLinkRemotePushCurrent(push, stamp)) void refresh();
         })
       : window.electronAPI.subscriptionAccounts.onChanged((event) => {
-          if (event.providerId === observed) void refresh();
+          if (matchesChange(event.providerId)) void refresh();
         });
     return () => {
       disposed = true;
       window.clearInterval(timer);
       offChanged?.();
     };
-  }, [observed, deviceId, key, owner, reconnectEpoch]);
+  }, [observed, changeProviderId, deviceId, key, owner, reconnectEpoch]);
   const current = pool && loaded?.key === key && isDataOwnerGenerationCurrent(loaded.owner)
     ? loaded
     : null;
   return { accounts: current?.accounts ?? null, loading: pool !== null && current === null };
 }
 
-/** `defaultCard` 是这台电脑原有的用量卡，它属于 CLI 默认账号，保留实时刷新与 Codex 重置次数。 */
+/** Every listed account displays its own quota; unavailable snapshots remain unknown. */
 export function GroupMemberAccountList({
   accounts,
-  defaultCard,
   hideAccountNames = false,
 }: {
   accounts: GroupMemberAccount[];
-  defaultCard: UsageCardAccount | null;
   hideAccountNames?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -137,10 +166,7 @@ export function GroupMemberAccountList({
         {accounts.map(({ account, number }) => {
           const name =
             account.identity || t('providerGroup.member.accountFallback', { index: number });
-          const usage =
-            account.id === 'default' && defaultCard
-              ? defaultCard
-              : buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
+          const usage = buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
           // 正常的账号不写状态，只有不能分配或读不到时才说明。
           const status = account.paused
             ? t('providerGroup.member.status.paused')

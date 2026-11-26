@@ -19,11 +19,17 @@ import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createCatalogTransport, type ObservedMcpToolCallResult } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
-import type { Logger } from '@cindy/maker-core';
+import {
+  createMcpToolResultBucket,
+  type Logger,
+  type McpToolResultBucket,
+  type TakeMcpToolResult,
+} from '@cindy/maker-core';
 import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
@@ -65,6 +71,8 @@ export interface CodexHttpBridge {
    * 误删新 query 刚注册的 ctx。
    */
   unregisterSessionCtx(sessionId: string, expectedCtx?: LiziMcpSessionContext): void;
+  /** Close transports created by one confirmed Agent process instance. */
+  closeSessionInstance(sessionInstanceId: string): void;
   /**
    * per-session bearer token (pi 会话用)。按会话隔离,冻结伙伴仅能访问实际挂载的 server:
    * pi 每个会话在 spawn 前生成独立 token,经 env-file 交给远端进程 —— 单个
@@ -82,6 +90,14 @@ export interface CodexHttpBridge {
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
   /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
   mcpSessionCount(): number;
+  /**
+   * Records Host MCP `tools/call` responses for one ACP session instance so empty ACP
+   * `tool_call_update` completions can backfill `tool_result_full` (cards, media tokens).
+   */
+  enableMcpToolResultRecording?(
+    sessionId: string,
+    sessionInstanceId?: string,
+  ): { take: TakeMcpToolResult; clear: () => void; dispose: () => void };
   shutdown(): Promise<void>;
 }
 
@@ -91,7 +107,7 @@ export interface StartCodexHttpBridgeOptions {
    * MCP SDK 的 McpServer/Protocol 实例只能 connect 一个 transport，所以每个
    * streamable-http session 必须拿到独立实例。
    */
-  serverFactories: Record<string, () => McpServer>;
+  serverFactories: Record<string, (startupContext?: LiziMcpSessionContext) => McpServer>;
   /** Built-in plugin id for each policy-controlled MCP server. */
   pluginIdByServerName?: Record<string, string>;
   /**
@@ -113,6 +129,8 @@ interface DispatchOpts {
   createMcpServer: () => McpServer;
   transports: Map<string, SessionTransport>;
   serverName: string;
+  /** Every server this bridge offers; agy catalogs share one declaration budget across them. */
+  serverNames: readonly string[];
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
   toolCancellation: AppToolCancellation;
@@ -125,16 +143,23 @@ interface DispatchOpts {
   sessionTokenCtx?: LiziMcpSessionContext;
   /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
   ownerSessionId?: string;
+  /** URL/session context instance that owns a newly initialized transport. */
+  ownerSessionInstanceId?: string;
   /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
   isOwnerLive?: (sessionId: string) => boolean;
+  isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
+  /** Optional Host MCP `tools/call` output observer for opted-in ACP sessions. */
+  onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void;
 }
 
 interface SessionTransport {
   transport: StreamableHTTPServerTransport;
   mcpServer: McpServer;
   ownerSessionId?: string;
+  ownerSessionInstanceId?: string;
+  lastActivityAt: number;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -181,6 +206,9 @@ const { appServerIds } = ports;
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_ORPHAN_TRANSPORTS = 256;
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
@@ -264,6 +292,7 @@ function countLiveBridgeMcpSessions(): number {
   return n;
 }
 
+
 async function startCodexHttpBridge(
   opts: StartCodexHttpBridgeOptions,
 ): Promise<CodexHttpBridge> {
@@ -285,6 +314,9 @@ async function startCodexHttpBridge(
   const threadContextStore = createCodexMcpThreadContextStore();
   const toolCancellation = new AppToolCancellation();
   const discoveryContexts = new Map<string, LiziMcpSessionContext>();
+  // Only in-flight handshakes can miss the instance cleanup scan. Drop their
+  // generation records when the last request settles so ended IDs cannot pile up.
+  const instanceHandshakes = new Map<string, { generation: number; pending: number }>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
   // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
@@ -295,6 +327,38 @@ async function startCodexHttpBridge(
   // 用的 token 注销 → pi 的 bridge 请求全部 401。
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
+  // Opt-in Host MCP `tools/call` output receipts for ACP sessions whose engine omits
+  // `content`/`rawOutput` on `tool_call_update`. Keyed by sessionId (+ instanceId when present).
+  const receiptBuckets = new Map<string, McpToolResultBucket>();
+  const receiptBucketKey = (sessionId: string, sessionInstanceId?: string): string =>
+    sessionInstanceId ? `${sessionId}\0${sessionInstanceId}` : sessionId;
+  const findReceiptBucket = (sessionId: string, sessionInstanceId?: string): McpToolResultBucket | undefined =>
+    receiptBuckets.get(receiptBucketKey(sessionId, sessionInstanceId))
+    ?? (sessionInstanceId ? receiptBuckets.get(sessionId) : undefined);
+
+  const closeTransport = (transports: Map<string, SessionTransport>, sessionId: string): void => {
+    const entry = transports.get(sessionId);
+    if (!entry) return;
+    transports.delete(sessionId);
+    void entry.transport.close().catch((e: unknown) => {
+      log.warn('transport close threw', { message: (e as Error).message });
+    });
+  };
+
+  const sweepOrphanTransports = (): void => {
+    const now = Date.now();
+    for (const transports of transportsByServer.values()) {
+      const orphaned = [...transports.entries()]
+        .filter(([, entry]) => !entry.ownerSessionId && !entry.ownerSessionInstanceId)
+        .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+      for (const [index, [sessionId, entry]] of orphaned.entries()) {
+        if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
+            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+        closeTransport(transports, sessionId);
+      }
+    }
+  };
+  let orphanSweepTimer: NodeJS.Timeout | undefined;
 
   const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
@@ -422,10 +486,11 @@ async function startCodexHttpBridge(
       // A process-wide daemon has no frozen mount policy. App facades
       // may attach upstream credentials only for an explicitly bound Session,
       // including Codex's short-lived discovery lease before thread/start returns.
-      const appContext = appServer
+      const boundContext = appServer || serverName === 'cindy'
         ? sessionTokenCtx ?? (instanceQuery === null ? undefined
           : threadContextStore.getContextForSessionInstanceId(instanceQuery) ?? discoveryContexts.get(instanceQuery))
         : undefined;
+      const appContext = appServer ? boundContext : undefined;
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
@@ -449,25 +514,51 @@ async function startCodexHttpBridge(
         return;
       }
 
-      await dispatchToTransport({
-        req,
-        res,
-        createMcpServer,
-        transports,
-        serverName,
-        log,
-        threadContextStore,
-        toolCancellation,
-        discoveryContexts,
-        remoteAppServer,
-        appServer,
-        pluginId: opts.pluginIdByServerName?.[serverName],
-        sessionTokenCtx,
-        ownerSessionId: sessionQuery ?? undefined,
-        isOwnerLive: (id) => sessionCtxById.has(id),
-        threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
-        remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
-      });
+      const ownerSessionInstanceId = sessionTokenCtx?.sessionInstanceId ?? instanceQuery ?? undefined;
+      const handshakeInstance = req.method === 'POST' && !req.headers['mcp-session-id']
+        ? ownerSessionInstanceId : undefined;
+      const handshake = handshakeInstance === undefined ? undefined
+        : instanceHandshakes.get(handshakeInstance) ?? { generation: 0, pending: 0 };
+      if (handshake && handshakeInstance !== undefined) {
+        handshake.pending++;
+        instanceHandshakes.set(handshakeInstance, handshake);
+      }
+      const generation = handshake?.generation;
+      try {
+        await dispatchToTransport({
+          req,
+          res,
+          createMcpServer: () => createMcpServer(serverName === 'cindy' ? boundContext : undefined),
+          transports,
+          serverName,
+          serverNames,
+          log,
+          threadContextStore,
+          toolCancellation,
+          discoveryContexts,
+          remoteAppServer,
+          appServer,
+          pluginId: opts.pluginIdByServerName?.[serverName],
+          sessionTokenCtx,
+          ownerSessionId: sessionQuery ?? undefined,
+          ownerSessionInstanceId,
+          isOwnerLive: (id) => sessionCtxById.has(id),
+          isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
+          threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
+          remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+          ...(sessionQuery && findReceiptBucket(sessionQuery, ownerSessionInstanceId)
+            ? {
+                onToolCallResult: (receipt: ObservedMcpToolCallResult) => {
+                  findReceiptBucket(sessionQuery, ownerSessionInstanceId)?.record(receipt);
+                },
+              }
+            : {}),
+        });
+      } finally {
+        if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
+          instanceHandshakes.delete(handshakeInstance);
+        }
+      }
     } catch (err) {
       log.error('request handler threw', {
         message: err instanceof Error ? err.message : String(err),
@@ -529,6 +620,8 @@ async function startCodexHttpBridge(
 
   const addr = httpServer.address() as AddressInfo;
   const port = addr.port;
+  orphanSweepTimer = setInterval(sweepOrphanTransports, ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS);
+  orphanSweepTimer.unref?.();
 
   log.info('http bridge listening', {
     port,
@@ -562,12 +655,35 @@ async function startCodexHttpBridge(
     if (closed > 0) log.info('closed MCP sessions of ended session', { session: prefixId(sessionId), closed });
   };
 
+  const closeSessionInstance = (sessionInstanceId: string): void => {
+    const handshake = instanceHandshakes.get(sessionInstanceId);
+    if (handshake) handshake.generation++;
+    let closed = 0;
+    for (const transports of transportsByServer.values()) {
+      for (const [mcpSessionId, entry] of transports) {
+        if (entry.ownerSessionInstanceId !== sessionInstanceId) continue;
+        transports.delete(mcpSessionId);
+        closed++;
+        void entry.transport.close().catch((e: unknown) => {
+          log.warn('transport close threw', { message: (e as Error).message });
+        });
+      }
+    }
+    if (closed > 0) log.info('closed MCP sessions of ended Agent instance', {
+      instance: prefixId(sessionInstanceId), closed,
+    });
+  };
+
   const shutdown = async (): Promise<void> => {
     liveBridges.delete(bridge);
+    if (orphanSweepTimer) clearInterval(orphanSweepTimer);
     log.info('shutting down http bridge', {
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
     });
+
+    for (const bucket of receiptBuckets.values()) bucket.clear();
+    receiptBuckets.clear();
 
     // 1. 关所有 mcp transport (会断 codex 端的长连接)
     for (const transports of transportsByServer.values()) {
@@ -638,6 +754,7 @@ async function startCodexHttpBridge(
       if (!sessionCtxById.delete(sessionId)) return;
       closeSessionOwnedTransports(sessionId);
     },
+    closeSessionInstance,
     registerSessionToken: (sessionId, sessionToken) => {
       const generation = nextTokenGeneration++;
       sessionTokenBySessionId.set(sessionId, { token: sessionToken, generation });
@@ -651,6 +768,21 @@ async function startCodexHttpBridge(
       sessionTokenBySessionId.delete(sessionId);
     },
     mcpSessionCount: () => countTransports(transportsByServer),
+    enableMcpToolResultRecording: (sessionId, sessionInstanceId) => {
+      const key = receiptBucketKey(sessionId, sessionInstanceId);
+      const bucket = createMcpToolResultBucket();
+      receiptBuckets.set(key, bucket);
+      return {
+        take: (query) => bucket.take(query),
+        clear: () => {
+          bucket.clear();
+        },
+        dispose: () => {
+          bucket.clear();
+          if (receiptBuckets.get(key) === bucket) receiptBuckets.delete(key);
+        },
+      };
+    },
     shutdown,
   };
   liveBridges.add(bridge);
@@ -709,7 +841,9 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     pluginId,
     sessionTokenCtx,
     ownerSessionId,
+    ownerSessionInstanceId,
     isOwnerLive,
+    isInstanceGenerationCurrent,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -724,6 +858,15 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     if (!existing) {
       res.statusCode = 404;
       res.end('Unknown session');
+      return;
+    }
+    existing.lastActivityAt = Date.now();
+    // A cindy transport created with a concrete task may expose its private
+    // startup catalog. The transport ID alone does not identify that task.
+    if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
+        existing.ownerSessionInstanceId !== ownerSessionInstanceId) {
+      res.statusCode = 401;
+      res.end('Session instance mismatch');
       return;
     }
     let parsedBody: unknown;
@@ -836,7 +979,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         sessionId: prefixId(blockedToolCall.context?.sessionId),
         workingDir: blockedToolCall.context?.workingDir,
       });
-      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall.reason);
+      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall);
       return;
     }
     if (activeContext) {
@@ -890,13 +1033,19 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
   const mcpServer = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({
+  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer, ownerSessionId });
+      transports.set(newId, {
+        transport,
+        mcpServer,
+        ownerSessionId,
+        ownerSessionInstanceId,
+        lastActivityAt: Date.now(),
+      });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
-  });
+  }, opts.onToolCallResult);
   transport.onclose = () => {
     if (transport.sessionId) {
       transports.delete(transport.sessionId);
@@ -907,10 +1056,10 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, body);
-    // 注销时的扫描只看得到已入表的会话;这条 initialize 在 ctx 检查之后、入表之前若遇到
-    // 注销,会错过那次扫描。入表发生在 handleRequest 内,所以在它返回后复查 owner。
-    if (ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId)
-      && transport.sessionId) {
+    // The scan only sees transports already in the table. Recheck both
+    // lifetimes once initialize has inserted its transport.
+    const ownerGone = ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId);
+    if (transport.sessionId && (ownerGone || isInstanceGenerationCurrent?.() === false)) {
       transports.delete(transport.sessionId);
       void transport.close().catch((e: unknown) => {
         log.warn('transport close threw', { message: (e as Error).message });
@@ -1048,10 +1197,14 @@ function writeBlockedToolCallResponse(
   res: http.ServerResponse,
   body: unknown,
   pluginId: string,
-  reason: BlockedToolCall['reason'],
+  { reason, context }: BlockedToolCall,
 ): void {
+  const disabledGuidance =
+    pluginId === 'browser' && context?.agentKind === 'codex' && !context.remoteHostId
+      ? 'Enable Browser in Settings → Tools → Built-in Tools → Agent session defaults. Wait for local Codex to finish any active turns, then retry in this task. If a project override disables Browser, enable Browser in Settings → Automation for that project and restart the agent session.'
+      : 'Enable it in Settings and start a new session to apply the change.';
   const message = reason === 'disabled'
-    ? `Built-in tool "${pluginId}" is disabled for this session. Enable it in Settings and start a new session to apply the change.`
+    ? `Built-in tool "${pluginId}" is disabled for this session. ${disabledGuidance}`
     : reason === 'ambiguous_thread_context'
       ? `Built-in tool "${pluginId}" received calls from more than one session in a single batch and cannot tell them apart. Retry the calls one session at a time.`
       : `Built-in tool "${pluginId}" could not bind this call to a verified Cindy session. This is a session-routing problem, not a plugin setup problem. Start a new task and try again.`;

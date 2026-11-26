@@ -103,5 +103,14 @@ it('keeps owner-project membership across mobile parsing and rejects unresolved 
   const companion = parseTaskCompanion({ id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' });
   expect(companion?.taskProjectDir).toBe('/buddy/workspace');
   expect(isTeammateTask(task('group', { source: 'bot', companion }))).toBe(true);
-  expect(isTeammateTask(task('unresolved', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(false);
+  expect(isTeammateTask(task('dialogue', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(true);
+});
+
+it('keeps the legacy routine identity through mobile parsing so routine runs can be grouped', async () => {
+  const { automationGroupKey } = await import('@cindy/maker-shared/session-list');
+  const companion = parseTaskCompanion({ id: 'cindy', role: 'routine', routineId: 'memory' });
+  expect(companion).toEqual({ id: 'cindy', role: 'routine', routineId: 'memory' });
+  const item = { session: { id: 'r1', source: 'bot', companion }, title: 'Review memory' } as never;
+  expect(automationGroupKey(item)).toBe('routine:cindy:memory');
+  expect(parseTaskCompanion({ id: 'cindy', role: 'routine', routineId: '' })).toEqual({ id: 'cindy', role: 'routine' });
 });

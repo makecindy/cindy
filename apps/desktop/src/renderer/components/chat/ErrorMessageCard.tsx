@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -8,7 +9,7 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
  * 落库)。定位是**事后可追溯的时间线记录**,与输入框上方的 ErrorBanner 分工:
  *  - ErrorBanner:live 报错,带 Retry / Cancel / auth 同步等交互;
  *  - 本卡:历史加载时还原"这一轮在这里失败了"。Retry 语义不成立(turn 早已收场),
- *    唯一交互是友好文案/协议拆封后的「查看原始错误」,与 live ErrorBanner 对齐。
+ *    保留错误详情与适用的设置恢复入口,与 live ErrorBanner 对齐。
  *
  * 文案:errorReason 是 maker-core 的稳定 key,优先走 i18n(规则 18;与 live
  * ErrorBanner 的 reason → i18n 映射同款);未知错误使用本地化摘要，
@@ -20,18 +21,23 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
+import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
+  parseGeminiInputRateLimit,
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
-import { errorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
@@ -39,9 +45,11 @@ export function ErrorMessageCard({
   message,
   reason,
   providerId,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   sessionSource,
+  canConfigureAutoReview = false,
   kind = 'reply-error',
   onDiagnose,
 }: {
@@ -51,11 +59,13 @@ export function ErrorMessageCard({
   kind?: 'reply-error' | 'blocked-input';
   reason?: string;
   providerId?: string;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
   /** 当前任务来源。个人微信不能建议切到完全访问。 */
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
@@ -76,6 +86,7 @@ export function ErrorMessageCard({
   });
   const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
+    reason === 'codex_reconnect_stalled' ? localizeReconnectStall(t, reconnectHandoff) :
     reason === 'output-limit'
       ? localizeOutputLimit(t, outputLimit)
       : toolLoopI18nKey && toolLoop
@@ -84,6 +95,18 @@ export function ErrorMessageCard({
           ? t(i18nKey)
           : undefined;
   const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const geminiGuidance = parseGeminiInputRateLimit(message) === null ? null :
+    t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
+  // 历史错误行与实时横幅同一口径：上游 5xx（无正文）时点名状态，不落到通用兜底。
+  const upstreamStatusError = parseUpstreamStatusError(decoded);
+  // #12970 review: 「未发送」必须压过上游状态码。Pi 历史读取被拒时上游可能返回
+  // 502/529，先命中状态文案会让历史行只说「回复未完成」，丢掉消息根本没发出去这个
+  // 事实。与 ErrorBanner 的 piRetryHistoryKey 分支同一优先级。
+  const piRetryHistoryKey =
+    i18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || i18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? i18nKey
+      : undefined;
   const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
     ? t('chat.errorBanner.requestFormatError')
     : isStreamInterrupted
@@ -91,10 +114,15 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
-          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          ?? (piRetryHistoryKey ? t(piRetryHistoryKey) : undefined)
+          ?? (upstreamStatusError
+            ? t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status })
+            : undefined)
+          ?? localizedReasonError ?? remoteGuidance
+          ?? t(isAccountUsageLimitReachedText(decoded) ? 'chat.errorBanner.usageLimitReached' : 'chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : subscriptionGuidance ?? fallbackText;
+    : geminiGuidance ?? subscriptionGuidance ?? fallbackText;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
@@ -103,8 +131,11 @@ export function ErrorMessageCard({
       key={`${reason ?? ''}:${kind}`}
       className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
-      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
+      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
+        : kind === 'reply-error' && renderProviderErrorExplanation(message, text, t)}
       details={showRawToggle ? message : undefined}
+      actions={canConfigureAutoReview && parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'
+        ? <AutoReviewRecoveryActions /> : undefined}
       onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
       data-testid="error-message-card"
     />

@@ -8,6 +8,7 @@ import { SILENT_STOP_RESUME_PROMPT, type SilentStopAutoResumeGuard } from './sil
 import type { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import type { SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import type { ProductTurnWallClockTracker } from './turnWallClock.js';
+import type { SilentStopFailureCause } from './silentStopFailure.js';
 
 type SilentStopSession = NonNullable<ReturnType<Maker['getSession']>>;
 
@@ -31,7 +32,7 @@ export interface SilentStopTurnEndPorts {
     session: SilentStopSession,
     generation: number,
   ): Promise<void>;
-  surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void>;
+  surfaceSilentStopExhaustedBanner(sessionId: string, cause: SilentStopFailureCause): Promise<void>;
   log: {
     debug(message: string, meta?: Record<string, unknown>): void;
     info(message: string, meta?: Record<string, unknown>): void;
@@ -54,6 +55,8 @@ export async function handleSilentStopTurnEndWithPorts(
     productTurnWallClockTracker, advanceRuntimeRecoveryNotice, createDbMessage, settleSilentStopDone,
     surfaceSilentStopExhaustedBanner, log,
   }: SilentStopTurnEndPorts,
+  /** Best-effort Desktop recovery evidence, after the hidden input is saved. */
+  startContinuationMarker?: (generation: number, signal?: AbortSignal) => Promise<(() => void) | undefined>,
 ): Promise<void> {
   const generation = session.getTurnGeneration();
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
@@ -86,6 +89,8 @@ export async function handleSilentStopTurnEndWithPorts(
           adoptedGeneration,
         ),
     });
+    let undoMarker: (() => void) | undefined;
+    let reservedGeneration: number | undefined;
     try {
       // The next Claude running boundary belongs to the same user-visible turn.
       // Mark it before send(), which may synchronously emit status events.
@@ -99,7 +104,13 @@ export async function handleSilentStopTurnEndWithPorts(
           // 预约(onTurnReserved)在 binding.sendOpts；语义与不变量见
           // silentStopContinuationBinding.ts 文件头。
           ...binding.sendOpts,
-          onAccepted: async () => {
+          ...(startContinuationMarker && {
+            onTurnReserved: (reserved: number) => {
+              binding.sendOpts.onTurnReserved(reserved);
+              reservedGeneration = reserved;
+            },
+          }),
+          onAccepted: async (signal) => {
             await createDbMessage(session.id, {
               clientId,
               role: 'user',
@@ -123,6 +134,9 @@ export async function handleSilentStopTurnEndWithPorts(
                   : {}),
               },
             });
+            if (reservedGeneration !== undefined && !signal?.aborted) {
+              undoMarker = await startContinuationMarker?.(reservedGeneration, signal);
+            }
           },
         },
       );
@@ -138,11 +152,12 @@ export async function handleSilentStopTurnEndWithPorts(
         // 否则失败收口合成的 done 会因 generation 不匹配被 ownership 守卫丢弃,
         // 形成与本次修复对称的反向僵尸(输入边界永久忙)。
         binding.rollbackBinding();
+        undoMarker?.();
         log.warn('silent-stop auto-resume send not accepted', {
           sessionId: session.id,
           reason: outcome.reason,
         });
-        await surfaceSilentStopExhaustedBanner(session.id);
+        await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-not-accepted');
         await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
       } else {
         // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
@@ -152,17 +167,18 @@ export async function handleSilentStopTurnEndWithPorts(
     } catch (err) {
       silentStopAutoResumeGuard.noteResumeSendFailed(session.id);
       binding.rollbackBinding();
+      undoMarker?.();
       log.warn('silent-stop auto-resume send failed', {
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
-      await surfaceSilentStopExhaustedBanner(session.id);
+      await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-error');
       await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
     }
     return;
   }
   if (decision.action === 'exhausted') {
-    await surfaceSilentStopExhaustedBanner(session.id);
+    await surfaceSilentStopExhaustedBanner(session.id, decision.cause);
     await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
   }
   if (decision.action === 'skip') {

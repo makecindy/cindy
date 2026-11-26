@@ -3,9 +3,9 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
+import { act, createElement, useContext, useImperativeHandle, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
 // and English fallback without collecting the ten unused locale catalogs.
 // Window geometry is a native boundary; preview placement has its own production-hook suite.
@@ -51,15 +51,22 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 // Card previews have their own regression suite; this suite preserves the message/source-label assertions.
 vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this source-label test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
+import { MessageListVisibilityContext, type MessageListVisibility } from '@/session/messageListVisibility';
 const viewportHarness = vi.hoisted(() => ({
   list: null as any,
+  visibility: null as MessageListVisibility | null,
+  bottom: 800,
   finishReveal: null as any,
   renders: 0,
   captureNativeOpacity: false,
   memoizedCells: false,
+  window: { width: 402, height: 874, scale: 3, fontScale: 1 },
+  windowListeners: new Set<() => void>(),
   opacityTargets: new Set<HTMLElement>(),
 }));
 
@@ -67,15 +74,20 @@ const viewportHarness = vi.hoisted(() => ({
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
-  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
-    React.createElement(
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) => {
+    const layoutStyle = Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean));
+    return React.createElement(
       "div",
       {
         ref: nativeRef,
         "data-testid": testID,
-        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
+        "data-min-height": layoutStyle.minHeight,
+        "data-padding-left": layoutStyle.paddingLeft,
+        ...(testID === "message.audioAttachmentCard" ? {
+          "data-set-width": layoutStyle.width,
+          "data-align": layoutStyle.alignSelf,
+        } : {}),
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
@@ -85,6 +97,7 @@ vi.mock("react-native", async () => {
       },
       children,
     );
+  };
   class Value {
     constructor(public value: number) {}
     interpolate() {
@@ -144,7 +157,13 @@ vi.mock("react-native", async () => {
     Alert: {},
     Linking: {},
     StatusBar: {},
-    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
+    Dimensions: {
+      get: () => viewportHarness.window,
+      addEventListener: (_event: string, listener: () => void) => {
+        viewportHarness.windowListeners.add(listener);
+        return { remove: () => viewportHarness.windowListeners.delete(listener) };
+      },
+    },
     useWindowDimensions: () => ({
       width: 402,
       height: 874,
@@ -155,9 +174,11 @@ vi.mock("react-native", async () => {
 });
 vi.mock("@legendapp/list/react-native", () => ({
   LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.visibility = useContext(MessageListVisibilityContext);
     viewportHarness.renders += 1;
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
+      getNativeScrollRef: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: viewportHarness.bottom }) }),
       scrollToEnd() {},
       scrollToOffset() {},
       getState() {
@@ -173,6 +194,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  ArrowDown: () => createElement("span", { "data-testid": "audio-fetch-icon" }),
   Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
@@ -208,7 +230,8 @@ vi.mock("lucide-react-native", () => ({
   ListTodo: () => null,
   LoaderCircle: () => null,
   PencilLine: () => null,
-  RefreshCw: () => null,
+  RefreshCw: () => createElement("span", { "data-testid": "retry-icon" }),
+  Play: () => createElement("span", { "data-testid": "play-icon" }),
   Send: () => null,
   Share: () => null,
   Sparkles: () => null,
@@ -333,8 +356,21 @@ vi.mock("@/session/CompanionMessageActions", () => ({
 vi.mock("@/session/CompanionMessageCard", () => ({
   CompanionMessageCard: () => null,
 }));
+// Only the pending-send container is replaced; MessageRenderer's own renderText
+// callback (and its selectable / long-message gates) stays production code under test.
+// The substitute forwards the real bubble's measured `longMessage` contract; the
+// bubble's own measurement and expand state machine is covered separately in
+// PendingSendBubble.touch.test.tsx.
+const pendingBubbleHarness = vi.hoisted(() => ({ longMessage: false, sentInlineText: null as string | null }));
 vi.mock("@/session/PendingSendBubble", () => ({
-  PendingSendBubble: () => null,
+  PendingSendBubble: ({ item, renderText }: {
+    item: { clientId: string; text: string };
+    renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
+  }) => {
+    const body = pendingBubbleHarness.sentInlineText ?? item.text;
+    return createElement("div", { "data-testid": `pendingSend.body.${item.clientId}` },
+      body ? renderText(body, 0, pendingBubbleHarness.longMessage) : null);
+  },
 }));
 vi.mock("@/session/messageActions", async (original) => ({
   ...(await original<object>()),
@@ -343,7 +379,10 @@ vi.mock("@/session/messageActions", async (original) => ({
 }));
 
 import { i18n } from "@/i18n";
-import { MessageRenderer } from "@/session/MessageRenderer";
+import { AttachmentStrip, COMPANION_AVATAR_SIZE, MessagePayloadModal, MessageRenderer } from "@/session/MessageRenderer";
+import { buildMediaPayload } from "@/session/messagePayload";
+import { buildMessageContentLayout } from "@/session/messageContentLayout";
+import { copyMessageText, writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
 import type { RemoteMessage } from "@/session/types";
@@ -361,6 +400,11 @@ const msg = (
   toolUseId: null,
   agentMeta,
   createdAt: "2026-01-01T00:00:00Z",
+});
+
+afterEach(() => {
+  pendingBubbleHarness.longMessage = false;
+  pendingBubbleHarness.sentInlineText = null;
 });
 
 function render(
@@ -388,6 +432,25 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// Unit, PR #11917: a card inside a long, still-visible row must see fresh geometry
+// from the mounted LegendList, even when the set of visible row ids stays constant.
+it('publishes viewport geometry on native scroll, list layout and content resize', () => {
+  const h = mount([msg('long-row', 'Retained row', {})]);
+  const measured: number[] = [];
+  const list = viewportHarness.visibility!;
+  const unsubscribe = list.onViewportChange(() => measured.push(list.viewport!()!.bottom));
+  try {
+    const callbacks = viewportHarness.list;
+    viewportHarness.bottom = 600;
+    act(() => callbacks.onScroll({ nativeEvent: { contentOffset: { y: 120 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 600 } } }));
+    viewportHarness.bottom = 400;
+    act(() => callbacks.onLayout({ nativeEvent: { layout: { height: 400 } } }));
+    viewportHarness.bottom = 700;
+    act(() => callbacks.onContentSizeChange(400, 1800));
+    expect(measured).toEqual([600, 400, 700]);
+  } finally { unsubscribe(); h.unmount(); viewportHarness.bottom = 800; }
 });
 
 it('updates retained companion cells when topic replies change without new messages', () => {
@@ -455,6 +518,21 @@ it.each([
     meta: { turnCost: { amount: 0.25, currency: 'USD', approximate: false, kind: 'actual-cost' } },
     visible: '$0.25',
     accessible: '本轮消耗 $0.25',
+  },
+  {
+    name: 'two native costs with a same-currency media fee',
+    meta: {
+      userTurnCost: { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      turnUsageDetails: {
+        userTurnAmounts: [
+          { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+          { amount: 3, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+        ],
+        additionalCosts: [{ amount: 1, currency: 'CNY', approximate: false, kind: 'actual-cost' }],
+      },
+    },
+    visible: '$2.00 + ¥2.00 + ¥1.00',
+    accessible: '本轮消耗 $2.00 + ¥2.00 + ¥1.00',
   },
   {
     name: 'subscription value',
@@ -764,6 +842,26 @@ describe("IM source card", () => {
     expect(html).toContain(`Cindy · 来自 ${platform}`);
     expect(html).toContain("#general");
   });
+
+  // unit/jsdom: message-source.md「插件转发的 IM 消息」(2026-11-16). Anti-impersonation on the phone: a
+  // plugin relay uses the owner-style card, and the Host-stamped plugin label still renders with it.
+  it("keeps the plugin label on a relayed WeChat card and hides the plugin reference material", () => {
+    const text = "发布时间定了吗？";
+    const stored = `${text}\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n`
+      + "[渠道说明] 回复会发回微信群。\n[/Plugin-provided reference material]";
+    const html = render([
+      msg("relay", { text: stored, images: [], files: [], pastedTextRanges: [{ start: text.length + 2, end: stored.length, display: "附带资料" }] }, {
+        sourcePlugin: { pluginId: "cindy-wechat-groups", name: "微信群里的 Cindy",
+          relay: { platform: "wechat", chatType: "group", chatName: "产品群", sender: { id: "wxid_a", name: "Chris", isOwner: false } } },
+      }),
+    ]);
+    expect(html).toContain("Cindy · 来自 微信");
+    expect(html).toContain("由插件「微信群里的 Cindy」发送");
+    expect(html).toContain(text);
+    expect(html).not.toContain("渠道说明");
+    expect(html).not.toContain("附带资料");
+    expect(html).toContain("message.agentBubble");
+  });
 });
 
 describe("source labels reveal their ids on long press", () => {
@@ -960,6 +1058,28 @@ describe("table-heavy assistant replies", () => {
     ...Array.from({ length: rows }, (_, i) => `| ${i === 0 ? '甲春风乙' : `r${i}`} | x | y |`)].join("\n");
   const rich = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "h", kind: "heading", props: { text: "Mid" } }) + "\n```";
 
+  // Batfree feedback: native ranges stop at each table cell. The real message
+  // must expose an independent whole-table copy action; existing tests only
+  // exercised a cell's quote menu. Unit: prose + a 2x3 table + trailing prose,
+  // with formatted/empty cells, must copy all cells as TSV without surrounding prose.
+  it("copies every table cell while retaining local selection", async () => {
+    vi.mocked(writeClipboardText).mockResolvedValue(undefined);
+    const markdown = ["Before the table", "", "| Name | Value | Note |", "| --- | --- | --- |",
+      "| **甲春风乙** | `42` | |", "| [Beta](https://example.com) | 7 | Final |", "", "After the table"].join("\n");
+    const h = mount([{ ...msg("copy-table", markdown, { turnCompleted: true }), role: "assistant" }]);
+    try {
+      const copy = h.host.querySelector<HTMLElement>('[data-testid="message.markdownTableCopyButton"]');
+      expect(copy).not.toBeNull();
+      await act(async () => copy!.click());
+      expect(writeClipboardText).toHaveBeenLastCalledWith("Name\tValue\tNote\n甲春风乙\t42\t\nBeta\t7\tFinal");
+      expect(copy!.getAttribute('aria-label')).toBe(i18n.t('message.renderer.copyStateCopied'));
+      const cell = [...h.host.querySelectorAll<HTMLElement>(
+        '[data-testid="message.markdownTable"] [data-selectable="true"]',
+      )].find(node => node.textContent === '甲春风乙');
+      expect(cell).toBeDefined();
+    } finally { h.unmount(); }
+  });
+
   // PR #7723's >120-cell fallback removed partial selection and native menu actions.
   // Existing selectionQuote tests cover menu dispatch in isolation, not whether a large
   // MessageRenderer reply still exposes it. Unit tier: a >120-cell reply, either one
@@ -982,7 +1102,171 @@ describe("table-heavy assistant replies", () => {
   });
 });
 
-vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+const mockAudioViewer = vi.hoisted(() => vi.fn((_props: {
+  onAudioPhaseChange?: (phase: 'idle' | 'loading' | 'ready' | 'error') => void;
+  resolve(signal: AbortSignal, forceRefresh?: boolean): Promise<unknown>;
+}) => null));
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: mockAudioViewer }));
+
+// 测试价值
+// - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send 分支通过 renderText
+//   挂真实 MarkdownBody；PendingSendBubble 容器用最小替身转发该回调。用户长按排队
+//   气泡正文应能进入 iOS 原生 UITextView 选区，DOM 上表现为 data-selectable="true"
+//   的原生文本根。
+// - Bug／规则依据：手机端正文直接长按选字是优先能力
+//   (docs/product-rules/cindy-bots-runtime.md §「私聊引用回复」2026-10-25 修订)。
+//   待答 ask 卡锁住输入框时，主人排队中的消息一直是 pending_send 气泡，正文
+//   原先被显式设为不可选，复制/粘贴整条路径都不可达。
+// - 现有覆盖缺口：相邻用例只覆盖完成态消息或自定义引用菜单，没有 pending_send
+//   正文的可选性；pendingSend 触摸用例只验证分享态轻点，不验证原生长按选字。
+// - 最小失败输入：一个 queued pending_send 项 + onQuoteSelection 缺省（模拟
+//   待答 ask 卡的发送锁）；修复前正文渲染 data-selectable="false"。
+// - tier：unit（jsdom 替身验证真实生产组件的原生选择根，真实系统菜单另需设备验收）。
+// - 实测耗时：7.35s 实墙（既有 49 条用例的 RN / LegendList mock 收集约 5s，
+//   本用例只新增一条；未超过 10s 上限）。
+describe("queued message text while an ask card blocks the composer", () => {
+  it("keeps pending-send body natively selectable without quote-to-composer", () => {
+    const pendingItem = {
+      type: 'pending_send',
+      key: 'message-queued-1',
+      clientId: 'queued-1',
+      text: 'Copy this queued sentence',
+      sentInlineTokens: [],
+      phase: 'queued',
+      queueIndex: 1,
+      thumbs: [],
+      fileCount: 0,
+      fileNames: [],
+      attachmentCount: 0,
+      uploadedCount: 0,
+      errorText: null,
+      actions: null,
+      hint: null,
+    };
+    const pendingSend = {
+      selectedClientId: null,
+      onSelect: vi.fn(),
+      onRemove: vi.fn(),
+      onBeginEdit: vi.fn(),
+      onSteer: vi.fn(),
+      onMove: vi.fn(),
+      onRetryOutbox: vi.fn(),
+      onRemoveOutbox: vi.fn(),
+    };
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={[pendingItem as any]} pendingSend={pendingSend} />));
+    try {
+      const body = host.querySelector('[data-testid="pendingSend.body.queued-1"]');
+      expect(body).not.toBeNull();
+      const selectable = body!.querySelector('[data-selectable="true"]');
+      expect(selectable).not.toBeNull();
+      expect(selectable!.textContent).toContain('Copy this queued sentence');
+      expect(body!.querySelector('[data-native-text-view]')).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  const longQueuedText = '排队长正文'.repeat(700);
+  function mountQueuedBody(
+    text: string,
+    options: { longMessage?: boolean; companion?: boolean; atoms?: boolean } = {},
+  ) {
+    pendingBubbleHarness.longMessage = options.longMessage === true;
+    pendingBubbleHarness.sentInlineText = options.atoms ? text : null;
+    const pendingItem = {
+      type: 'pending_send', key: 'message-queued-2', clientId: 'queued-2', text,
+      sentInlineTokens: options.atoms
+        ? [{ kind: 'text', text }, { kind: 'slash', text: '/compact' }]
+        : [],
+      phase: 'queued', queueIndex: 1, thumbs: [], fileCount: 0, fileNames: [],
+      attachmentCount: 0, uploadedCount: 0, errorText: null, actions: null, hint: null,
+    };
+    const pendingSend = {
+      selectedClientId: null, onSelect: vi.fn(), onRemove: vi.fn(), onBeginEdit: vi.fn(),
+      onSteer: vi.fn(), onMove: vi.fn(), onRetryOutbox: vi.fn(), onRemoveOutbox: vi.fn(),
+    };
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={[pendingItem as any]}
+      pendingSend={pendingSend} companion={options.companion === true} />));
+    return { host, unmount: () => act(() => root.unmount()) };
+  }
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send renderText 挂真实
+  //   MarkdownBody；替身容器只转发真实气泡实测的 longMessage 判定。展开长正文后，
+  //   普通任务不能出现巨型 iOS UITextView，但正文必须仍在可选中的 RN Text 里完整可读。
+  // - Bug／规则依据：iOS UITextView 在收起→展开骤增为超高复用视图时偶发只留空白；
+  //   完成态正文已用 allowIosUITextView / boundTextRuns 规避，排队正文必须同款保护。
+  // - 现有覆盖缺口：上面的短正文用例只证明可选性；完成态长消息用例走的是另一条分支；
+  //   结构化 atom 正文(没人指出的对称半边)此前没有任何长正文断言。
+  // - 最小失败输入：longMessage=true 的 queued 项；修复前 renderText 恒挂
+  //   UITextView(allowIosUITextView 默认 true)，data-native-text-view 会存在。
+  // - tier：unit（jsdom 替身只替换气泡容器，不替换被验证的 MarkdownBody 选择根）。
+  // - 实测耗时：7.26s 单独运行本文件（既有 50 条用例的 RN / LegendList mock 收集约 5s，
+  //   本组新增 4 条表驱动用例；未超过 10s 上限）。
+  it.each(['plain', 'atoms'])('keeps expanded long %s queued text readable without a giant native view', (kind) => {
+    const h = mountQueuedBody(longQueuedText, { longMessage: true, atoms: kind === 'atoms' });
+    try {
+      const body = h.host.querySelector('[data-testid="pendingSend.body.queued-2"]')!;
+      expect(body.textContent).toContain(longQueuedText);
+      expect(body.querySelector('[data-native-text-view]')).toBeNull();
+      expect(body.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally { h.unmount(); }
+  });
+
+  // 伙伴长正文展开沿用完成态的有界原生文本分组：仍可部分选字，但每个原生文本根有上界。
+  // 与上一组共用最小失败输入；若只关掉 UITextView 而漏掉 boundTextRuns，本组会红。
+  it.each(['plain', 'atoms'])('bounds expanded long %s companion queued text into native runs', (kind) => {
+    const h = mountQueuedBody(longQueuedText, { longMessage: true, companion: true, atoms: kind === 'atoms' });
+    try {
+      const body = h.host.querySelector('[data-testid="pendingSend.body.queued-2"]')!;
+      const runs = [...body.querySelectorAll('[data-native-text-view] [data-testid="message.markdownTextRun"]')];
+      expect(runs.length).toBeGreaterThan(1);
+      expect(runs.every(node => node.getAttribute('data-selectable') === 'true')).toBe(true);
+      expect(runs.every(node => (node.textContent?.length ?? 0) <= 1800)).toBe(true);
+      expect(runs.map(node => node.textContent).join('')).toBe(longQueuedText);
+    } finally { h.unmount(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 MessageRenderer 收尾消息的 Copy 动作栏按钮。会话页在
+  //   canUseComposer=false(待答 ask 卡锁输入)时把 onQuoteSelection / onEditMessage /
+  //   onAddMessageToComposer 都置为 undefined；这里显式传入这组入参并真实点击，检查复制
+  //   请求带上正文、按钮转为 Copied 态。
+  // - Bug／规则依据：发送锁不是阅读锁；布局纯函数 + 内存 writer 的旧用例绕过了页面复制入口。
+  // - 现有覆盖缺口：sessionOperationLayout 只断言布局字段，messageActions 只覆盖 helper
+  //   写入，pluginAttachmentBubble 覆盖本地化前缀，均未在发送锁下点击真实 Copy 入口。
+  // - 最小失败输入：上面三个 composer 回调全缺省 + 一条收尾消息；若 Copy 被 composer
+  //   可用性门控，按钮不存在或点击无写入，此用例会红。
+  // - tier：unit（jsdom；原生剪贴板写入由 messageActions.test.ts 覆盖）。
+  // - 实测耗时：同上 7.26s 单独运行本文件，本用例只新增一条。
+  it('keeps the real Copy action reachable while the ask card locks the composer', async () => {
+    vi.mocked(copyMessageText).mockResolvedValue('copied' as never);
+    const text = 'Copy me while the ask card blocks the composer';
+    // 与 app/sessions/[sessionId].tsx 在 canUseComposer=false 时传给 MessageRenderer 的
+    // composer 回调一致：这些引用/编辑入口关闭，复制入口不应跟着关闭。
+    const h = mount([msg('locked-copy', text, null)], {
+      onQuoteSelection: undefined,
+      onEditMessage: undefined,
+      onAddMessageToComposer: undefined,
+    });
+    try {
+      const copy = h.host.querySelector<HTMLElement>('[data-testid="message.copyButton"]');
+      expect(copy).not.toBeNull();
+      await act(async () => copy!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      expect(copyMessageText).toHaveBeenCalledExactlyOnceWith(text);
+      expect(copy!.getAttribute('aria-label')).toBe(i18n.t('message.renderer.copyStateCopied'));
+    } finally {
+      vi.mocked(copyMessageText).mockReset();
+      h.unmount();
+    }
+  });
+});
 
 // Regression: tapping a cross-device source must reach the page's routing callback intact.
 it('opens cross-device source labels while redacted sources remain inert', () => {
@@ -1000,4 +1284,162 @@ it('opens cross-device source labels while redacted sources remain inert', () =>
   act(() => labels.forEach(label => label.dispatchEvent(new MouseEvent('click', { bubbles: true }))));
   expect(onOpenOriginSession).toHaveBeenCalledExactlyOnceWith('dev-A::task-1');
   act(() => root.unmount());
+});
+
+it('opens managed audio on tap and reflects the viewer states on the message card', async () => {
+  const url = `cindy-media://blobs/${'a'.repeat(64)}.wav`;
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Voice sample', xdt_audio_url: url }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const items = buildMobileMessageRenderItems([tool, result]);
+  const playbackSource = { url: 'https://fixture.invalid/tone.wav' };
+  const resolve = vi.fn().mockResolvedValue(playbackSource);
+  mockAudioViewer.mockClear();
+  const mounted = mount([], { items, companion: true, onResolveRemoteMedia: resolve });
+  const card = () => mounted.host.querySelector<HTMLElement>('[data-testid="message.audioAttachmentCard"]')!;
+  try {
+    expect(card().textContent).toContain('Voice sample');
+    expect(card().querySelector('[data-testid="audio-fetch-icon"]')).not.toBeNull();
+    expect(card().querySelector('[data-testid="play-icon"]')).toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.fetchAudio'));
+    expect(resolve).not.toHaveBeenCalled();
+    await act(async () => {
+      card().click();
+      await Promise.resolve();
+      expect(resolve).toHaveBeenCalledWith(
+        { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true },
+      );
+    });
+    const firstViewer = mockAudioViewer.mock.lastCall?.[0]!;
+    expect(card().getAttribute('aria-disabled')).toBe('true');
+    expect(card().textContent).toContain(i18n.t('message.renderer.loading'));
+    await expect(firstViewer.resolve(new AbortController().signal)).resolves.toBe(playbackSource);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    act(() => firstViewer.onAudioPhaseChange?.('ready'));
+    expect(card().querySelector('[data-testid="play-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.renderer.playAudio'));
+    act(() => firstViewer.onAudioPhaseChange?.('error'));
+    expect(card().querySelector('[data-testid="retry-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    resolve.mockRejectedValueOnce(new Error('Controller offline'));
+    await act(async () => card().click());
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    await act(async () => card().click());
+    expect(resolve).toHaveBeenLastCalledWith(
+      { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true, forceRefresh: true },
+    );
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it.each([true, false])('aligns tool audio to the reply column when a Bot portrait is present (%s)', (companion) => {
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Tone.wav', xdt_audio_url: 'xdt-audio://tone.wav' }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const final = { ...msg('reply', 'Here is the audio.', { assistantPhase: 'final_answer', turnCompleted: true }), role: 'assistant' as const };
+  const items = buildMobileMessageRenderItems([tool, result, final]).map(item => item.type === 'tool_media'
+    ? { ...item, tools: item.tools.map(entry => ({ ...entry,
+      files: [{ kind: 'file' as const, title: 'Readme.pdf', url: `cindy-media://blobs/${'b'.repeat(64)}.pdf` }],
+    })) }
+    : item);
+  const mounted = mount([], { items, companion, companionAvatar: <i data-testid="partner-portrait" /> });
+  try {
+    const output = mounted.host.querySelector('[data-testid="message.toolMediaBlock"]')!;
+    const audio = output.querySelector('[data-testid="message.audioAttachmentCard"]')!;
+    expect(audio.parentElement?.getAttribute('data-padding-left')).toBe(companion ? String(COMPANION_AVATAR_SIZE + 10) : null);
+    const file = output.querySelector('[data-testid="message.filePreviewButton.pdf"]');
+    expect(file?.parentElement).toBe(output);
+    expect(output.getAttribute('data-padding-left')).toBeNull();
+    expect(output.parentElement?.getAttribute('data-padding-left')).toBeNull();
+    expect(output.querySelector('[data-testid="partner-portrait"]')).toBeNull();
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it('keeps addressless group files on their ID-based open path', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const onOpenFile = vi.fn();
+  const onResolveRemoteMedia = vi.fn();
+  const layout = buildMessageContentLayout({ screenWidth: 320 });
+  act(() => root.render(
+    <AttachmentStrip attachments={[
+      { kind: 'file', name: 'Readme.pdf', previewable: false },
+      { kind: 'file', name: '录音附件.wav', mimeType: 'audio/wav', previewable: false },
+    ]} messageKey="sent-audio" align="right" layout={layout}
+    usePreviewState={useState} onOpenFile={onOpenFile} onResolveRemoteMedia={onResolveRemoteMedia} />,
+  ));
+  try {
+    const file = host.querySelector<HTMLElement>('[data-testid="message.filePreviewButton"]');
+    expect(file?.textContent).toContain('录音附件.wav');
+    expect(host.querySelector('[data-testid="message.audioAttachmentCard"]')).toBeNull();
+    expect(host.querySelector('[data-testid="message.filePreviewButton.pdf"]')).not.toBeNull();
+    act(() => file!.click());
+    expect(onOpenFile).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onResolveRemoteMedia).not.toHaveBeenCalled();
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it.each([[320, 252], [402, 304], [834, 320]])(
+  'gives short and long audio cards the same width at a %d pt screen', (screenWidth, expectedWidth) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(
+      <AttachmentStrip attachments={[
+        { kind: 'file', name: 'Tone.wav', path: '/fixture/Tone.wav', previewable: false },
+        { kind: 'file', name: '小猫观察日记 · 片头旁白和客厅环境声 · 第三版试听录音.wav', path: '/fixture/voice.wav', previewable: false },
+      ]} messageKey="audio-width" align="left" layout={buildMessageContentLayout({ screenWidth })} usePreviewState={useState} />,
+    ));
+    try {
+      const widths = Array.from(host.querySelectorAll('[data-testid="message.audioAttachmentCard"]'),
+        (card) => card.getAttribute('data-set-width'));
+      expect(widths).toEqual([String(expectedWidth), String(expectedWidth)]);
+    } finally {
+      act(() => root.unmount());
+    }
+  },
+);
+
+it('updates a retained audio card when the chat viewport resizes', () => {
+  const portrait = viewportHarness.window;
+  viewportHarness.memoizedCells = true;
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Tone.wav', xdt_audio_url: 'xdt-audio://tone.wav' }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const mounted = mount([], { items: buildMobileMessageRenderItems([tool, result]) });
+  const width = () => mounted.host.querySelector('[data-testid="message.audioAttachmentCard"]')?.getAttribute('data-set-width');
+  try {
+    expect(width()).toBe('304');
+    act(() => {
+      viewportHarness.window = { ...portrait, width: 874, height: 402 };
+      viewportHarness.windowListeners.forEach((listener) => listener());
+    });
+    expect(width()).toBe('320');
+  } finally {
+    mounted.unmount();
+    viewportHarness.memoizedCells = false;
+    viewportHarness.window = portrait;
+  }
+});
+
+it('opens public audio in the attachment player without a computer resolver', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const root = createRoot(document.createElement('div'));
+  mockAudioViewer.mockClear();
+  const url = 'https://fixture.invalid/tone.wav';
+  try {
+    const payload = buildMediaPayload({ kind: 'audio', url, mimeType: 'audio/wav', previewable: true }, 'Tone');
+    act(() => root.render(<MessagePayloadModal payload={payload} onClose={() => {}} />));
+    const preview = mockAudioViewer.mock.lastCall?.[0];
+    expect(preview).toMatchObject({ mediaKind: 'audio' });
+    await expect(preview?.resolve(new AbortController().signal)).resolves.toEqual({ url, mimeType: 'audio/wav' });
+  } finally {
+    act(() => root.unmount());
+  }
 });

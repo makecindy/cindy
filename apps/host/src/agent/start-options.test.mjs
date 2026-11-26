@@ -33,9 +33,15 @@ import { lifoCleanup } from '../test-support/cleanup.mjs';
 // files; an explicit bound turns a stuck child or lock into a failure, not a stalled gate.
 const TEST_TIMEOUT_MS = 120_000;
 
-function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-'));
+// Account-switch fixtures need the same cleanup ownership as the initial profile.
+function temporaryProfile(t, prefix = 'cindy-host-start-options-') {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  return profile;
+}
+
+function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
+  const profile = temporaryProfile(t);
   configureHostOwner({ userDataDir: profile, ownerId });
   const modelContext = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
     codexAccountState: () => ({ authenticated: false }) });
@@ -136,7 +142,7 @@ test('the saved task budget is settled against the catalog with the Host route r
 
 test('a start after the account changed is refused with the desktop marker', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { start } = setup(t, 'start-options-owner-a');
-  configureHostOwner({ userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-b-')), ownerId: 'start-options-owner-b' });
+  configureHostOwner({ userDataDir: temporaryProfile(t, 'cindy-host-start-options-b-'), ownerId: 'start-options-owner-b' });
   await assert.rejects(
     start.prepareStartOptions('stale-task', { agentKind: 'codex', providerId: 'openai', model: 'fixture-model' }),
     error => error.code === 'ACCOUNT_PROVIDER_NOT_READY' && /^ACCOUNT_PROVIDER_NOT_READY: /.test(error.message),
@@ -160,7 +166,7 @@ test('a start whose catalog refresh fails, or whose owner changes during it, is 
   assert.equal(getSessionProvider('fail-task'), null);
 
   const switching = setup(t, 'start-options-catalog-switch', async () => {
-    configureHostOwner({ userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-c-')), ownerId: 'start-options-other-owner' });
+    configureHostOwner({ userDataDir: temporaryProfile(t, 'cindy-host-start-options-c-'), ownerId: 'start-options-other-owner' });
   });
   await assert.rejects(switching.start.prepareStartOptions('switch-task', { agentKind: 'codex', providerId: 'openai', model: 'm' }),
     error => error.code === 'ACCOUNT_PROVIDER_NOT_READY');

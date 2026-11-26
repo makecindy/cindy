@@ -3,7 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteSerializedAttachment } from '@/session/types';
+import { i18n } from '@/i18n';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import type { MobileLocalAttachmentUploadCandidate } from '@/session/mobileLocalAttachmentUpload';
+import { useBotGroupComposerAttachments } from '@/session/useBotGroupComposerAttachments';
 import { useComposerImageExpansion } from '@/session/useComposerImageExpansion';
 import {
   useMobileLocalAttachments,
@@ -37,6 +40,13 @@ vi.mock('expo-image-picker', () => ({
   UIImagePickerPreferredAssetRepresentationMode: { Current: 'current' },
 }));
 vi.mock('@/session/deferredPhotoLibrary', () => ({ pickDeferredLibraryPhotos: runtime.pickPhotos }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ getAccessToken: async () => 'token' }) }));
+vi.mock('@/session/useContextSheetMediaAssets', () => ({
+  // The photo library hands back a local file that is already optimized.
+  resolveContextSheetMediaAssetForUpload: async (asset: { filename: string }) => ({
+    uri: `file:///photos/${asset.filename}`, filename: asset.filename, width: 10, height: 10, optimized: true,
+  }),
+}));
 vi.mock('expo-file-system/legacy', () => ({
   documentDirectory: 'file:///docs/',
   deleteAsync: async () => undefined,
@@ -406,6 +416,52 @@ it('restores share source order when concurrent uploads complete in reverse orde
   expect(attachments.map(item => item.name)).toEqual(['first.pdf', 'second.pdf']);
 });
 
+// PR #10729 review (P1): recent photos picked together and added with the sheet's bottom button
+// upload two at a time, so the tray followed upload completion instead of the picked order.
+// The share case above covers the pipeline with hand-written order; these run what the three
+// composers really enqueue. Minimal failing input: two photos, the second upload finishes first.
+// Unit tier, real upload pipeline with the transport faked.
+describe('recent photos added together', () => {
+  const photo = (name: string) => ({ id: name, uri: `ph://${name}`, filename: `${name}.jpg` }) as never;
+  const finish = (name: string) => runtime.uploads.find((upload) => upload.name === `${name}.jpg`)!.resolve();
+
+  it('return to the picked order in the task and new-task composers', async () => {
+    const harness = mount('session-a');
+    let attachments: RemoteSerializedAttachment[] = [];
+    // Both pages keep their list with insertUploadedAttachment.
+    vi.mocked(harness.options.onUploaded).mockImplementation((attachment) => {
+      attachments = harness.latest().insertUploadedAttachment(attachments, attachment);
+    });
+    act(() => harness.first.enqueueUploads(
+      contextSheetMediaUploadCandidates([photo('first'), photo('second')]), { token: 'token' }));
+    await act(async () => { await flush(); });
+    expect(runtime.uploads).toHaveLength(2);
+    await act(async () => { finish('second'); await flush(); });
+    expect(attachments.map((item) => item.name)).toEqual(['second.jpg']);
+    await act(async () => { finish('first'); await harness.latest().waitForPendingUploads(); });
+    expect(attachments.map((item) => item.name)).toEqual(['first.jpg', 'second.jpg']);
+  });
+
+  it('return to the picked order in the group composer, after what was already attached', async () => {
+    let tray!: ReturnType<typeof useBotGroupComposerAttachments>;
+    function Harness() {
+      tray = useBotGroupComposerAttachments({ deviceId: 'device-1', onPicked: () => undefined });
+      return null;
+    }
+    act(() => root.render(<Harness />));
+    // A single tap first: a later batch must not be sorted in front of it.
+    act(() => tray.toggleMediaAsset(photo('earlier')));
+    await act(async () => { await flush(); });
+    await act(async () => { finish('earlier'); await tray.waitForPendingUploads(); });
+    act(() => { tray.armMediaTap(); tray.addMediaAssets([photo('first'), photo('second')]); });
+    await act(async () => { await flush(); });
+    await act(async () => { finish('second'); await flush(); });
+    expect(tray.attachments.map((item) => item.name)).toEqual(['earlier.jpg', 'second.jpg']);
+    await act(async () => { finish('first'); await tray.waitForPendingUploads(); });
+    expect(tray.attachments.map((item) => item.name)).toEqual(['earlier.jpg', 'first.jpg', 'second.jpg']);
+  });
+});
+
 it('cleans a shared file only after staging takes ownership, retaining failed originals for retry', async () => {
   const harness = mount('session-a');
   const cleanup = vi.fn(async () => {
@@ -422,4 +478,39 @@ it('cleans a shared file only after staging takes ownership, retaining failed or
   await act(async () => { await flush(); });
   await act(async () => { runtime.uploads[0].resolve(); await harness.latest().waitForPendingUploads(); });
   expect(cleanup).toHaveBeenCalledExactlyOnceWith(['file:///share/report.pdf']);
+});
+
+// 锁屏 / 切走 App / 离开任务会让直连上传以 FILE_PEER_* 内部码失败。界面必须拿到可操作
+// 的一句话,而不是下划线常量;文案 key 由 i18n 目录提供(此文件按惯例把 t mock 成 key)。
+it('reports an interrupted peer upload with user-facing copy instead of the internal code', async () => {
+  const harness = mount('session-a', async () => {
+    throw new Error('FILE_PEER_CANCELLED');
+  });
+  act(() => harness.latest().enqueueUploads([{
+    kind: 'file', uri: 'file:///share/report.pdf', name: 'report.pdf', size: 1000,
+  }], { token: 'token' }));
+  await act(async () => { await harness.latest().waitForPendingUploads(); });
+  // 文案来自 locale 目录(t 在本文件 mock 成 key,但 hook 走 i18n 实例取真值)。
+  expect(harness.options.onError).toHaveBeenCalledWith(
+    i18n.t('composer.upload.interrupted'), { uploadLocalId: expect.any(String) },
+  );
+  expect(i18n.t('composer.upload.interrupted')).not.toContain('FILE_PEER');
+  // 失败卡仍留在托盘,重试 / 删除入口不因换文案而消失。
+  expect(harness.latest().pendingUploads).toHaveLength(1);
+  expect(harness.latest().pendingUploads[0].failed).toBe(true);
+});
+
+// 取不到 token 时上传管线自己已经抛了「登录已过期,请重新登录后再上传附件」。这条文案
+// 必须原样到界面:换成通用的「操作没完成」会让用户以为等等再试就好,而实际需要重新登录。
+it('keeps the pipeline sign-in prompt instead of collapsing it to generic copy', async () => {
+  const harness = mount('session-a');
+  act(() => harness.latest().enqueueUploads([{
+    kind: 'file', uri: 'file:///share/report.pdf', name: 'report.pdf', size: 1000,
+  }], { token: Promise.resolve(null) }));
+  await act(async () => { await harness.latest().waitForPendingUploads(); });
+  const signInPrompt = i18n.t('composer.upload.sessionExpiredFile');
+  expect(signInPrompt).not.toBe(i18n.t('deviceLink.remoteError.unclassified'));
+  expect(harness.options.onError).toHaveBeenCalledWith(
+    signInPrompt, { uploadLocalId: expect.any(String) },
+  );
 });

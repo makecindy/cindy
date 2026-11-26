@@ -3,6 +3,13 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改客户端日志采集／脱敏／上报链路，修改 `main/logger.ts` 的 main 日志行
 > 格式，或修改崩溃判定与待补传标记之前
+> **适用路径**：`apps/desktop/src/main/log-upload/**`、`apps/desktop/src/main/{logger,lifecycle}.ts`、
+> `apps/desktop/src/shared/{mainLogRecordFormat,logUpload,logRetention}.ts`、
+> `apps/desktop/src/renderer/components/log-support/**`、
+> `apps/desktop/src/renderer/hooks/useLogUploadSettings.ts`、
+> `apps/mobile/src/debug/{mobileDebugLog,mobileDebugRecord,diagnosticEvents}*`、
+> `config/log-upload.json.example`、`scripts/shared/log-upload-build-env.mjs`、
+> `scripts/__tests__/log-upload-build-env.test.mjs`
 
 本文管**日志怎么离开用户的机器**。日志模块本身的约定（统一 logger、不裸 `console.log`）见
 [`engineering-conventions.md`](engineering-conventions.md) §1；凭证不落盘见
@@ -38,6 +45,9 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 低于 2,000 字符的 JSON 记录，用 `instance + event + part` 关联，避免单条截断丢掉队头证据。
 采样省略数由 `suppressed` 明示；总量裁剪仍遵守现有上限，不放宽来源、记录边界或脱敏规则。
 新增诊断须验证默认 INFO → 正式 writer → collectLogs 后的内容，不能只断言 logger 被调用。
+任务启动分段计时新增精确来源 `session-start-timing`（2026-11-26），单行 JSON，只含固定阶段名、
+Agent 种类枚举（未知记为 `other`）、启动方式、结果、尝试次数与毫秒数，不带任务 id、路径、
+模型名、供应商或错误原文；`maker-ipc` 根与本 scope 的子 scope 仍不放行。
 
 ## 1. 三条不变量
 
@@ -148,7 +158,7 @@ proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志
 缺一不可（`agentLogReader.ts`）：
 
 1. **等级闸**：只放行 info 及以上；等级缺失或不认识按 debug 处理（未知不该比明确的 debug 宽松）；
-2. **标记截断**：只取 `msg` 里渲染对象之前那截字面量（对象里的值因此不可能进标记），截断；
+2. **标记截断**：只取 `msg` 首行里渲染对象之前的字面量并截断。Desktop Maker logger 在续行渲染字段，续行不能作为标记带出；
 3. **标量字段白名单**：`PROXY_FIELDS` 逐个键配窄正则取值，`body` 这类名单外的键**没有出口**，
    与等级无关。形状写窄是要点——用 `.*` 取值等于把「这个值安全」的判断让给写日志的人。
 

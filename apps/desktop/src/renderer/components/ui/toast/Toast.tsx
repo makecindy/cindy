@@ -1,3 +1,4 @@
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { ConfettiBurst } from '@/components/ui/ConfettiBurst';
 import { Button } from '@/components/ui/button';
 import { Star, X, CircleCheck, CircleX, Info, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
@@ -6,6 +7,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast, type ToastItem, type ToastVariant, type ToastActionPoint } from '@/lib/toast';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface VariantMeta {
   icon: LucideIcon;
@@ -103,6 +105,7 @@ export function Toast({ item, message }: ToastProps) {
   return (
     <div
       ref={panelRef}
+      style={WINDOW_NO_DRAG_STYLE}
       role={meta.role}
       aria-live={meta.ariaLive}
       data-state={item.exiting ? 'exiting' : 'entering'}
@@ -133,7 +136,7 @@ export function Toast({ item, message }: ToastProps) {
         item.placement === 'top-right' && 'shadow-[shadow:var(--shadow-menu)]',
         'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         // padding 对称
-        'px-4 py-[10px]',
+        'px-4 py-2.5',
       )}
     >
       <span className="inline-flex shrink-0">
@@ -150,7 +153,7 @@ export function Toast({ item, message }: ToastProps) {
 
       </span>
       {celebrationOrigin && !item.exiting && (
-        <ConfettiBurst origin={celebrationOrigin} zIndex={10101} onDone={() => setCelebrationOrigin(null)} />
+        <ConfettiBurst origin={celebrationOrigin} zIndex={Z_INDEX_LAYERS['toast-top']} onDone={() => setCelebrationOrigin(null)} />
       )}
 
       <span ref={messageRef} className="flex-1 min-w-0 max-w-[480px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line [overflow-wrap:anywhere]">

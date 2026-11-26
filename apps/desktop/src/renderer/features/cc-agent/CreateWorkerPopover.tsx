@@ -20,6 +20,9 @@ import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -36,6 +39,9 @@ import {
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector, type RemoteAgentSelectorOptions } from '@/components/new-chat/ModelSelector';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import type { ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
@@ -105,9 +111,12 @@ const LOCAL_WORKER_MODEL_MEMORY = {
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：providerId 指出是哪一个引擎。 */
+  agent: 'claude-code' | 'codex' | 'pi' | 'acp';
   model: string;
-  effort?: Effort;
+  modelGroup?: string;
+  /** 插件引擎 Worker 用引擎自己列出的档位。 */
+  effort?: Effort | PluginEngineEffort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null = 未显式,由 main 侧按默认路由解析。 */
   providerId: string | null;
@@ -137,6 +146,7 @@ export interface ExecutionDeviceOption {
   /** false = 版本过旧，不可选。 */
   supported: boolean;
   supportsAgentDevice?: boolean;
+  supportsModelGroup?: boolean;
 }
 
 export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
@@ -152,6 +162,7 @@ export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
         platform: typeof row.platform === 'string' ? row.platform : null,
         supported: row.supported === true,
         ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
+        ...(row.supportsModelGroup === true ? { supportsModelGroup: true } : {}),
       },
     ];
   });
@@ -196,6 +207,11 @@ export interface CreateWorkerPopoverProps {
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   catalogHostDeviceId?: string;
+  /**
+   * 模型面板同时列出本机插件引擎(docs/plans/acp-plugin-bridge.md)。只在本机 Lead、Worker 也在这台
+   * 电脑运行时生效(远程控制、SSH、另一台工作电脑都不列)；缺省 = 不列，面板与今天一致。
+   */
+  pluginEnginesEnabled?: boolean;
 }
 
 export function CreateWorkerPopover({
@@ -214,6 +230,7 @@ export function CreateWorkerPopover({
   leadAgentDeviceId,
   remoteAgentDevices,
   catalogHostDeviceId,
+  pluginEnginesEnabled = false,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -240,6 +257,7 @@ export function CreateWorkerPopover({
   // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
   // 面板退化为被控端纯列表(无来源维度),恒为 null。
   const [providerSource, setProviderSource] = useState<string | null>(null);
+  const [modelGroup, setModelGroup] = useState<string | null>(null);
   const [initialTask, setInitialTask] = useState('');
   const [selectedWorkerPermissionMode, setSelectedWorkerPermissionMode] =
     useState<OrcaWorkerPermissionMode>(DEFAULT_ORCA_WORKER_PERMISSION_MODE);
@@ -274,6 +292,41 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
+  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，worktree 与内置 Worker 相同。被停用、卸载或报告
+  // 不可用时按没选处理，回到下面的内置模型。
+  const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
+  useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
+  const pluginEnginesAllowed = pluginEnginesEnabled && !leadDeviceId && !sshRemote && !executionDeviceId;
+  // 面板常驻挂载：只在打开期间订阅引擎列表，关闭即停止。
+  const pluginEngineList = usePluginEngines(open && pluginEnginesAllowed);
+  const activePluginEngine = useMemo(
+    () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
+    [pluginEnginesAllowed, pluginEngineList, pluginEngine],
+  );
+  const pluginEnginePicker = useMemo(
+    () => pluginEnginesAllowed && pluginEngineList.length
+      ? {
+          engines: pluginEngineList,
+          active: activePluginEngine
+            ? {
+                providerId: activePluginEngine.engine.providerId,
+                modelId: activePluginEngine.modelId,
+                ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+              }
+            : null,
+          onSelect: (selection: PluginEngineSelection) => {
+            setModelGroup(null);
+            // 插件引擎只在这台电脑运行：Worker 的 Agent 位置一并收回本机。
+            setAgentDeviceId(null);
+            setPluginEngine((previous) => {
+              const effort = selection.effort ?? previous?.effort;
+              return { providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) };
+            });
+          },
+        }
+      : undefined,
+    [pluginEnginesAllowed, pluginEngineList, activePluginEngine],
+  );
   const trimmedRemoteDir = remoteDir.trim();
   const remoteDirInvalid =
     !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
@@ -318,6 +371,29 @@ export function CreateWorkerPopover({
     && sshRemote !== true
     && (!executionDeviceId || executionDevice?.supportsAgentDevice === true)
     && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
+  const modelGroupsAllowed = open && !sshRemote
+    && (!leadDeviceId || taskHostCaps?.supportsOrcaWorkerModelGroup === true)
+    && (!executionDeviceId || executionDevice?.supportsModelGroup === true);
+  const localModelGroups = useModelGroups(modelGroupsAllowed && !workerHostDeviceId);
+  const remoteModelGroups = useDeviceModelGroups(modelGroupsAllowed ? workerHostDeviceId : null, true);
+  const modelGroupsConfig = workerHostDeviceId ? remoteModelGroups.config : localModelGroups.config;
+  const workerModelGroups: ModelGroupsPickerProps | undefined = modelGroupsAllowed && modelGroupsConfig
+    ? {
+        config: modelGroupsConfig,
+        active: modelGroup ? { type: 'route', id: modelGroup } : null,
+        onSelect: (selection) => {
+          setPluginEngine(null);
+          setModelGroup(selection.id);
+        },
+        // 本机的 Worker：合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(另一台电脑的配置里没有这类路由)。
+        ...(workerHostDeviceId ? {} : {
+          onAttach: (selection) => {
+            setPluginEngine(null);
+            setModelGroup(selection.id);
+          },
+        }),
+      }
+    : undefined;
   const activeModels = useMemo(() => {
     return selectWorkerModels({
       agent,
@@ -529,6 +605,7 @@ export function CreateWorkerPopover({
       restoreFormRef.current(stored, readWorkerRolePrefs(stored, getDataOwnerGeneration().dataOwnerId), true);
     }
     setMoreSettingsOpen(false);
+    setModelGroup(null);
     setExecutionDeviceId(null);
     setRemoteDirMode('dialogue');
     setRemoteDir('');
@@ -580,6 +657,7 @@ export function CreateWorkerPopover({
       if (next === executionDeviceId) return;
       restoredModelSelectionRef.current = false;
       modelSelectionChosenRef.current = false;
+      setModelGroup(null);
       setExecutionDeviceId(next);
       setAgentDeviceId(next ? null : leadAgentDeviceIdRef.current);
       setRemoteDirMode('dialogue');
@@ -671,6 +749,7 @@ export function CreateWorkerPopover({
             },
       };
       setPrefs(snapshot);
+      setModelGroup(null);
       setAgent(nextAgent);
       const remembered = snapshot[nextAgent];
       setModel(remembered.model);
@@ -889,6 +968,8 @@ export function CreateWorkerPopover({
       if (selection) {
         modelSelectionChosenRef.current = true;
         restoredModelSelectionRef.current = true;
+        // 角色记住的是内置模型：带回它就不再停在之前选的插件引擎上。
+        setPluginEngine(null);
         setAgent(selection.agent);
         setModel(selection.model);
         setEffort(selection.effort);
@@ -1008,7 +1089,7 @@ export function CreateWorkerPopover({
   const agentLocationUnsendable =
     !agentLocationSelectable && agentDeviceId !== (executionDeviceId ? null : leadAgentDeviceId ?? null);
   // Keep the remembered route intact; explain the blocked form only after its catalog settles.
-  const savedModelUnavailable = prefsRestored && !modelCatalogLoading
+  const savedModelUnavailable = !modelGroup && prefsRestored && !modelCatalogLoading
     && (activeCaps !== null || activeCapabilitiesState.error !== null)
     && restoredModelSelectionRef.current
     && (rememberedSourceUnavailable || !currentModel || agentLocationUnsendable);
@@ -1017,12 +1098,14 @@ export function CreateWorkerPopover({
     !isSubmitting &&
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
-    !remoteModelListBlocked &&
     !remoteDirInvalid &&
-    !agentLocationUnsendable &&
-    !rememberedSourceUnavailable &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
-    !!currentModel;
+    // 插件引擎不读内置模型目录与来源。
+    (activePluginEngine
+      ? true
+      : modelGroup
+        ? modelGroupsAllowed
+        : !remoteModelListBlocked && !agentLocationUnsendable && !rememberedSourceUnavailable && !!currentModel);
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
 
@@ -1037,6 +1120,28 @@ export function CreateWorkerPopover({
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
+    if (activePluginEngine) {
+      // 插件引擎 Worker：在这台电脑运行，不用内置模型目录、来源与 Fast；内置模型的记忆不改。
+      try {
+        await onCreate({
+          ...(localProjectEnabled ? project.fields : {}),
+          role: activeRole,
+          agent: 'acp',
+          model: activePluginEngine.modelId,
+          ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+          providerId: activePluginEngine.engine.providerId,
+          initialTask,
+          ...(supportsWorkerPermissionModeSelection
+            ? { workerPermissionMode: selectedWorkerPermissionMode }
+            : {}),
+          ...(agentLocationSelectable ? { agentDeviceId: null } : {}),
+        });
+      } finally {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
+      return;
+    }
     // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
     const submitProviderId = narrowProviderSource(providerSource, model);
     // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的记忆(角色清单、上次选择，App 直接写进存储)。
@@ -1143,6 +1248,7 @@ export function CreateWorkerPopover({
         role: activeRole,
         agent,
         model,
+        ...(modelGroup ? { modelGroup } : {}),
         effort: submitEffort,
         fast: currentModelSupportsFast ? fast : undefined,
         providerId: submitProviderId,
@@ -1166,6 +1272,7 @@ export function CreateWorkerPopover({
       setIsSubmitting(false);
     }
   }, [
+    activePluginEngine,
     localProjectEnabled,
     project.fields,
     canCreate,
@@ -1178,6 +1285,7 @@ export function CreateWorkerPopover({
     agentLocationSelectable,
     deviceId,
     model,
+    modelGroup,
     effort,
     fast,
     providerSource,
@@ -1236,13 +1344,13 @@ export function CreateWorkerPopover({
     <><Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
       <Dialog.Portal>
       <Dialog.Overlay
-        className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
+        className={cn('modal-scrim fixed inset-0 z-modal flex items-center justify-center', className)}
         // 遮罩不是拖拽区:标 drag 会把整块视口变成拖拽命中区,只给 500px 的 Content 挖洞,
         // 探出洞的浮层(模型面板)左侧就被吞掉 —— 与其它 modal 弹窗同口径(windowDrag.tsx)。
         style={WINDOW_NO_DRAG_STYLE}
       >
       <Dialog.Content
-        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
+        className="modal-panel relative z-raised max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
         // 没有说明文字时显式置空,避免指向不存在的描述节点。
         {...(description ? {} : { 'aria-describedby': undefined })}
         onPointerDownOutside={(event) => event.preventDefault()}
@@ -1280,7 +1388,7 @@ export function CreateWorkerPopover({
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
             disabled={isSubmitting}
             onClick={handleClose}
           >
@@ -1417,17 +1525,20 @@ export function CreateWorkerPopover({
               {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
                 <FastModeToggle enabled={!!fast} onToggle={() => setFast((v) => !v)} />
               )}
-              {savedModelUnavailable ? (
+              {savedModelUnavailable && !activePluginEngine ? (
                 <CircleAlert size={14} className="shrink-0 text-[var(--error-fg)]" aria-hidden />
               ) : null}
               <ModelSelector
                 openRequest={modelPickerOpenRequest}
                 onOpenRequestConsumed={(request) => setModelPickerOpenRequest((pending) => pending === request ? 0 : pending)}
-                ariaContext={savedModelUnavailable ? t('orca.createWorker.savedModelUnavailable') : undefined}
+                ariaContext={savedModelUnavailable && !activePluginEngine ? t('orca.createWorker.savedModelUnavailable') : undefined}
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
+                modelGroups={workerModelGroups}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
+                  setPluginEngine(null);
+                  setModelGroup(null);
                   modelSelectionChosenRef.current = true;
                   restoredModelSelectionRef.current = false;
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
@@ -1443,10 +1554,15 @@ export function CreateWorkerPopover({
                 }}
                 modelId={model}
                 effort={effort}
-                onModelChange={updateModel}
+                onModelChange={(...args: Parameters<typeof updateModel>) => {
+                  setPluginEngine(null);
+                  setModelGroup(null);
+                  updateModel(...args);
+                }}
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
                 deviceId={catalogDeviceId}
+                {...(pluginEnginePicker ? { pluginEngines: pluginEnginePicker } : {})}
                 remoteAgent={remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
                   ? remoteAgentOptions
                   : undefined}
@@ -1461,7 +1577,10 @@ export function CreateWorkerPopover({
                 currentProviderId={
                   sshRemote === true ? narrowProviderSource(providerSource, model) : providerSource
                 }
-                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : handleProviderChange}
+                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : (...args: Parameters<typeof handleProviderChange>) => {
+                  setPluginEngine(null);
+                  handleProviderChange(...args);
+                }}
                 // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
                 // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
                 // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
@@ -1491,7 +1610,7 @@ export function CreateWorkerPopover({
             </div>
           </div>
         </div>
-        {noAvailableLocalModels ? (
+        {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
           <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
             {t('orca.createWorker.noAvailableModels', {
               agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',

@@ -15,6 +15,7 @@ import {
   registerSendToSessionTool,
   type SendToRemoteSessionCallback,
   type SendToSessionCallback,
+  type SendToSessionDeps,
 } from '../xdt-helper/send_to_session.js';
 
 type SendResult = Awaited<ReturnType<SendToSessionCallback>>;
@@ -55,6 +56,57 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  // Unit, shared-task-mode.md: shared links previously fell through to local
+  // lookup; neither remote-ID nor create tests covered the guest route.
+  // Minimal failure: one copied shared link. Standalone: 1.7s on Windows.
+  it('routes copied links and scoped references only to shared delivery, including reconciliation', async () => {
+    const registry = new XdtHelperToolRegistry();
+    const sendToSession = vi.fn();
+    const sendToRemoteSession = vi.fn();
+    const context = { sessionId: 'mine', sessionInstanceId: 'instance', agentKind: 'codex', workingDir: '/fixture' };
+    const receipt = { ok: true as const, target_session_id: 'cindy://session/shared?device=scoped',
+      task_link: 'cindy://session/shared?device=scoped', delivery_id: 'delivery',
+      delivery_state: 'pending' as const, wake_kind: 'queued' as const };
+    const sendToSharedTask = vi.fn<NonNullable<SendToSessionDeps['sendToSharedTask']>>(async () => receipt);
+    registerSendToSessionTool(registry, { getSessionContext: () => context, sendToSession, sendToRemoteSession, sendToSharedTask });
+    for (const target of ['cindy://session/shared?device=scoped', JSON.stringify(['share', 'host', null, 'owner']).padEnd(129, '~') + '::shared']) {
+      expect(parse(await registry.call('send_to_session', { target_session_id: target, message: 'Only selected text', delivery_id: 'delivery', model: 'ignored' }))).toEqual(receipt);
+      expect(sendToSharedTask).toHaveBeenLastCalledWith({ target, message: 'Only selected text', deliveryId: 'delivery', context });
+    }
+    expect(sendToSession).not.toHaveBeenCalled();
+    expect(sendToRemoteSession).not.toHaveBeenCalled();
+    expect(parse(await registry.call('send_to_session', { message: 'x', delivery_id: 'delivery' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: 'local-task', message: 'x', delivery_id: 'delivery' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: receipt.task_link, device: 'owner', message: 'x' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    sendToSharedTask.mockResolvedValueOnce({ ok: false, errorCode: 'DELIVERY_UNKNOWN', message: 'Reconcile first', task_link: receipt.task_link, delivery_id: 'delivery' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: receipt.task_link, message: 'x' }))).toMatchObject({ errorCode: 'DELIVERY_UNKNOWN', data: { target_session_id: receipt.task_link, delivery_id: 'delivery' } });
+  });
+
+  it('refuses shared target syntax on older hosts without trying local or same-account delivery', async () => {
+    const { registry, sendToSession } = setup();
+    for (const target of ['cindy://session/shared?device=scoped', '["share","host",null,"owner"]::shared', 'https://relay.example.test/shared-task/join#invitation']) {
+      expect(parse(await registry.call('send_to_session', { target_session_id: target, message: 'hi' }))).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
+    }
+    expect(sendToSession).not.toHaveBeenCalled();
+  });
+  // #12060, unit: exercise schema parsing and the actual handoff arguments.
+  // A provider-only create used to silently lose the requested connection.
+  it('forwards the provider only on explicit create and preserves legacy calls', async () => {
+    const { registry, sendToSession } = setup();
+    for (const args of [
+      { provider_id: 'second' },
+      {},
+      { target_session_id: UUID, provider_id: 'second' },
+    ]) {
+      expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })).ok).toBe(true);
+    }
+    const calls = sendToSession.mock.calls;
+    expect(calls[0]).toEqual([expect.objectContaining({ providerId: 'second' })]);
+    for (const [request] of calls.slice(1) as unknown as [object][]) {
+      expect(request).not.toHaveProperty('providerId');
+    }
+  });
+
   // Unit contract: task host and provider location are independent; conflicting aliases
   // must fail before host dispatch, and uncertain creation returns an address to inspect.
   it('routes creation locations independently and preserves a recovery address', async () => {

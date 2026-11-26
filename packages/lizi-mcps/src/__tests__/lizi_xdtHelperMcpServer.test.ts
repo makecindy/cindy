@@ -3,9 +3,155 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
+import { appProviderChange } from "../xdt-helper/app_models.js";
 import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+
+// #10568 / unit: ordinary tasks must discover the local migration primitive through
+// the production index; caller identity is host supplied, and SSH/plugin callers
+// cannot redirect a local buddy by supplying it in tool arguments.
+it('discovers local workspace relocation and validates its caller and action arguments', async () => {
+  const run = vi.fn(async () => ({ phase: 'pending', scope: 'local' }));
+  const context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/project', sessionId: 'task', sessionInstanceId: 'instance' };
+  const server = createXdtHelperMcpServer({ workspaceMigration: { run }, resolveSurface: async () => 'default' },
+    { agentKind: 'codex', workingDir: '/project', getSessionContext: () => context });
+  const client = new Client({ name: 'workspace-migration', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const discovery = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '工作区迁移' } }));
+    expect(discovery).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'teammates.management' })]) });
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'request', teammate_id: 'buddy', target_directory: '/data/buddy' })))
+      .toMatchObject({ ok: true, phase: 'pending' });
+    expect(run).toHaveBeenLastCalledWith({ action: 'request', teammateId: 'buddy', target: '/data/buddy', callerSessionId: 'task', callerSessionInstanceId: 'instance' }, undefined);
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy', target_directory: '/unexpected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    context.remoteHostId = 'ssh';
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy' }))).toMatchObject({ ok: false });
+    expect(run).toHaveBeenCalledOnce();
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit: native catalog discovery/mutation through the real host-tool registry.
+// Existing runtime controls lack native method argument and stdio boundaries.
+it('exposes native catalogs on demand and rejects process MCP configuration', async () => {
+  const call = vi.fn(async () => ({ ok: true as const, engine: 'pi', result: ['read'] }));
+  const server = createXdtHelperMcpServer({ sessionToolCatalog: { call } }, {
+    agentKind: 'pi', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'catalog', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(call).not.toHaveBeenCalled();
+    expect(server.hostTools.describe('get_session_tool_catalog')).toMatchObject({ category: 'control' });
+    expect(parsePayload(await server.hostTools.call('get_session_tool_catalog', { method: 'getActiveTools' })))
+      .toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+    for (const config of [{ url: 'http://localhost/mcp', command: 'node' }, { url: 'file:///fixture/server' }]) {
+      expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+        session_id: 'target', method: 'registerMcpServer', args: ['external', config],
+      }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+      session_id: 'target', method: 'setActiveTools', args: [['read']],
+    }))).toMatchObject({ ok: true, engine: 'pi', result: ['read'] });
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ hostCaller: expect.objectContaining({ pluginId: 'catalog' }) }),
+      { sessionId: 'target', method: 'setActiveTools', args: [['read']] });
+  } finally { await server.close(); }
+});
+
+// Unit / #10794 permission boundary: the real registry must not expose the raw
+// account view or provider directory to a plugin without a task. The original
+// plugin read case allowed both. Minimal input is subscriptionAccounts/read.
+it('keeps raw account reads and provider management unavailable to plugins without a Session', async () => {
+  const models = vi.fn(async () => ({ providers: [] }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(parsePayload(await server.hostTools.call('list_model_providers', {})))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    for (const action of ['login', 'configure', 'remove']) {
+      expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+        change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action, accountId: 'a' } },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    }
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'rename', providerId: 'anthropic', name: 'renamed' },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(models).not.toHaveBeenCalled();
+  } finally { await server.close(); }
+});
+
+// Unit / existing provider-group management query: keep original payloads and
+// truncation instead of calculating a plugin-only aggregate. Minimal one-row
+// response exercises new discovery and no-session plugin routing.
+it('exposes original usage history and provider group views through the shared registry', async () => {
+  const history = { providerId: 'anthropic', todayKey: '2026-11-16', coverageStart: '2026-11-15',
+    self: { lastUsedAt: null, days: [] }, relays: [], members: [{ shareId: 's', memberId: 'm', lastUsedAt: 1, days: [
+      { day: '2026-11-16', model: 'model-a', inputTokens: 3, outputTokens: 2, cacheCreateTokens: 4, cacheReadTokens: 5 },
+    ] }] };
+  const group = { providerId: 'anthropic', config: null, members: [] };
+  const call = vi.fn(async (input: { action: string }) => input.action === 'usage-history' ? history : group);
+  const server = createXdtHelperMcpServer({ providerReads: { call } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-read-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+    expect(overview).toMatchObject({ categories: expect.arrayContaining([
+      expect.objectContaining({ name: 'usage', description: expect.stringContaining('device') }),
+    ]) });
+    const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'models.provider-state' } }));
+    expect(detail).toMatchObject({ control: expect.objectContaining({ summary: expect.stringContaining('device') }) });
+    expect(server.hostTools.describe('get_provider_usage_history')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', device: 'computer' })))
+      .toEqual({ ok: true, ...history });
+    expect(call).toHaveBeenLastCalledWith({ action: 'usage-history', providerId: 'anthropic', device: 'computer', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('get_provider_group', { providerId: 'anthropic' }))).toEqual({ ok: true, ...group });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', groupBy: 'day' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
+// expose owner management to an installed plugin without borrowing a task.
+// Existing model/settings tests do not exercise member operations or their schema.
+it('offers provider share member tools to plugins without a Session and validates writes', async () => {
+  const call = vi.fn(async () => ({ members: [{ memberId: 'member', status: 'paused' }] }));
+  const server = createXdtHelperMcpServer({ providerSharing: { call } }, {
+    agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-sharing-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(server.hostTools.describe('list_provider_share_members')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_provider_share_members', {})))
+      .toMatchObject({ ok: true, members: [{ memberId: 'member' }] });
+    expect(call).toHaveBeenLastCalledWith({ action: 'members', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      device: 'other-computer', memberId: 'member', status: 'pause',
+    }))).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith({ callerSessionId: undefined, action: 'status', device: 'other-computer',
+      memberId: 'member', status: 'pause' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_member_status', {
+      memberId: 'member', status: 'remove',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('set_provider_share_model_access', {
+      providerId: 'anthropic', memberId: 'member', models: ['model-a'], ownerId: 'someone-else',
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+    const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '供应商分享成员' } }));
+    expect(JSON.stringify(found)).toContain('models.provider-sharing');
+  } finally { await client.close(); await server.close(); }
+});
 
 // Unit, capability list #10/#15: the existing registry had no native package
 // transfer. A named task or file is enough to exercise discovery, caller identity
@@ -67,6 +213,44 @@ it('discovers Host services through the common validated registry', async () => 
     expect(list).toHaveBeenCalledOnce();
   } finally { await server.close(); }
 });
+// Unit: plugin callers have no Session; the new usage entry must use their attested
+// context and reject arbitrary owner/path/refresh parameters before touching host data.
+it('exposes read-only subscription usage to the common validated tool registry', async () => {
+  const read = vi.fn(async () => ({ scope: 'local', accounts: [{ accountId: 'second', windows: [] }] }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read } }, { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_subscription_usage')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_subscription_usage', { providerId: 'anthropic' })))
+      .toMatchObject({ ok: true, accounts: [{ accountId: 'second' }] });
+    expect(read.mock.calls[0]).toEqual([expect.objectContaining({ hostCaller }), 'anthropic']);
+    for (const key of ['ownerId', 'accountPath', 'refresh', 'deviceId', 'sessionId']) {
+      expect(parsePayload(await server.hostTools.call('get_subscription_usage', { [key]: 'other' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    }
+    expect(read).toHaveBeenCalledOnce();
+    read.mockRejectedValueOnce(new Error('secret host path'));
+    const failed = await server.hostTools.call('get_subscription_usage', {});
+    expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
+    expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
+// #11274: only the target task ID is accepted and the existing usage group admits the read.
+it('exposes session quota without accepting caller-supplied routing', async () => {
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read: vi.fn(), readSession } },
+    { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_session_quota')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target' })))
+      .toMatchObject({ ok: true, status: 'unavailable' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target', deviceId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(readSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostCaller }), 'target');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and
@@ -316,6 +500,33 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Unit through MCP discovery and call_tool. A shared-task link must reach the guest reader
+  // for an owner task, and stay outside a bot's local-only history even if the session IDs match.
+  it('discovers shared progress and checks the live history scope before reading the link', async () => {
+    const context = { agentKind: 'codex' as const, workingDir: '', sessionId: 'mine', sessionInstanceId: 'instance' };
+    const link = 'cindy://session/session?device=fixture';
+    const progress = { ok: true as const, title: 'Build', inTurn: true, observedAt: '2026-11-19T00:00:00Z', events: [], nextBefore: null };
+    const readSharedTaskProgress = vi.fn(async () => progress);
+    let allowedSessionIds: string[] | null = null;
+    const server = createXdtHelperMcpServer({ history: {
+      listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn(), readSharedTaskProgress,
+      resolveSessionScope: async () => ({ ok: true, sessionIds: allowedSessionIds }),
+    } }, context);
+    const client = new Client({ name: 'shared-task-progress', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '监控共享任务进度' } }));
+      expect(found.items).toContainEqual(expect.objectContaining({ key: 'tasks.shared-progress', availability: 'available' }));
+      const read = async () => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_shared_task_progress', args: { task_link: link } } }));
+      expect(await read()).toEqual(progress);
+      expect(readSharedTaskProgress).toHaveBeenCalledWith({ task_link: link }, expect.objectContaining(context));
+      allowedSessionIds = ['session'];
+      expect(await read()).toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+      expect(readSharedTaskProgress).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
   // Unit through real MCP wire. Shared-task mode requires an authoritative current
   // task, never a selected window or caller-supplied target. Existing control tests
   // did not cover invitation discovery, live context loss or transferable receipts.
@@ -389,6 +600,13 @@ describe("cindy_helper MCP server", () => {
     try {
       const owner = (await client.listTools()).tools.find((tool) => tool.name === 'request_input_handoff')!;
       expect(owner.description).toContain('password');
+      // #11508: tools/list must disclose the host restriction before any call.
+      // Existing discovery coverage only checked purpose/schema. Minimal input:
+      // a fresh client's tools/list (unit, in-memory transport; all three harnesses).
+      expect(owner.description).toContain('only on a macOS host');
+      expect(owner.description).toContain('Windows and Linux hosts are unsupported');
+      expect(owner.description).toContain('both window targets and screenshot QR codes');
+      expect(owner.description).toContain('phone or another computer');
       expect(owner.inputSchema).toMatchObject({
         required: ['purpose'],
         properties: {
@@ -405,6 +623,12 @@ describe("cindy_helper MCP server", () => {
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      // The public tool must preserve a logical field plan through every harness.
+      const fields = [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code 0', length: 1 }, { label: 'Code 1', length: 1 }] }];
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Enter code', target: {}, fields,
+      } }))).toMatchObject({ ok: true, status: 'pending' });
+      expect(start).toHaveBeenLastCalledWith(expect.anything(), { purpose: 'Enter code', target: {}, fields });
       expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
         purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
       } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
@@ -436,7 +660,7 @@ describe("cindy_helper MCP server", () => {
       } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
         { purpose: 'Sign in', target: { app: 'Cindy' } });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(3);
       expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });
@@ -689,17 +913,59 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("dispatches a discovered send_to_session call without dropping nested arguments", async () => {
+  // Unit through MCP tools/list and tools/call: on 11/19 the user's wording only
+  // found runtime settings despite handoff being registered. Follow the result
+  // to the existing task, and keep title-only requests on the rename path.
+  // Unit MCP integration: the runtime index/schema previously offered only local
+  // and same-account IDs, so a copied guest link could not reach its Host.
+  // shared-task-mode.md; minimal input is one shared target. No network beyond MCP in-memory transport.
+  it('discovers received shared-task delivery and exposes the same schema over the real MCP entry', async () => {
+    const sendToSession = vi.fn();
+    const sendToSharedTask = vi.fn(async () => ({ ok: true as const,
+      target_session_id: 'cindy://session/task?device=shared', task_link: 'cindy://session/task?device=shared',
+      delivery_id: 'delivery', delivery_state: 'pending' as const, wake_kind: 'queued' as const }));
+    const server = createXdtHelperMcpServer({ sendToSession, sendToSharedTask }, {
+      agentKind: 'codex', workingDir: '/fixture', sessionId: 'mine',
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'shared-handoff', version: '1' });
+    await Promise.all([server.connect(b), client.connect(a)]);
+    try {
+      expect((await client.listTools()).tools.find(tool => tool.name === 'list_tools')?.description).toContain('共享任务');
+      const list = async (args: Record<string, string>) => parsePayload(await client.callTool({ name: 'list_tools', arguments: args }));
+      const tool = (await list({ name: 'send_to_session' })).tool as { description: string; inputSchema: { properties: Record<string, { description: string }> } };
+      expect(tool.description).toContain('delivery_id');
+      expect(tool.inputSchema.properties.target_session_id.description).toContain('复制任务链接');
+      expect(tool.inputSchema.properties.delivery_id.description).toContain('绝不再次发送');
+      expect((await list({ query: '给共享任务发消息' })).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'native.send_to_session', availability: 'available' }),
+      ]));
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'send_to_session', args: { target_session_id: 'cindy://session/task?device=shared', message: 'Chosen result', delivery_id: 'delivery' },
+      } }))).toMatchObject({ ok: true, wake_kind: 'queued', delivery_id: 'delivery' });
+      expect(sendToSharedTask).toHaveBeenCalledWith(expect.objectContaining({
+        target: 'cindy://session/task?device=shared', message: 'Chosen result', deliveryId: 'delivery', context: expect.objectContaining({ sessionId: 'mine' }),
+      }));
+      expect(sendToSession).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it("discovers sending to an existing task without exposing it in rename discovery", async () => {
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
       agentKind: "codex" as const,
-      wakeKind: "resumed" as const,
+      wakeKind: "queued" as const,
       targetTitle: "Issue follow-up",
       targetLastUserSendAt: null,
     }));
+    const rename = vi.fn(async (args: { sessionId: string; title: string }) => ({
+      ok: true as const,
+      ...args,
+    }));
+    let restricted = false;
     const server = createXdtHelperMcpServer(
-      { sendToSession },
+      { sendToSession, setCurrentSessionTitle: rename, resolveSurface: async () => restricted ? "restricted" : "default" },
       {
         agentKind: "codex",
         workingDir: "/repo",
@@ -723,26 +989,96 @@ describe("cindy_helper MCP server", () => {
         "call_tool",
         "list_tools",
       ]);
-
-      const discovered = parsePayload(
-        await client.callTool({
-          name: "list_tools",
-          arguments: { category: "handoff" },
-        }),
+      const matchingEntries = topLevelTools.tools.filter((tool) => tool.description?.includes("send_to_session"));
+      expect(matchingEntries.map((tool) => tool.name)).toEqual(["list_tools"]);
+      expect(matchingEntries[0].description).toContain("仅本机");
+      const list = async (args: Record<string, string>) => parsePayload(
+        await client.callTool({ name: "list_tools", arguments: args }),
       );
-      expect(discovered).toMatchObject({
+
+      expect(await list({ category: "handoff" })).toMatchObject({
         ok: true,
         category: "handoff",
+        tools: [expect.objectContaining({
+          name: "send_to_session",
+          description: expect.not.stringContaining("目标在另一台电脑:target_session_id"),
+        })],
       });
-      const discoveredTools = discovered.tools as Array<{ name: string }>;
-      expect(discoveredTools.map((tool) => tool.name)).toContain(
-        "send_to_session",
-      );
+      expect(await list({})).toMatchObject({ categories: expect.arrayContaining([
+        expect.objectContaining({ name: "handoff", description: expect.stringContaining("仅本机") }),
+      ]) });
+      expect(await list({ name: "send_to_session" })).toMatchObject({
+        ok: true,
+        tool: {
+          name: "send_to_session",
+          inputSchema: {
+            properties: {
+              target_session_id: { type: "string", description: expect.not.stringContaining("deviceId::sessionId") },
+              message: { type: "string" },
+            },
+            required: ["message"],
+          },
+        },
+      });
+      const search = await list({ query: "发消息给另一个任务会话" });
+      const [firstMatch] = search.items as Array<{ next: { tool: string; args: Record<string, string> } }>;
+      expect(firstMatch).toMatchObject({
+        key: "native.send_to_session",
+        availability: "available",
+        summary: expect.stringContaining("仅本机"),
+      });
+      // PR #11583: the exact action should still match with polite prefixes or sentence punctuation.
+      for (const query of [
+        "向另一个任务发送消息",
+        "send a message to another task",
+        "给伙伴发消息",
+        "请发消息给另一个任务会话",
+        "发消息给另一个任务会话。",
+        "请帮我发消息给另一个任务会话！",
+        "Please, send a message to another task.",
+      ]) {
+        const result = await list({ query });
+        expect((result.items as unknown[])[0], query).toMatchObject({ key: "native.send_to_session", availability: "available" });
+      }
+      const genericSearch = await list({ query: "任务" });
+      expect((genericSearch.items as unknown[])[0]).not.toMatchObject({ key: "native.send_to_session" });
+      const wrappedGenericSearch = await list({ query: "请任务。" });
+      expect((wrappedGenericSearch.items as Array<{ key: string }>).map(item => item.key)).not.toContain("native.send_to_session");
+      const detail = parsePayload(await client.callTool({
+        name: firstMatch.next.tool,
+        arguments: firstMatch.next.args,
+      }));
+      const { operations: [{ call }] } = detail.control as {
+        operations: Array<{ call: { tool: string; args: { name: string } } }>;
+      };
+      expect(detail).toMatchObject({ control: { domain: "tasks" } });
+
+      const control = await list({ category: "control" });
+      const controlNames = (control.tools as Array<{ name: string }>).map((tool) => tool.name);
+      expect(controlNames).toContain("set_current_session_title");
+      expect(controlNames).not.toContain("send_to_session");
+      for (const query of [
+        "把这个会话改名",
+        "不要给伙伴发消息，只把这个会话改名",
+        "请不要给伙伴发消息，只把这个会话改名。",
+      ]) {
+        const renameSearch = await list({ query });
+        expect(renameSearch).toMatchObject({ ok: true });
+        expect((renameSearch.items as Array<{ key: string }>).map((item) => item.key)).not.toContain("native.send_to_session");
+      }
+      expect(rename).not.toHaveBeenCalled();
+      expect(sendToSession).not.toHaveBeenCalled();
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "set_current_session_title", args: { title: "New title" } },
+      }))).toMatchObject({ ok: true, title: "New title" });
+      expect(rename).toHaveBeenCalledExactlyOnceWith({ sessionId: "dispatcher-session", title: "New title" });
+      expect(sendToSession).not.toHaveBeenCalled();
 
       const result = await client.callTool({
-        name: "call_tool",
+        name: call.tool,
         arguments: {
-          name: "send_to_session",
+          ...call.args,
           args: {
             target_session_id: TARGET_SESSION_ID,
             message: "Continue the existing task",
@@ -754,7 +1090,7 @@ describe("cindy_helper MCP server", () => {
       expect(parsePayload(result)).toMatchObject({
         ok: true,
         target_session_id: TARGET_SESSION_ID,
-        wake_kind: "resumed",
+        wake_kind: "queued",
       });
       expect(sendToSession).toHaveBeenCalledOnce();
       expect(sendToSession).toHaveBeenCalledWith({
@@ -765,6 +1101,9 @@ describe("cindy_helper MCP server", () => {
         useWorktree: undefined,
         workingDir: undefined,
       });
+      restricted = true;
+      const restrictedEntries = await client.listTools();
+      expect(restrictedEntries.tools.find(tool => tool.name === "list_tools")?.description).not.toContain("send_to_session");
     } finally {
       await client.close();
       await server.close();
@@ -1095,7 +1434,8 @@ describe("cindy_helper MCP server", () => {
         (overview.categories as Array<{ name: string; description: string }>).map((c) => [c.name, c.description]),
       );
       for (const description of Object.values(described)) expect(description).toMatch(/\S/);
-      for (const name of ['history', 'handoff', 'bots']) expect(described[name]).toContain('可跨电脑');
+      for (const name of ['history', 'bots']) expect(described[name]).toContain('可跨电脑');
+      expect(described.handoff).toContain('宿主支持跨电脑新建时');
       expect(described.handoff).toContain('agent_device_id');
       expect(described.handoff).not.toContain('新建只在本机');
       expect(described.control).toMatch(/本机。$/);
@@ -1267,6 +1607,12 @@ describe("cindy_helper MCP server", () => {
   });
 
   it("fails closed when the host cannot classify the Session surface", async () => {
+    let canClassify = true;
+    const sendToRemoteSession = vi.fn();
+    const resolveSurface = vi.fn(async () => {
+      if (!canClassify) throw new Error("db unavailable");
+      return "default" as const;
+    });
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
@@ -1277,8 +1623,9 @@ describe("cindy_helper MCP server", () => {
     }));
     const server = createXdtHelperMcpServer(
       {
-        resolveSurface: async () => { throw new Error("db unavailable"); },
+        resolveSurface,
         sendToSession,
+        sendToRemoteSession,
       },
       { agentKind: "pi", workingDir: "/repo", sessionId: "unknown-session" },
     );
@@ -1286,10 +1633,23 @@ describe("cindy_helper MCP server", () => {
     const client = new Client({ name: "cindy-helper-restricted-test", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
+      const listDescription = async () => (await client.listTools()).tools.find((tool) => tool.name === "list_tools")?.description;
+      const description = await listDescription();
+      expect(description).not.toContain("send_to_session");
+      expect(resolveSurface).not.toHaveBeenCalled();
+      const available = parsePayload(await client.callTool({ name: "list_tools", arguments: { query: "发消息给另一个任务会话" } }));
+      expect((available.items as unknown[])[0]).toMatchObject({ summary: expect.stringContaining("本机或已授权电脑") });
+      canClassify = false;
+      // Pi fingerprints descriptions, so the lookup instruction stays stable.
+      expect(await listDescription()).toBe(description);
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
       expect(overview.categories).toEqual([]);
+      for (const args of [{ name: "send_to_session" }, { query: "请发消息给另一个任务会话。" }]) {
+        expect(parsePayload(await client.callTool({ name: "list_tools", arguments: args })))
+          .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      }
       const forbiddenCall = parsePayload(
         await client.callTool({
           name: "call_tool",
@@ -1304,6 +1664,7 @@ describe("cindy_helper MCP server", () => {
         errorCode: "CAPABILITY_NOT_AVAILABLE",
       });
       expect(sendToSession).not.toHaveBeenCalled();
+      expect(sendToRemoteSession).not.toHaveBeenCalled();
     } finally {
       await client.close();
       await server.close();
@@ -1720,6 +2081,10 @@ it('keeps the control directory compact and reports gaps and invalid continuatio
     expect(await read({ key: 'mobile.preferences' })).toMatchObject({ control: { availability: 'not_exposed', operations: [] } });
     expect(await read({ key: 'teammates.profile' })).toMatchObject({ control: { availability: 'unavailable_in_context', operations: [] } });
     expect(await read({ key: 'native.set_current_session_title' })).toMatchObject({ control: { operations: [expect.objectContaining({ name: 'set_current_session_title' })] } });
+    const entries = await client.listTools();
+    expect(entries.tools.find(tool => tool.name === 'list_tools')?.description).not.toContain('send_to_session');
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { name: 'send_to_session' } })))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
     expect(rename).not.toHaveBeenCalled();
     expect(await read({ key: 'missing' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CONTROL' });
     // 2026-11-08: a teammate told to use list_agents searched that exact name and found nothing.
@@ -1779,4 +2144,35 @@ it('discovers and generates settings links on the task computer', async () => {
     expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
       .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   } finally { await server.close(); }
+});
+
+// Unit, agent-user-parity.md「第一时间能发现」(PR #12041 review): the first
+// list_tools overview must name snooze and its cross-computer scope, not only
+// the expanded control list.
+it('names snooze_sessions and its cross-computer scope in the control overview', async () => {
+  const setSessionsSnooze = vi.fn(async () => ({ ok: true as const, changed: [] }));
+  const server = createXdtHelperMcpServer({ setSessionsSnooze }, { agentKind: 'codex', workingDir: '/tmp', sessionId: 's' });
+  const client = new Client({ name: 'snooze-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })) as { categories: Array<{ name: string; description: string }> };
+    const control = overview.categories.find((c) => c.name === 'control');
+    expect(control?.description).toMatch(/snooze_sessions[^；]*支持本机与跨电脑（deviceId::sessionId）/);
+    expect(server.hostTools.describe('snooze_sessions')).toMatchObject({ category: 'control' });
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit / plugin engine accounts (subscription-account-pools.md 插件引擎的账号, 2026-11-23): the
+// configure_model_provider input contract the model sees. Plugin engine providers (and providers
+// taken out of them) are accepted with a sign-in methodId; a key can never be passed by an Agent.
+// Minimal inputs: a plugin engine add with methodId; the same with a secret; a malformed plugin id.
+it('accepts plugin engine providers for account management but never a secret', () => {
+  const change = (command: Record<string, unknown>, providerId = 'acp-plugin:zcode-plugin:zcode') =>
+    appProviderChange.safeParse({ action: 'subscriptionAccounts', providerId, command });
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'zai' }).success).toBe(true);
+  expect(change({ action: 'place', accountId: 'a', target: 'acp-plugin:zcode-plugin:zcode~ab12cd34' }).success).toBe(true);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:zcode~ab12cd34').success).toBe(true);
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'api-key', secret: 'sk-1' }).success).toBe(false);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:ZCode').success).toBe(false);
 });

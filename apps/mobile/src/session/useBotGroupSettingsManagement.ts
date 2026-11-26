@@ -8,10 +8,10 @@ import { canManageBotGroup } from './botGroupRemote';
 
 /**
  * `archive` also restores an archived group; `nickname`, `avatar`, `bot-access` and adding your
- * own teammate are written as yourself, every other write as the owner or admin you control.
+ * own teammate are written as yourself; withdrawing it uses its own actor. Other writes use an owner or admin you control.
  */
 export type GroupSettingsActionId = BotGroupRemoteActionId | 'set-member-role' | 'archive' | 'transfer' | 'nickname' | 'avatar' | 'bot-access';
-const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member', 'notifications']);
+const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member', 'notifications', 'assistantDevice']);
 type Settings = { group: BotGroupRemoteChatData; managerId?: string };
 
 /** Cloud settings use the account's chat service, never device discovery or a host link. */
@@ -44,13 +44,15 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     }
   }, [api, binding, groupId, valid]);
   // The parent already subscribes to server changes. Recheck only settings/membership changes.
-  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode,
+  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode, source.notificationModeInherited, source.assistantDeviceId,
     source.members.map(member => [member.actorId, member.role, member.status])]);
   useEffect(() => { void refresh(); }, [refresh, sourceVersion]);
 
   const act = useCallback(async (actionId: GroupSettingsActionId, input: Record<string, unknown> = {}) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
-    const asSelf = SELF_ACTIONS.has(actionId);
+    const ownCompanion = actionId === 'remove-member' ? current?.group.members.find(member =>
+      !!member.actorId && member.actorId === input.actorId && member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true) : undefined;
+    const asSelf = SELF_ACTIONS.has(actionId) || !!ownCompanion;
     // An archived group only takes 取消归档 from its managers.
     const allowed = asSelf ? !current?.group.archived && (actionId !== 'notifications' || current?.group.supportsNotificationSettings === true) : actionId === 'archive'
       ? !!current?.managerId && chatGroupMembership(current.group).manager : !!current?.managerId && canManageBotGroup(current.group);
@@ -62,7 +64,10 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     };
     const actor = () => { const id = String(input.actorId ?? ''); if (!id) throw new Error('INVALID_PARAMS'); return id; };
     let action: ChatGroupSettingsAction;
-    if (actionId === 'notifications') {
+    if (actionId === 'assistantDevice') {
+      if (!current.group.assistantComputers?.some(device => device.id === input.deviceId)) throw new Error('DEVICE_UNAVAILABLE');
+      action = { type: 'assistantDevice', deviceId: String(input.deviceId) };
+    } else if (actionId === 'notifications') {
       if (input.mode !== 'all' && input.mode !== 'mentions' && input.mode !== 'none') throw new Error('INVALID_PARAMS');
       action = { type: 'notifications', mode: input.mode };
     } else if (actionId === 'nickname') {
@@ -82,6 +87,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
         if (typeof input.name === 'string') action.name = input.name;
         if (typeof input.topic === 'string') action.topic = input.topic;
         if (typeof input.description === 'string') action.description = input.description;
+        if (typeof input.allowMemberInvites === 'boolean') action.allowMemberInvites = input.allowMemberInvites;
         if (typeof input.allowMentionAllBots === 'boolean') action.allowMentionAllBots = input.allowMentionAllBots;
         if (input.replyMode === 'all' || input.replyMode === 'mentioned') action.responseMode = input.replyMode;
         if (input.speakingMode === 'auto' || input.speakingMode === 'sequential') action.speakingMode = input.speakingMode;
@@ -89,7 +95,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
       }
     } else if (actionId === 'add-member' || actionId === 'remove-member' || actionId === 'set-member-role') {
       action = { type: 'member', actorId: String(input.actorId ?? input.botId ?? ''),
-        action: actionId === 'add-member' ? 'invite' : actionId === 'remove-member' ? 'remove' : 'role' };
+        action: actionId === 'add-member' ? 'invite' : actionId === 'remove-member' ? (ownCompanion ? 'leave' : 'remove') : 'role' };
       if (actionId === 'set-member-role') {
         if (input.role !== 'admin' && input.role !== 'member') throw new Error('INVALID_PARAMS');
         action.role = input.role;
@@ -100,7 +106,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     const key = JSON.stringify(action.type === 'update' ? { ...action, expectedRevision: undefined } : action);
     const prior = pending.current;
     const operation = prior?.binding === binding && prior.key === key ? prior
-      : { binding, key, operationId: randomUUID(), managerId: asSelf ? undefined : current.managerId, action };
+      : { binding, key, operationId: randomUUID(), managerId: ownCompanion?.actorId ?? (asSelf ? undefined : current.managerId), action };
     pending.current = operation;
     const write = Symbol(); writing.current = write;
     // Fence reads started before this mutation, including the parent subscription refresh.
@@ -120,16 +126,17 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
       if (valid()) await refresh();
     }
   }, [api, binding, groupId, refresh, valid]);
-  /** A join link from the owner or admin you control; revoking takes the same link back. */
+  /** A join link from an eligible joined actor you control; rights come from the latest snapshot. */
   const invite = useCallback(async (revoke?: string) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
-    if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
-    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, randomUUID()); return null; }
+    const actorId = current?.managerId ?? (current?.group.canInvite ? chatGroupMembership(current.group).self?.actorId : undefined);
+    if (!valid() || !actorId || current?.group.dissolvedAt || current?.group.archived) throw new Error('PERMISSION_DENIED');
+    if (revoke) { await api.client.revokeInvite(groupId, actorId, revoke, randomUUID()); return null; }
     // Share publication may fail after the invite was created. Retry its original
     // receipt so the Chat Server returns the same token instead of another invite.
     const prior = pendingInvite.current;
-    const operation = prior?.binding === binding && prior.managerId === current.managerId ? prior
-      : { binding, managerId: current.managerId, operationId: randomUUID() };
+    const operation = prior?.binding === binding && prior.managerId === actorId ? prior
+      : { binding, managerId: actorId, operationId: randomUUID() };
     pendingInvite.current = operation;
     const link = await api.client.createInvite(groupId, operation.managerId, operation.operationId);
     if (!valid()) throw new Error('OWNER_CHANGED');

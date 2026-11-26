@@ -1,10 +1,19 @@
-import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@cindy/maker-shared/model-route';
+import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
-export const BOT_MODEL_CHAIN_MAX = 5;
+/**
+ * 伙伴只用一个模型(或一条智能路由)：2026-11-26 用户裁决取消备用模型，想要出问题时自动换来源就选一条智能路由，
+ * 由路由接替(model-groups.md §6.2)。存下、生效、展示都只认第一条。
+ */
+export const BOT_MODEL_CHAIN_MAX = 1;
 
-export type BotHarness = 'claude' | 'codex' | 'pi';
+/**
+ * 旧版电脑、手机、云端记录与 Agent 工具仍可能发来最多 5 条(原来的首选 + 备用)：照样接受，不让保存失败，只用第一条。
+ */
+export const BOT_MODEL_CHAIN_INPUT_MAX = 5;
 
-export type BotModelRoute = ModelRoute;
+export type BotHarness = CompanionModelRoute['harness'];
+
+export type BotModelRoute = CompanionModelRoute;
 
 /** Runtime-control uses the same full route identity as the Bot editor. */
 export function botModelRouteRuntimeKey(
@@ -15,10 +24,10 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'acp' ? value : 'claude';
 }
 
-export const normalizeBotModelRoute = normalizeModelRoute;
+export const normalizeBotModelRoute = normalizeCompanionModelRoute;
 
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
@@ -35,13 +44,30 @@ export function normalizeBotModelChain(
     const single = normalizeBotModelRoute(legacy);
     if (single) candidates.push(single);
   }
+  return uniqueBotModelRoutes(candidates).slice(0, BOT_MODEL_CHAIN_MAX);
+}
+
+/** A remote form must save every submitted route, in order, or reject the entire edit. */
+export function parseRemoteBotModelChain(value: unknown): BotModelRoute[] | null {
+  if (!Array.isArray(value) || !value.length || value.length > BOT_MODEL_CHAIN_INPUT_MAX
+    || value.some(route => !route || normalizeBotHarness(route.harness) !== route.harness)) return null;
+  // 每一条都要合法、互不重复(旧版表单发来的备用项也一样；#12944：不同写法归成同一条路由时不悄悄丢掉一项)，
+  // 否则整份拒绝；合法时只存第一条。
+  const routes = value.map(normalizeBotModelRoute);
+  if (routes.some(route => route === null)) return null;
+  if (uniqueBotModelRoutes(routes as BotModelRoute[]).length !== routes.length) return null;
+  return normalizeBotModelChain(routes);
+}
+
+/** A group entry and a plain route with the same fallback model are different choices. */
+function uniqueBotModelRoutes(routes: readonly BotModelRoute[]): BotModelRoute[] {
   const seen = new Set<string>();
-  return candidates.filter((item) => {
-    const key = `${item.harness}\u0000${item.providerId ?? ''}\u0000${item.model}${modelRouteLocationKey(item.agentDeviceId)}`;
+  return routes.filter((item) => {
+    const key = `${item.harness}\u0000${item.providerId ?? ''}\u0000${item.model}${modelRouteLocationKey(item.agentDeviceId)}\u0000${item.modelGroup ?? ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).slice(0, BOT_MODEL_CHAIN_MAX);
+  });
 }
 
 export function primaryBotModelRoute(
@@ -83,16 +109,40 @@ export function botModelRouteIndex(
   return legacyMatches.length === 1 ? legacyMatches[0]!.index : -1;
 }
 
-/** Select the next explicit route; never invent one from the global catalog. */
+const range = (from: number, to: number): number[] =>
+  Array.from({ length: Math.max(0, to - from) }, (_, at) => from + at);
+
+/**
+ * The order to try after the current route. A model group expands into consecutive
+ * routes tagged with its id and its strategy may have started anywhere in them, so
+ * the rest of that group (wrapping to the ones before the current) comes first.
+ */
+function fallbackOrder(chain: readonly BotModelRoute[], currentIndex: number): number[] {
+  const group = currentIndex >= 0 ? chain[currentIndex]!.modelGroup : undefined;
+  if (!group) return range(currentIndex + 1, chain.length);
+  let start = currentIndex;
+  while (start > 0 && chain[start - 1]!.modelGroup === group) start -= 1;
+  let end = currentIndex + 1;
+  while (end < chain.length && chain[end]!.modelGroup === group) end += 1;
+  return [...range(currentIndex + 1, end), ...range(start, currentIndex), ...range(end, chain.length)];
+}
+
+/**
+ * Select the next explicit route; never invent one from the global catalog.
+ * The chain may be one already expanded from model groups, so it is not cut to
+ * BOT_MODEL_CHAIN_MAX here (that limit is for what the owner saves).
+ */
 export function nextBotModelRoute(
   value: unknown,
   current: Pick<BotModelRoute, 'harness' | 'model' | 'providerId' | 'agentDeviceId'>,
   visitedRoutes: readonly string[] = [],
   isUsable: (route: BotModelRoute) => boolean = () => true,
 ): BotModelRoute | null {
-  const chain = normalizeBotModelChain(value);
+  const chain = uniqueBotModelRoutes(Array.isArray(value)
+    ? value.map(normalizeBotModelRoute).filter((item): item is BotModelRoute => item !== null)
+    : []);
   const currentIndex = botModelRouteIndex(chain, current);
-  for (let index = currentIndex + 1; index < chain.length; index += 1) {
+  for (const index of fallbackOrder(chain, currentIndex)) {
     const route = chain[index]!;
     if (!isUsable(route)) continue;
     const runtimeKey = botModelRouteRuntimeKey(route);

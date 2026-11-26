@@ -1,13 +1,19 @@
-/* Both reply runtimes use the same narrow-panel presentation. Controls stay in
-   flow below the content, leaving the full message column available for reading. */
-.thread-panel {
+/* Private topics keep controls in flow below the content. Group topics retain
+   the main timeline toolbar and its side gutter, clear of the read receipt. */
+/* A group topic has reaction + more, rather than the main chat's four actions.
+   Keep that outer rail without sacrificing another 56px of narrow-panel text. */
+.thread-panel:not(.thread-panel-inline-actions) {
+  --chat-bubble-gutter: 64px;
+}
+
+.thread-panel-inline-actions {
   --chat-bubble-gutter: 0px;
 }
 
-.thread-panel .chat-bubble-toolbar {
+.thread-panel-inline-actions .chat-bubble-toolbar {
   position: relative;
   inset: auto;
-  margin: 8px 0 0 auto;
+  margin: var(--space-2) 0 0 auto;
   max-width: 100%;
   opacity: 1;
   pointer-events: auto;
@@ -16,6 +22,14 @@
 /* The existing Markdown table scroller owns wide columns. Don't reduce dates,
    numbers and domains to individual characters to make them fit the panel. */
 .thread-panel :is(th, td) {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* 行内 code 在 thread 表格里必须跟随单元格语义，不被 markdown 正文的
+   overflow-wrap:anywhere 覆盖，否则日期/ID/域名会被拆成单字符，
+   而这些表格本来就靠外层横滚承载宽列。 */
+.thread-panel :is(th, td) code {
   overflow-wrap: normal;
   word-break: normal;
 }

@@ -2,11 +2,12 @@
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
 import { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import { prepareShareAvailability } from './providerShareAvailability.js';
-import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
-import { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
+import { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
@@ -59,9 +60,14 @@ export const {
   revalidateRemoteModelAccess,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  getProviderGroupRemoteHandler,
+  setCloudPrivateInvokeHandler,
+  getCloudPrivateInvokeHandler,
+  projectRoutingForDisplay,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
@@ -81,6 +87,7 @@ export const {
   getActiveControllers,
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   pushToTopicSubscribers,
   dropAllControllers,
@@ -91,14 +98,13 @@ export const {
   purgeRevokedController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
+  remoteInvokeEpoch,
   flushRemoteInvokeResultOutboxOnReconnect,
   flushMakerEventBatchesOnReconnect,
   runInvoke,
   hasProviderShares,
   providerShareActiveControllers,
   revokeProviderShareControllers,
-  revokeControllerModelUse,
-  notifyControllerModelUseRestored,
   abortProviderShareReshareRuns,
   __testing,
   remoteAgentLimitUsage
@@ -109,6 +115,8 @@ export const {
   },
   configureStandbyGuestCleanup,
   prepareShareAvailability,
+  isRemoteProviderInvocationAllowed,
+  readZhipuCodingPlanAccountUsage,
   readKimiCodingAccountUsage,
   readOpenCodeGoAccountUsage,
   executeTaskTags: (...args) => executeTaskTags(...args),
@@ -117,6 +125,7 @@ export const {
   stopFilePeers: (...args) => stopFilePeers(...args),
   requestTaskMigration: (...args) => requestTaskMigration(...args),
   delegatedProviderShareGuestAccess,
+  locallyProvenProviderShareDelegation,
   delegatedProviderShareLeases,
   invalidateProviderShareDelegation,
   app,

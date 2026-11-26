@@ -1,21 +1,20 @@
-import { withAvailabilityPolicyLock, withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 远程 Agent 的供应商级授权。每台电脑、每个 Cindy 账号各自保存一份。
  *
- * - 「允许被远程调用」(allowedProviders)：逐个供应商、默认关闭，用户在模型供应商页打开。打开的供应商，
- *   自己的其他电脑和分享出去的人都能用(11-10 之前的行为，原样保留)。
- * - 「让我的其他电脑用本机模型」(ownComputerModelUse)：「远程连接」里的开关，默认关闭、只由用户打开。
- *   打开后自己的其他电脑能用本机全部供应商；不影响分享出去的人。
+ * - 「允许被远程调用」(allowedProviders)：逐个供应商、默认关闭，用户在模型供应商页打开。这是别的电脑
+ *   能否用这个供应商的唯一开关(2026-11-18 用户裁决)：打开后自己账号下的其他电脑以信任模式完全可用，
+ *   分享出去的人按各自分享使用。并进账号池的旧连接没有自己的开关，跟随所属账号池。
+ *   曾经的「让我的其他电脑用本机模型」总开关(ownComputerModelUse)已删除，文件里残留的值不再读取。
  *
- * 2026-11-10 的版本曾把所有供应商默认对自己的电脑开放(defaultOpen / disabledProviders)。用户确认那是
- * 开了不该开的(2026-11-12)：这里不再读 defaultOpen，只因它而开放的供应商回到关闭；11-10 之前和之后用户
- * 自己打开的都在 allowedProviders 里，照旧。唯一的例外是 11-10 期间用户在默认开放的供应商上建了分享：
- * 那是用户自己要分享，拿到分享快照后补记为打开(keepSharedProvidersOpen)。两个旧字段原样保留在文件里、
- * 继续记录关闭，退回 11-10 的版本时也不会重新打开用户关掉的供应商。
+ * 2026-11-10 的版本曾把所有供应商默认对自己的电脑开放(defaultOpen / disabledProviders)。这里不读 defaultOpen，
+ * 也不按旧的分享快照补记任何供应商(2026-11-18：旧配置一律不再处理)：只有用户自己打开过的才在 allowedProviders 里。
+ * 两个旧字段原样保留在文件里、继续记录关闭，退回 11-10 的版本时也不会重新打开用户关掉的供应商。
  */
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { remoteAccessProviderId } from './mergedProviderPool.js';
 
 interface RemoteProviderAccessPrefs {
   allowedProviders: Record<string, true>;
@@ -23,14 +22,12 @@ interface RemoteProviderAccessPrefs {
   disabledProviders: Record<string, true>;
   /** 11-10 版本的「默认开放」迁移标记；本版本不再读。 */
   defaultOpen: boolean;
-  /** 「远程连接」里的「让我的其他电脑用本机模型」，默认关闭。 */
-  ownComputerModelUse: boolean;
-  /** 已按分享快照处理过 11-10 默认开放期间建的分享。 */
+  /** 旧版本按分享快照补记过的标记；本版本不再读写其含义，只原样保留。 */
   defaultOpenReverted: boolean;
 }
 
 const DEFAULTS: RemoteProviderAccessPrefs = {
-  allowedProviders: {}, disabledProviders: {}, defaultOpen: false, ownComputerModelUse: false, defaultOpenReverted: false,
+  allowedProviders: {}, disabledProviders: {}, defaultOpen: false, defaultOpenReverted: false,
 };
 const MAX_ENTRIES = 4096;
 let permissionGeneration = 0;
@@ -42,7 +39,7 @@ export function onRemoteProviderAccessChanged(listener: (providerId: string) => 
 }
 /** Process-local fences: restarting also discards all retained group routing contexts. */
 export function remoteProviderAccessEpoch(providerId: string): string {
-  return `${permissionGeneration}:${permissionEpochs.get(providerId) ?? 0}`;
+  return `${permissionGeneration}:${permissionEpochs.get(remoteAccessProviderId(providerId)) ?? 0}`;
 }
 const log = desktopMakerLogger.child('remote-provider-access-store');
 
@@ -60,13 +57,12 @@ function providerSet(source: unknown): Record<string, true> {
 
 function normalize(raw: unknown): RemoteProviderAccessPrefs {
   const value = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as { allowedProviders?: unknown; disabledProviders?: unknown; defaultOpen?: unknown; ownComputerModelUse?: unknown; defaultOpenReverted?: unknown }
+    ? raw as { allowedProviders?: unknown; disabledProviders?: unknown; defaultOpen?: unknown; defaultOpenReverted?: unknown }
     : {};
   return {
     allowedProviders: providerSet(value.allowedProviders),
     disabledProviders: providerSet(value.disabledProviders),
     defaultOpen: value.defaultOpen === true,
-    ownComputerModelUse: value.ownComputerModelUse === true,
     defaultOpenReverted: value.defaultOpenReverted === true,
   };
 }
@@ -87,82 +83,11 @@ const store = createOverrideSettingsFile<RemoteProviderAccessPrefs>({
   maxBytes: 256 * 1024,
 });
 
-/** 「允许被远程调用」：分享出去的人、供应商组，以及自己的其他电脑(逐个供应商打开的那部分)。 */
+/** 「允许被远程调用」：自己的其他电脑、分享出去的人与供应商组共用这一个开关。 */
 export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
-  store.invalidateIfChanged();
-  return !!providerId && store.read().allowedProviders[providerId] === true;
-}
-
-/** 「远程连接」里的「让我的其他电脑用本机模型」。 */
-export function isOwnComputerModelUseEnabled(): boolean {
-  store.invalidateIfChanged();
-  return store.read().ownComputerModelUse;
-}
-
-/** 自己的其他电脑能否用这个供应商：逐个打开过的，或「让我的其他电脑用本机模型」开着。 */
-export function isRemoteProviderOpenToOwnComputers(providerId: string): boolean {
-  return isRemoteProviderInvocationAllowed(providerId) || (!!providerId && isOwnComputerModelUseEnabled());
-}
-
-function notifyAll(): void {
-  permissionGeneration++; permissionEpochs.clear();
-  for (const listener of accessListeners) {
-    try { listener('*'); } catch { log.warn('remote provider access listener failed'); }
-  }
-}
-
-/**
- * 撤回 11-10 默认开放时的唯一补记：那段时间里，用户在「默认开放、没单独关过」的供应商上建了分享，
- * 说明用户要让分享出去的人用，补记为打开。`sharedProviderIds` 来自已拉到的完整分享快照。
- * 只对跑过 11-10 迁移的文件做一次；其余供应商一律不动。
- */
-/**
- * 撤回 11-10 默认开放时要补记的供应商：分享了的供应商，加上当前仍属于这些分享池的旧 Codex 连接
- * （拆回独立供应商的历史映射不算分享意图）——受邀者用这个池时会逐个核对这些旧连接的「允许被远程调用」，只补 openai 本身会让分享失效。
- */
-export function sharedProviderIdsForRevert(
-  shares: readonly { providerId: string }[],
-  /** 账号池读不了时返回 null：这时不能确定要补哪些旧连接，整次补记推迟到下次。 */
-  readSharedLegacyAccounts: (sharedProviders: ReadonlySet<string>) => Readonly<Record<string, string>> | null,
-): Set<string> | null {
-  const ids = new Set(shares.map((share) => share.providerId));
-  if (ids.size === 0) return ids;
-  const legacy = readSharedLegacyAccounts(ids);
-  if (!legacy) return null;
-  for (const legacyId of Object.keys(legacy)) ids.add(legacyId);
-  return ids;
-}
-
-export async function keepSharedProvidersOpen(sharedProviderIds: ReadonlySet<string>): Promise<void> {
-  store.invalidateIfChanged();
-  const before = store.read();
-  if (!before.defaultOpen || before.defaultOpenReverted) return;
-  return withAvailabilityPolicyLock(async () => {
-    store.invalidateIfChanged();
-    const prefs = store.read();
-    if (!prefs.defaultOpen || prefs.defaultOpenReverted) return;
-    const allowedProviders = { ...prefs.allowedProviders };
-    let kept = 0;
-    for (const providerId of sharedProviderIds) {
-      if (!providerId || allowedProviders[providerId] === true || prefs.disabledProviders[providerId] === true) continue;
-      if (Object.keys(allowedProviders).length >= MAX_ENTRIES) break;
-      allowedProviders[providerId] = true;
-      kept++;
-    }
-    store.writePatch({ allowedProviders, defaultOpenReverted: true });
-    if (kept > 0) notifyAll();
-    log.info('default-open access reverted', { keptForShares: kept });
-  });
-}
-
-export async function setOwnComputerModelUse(enabled: boolean): Promise<void> {
-  return withAvailabilityPolicyLock(async () => {
-    store.invalidateIfChanged();
-    if (store.read().ownComputerModelUse === enabled) return;
-    store.writePatch({ ownComputerModelUse: enabled });
-    notifyAll();
-    log.info('own computer model use updated', { enabled });
-  });
+  if (!providerId) return false;
+  store.invalidateIfChanged(60_000);
+  return store.read().allowedProviders[remoteAccessProviderId(providerId)] === true;
 }
 
 export async function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): Promise<void> {

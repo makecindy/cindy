@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { prepareCodexDesktopInputRules } from './codexDesktopInputRules.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import type { ProviderView, Catalog } from '@cindy/model-providers';
 import type { createCodexProxyHost } from './codex-proxy-host.js';
@@ -12,6 +13,7 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { prepareCodexBrowserCompanion, resolveCodexBrowserCompanionSpawnConfig } from './codex-browser-companion.js';
 import { getActiveCatalog, getActiveCatalogRevision } from './active-catalog.js';
 import { prepareCodexCustomContextCatalog, prepareCodexGuestModelCatalog } from './codex-custom-context-catalog.js';
+import { needsOpenAiApiCodexFastDeclaration, needsOpenAiApiCodexUltrafastDeclaration } from './codex-api-model-capabilities.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveModelDefaultContextWindow } from './catalog-to-descriptors.js';
 
@@ -37,6 +39,7 @@ export function createCodexSpawnConfig(ports: {
 }): Prepare {
   const { getCodexHome, getCodexExtraSpawnConfig, broadcastCodexRuntimeRoute, readClaudeApiKey, isReplacedCindyGatewayKey, getDesktopSelectableCatalog, resolveDesktopModelContextProviderId } = ports;
   const { setCodexProxyAuthInjection, setCodexProxyGatewayKeyReader, setCodexSubagentOAuthReader, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, releaseCodexCustomContextProxy, ensureCodexControlPlaneProxyReady, ensureCodexProxyReady, isCodexControlPlaneProxyHandleReady, isCodexProxyHandleReady, getCodexCustomContextProxyEndpoint, getCodexControlPlaneProxyEndpoint, getCodexProxyEndpoint, setCodexAppliedCustomProviderRoutes } = ports.proxy;
+  let lastBrowserCompanionUnavailableKey: string | null = null;
   return async (providers, ctx) => {
         if (ctx.remoteHostId) return ports.prepareRemote(providers, ctx);
         const isControlPlane = ctx.hostPurpose === 'control-plane';
@@ -64,12 +67,19 @@ export function createCodexSpawnConfig(ports: {
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           throw error;
         }
-        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
+        const appHome = getCodexHome();
+        const effectiveCodexHome = ctx.codexHome ?? appHome;
+        if (!isControlPlane && !ctx.nativeStorageOnly && !guestProviderId) {
+          try {
+            await prepareCodexDesktopInputRules(ctx.runtimeCodexHome ?? effectiveCodexHome, appHome);
+          } catch (cause) {
+            throw Object.assign(new Error('Could not prepare Codex desktop input rules', { cause }), { codexSpawnConfigFatal: true });
+          }
+        }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
-        let buildSessionMcpConfig:
-          | ((sessionInstanceId: string) => Record<string, unknown>)
-          | undefined;
+        let buildSessionMcpConfig: Awaited<ReturnType<Prepare>>['buildSessionMcpConfig'];
+        let closeHostMcpInstances: (() => void) | undefined;
         // Guests use only the controller's tunnel, installed by CodexAgent at
         // thread creation. Injecting this computer's MCPs here makes the earlier
         // process-level isolation check wait for unrelated local MCP startup.
@@ -84,7 +94,20 @@ export function createCodexSpawnConfig(ports: {
             // Browser overrides must never mutate that shared snapshot.
             mcpExtraArgs = [...cfg.extraArgs];
             mcpExtraEnv = cfg.extraEnv;
-            buildSessionMcpConfig = cfg.buildSessionMcpConfig;
+            const { bridge, buildSessionMcpConfig: build } = cfg;
+            if (bridge && build) {
+              const instances = new Set<string>();
+              buildSessionMcpConfig = (id, session) => {
+                instances.add(id);
+                return build(id, session);
+              };
+              closeHostMcpInstances = () => {
+                for (const id of instances) bridge.closeSessionInstance(id);
+                instances.clear();
+              };
+            } else {
+              buildSessionMcpConfig = build;
+            }
           } catch (err) {
             desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
               message: err instanceof Error ? err.message : String(err),
@@ -97,14 +120,33 @@ export function createCodexSpawnConfig(ports: {
         const browserCompanionSpawnConfig =
           resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
         mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
-        if (
+        if (browserCompanion?.status === 'ready') {
+          lastBrowserCompanionUnavailableKey = null;
+        } else if (
           browserCompanion?.status === 'unavailable' &&
           browserCompanion.reason !== 'platform_unsupported'
         ) {
-          desktopMakerLogger.warn('Codex Browser companion unavailable', {
-            reason: browserCompanion.reason,
-            detail: browserCompanion.detail,
-          });
+          const unavailableKey = `${browserCompanion.reason}\u0000${browserCompanion.detail}`;
+          const changed = unavailableKey !== lastBrowserCompanionUnavailableKey;
+          lastBrowserCompanionUnavailableKey = unavailableKey;
+          if (browserCompanion.reason === 'provider_not_installed') {
+            if (changed) {
+              desktopMakerLogger.debug?.('Codex Browser companion not installed', {
+                reason: browserCompanion.reason,
+                detail: browserCompanion.detail,
+              });
+            }
+          } else if (changed) {
+            desktopMakerLogger.warn('Codex Browser companion unavailable', {
+              reason: browserCompanion.reason,
+              detail: browserCompanion.detail,
+            });
+          } else {
+            desktopMakerLogger.debug?.('Codex Browser companion unavailable (unchanged)', {
+              reason: browserCompanion.reason,
+              detail: browserCompanion.detail,
+            });
+          }
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
@@ -164,20 +206,22 @@ export function createCodexSpawnConfig(ports: {
           : usesIsolatedProxy
             ? isCodexControlPlaneProxyHandleReady(authInjection)
             : isCodexProxyHandleReady();
-        if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
+        if (!ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
               ? 'Codex provider OAuth mode requires the local proxy, but the proxy is not ready'
-              : 'Codex OAuth mode requires the local proxy, but the proxy is not ready',
+              : useOAuthBearer
+                ? 'Codex OAuth mode requires the local proxy, but the proxy is not ready'
+                : 'Codex gateway mode requires the local proxy, but the proxy is not ready',
           );
-          // fallback OAuth 也是凭据隔离要求,不能被 maker-core 当成普通 MCP 降级吞掉。
+          // Route materialization must not be swallowed as an optional MCP failure.
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           if (usesScopedProxy) {
             await releaseCodexCustomContextProxy(scopedProxyKey);
           }
           throw error;
         }
-        // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
+        // Every local host freezes proxy routing, including gateway-key hosts.
         const endpoint = usesScopedProxy
           ? getCodexCustomContextProxyEndpoint(scopedProxyKey)
           : usesIsolatedProxy
@@ -219,48 +263,55 @@ export function createCodexSpawnConfig(ports: {
             );
           }
         }
+        let contextProviderModels: string[] | undefined;
         let customContextCatalogArgs: string[] = [];
         let customContextCatalogPath: string | undefined;
-        if (isCustomContext) {
-          const modelId = ctx.customContextModel?.trim();
+        const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
+        const requestedCatalogModel = ctx.customContextModel?.trim();
+        if (isCustomContext || (isReview && requestedCatalogModel)) {
           const contextWindow = ctx.customContextWindow;
           try {
-            if (
-              !modelId ||
-              typeof contextWindow !== 'number' ||
-              !Number.isFinite(contextWindow) ||
-              contextWindow <= 0
-            ) {
+            if (!requestedCatalogModel || (isCustomContext &&
+                (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0))) {
               throw new Error('custom-context Codex host is missing its model or context window');
             }
             const catalog = getDesktopSelectableCatalog();
-            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, modelId);
-            const customCatalog = await prepareCodexCustomContextCatalog({
-              binaryPath: ports.binaryPath,
-              codexHome: effectiveCodexHome,
-              modelId,
-              contextWindow,
-              modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
-              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
-              resolveContextWindow: (nativeModelId) => {
-                return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
-                  ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
-              },
-              ...(smartSubagentConfig
-                ? { baseCatalog: smartSubagentConfig.modelCatalog }
-                : {}),
-            });
-            customContextCatalogPath = customCatalog.catalogPath;
-            if (smartSubagentConfig) {
-              smartSubagentConfig = {
-                ...smartSubagentConfig,
-                catalogPath: customCatalog.catalogPath,
-              };
-            } else {
-              customContextCatalogArgs = customCatalog.extraArgs;
+            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, requestedCatalogModel);
+            const provider = catalog.providers.find(provider => provider.id === source);
+            const canDeclareTiers = !guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel));
+            const declareFastMode = canDeclareTiers && needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel);
+            const declareUltrafastMode = declareFastMode && needsOpenAiApiCodexUltrafastDeclaration(provider, requestedCatalogModel);
+            if (isCustomContext) contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
+            if (isCustomContext || declareFastMode) {
+              const budgets = isCustomContext ? {
+                contextWindow,
+                modelIds: contextProviderModels,
+                resolveCompactionPct: (id: string) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
+                resolveContextWindow: (nativeModelId: string) => {
+                  return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
+                    ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
+                },
+              } : {};
+              const customCatalog = await prepareCodexCustomContextCatalog({
+                binaryPath: ports.binaryPath,
+                codexHome: effectiveCodexHome,
+                modelId: requestedCatalogModel,
+                declareFastMode,
+                declareUltrafastMode,
+                ...budgets,
+                ...(smartSubagentConfig
+                  ? { baseCatalog: smartSubagentConfig.modelCatalog }
+                  : {}),
+              });
+              customContextCatalogPath = customCatalog.catalogPath;
+              if (smartSubagentConfig) {
+                smartSubagentConfig = { ...smartSubagentConfig, catalogPath: customCatalog.catalogPath };
+              } else {
+                customContextCatalogArgs = customCatalog.extraArgs;
+              }
             }
           } catch (error) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
+            if (usesScopedProxy) await releaseCodexCustomContextProxy(scopedProxyKey);
             const fatal = error instanceof Error ? error : new Error(String(error));
             (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
             throw fatal;
@@ -268,9 +319,10 @@ export function createCodexSpawnConfig(ports: {
         }
         if (guestProviderId) {
           try {
+            contextProviderModels = contextProviderModels?.filter(model => guestModelIds.includes(model));
             const guestCatalog = await prepareCodexGuestModelCatalog({
               binaryPath: ports.binaryPath, codexHome: effectiveCodexHome,
-              modelIds: ctx.deviceHostedGuestModelIds ?? [],
+              modelIds: guestModelIds,
               ...(customContextCatalogPath ? { baseCatalog: JSON.parse(await fs.readFile(customContextCatalogPath, 'utf8')) } : {}),
             });
             customContextCatalogArgs = guestCatalog.extraArgs;
@@ -305,6 +357,7 @@ export function createCodexSpawnConfig(ports: {
             ? { smartSubagentRoutes: smartSubagentConfig.routes }
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
+          contextProviderModels,
           codexProxyActive: ready,
           codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
@@ -330,11 +383,12 @@ export function createCodexSpawnConfig(ports: {
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
-          ...(usesScopedProxy
+          ...(usesScopedProxy || closeHostMcpInstances
             ? {
                 onHostRetired: async () => {
+                  closeHostMcpInstances?.();
                   releaseScopedCapabilities?.();
-                  await releaseCodexCustomContextProxy(scopedProxyKey);
+                  if (usesScopedProxy) await releaseCodexCustomContextProxy(scopedProxyKey);
                 },
               }
             : {}),

@@ -143,6 +143,8 @@ export interface CodexModelListParams {
 export interface CodexMcpServerStatus {
   name: string;
   tools: Record<string, unknown>;
+  /** Native thread state; absent on older runtimes, null after config changes. */
+  runtimeStatus?: 'notStarted' | 'starting' | 'connected' | 'authenticationRequired' | 'failed' | 'cancelled' | 'disabled' | null;
   [k: string]: unknown;
 }
 
@@ -833,7 +835,17 @@ export interface TurnStartedNotification {
 
 export interface TurnDiffUpdatedNotification {
   method: 'turn/diff/updated';
-  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+  params: {
+    threadId: string;
+    turnId: string;
+    diff: string;
+    /**
+     * Cindy 本地字段, app-server 不会发送: 这次累计 diff 超过单行上限, 已由 AppServerHost
+     * 丢弃正文, `diff` 为空串, 只表示「该线程本轮 diff 未知」。
+     */
+    cindyOmitted?: 'oversized';
+    [k: string]: unknown;
+  };
 }
 
 /**
@@ -862,9 +874,11 @@ export type CodexErrorInfo =
   | 'contextWindowExceeded'
   | 'sessionBudgetExceeded'
   | 'usageLimitExceeded'
+  | 'rateLimitExceeded'
   /** 上游临时过载: HTTP 503 + `server_is_overloaded` / `slow_down`。 */
   | 'serverOverloaded'
   | 'cyberPolicy'
+  | 'misalignmentPolicyViolation'
   | 'internalServerError'
   | 'unauthorized'
   | 'badRequest'

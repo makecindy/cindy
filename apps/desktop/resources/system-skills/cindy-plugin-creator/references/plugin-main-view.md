@@ -21,6 +21,9 @@
   替代或修改根级 `icon` 品牌图片。可用值与 Cindy 系统图标名完全一致：
   `puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、
   `image`、`message-circle`、`calendar-days`；不接受别名、任意图标名或图片路径；
+- `mainView.preferredIcon` 可选，用于侧栏、自定义导航与新增页签菜单。支持上述图标以及
+  `tablet-smartphone`、`contact-round`、`podcast`、`workflow`。客户端不认识首选名称时使用
+  `mainView.icon`，两项都省略时使用拼图。插件品牌图仍由根级 `icon` 指定。
 - `mainView.open` 可省略(缺省 `page`:左侧导航入口点开后撑满内容区)。`sidebar` =
   作为不跟对话的页签放进聊天区某一边的页签组(`side`:`left` / `right` / `top` /
   `bottom`,缺省 right;其它 open 值下声明 side 拒装);`window` = 弹成独立 OS 窗口。

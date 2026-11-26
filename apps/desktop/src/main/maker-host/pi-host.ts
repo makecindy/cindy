@@ -1,4 +1,7 @@
 import { createPiAuthAdapter } from './pi-auth.js';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { piNativeKeyEnvVar, wireProtocolToPiApi, resolvePiBundledModelById, urlOrigin, officialPiRouteMatches, piModelCatalog, anthropicRootForV1Endpoint, type PiCatalogModel } from './pi-native-catalog.js';
 export { buildPiNativeProvidersFromConfigs, type PiBundledModelCatalog, type PiBundledModelInfo, piNativeKeyEnvVar, resolvePiBundledModelById } from './pi-native-catalog.js';
 import { listCindyManagedSkills } from './managed-skills.js';
@@ -77,19 +80,23 @@ import {
 import {
   getClaudeEndpoint,
   isAnthropicCompatProxyHandleReady,
+  ensureAnthropicCompatProxyReady,
 } from './anthropic-compat-proxy-host.js';
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { codexAccountState, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { hasConnectedSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createLogger } from '../logger.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
+  getDesktopMcpToolApprovalEvidence,
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { buildPiRuntimeConfig } from './runtimeConfigsCore.js';
+import { withCloudPluginOauthPrompt } from '../plugin-oauth/prompt.js';
 import {
   getActiveCatalog,
 } from './active-catalog.js';
@@ -102,11 +109,13 @@ import {
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 import {
   createPiNativeProviderResolver,
+  createPiSubscriptionConnectionReader,
   resolvePiCindyGatewayModelApi,
   resolvePiCindyGatewayModelSpec,
 } from './piNativeProvidersCore.js';
 export {
   buildPiSubscriptionNativeProviders,
+  createPiSubscriptionConnectionReader,
   listedPiModelIds,
   mergePiNativeProviderResults,
   parsePiListModels,
@@ -135,10 +144,34 @@ export function resolvePiBinaryPath(): string | null {
   return getReadyBinaryPath('pi') ?? null;
 }
 
+/**
+ * #12298: 订阅来源的连接态(与「设置 → 模型供应商」列表同口径,纯读、无自愈副作用)。
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它。
+ *
+ * 它接在 AgentDeps.isNativeProviderSourceConnected 上,不进入 provider 清单本身 ——
+ * 清单是桌面与 Node Host 的逐字节契约(host↔desktop parity),连接态是宿主各自的凭证事实。
+ */
+const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
+  // 架构规则 §5:端口在调用时才取值(转调),不在模块加载时把函数本身存下来。
+  getActiveCatalog: () => getActiveCatalog(),
+  hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
+  codexAccountState: (...args) => codexAccountState(...args),
+  hasCodexOAuthLoginReadOnly: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+  hasConnectedSubscriptionPool: (...args) => hasConnectedSubscriptionPool(...args),
+  onReadFailure: (providerId, error) => log.warn(
+    'pi: subscription connection read failed; keeping the source listed',
+    {
+      providerId,
+      message: error instanceof Error ? error.message : String(error),
+    },
+  ),
+});
+
 // The desktop's ports for the Pi native providers shared with the Node Host (piNativeProvidersCore.ts).
 const piNativeProviderResolver = createPiNativeProviderResolver({
   getClaudeEndpoint: () => getClaudeEndpoint(),
   isAnthropicCompatProxyHandleReady: () => isAnthropicCompatProxyHandleReady(),
+  ensureAnthropicCompatProxyReady: () => ensureAnthropicCompatProxyReady(),
   resolvePiBinaryPath: () => resolvePiBinaryPath(),
   isOpenAiSubscriptionProviderId: (...args) => isOpenAiSubscriptionProviderId(...args),
   hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
@@ -171,12 +204,12 @@ export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscript
 export { composePiSystemPrompt } from './runtimeConfigsCore.js';
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
-  return buildPiRuntimeConfig({
+  return withCloudPluginOauthPrompt(buildPiRuntimeConfig({
     ripgrepPath: getRipgrepBinaryPath(),
     userDataPath: app.getPath('userData'),
-    endpoint: () => getClaudeEndpoint(),
+    endpoint: () => isAnthropicCompatProxyHandleReady() ? getClaudeEndpoint() : undefined,
     remoteEndpoint: () => claudeUpstreamEndpoint(),
-  });
+  }));
 }
 
 // ── 构造入口 ─────────────────────────────────────────────────────────────────
@@ -184,6 +217,8 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
 export interface BuildPiAgentOpts {
   logger: AgentDeps['logger'];
   turnChangeCapture?: AgentDeps['turnChangeCapture'];
+  toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
+  nativeRecoveryObserver?: AgentDeps['nativeRecoveryObserver'];
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
@@ -199,10 +234,10 @@ export interface BuildPiAgentOpts {
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
   /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
-  /** 层 C：视觉桥后端 env（cindy-bridge 的 vision 工具读取）。 */
-  resolvePiVisionBridgeEnv?: AgentDeps['resolvePiVisionBridgeEnv'];
   /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
+  /** Credential-free reachability check on the SSH execution host. */
+  probeRemotePiProviderEndpoint?: AgentDeps['probeRemotePiProviderEndpoint'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
   getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
   getRemoteAgentFileOps?: AgentDeps['getRemoteAgentFileOps'];
@@ -232,6 +267,11 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    // Pi can switch providers without respawning. Let each new HTTPS tunnel
+    // resolve its own destination, even if the first model used a direct route.
+    getLocalPiHttpsProxy: async env => hasProxyEnvConfig(env)
+      ? undefined
+      : ensureCliProxyBridge(resolveDesktopOutboundProxy),
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
     // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
@@ -248,6 +288,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
+    toolLifecycleControl: opts.toolLifecycleControl,
+    nativeRecoveryObserver: opts.nativeRecoveryObserver,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
     spawnPiSubagentRunner,
     derivePiProxySessionToken,
@@ -258,6 +300,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类
     // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalEvidence: getDesktopMcpToolApprovalEvidence,
     resolvePiAgentHome: (remoteHostId) => {
       // 轮 40-w4-t3 CRITICAL:远端 agentHome 承载 session 历史(sessions/*.jsonl,
       // 与 DB sdk_session_id 持久关联)—— 必须落远端持久目录, 不能用本机
@@ -377,6 +420,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
+    // #12298: 子代理路由不列确知断开的订阅来源(连接态是桌面宿主的凭证事实,纯读)。
+    isNativeProviderSourceConnected: subscriptionSourceConnected,
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiRuntimeModels: opts.resolvePiRuntimeModels,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
@@ -387,8 +432,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
-    resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,
     getRemotePiTransport: opts.getRemotePiTransport,
+    probeRemotePiProviderEndpoint: opts.probeRemotePiProviderEndpoint,
     getRemotePiFileOps: opts.getRemotePiFileOps,
     getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,

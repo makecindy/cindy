@@ -50,7 +50,15 @@ describe('bot and split route visibility', () => {
     expect(isAgentIslandVisibleSessionOwnedByBotRoute(pathname)).toBe(expected);
   });
 
-  it('keeps stale splits out of bot pages across navigation and settings', () => {
+  // Unit #11517 regression: one ordinary task beside a companion remains viewed.
+  // Existing coverage assumed task panes disappeared on every companion route.
+  it.each(['/bots/mate', '/bots/mate/session/chat', '/bots/groups/group', '/bots/remote/mac/mate'])(
+    'keeps one visible task protected on %s', path => {
+      expect(resolveAgentIslandVisibleSessionsFromPath(path, ['task-a'])).toEqual(['task-a']);
+    },
+  );
+
+  it('protects mounted task splits across companion navigation while excluding hidden layouts', () => {
     const splits = ['task-a', 'task-b'];
     const targets = [
       '/cc-agent/task-a',
@@ -68,7 +76,7 @@ describe('bot and split route visibility', () => {
       new URL(target, 'https://cindy.invalid').pathname,
       splits,
     ))).toEqual([
-      ['task-a', 'task-b'], null, null, null, null, null, null, null,
+      ['task-a', 'task-b'], splits, splits, splits, splits, null, null, null,
       ['task-a', 'task-b'],
     ]);
     expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', [])).toBe('task-a');

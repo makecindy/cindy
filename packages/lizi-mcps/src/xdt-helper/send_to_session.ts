@@ -6,6 +6,7 @@ import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
+  ControlWorkerEngine,
   LiziMcpSessionContext,
 } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
@@ -36,6 +37,7 @@ export type SendToSessionCallback = (params: {
   agentKind?: ControlWorkerAgent;
   /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
   model?: string;
+  providerId?: string;
   /** create 模式可选:显式推理强度；缺省继承 dispatcher。jump 忽略。 */
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
@@ -48,7 +50,8 @@ export type SendToSessionCallback = (params: {
       targetDeviceId?: string;
       responsibilityRecorded?: false;
       targetSessionId: string;
-      agentKind: ControlWorkerAgent;
+      /** 'acp' only for collaboration-internal deliveries to a plugin-engine Worker. */
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -125,18 +128,35 @@ export interface SendToSessionDeps {
   sendToSession: SendToSessionCallback;
   /** 缺省 = host 不支持跨电脑投递;deviceId::sessionId 目标返 REMOTE_UNSUPPORTED。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
+  /** Uses the signed-in user's existing guest membership, never same-account control. */
+  sendToSharedTask?: (params: {
+    target: string; message: string; deliveryId?: string; context: LiziMcpSessionContext;
+  }) => Promise<
+    | { ok: true; target_session_id: string; task_link: string; delivery_id: string;
+        delivery_state: 'pending' | 'accepted'; wake_kind: 'queued' | 'accepted' }
+    | { ok: false; errorCode: string; message: string; task_link?: string; delivery_id?: string }
+  >;
 }
 
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
-const DESCRIPTION = [
-  "【已有任务】发消息必须传 target_session_id；不知道 id 先用 history/list_sessions 查找。只有明确新建任务时才省略 target_session_id。新建时省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。",
+export const sessionDeliveryScope = (supportsRemote: boolean, supportsShared = false): string =>
+  (supportsRemote ? '本机或已授权电脑' : supportsShared ? '本机' : '仅本机') + (supportsShared ? '，以及当前账号已加入的共享任务' : '');
+
+const describeSendToSession = (supportsRemote: boolean, supportsShared: boolean) => [
+  `【已有任务】发消息必须传 target_session_id（${sessionDeliveryScope(supportsRemote, supportsShared)}）；不知道 id 先用 history/list_sessions 查找。只有明确新建任务时才省略 target_session_id。新建时省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。`,
+  ...(supportsShared ? [
+    '【共享任务】别人共享给当前账号且已加入的任务：target_session_id 直接传「复制任务链接」得到的完整 Cindy 链接（与 get_shared_task_progress 相同），或该链接中 device 的完整共享引用加 ::sessionId。保留共享身份，不能改成房主 deviceId::sessionId 或裸 ID；不自动加入、不创建替代任务。仅发送显式 message，不附带本机历史、附件或工具权限；原任务保留执行者、模型、工作目录与权限。',
+    '共享投递返回 task_link、delivery_id、delivery_state=pending/accepted；pending 对应 wake_kind=queued，无需重试；accepted 对应 wake_kind=accepted，仅证明原任务已接受输入，不证明仍在运行或执行成功。DELIVERY_UNKNOWN 时消息可能已入队，保留 task_link 和 delivery_id；再次调用相同 target_session_id、message 并带 delivery_id 只对账，绝不重发。unknown 不能证明未送达，不能换新 ID 重发；也可用 get_shared_task_progress 查看进展。只读、退出、移除、撤销共享、旧版或不可用均明确失败，不改走同账号远控。',
+  ] : []),
   "",
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
-  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;新建远程任务则省略 target_session_id 并传 device。",
+  ...(supportsRemote ? [
+    "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制。",
+  ] : []),
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
@@ -214,10 +234,13 @@ export function registerSendToSessionTool(
   registry.register({
     name: "send_to_session",
     category: "handoff",
-    description: DESCRIPTION,
+    description: describeSendToSession(!!deps.sendToRemoteSession, !!deps.sendToSharedTask),
     inputShape: {
       device: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：任务、目录和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；省略或 local 为当前宿主。远程项目/目录按目标电脑解析；未选项目不继承本机路径，未选模型用目标默认。已有任务使用 target_session_id，不同时传 device。',
+      ),
+      provider_id: z.string().trim().min(1).optional().describe(
+        "仅本机新建任务可选：从 list_available_models 对应模型的 providers 选取本机连接 ID。省略沿用原选路；jump 忽略。",
       ),
       provider_device_id: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：模型供应商所在电脑，取 list_available_models 的 locations；local 表示任务所在电脑。与 device（任务和文件位置）独立。旧名 agent_device_id 兼容保留，同时填写必须一致。',
@@ -230,14 +253,18 @@ export function registerSendToSessionTool(
           `目标 ${BRAND_NAME} session 的 business id(新建 desktop session 是 UUID,` +
             "历史 session 可能是 cuid 或 IM 确定性 id,一律按不透明字符串处理、不校验格式)。" +
             "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
-            "另一台电脑上的任务用 deviceId::sessionId。" +
+            (deps.sendToRemoteSession ? "另一台电脑上的任务用 deviceId::sessionId。" : deps.sendToSharedTask ? '本机目标用裸 ID。' : "仅支持发给本机已有任务。") +
+            (deps.sendToSharedTask ? '已加入的共享任务传完整复制任务链接，或完整共享 device 引用加 ::sessionId；不要只取房主设备或裸任务 ID。' : '') +
             "省略 → create:新建任务并立刻跑一轮；项目归属由 project_path 指定或继承。",
         ),
+      ...(deps.sendToSharedTask ? { delivery_id: z.string().min(1).max(256).optional().describe(
+        '仅共享任务：先前投递回执的 delivery_id。提供时只查询该消息是否排队/已接受，绝不再次发送；结果不明时保留原 ID。首次发送省略。',
+      ) } : {}),
       message: z
         .string()
         .min(1)
         .describe(
-          "要发送的消息，对方收到的就是这段原文，并附有本任务的 session_id；对方需要背景时可以用 get_chat_history 读本任务的对话。当前输入属于用户请求或其转交时，对方按这段内容处理，不扩大范围或要求重复确认。自主消息、自动化通知和结果回传不代表用户。",
+          "要发送的消息，对方收到的就是这段原文。共享目标只接收这段文字与已验证的访客作者，不附加本机历史、附件或来源任务 ID。本机/同账号任务另附本任务的 session_id，可用 get_chat_history 读背景。当前输入属于用户请求或其转交时，对方按这段内容处理，不扩大范围或要求重复确认。自主消息、自动化通知和结果回传不代表用户。",
         ),
       title: z
         .string()
@@ -297,8 +324,10 @@ export function registerSendToSessionTool(
     },
     handler: async ({
       target_session_id,
+      delivery_id,
       device,
       provider_device_id,
+      provider_id,
       message,
       title,
       use_worktree,
@@ -316,6 +345,20 @@ export function registerSendToSessionTool(
         && provider_device_id !== agent_device_id)
         return errorPayload("INVALID_ARGS", "provider_device_id 与旧名 agent_device_id 指向不同位置，请只选一个供应商位置。");
       const ctx = deps.getSessionContext();
+      // URLs and scoped references must never reach local lookup/create or the
+      // same-account remote handoff. The Host validates the full shared target.
+      const sharedTarget = target_session_id && (/^[a-z][a-z0-9+.-]*:\/\//i.test(target_session_id) || target_session_id.startsWith('['));
+      if (sharedTarget) {
+        if (!deps.sendToSharedTask) return errorPayload('UNSUPPORTED_CAPABILITY', '当前宿主不支持向共享任务投递。');
+        const result = await deps.sendToSharedTask({ target: target_session_id, message,
+          deliveryId: typeof delivery_id === 'string' ? delivery_id : undefined, context: ctx });
+        if (result.ok) return okPayload(result);
+        return errorPayload(result.errorCode, result.message, {
+          ...(result.task_link ? { task_link: result.task_link, target_session_id: result.task_link } : {}),
+          ...(result.delivery_id ? { delivery_id: result.delivery_id } : {}),
+        });
+      }
+      if (delivery_id !== undefined) return errorPayload('INVALID_ARGS', 'delivery_id 只能用于共享任务对账。');
       const qualified = parseQualifiedSessionId(target_session_id);
       // 设备目录里本机的 id 是 "local":local::<id> 就是本机任务。
       const localTargetId = qualified?.deviceId === "local" ? qualified.sessionId : target_session_id;
@@ -353,6 +396,7 @@ export function registerSendToSessionTool(
         ...(project_path !== undefined ? { projectDir: project_path } : {}),
         ...(agent_kind !== undefined ? { agentKind: agent_kind } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(localTargetId === undefined && provider_id !== undefined ? { providerId: provider_id } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
         // jump 不改既有任务的位置：只在 create 时传。

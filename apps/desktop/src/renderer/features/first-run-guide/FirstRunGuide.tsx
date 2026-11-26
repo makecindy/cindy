@@ -31,12 +31,15 @@ import { IMPORT_SOURCE_NAMES } from '@cindy/maker-shared/import-source-marks';
 import type { CompanionImportSource } from '@cindy/maker-shared/companion-import';
 
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
+import { at, GuideCover } from '@/components/feature-intro/GuideCover';
 import { ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { hasProviderLogo, ProviderLogoMark, type ProviderLogoRouting } from '@/components/icons/ProviderLogoMark';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { estimateMinutes, useFormatSize } from '@/components/settings/SessionImportSection';
 import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -274,7 +277,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     // The Migration Assistant is a modal of its own; the bar would only sit behind it.
     if (migrationDialogOpen || !step) return null;
     return (
-      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
+      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-float-top flex justify-center px-4">
         <div
           role="status"
           className="pointer-events-auto flex w-full max-w-[520px] items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2.5 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
@@ -604,59 +607,39 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   return (
     <Dialog.Root open onOpenChange={(next) => { if (!next) closeFirstRunGuide(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(event) => event.preventDefault()}
           style={WINDOW_NO_DRAG_STYLE}
-          className="modal-panel fixed inset-0 z-[10000] m-auto flex h-[min(640px,88vh)] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+          className="modal-panel fixed inset-0 z-modal m-auto flex h-[min(640px,88vh)] w-[min(640px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
           {step === 'intro' ? (
             // Cover: the one page that carries the brand block and no step chrome.
-            <div className="first-run-cover relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-8 py-8">
-              <div className="absolute right-3 top-3">{closeButton}</div>
-              <div className="first-run-rise" style={coverRise(0)}>
-                <ThemeBrandLockup theme={theme} />
-              </div>
-              <Dialog.Title asChild>
-                <h2 className="first-run-rise mt-7 text-center text-28 font-medium leading-tight text-[var(--confirm-title)]" style={coverRise(1)}>
-                  {t('firstRunGuide.title.new')}
-                </h2>
-              </Dialog.Title>
-              <p className="first-run-rise mt-2 max-w-[440px] text-center text-15 leading-relaxed text-[var(--confirm-desc)]" style={coverRise(2)}>
-                {t('firstRunGuide.intro.lead')}
-              </p>
-              <ul className="mt-8 grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
-                {([
-                  ['work', <WorkVignette key="work" start={coverSceneStart(0)} />],
-                  ['connect', (
-                    <ModelsVignette key="connect" start={coverSceneStart(1)} />
-                  )],
-                  ['continue', <DevicesVignette key="continue" start={coverSceneStart(2)} />],
-                ] as const).map(([point, vignette], position) => (
-                  <li key={point} className="first-run-rise flex flex-col rounded-xl border border-[var(--border-default)] p-2" style={coverRise(COVER_CARD_INDEX + position)}>
-                    {/* A small scene made of the product's own elements instead of a generic icon. */}
-                    <div className="flex h-[88px] items-center justify-center rounded-lg bg-[var(--surface-chip)]" aria-hidden="true">
-                      {vignette}
-                    </div>
-                    <div className="flex flex-col gap-1 px-2 pb-2 pt-3">
-                      <span className="text-14 font-medium text-[var(--confirm-title)]">{t(`firstRunGuide.intro.${point}.title`)}</span>
-                      <span className="text-13 leading-relaxed text-[var(--confirm-desc)]">{t(`firstRunGuide.intro.${point}.body`)}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <div className="first-run-rise mt-8 shrink-0" style={coverRise(COVER_CARD_INDEX + 3)}>
+            <GuideCover
+              mark={<ThemeBrandLockup theme={theme} />}
+              title={t('firstRunGuide.title.new')}
+              lead={t('firstRunGuide.intro.lead')}
+              cards={([
+                ['work', (start: number) => <WorkVignette start={start} />],
+                ['connect', (start: number) => <ModelsVignette start={start} />],
+                ['continue', (start: number) => <DevicesVignette start={start} />],
+              ] as const).map(([point, scene]) => ({
+                id: point,
+                title: t(`firstRunGuide.intro.${point}.title`),
+                body: t(`firstRunGuide.intro.${point}.body`),
+                scene,
+              }))}
+              action={(
                 <Button variant="cta" size="lg" type="button" className="min-w-[168px]" onClick={goNext}>
                   {t('firstRunGuide.intro.start')}
                 </Button>
-              </div>
-              {upcoming.length > 0 ? (
-                <p className="first-run-rise mt-3 text-center text-12 text-[var(--text-tertiary)]" style={coverRise(COVER_CARD_INDEX + 4)}>
-                  {[t('firstRunGuide.intro.next'), ...upcoming.map((id) => t(`firstRunGuide.steps.${id}`))].join(' · ')}
-                </p>
-              ) : null}
-            </div>
+              )}
+              note={upcoming.length > 0
+                ? [t('firstRunGuide.intro.next'), ...upcoming.map((id) => t(`firstRunGuide.steps.${id}`))].join(' · ')
+                : undefined}
+              close={closeButton}
+            />
           ) : (
             <>
               <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-4">
@@ -738,26 +721,6 @@ function IconChip({ icon: Icon }: { icon: LucideIcon }) {
   );
 }
 
-// Cover choreography (DESIGN.md §14.4, get-started guide entrance). The blocks arrive briskly,
-// top first; each card's scene then plays once and carries the part worth watching. Delays are
-// in ms from the moment the cover mounts and mirror `.first-run-cover` in globals.css.
-const COVER_RISE_START = 0;
-const COVER_RISE_STEP = 45;
-const COVER_CARD_INDEX = 3;
-
-function coverRise(index: number): CSSProperties {
-  return { '--rise-index': index } as CSSProperties;
-}
-
-/** When a card's scene starts: once that card has arrived. */
-function coverSceneStart(card: number): number {
-  return COVER_RISE_START + (COVER_CARD_INDEX + card) * COVER_RISE_STEP + 150;
-}
-
-function at(ms: number): CSSProperties {
-  return { '--at': `${ms}ms` } as CSSProperties;
-}
-
 /** Cover scene: three tasks are written down and ticked off one after another. */
 function WorkVignette({ start }: { start: number }) {
   const widths = ['w-[72%]', 'w-[52%]', 'w-[62%]'];
@@ -817,6 +780,7 @@ function ModelsVignette({ start }: { start: number }) {
 
 /** Cover scene: a task on the computer travels to the phone and continues there. */
 function DevicesVignette({ start }: { start: number }) {
+  // 迷你屏幕：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
   const screen = 'flex flex-col justify-center gap-1 rounded border border-[var(--text-tertiary)] bg-[var(--confirm-bg)]';
   // The first line is the same task on both screens; the rest is whatever else is there.
   const lines = (widths: string[], from: number) => widths.map((width, position) => (
@@ -912,9 +876,9 @@ function OptionCard({ icon, title, badge, body, action, children }: {
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-15 font-medium text-[var(--confirm-title)]">{title}</span>
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-11 font-medium text-[var(--text-secondary)]">
+            <Badge tone="outline">
               {badge}
-            </span>
+            </Badge>
             {action ? <span className="ml-auto shrink-0">{action}</span> : null}
           </div>
           <p className="text-13 leading-relaxed text-[var(--confirm-desc)]">{body}</p>
@@ -935,7 +899,11 @@ function ConnectedProviderRow({ provider, onClick }: { provider: ProviderView; o
   const detail = [account?.identity, account?.planLabel].filter(Boolean).join(' · ');
   return (
     <OptionRow
-      icon={providerIcon(provider.id, provider.name, provider.routing)}
+      icon={(
+        <CustomProviderIcon svg={provider.customIcon} size={16}>
+          {providerIcon(provider.id, provider.name, provider.routing)}
+        </CustomProviderIcon>
+      )}
       label={provider.name}
       badge={t('firstRunGuide.models.own.connected')}
       sub={detail || undefined}
@@ -962,9 +930,9 @@ function OptionRow({ icon, label, sub, badge, onClick }: {
         <span className="flex items-center gap-2">
           <span className="truncate text-14 font-medium text-[var(--text-primary)]">{label}</span>
           {badge ? (
-            <span className="shrink-0 rounded-full border border-[var(--border-default)] px-2 py-px text-10 font-medium text-[var(--text-tertiary)]">
+            <Badge size="xs" tone="outline">
               {badge}
-            </span>
+            </Badge>
           ) : null}
         </span>
         {sub ? <span className="truncate text-12 text-[var(--text-tertiary)]">{sub}</span> : null}

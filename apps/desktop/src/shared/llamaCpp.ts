@@ -1,4 +1,5 @@
 import type { LocalCatalogModel, LocalGgufVariant } from '@cindy/model-providers';
+import type { DownloadProgress } from './downloadProgress.js';
 
 /** Managed llama.cpp uses its own loopback port; existing user servers stay independent. */
 export const MANAGED_LLAMACPP_PROVIDER_ID = 'cindy-local-llamacpp';
@@ -74,6 +75,8 @@ export interface LlamaCppSnapshot {
     paused?: boolean;
     completed: number;
     total: number;
+    /** Standard progress (retries, verifying, time left) for the shared DownloadMeter. */
+    download?: DownloadProgress;
   };
 }
 export interface LlamaCppCatalogEntry {

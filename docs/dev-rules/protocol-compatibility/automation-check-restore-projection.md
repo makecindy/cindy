@@ -8,6 +8,11 @@
 正常标红。检查受阻与实际执行失败分别显示；原有运行历史页面及其已读状态保持不变。
 轻量侧栏协议新增可选 `failureKind` / `failureRecovered`，旧端忽略，新端缺省按普通失败处理。
 
+任务页另按对话进展决定是否展示自动续跑失败横幅。轻量索引在失败行携带可选的
+`finishedAt`（Unix 毫秒）。同一任务的 `userSendAt` 严格晚于该次失败结束时，
+桌面和手机收起这条横幅。旧宿主缺少结束时间时继续展示，旧控制端忽略该字段。
+列表红点、运行结果和已读回执继续沿用上述调度规则。
+
 前置检查仍遵守 exit 0 放行、exit 2 跳过、其他值阻止执行。脚本可在 stdout 单独输出一行
 `CINDY_PRECHECK_OK`，表示检查完整完成（包括正常无事可做的跳过）。只有 exit 0/2 且输出未
 截断时记录可选 `checkSucceeded: true`；错误、超时、取消和退避跳过不构成恢复。
@@ -15,3 +20,10 @@
 原有退出码语义。实现见 `scheduler-host/pre-run-hook.ts` 与 `scheduler-host/storage.ts`。
 macOS/Linux 上命令先经 `sh -n` 语法预检：shell 语法错误的退出码同为 2，不预检会被误记为
 跳过而让任务悄悄停摆。保存时直接拒绝（INVALID_PARAMS），已保存的旧命令在运行时按失败记录并提醒。
+
+PR 检查受阻时可以在 stdout 单独输出 `CINDY_PR_CHECK_DIAGNOSIS ` 后接一行 JSON。
+`kind` 取 `dns`、`timeout`、`auth`、`rate-limit` 或 `unknown`，DNS 诊断附带
+`host`。脚本提供连续失败次数 `failures` 和退避结束时间 `retryAt`（Unix 毫秒）。
+执行端仅在脚本失败且 stdout 完整时读取，为有效数据补上本机名称，然后将
+`prCheckDiagnosis` 随运行记录和轻量索引传递。缺失或无效的诊断沿用原有提示，
+退出码、恢复条件与调度频率沿用原有约定。stderr 首行仍供旧版执行端提取摘要。

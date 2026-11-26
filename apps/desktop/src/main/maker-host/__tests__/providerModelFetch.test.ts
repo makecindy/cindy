@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
@@ -86,6 +87,61 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
   const request = buildModelsFetchRequest(spec({ baseUrl }));
   expect(request.url).toBe(`${baseUrl}/v1/models`);
   expect(new Headers(request.init.headers).has('copilot-integration-id')).toBe(false);
+});
+
+describe('Token Rhythm discovery reads', () => {
+  it('shares only the equivalent Codex/Pi HTTP read while issuing independent agent receipts', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const requests = agents.map(agent => spec({ ...preset.runtimes[agent], agent }));
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, JSON.stringify({ data: [{
+      id: 'future-model', owned_by: 'fake-source', magpie_label: 'Model · fake-source',
+    }] })));
+    const results = await Promise.all(requests.map(request => fetchProviderModels(request, transport)));
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport.mock.calls.map(([, init]) => new Headers(init?.headers).has('anthropic-version')).sort()).toEqual([false, true]);
+    const snapshots = new Set<string>();
+    results.forEach((result, index) => {
+      expect(result.ok).toBe(true);
+      const model = result.models![0];
+      snapshots.add(model.discoverySnapshotId!);
+      const { url, init } = buildModelsFetchRequest(requests[index]);
+      const signature = modelSourceRequestSignature(url, init);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[index], signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents[(index + 1) % agents.length], signature)).toBe(false);
+    });
+    expect(snapshots.size).toBe(3);
+    expect(results[1].models).not.toBe(results[2].models);
+    await fetchProviderModels(requests[2], transport);
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it('separates credentials, effective headers, redirect policies and owner transports', async () => {
+    const request = spec({ agent: 'pi', baseUrl: 'https://tokenrhythm.studio/v1',
+      modelsUrl: 'https://tokenrhythm.studio/v1/models', wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const otherOwner = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    const results = await Promise.all([
+      fetchProviderModels(request, transport),
+      fetchProviderModels({ ...request, agent: 'codex', wireProtocol: 'openai-responses' }, transport),
+      fetchProviderModels({ ...request, apiKey: 'other-fake-key' }, transport),
+      fetchProviderModels({ ...request, headers: { 'X-Account': 'other' } }, transport),
+      fetchProviderModels({ ...request, redirect: 'error' }, transport),
+      fetchProviderModels(request, otherOwner),
+    ]);
+    expect(results.every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(4);
+    expect(otherOwner).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://tokenrhythm.studio/v1/models?view=chat', 'https://tokenrhythm.studio.evil.test/v1/models',
+    'https://custom.example/v1/models'])('does not merge a custom or filtered view at %s', async modelsUrl => {
+    const request = spec({ agent: 'pi', baseUrl: new URL(modelsUrl).origin + '/v1', modelsUrl, wireProtocol: 'openai-chat' });
+    const transport = vi.fn<typeof fetch>(async () => fakeResponse(200, '{"data":[{"id":"future-model"}]}'));
+    expect((await Promise.all([fetchProviderModels(request, transport), fetchProviderModels(request, transport)]))
+      .every(result => result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('import discovery limits', () => {
@@ -214,7 +270,7 @@ describe('import discovery limits', () => {
       expect(init?.redirect).toBe('error');
       return fakeResponse(200, JSON.stringify({ name: 'magpie' }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([
@@ -249,7 +305,7 @@ describe('import discovery limits', () => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-test');
       return fakeResponse(200, JSON.stringify({ object: 'list', data: [] }));
     });
-    expect(result).toEqual({ ok: true, models: [] });
+    expect(result).toEqual({ ok: true, models: [], complete: true });
   });
 
   it.each([{}, { data: [{}] }, { data: [null] }, { data: [{ id: '' }] }, { models: [] },
@@ -783,5 +839,66 @@ describe('ElevenLabs catalog authentication', () => {
     expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
     const noAuth = buildModelsFetchRequest(spec({ baseUrl: 'https://api.elevenlabs.io/v1', apiKey: undefined, authMethod: 'none', headers: { 'Xi-Api-Key': 'stale' } }));
     expect(noAuth.init.headers).toEqual({});
+  });
+});
+
+describe('GLM ordinary catalog with optional Flash discovery', () => {
+  const baseUrl = 'https://open.bigmodel.cn/api/paas/v4';
+  const flash = 'glm-realtime-flash';
+  const ordinary = { id: 'glm-5', display_name: 'GLM-5' };
+  const http = (rows: { id: string }[]) => async () => Response.json({ data: rows });
+  const glm = (extra: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec =>
+    ({ baseUrl, agent: 'codex', wireProtocol: 'openai-chat', apiKey: 'fixture', authMethod: 'apiKey', ...extra });
+
+  it.each([true, false])('merges Flash exactly once (already listed: %s)', async listed => {
+    const probe = vi.fn(async () => 'available' as const);
+    const result = await fetchProviderModels(glm({ probeGlmFlash: probe }), http(listed ? [ordinary, { id: flash }] : [ordinary]));
+    expect(probe).toHaveBeenCalledTimes(listed ? 0 : 1);
+    expect(result).toMatchObject({ ok: true, complete: true, models: [
+      { id: ordinary.id, name: ordinary.display_name }, { id: flash, discoveredMetadata: { mode: 'realtime' } },
+    ] });
+    expect(result.models?.[1].discoverySnapshotId).toBeTruthy();
+  });
+
+  it.each(['unknown', 'unavailable', 'exception'] as const)('preserves ordinary results on %s', async status => {
+    const probe = vi.fn(() => { if (status === 'exception') throw Error(); return Promise.resolve(status); });
+    const normal = await fetchProviderModels(glm(), http([ordinary]));
+    const actual = await fetchProviderModels(glm({ probeGlmFlash: probe }), http([ordinary]));
+    expect(actual).toEqual({ ...normal, glmFlashProbe: status === 'exception' ? 'unknown' : status });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', baseUrl])(
+    'confirms ordinary preset Flash separately from the chat catalog at %s', async chatBase => {
+      const probe = vi.fn(async () => 'available' as const);
+      const spec = glm({ baseUrl: chatBase, catalogPresetId: 'zhipu-glm-cn', probeGlmFlash: probe });
+      const response = http([ordinary, { id: flash }]);
+      const found = await fetchProviderModels(spec, response);
+      expect(probe).toHaveBeenCalledOnce();
+      expect(found.models?.map(model => model.id)).toEqual([ordinary.id, flash]);
+      expect(found.models?.[1]).toMatchObject({ discoverySnapshotId: expect.any(String),
+        discoveredMetadata: { mode: 'realtime', modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } });
+      for (const access of ['unknown', 'unavailable'] as const) {
+        const result = await fetchProviderModels({ ...spec, probeGlmFlash: async () => access }, response);
+        expect(result).toMatchObject({ ok: true, complete: true, glmFlashProbe: access });
+        expect(result.models?.map(model => model.id)).toEqual([ordinary.id]);
+      }
+      const denied = await fetchProviderModels({ ...spec, probeGlmFlash: async () => 'unavailable' },
+        async () => new Response('', { status: 403 }));
+      expect(denied).toMatchObject({ ok: false, status: 403, glmFlashProbe: 'unavailable' });
+      const onlyVoice = await fetchProviderModels(spec, async () => new Response('', { status: 403 }));
+      expect(onlyVoice).toMatchObject({ ok: true, complete: false, models: [{ id: flash }] });
+    },
+  );
+
+  it('skips unrelated endpoints, alternate discovery URLs, OAuth, and failed catalogs', async () => {
+    const probe = vi.fn(async () => 'available' as const);
+    for (const extra of [{ baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' }, { baseUrl: 'https://proxy.example/v4' },
+      { modelsUrl: baseUrl + '/alternate' }, { authMethod: 'oauth' as const }, { apiKey: null }]) {
+      const result = await fetchProviderModels(glm({ ...extra, probeGlmFlash: probe }), http([ordinary]));
+      expect(result.models?.map(m => m.id)).toEqual([ordinary.id]);
+    }
+    expect((await fetchProviderModels(glm({ probeGlmFlash: probe }), async () => new Response('', { status: 401 }))).ok).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
   });
 });
