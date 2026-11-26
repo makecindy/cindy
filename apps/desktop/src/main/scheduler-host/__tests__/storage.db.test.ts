@@ -7,14 +7,14 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  * 因此由 test-workspaces 的 db tier 运行，不放进 fast unit tier。
  */
 
-import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { Scheduler, RUN_HEARTBEAT_INTERVAL_MS, type Schedule, type ScheduleRun } from '@cindy/maker-scheduler';
 import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
@@ -60,6 +60,7 @@ const ZERO_ESTIMATED_MONEY = {
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
     id: 'sch-1',
+    scheduleRevision: 0,
     name: 'daily standup',
     prompt: '/standup',
     jobType: 'prompt',
@@ -185,6 +186,7 @@ const SCHEDULER_DDL = [
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      schedule_revision INTEGER NOT NULL DEFAULT 0,
       last_fired_at INTEGER,
       last_finished_at INTEGER,
       next_fire_at INTEGER,
@@ -305,6 +307,98 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[], 
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
+
+// #12160, DB tier. A retired replan and a second active scheduler race on
+// the same cron slot. Each scheduler has its own connection and receipt book.
+it.each(['late write', 'pause/resume'] as const)('preserves the shared cron slot after %s', async scenario => {
+  const dir = mkdtempSync(join(tmpdir(), 'scheduler-replan-'));
+  const path = join(dir, 'schedule.sqlite');
+  const first = createStorageHarness(undefined, path);
+  const second = new Database(path);
+  const secondDb = drizzle(second, { schema });
+  const peer = new DrizzleScheduleStorage(() => secondDb);
+  const minute = 60_000;
+  const start = Date.UTC(2026, 0, 1, 0, 0, 30);
+  let now = start;
+  first.sqlite.function('unixepoch', (_subsec: unknown) => now / 1000);
+  const clock = { now: () => now };
+  const fireA = vi.fn(() => new Promise<{ sessionId: string }>(() => {}));
+  const fireB = vi.fn(() => new Promise<{ sessionId: string }>(() => {}));
+  const opts = { clock, runStallMs: 10_000, runStallAbortGraceMs: 1000,
+    suspendGapMs: 0, preGateStorageTimeoutMs: 30 };
+  const a = new Scheduler({ ...opts, storage: first.storage, runner: { fire: fireA } });
+  const b = new Scheduler({ ...opts, storage: peer, runner: { fire: fireB } });
+  vi.useFakeTimers();
+  try {
+    const schedule = await a.create({ name: 'Cron', prompt: 'test', kind: 'cron',
+      cronExpr: '* * * * *', timezone: 'UTC', recurring: true, agentKind: 'claude-code',
+      useWorktree: false, notify: { desktop: false, feishu: false } });
+    now += 30_000;
+    void a.tick();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fireA).toHaveBeenCalledTimes(1);
+    now += 10_001;
+    await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+    first.storage.get = vi.fn(first.storage.get.bind(first.storage))
+      .mockRejectedValueOnce(new Error('storage offline'));
+    now += 1001;
+    await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+    expect(a.getRuntimeSnapshot().slotsInUse).toBe(0);
+
+    const update = first.storage.update.bind(first.storage);
+    let oldSlot: number | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    first.storage.update = vi.fn(update).mockImplementationOnce(async (id, patch, expected, mode) => {
+      oldSlot = patch.nextFireAt;
+      await gate;
+      return update(id, patch, expected, mode);
+    });
+    void a.tick();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(oldSlot).toBe(start + 90_000);
+    if (scenario === 'pause/resume') {
+      await b.pause(schedule.id);
+      expect((await b.resume(schedule.id)).nextFireAt).toBe(oldSlot);
+    }
+    now = start + minute;
+    vi.spyOn(first.storage, 'listActive').mockRejectedValueOnce(new Error('offline'));
+    await a.tick();
+    now = scenario === 'pause/resume' ? oldSlot! : start + 3 * minute + 30_000;
+    let releaseReplacement!: () => void;
+    if (scenario === 'late write') {
+      const replacement = new Promise<void>(resolve => { releaseReplacement = resolve; });
+      first.storage.update = vi.fn(update).mockImplementationOnce(async (...args) => {
+        await replacement;
+        return update(...args);
+      });
+    }
+    void a.tick();
+    await vi.advanceTimersByTimeAsync(100);
+    if (scenario === 'late write') {
+      expect(first.storage.update).toHaveBeenCalledTimes(1);
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      void b.tick();
+      await vi.advanceTimersByTimeAsync(1);
+      releaseReplacement();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fireB).toHaveBeenCalledTimes(0);
+      expect((await peer.get(schedule.id))?.nextFireAt).toBe(now + minute);
+    } else {
+      void b.tick();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fireA.mock.calls.length + fireB.mock.calls.length).toBe(2);
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+  } finally {
+    vi.useRealTimers();
+    first.close();
+    second.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // DB-tier regression for app-exit recovery: claim the original run exactly once,
 // and respect user takeover/stop and the current task owner. The old storage had no

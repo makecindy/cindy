@@ -1608,6 +1608,7 @@ export const schedules = sqliteTable(
       .default('active'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
+    scheduleRevision: integer('schedule_revision').notNull().default(0),
     lastFiredAt: integer('last_fired_at'),
     /**
      * 上一次终态完成时间（success/failed/aborted）。NULL = 从未跑完过。

@@ -4751,7 +4751,7 @@ export class Scheduler extends EventEmitter {
     freshNext: number,
     attempt: ReplanAttempt,
   ): Promise<Schedule | null> {
-    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh, 'replan');
     const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
     void write.then(
       (row) => {
@@ -4993,6 +4993,7 @@ export class Scheduler extends EventEmitter {
  */
 function replanWriteIdentity(row: Schedule): string {
   return JSON.stringify([
+    row.scheduleRevision ?? 0,
     row.lastFiredAt ?? null,
     row.nextFireAt ?? null,
     row.status,
