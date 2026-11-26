@@ -188,7 +188,7 @@ export interface ReplayContextRecoveryPorts {
   log: Pick<ReturnType<typeof import('../logger.js').createLogger>, 'info' | 'warn'>;
   readSessionWritableDirsFromDb: typeof import('../maker-host/session-storage.js').readSessionWritableDirsFromDb;
   restoreAutoReviewUserIntent: typeof import('./autoReviewUserIntent.js').restoreAutoReviewUserIntent;
-  readAutoReviewHistory: (sessionId: string) => ReturnType<typeof import('../localDb/ipc/messages.js').listMessagesForAgentHandoff>;
+  readAutoReviewHistory: (sessionId: string) => Promise<import('./autoReviewUserIntent.js').AutoReviewHistory>;
   readContextRecoverySession: (sessionId: string) => ReturnType<typeof readContextRecoverySessionWithPorts>;
   canContinueContextRecovery: typeof import('./contextOverflowRollover.js').canContinueContextRecovery;
   isHeadlessGhostSetupTurn: (sessionId: string) => boolean;
