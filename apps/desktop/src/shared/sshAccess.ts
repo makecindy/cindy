@@ -58,7 +58,8 @@ export interface SshAccessLocalState {
   lastSessionCleanup: SshAccessSessionCleanup | null;
 }
 
-export type SshAccessRequest =
+/** One settings IPC request (not the device-link wire request, which is `SshAccessRequest` in `@cindy/device-link`). */
+export type SshAccessLocalRequest =
   | { operation: 'read' }
   /** `enabled: null` restores the default (deletes the stored choice). */
   | { operation: 'set-enabled'; enabled: boolean | null }

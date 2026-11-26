@@ -6,7 +6,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { z } from 'zod';
 import { SSH_ACCESS_MAX_KEY_TEXT_CHARS } from '@cindy/device-link';
-import { SSH_ACCESS_CHANGED_CHANNEL, SSH_ACCESS_IPC_CHANNEL, type SshAccessRequest } from '../../shared/sshAccess.js';
+import { SSH_ACCESS_CHANGED_CHANNEL, SSH_ACCESS_IPC_CHANNEL, type SshAccessLocalRequest } from '../../shared/sshAccess.js';
 import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
@@ -40,7 +40,7 @@ export async function handleSshAccessRequest(target: SshAccessTarget | null, raw
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid SSH access request');
   if (!target) throwIpcError('PRECONDITION_FAILED', 'SSH access is not available yet');
-  const request: SshAccessRequest = parsed.data;
+  const request: SshAccessLocalRequest = parsed.data;
   try {
     switch (request.operation) {
       case 'read': return await target.readLocal();
