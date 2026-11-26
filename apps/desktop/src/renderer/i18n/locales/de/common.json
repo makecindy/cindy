@@ -2551,7 +2551,7 @@
       "skinLabel": "Figur",
       "skinHint": "Die Figur in Agent Notch und in der Dynamic Island.",
       "soundLabel": "Ereignistöne",
-      "soundHint": "Ist ein Ereigniston festgelegt, wird nur dieser abgespielt. Ohne Ereigniston oder bei deaktivierten Ereignistönen gelten die Systembenachrichtigungseinstellungen.",
+      "soundHint": "Wähle für jeden Hinweis einen 8-Bit-Sound, gemeinsam für Agent Notch und die Dynamic Island. Der Tipp-Sound ertönt nur beim Tippen auf Agent Notch.",
       "soundAria": "Töne für Agent Notch ein-/ausschalten",
       "soundSelectAria": "Ton für {{event}}",
       "soundPreviewAria": "Ton für {{event}} vorhören",
@@ -2606,7 +2606,7 @@
         "select": "Aktion beim Klicken"
       },
       "soundOptions": {
-        "none": "Systemeinstellung verwenden",
+        "none": "Keine",
         "startup-chime": "Startklang",
         "ring-chime": "Klingelton",
         "item-found": "Gegenstand gefunden",
