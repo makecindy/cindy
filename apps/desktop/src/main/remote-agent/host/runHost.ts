@@ -8,7 +8,7 @@ import { generateSharedImage, type SharedImageStart } from '../../cindy-media/sh
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
 import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
-import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
+import { isProductTurnDoneEvent, isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
@@ -209,6 +209,7 @@ export interface HostedStartInput {
 
 /** 一次受邀者任务的出站登记(见 RemoteAgentHostDeps.bindGuestProviderRoute)。 */
 export interface GuestProviderRouteBinding {
+  estimateTurn?(event: AgentEvent): import('../sharedTurnValue.js').SharedTurnValue | undefined;
   receiptMetering?: boolean;
   modelDenial?(model: string): { code: string; message: string } | null;
   routeToken: string;
@@ -2047,9 +2048,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     let groupTurnFailed = false;
     let streamError: unknown;
     let streamFailed = false;
+    // A product turn may span several native Codex turns, each with its own usage delta.
+    const pricedNativeTurns = new Set<string>();
     try {
-      for await (const event of handle.events()) {
+      for await (const nativeEvent of handle.events()) {
         if (run.closing) break;
+        // Only this host can attach a shared value to a local engine event.
+        let event = nativeEvent;
+        if (event.type === 'done' && event.source === 'codex' && event.data && typeof event.data === 'object'
+          && 'sharedTurnValue' in event.data) {
+          const { sharedTurnValue: _discarded, ...data } = event.data;
+          event = { ...event, data };
+        }
         if (startsRemoteProductTurn(event)) {
           run.nativeHistoryCheckpoint = undefined;
           if (!run.abortRequested) {
@@ -2103,7 +2113,24 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             [NATIVE_HISTORY_CHECKPOINT]: { token: checkpoint.token, runId: run.id },
           } } });
         } else {
-          append(run, { t: 'event', event });
+          let outgoing = event;
+          if (run.trust === 'guest' && run.kind === 'codex' && event.source === 'codex' && event.type === 'done'
+            && event.turnScope !== 'background' && !event.agentMeta?.parentUuid && run.guestRoute?.estimateTurn
+            && (currentTerminal || isTurnContinuationBoundaryEvent(event)) && delegatedRunAllowed(run)) {
+            try {
+              const turnId = (data?.raw as { id?: unknown } | undefined)?.id;
+              if (typeof turnId === 'string' && turnId && !pricedNativeTurns.has(turnId)) {
+                const sharedTurnValue = run.guestRoute.estimateTurn(event);
+                if (sharedTurnValue) {
+                  pricedNativeTurns.add(turnId);
+                  outgoing = { ...event, data: { ...data, sharedTurnValue } };
+                }
+              }
+            } catch {
+              // Pricing is optional. A failed local lookup must still deliver the original terminal.
+            }
+          }
+          append(run, { t: 'event', event: outgoing });
         }
         emitState(run);
       }

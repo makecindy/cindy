@@ -201,3 +201,30 @@ export function parseOpenCodeGoAccountUsageResult(value: unknown): ProviderAccou
   }
   return { status: 'ready', stale: raw.stale, snapshot: { kind: 'opencode-go-quota', windows, fetchedAt: snapshot.fetchedAt } };
 }
+
+/** Rebuild the GLM display payload on both sides of the same-account tunnel. */
+export function parseZhipuAccountUsageResult(value: unknown): ProviderAccountUsageResult {
+  const invalid = { status: 'unavailable', error: 'invalid-response' } as const;
+  if (!value || typeof value !== 'object') return invalid;
+  const raw = value as Record<string, unknown>;
+  if (raw.status === 'unsupported') return { status: 'unsupported' };
+  if (raw.status === 'unavailable') return { status: 'unavailable', error: 'unknown' };
+  const snapshot = raw.snapshot as ZhipuCodingPlanQuotaSnapshot | undefined;
+  if (raw.status !== 'ready' || typeof raw.stale !== 'boolean' || !snapshot
+    || snapshot.kind !== 'zhipu-coding-plan-quota' || typeof snapshot.noPlan !== 'boolean'
+    || !Number.isSafeInteger(snapshot.fetchedAt)) return invalid;
+  const window = (entry: ZhipuCodingPlanWindow | null) => {
+    if (entry === null) return null;
+    if (!entry || !Number.isFinite(entry.usedPercent) || entry.usedPercent < 0 || entry.usedPercent > 100
+      || (entry.resetsAt !== null && (!Number.isSafeInteger(entry.resetsAt) || entry.resetsAt <= 0))) return undefined;
+    return { usedPercent: entry.usedPercent, resetsAt: entry.resetsAt };
+  };
+  const fiveHour = window(snapshot.fiveHour);
+  const weekly = window(snapshot.weekly);
+  if (fiveHour === undefined || weekly === undefined) return invalid;
+  const level = typeof snapshot.level === 'string' && ['lite', 'pro', 'max'].includes(snapshot.level.toLowerCase())
+    ? snapshot.level.toLowerCase() : null;
+  return { status: 'ready', stale: raw.stale, snapshot: {
+    kind: 'zhipu-coding-plan-quota', noPlan: snapshot.noPlan, fetchedAt: snapshot.fetchedAt, fiveHour, weekly, level,
+  } };
+}

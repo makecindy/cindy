@@ -393,23 +393,41 @@ function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
-/** A finished run can change its own route only when no automation reuses this task. */
+/** A finished run can change its own route only when no persistent or routine automation reuses this task. */
 function canSwitchRunPluginEngine() {
   return sql<boolean>`(
     ${scheduleRuns.sessionId} IS NOT NULL
     AND ${scheduleRuns.finishedAt} IS NOT NULL
     AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
     AND NOT EXISTS (
-      SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+      SELECT 1 FROM schedules AS bound
+      WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+        AND (bound.persistent_session = 1 OR COALESCE(bound.source, 'user') = 'bot')
     )
   )`.mapWith(Boolean);
 }
 
 // Check as part of the write so another desktop instance cannot switch the
-// target between validation and persistence.
-function targetAcceptsAutomation(targetSessionId: string) {
+// target to a plugin engine between validation and persistence of a persistent
+// or teammate-routine binding. Ordinary non-persistent bound automations (e.g.
+// PR auto-follow) are supported on plugin-engine tasks regardless of source.
+function targetAcceptsPersistentOrRoutineBinding(targetSessionId: string) {
   return sql`NOT EXISTS (
-    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND source = 'scheduler' AND agent_kind = 'acp'
+    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND agent_kind = 'acp'
+  )`;
+}
+
+function targetAcceptsScheduleBinding(next: {
+  targetSessionId: SQL;
+  persistentSession: SQL;
+  source: SQL;
+}) {
+  return sql`NOT (
+    ${next.targetSessionId} IS NOT NULL
+    AND (${next.persistentSession} = 1 OR COALESCE(${next.source}, 'user') = 'bot')
+    AND EXISTS (
+      SELECT 1 FROM sessions WHERE id = ${next.targetSessionId} AND agent_kind = 'acp'
+    )
   )`;
 }
 
@@ -458,10 +476,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
-        // A different instance can repoint a rule without changing those totals.
+        // A different instance can repoint or toggle persistent/routine ownership without changing those totals.
         boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
           SELECT DISTINCT target_session_id FROM schedules
-          WHERE target_session_id IS NOT NULL ORDER BY target_session_id
+          WHERE target_session_id IS NOT NULL
+            AND (persistent_session = 1 OR COALESCE(source, 'user') = 'bot')
+          ORDER BY target_session_id
         ) AS bound)`,
       })
       .from(schedules);
@@ -506,7 +526,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
     const row = scheduleCreateToRow(s);
-    if (row.targetSessionId) {
+    if (row.targetSessionId && (row.persistentSession === true || row.source === 'bot')) {
       // Drizzle inserts SELECT values in table column order. Reuse its
       // encoders and schema defaults, including columns omitted by the mapper.
       const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
@@ -515,7 +535,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         return is(value, SQL) ? value : sql.param(value, column);
       });
       const [inserted] = await db.insert(schedules)
-        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsAutomation(row.targetSessionId)}`)
+        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsPersistentOrRoutineBinding(row.targetSessionId)}`)
         .returning({ id: schedules.id });
       if (!inserted) rejectPluginAutomationTarget();
     } else {
@@ -559,7 +579,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const targetCondition = patch.targetSessionId ? targetAcceptsAutomation(patch.targetSessionId) : undefined;
+    const checksPluginBinding = Boolean(setObj.targetSessionId)
+      || setObj.persistentSession === true
+      || setObj.source === 'bot';
+    const targetCondition = checksPluginBinding
+      ? targetAcceptsScheduleBinding({
+          targetSessionId: setObj.targetSessionId !== undefined
+            ? sql`${setObj.targetSessionId}`
+            : sql`${schedules.targetSessionId}`,
+          persistentSession: setObj.persistentSession !== undefined
+            ? sql`${setObj.persistentSession ? 1 : 0}`
+            : sql`${schedules.persistentSession}`,
+          source: setObj.source !== undefined
+            ? sql`${setObj.source}`
+            : sql`${schedules.source}`,
+        })
+      : undefined;
     const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
     if (!updated) {
       if (targetCondition) {

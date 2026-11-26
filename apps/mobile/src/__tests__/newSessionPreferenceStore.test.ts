@@ -112,6 +112,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
@@ -140,6 +141,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
 
@@ -150,6 +152,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
 
@@ -162,11 +165,12 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
   });
 
-  it('remembers per-agent permission modes and drops plan / stale entries', async () => {
+  it('remembers unified lastPermissionMode alongside per-agent entries and drops plan / stale entries', async () => {
     const {
       __testing,
       readNewSessionPreferences,
@@ -179,7 +183,7 @@ describe('newSessionPreferenceStore', () => {
     await saveNewSessionPreferences({
       permissionModeForAgent: { agentKind: 'codex', mode: 'ask' },
     });
-    // plan 是计划模式实现细节,不入记忆(忽略而非报错)。
+    // plan 是计划模式实现细节,不入 built-in per-agent 记忆(忽略而非报错)。
     await saveNewSessionPreferences({
       permissionModeForAgent: { agentKind: 'claude-code', mode: 'plan' },
     });
@@ -188,9 +192,18 @@ describe('newSessionPreferenceStore', () => {
       agentKind: null,
       device: null,
       workspaceKind: null,
-      permissionModeByAgent: { 'claude-code': 'bypassPermissions', codex: 'ask' },
+      lastPermissionMode: 'ask',
+      permissionModeByAgent: { 'claude-code': 'ask', codex: 'ask' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+    });
+
+    // 插件引擎写入 lastPermissionMode 时同步保留给内置与插件引擎沿用（default -> ask）。
+    await saveNewSessionPreferences({ lastPermissionMode: 'bypassPermissions' });
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({
+      lastPermissionMode: 'bypassPermissions',
+      permissionModeByAgent: { 'claude-code': 'bypassPermissions', codex: 'bypassPermissions', pi: 'bypassPermissions' },
     });
 
     // 落盘的 plan / 非法 agent 键在读取时被清洗。
@@ -203,6 +216,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: { codex: 'auto' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
   });
@@ -229,21 +243,33 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: 'dialogue',
       permissionModeByAgent: {},
       workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'project' },
       remoteAgentByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
       workspaceKind: 'dialogue',
     });
     expect(JSON.parse(store.get(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: '/repo/fourth', devB: ' /other/app ' });
+    expect(JSON.parse(store.get(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: 'project', devB: 'project' });
+
+    // Switching one device explicitly to dialogue records that device without clearing another device's project.
+    await saveNewSessionPreferences({ workspaceKindForDevice: { deviceId: 'devB', workspaceKind: 'dialogue' } });
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({
+      workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
+    });
 
     // 落盘里的非法条目(非字符串 / 空)在读取时被清洗,旧存储没有该字段也不报错。
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: '/repo/ok', devB: 42, ' ': '/x', devC: '', devD: ' /keep me ' }));
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: 'project', devB: 'dialogue', devC: 'invalid', ' ': 'project' }));
     await expect(readNewSessionPreferences()).resolves.toMatchObject({
       workingDirByDevice: { devA: '/repo/ok', devD: ' /keep me ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
       remoteAgentByDevice: {},
     });
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
-    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {} });
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {}, workspaceKindByDevice: {} });
   });
 
   // 回归:新建页选了其他电脑 / 分享来的模型，下次打开就回到被控电脑默认。按(账号, 被控电脑, agent)记,
