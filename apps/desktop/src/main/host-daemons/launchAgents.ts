@@ -116,13 +116,34 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
   const exec = deps.exec ?? runCommand;
   const dir = deps.dir ?? join(homedir(), LAUNCH_AGENTS_DIR);
   const removeFile = deps.removeFile ?? ((path: string) => unlink(path));
-  /** 一次扫描内记下 Label → plist 路径，动作侧要靠它删文件 / 定位未加载的 job。 */
-  let seen = new Map<string, { path: string; command: string }>();
+  async function readPlist(path: string): Promise<LaunchAgentPlist | null> {
+    const { stdout, failed } = await exec('plutil', ['-convert', 'json', '-o', '-', path]);
+    return failed ? null : parseLaunchAgentPlist(stdout, basename(path, '.plist'));
+  }
 
-  async function plistPathFor(label: string): Promise<string> {
-    const cached = seen.get(label);
-    if (cached) return cached.path;
-    throw new Error('launch agent is no longer present');
+  /** 上次扫描记下的 Label → plist 路径，只作动作时的查找捷径，必须核对后才采信。 */
+  let seen = new Map<string, string>();
+
+  /**
+   * 动作时刻按 Label 重新定位定义文件。扫描到动作之间文件可能已被换掉或改名：
+   * 照上次的路径删，删掉的是别人刚放进去的 agent。旧路径里的 Label 对得上才用它，
+   * 否则重扫目录。
+   */
+  async function locate(label: string): Promise<string | null> {
+    const remembered = seen.get(label);
+    if (remembered && (await readPlist(remembered))?.label === label) return remembered;
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return null;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.plist')) continue;
+      const path = join(dir, name);
+      if ((await readPlist(path))?.label === label) return path;
+    }
+    return null;
   }
 
   return {
@@ -138,14 +159,12 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
         seen = new Map();
         return [];
       }
-      const next = new Map<string, { path: string; command: string }>();
+      const next = new Map<string, string>();
       const entries: RawHostDaemon[] = [];
       for (const name of names) {
         if (!name.endsWith('.plist')) continue;
         const path = join(dir, name);
-        const { stdout, failed } = await exec('plutil', ['-convert', 'json', '-o', '-', path]);
-        if (failed) continue;
-        const plist = parseLaunchAgentPlist(stdout, basename(name, '.plist'));
+        const plist = await readPlist(path);
         if (!plist) continue;
         let definitionMtimeMs: number | null = null;
         try {
@@ -153,7 +172,7 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
         } catch {
           // 读不到 mtime 的条目退化成「首次扫描到它的时刻」锚点，仍可归属。
         }
-        next.set(plist.label, { path, command: plist.command });
+        next.set(plist.label, path);
         entries.push({
           id: `launch-agent:${plist.label}`,
           name: plist.label,
@@ -183,8 +202,8 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
       const label = id.slice('launch-agent:'.length);
       const domain = guiDomain();
       if (!(await exec('launchctl', ['kickstart', '-k', `${domain}/${label}`])).failed) return;
-      const path = await plistPathFor(label);
-      if ((await exec('launchctl', ['bootstrap', domain, path])).failed) {
+      const path = await locate(label);
+      if (!path || (await exec('launchctl', ['bootstrap', domain, path])).failed) {
         throw new Error('launch agent could not be started');
       }
       if ((await exec('launchctl', ['kickstart', `${domain}/${label}`])).failed) {
@@ -194,12 +213,14 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
 
     async remove(id) {
       const label = id.slice('launch-agent:'.length);
-      const path = await plistPathFor(label);
       // 先 bootout 再删文件：删掉文件后 launchd 仍持有已加载的 job，直到注销。
       // 卸载真失败时不能继续删：那会留下一个还活着、却从清单里消失的 job。
       // `bootout` 对未加载的 label 也返回非 0，这是唯一可以忽略的失败。
       const { failed, stderr } = await exec('launchctl', ['bootout', `${guiDomain()}/${label}`]);
       if (failed && !hasNoSuchJob(stderr ?? '')) throw new Error('launch agent could not be unloaded');
+      // 卸载之后、删文件之前再定位一次：此刻盘上属于这个 Label 的文件才是该删的那个。
+      const path = await locate(label);
+      if (!path) throw new Error('launch agent is no longer present');
       await removeFile(path);
       seen.delete(label);
     },

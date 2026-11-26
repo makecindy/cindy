@@ -115,13 +115,14 @@ function psQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function buildActionScript(id: string, command: string, extraArgs: string): string | null {
+function buildActionScript(id: string, statements: ((target: string) => string)[]): string | null {
   const parts = splitScheduledTaskId(id);
   if (!parts || isSystemScheduledTaskId(id)) return null;
+  const target = `-TaskName ${psQuote(parts.taskName)} -TaskPath ${psQuote(parts.taskPath)}`;
   return [
     "$ErrorActionPreference = 'Stop'",
     'try {',
-    `  ${command} -TaskName ${psQuote(parts.taskName)} -TaskPath ${psQuote(parts.taskPath)}${extraArgs}`,
+    ...statements.map((statement) => `  ${statement(target)}`),
     "  Write-Output 'ok'",
     '} catch {',
     '  [Console]::Error.WriteLine($_.Exception.Message)',
@@ -132,16 +133,24 @@ function buildActionScript(id: string, command: string, extraArgs: string): stri
 
 /** Stop-ScheduledTask 没有 -Confirm（只结束当前实例，不改任务定义）。 */
 export function buildStopScheduledTaskScript(id: string): string | null {
-  return buildActionScript(id, 'Stop-ScheduledTask', '');
+  return buildActionScript(id, [(target) => `Stop-ScheduledTask ${target}`]);
 }
 
+/**
+ * 先结束正在跑的实例再注销：Unregister 只删定义，不会带走运行中的进程；不先停，
+ * 就会留下「页面说删了、进程还在跑、下次扫描也找不到它」的残留。
+ * 任务已经不在时 Get-ScheduledTask 报错中止，不会把「没删成」报成成功。
+ */
 export function buildDeleteScheduledTaskScript(id: string): string | null {
-  return buildActionScript(id, 'Unregister-ScheduledTask', ' -Confirm:$false');
+  return buildActionScript(id, [
+    (target) => `if ((Get-ScheduledTask ${target}).State -eq 'Running') { Stop-ScheduledTask ${target} }`,
+    (target) => `Unregister-ScheduledTask ${target} -Confirm:$false`,
+  ]);
 }
 
 /** 立即跑一次；停止之后用户要靠它把任务重新拉起来。 */
 export function buildRunScheduledTaskScript(id: string): string | null {
-  return buildActionScript(id, 'Start-ScheduledTask', '');
+  return buildActionScript(id, [(target) => `Start-ScheduledTask ${target}`]);
 }
 
 export async function scanScheduledTasks(): Promise<RawScheduledTask[]> {

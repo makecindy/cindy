@@ -67,40 +67,11 @@ export interface HostDaemonTarget {
 /** 外部命令结果：非 0 退出码不算异常（「没有 crontab」也是正常分支）。 */
 export interface ExecResult {
   stdout: string;
-  /** stderr：用来区分「对象本来就不在」与真正的失败，见 `isMissingObject`。 */
+  /** stderr：破坏性动作靠它区分「对象本来就不在」与真正的失败，后者必须中断。 */
   stderr?: string;
-  /** 进程退出码；启动失败（ENOENT）时为 undefined。 */
+  /** 退出码；命令没启动起来或被信号结束时没有。 */
   code?: number;
   failed: boolean;
-}
-
-/**
- * 失败是不是「要操作的对象本来就不存在」。
- *
- * 破坏性动作必须先停再删，而「没加载 / 没这个进程」是已经停住的意思，不该否定这次
- * 删除；其它失败（权限、路径错、daemon 拒收）说明对象可能还活着，必须中断。
- *
- * 只认明确的措辞，不认 `unknown` 这类泛词 —— 把真正的失败误判成「本来就没有」，
- * 就等于绕过 fail-closed。
- */
-export function isMissingObject(result: ExecResult): boolean {
-  if (!result.failed) return false;
-  const text = `${result.stderr ?? ''}\n${result.stdout}`.toLowerCase();
-  return (
-    text.includes('no such process') ||
-    text.includes('not loaded') ||
-    text.includes('no such file') ||
-    text.includes('not found')
-  );
-}
-
-/**
- * 破坏性动作的前置条件：这一步不成立就抛错，调用方不得继续往下删。
- *
- * 唯一例外是「对象本来就不在」，由调用方显式用 `isMissingObject` 判断后放行。
- */
-export function requireSuccess(result: ExecResult, message: string): void {
-  if (result.failed) throw new Error(message);
 }
 
 /**

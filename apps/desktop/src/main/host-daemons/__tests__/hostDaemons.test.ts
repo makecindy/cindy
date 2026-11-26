@@ -7,20 +7,29 @@
  * - 现有覆盖缺口：process-monitor 的测试只覆盖进程与终止授权，没有计划任务扫描、
  *   归属判定与台账命中的任何覆盖。
  * - 最小失败输入：一条任务名只出现在用户聊天、不在工具调用里的计划任务（必须被排除）；
- *   以及 `\Microsoft\` 下的系统任务（必须拒绝操作）。
+ *   以及 `\Microsoft\` 下的系统任务（必须拒绝操作）；删除必须先结束运行中的实例
+ *   （Unregister 只删定义，不带走进程）。
  * - tier：unit。扫描与数据库全部注入，不触碰真实 PowerShell / SQLite。
  */
 
 import fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+// 只为台账那条用例卡住一次 rename；其余用例与模块拿到的仍是真实实现。
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, mkdir: vi.fn(actual.mkdir), rename: vi.fn(actual.rename) };
+});
+
 import type { ToolMessageRow } from '../attribution.js';
 import { pickOwnerSession } from '../attribution.js';
 import { createHostDaemonLedger, type HostDaemonLedger, type HostDaemonOwnerRecord } from '../ledger.js';
 import {
+  buildDeleteScheduledTaskScript,
   parseScheduledTaskScan,
   toRawHostDaemon,
   type RawScheduledTask,
@@ -136,6 +145,14 @@ describe('parseScheduledTaskScan', () => {
       },
     ]);
   });
+
+  it('ends the running instance before unregistering the task', () => {
+    const script = buildDeleteScheduledTaskScript('\\airlink-autopm');
+
+    // 顺序反了或漏掉停止，都会留下「页面说删了、进程还在跑」的残留。
+    expect(script).toMatch(/Stop-ScheduledTask [^\n]+\n {2}Unregister-ScheduledTask /);
+    expect(buildDeleteScheduledTaskScript('\\Microsoft\\Windows\\Defrag')).toBeNull();
+  });
 });
 
 describe('pickOwnerSession', () => {
@@ -192,6 +209,51 @@ describe('host daemon ledger', () => {
       accountA.save();
       expect(accountB.getOwner('\\airlink-autopm')).toBeNull();
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 保存必须排队：两次并发保存各自整文件替换，先发出的旧快照若在最后一次改名，
+  // 会把后一次保存刚写进去的记录覆盖掉。
+  it('serializes saves so an older snapshot cannot overwrite a newer record', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-daemons-ledger-'));
+    const file = path.join(dir, 'host-daemons.v1.json');
+    const record = (id: string): HostDaemonOwnerRecord => ({
+      sessionId: `session-${id}`,
+      title: id,
+      atMs: 1,
+      definitionMtimeMs: 1,
+      command: '',
+    });
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const inRename = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.mocked(fsPromises.rename).mockImplementationOnce(async (from, to) => {
+      entered();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fs.renameSync(from, to);
+    });
+    try {
+      const ledger = createHostDaemonLedger(file);
+      await ledger.ready();
+      ledger.setOwner('a', record('a'));
+      const first = ledger.save();
+      await inRename;
+      ledger.setOwner('b', record('b'));
+      const second = ledger.save();
+      // 第一次还卡在最后一步改名：第二次保存此时不能已经开始写盘，否则新记录可能先被旧快照盖掉。
+      expect(vi.mocked(fsPromises.mkdir)).toHaveBeenCalledTimes(1);
+      release();
+      await Promise.all([first, second]);
+
+      expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).owners)).toEqual(['a', 'b']);
+      expect(fs.readdirSync(dir)).toEqual(['host-daemons.v1.json']);
+    } finally {
+      vi.mocked(fsPromises.rename).mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

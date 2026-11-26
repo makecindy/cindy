@@ -122,6 +122,9 @@ function isOwnCounterpart(unit: string, declaredUnit: string): boolean {
   return !declaredUnit || stem(declaredUnit) === stem(unit);
 }
 
+/** `systemctl stop` 对「单元未加载」的退出码；文件在的单元即使没跑过也返回 0。 */
+const EXIT_NOT_LOADED = 5;
+
 function triggerOf(file: SystemdUnitFile): HostDaemonTrigger {
   if (!file.schedule) return 'other';
   return file.schedule.startsWith('OnBootSec') || file.schedule.startsWith('OnStartupSec')
@@ -150,20 +153,31 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
     // 失败意味着 systemd 仍持有内存单元：此时删文件会留下「文件没了、进程还在」。
     if (failed) throw new Error('systemd could not reload units');
   });
-  /** 一次扫描内记下单元名 → 文件路径，动作侧靠它删文件。 */
-  let paths = new Map<string, string>();
-  /** 一次扫描内记下单元名 → 解析结果，动作侧靠它认准对象（不靠同名猜）。 */
-  let files = new Map<string, SystemdUnitFile>();
-
-  /** 条目的执行面：`Unit=` 优先，没写才同名。 */
-  function targetOf(unit: string): string {
-    return pairedUnit(unit, files.get(unit)?.declaredUnit ?? '');
+  /**
+   * 动作时刻重新读单元文件：`Unit=`、文件还在不在，都以当下为准。
+   * 用上次扫描留下的快照，扫描到动作之间被改过的条目就会照旧关系去停 / 删别的单元。
+   */
+  async function readUnit(unit: string): Promise<SystemdUnitFile | null> {
+    try {
+      return parseSystemdUnitFile(await readFile(join(dir, unit), 'utf8'));
+    } catch {
+      return null;
+    }
   }
 
-  async function pathFor(unit: string): Promise<string> {
-    const cached = paths.get(unit);
-    if (cached) return cached;
-    throw new Error('systemd unit is no longer present');
+  async function requireUnit(unit: string): Promise<SystemdUnitFile> {
+    const file = await readUnit(unit);
+    if (!file) throw new Error('systemd unit is no longer present');
+    return file;
+  }
+
+  /**
+   * 停执行面。返回码 5 = 单元未加载（systemd 259 实测，如 timer 指向的 service 文件早已被删）：
+   * 没有实例在跑，等于已经停了。其余非 0 才是真失败，必须中断后面的删除。
+   */
+  async function stopUnit(name: string): Promise<void> {
+    const { failed, code } = await exec('systemctl', ['--user', 'stop', name]);
+    if (failed && code !== EXIT_NOT_LOADED) throw new Error('systemd unit could not be stopped');
   }
 
   async function listUnits(): Promise<Map<string, SystemdUnitRuntime> | null> {
@@ -188,18 +202,14 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       try {
         names = await readdir(dir);
       } catch {
-        paths = new Map();
-        files = new Map();
         return [];
       }
-      const next = new Map<string, string>();
       const parsed = new Map<string, SystemdUnitFile>();
       for (const name of names) {
         if (!name.endsWith('.service') && !name.endsWith('.timer')) continue;
         const path = join(dir, name);
         try {
           parsed.set(name, parseSystemdUnitFile(await readFile(path, 'utf8')));
-          next.set(name, path);
         } catch {
           // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
         }
@@ -220,7 +230,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
         } catch {
           // 读不到 mtime 时退化成「首次扫描到它的时刻」锚点，仍可归属。
         }
-        const serviceFile = parsed.get(targetOf(unit));
+        const serviceFile = parsed.get(pairedUnit(unit, file.declaredUnit));
         entries.push({
           id: `systemd-user:${unit}`,
           name: unit,
@@ -233,52 +243,53 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           lastRunAtMs: null,
         });
       }
-      paths = next;
-      files = parsed;
       return entries;
     },
 
     // 只结束这一次运行：停的是这个条目的执行面（`Unit=` 指名或同名），定义都还在。
     async stop(id) {
       const unit = id.slice('systemd-user:'.length);
-      const { failed } = await exec('systemctl', ['--user', 'stop', targetOf(unit)]);
-      if (failed) throw new Error('systemd unit could not be stopped');
+      const { declaredUnit } = await requireUnit(unit);
+      await stopUnit(pairedUnit(unit, declaredUnit));
     },
 
     // timer 的 start 只是「开始等下一次」，用户点「立即运行」要的是一次真实执行。
     async run(id) {
       const unit = id.slice('systemd-user:'.length);
-      const { failed } = await exec('systemctl', ['--user', 'start', targetOf(unit)]);
+      const { declaredUnit } = await requireUnit(unit);
+      const { failed } = await exec('systemctl', ['--user', 'start', pairedUnit(unit, declaredUnit)]);
       if (failed) throw new Error('systemd unit could not be started');
     },
 
     async remove(id) {
       const unit = id.slice('systemd-user:'.length);
-      const path = await pathFor(unit);
-      const target = targetOf(unit);
-      const declared = files.get(unit)?.declaredUnit ?? '';
-      const pairedPath =
-        unit.endsWith('.timer') && isOwnCounterpart(unit, declared) ? paths.get(target) : undefined;
+      const { declaredUnit } = await requireUnit(unit);
+      const target = pairedUnit(unit, declaredUnit);
       // 先停执行面：`disable --now` 只停 timer 自己，正在跑的 service 不受影响；
       // 不先停，就会出现「页面说删了、进程还在跑、下次扫描也找不到它」。
-      if (target !== unit) {
-        const stopped = await exec('systemctl', ['--user', 'stop', target]);
-        // 单元本来就没加载时 stop 也是 0，所以这里非 0 只能是真失败。
-        if (stopped.failed) throw new Error('systemd unit could not be stopped');
-      }
+      if (target !== unit) await stopUnit(target);
       // 再让 systemd 交还这个单元：disable 失败时它还挂着开机自启，只删文件等于什么都没做。
       const { failed } = await exec('systemctl', ['--user', 'disable', '--now', unit]);
       if (failed) throw new Error('systemd unit could not be disabled');
       // reload 必须在 unlink 之前：失败时文件还在，条目可被下次扫描重新找回，不会留下
       // 「文件已删、daemon 仍持有内存单元」的半删状态。
       await reload();
-      await removeFile(path);
-      // timer 与它自带的执行面是同一项常驻物的两半：只删一半会留下一个谁也不触发的残留。
-      if (pairedPath) {
+      // 执行面先删、条目自己的文件最后删：中途失败时条目还列在清单里、还带着归属，能重试。
+      // 反过来先删 timer，就会留下一个没有归属记录、从页面上再也删不掉的 service。
+      const pairedPath = join(dir, target);
+      if (unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && (await exists(pairedPath))) {
         await removeFile(pairedPath);
-        paths.delete(target);
       }
-      paths.delete(unit);
+      await removeFile(join(dir, unit));
     },
   };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

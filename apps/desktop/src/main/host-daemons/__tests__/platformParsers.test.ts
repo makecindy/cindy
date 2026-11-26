@@ -223,7 +223,7 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
    */
   async function withUnits(
     units: Record<string, string>,
-    overrides: { reload?: () => Promise<void> } = {},
+    overrides: { reload?: () => Promise<void>; stopCode?: number } = {},
   ) {
     const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
     for (const [name, body] of Object.entries(units)) {
@@ -234,7 +234,9 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       dir,
       exec: async (command, args) => {
         commands.push([command, ...args]);
-        return { stdout: '', failed: false };
+        return args.includes('stop') && overrides.stopCode !== undefined
+          ? { stdout: '', failed: true, code: overrides.stopCode }
+          : { stdout: '', failed: false };
       },
       reload: overrides.reload ?? (async () => {}),
     });
@@ -261,6 +263,30 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       await expect(stat(join(dir, 'shared.service'))).resolves.toBeTruthy();
     } finally {
       await cleanup();
+    }
+  });
+
+  it('执行面未加载（stop 返回 5）时停与删都不算失败；真停不下来则不删', async () => {
+    const units = { 'orphan.timer': '[Timer]\nOnCalendar=hourly\n' };
+    const orphan = await withUnits(units, { stopCode: 5 });
+    const stuck = await withUnits(units, { stopCode: 1 });
+    try {
+      // WSL2 实测：timer 指向的 service 没加载时 `systemctl stop` 返回 5，没有任何实例在跑。
+      // 把它当失败，指向已删 service 的孤儿 timer 就永远删不掉。
+      await orphan.adapter.scan();
+      await orphan.adapter.stop('systemd-user:orphan.timer');
+      await orphan.adapter.remove('systemd-user:orphan.timer');
+      await expect(stat(join(orphan.dir, 'orphan.timer'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await stuck.adapter.scan();
+      await expect(
+        stuck.adapter.remove('systemd-user:orphan.timer'),
+      ).rejects.toThrow('could not be stopped');
+      await expect(stat(join(stuck.dir, 'orphan.timer'))).resolves.toBeTruthy();
+    } finally {
+      await orphan.cleanup();
+      await stuck.cleanup();
     }
   });
 

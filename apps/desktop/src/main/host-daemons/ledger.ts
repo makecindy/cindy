@@ -14,7 +14,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -117,10 +116,14 @@ export interface HostDaemonLedger {
 
 export function createHostDaemonLedger(filePath: string | (() => string)): HostDaemonLedger {
   let state: LedgerFile | null = null;
-  let dirty = false;
+  /** 内存态的代次：每改一次 +1；`written` 追上它才算已落盘。 */
+  let generation = 0;
+  let written = 0;
   let loadedPath: string | null = null;
   // 「当前账号的台账已经读过」：没读过时绝不落盘，否则会把空台账写成真台账。
   let loaded = false;
+  let loading: { path: string; done: Promise<void> } | null = null;
+  let saving: Promise<void> = Promise.resolve();
 
   /**
    * 台账按当前账号隔离（路径随账号变化）。路径变了就丢弃内存态：切号后旧账号的
@@ -138,36 +141,50 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
     state = emptyLedger();
     loadedPath = path;
     loaded = false;
-    dirty = false;
+    written = generation;
     return state;
   }
 
-  async function ready(): Promise<void> {
+  function ready(): Promise<void> {
     const path = currentPath();
-    if (loaded && loadedPath === path) return;
-    loadedPath = path;
-    dirty = false;
-    state = null;
-    try {
-      state = parseLedger(await readFile(path, 'utf8'));
-    } catch {
-      // 文件不存在 = 首次运行；损坏 = 当成空台账重来（判定可重建，不阻塞面板）。
-      state = emptyLedger();
-    }
-    loaded = true;
+    if (loaded && loadedPath === path) return Promise.resolve();
+    // 并发的读盘共用一次：各自读会互相清空内存态，后读完的把先读完之后写进去的记录丢掉。
+    if (loading?.path === path) return loading.done;
+    const flight = { path, done: Promise.resolve() };
+    flight.done = (async () => {
+      let next: LedgerFile;
+      try {
+        next = parseLedger(await readFile(path, 'utf8'));
+      } catch {
+        // 文件不存在 = 首次运行；损坏 = 当成空台账重来（判定可重建，不阻塞面板）。
+        next = emptyLedger();
+      }
+      if (loading === flight) loading = null;
+      // 读盘途中切了号：这批是旧账号的数据，不能装进当前内存态。
+      if (currentPath() !== path) return;
+      state = next;
+      loadedPath = path;
+      loaded = true;
+      written = generation;
+    })();
+    loading = flight;
+    return flight.done;
   }
 
   /**
    * 台账是可重建的判定缓存，所以写侧只要「整文件替换」的原子性，不需要 .bak 交换：
    * 丢的只是一轮判定结论，下次扫描会重算。
    */
-  async function save(): Promise<void> {
-    if (!dirty || !loaded) return;
+  async function flush(): Promise<void> {
     const path = currentPath();
-    if (loadedPath !== path) return;
+    // 没读过当前账号的台账绝不落盘；没有改动也不写。
+    if (!loaded || loadedPath !== path || written === generation) return;
+    const snapshot = generation;
+    // 内容在任何 await 之前取定：写盘途中切号时 ensure() 已是新账号的空台账，不能写进旧账号的路径。
+    const content = `${JSON.stringify(ensure(), null, 2)}\n`;
     const temp = `${path}.${randomUUID()}.tmp`;
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(temp, `${JSON.stringify(ensure(), null, 2)}\n`, { mode: 0o600 });
+    await writeFile(temp, content, { mode: 0o600 });
     try {
       await rename(temp, path);
     } catch (error) {
@@ -180,7 +197,18 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
       await rm(path, { force: true });
       await rename(temp, path);
     }
-    dirty = false;
+    // 写盘途中又有改动时不能标成已落盘：那批改动留给下一次保存。
+    written = snapshot;
+  }
+
+  /**
+   * 保存排队执行：两次并发保存各自整文件替换，Windows 回退路径还要先删目标再改名，
+   * 交错时会出现带着旧快照覆盖新记录、或文件暂时不存在的窗口。
+   */
+  function save(): Promise<void> {
+    const run = saving.then(flush, flush);
+    saving = run.catch(() => {});
+    return run;
   }
 
   return {
@@ -191,27 +219,27 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
       const current = ensure();
       current.owners[id] = record;
       delete current.misses[id];
-      dirty = true;
+      generation += 1;
     },
     clearOwner(id) {
       const current = ensure();
       if (!current.owners[id]) return;
       delete current.owners[id];
-      dirty = true;
+      generation += 1;
     },
     getMissMtime(id) {
       return ensure().misses[id] ?? null;
     },
     setMissMtime(id, mtimeMs) {
       ensure().misses[id] = mtimeMs;
-      dirty = true;
+      generation += 1;
     },
     getFirstSeen(id) {
       return ensure().firstSeen[id] ?? null;
     },
     setFirstSeen(id, atMs) {
       ensure().firstSeen[id] = atMs;
-      dirty = true;
+      generation += 1;
     },
     ready,
     save,
