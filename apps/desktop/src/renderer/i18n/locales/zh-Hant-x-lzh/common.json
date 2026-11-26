@@ -8823,6 +8823,8 @@
         "networkSecretOauthDetail": "登入與令牌由 Cindy 代管，可新授權，亦可擇同服務既連之帳號。請核下列所請之權；用既連帳號時，以其已有之權為準。",
         "networkConnections": "可連君所增之 {{label}}",
         "networkConnectionsDetail": "位址於此法器之設定介面中增之；每增一位址皆須君確認，君所供之憑證僅注入相應位址。",
+        "networkConnectionsGlabCli": "可連君所增之 {{label}}，並先用此機 glab 已登之執行個體",
+        "networkConnectionsGlabCliDetail": "君於法器設定中所增之執行個體憑證為先；未另增之執行個體，主機按需取此機 glab 之登入權杖，唯注入其自身之 HTTPS 請求，法器程式碼不得讀取或存留權杖。",
         "codeDetailNetwork": "於獨立沙箱中運行，不能存取君之檔案；網路僅限上方所宣告之網域，由主機代發。",
         "codeDetailWithNode": "面板 UI 於獨立沙箱中運行；此機處理之能由上方所宣告之 Node 執行環境提供。",
         "added": "新",
@@ -8851,7 +8853,7 @@
         "nodeChildSpawnDetail": "僅能啟其包內已申報之 JS 檔案(與主程式同等本機權柄)，不能行任意命令；法器停用或退出時，子處理程序一併關閉。",
         "skill": "為 AI 助手增技藝「{{name}}」",
         "skillDetail": "技藝乃一份指令檔案，AI 將視為己之指令載入而行，具君之全部權柄，於 Claude Code 與 Codex、一切案中皆生效——不受本法器沙箱所約。法器啟用期間持續可用，停用或卸除即移除；僅對某卷匣關閉本法器，不能隱之。此處不能先覽技藝全文——請僅納君所信之法器。",
-        "routineEvents": "例行差事事件",
+        "routineEvents": "自動化之事",
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
@@ -17779,8 +17781,8 @@
           }
         },
         "gitlab": {
-          "missing": "未見 GitLab CLI（glab），故無 MR 狀態。裝 glab 並登入乃可見。",
-          "notLoggedIn": "本機 glab 未登入 {{host}}，故無 MR 狀態。於終端行 glab auth login，登入乃可見。",
+          "missing": "未見 GitLab CLI（glab），GitLab 法器亦無此實例之連，故無 MR 狀態。裝 glab 並登入，或於 GitLab 法器添此實例，乃可見。",
+          "notLoggedIn": "本機 glab 未登入 {{host}}，GitLab 法器亦無此實例之連，故無 MR 狀態。於終端行 glab auth login，或於 GitLab 法器添此實例，乃可見。",
           "unsupported": "此機尚不支援 GitLab MR 狀態",
           "openAria": "於瀏覽器開 MR !{{number}}",
           "summaryAria": "MR !{{number}} 概覽",
@@ -18206,7 +18208,8 @@
         "pause": "暫止",
         "deleteAutomation": "刪自運"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手觸",
@@ -18547,11 +18550,123 @@
         "cindyConnectionTitle": "GitHub · 經 Cindy 連接",
         "manualConnectionTitle": "GitHub · 手動 Webhook",
         "githubAppHint": "於執行此任務之電腦連接 GitHub App，授權所列倉庫，無須另設 Webhook 位址或金鑰。",
-        "githubAppPaused": "任務已暫停，事件不啟之。"
+        "githubAppPaused": "任務已暫停，事件不啟之。",
+        "plugin": {
+          "source": "法器之事",
+          "label": "擇法器與事",
+          "empty": "本機尚無能報事之法器。裝而啟用申明有事之法器，乃可於此擇之。",
+          "unavailable": "法器不可用",
+          "remove": "除之",
+          "hint": "法器不代汝濾事，雖此自動化自發之訊亦然；當否處之，宜於提示或前置檢查中言明。機寐、機關或法器停用之時，事不可得。",
+          "offlineHint": "機寐、機關或法器停用之時，事不可得；不容遺漏者，宜另設定時之察。",
+          "required": "請至少擇一法器之事",
+          "state": {
+            "listening": "方聽",
+            "disconnected": "已斷",
+            "error": "連接有誤",
+            "stopped": "未行",
+            "unknown": "待法器報其狀"
+          },
+          "filterOnly": "唯察",
+          "filterField": "字段",
+          "filterOperator": "約",
+          "filterValue": "值",
+          "filterRemove": "除此約",
+          "filterAdd": "增「唯察」之約",
+          "operators": {
+            "equals": "等於",
+            "contains": "含",
+            "not-equals": "不等於"
+          }
+        },
+        "scopeLabel": "所及",
+        "scope": {
+          "repository": "全庫",
+          "repositoryHint": "庫有新事則行，如新 PR、評語、CI 竣事。",
+          "repositoryNeedsAccount": "須登 Cindy 之號，乃能受庫之事。",
+          "item": "指定之 PR 或 Issue",
+          "itemHint": "唯察一 PR 或 Issue：PR 狀實有變乃行，Issue 有新動則行。",
+          "project": "全項",
+          "projectHint": "項有新事則行，如新 MR、Issue、流水竣事。",
+          "gitlabItem": "指定之 MR 或 Issue",
+          "gitlabItemHint": "唯察一 MR 或 Issue：MR 狀實有變乃行，Issue 有變則行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或鏈",
+          "hint": "書編號、owner/repo#編號，或貼 PR / Issue 之鏈，Cindy 自辨其類。",
+          "resolving": "辨之中…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已閉",
+          "required": "請書所察之 PR 或 Issue，待其辨畢。",
+          "issueHint": "指定 Issue 藉 Cindy 所連之 GitHub App 受事，須登 Cindy 之號。",
+          "errors": {
+            "invalid": "請書編號、#編號、owner/repo#編號，或 GitHub 上 PR / Issue 之鏈。",
+            "no-repository": "唯書編號則須知其庫，請書 owner/repo#42，或貼其鏈。",
+            "not-connected": "連 GitHub 而後能辨 PR 抑 Issue。",
+            "not-found": "此庫無此編號，或君無權觀之。",
+            "unavailable": "暫不能連 GitHub，請稍後再試。",
+            "needs-account": "此乃 Issue。指定 Issue 須登 Cindy 之號，並藉 Cindy 連 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新動",
+            "comment": "有新評",
+            "closed": "Issue 已閉",
+            "reopened": "Issue 復開"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "簽名之令（GitLab 十九以上）",
+        "gitlabSignedConnectionHint": "於 GitLab 項之 Webhook 設中用簽名之令，更為穩妥。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "宜於舊版 GitLab：於 Webhook 設中書 Secret token。",
+        "gitlabPluginConnection": "借 GitLab 法器",
+        "gitlabPluginConnectionHint": "以 GitLab 法器所連之號，每分一察，無須於 GitLab 設 Webhook，亦無須登 Cindy 之號。機寐或機關之時所變，不復補報。",
+        "gitlabMrPollConnection": "按時察其進止",
+        "gitlabMrPollConnectionHint": "依「兼按時省察」之期讀 MR 之狀（不行差事），先取法器所錄之號，次取此機 glab 之登。",
+        "gitlabSetupHint": "存後於差事詳情取收址與密鑰，書於 GitLab 項之「設置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或鏈",
+          "hint": "MR 書 !編號，Issue 書 #編號，亦可逕貼其鏈。",
+          "required": "請書所察之 MR 或 Issue。",
+          "mrHint": "GitLab 無推報，Cindy 依「兼定時察」之時讀 MR 之狀（不行差事），用此機 glab 之登，或 GitLab 法器所連之號。",
+          "mrPluginHint": "GitLab 法器每分一察此 MR，新提交、評注、核准及管線成敗皆在其中。",
+          "issueHint": "藉 GitLab Webhook 受此 Issue 之變。評語之事不能辨 MR 與 Issue，故唯應 Issue 自身之新立、修改、閉與復開。",
+          "issuePluginHint": "GitLab 法器每分一察此 Issue，新評亦在其中。",
+          "errors": {
+            "invalid": "請依 !12（MR）、#12（Issue）或 group/project!12 之式書之，亦可貼 GitLab 之鏈。",
+            "ambiguous": "GitLab 之 MR 與 Issue 編號各別，請書 !12（MR）或 #12（Issue），或貼其鏈。",
+            "needs-link": "指定 MR 須知 GitLab 之所，請貼 MR 之鏈。",
+            "needs-account": "此乃 Issue。指定 GitLab Issue，須裝 GitLab 法器，或登 Cindy 之號以受 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新動",
+            "merged": "MR 已合",
+            "review": "審有新動",
+            "ci": "流水之狀有變"
+          },
+          "issueChange": {
+            "any": "Issue 有變",
+            "comment": "Issue 有新評",
+            "closed": "Issue 已閉",
+            "reopened": "Issue 復開"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "項目",
+          "projectHint": "書 group/project 或項目之鏈。法器連數實例者，宜貼其鏈。",
+          "projectInvalid": "宜書 group/project 或以 https 起之項目鏈。",
+          "eventsLabel": "事",
+          "eventsHint": "皆不擇者，應此項目諸事。",
+          "unavailable": "GitLab 法器未裝或已停，請於「法器」啟之，然後存。"
+        }
       },
       "trigger": {
         "label": "觸發方式",
-        "timed": "定時"
+        "timed": "定時",
+        "event": "事"
       },
       "runSettings": "運行設定"
     },
@@ -18842,7 +18957,8 @@
         "reconnectConfirm": "重連 Webhook 乎？",
         "reconnectConfirmHint": "此舉將占一名額並生新受信之址。請以新址與密鑰更設發信方。",
         "reconnectFailed": "暫未能重連，請察所餘名額後再試。"
-      }
+      },
+      "pluginTitle": "法器之事觸發"
     }
   },
   "issueTracker": {
@@ -21122,7 +21238,7 @@
   "routines": {
     "hourly": "每時",
     "everyMinutes": "每 {{count}} 分",
-    "pluginCapability": "向例行差事呈已宣告之事，唯觸發君所設之例行差事",
+    "pluginCapability": "向自動化呈已聲明之事，唯觸發擇此法器之自動化",
     "advancedSettings": "進階之設"
   },
   "cindyMakeDoctor": {
