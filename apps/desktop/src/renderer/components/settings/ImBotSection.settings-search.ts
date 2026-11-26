@@ -157,6 +157,20 @@ export const imBotSettings = defineSettings({
     ],
     aliases: ['Feishu group settings', 'Lark group settings', '飞书群聊'],
   },
+  feishuReplyFormat: {
+    id: 'imBot.feishu.replyFormat',
+    fallbackTargetId: 'personal-im-feishu',
+    tab: 'im-bot',
+    targetId: 'personal-im-feishu-reply-format',
+    titleKey: 'settings.feishuBot.replyFormat.label',
+    sectionKey: 'settings.imBot.groups.personal',
+    descriptionKey: 'settings.feishuBot.replyFormat.hint',
+    options: [
+      { value: 'card', labelKey: 'settings.feishuBot.replyFormat.card' },
+      { value: 'text', labelKey: 'settings.feishuBot.replyFormat.text' },
+    ],
+    aliases: ['Feishu reply format', 'plain text reply', '飞书回复格式', '纯文本回复'],
+  },
   dingtalk: {
     id: 'imBot.dingtalk',
     tab: 'im-bot',

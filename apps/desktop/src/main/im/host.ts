@@ -31,6 +31,7 @@ import {
   type DiscordChannelAccessStore,
   type DiscordIM,
   type FeishuIM,
+  type FeishuReplyFormat,
   type IMHost,
   type TelegramBehaviorConfig,
   type TelegramIM,
@@ -39,6 +40,7 @@ import {
 import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 
 import { inboundFileStaging } from './shared/inboundFileStaging';
+import { readImDefaultSettings } from './defaultSettingsStore';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
 import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
@@ -208,7 +210,17 @@ const host: IMHost = {
 
 export const feishuIm = createFeishuIM(host, {
   shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+  replyFormat: feishuReplyFormat,
 });
+
+/**
+ * 飞书回答形态: 读渠道设置(个人 bot 与伙伴连接共用同一条渠道口径), 每轮现读 —
+ * 设置改成 text / card 后下一轮即生效, 不需要重连传输层。缺省 card。
+ */
+function feishuReplyFormat(): FeishuReplyFormat {
+  return readImDefaultSettings('feishu').replyFormat;
+}
+
 /**
  * 伙伴自有飞书 / Lark 连接的传输层实例: 凭证与 TOFU 主人按连接前缀隔离、不注册设置卡
  * IPC。非主人仅可通过群 @ 进业务层，私聊只认已绑定主人。
@@ -219,6 +231,7 @@ export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
     ipc: false,
     guests: true,
     shouldAnnounceLifecycle: shouldAnnounceFeishuLifecycle,
+    replyFormat: feishuReplyFormat,
   });
 }
 export const discordIm = createDiscordIM(host, {

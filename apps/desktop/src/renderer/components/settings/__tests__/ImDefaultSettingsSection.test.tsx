@@ -109,6 +109,7 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
   return {
     agentKind,
     permissionMode: 'auto',
+    replyFormat: 'card',
     groupPermissionMode: 'auto',
     agents: {
       'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
