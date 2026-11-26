@@ -7358,6 +7358,30 @@
             "controller-encryption-required": "Este computador está com “Usar apenas Agent-Net” ativado. Desative essa opção aqui antes de voltar o outro computador para Device Link.",
             "agent-net-only-relay": "Esta conexão usa uma rede que só oferece suporte a Agent-Net. Escolha primeiro uma rota compatível com Device Link."
           }
+        },
+        "peerUpdate": {
+          "availableTip": "Versão {{version}} disponível — clique para atualizar",
+          "downloading": "Baixando {{version}}…",
+          "relaunching": "Reiniciando para instalar {{version}}…",
+          "confirm": {
+            "title": "Atualizar o Cindy em “{{name}}”?",
+            "selfTitle": "Atualizar o Cindy neste computador?",
+            "description": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado nesse dispositivo. A conexão remota cairá brevemente.",
+            "selfDescription": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado neste computador.",
+            "busyWarning": "Tarefas em andamento ou processos em segundo plano nesse dispositivo serão interrompidos pela reinicialização.",
+            "selfBusyWarning": "Tarefas em andamento ou processos em segundo plano neste computador serão interrompidos pela reinicialização.",
+            "linuxPermissionHint": "Instalações gerenciadas no Linux podem solicitar a senha do sistema no dispositivo de destino.",
+            "windowsPermissionHint": "Instalações em uma pasta protegida podem solicitar permissão do sistema no dispositivo de destino.",
+            "action": "Atualizar agora"
+          },
+          "toast": {
+            "started": "Atualizando “{{name}}” para {{version}}",
+            "relaunching": "“{{name}}” está reiniciando para instalar {{version}}",
+            "versionChanged": "A versão disponível em “{{name}}” mudou. Reabra o cartão para conferir.",
+            "noUpdate": "Nenhuma atualização instalável está disponível em “{{name}}”.",
+            "busy": "“{{name}}” já está executando uma atualização. Tente novamente em breve.",
+            "failed": "Não foi possível atualizar o Cindy em “{{name}}”."
+          }
         }
       }
     },
