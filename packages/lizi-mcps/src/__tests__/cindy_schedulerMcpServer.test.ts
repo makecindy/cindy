@@ -44,6 +44,7 @@ import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
+import type { HostToolRuntime } from '../host-tool-runtime.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -151,6 +152,7 @@ const baseCreate: CreateScheduleInput = {
 
 interface Harness {
   client: Client;
+  hostTools: HostToolRuntime;
   scheduler: Scheduler;
   storage: InMemoryStorage;
   cleanup: () => Promise<void>;
@@ -158,7 +160,9 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  getSessionProject?: SchedulerMcpDeps['getSessionProject'];
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
+  context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -173,6 +177,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    getSessionProject: opts?.getSessionProject,
     webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
@@ -180,7 +185,7 @@ async function makeHarness(opts?: {
       }
       return scheduler;
     },
-  });
+  }, opts?.context);
 
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'phase5-smoke-client', version: '0.0.0' });
@@ -192,6 +197,7 @@ async function makeHarness(opts?: {
 
   return {
     client,
+    hostTools: server.hostTools,
     scheduler,
     storage,
     cleanup: async () => {
@@ -225,6 +231,39 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
 
   beforeEach(async () => {
     h = await makeHarness();
+  });
+
+  // Unit, parity #18: the plugin entry must manage the real Scheduler without a
+  // Session. Existing MCP tests cover task calls, not the in-process plugin caller.
+  // Minimal input: explicit schedule fields and a plugin context with no sessionId.
+  it('manages a schedule through the shared Host handlers without a current task', async () => {
+    await h.cleanup();
+    h = await makeHarness({ context: { agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1,
+    } } });
+    const call = async (tool: string, args: Record<string, unknown> = {}) => {
+      const { envelope, isError } = parseToolResult(await h.hostTools.call(tool, args));
+      expect(isError).toBe(false);
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      return envelope.data;
+    };
+    try {
+      const created = await call('schedule_create', { ...baseCreate }) as Schedule;
+      const id = created.id;
+      expect(await call('schedule_list')).toEqual([created]);
+      expect(await call('schedule_update', { id, name: 'updated' })).toMatchObject({ id, name: 'updated' });
+      expect(await call('schedule_pause', { id })).toMatchObject({ id, status: 'paused' });
+      expect(await call('schedule_resume', { id })).toMatchObject({ id, status: 'active' });
+      const run = await call('schedule_run_now', { id }) as { runId: string };
+      expect(await call('schedule_list_runs', { scheduleId: id })).toEqual([
+        expect.objectContaining({ id: run.runId, scheduleId: id, status: 'success' }),
+      ]);
+      const nativeRead = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_get', args: { id } } });
+      expect(parseToolResult(nativeRead as { content: unknown[] }).envelope).toMatchObject({ ok: true, data: { id, name: 'updated', status: 'active' } });
+      expect(await call('schedule_delete', { id })).toEqual({ deleted: id });
+      expect(await call('schedule_list')).toEqual([]);
+    } finally { await h.cleanup(); }
   });
 
   // Unit integration: account management must be discoverable and reachable through
@@ -299,12 +338,14 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
   });
 
   // Unit: schema lookup is read-only even for destructive scheduler operations.
-  it('describes a nested operation without creating or changing a schedule', async () => {
+  it.each(['schedule_create', 'schedule_update'])('describes %s including manual without changing a schedule', async (name) => {
     try {
-      const result = await h.client.callTool({ name: 'list_tools', arguments: { name: 'schedule_create' } });
+      const result = await h.client.callTool({ name: 'list_tools', arguments: { name } });
       const metadata = JSON.parse((result.content as Array<{ text: string }>)[0].text);
-      expect(metadata).toMatchObject({ ok: true, tool: { name: 'schedule_create', inputSchema: { type: 'object' } } });
+      expect(metadata).toMatchObject({ ok: true, tool: { name, inputSchema: { type: 'object' } } });
       expect(metadata.tool.inputSchema.properties).toHaveProperty('timezone');
+      expect(metadata.tool.inputSchema.properties.manual).toMatchObject({ type: 'boolean', description: expect.any(String) });
+      expect(metadata.tool.inputSchema.required).not.toContain('manual');
       expect(await h.storage.list()).toEqual([]);
     } finally { await h.cleanup(); }
   });
@@ -403,6 +444,23 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  // Unit: follow-up tasks run in a sibling checkout; keep the host-attested project across scheduler storage.
+  it('saves the creating task project independently of the requested checkout', async () => {
+    await h.cleanup();
+    const getSessionProject = vi.fn(async () => ({ projectDir: '/projects/app', remoteHostId: null }));
+    h = await makeHarness({ getSessionProject, context: { agentKind: 'codex', workingDir: '/work', sessionId: 'creator' } });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, workingDir: '/checkouts/pr' },
+      } });
+      expect(parseToolResult(result as { content: unknown[] }).isError).toBe(false);
+      expect(getSessionProject).toHaveBeenCalledWith('creator');
+      expect(await h.scheduler.list()).toMatchObject([{ workingDir: '/checkouts/pr', inheritedProjectDir: '/projects/app' }]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',
@@ -421,6 +479,84 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(createdData.agentKind).toBe('pi');
 
     await h.cleanup();
+  });
+
+  // #10791, unit: the real MCP gateway used to reject manual before reaching
+  // Scheduler. Cover persisted trigger state and nextFireAt for both execution
+  // modes; the existing create/update tests only exercise timed schedules.
+  it.each([
+    { executionMode: 'agent' as const, intervalMs: undefined },
+    { executionMode: 'script' as const, intervalMs: 600_000 },
+  ])('manual switches preserve scheduling settings: %j', async ({ executionMode, intervalMs }) => {
+    const call = async (name: string, args: Record<string, unknown>): Promise<Schedule> => {
+      const { envelope, isError } = parseToolResult(await h.client.callTool({
+        name: 'call_tool', arguments: { name, args },
+      }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      return envelope.data as Schedule;
+    };
+    try {
+      const input = { ...baseCreate, executionMode, intervalMs,
+        ...(executionMode === 'script' ? { scriptConfig: { command: 'node job.mjs', capabilities: [] } } : {}),
+        webhookTrigger: { source: { preset: 'gitlab-token' }, events: ['merge_request'] },
+      };
+      const timed = await call('schedule_create', input);
+      expect(timed.manual).toBe(false);
+      expect(typeof timed.nextFireAt).toBe('number');
+
+      const eventOnly = await call('schedule_create', { ...input, manual: true });
+      expect(eventOnly.manual).toBe(true);
+      expect(eventOnly.nextFireAt).toBeUndefined();
+      expect(await h.storage.get(eventOnly.id)).toMatchObject({ manual: true, nextFireAt: undefined });
+
+      const renamed = await call('schedule_update', { id: eventOnly.id, name: 'renamed' });
+      expect(renamed.manual).toBe(true);
+      expect(renamed.nextFireAt).toBeUndefined();
+      expect(renamed.webhookTrigger).toEqual(eventOnly.webhookTrigger);
+
+      const restored = await call('schedule_update', { id: eventOnly.id, manual: false });
+      expect(restored.manual).toBe(false);
+      expect(restored.nextFireAt).toBe(timed.nextFireAt);
+      expect(restored.intervalMs).toBe(intervalMs);
+      expect(restored.webhookTrigger).toEqual(eventOnly.webhookTrigger);
+
+      await call('schedule_update', { id: eventOnly.id, manual: true, webhookTrigger: null });
+      const stored = await h.storage.get(eventOnly.id);
+      expect(stored).toMatchObject({ manual: true, nextFireAt: undefined, webhookTrigger: undefined });
+      expect(stored?.intervalMs).toBe(intervalMs);
+      expect(stored?.cronExpr).toBe(input.cronExpr);
+      expect(stored?.executionMode).toBe(executionMode);
+    } finally { await h.cleanup(); }
+  });
+
+  it('manual keeps the Webhook one-time constraint and strict boolean validation', async () => {
+    const call = async (name: string, args: Record<string, unknown>) => parseToolResult(
+      await h.client.callTool({ name: 'call_tool', arguments: { name, args } }) as { content: unknown[]; isError?: boolean },
+    );
+    try {
+      const input = { ...baseCreate, recurring: false, webhookTrigger: { events: ['issues.opened'] } };
+      // Preserve the existing engine rejection (currently classified INTERNAL);
+      // the important boundary is no write, with the specific recurring reason.
+      const rejection = { ok: false, code: 'INTERNAL', message: 'webhook trigger requires a recurring schedule' };
+      expect((await call('schedule_create', { ...input, manual: false })).envelope)
+        .toMatchObject(rejection);
+      expect(await h.storage.list()).toEqual([]);
+      const { envelope } = await call('schedule_create', { ...input, manual: true });
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      const created = envelope.data as Schedule;
+      expect((await call('schedule_update', { id: created.id, manual: false })).envelope)
+        .toMatchObject(rejection);
+      expect(await h.storage.get(created.id)).toMatchObject({ manual: true, nextFireAt: undefined });
+      for (const manual of [null, 'true']) {
+        expect((await call('schedule_create', { ...input, manual })).envelope)
+          .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+        expect((await call('schedule_update', { id: created.id, manual })).envelope)
+          .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      }
+    } finally { await h.cleanup(); }
   });
 
   it('call_tool(schedule_create) accepts intervalMs and schedules first fire relative to creation time', async () => {
@@ -715,6 +851,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(data.prompt).toBe('');
     expect(data.workspaceKind).toBe('project');
     await h.cleanup();
+  });
+
+  // Unit / #10840 parity: the real MCP create/update schemas must accept the
+  // same grants as the UI. Existing script cases only used the older grants;
+  // settings.read + usage.read previously failed before reaching Scheduler.
+  it.each(['schedule_create', 'schedule_update'] as const)('%s persists the shared host-read capabilities', async tool => {
+    try {
+      const scriptConfig = { command: 'node read.mjs', capabilities: ['settings.read', 'usage.read'] };
+      const seed = tool === 'schedule_update' ? await h.scheduler.create({
+        ...baseCreate, executionMode: 'script', scriptConfig: { command: 'node old.mjs', capabilities: [] },
+      }) : undefined;
+      const { envelope, isError } = parseToolResult(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: tool, args: tool === 'schedule_create' ? { ...scriptCreate, scriptConfig } : { id: seed!.id, scriptConfig },
+      } }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope).toMatchObject({ ok: true, data: { scriptConfig } });
+      if (!envelope.ok) throw new Error('unexpected validation failure');
+      const saved = await h.storage.get((envelope.data as Schedule).id);
+      expect(saved?.scriptConfig).toEqual(scriptConfig);
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('call_tool(schedule_create, script without scriptConfig) returns INVALID_PARAMS', async () => {

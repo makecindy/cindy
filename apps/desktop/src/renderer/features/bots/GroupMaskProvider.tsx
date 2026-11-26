@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import type { ChatMaskAction, ChatMaskMention, ChatMaskState } from '../../../shared/botGroupChat';
 import { GroupMaskContext, maskIdentity, type GroupMaskPresentation, type GroupMaskSettings } from './groupMaskPresentation';
 
@@ -53,13 +54,22 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     }
   },[groupId]);
   useEffect(()=>{
+    const api=window.electronAPI.maker.chatServer;
+    if (!api.mask || !api.mentions) return;
     alive.current=true; void reload();
     const stop=window.electronAPI.maker.onBotGroupChanged((event,stamp)=>{
       if(isDataOwnerPushCurrent(stamp) && (event.groupId===groupId || !event.groupId)) void reload();
     });
-    // Scheduled windows still change when no message is arriving.
-    const timer=setInterval(()=>void reload(),15000);
-    return ()=>{alive.current=false; version.current++; clearInterval(timer); stop();};
+    // Scheduled windows still change when no message is arriving. A hidden window reads once on return.
+    // document.hidden stays false when background throttling is off, so the main broadcast also counts.
+    let windowHidden=isWindowHidden();
+    const isHidden=()=>windowHidden || document.hidden;
+    let paused=isHidden();
+    const sync=()=>{ const next=isHidden(); if(paused && !next) void reload(); paused=next; };
+    const timer=setInterval(()=>{ if(!isHidden()) void reload(); },15000);
+    document.addEventListener('visibilitychange',sync);
+    const offHidden=window.electronAPI.onWindowHiddenChange?.(hidden=>{ windowHidden=hidden; sync(); });
+    return ()=>{alive.current=false; version.current++; clearInterval(timer); document.removeEventListener('visibilitychange',sync); offHidden?.(); stop();};
   },[groupId,reload]);
   const act=useCallback((retryKey:string, makeAction:(current:ChatMaskState)=>ChatMaskAction)=>{
     const owner=getDataOwnerGeneration(), generation=authority.current;

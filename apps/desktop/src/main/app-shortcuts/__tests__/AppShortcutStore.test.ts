@@ -47,6 +47,20 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
+  it('Host edits share native conflict checks, preserve hidden overrides and reject a stale form', async () => {
+    const store = makeStore('darwin');
+    fs.writeFileSync(filePath(), JSON.stringify({ version: 1, overrides: { 'save-file': null }, future: true }));
+    const before = store.inspectHost();
+    if (before.status !== 'ready') throw new Error('fixture');
+    await expect(store.commitHost({ 'toggle-sidebar': combo('KeyF', { meta: true }) }, ['toggle-sidebar'], { expectedRevision: before.revision })).rejects.toThrow('conflict');
+    const saved = await store.commitHost({ 'toggle-sidebar': combo('KeyJ', { meta: true }) }, ['toggle-sidebar'], { expectedRevision: before.revision });
+    expect(store.getEffectiveCombos('toggle-sidebar')[0]?.code).toBe('KeyJ');
+    expect(JSON.parse(fs.readFileSync(filePath(), 'utf8'))).toMatchObject({ overrides: { 'save-file': null, 'toggle-sidebar': { code: 'KeyJ' } }, future: true });
+    await expect(store.commitHost({}, ['toggle-sidebar'], { expectedRevision: before.revision })).rejects.toThrow();
+    await store.commitHost({}, ['toggle-sidebar'], { expectedRevision: saved.revision });
+    expect(JSON.parse(fs.readFileSync(filePath(), 'utf8'))).toEqual({ version: 1, overrides: { 'save-file': null }, future: true });
+  });
+
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([

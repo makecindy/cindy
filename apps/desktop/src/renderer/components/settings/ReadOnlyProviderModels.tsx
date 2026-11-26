@@ -109,7 +109,14 @@ export function ReadOnlyProviderModelSection({
               className="flex items-center gap-3 rounded-lg px-3 py-2 text-13"
               style={{ color: 'var(--text-primary)' }}
             >
-              <span className="min-w-0 flex-1 truncate">{model.name}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block break-words">{model.name}</span>
+                {model.id !== model.name && (
+                  <span className="block break-all text-12 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                    {model.id}
+                  </span>
+                )}
+              </span>
             </li>
           ))}
         </ul>

@@ -1,26 +1,39 @@
 /** This document owns the App transport. The top Renderer only observes UI state. */
-export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string): string {
+export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string, scheme: 'light' | 'dark' = 'light'): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${scheme === 'dark' ? 'dark' : 'light'}}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}</style></head><body><script>
 const frame=document.createElement('iframe');
 frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
 frame.style.cssText='border:0;width:100%;height:100%;display:block';
 let after=0,stopped=false,generation=0,initialized=false,initializationTimer,handshakeDelivery;
+const localNotice=method=>window.parent.postMessage({jsonrpc:'2.0',method},'*');
 const state=(message,fromHost=false)=>{
  // App notifications cannot assert Host-owned context such as display mode.
  if(['ui/notifications/initialized','ui/notifications/size-changed','ui/notifications/sandbox-escape'].includes(message.method)||(fromHost&&message.method==='ui/notifications/host-context-changed'))
   window.parent.postMessage(message,'*');
 };
-const fail=()=>{if(stopped)return;stopped=true;clearTimeout(initializationTimer);window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'},'*');};
+const fail=error=>{
+ if(stopped)return;
+ stopped=true;clearTimeout(initializationTimer);
+ const notice={jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'};
+ if(error?.message==='MCP_PLUGIN_UNAVAILABLE'||error?.message==='MCP_APP_SERVER_CHANGED')notice.params={code:error.message};
+ window.parent.postMessage(notice,'*');
+};
 async function invoke(input){
  const response=await fetch(${encode(bridgeUrl)},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+ if(response.status===410)throw new Error((await response.json()).code);
  if(!response.ok)throw new Error('MCP_APP_VIEW_UNAVAILABLE');
  return response.json();
 }
 window.addEventListener('message',event=>{
- if(stopped||event.source!==frame.contentWindow)return;
  const message=event.data;
+ if(event.source===window.parent){
+  if(message?.type==='cindy:sandbox-color-scheme' && Object.keys(message).length===2 &&
+     (message.scheme==='light'||message.scheme==='dark'))document.documentElement.style.colorScheme=message.scheme;
+  return;
+ }
+ if(stopped||event.source!==frame.contentWindow)return;
  if(!message||message.jsonrpc!=='2.0'||typeof message.method==='string'&&message.method.startsWith('ui/notifications/sandbox-'))return;
  if(message.method==='ui/initialize'&&initialized){
   generation++;initialized=false;
@@ -28,6 +41,7 @@ window.addEventListener('message',event=>{
   clearTimeout(initializationTimer);
   initializationTimer=setTimeout(()=>{if(generation===current&&!initialized)fail();},45000);
  }
+ if(message.method==='ui/initialize')localNotice('ui/notifications/sandbox-handshake-started');
  if(message.method==='ui/notifications/initialized'){initialized=true;clearTimeout(initializationTimer);}
  state(message);
  const current=generation;
@@ -57,10 +71,14 @@ async function poll(){
     try{await invoke({op:'open-link',linkId:event.openLink.id,url:event.openLink.url});success=true;}catch{}
     if(event.generation!==undefined&&event.generation!==generation)continue;
     await invoke({op:'link-result',linkId:event.openLink.id,success});
-   }else{state(event.message,true);frame.contentWindow.postMessage(event.message,'*');}
+  }else{
+   if(['ui/notifications/tool-result','ui/notifications/tool-cancelled'].includes(event.message?.method))
+    localNotice('ui/notifications/sandbox-result-delivered');
+   state(event.message,true);frame.contentWindow.postMessage(event.message,'*');
+  }
   }
   if(!events.length&&!stopped)await new Promise(resolve=>setTimeout(resolve,250));
- }}catch{fail();}
+ }}catch(error){fail(error);}
 }
 frame.src=${encode(resourceUrl)};
 document.body.appendChild(frame);

@@ -35,7 +35,17 @@
   "retryAccess": "再試訪問",
   "recheck": "重察",
   "deviceRemovedTitle": "機已移除",
-  "deviceRemovedHint": "請辭出後重新登門，以重入機錄。",
+  "deviceRemovedHint": "此機已自名籍中移除，點「重新加入」即可復歸。",
+  "rejoin": {
+    "action": "重新加入",
+    "busy": "正重新加入",
+    "doneTitle": "已重新加入",
+    "agentNetUnavailable": "Agent-Net 之服暫不支重新加入，此機姑不用 Agent-Net 連線。",
+    "failedTitle": "未能重新加入",
+    "failed": "請察網路，再試一次。",
+    "unsupported": "服務暫不支重新加入，請辭出後重新登門。",
+    "agentNetUnsupported": "Agent-Net 之服暫不支重新加入。閉「惟用加密連線」後，此機可先不用 Agent-Net 而歸。"
+  },
   "authFailedTitle": "登門已失效",
   "authFailedHint": "登門之狀已過期，請辭出後重新登門。",
   "replacedTitle": "連線已見奪",
@@ -65,6 +75,7 @@
     "noCredentials": "{{agent}} 不可用：電腦端尚未登門。請於電腦端 {{appName}} 之「設定 → 模型供應商」登門後再試。",
     "noEncryption": "{{agent}} 不可用：電腦端系統安全儲存空間不可用，讀不到已存之金鑰。請察系統鑰匙圈（macOS）或系統帳號加密（Windows），然後重啟電腦端 {{appName}}。",
     "proxyNotReady": "{{agent}} 暫不可用：電腦端元件未就緒。請稍候再試；若屢見之，請重啟電腦端 {{appName}}。",
+    "sharedLinkUnavailable": "{{agent}} 暫不可用：電腦端之 Codex 已登門，而 {{appName}} 不能讀其登入（建立不出指向其之連結，Windows 常權之下，通常建不了）。請確認電腦端之 {{appName}} 有權建立連結（Windows 上可以管理員之身執行一次，或開啟開發人員模式）後再試。",
     "default": "{{agent}} 不可用：電腦端登門憑證不可用。請於電腦端 {{appName}} 之「設定 → 模型供應商」重新登門後再試。（{{reason}}）"
   },
   "remoteError": {

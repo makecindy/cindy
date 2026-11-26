@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import {
+  registerControlSessionTool,
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
   registerMoveSessionQueuedMessageTool,
@@ -90,10 +91,70 @@ function setup(opts?: { sessionId?: string | undefined }) {
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
   registerSetSessionRuntimeTool(registry, deps);
+  registerControlSessionTool(registry, deps);
   return { deps, registry };
 }
 
 describe('cindy_helper session control tools', () => {
+  it('exposes shared execution actions only when the Host provides them', async () => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' }))).toMatchObject({ ok: false });
+    deps.controlSession = vi.fn(async () => ({ ok: true as const, result: { executionPaused: true } }));
+    registerControlSessionTool(registry, deps);
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause' })))
+      .toMatchObject({ ok: true, action: 'pause', result: { executionPaused: true } });
+    expect(parse(await registry.call('control_session', { session_id: 'target', action: 'pause', instructions: 'summary' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  });
+  // Unit / queue capability contract: an attested plugin has no task identity.
+  // The old entry rejected every mutation with NO_SESSION_CONTEXT before reaching the queue owner.
+  it.each(['update', 'cancel', 'steer', 'move'] as const)('allows plugin %s through the existing queue tool', async action => {
+    const { deps, registry } = setup({ sessionId: undefined });
+    deps.getSessionContext = () => ({ agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1,
+    } });
+    const result = await registry.call(`${action}_session_queued_message`, {
+      session_id: 'target', queued_message_id: 'queued-1',
+      ...(action === 'update' ? { message: 'edited' } : {}),
+      ...(action === 'move' ? { position: 0 } : {}),
+    });
+    expect(parse(result)).toMatchObject({ ok: true, queued_message_id: 'queued-1' });
+    const mutation = { update: deps.updateQueuedMessage, cancel: deps.cancelQueuedMessage,
+      steer: deps.steerQueuedMessage, move: deps.moveQueuedMessage }[action]!;
+    expect(mutation).toHaveBeenCalledWith(expect.objectContaining({
+      callerSessionId: undefined, targetSessionId: 'target', queuedMessageId: 'queued-1',
+    }));
+  });
+
+  // Unit #9801/uKm_: the production tool must retain partial-application facts
+  // in its existing error payload; prior tests only covered successful runtime results.
+  it('returns an error with the applied runtime and original permission failure', async () => {
+    const { deps, registry } = setup();
+    const data = { runtime: { status: 'applied', generation: 7, fields: ['model'] }, failed: 'permission_mode',
+      original_error: { code: 'WRITE_FAILED', message: 'permission persistence failed' } };
+    deps.setSessionRuntime = vi.fn(async () => ({ ok: false as const, errorCode: 'INTERNAL' as const,
+      message: 'Model applied; permission update failed. Read get_session_runtime before retrying.', data }));
+    const result = await registry.call('set_session_runtime', { session_id: 'target', expected_generation: 0, model: 'next', permission_mode: 'auto' });
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toMatchObject({ ok: false, errorCode: 'INTERNAL', data });
+  });
+
+  // Unit parity #16: the schema previously discarded permission_mode, making a permission-only
+  // request fail. Drive the production dispatcher, not a copied schema.
+  it('accepts a permission profile through the existing runtime update', async () => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('set_session_runtime', { session_id: 'target', expected_generation: 1, permission_mode: 'bypassPermissions' })))
+      .toMatchObject({ ok: true });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({ targetSessionId: 'target', expectedGeneration: 1, patch: { permissionMode: 'bypassPermissions' } });
+  });
+
+  it('allows an attested plugin to steer an explicit target without a caller task', async () => {
+    const { deps, registry } = setup({ sessionId: undefined });
+    deps.getSessionContext = () => ({ agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } });
+    expect(parse(await registry.call('steer_session', { session_id: 'target', message: 'continue' }))).toMatchObject({ ok: true, steered: true });
+    expect(deps.steerSession).toHaveBeenCalledWith({ callerSessionId: undefined, targetSessionId: 'target', message: 'continue' });
+  });
+
   it('forwards a complete harness selection and reports the next-send boundary', async () => {
     const { deps, registry } = setup();
     const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };

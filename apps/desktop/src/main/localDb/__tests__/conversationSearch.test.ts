@@ -83,6 +83,7 @@ function createSearchDb(): Database.Database {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -92,7 +93,7 @@ function createSearchDb(): Database.Database {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -143,7 +144,7 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY, display_name TEXT NOT NULL, status TEXT NOT NULL, hidden_at INTEGER
     );
     CREATE TABLE bot_session_links (
-      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL
+      session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL, route_key TEXT
     );
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, name_customized INTEGER NOT NULL DEFAULT 0,
@@ -384,7 +385,7 @@ describe('conversationSearch personal companion chats', () => {
       ]) {
         insertSearchSession(db, id!, 10, null);
         db.prepare('UPDATE sessions SET source = ?, status = ? WHERE id = ?').run(source, status, id);
-        if (role) db.prepare('INSERT INTO bot_session_links VALUES (?, ?, ?)').run(id, 'bot', role);
+        if (role) db.prepare('INSERT INTO bot_session_links (session_id, bot_id, role) VALUES (?, ?, ?)').run(id, 'bot', role);
       }
       const result = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
       const localIds = ['channel', 'feishu-channel', 'group', 'imported', 'main', 'old', 'old-channel', 'review', 'task'];
@@ -406,6 +407,25 @@ describe('conversationSearch personal companion chats', () => {
       db.exec("UPDATE bot_profiles SET hidden_at = NULL");
       const visibleRemote = await searchConversations({ query: 'needle', filters: { status: 'archived' } }, { remoteVisibleOnly: true });
       expect(visibleRemote.results.map(item => item.session.id).sort()).toEqual(['imported', 'old', 'old-channel']);
+
+      // Old group rows retain their execution directory. Project search and remote
+      // alias matching must use the same Buddy ownership projection as the list.
+      db.exec("UPDATE sessions SET working_dir = '/buddy', project_dir = '/buddy' WHERE id = 'main'");
+      db.exec("UPDATE sessions SET working_dir = '/group-repo', project_dir = '/group-repo', workspace_kind = 'dialogue' WHERE id = 'group'");
+      db.prepare('INSERT INTO project_aliases VALUES (?, ?, ?)').run('local:/group-repo', 'Group Melody', 10);
+      for (const remoteVisibleOnly of [false, true]) {
+        const scoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } }, { remoteVisibleOnly });
+        expect(scoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+        expect(scoped.results.find(item => item.session.id === 'group')?.session).toMatchObject({
+          workingDir: '/group-repo', projectDir: '/group-repo',
+        });
+      }
+      const alias = await searchConversations({ query: 'Melody' }, { remoteVisibleOnly: true });
+      expect(alias.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = 'group:qa:personal-digest' WHERE session_id = 'group'");
+      const privateScoped = await searchConversations({ query: 'needle', filters: { workingDirs: ['/group-repo'] } });
+      expect(privateScoped.results.map(item => item.session.id).sort()).toEqual(['group']);
+      db.exec("UPDATE bot_session_links SET route_key = NULL WHERE session_id = 'group'");
 
       // A content-only hit must retain its client id and read-only owner so the
       // existing result handler can open history at the exact message.

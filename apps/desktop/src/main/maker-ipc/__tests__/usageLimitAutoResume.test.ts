@@ -10,10 +10,59 @@ import {
 } from '../usageLimitAutoResume';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
+import type { ProviderView } from '@cindy/model-providers';
+import { resolveSessionUsageReset, type SessionUsageRoute, type SessionUsageResetDeps } from '../sessionUsageReset';
+import { createAutomaticContinueEligibility } from '../automaticContinueEligibility';
 
 const NOW = 1_000_000;
 const RESET_AT = NOW + 60 * 60 * 1000;
 const LIMIT = { sdkError: 'rate_limit', message: "You've hit your session limit" };
+
+function remoteResetHarness() {
+  const provider = { id: 'remote-claude', auth: { method: 'oauth', native: 'claude' }, connected: true,
+    agents: ['claude-code'], models: { 'claude-code': [{ id: 'claude-opus-5-5' }] }, routing: { 'claude-code': {} },
+  } as ProviderView;
+  const route: SessionUsageRoute = { agentKind: 'claude-code', providerId: null, modelId: 'claude-opus-5-5',
+    agentDeviceId: 'target', remoteHostId: null, sdkSessionId: 'native-1' };
+  let owner = 'owner';
+  const deps = {
+    now: () => NOW, scopeKey: () => owner, localFamilyOf: vi.fn<SessionUsageResetDeps['localFamilyOf']>(() => null),
+    readRemoteProviders: vi.fn(async () => [provider]),
+    readLocalLimit: vi.fn(async () => ({ limited: true, resetAtMs: RESET_AT + 9999 })),
+    readRemoteLimit: vi.fn<SessionUsageResetDeps['readRemoteLimit']>(async () => ({ limited: true, resetAtMs: RESET_AT })),
+    unavailable: vi.fn(),
+  } satisfies SessionUsageResetDeps;
+  return { provider, route, deps, changeOwner: () => { owner = 'new-owner'; } };
+}
+
+// Unit regression: real eligibility + quota timer. Existing tests stubbed eligibility,
+// missing a remote companion's real Schedule run. Ordinary wakes have no quota owner.
+describe('remote companion scheduled quota wait', () => {
+  it.each(['resume', 'pause', 'takeover', 'shared', 'owner', 'local', 'no-run'] as const)('%s', async action => {
+    let paused = false; let owns = action !== 'no-run'; let shared = false; let owner = 'a';
+    const eligibility = createAutomaticContinueEligibility({
+      ownerEpoch: () => owner, isPaused: () => paused,
+      readSession: async () => ({ source: 'bot', status: 'active', agentDeviceId: action === 'local' ? null : 'remote' }),
+      isShared: () => shared, goalOwnsRecovery: async () => false,
+      readCompanion: async () => ({ role: 'canonical', profileStatus: 'active', hiddenAt: null, shadowed: false }),
+      ownsCompanionInput: () => false, ownsScheduledQuotaInput: () => owns,
+    });
+    const h = harness({ isEligible: eligibility.usageLimit });
+    expect(await h.guard.onTurnError('s', LIMIT)).toBe(action !== 'local' && action !== 'no-run');
+    if (action === 'local' || action === 'no-run') { expect(h.timers).toHaveLength(0); return; }
+    if (action === 'pause') paused = true;
+    if (action === 'takeover') owns = false;
+    if (action === 'shared') shared = true;
+    if (action === 'owner') { owner = 'b'; owns = false; }
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
+    expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
+      .toBe(action === 'resume');
+    // A live, owned schedule checks its selected group before delayed waiting.
+    expect(await eligibility.providerGroup('s', { kind: 'failure', token: 1 }))
+      .toBe(action === 'resume');
+  });
+});
 
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
@@ -75,6 +124,97 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // #11088, unit: exercise the production reset resolver and timer together.
+  // Old timer coverage injected a deadline, bypassing remote implicit identity.
+  it('waits and resumes a remote implicit Claude route using its target account', async () => {
+    const { route, provider, deps: resetDeps } = remoteResetHarness();
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(route, signals, resetDeps) });
+    expect(await h.guard.onTurnError('remote-implicit', LIMIT)).toBe(true);
+    expect(resetDeps.readRemoteLimit).toHaveBeenCalledWith({ ...route, providerId: provider.id }, 'claude');
+    expect(resetDeps.readLocalLimit).not.toHaveBeenCalled();
+    expect(h.deps.arm).toHaveBeenCalledWith('remote-implicit', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
+  it.each(['structured', 'zoned-text', 'bare-clock', 'unknown'] as const)(
+    'uses only trustworthy remote reset hints: %s', async (kind) => {
+      const { route, deps } = remoteResetHarness();
+      deps.now = () => Date.parse('2026-11-17T10:00:00Z');
+      const reset = Date.parse('2026-11-17T11:00:00Z');
+      deps.readRemoteLimit.mockResolvedValue(null);
+      const signals = kind === 'structured' ? { ...LIMIT, usageResetAt: reset }
+        : { ...LIMIT, message: kind === 'zoned-text' ? "You've hit your limit · resets 7pm (Asia/Shanghai)"
+          : kind === 'bare-clock' ? "You've hit your limit · resets 7pm" : LIMIT.message };
+      expect(await resolveSessionUsageReset(route, signals, deps)).toBe(
+        kind === 'structured' || kind === 'zoned-text' ? reset : null,
+      );
+      expect(deps.readLocalLimit).not.toHaveBeenCalled();
+      if (kind === 'structured') expect(deps.readRemoteLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['gateway', 'missing', 'unavailable', 'owner-changed', 'same-id-local-subscription'] as const)(
+    'does not acquire local subscription semantics for a remote %s', async (kind) => {
+      const h = remoteResetHarness();
+      h.deps.localFamilyOf.mockReturnValue('claude');
+      if (kind === 'gateway' || kind === 'same-id-local-subscription') h.provider.auth = { method: 'apiKey' };
+      if (kind === 'same-id-local-subscription') h.route.providerId = h.provider.id;
+      if (kind === 'missing') h.deps.readRemoteProviders.mockResolvedValue([]);
+      if (kind === 'unavailable') h.deps.readRemoteProviders.mockRejectedValue(new Error('offline'));
+      if (kind === 'owner-changed') h.deps.readRemoteProviders.mockImplementation(async () => { h.changeOwner(); return [h.provider]; });
+      expect(await resolveSessionUsageReset(h.route, { ...LIMIT, usageResetAt: RESET_AT }, h.deps)).toBeNull();
+      expect(h.deps.readLocalLimit).not.toHaveBeenCalled();
+      expect(h.deps.readRemoteLimit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains explicit remote builtin hints offline and never queries local quota for SSH', async () => {
+    const h = remoteResetHarness();
+    h.route.providerId = 'anthropic';
+    expect(await resolveSessionUsageReset(h.route, { ...LIMIT, usageResetAt: RESET_AT }, h.deps)).toBe(RESET_AT);
+    expect(h.deps.readRemoteProviders).not.toHaveBeenCalled();
+    h.route.remoteHostId = 'ssh';
+    h.deps.localFamilyOf.mockReturnValue('claude');
+    expect(await resolveSessionUsageReset(h.route, LIMIT, h.deps)).toBeNull();
+    expect(h.deps.readLocalLimit).not.toHaveBeenCalled();
+    expect(h.deps.readRemoteLimit).not.toHaveBeenCalled();
+  });
+
+  // Review #11092: auth.native can also describe an API-key route. Exercise the
+  // real resolver + timer; a reset hint must not turn such a route into a subscription.
+  it.each([
+    { method: 'apiKey', access: 'api' },
+    { method: 'apiKey', access: 'subscription' },
+    { method: 'oauth', access: 'api' },
+    { method: 'oauth', access: 'subscription' },
+  ] as const)('checks auth and access before scheduling $method/$access native routes', async ({ method, access }) => {
+    const reset = remoteResetHarness();
+    reset.provider.auth = { method, native: 'codex' };
+    reset.provider.access = access === 'subscription' ? { kind: access, product: 'ChatGPT' } : { kind: access };
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(reset.route, signals, reset.deps) });
+    const subscription = method === 'oauth' && access === 'subscription';
+    expect(await h.guard.onTurnError('remote-auth', { ...LIMIT, usageResetAt: RESET_AT })).toBe(subscription);
+    expect(h.timers).toHaveLength(subscription ? 1 : 0);
+    expect(reset.deps.readRemoteLimit).not.toHaveBeenCalled();
+    expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {
+    const reset = remoteResetHarness();
+    let finish!: (views: ProviderView[]) => void;
+    reset.deps.readRemoteProviders.mockReturnValue(new Promise(r => { finish = r; }));
+    const h = harness({ resolveResetAt: (_id, signals) => resolveSessionUsageReset(reset.route, signals, reset.deps) });
+    const pending = h.guard.onTurnError('remote-implicit', LIMIT);
+    await Promise.resolve();
+    if (action === 'stop') h.guard.noteSessionClosed('remote-implicit');
+    else h.guard.noteUserAction('remote-implicit');
+    finish([reset.provider]);
+    await pending;
+    expect(h.deps.arm).not.toHaveBeenCalled();
+    expect(h.timers).toHaveLength(0);
+  });
+
   // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
   // sdkError; text-only Claude limits never armed automatic continuation.
   it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {
@@ -344,5 +484,46 @@ describe('UsageLimitAutoResume', () => {
       await h.flush();
       expect(h.deps.arm).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Gemini paid input tokens per minute (#11719)', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}, limit: 2000000. Generate content input tokens per minute limit exceeded on Tier 1. Please retry in 56.598211013s.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  const message = JSON.stringify({ error: { message: JSON.stringify({ error }) } });
+
+  // Unit: tasks sharing Google's retry boundary must not all spend their only retry together.
+  it('staggers minute-limit waits and preserves future deadlines across restart', async () => {
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.5).mockReturnValue(0.25);
+    const h = harness({ random });
+    await Promise.all(['first', 'second'].map(id => h.guard.onTurnError(id, { message })));
+    expect(h.timers.map(timer => timer.delayMs)).toEqual([56_599, 71_599]);
+    expect(h.deps.arm).toHaveBeenCalledWith('second', 2, NOW + 71_599);
+    h.guard.suspend();
+    expect(h.guard.restore('second', 3, NOW + 71_599, 0, false, true)).toBe(true);
+    expect(h.guard.restore('first', 4, NOW - 1, 0, false, true)).toBe(true);
+    expect(h.timers.slice(-2).map(timer => timer.delayMs)).toEqual([71_599, 7_500]);
+  });
+
+  it('uses the later Google hint, bypasses subscription checks and retries once', async () => {
+    const h = harness();
+    expect(await h.guard.onTurnError('api', { message })).toBe(true);
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.timers[0]?.delayMs).toBe(56_599);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledWith('api', 1, expect.objectContaining({ attempt: 1, maxAttempts: 1 }));
+    expect(await h.guard.onTurnError('api', { message })).toBe(false);
+    expect(h.timers).toHaveLength(1);
+  });
+
+  it('invalidates a due callback when the user takes over', async () => {
+    const h = harness();
+    await h.guard.onTurnError('api', { message });
+    h.guard.noteUserAction('api');
+    h.timers[0]!.fn();
+    await h.flush();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
   });
 });

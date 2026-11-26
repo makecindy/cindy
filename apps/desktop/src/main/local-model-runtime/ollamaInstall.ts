@@ -2,9 +2,18 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 
-import { download as downloadFile, cleanup as cleanupDownload } from '../downloader/index.js';
+import {
+  download as downloadFile,
+  cleanup as cleanupDownload,
+  createDownloadProgressReporter,
+  type DownloadOptions,
+} from '../downloader/index.js';
 
-import type { LocalRuntimeInstallProgress } from '../../shared/localModelRuntime.js';
+import {
+  downloadPhaseOfInstall,
+  type LocalRuntimeInstallPhase,
+  type LocalRuntimeInstallProgress,
+} from '../../shared/localModelRuntime.js';
 import {
   isAllowedOllamaDownloadUrl,
   OLLAMA_GITHUB_API_LATEST,
@@ -82,7 +91,7 @@ export async function downloadOfficialAsset(
   opts: {
     signal?: AbortSignal;
     onProgress?: (completed: number, total: number, speedBps?: number) => void;
-  } = {},
+  } & Pick<DownloadOptions, 'onRetry' | 'onVerifying'> = {},
 ): Promise<void> {
   await downloadFile({
     url: asset.url,
@@ -94,6 +103,8 @@ export async function downloadOfficialAsset(
     signal: opts.signal,
     onProgress: ({ loaded, total, speedBps }) =>
       opts.onProgress?.(loaded, total ?? asset.sizeBytes, speedBps),
+    onRetry: opts.onRetry,
+    onVerifying: opts.onVerifying,
   });
 }
 
@@ -161,40 +172,55 @@ export async function installOfficialSidecar(
   const platform = opts.platform ?? process.platform;
   const arch = opts.arch ?? process.arch;
   const emit = (progress: LocalRuntimeInstallProgress) => opts.onProgress?.(progress);
-  emit({ phase: 'resolving', done: false });
+  // Byte-level updates (retries, speed, time left) go out as the standard `download` shape.
+  let installPhase: LocalRuntimeInstallPhase = 'resolving';
+  let version: string | undefined = undefined; // set once the release is resolved
+  const reporter = createDownloadProgressReporter({
+    initialPhase: downloadPhaseOfInstall(installPhase),
+    emit: (download) => {
+      if (opts.signal?.aborted) return;
+      if (download.phase === 'downloading' || download.phase === 'retrying') {
+        installPhase = 'downloading';
+      } else if (download.phase === 'verifying') {
+        installPhase = 'verifying';
+      }
+      emit({
+        phase: installPhase,
+        ...(version ? { version } : {}),
+        ...(download.total !== null ? { total: download.total, completed: download.loaded } : {}),
+        ...(download.percent !== null ? { percent: Math.round(download.percent) } : {}),
+        ...(download.speedBps > 0 ? { bytesPerSecond: download.speedBps } : {}),
+        done: false,
+        download,
+      });
+    },
+  });
+  const step = (phase: LocalRuntimeInstallPhase) => {
+    installPhase = phase;
+    reporter.setPhase(downloadPhaseOfInstall(phase));
+  };
+  emit({ phase: 'resolving', done: false, download: reporter.snapshot() });
   const resolve = opts.resolve ?? resolveOfficialSidecarAsset;
   const asset = await resolve(opts.fetchImpl, platform, arch, opts.signal);
   if (opts.signal?.aborted) throw new Error('aborted');
+  version = asset.version;
   const root = ollamaRuntimeRoot(userDataDir);
   const archivePath = path.join(root, 'downloads', asset.assetName);
   const destDir = path.join(root, `v${asset.version}`);
   try {
-    emit({
-      phase: 'downloading',
-      version: asset.version,
-      total: asset.sizeBytes,
-      completed: 0,
-      percent: 0,
-      done: false,
-    });
+    installPhase = 'downloading';
+    reporter.reset('downloading', asset.sizeBytes);
     const download = opts.download ?? downloadOfficialAsset;
     await download(asset, archivePath, {
       signal: opts.signal,
-      onProgress: (completed, total, bytesPerSecond) => {
-        emit({
-          phase: 'downloading',
-          version: asset.version,
-          completed,
-          total,
-          percent: total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0,
-          ...(bytesPerSecond && bytesPerSecond > 0 ? { bytesPerSecond } : {}),
-          done: false,
-        });
-      },
+      onProgress: (completed, total, bytesPerSecond) =>
+        reporter.setBytes(completed, total, bytesPerSecond ?? 0),
+      onRetry: reporter.callbacks.onRetry,
+      onVerifying: reporter.callbacks.onVerifying,
     });
-    emit({ phase: 'verifying', version: asset.version, percent: 100, done: false });
+    step('verifying');
     if (opts.signal?.aborted) throw new Error('aborted');
-    emit({ phase: 'extracting', version: asset.version, done: false });
+    step('extracting');
     const extract = opts.extract ?? extractOfficialArchive;
     const binary = await extract(archivePath, destDir, platform, opts.signal);
     if (opts.signal?.aborted) throw new Error('aborted');

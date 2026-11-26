@@ -3,6 +3,7 @@
 //! owned window's light/dark mode, which tints its Windows 11 system backdrop.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+mod deep_link;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -31,6 +32,59 @@ use windows::{
 
 fn failure(error: impl std::fmt::Display) -> napi::Error {
     napi::Error::from_reason(format!("Windows taskbar: {error}"))
+}
+
+/// Read a browser's default manifest path in the current user's registry view.
+/// Validate the complete UTF-16 value before expanding environment variables.
+#[napi]
+pub fn read_browser_manifest(key: String) -> napi::Result<Option<String>> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS, ERROR_UNSUPPORTED_TYPE};
+    use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+    let unsafe_path = || napi::Error::from_reason("NATIVE_PATH_UNSAFE");
+    let key = key.strip_prefix("HKCU\\").filter(|key| !key.contains('\0'))
+        .ok_or_else(unsafe_path)?;
+    let wide: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+    // Longest Windows path, including its terminator. Larger or malformed
+    // values must never be mistaken for an unclaimed registration.
+    let mut buffer = vec![0u16; 32768];
+    let mut bytes = (buffer.len() * 2) as u32;
+    let mut kind = 0;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, wide.as_ptr(), std::ptr::null(),
+            RRF_NOEXPAND | RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &mut kind, buffer.as_mut_ptr().cast(), &mut bytes)
+    };
+    match status {
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+        ERROR_MORE_DATA | ERROR_UNSUPPORTED_TYPE => Err(unsafe_path()),
+        ERROR_SUCCESS => {
+            let raw = buffer.get(..(bytes / 2) as usize)
+                .and_then(|data| data.strip_suffix(&[0]))
+                .filter(|data| bytes % 2 == 0 && !data.is_empty() && !data.contains(&0))
+                .ok_or_else(unsafe_path)?;
+            let mut expanded;
+            let contents = if kind == REG_EXPAND_SZ {
+                expanded = vec![0u16; 32768];
+                let length = unsafe {
+                    ExpandEnvironmentStringsW(buffer.as_ptr(), expanded.as_mut_ptr(), expanded.len() as u32)
+                };
+                if length == 0 {
+                    return Err(napi::Error::from_reason("Registry path expansion failed"));
+                }
+                if length == 1 || length as usize > expanded.len() {
+                    return Err(unsafe_path());
+                }
+                &expanded[..length as usize - 1]
+            } else {
+                raw
+            };
+            String::from_utf16(contents).map(Some)
+                .map_err(|_| unsafe_path())
+        }
+        _ => Err(napi::Error::from_reason(format!("Registry read failed ({status})"))),
+    }
 }
 
 // Only balance successful CoInitializeEx calls; Electron normally already owns
@@ -163,6 +217,22 @@ pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bo
         }
         if x == bounds.left && y == bounds.top { return true; }
         SetWindowPos(window, HWND::default(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).is_ok()
+    }
+}
+
+// A privacy mask must disappear from capture, including the area it covers.
+// Electron's content-protected state also accepts WDA_MONITOR (a black area).
+#[napi]
+pub fn exclude_privacy_mask_from_capture(handle: Buffer) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut affinity = 0;
+    unsafe {
+        SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE).is_ok()
+            && GetWindowDisplayAffinity(window, &mut affinity).is_ok()
+            && affinity == WDA_EXCLUDEFROMCAPTURE.0
     }
 }
 

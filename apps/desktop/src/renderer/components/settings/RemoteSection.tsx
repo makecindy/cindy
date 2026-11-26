@@ -183,7 +183,14 @@ function HostRow({
         </span>
         {!snap.config.managedByCindy && (
           <span className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-            {t('settings.remote.readOnlyFromSshConfig')}
+            {t(snap.config.managedAliasConflict
+              ? 'settings.remote.managedAliasConflict'
+              : 'settings.remote.readOnlyFromSshConfig')}
+          </span>
+        )}
+        {!snap.config.managedByCindy && snap.config.authMethod === 'agent' && (
+          <span className="text-11 leading-relaxed" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.importedAgentHint')}
           </span>
         )}
       </div>
@@ -418,6 +425,7 @@ interface HostFormProps {
   initial?: AddFormState;
   busy: boolean;
   connectionFieldsReadOnly?: boolean;
+  managedAliasConflict?: boolean;
   onSubmit: (form: AddFormState) => void;
   onCancel: () => void;
 }
@@ -427,6 +435,7 @@ function HostForm({
   initial,
   busy,
   connectionFieldsReadOnly = false,
+  managedAliasConflict = false,
   onSubmit,
   onCancel,
 }: HostFormProps) {
@@ -531,7 +540,9 @@ function HostForm({
 
       {connectionFieldsReadOnly && (
         <p className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-          {t('settings.remote.edit.connectionFieldsReadOnly')}
+          {t(managedAliasConflict
+            ? 'settings.remote.managedAliasConflict'
+            : 'settings.remote.edit.connectionFieldsReadOnly')}
         </p>
       )}
 
@@ -573,7 +584,7 @@ function HostForm({
                 </span>
                 <div className="flex items-center gap-2">
                   <code
-                    className="flex-1 text-12 truncate rounded-md px-2 py-1.5"
+                    className="flex-1 text-12 truncate rounded-lg px-2 py-1.5"
                     style={{
                       backgroundColor: 'var(--surface-chip, #f5f5f5)',
                       color: 'var(--settings-section-title)',
@@ -658,7 +669,7 @@ function HostForm({
               {hasIdentityFile ? (
                 <div className="flex items-center gap-2">
                   <code
-                    className="flex-1 text-12 truncate rounded-md px-2 py-1.5"
+                    className="flex-1 text-12 truncate rounded-lg px-2 py-1.5"
                     style={{
                       backgroundColor: 'var(--surface-chip, #f5f5f5)',
                       color: 'var(--settings-section-title)',
@@ -1109,9 +1120,10 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         ipc?.code === 'SSH_HOST_KEY_MISMATCH'
         || ipc?.code === 'SSH_AUTH_FAILED'
         || ipc?.code === 'SSH_CONNECT_FAILED'
+        || ipc?.code === 'SSH_AGENT_UNAVAILABLE'
       ) {
         // Preserve the actual connection failure, including localized host-key
-        // diagnostics and the backing store path, rather than a generic toast.
+        // diagnostics, configured IdentityAgent failures and backing store paths.
         toast.error(ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),
@@ -1294,7 +1306,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
   }, [refresh, reloadCommittedMutationOnce, t]);
 
   return (
-    <div className="flex flex-col gap-[14px]">
+    <div className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between">
         {showTitle ? (
           <h2
@@ -1435,6 +1447,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                       : 'http://127.0.0.1:7890',
                   }}
                   connectionFieldsReadOnly={!snap.config.managedByCindy}
+                  managedAliasConflict={snap.config.managedAliasConflict}
                   onSubmit={handleEdit}
                   onCancel={() => setEditingId(null)}
                 />

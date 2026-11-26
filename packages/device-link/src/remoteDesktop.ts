@@ -11,6 +11,8 @@ import {
 /** Additive, same-account business channel. Never broadcast screen data or input. */
 export const REMOTE_DESKTOP_CHANNEL = "device-link:remote-desktop:v1";
 export const REMOTE_DESKTOP_LEASE_MS = 12_000;
+/** Leave time for the next 3s renewal tick inside the unchanged lease. */
+export const REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS = 5_000;
 /** Human inactivity, independent of transport heartbeats. Zero disables it. */
 export const REMOTE_DESKTOP_IDLE_MINUTES = [0, 1, 5, 10, 15, 30] as const;
 export const REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES = 5;
@@ -228,6 +230,14 @@ export interface RemoteDesktopCapabilities {
   lockOnExit?: boolean;
   /** Host enforces human inactivity and locks before ending the lease. */
   idleLock?: boolean;
+  /**
+   * The host applies its own away time to idle viewers and ignores `idleTimeoutMinutes`
+   * (docs/product-rules/privacy-screen.md). Viewers hide their idle setting; for hosts
+   * without it they keep sending the old default.
+   */
+  hostIdle?: boolean;
+  /** How a protected end leaves the host: its privacy screen, or a real lock. Older hosts: lock. */
+  exitProtection?: 'privacy-screen' | 'lock';
   videoSettings?: boolean;
   trickleIce?: boolean;
   systemAudio?: boolean;
@@ -243,6 +253,8 @@ export interface RemoteDesktopCapabilities {
    * send them otherwise: older hosts end the session on unknown channel data.
    */
   channelRequests?: boolean;
+  /** Accepts heartbeats over input-v1 and retains live media through signaling loss. */
+  signalingContinuity?: boolean;
   /** Display changes requested with `keepVideo` may keep the live video stream. */
   liveDisplaySwitch?: boolean;
   /**
@@ -255,6 +267,8 @@ export interface RemoteDesktopCapabilities {
   cursorOverlay?: boolean;
   clipboardText?: boolean;
   clipboardContent?: boolean;
+  /** Can identify the text field at a delivered click on the controlled display. */
+  editableClick?: boolean;
   clipboardSync?: boolean;
   /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
   clipboardInline?: boolean;
@@ -431,6 +445,7 @@ export type RemoteDesktopRequest =
   | { op: "viewerHidden"; lease: string; hidden: boolean }
   | { op: "clipboardSync"; lease: string; enabled: boolean }
   | { op: "clipboardVersion"; lease: string }
+  | { op: "editableClick"; lease: string; sequence: number }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
@@ -625,6 +640,8 @@ export function parseRemoteDesktopRequest(
     typeof v.enabled === "boolean"
   )
     return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "editableClick" && Number.isSafeInteger(v.sequence) && (v.sequence as number) >= 0)
+    return { op: v.op, lease, sequence: v.sequence as number };
   if (v.op === "clipboardVersion") return { op: v.op, lease };
   if (v.op === "viewerHidden" && typeof v.hidden === "boolean")
     return { op: v.op, lease, hidden: v.hidden };
@@ -805,6 +822,7 @@ export function parseRemoteDesktopRequest(
  */
 export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "control",
+  "heartbeat",
   "presentation",
   "hostMute",
   "privacyScreen",
@@ -812,12 +830,21 @@ export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
   "displayModes",
   "clipboardSync",
   "clipboardVersion",
+  "editableClick",
   "screenShape",
 ]);
 export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
 /** Fits one SCTP message on every shipped receiver. */
 export const REMOTE_DESKTOP_CHANNEL_MAX_BYTES = 32_768;
 export const REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS = 8_000;
+
+export function remoteDesktopChannelTimeoutMs(
+  request: RemoteDesktopRequest,
+): number {
+  return request.op === "heartbeat"
+    ? REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS
+    : REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS;
+}
 
 export function isRemoteDesktopChannelRequest(
   request: RemoteDesktopRequest,

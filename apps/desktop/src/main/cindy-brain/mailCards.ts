@@ -7,13 +7,19 @@ const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').rep
 /** Only the host creates this marker. Plugin HTML cannot retain data-cindy-mail. */
 export function renderMailCard(mail: MailCardData): string {
   const active = !mail.supersededBy && ['draft', 'syncing', 'error'].includes(mail.state);
+  // The editable card offers one action in place of an empty disclosure.
+  // Keep the original field in the stored snapshot for read-only states.
+  const form = active && mail.addQuoteLabel
+    ? mail.fields.map(f => f.name === 'quote' ? { ...f, kind: 'hidden' as const } : f)
+    : mail.fields;
   const button = (action: string, label: string, submit = false) =>
     `<button data-ghost-action="mail:${action}:${escape(mail.key)}"${submit ? ' data-ghost-submit="true"' : ''} style="position:relative;overflow:hidden;min-height:36px;padding:7px 16px;border:1px solid var(--border-default);border-radius:999px;font:inherit;cursor:pointer;background:${action === 'cancel' || action === 'delete' ? 'transparent' : action === 'now' ? 'var(--surface)' : 'var(--text-primary)'};color:${action === 'cancel' || action === 'delete' || action === 'now' ? 'var(--text-primary)' : 'var(--surface)'}">` +
     (action === 'now' ? `<span data-mail-progress="true" aria-hidden="true" style="position:absolute;inset:0;pointer-events:none"><span style="display:block;height:100%;background:var(--text-primary);opacity:0.14;transform-origin:left;transform:scaleX(${1 - mailSendRemainingFraction(mail)})"></span></span>` : '') +
     `<span style="position:relative">${escape(label)}</span></button>`;
   return `<div data-cindy-mail="${escape(JSON.stringify(mail))}"></div>` +
-    `<div data-ghost-form="${escape(JSON.stringify(mail.fields))}"${active ? ` data-ghost-change="mail:change:${escape(mail.key)}"` : ''}>` +
-    mail.fields.filter(f => (f.kind !== 'hidden' || f.name === 'body') && f.kind !== 'mail-html' && f.kind !== 'mail-attachments').map(f => `<p style="white-space:pre-wrap"><b>${escape(f.label)}</b><br>${escape(f.value)}</p>`).join('') + '</div>' +
+    `<div data-ghost-form="${escape(JSON.stringify(form))}"${active ? ` data-ghost-change="mail:change:${escape(mail.key)}"` : ''}>` +
+    form.filter(f => (f.kind !== 'hidden' || f.name === 'body') && f.kind !== 'mail-html' && f.kind !== 'mail-attachments').map(f => `<p style="white-space:pre-wrap"><b>${escape(f.label)}</b><br>${escape(f.value)}</p>`).join('') + '</div>' +
+    (active && mail.addQuoteLabel ? `<div style="padding:0 12px"><button data-ghost-action="mail:quote:${escape(mail.key)}" data-ghost-submit="true" style="min-height:32px;padding:4px 0;font-size:12px;background:transparent;border:0;color:var(--text-secondary);font-family:inherit;cursor:pointer">${escape(mail.addQuoteLabel)}</button></div>` : '') +
     '<div style="padding:10px 12px;font-size:12px;line-height:1.5;color:var(--text-secondary);overflow-wrap:anywhere">' +
     `<div>${escape(mail.fromLabel)}: ${escape(mail.from)}</div>` +
     (mail.attachments.length && !mail.fields.some(f => f.kind === 'mail-attachments') ? `<div style="margin-top:4px">${mail.attachments.map(escape).join(' · ')}</div>` : '') +

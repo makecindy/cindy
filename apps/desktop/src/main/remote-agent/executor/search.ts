@@ -83,7 +83,7 @@ export async function piGrep(
   const skipped = new Map<string, boolean>();
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal });
+    const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal, windowsHide: true });
     const reader = readline.createInterface({ input: child.stdout });
     let stopped = false;
     reader.on('line', (raw) => {

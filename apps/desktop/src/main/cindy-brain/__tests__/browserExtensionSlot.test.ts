@@ -186,9 +186,9 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
       extGhost({ id: 'plain', declare: false }),
       extGhost({ id: 'off', enabled: false }),
     ];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].options).toMatchObject({
       ghostId: 'my-browser',
@@ -205,19 +205,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     });
     // 幂等:同一份花名册不重建。
     slot.reconcile(ghosts);
-    await settle();
     expect(bridges).toHaveLength(1);
     // 换版:关旧开新。
-    const upgraded = [extGhost({ version: '1.1.0' })];
-    slot.reconcile(upgraded);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0' });
+    slot.reconcile(ghosts);
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges[0].closed).toBe(true);
     expect(natives[0].close).toHaveBeenCalledOnce();
     expect(bridges).toHaveLength(2);
     expect(bridges[1].options.installedVersion).toBe('1.1.0');
     // 停用:关掉,不再提供页面控制。
-    slot.reconcile([extGhost({ version: '1.1.0', enabled: false })]);
-    await settle();
+    ghosts[0] = extGhost({ version: '1.1.0', enabled: false });
+    slot.reconcile(ghosts);
+    await vi.waitFor(() => expect(natives[1].close).toHaveBeenCalledOnce());
     expect(bridges[1].closed).toBe(true);
     expect(slot.getPageControl()).toBeNull();
   });
@@ -252,17 +252,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(order.indexOf('close0')).toBeLessThan(order.indexOf('install1'));
   });
 
-  // Native hosts run outside the sandbox and share one registration per account, so a plugin that
-  // is not the official Cindy Chrome must not get one, even under the official name.
+  // Native hosts require the declared Node capability, not an official plugin identity.
   it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    // PR #11114 Linux CI: restoring pairings from disk can outlast a fixed 25 ms wait.
+    // The public status request awaits startup, including native host registration.
+    expect(await slot.handleRequest('_root__impostor', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
     expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
     expect(natives).toHaveLength(1);
+    expect(natives[0].install).toHaveBeenCalledExactlyOnceWith(18810, [CHROME_ID]);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {
@@ -276,7 +278,7 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(slot.getPageControl()).toBeNull();
   });
 
-  // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
+  // The shared provider seam accepts any approved pageControl implementation.
   it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);
@@ -314,7 +316,9 @@ describe('browserExtensionSlot · 更新来源收敛', () => {
     ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'public-market', pluginId: 'market-browser' } };
     complete();
     h.slot.reconcile(ghosts);
-    await h.settle();
+    // PR #10357 Windows CI: restoring the saved pairings can outlast a 25 ms sleep.
+    // The public status request waits for startup, including the real cache read.
+    expect(await h.slot.handleRequest('_root__my-browser', { kind: 'status' })).toMatchObject({ ok: true });
     expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
     expect(h.bridges.at(-1)?.calls).toContainEqual(['setTrustedClients', [clients]]);
     await h.slot.dispose();
@@ -463,8 +467,195 @@ describe('browserExtensionSlot · 管子上行', () => {
     ).toBe(false);
   });
 
-  // Review 2026-10-30 (Codex P2): a native install that failed for a passing reason is retried on status.
-  it('原生连接程序安装失败后,status 请求按 30 秒节流重试', async () => {
+  // Regression 2026-11-16: EPERM during initial registration left Chrome disconnected until
+  // the user refreshed plugin settings. Existing tests only exercise status-triggered recovery.
+  // Unit: reconcile + failed native install, then time alone must restore registration;
+  // revocation before the retry must leave the registration untouched.
+  // Standalone file: 2.40 s on macOS (2026-11-16).
+  it.each(['recover', 'disable', 'owner-change', 'update', 'dispose'] as const)(
+    'failed native registration recovers without opening settings: %s', async scenario => {
+      let owner = 'owner-a';
+      let state: 'ready' | 'unavailable' = 'unavailable';
+      const install = vi.fn(async () => {
+        if (install.mock.calls.length > 1) state = 'ready';
+        return state === 'ready' ? { ok: true as const } : {
+          ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'EPERM',
+        };
+      });
+      const { slot, ghosts } = await makeSlot({
+        ownerScopeKey: () => owner,
+        createNativeBinding: () => ({
+          token: 'f'.repeat(64), install, close: vi.fn(async () => undefined), status: () => state,
+        }),
+      });
+      vi.useFakeTimers();
+      try {
+        slot.reconcile(ghosts);
+        await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+        if (scenario === 'disable') slot.reconcile([]);
+        if (scenario === 'owner-change') owner = 'owner-b';
+        if (scenario === 'update') await slot.prepareUpdate('_root__my-browser');
+        if (scenario === 'dispose') await slot.dispose();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(install).toHaveBeenCalledTimes(scenario === 'recover' ? 2 : 1);
+        if (scenario === 'recover') {
+          expect(state).toBe('ready');
+          await vi.advanceTimersByTimeAsync(120_000);
+          expect(install).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        await slot.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('automatic native retries survive repeated failures and share in-flight work with status', async () => {
+    let state: 'ready' | 'unavailable' = 'unavailable';
+    let finish = () => undefined as void;
+    const install = vi.fn(async () => {
+      if (install.mock.calls.length >= 3) {
+        await new Promise<void>(resolve => { finish = resolve; });
+        state = 'ready';
+        return { ok: true as const };
+      }
+      return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'EPERM' };
+    });
+    const { slot, ghosts } = await makeSlot({
+      createNativeBinding: () => ({
+        token: 'f'.repeat(64), install, close: vi.fn(async () => undefined), status: () => state,
+      }),
+    });
+    vi.useFakeTimers();
+    try {
+      slot.reconcile(ghosts);
+      await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(install).toHaveBeenCalledTimes(3);
+      const status = slot.handleRequest('_root__my-browser', { kind: 'status' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(install).toHaveBeenCalledTimes(3);
+      finish();
+      expect(await status).toMatchObject({ ok: true, nativeBinding: 'ready' });
+    } finally {
+      finish();
+      await slot.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression 2026-11-17: fixed retries waste writes for permanent failures; status polling
+  // must not bypass backoff. Unit entry: reconcile/handleRequest/activate, injected native install.
+  it.each([
+    { reason: 'NATIVE_HOST_IN_USE', recovery: 'activation' },
+    { reason: 'NATIVE_PATH_UNSAFE', recovery: 're-enable' },
+    { reason: 'NATIVE_BINARY_MISSING', recovery: 'update' },
+  ])(
+    'stops automatic/status retries for $reason and resumes on $recovery', async ({ reason, recovery }) => {
+      let state: 'ready' | 'unavailable' = 'unavailable';
+      const install = vi.fn(async () => state === 'ready' ? { ok: true as const } : {
+        ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason,
+      });
+      const { slot, ghosts } = await makeSlot({ createNativeBinding: () => ({
+        token: 'f'.repeat(64), install, close: vi.fn(async () => undefined), status: () => state,
+      }) });
+      vi.useFakeTimers();
+      try {
+        slot.reconcile(ghosts);
+        await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(3_600_000);
+        // #12633: plugins need the registration failure code to explain a blocked connection.
+        expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+          .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: reason });
+        expect(install).toHaveBeenCalledOnce();
+        state = 'ready';
+        if (recovery === 'activation') {
+          expect(await slot.activate('_root__my-browser')).toBe(true);
+        } else {
+          if (recovery === 're-enable') slot.reconcile([]);
+          else ghosts[0] = extGhost({ version: '2.0.0' });
+          slot.reconcile(ghosts);
+          await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
+        }
+        const restored = await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        expect(restored).toMatchObject({ ok: true, nativeBinding: 'ready' });
+        expect(restored).not.toHaveProperty('nativeBindingReason');
+        expect(install).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(install).toHaveBeenCalledTimes(2);
+      } finally { await slot.dispose(); vi.useRealTimers(); }
+    },
+  );
+
+  // PR #10929: retry results could stop recovery while logs still showed only the initial error.
+  // Unit: reconcile + automatic retries + activate expose current failure reasons via the logger.
+  // Existing backoff tests cover scheduling, not diagnostic changes or duplicate log suppression.
+  it('logs changed native failure reasons and logs the same reason again after recovery', async () => {
+    let reason: string | undefined = 'EPERM';
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const install = vi.fn(async () => reason ? {
+      ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason,
+    } : { ok: true as const });
+    const { slot, ghosts } = await makeSlot({ log, createNativeBinding: () => ({
+      token: 'f'.repeat(64), install, close: vi.fn(async () => undefined),
+      status: () => reason ? 'unavailable' : 'ready',
+    }) });
+    vi.useFakeTimers();
+    try {
+      slot.reconcile(ghosts);
+      await vi.waitFor(() => expect(log.warn).toHaveBeenCalledOnce());
+      await vi.advanceTimersToNextTimerAsync();
+      expect(install).toHaveBeenCalledTimes(2);
+      expect(log.warn).toHaveBeenCalledOnce();
+      reason = 'EBUSY';
+      await vi.advanceTimersToNextTimerAsync();
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason: 'EBUSY', retryBlocked: false,
+      });
+      reason = 'NATIVE_BINARY_MISSING';
+      await vi.advanceTimersToNextTimerAsync();
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason, retryBlocked: true,
+      });
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(install).toHaveBeenCalledTimes(4);
+      expect(log.warn).toHaveBeenCalledTimes(3);
+      reason = undefined;
+      expect(await slot.activate('_root__my-browser')).toBe(true);
+      reason = 'NATIVE_BINARY_MISSING';
+      expect(await slot.activate('_root__my-browser')).toBe(false);
+      expect(log.warn).toHaveBeenCalledTimes(4);
+      expect(log.warn).toHaveBeenLastCalledWith('browser extension native binding unavailable', {
+        instanceId: '_root__my-browser', reason, retryBlocked: true,
+      });
+    } finally { await slot.dispose(); vi.useRealTimers(); }
+  });
+
+  it('backs off transient failures up to five minutes without status polling accelerating them', async () => {
+    const attempts: number[] = [];
+    const install = vi.fn(async () => {
+      attempts.push(Date.now());
+      return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'EPERM' };
+    });
+    const { slot, ghosts } = await makeSlot({ createNativeBinding: () => ({
+      token: 'f'.repeat(64), install, close: vi.fn(async () => undefined), status: () => 'unavailable',
+    }) });
+    vi.useFakeTimers();
+    try {
+      slot.reconcile(ghosts);
+      await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+      for (const delay of [5_000, 15_000, 30_000, 60_000, 120_000, 300_000, 300_000]) {
+        const count = install.mock.calls.length;
+        await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        expect(install).toHaveBeenCalledTimes(count);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(install).toHaveBeenCalledTimes(count + 1);
+        expect(attempts[count] - attempts[count - 1]).toBe(delay);
+      }
+    } finally { await slot.dispose(); vi.useRealTimers(); }
+  });
+
+  it('status 请求遵守注册退避,成功后不再安装', async () => {
     let now = 1_000_000;
     let installs = 0;
     let state: 'ready' | 'unavailable' = 'unavailable';
@@ -489,6 +680,10 @@ describe('browserExtensionSlot · 管子上行', () => {
     await vi.waitFor(() => expect(installs).toBe(1));
     // A manually paired bridge remains usable while optional native registration is unavailable.
     expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+      .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: 'EBUSY' });
+    expect(installs).toBe(1);
+    now += 5_000;
     await slot.handleRequest('_root__my-browser', { kind: 'status' });
     expect(installs).toBe(2);
     expect(bridges).toHaveLength(1);
@@ -499,9 +694,11 @@ describe('browserExtensionSlot · 管子上行', () => {
   // Review 2026-10-30 (Codex P1): stopping waits for a native install retry, so it cannot write after the close.
   it('原生安装重试进行中停用插件时,等重试结束后才撤销注册', async () => {
     const order: string[] = [];
+    let now = 1_000_000;
     let finishRetry: () => void = () => undefined;
     let installs = 0;
     const { slot, settle, ghosts } = await makeSlot({
+      now: () => now,
       createNativeBinding: () => ({
         token: 'f'.repeat(64),
         install: vi.fn(async () => {
@@ -524,6 +721,7 @@ describe('browserExtensionSlot · 管子上行', () => {
     });
     slot.reconcile(ghosts);
     await settle();
+    now += 5_000;
     const pending = slot.handleRequest('_root__my-browser', { kind: 'status' });
     await vi.waitFor(() => expect(installs).toBe(2));
     slot.reconcile([]);

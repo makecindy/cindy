@@ -1,3 +1,5 @@
+import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
  * ComputerUseSection — Settings →「电脑使用 / Computer Use」面板。
@@ -16,7 +18,7 @@ import { computerUseSettings } from './ComputerUseSection.settings-search';
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
@@ -39,7 +41,9 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
-import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { withDefaultOverride, type DefaultOverrideReset } from './DefaultOverrideControls';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -48,9 +52,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError } from '@/utils/ipcError';
-import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { useAutomationSettingsRead } from './useAutomationSettingsRead';
 import { ComputerPermissionRow } from './ComputerPermissionRow';
@@ -60,7 +61,6 @@ import {
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
-import { ghostInstallApprovalToken } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
   browserOpenForLoginErrorCode,
@@ -82,6 +82,7 @@ import {
   confirmEnableRealProfile,
   guideFullDiskAccessAfterReadDenied,
 } from './realProfilePermissionGuide';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const log = createLogger('ComputerUseSection');
 
@@ -199,6 +200,7 @@ function ConfigurationReadStatus({
 
 export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const { t, i18n } = useTranslation();
+  const modernPermissions = usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease);
   const browserRead = useAutomationSettingsRead(
     'browser enable state',
     useCallback(
@@ -233,7 +235,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const [driverUpdate, setDriverUpdate] = useState<ComputerDriverUpdateCheck | null>(null);
   const [driverCheckPending, setDriverCheckPending] = useState(false);
   const [driverCheckFailed, setDriverCheckFailed] = useState(false);
-  // GitHub 未鉴权限额打满时 main 会标注原因:这种失败等配额重置就好,和真的要用户
+  // 上游/CDN 限流时 main 会标注原因:这种失败等一会儿重试就好,和真的要用户
   // 排查的网络故障分开说。旧版本 main 不下发 checkError,继续按普通失败处理。
   const driverCheckRateLimited =
     driverCheckFailed && driverUpdate?.checkError?.kind === 'rate_limited';
@@ -258,6 +260,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const computerPermissionPollTimerRef = useRef<number | null>(null);
   // Native grant remains cancellable while the user is moving between Settings panes.
   const computerPermissionGrantInProgressRef = useRef(false);
+  const nextScreenRecordingPane = useRef<'requesting' | 'waitingForControl' | null>(null);
   const computerEnableIntentRef = useRef(false);
   // 授权流程代际号:引导弹窗「取消」时 +1。grant/preflight 的 await 期间用户可能
   // 已取消,continuation 必须校验代际,否则被取消的流程仍会打开系统设置抢焦点。
@@ -265,6 +268,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const computerPermissionCompletionInFlightRef = useRef(false);
   const resetComputerPermissionFlow = useCallback(() => {
     computerPermissionGrantInProgressRef.current = false;
+    nextScreenRecordingPane.current = null;
   }, []);
 
   const cancelNativeComputerPermissionGrant = useCallback(() => {
@@ -397,13 +401,14 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   );
 
   const requestComputerPermissionGrant = useCallback(
-    async (reason: string, openedPaneUrl?: string) => {
+    async (reason: 'toggle' | 'badge', openedPaneUrl?: string) => {
+      const flow = computerPermissionFlowSeqRef.current;
+      nextScreenRecordingPane.current = reason === 'toggle' ? 'requesting' : null;
       computerPermissionGrantInProgressRef.current = true;
       log.debug('computer permission grant requested', { reason });
       try {
         const result = await window.electronAPI.maker.computer.grantPermissions({
-          // The native coach presents the drag/enable steps beside System Settings.
-          // Permission status itself advances only after explicit user actions.
+          // Main selects the system picker or the legacy drag guide for this Mac.
           showGuide: window.electronAPI.platform === 'darwin',
           ...(openedPaneUrl ? { openedPaneUrl } : {}),
         });
@@ -412,14 +417,31 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           ok: result.ok,
           ...getComputerPermissionLogSummary(result.status),
         });
+        if (flow !== computerPermissionFlowSeqRef.current) return result.status;
+        if (nextScreenRecordingPane.current === 'requesting') {
+          const openedControl = result.continueToScreenRecording || openedPaneUrl === MAC_ACCESSIBILITY_SETTINGS_URL;
+          nextScreenRecordingPane.current = openedControl ? 'waitingForControl' : null;
+        }
         setComputerStatus(result.status);
         return result.status;
       } finally {
-        computerPermissionGrantInProgressRef.current = false;
+        if (flow === computerPermissionFlowSeqRef.current) computerPermissionGrantInProgressRef.current = false;
       }
     },
     [],
   );
+
+  // An explicit full setup on the picker can advance once the driver confirms
+  // control. A single badge action, cancellation or unmount clears the follow-up.
+  useEffect(() => {
+    if (!computerPermissionPending || nextScreenRecordingPane.current !== 'waitingForControl') return;
+    if (!isComputerAccessibilityPermissionReady(computerStatus)) return;
+    nextScreenRecordingPane.current = null;
+    if (!isComputerScreenRecordingPermissionReady(computerStatus)) {
+      void openComputerPermissionSettings(MAC_SCREEN_RECORDING_SETTINGS_URL, 'control-granted')
+        .catch(error => log.warn('opening screen recording settings failed', error));
+    }
+  }, [computerPermissionPending, computerStatus, openComputerPermissionSettings]);
 
   // 独立引导浮窗里的关闭按钮由 main 广播回来。
   useEffect(() => {
@@ -465,6 +487,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   );
   const navigate = useNavigate();
   const installedGhosts = useInstalledGhosts();
+  const { run: runPluginInPlace } = usePluginInPlace();
   const userBrowserPlugin =
     // Only the root instance can provide My browser (an organization copy with the same id cannot),
     // so that is the one the setup steps install, enable and open.
@@ -500,6 +523,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(userBrowserPlugin))}`
           : '/plugins',
       );
+    if (browserBackendHealth?.reason === 'browser-missing') {
+      // No Chrome / Edge yet: get Chrome first; the poll below moves on once it is installed.
+      void window.electronAPI.openExternal(CHROME_DOWNLOAD_URL);
+      return;
+    }
     if (browserBackendHealth?.reason === 'extension-disconnected') {
       // Open the store page in the user's own browser; the page polls and turns connected once the
       // extension is added. Without a Chromium browser, the plugin page explains the other routes.
@@ -532,40 +560,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     }
     setUserBrowserSetupBusy(true);
     try {
-      if (userBrowserPlugin) {
-        await window.electronAPI.ghosts.setEnabled(
-          installedGhostStoragePart(userBrowserPlugin),
-          true,
-          ghostInstallApprovalToken(userBrowserPlugin.approval),
-        );
-      } else {
-        // Market ids are opaque; the plugin is found by the ghost id it installs as.
-        const item = (await window.electronAPI.pluginMarket.lookup([RECOMMENDED_PAGE_CONTROL_PLUGIN_ID])).items.find(
-          (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
-        );
-        const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
-        if (detail?.installState !== 'not-installed') {
-          openPluginPage();
-          return;
-        }
-        const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
-          expectedReleaseId: detail.releaseId,
-          expectedManifest: detail.manifest,
-          allowSourceReplacement: false,
-        });
-        toast.success(t('settings.ghosts.toast.installed', { name: result.ghost.manifest.name }));
-      }
-      await refreshUserBrowserHealth();
-    } catch (error) {
-      const code = extractIpcError(error)?.code;
-      // Cancelling the install confirmation is not a failure.
-      if (code !== 'MUTATION_CANCELLED') {
-        toast.error(t(userBrowserPlugin ? ghostInstallErrorKey(code) : pluginMarketErrorKey(error)));
-      }
+      await runPluginInPlace({ ghostId: RECOMMENDED_PAGE_CONTROL_PLUGIN_ID, namespace: null }, {
+        onReady: refreshUserBrowserHealth,
+      });
     } finally {
       setUserBrowserSetupBusy(false);
     }
-  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, runPluginInPlace, t, userBrowserPlugin]);
   // While "My browser" still lacks its plugin or extension, check again every few seconds so the
   // guidance turns into "connected" as soon as the user finishes a step elsewhere.
   useEffect(() => {
@@ -751,13 +752,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           onOpenSettingsFailed: (result) => {
             log.warn('open Full Disk Access settings failed', result);
           },
-          hasDiskAccess: async () => {
+          canReadSourceProfile: async () => {
             try {
               const result = await window.electronAPI.browserBackend.probeSourceRead?.();
-              return result?.readable === true;
+              return result?.readable;
             } catch (error) {
               log.warn('browserBackend.probeSourceRead failed', error);
-              return false;
+              return undefined;
             }
           },
         });
@@ -996,8 +997,8 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [setComputerEnabled, t],
   );
 
-  // CLI-only CuaDriver installs use the legacy `permissions grant` process and
-  // have no native-guide broadcasts. Keep checking that live permission state
+  // The system picker and CLI-only installations have no drag-guide broadcasts.
+  // Keep checking the driver's live permission state
   // while the shared pending UI is visible. The completion ref also prevents a
   // native broadcast and this fallback poll from enabling the plugin twice.
   useEffect(() => {
@@ -1254,7 +1255,15 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         if (shouldStartComputerPermissionGuide(next, nextStatus)) {
           if (!isCurrentFlow()) return;
           setComputerPermissionPending(true);
-          nextStatus = await requestComputerPermissionGrant('toggle');
+          let openedPaneUrl: string | undefined;
+          if (modernPermissions) {
+            const url = isComputerAccessibilityPermissionReady(nextStatus)
+              ? MAC_SCREEN_RECORDING_SETTINGS_URL
+              : MAC_ACCESSIBILITY_SETTINGS_URL;
+            if (await openComputerPermissionSettings(url, 'toggle-missing')) openedPaneUrl = url;
+            if (!isCurrentFlow()) return;
+          }
+          nextStatus = await requestComputerPermissionGrant('toggle', openedPaneUrl);
           // 用户在 grant 等待期间点了引导弹窗的「取消」:整个流程已终止,
           // 不再打开系统设置/弹提示。
           if (computerPermissionFlowSeqRef.current !== flowSeq) return;
@@ -1308,6 +1317,8 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [
       computerStatus,
       cancelNativeComputerPermissionGrant,
+      modernPermissions,
+      openComputerPermissionSettings,
       persistComputerEnabled,
       refreshComputerPermissionStatus,
       requestComputerPermissionGrant,
@@ -1360,7 +1371,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
 
   const handleOpenComputerPermission = useCallback(
     async (url: string, granted: boolean) => {
-      if (computerPermissionPending) return;
+      nextScreenRecordingPane.current = null;
       const flowSeq = computerPermissionFlowSeqRef.current;
       // Open the exact System Settings pane before starting native onboarding.
       // The old order waited for the paused grant flow first, so the user saw
@@ -1375,10 +1386,8 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       ) {
         return;
       }
-      if (!opened) return;
-      if (granted) {
-        return;
-      }
+      // A user can reopen or switch panes while the same driver grant is pending.
+      if (!opened || granted || computerPermissionPending) return;
 
       setComputerPermissionPending(true);
       const initialStatus = computerStatus;
@@ -1662,7 +1671,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           </p>
         ) : null}
         <p className={SETTINGS_HINT}>
-          {t('settings.computerUse.browser.toggleHint')}
+          {t(
+            workingDir
+              ? 'settings.computerUse.browser.toggleHint'
+              : 'settings.computerUse.browser.userDefaultToggleHint',
+          )}
         </p>
       </SettingsSection>
 
@@ -1720,9 +1733,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   action={computerInstallPending || computerPermissionPending ? (
                     <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
                       <Spinner size={12} />
-                      {computerInstallPending
-                        ? t('settings.computerUse.directControl.installing')
-                        : t('settings.computerUse.directControl.authorizing')}
+                      {t(computerInstallPending
+                        ? 'settings.computerUse.directControl.installing'
+                        : modernPermissions
+                          ? 'settings.computerUse.directControl.permissionGuide.waiting'
+                          : 'settings.computerUse.directControl.authorizing')}
                     </span>
                   ) : (
                     <Button data-setting-id={computerUseSettings.directControlPermissionsTitle.id}
@@ -1739,21 +1754,23 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     </Button>
                   )}
                 >
+                  {modernPermissions && !computerAccessibilityGranted && (
+                    <p className={`${SETTINGS_HINT} whitespace-pre-line`}>{t('macControlPermission.review', { app: 'CuaDriver' })}</p>
+                  )}
                   <div
                     id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
                     className="grid gap-2.5 sm:grid-cols-2"
                   >
                     <ComputerPermissionRow
-                      label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
+                      label={t(modernPermissions ? 'macControlPermission.pane' : computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
                       iconSrc={accessibilityPermissionIcon}
                       granted={computerAccessibilityGranted}
                       pending={computerAccessibilityPending}
+                      disabled={!computerStatus.installed && computerPermissionPending}
                       actionLabel={
-                        computerAccessibilityPending
-                          ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                          : computerAccessibilityGranted
-                            ? t('settings.computerUse.directControl.permissions.granted')
-                            : t('settings.computerUse.directControl.permissions.grant')
+                        computerAccessibilityGranted
+                          ? t('settings.computerUse.directControl.permissions.granted')
+                          : t('settings.computerUse.directControl.permissions.grant')
                       }
                       onAction={() =>
                         void (computerStatus.installed
@@ -1772,12 +1789,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                         iconSrc={screenRecordingPermissionIcon}
                         granted={computerScreenRecordingGranted}
                         pending={computerScreenRecordingPending}
+                        disabled={!computerStatus.installed && computerPermissionPending}
                         actionLabel={
-                          computerScreenRecordingPending
-                            ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                            : computerScreenRecordingGranted
-                              ? t('settings.computerUse.directControl.permissions.granted')
-                              : t('settings.computerUse.directControl.permissions.grant')
+                          computerScreenRecordingGranted
+                            ? t('settings.computerUse.directControl.permissions.granted')
+                            : t('settings.computerUse.directControl.permissions.grant')
                         }
                         onAction={() =>
                           void (computerStatus.installed
@@ -1939,20 +1955,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   </button>
                 </div>
                 {driverUpdatePending &&
-                driverUpdateProgress?.phase === 'downloading' &&
-                driverUpdateProgress.downloadedBytes !== null &&
-                driverUpdateProgress.totalBytes ? (
-                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-                    <div
-                      className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
-                            100,
-                        )}%`,
-                      }}
-                    />
+                driverUpdateProgress?.phase !== 'done' &&
+                driverUpdateProgress?.download ? (
+                  <div className="mt-3">
+                    <DownloadMeter label="cua-driver" progress={driverUpdateProgress.download} />
                   </div>
                 ) : null}
               </SettingsBlock>
@@ -2194,16 +2200,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 >
                   {t('settings.computerUse.android.adb.save')}
                 </Button>
-                <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-                  variant="secondary"
-                  size="sm"
-                  className="px-3"
-                  type="button"
+                <ResetGroupButton data-setting-id={computerUseSettings.androidAdbTitle.id}
                   onClick={() => void handleUseDefaultAndroidAdbPath()}
                   disabled={androidAdbPathBusy}
-                >
-                  {t('settings.computerUse.android.adb.useDefault')}
-                </Button>
+                  label={t('settings.computerUse.android.adb.useDefault')}
+                />
               </div>
             }
           />
@@ -2214,5 +2215,111 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         </p>
       </SettingsSection>
     </SettingsSection>
+  );
+}
+
+// The cloud settings page shows the browser and computer cards with an optional reset and read status.
+export function BrowserAutomationHeader({
+  checked,
+  disabled,
+  onChange,
+  reset,
+  headingStatus,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+  /** Cloud settings: the card could not be read; this says so in place of the switch. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow
+      lead={
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+            'bg-[var(--settings-input-bg)]',
+          )}
+        >
+          <Globe size={16} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={
+        <span id={computerUseSettings.browserTitle.targetId}>
+          {t(computerUseSettings.browserTitle.titleKey)}
+        </span>
+      }
+      hint={t(computerUseSettings.browserTitle.descriptionKey)}
+      trailing={headingStatus ?? withDefaultOverride(
+        <Switch data-setting-id={computerUseSettings.browserTitle.id}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={t('settings.computerUse.browser.toggleAria')}
+        />,
+        reset,
+      )}
+    />
+  );
+}
+
+export function ComputerAutomationHeader({
+  checked,
+  disabled,
+  onChange,
+  reset,
+  headingStatus,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  /** Optional: a saved override and how to clear it (the cloud page). */
+  reset?: DefaultOverrideReset;
+  /** Cloud settings: the card could not be read; this says so in place of the switch. */
+  headingStatus?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow
+      lead={
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+            'bg-[var(--settings-input-bg)]',
+          )}
+        >
+          <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={
+        <span id={computerUseSettings.directControlTitle.targetId}>
+          {t(computerUseSettings.directControlTitle.titleKey)}
+        </span>
+      }
+      hint={t(computerUseSettings.directControlTitle.descriptionKey)}
+      trailing={headingStatus ?? withDefaultOverride(
+        <Switch data-setting-id={computerUseSettings.directControlTitle.id}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          aria-label={t('settings.computerUse.directControl.toggleAria')}
+        />,
+        reset,
+      )}
+    />
+  );
+}
+
+/** 自动操作页标题与说明。 */
+export function ComputerUseSectionHeader() {
+  const { t } = useTranslation();
+  return (
+    <SettingsPageHeader
+      title={t(computerUseSettings.computerUse.sectionKey)}
+      description={t('settings.computerUse.description')}
+    />
   );
 }

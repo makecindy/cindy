@@ -1,3 +1,6 @@
+import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
+import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
+import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,6 +42,16 @@ export interface FolderPickerOption {
     deviceId: string;
     deviceName: string;
   };
+}
+
+function PickerProjectIcon({ project }: { project: FolderPickerOption }) {
+  const deviceId = project.remoteDevice?.deviceId ?? null;
+  const info = useProjectInfo(deviceId);
+  // The path belongs to the selected computer; UI option keys can also contain device IDs.
+  const projectKey = `local:${project.path}`;
+  return <ProjectIcon value={resolveProjectIcon(info, projectKey)} projectKey={projectKey}
+    projectName={project.name} deviceId={deviceId}
+    automaticEnabled={(info?.settingsVersion ?? 0) >= 4} size={24} />;
 }
 
 /**
@@ -159,6 +172,7 @@ interface FolderPickerPopoverProps {
    * 上层按当前可用的 SSH / device-link 目标决定是否传入,这里不做判断。
    */
   onAddRemoteProject?: (deviceId?: string) => void;
+  onCreateProject?: () => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
   align?: 'start' | 'center' | 'end';
   sideOffset?: number;
@@ -176,6 +190,7 @@ export function FolderPickerPopover({
   deviceScope,
   onRemoveRemoteProject,
   onAddRemoteProject,
+  onCreateProject,
   side,
   align = 'end',
   sideOffset = 4,
@@ -215,11 +230,33 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
+  // 当前高亮的项目行:回车选它,方向键与鼠标移动都改它。null = 默认:有词指向首个结果,
+  // 无词不高亮。每次改词(输入、Esc 清空、关闭)都显式回到默认,回到曾输入过的词也不复活
+  // 旧高亮;另记下所在的搜索词,搜索框因项目数变化出现/消失时同样回到默认。
+  // 列表异步变短时夹到末项;空列表时为 -1。
+  const [highlight, setHighlight] = useState<{ query: string; index: number | null }>({
+    query: '',
+    index: null,
+  });
+  const resetHighlight = () => setHighlight({ query: '', index: null });
+  const highlightIndex = Math.min(
+    highlight.index !== null && highlight.query === activeProjectQuery
+      ? highlight.index
+      : activeProjectQuery
+        ? 0
+        : -1,
+    visibleProjectOptions.length - 1,
+  );
+  const setHighlightIndex = (index: number) => {
+    if (index === highlightIndex) return;
+    setHighlight({ query: activeProjectQuery, index });
+  };
 
-  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  // 每次打开都从完整列表开始,不残留上次的搜索词与高亮。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
+      setHighlight({ query: '', index: null });
       setBrowseFailed(false);
     }
   }, [open]);
@@ -289,8 +326,8 @@ export function FolderPickerPopover({
 
   const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
-    // 有搜索词时首个结果常亮:回车选中的就是它。
-    const isEnterTarget = activeProjectQuery !== '' && index === 0;
+    // 高亮行就是回车会选中的行;键盘与鼠标共用这一个指示,不再各亮一行。
+    const isHighlighted = index === highlightIndex;
     return (
       /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
          之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
@@ -300,11 +337,19 @@ export function FolderPickerPopover({
          语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
       <div
         key={project.key ?? project.path}
+        data-folder-picker-index={index}
+        data-highlighted={isHighlighted || undefined}
+        onMouseMove={(e) => {
+          // 方向键滚动(或弹层刚出现)时,行会滑到静止的指针下,浏览器为此补发的 mousemove
+          // 没有位移;只有指针真的动了才算用户在用鼠标,高亮不会被拽到指针所在行。
+          if (e.movementX === 0 && e.movementY === 0) return;
+          setHighlightIndex(index);
+        }}
         className={cn(
-          'group flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px]',
+          // scroll-my-6 与列表边缘 24px 渐隐等宽:方向键滚入的行不会停在半透明的边上。
+          'group flex w-full scroll-my-6 items-center gap-3 rounded-lg px-3 py-2.5',
           'transition-colors',
-          'hover:bg-[var(--folder-item-hover)]',
-          isEnterTarget && 'bg-[var(--folder-item-hover)]',
+          isHighlighted && 'bg-[var(--folder-item-hover)]',
         )}
       >
         <button
@@ -316,13 +361,9 @@ export function FolderPickerPopover({
             'outline-none',
           )}
         >
-          <Folder
-            size={20}
-            className={cn(
-              'shrink-0 text-[var(--folder-item-icon)]',
-              project.missing && 'opacity-50',
-            )}
-          />
+          <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
+            <PickerProjectIcon project={project} />
+          </span>
           <div className="flex min-w-0 flex-1 flex-col items-start">
             <span
               className={cn(
@@ -377,6 +418,11 @@ export function FolderPickerPopover({
   };
 
   const handleChooseDifferent = async () => {
+    if (onCreateProject) {
+      onOpenChange(false);
+      onCreateProject();
+      return;
+    }
     // 远程设备语境下绝不能开本机原生目录对话框:选出来的是**控制端**路径,而草稿里的
     // deviceId 仍指向对端 —— 发送时要么被被控端 path guard 拒掉,要么(路径恰好在对端也存在)
     // 在一个毫不相关的远程目录里把会话建起来。改为打开设备域的远程浏览器,并带上当前设备。
@@ -411,7 +457,7 @@ export function FolderPickerPopover({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
         className={cn(
-          'z-[10010] w-[320px] rounded-[12px] p-2',
+          'w-[320px] rounded-xl p-2',
           'bg-[var(--folder-picker-bg)]',
           'border border-[var(--folder-picker-border)]',
         )}
@@ -432,6 +478,7 @@ export function FolderPickerPopover({
           if (!projectQuery) return;
           e.preventDefault();
           setProjectQuery('');
+          resetHighlight();
         }}
         aria-busy={selectionPending}
       >
@@ -449,7 +496,7 @@ export function FolderPickerPopover({
                   disabled={selectionPending}
                   onClick={() => handleSelectPath('', 'dialogue')}
                   className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
                     'transition-colors outline-none',
                     'hover:bg-[var(--folder-item-hover)]',
                   )}
@@ -479,16 +526,37 @@ export function FolderPickerPopover({
                     value={projectQuery}
                     onChange={(e) => {
                       setProjectQuery(e.target.value);
+                      resetHighlight();
                       if (projectScrollEl) projectScrollEl.scrollTop = 0;
                     }}
                     onKeyDown={(e) => {
                       // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
                       e.stopPropagation();
-                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
-                      if (!first) return;
+                      // 输入法组字时的回车与方向键属于候选词,不动列表。
+                      if (e.nativeEvent.isComposing) return;
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        const last = visibleProjectOptions.length - 1;
+                        if (last < 0) return;
+                        e.preventDefault();
+                        // 首尾停住不循环;尚无高亮时 ↓ 进首项、↑ 进末项。
+                        const next =
+                          e.key === 'ArrowDown'
+                            ? Math.min(highlightIndex + 1, last)
+                            : highlightIndex < 0
+                              ? last
+                              : Math.max(highlightIndex - 1, 0);
+                        setHighlightIndex(next);
+                        // 焦点留在搜索框,只把高亮行滚进可视区(行已在 DOM,无需等重渲染)。
+                        projectScrollEl
+                          ?.querySelector<HTMLElement>(`[data-folder-picker-index="${next}"]`)
+                          ?.scrollIntoView?.({ block: 'nearest' });
+                        return;
+                      }
+                      if (e.key !== 'Enter') return;
+                      const target = visibleProjectOptions[highlightIndex];
+                      if (!target) return;
                       e.preventDefault();
-                      void handleSelectPath(first.path, 'project', first);
+                      void handleSelectPath(target.path, 'project', target);
                     }}
                     placeholder={t('newChat.folderPicker.searchProjects')}
                     aria-label={t('newChat.folderPicker.searchProjects')}
@@ -508,6 +576,10 @@ export function FolderPickerPopover({
               ref={setProjectScrollEl}
               data-folder-picker-scroll="true"
               onScroll={updateScrollFade}
+              // 无搜索词时高亮只是悬停反馈,指针离开就熄灭;有搜索词时它是回车目标,保留。
+              onMouseLeave={() => {
+                if (!activeProjectQuery) setHighlightIndex(-1);
+              }}
               className={cn(
                 'pending-queue-scroll -mr-2 overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
                 scrollFade.top && 'folder-picker-fade-top',
@@ -516,7 +588,7 @@ export function FolderPickerPopover({
               )}
             >
               {deviceScope?.status === 'loading' ? (
-                <div className="flex items-center gap-2 px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
                   <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
                     <Loader2 size={14} />
                   </span>
@@ -551,14 +623,14 @@ export function FolderPickerPopover({
               ) : activeProjectQuery ? (
                 <div
                   role="status"
-                  className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]"
+                  className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]"
                 >
                   {t('newChat.folderPicker.noMatchingProjects')}
                 </div>
               ) : deviceScope && onAddRemoteProject ? (
                 /* 对端设备上一个项目都没有:空态里直接给「浏览文件夹」,并带着设备身份进弹窗 ——
                    否则用户得自己退出去找入口,而这台机器恰恰是最可能需要新建目录的。 */
-                <div className="flex items-center justify-between gap-3 px-3 py-[10px]">
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                   <span className="min-w-0 text-xs text-[var(--folder-item-path)]">
                     {t('newChat.addRemoteProject.existingEmpty')}
                   </span>
@@ -575,7 +647,7 @@ export function FolderPickerPopover({
                   </button>
                 </div>
               ) : (
-                <div className="px-3 py-[10px] text-sm text-[var(--folder-item-path)]">
+                <div className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]">
                   {t('newChat.folderPicker.noProjects')}
                 </div>
               )}
@@ -607,7 +679,7 @@ export function FolderPickerPopover({
                   disabled={selectionPending}
                   onClick={() => handleSelectPath(folder.path, 'recent')}
                   className={cn(
-                    'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+                    'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
                     'transition-colors outline-none',
                     'hover:bg-[var(--folder-item-hover)]',
                   )}
@@ -641,7 +713,7 @@ export function FolderPickerPopover({
           disabled={selectionPending}
           onClick={handleChooseDifferent}
           className={cn(
-            'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
             'transition-colors outline-none',
             'hover:bg-[var(--folder-item-hover)]',
           )}
@@ -649,9 +721,11 @@ export function FolderPickerPopover({
           <FolderPlus size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
           {/* CJK label 视觉重心比 icon 偏高,nudge 1px 居中。与 chip 上 "对话" 同样处理。 */}
           <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-            {isProjectPicker
-              ? t('newChat.folderPicker.browseProjectFolder')
-              : t('newChat.folderPicker.browseFolder')}
+            {onCreateProject
+              ? t('projectSettings.createTitle')
+              : isProjectPicker
+                ? t('newChat.folderPicker.browseProjectFolder')
+                : t('newChat.folderPicker.browseFolder')}
           </span>
         </button>
 
@@ -678,7 +752,7 @@ export function FolderPickerPopover({
               onOpenChange(false);
             }}
             className={cn(
-              'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left',
               'transition-colors outline-none',
               'hover:bg-[var(--folder-item-hover)]',
             )}

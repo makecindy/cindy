@@ -107,6 +107,22 @@ const mocks = vi.hoisted(() => ({
   directoryPath: '/Users/demo/Interviews',
   // useDeviceProviders 最近一次读的电脑(Worker 的模型目录按哪台读)。
   deviceProvidersFor: undefined as string | undefined,
+  // 每次渲染时面板是否订阅本机插件引擎列表。
+  pluginEngineSubscriptions: [] as boolean[],
+}));
+
+// 本机插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+vi.mock('@/hooks/usePluginEngines', () => ({
+  usePluginEngines: (enabled = true) => {
+    mocks.pluginEngineSubscriptions.push(enabled);
+    return enabled ? [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
+      permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
+    }] : [];
+  },
+  findPluginEngine: () => null,
+  requestPluginEnginesRefresh: () => {},
 }));
 
 vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
@@ -128,6 +144,10 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, values?: Record<string, unknown>) =>
     key.startsWith('orca.workerProject.') && values ? `${key} ${Object.values(values).join(' ')}` : key }),
 }));
+
+// WorkerProjectField uses only the branch picker export, not the new-task
+// checkout activity observer. Keep its unrelated task store out of this fixture.
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {} }));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   useAgentCapabilities: (agent: 'codex' | 'claude-code') => ({
@@ -185,9 +205,12 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     modelMemory?: unknown;
     remoteAgent?: { selectedDeviceId: string | null; homeDeviceId?: string; devices: Array<{ deviceId: string }> };
     agentDevice?: { deviceId: string } | null;
+    pluginEngines?: { engines: readonly unknown[]; active: { providerId: string } | null; onSelect(selection: { providerId: string; modelId: string }): void };
   }) => (
     <div
       data-testid="model-selector"
+      data-plugin-engines={String(props.pluginEngines?.engines.length ?? 0)}
+      data-plugin-engine-active={props.pluginEngines?.active?.providerId ?? ''}
       data-remote-selected={props.remoteAgent ? String(props.remoteAgent.selectedDeviceId) : 'none'}
       data-remote-home={props.remoteAgent?.homeDeviceId ?? ''}
       data-agent-device={props.agentDevice?.deviceId ?? ''}
@@ -202,6 +225,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-effort={props.effort ?? ''}
     >
       {props.modelId}
+      <button data-testid="pick-plugin-engine" onClick={() => props.pluginEngines?.onSelect({ providerId: 'acp-plugin:dsh-acp:dsh', modelId: 'dsh-pro' })} />
       <button data-testid="pick-claude-model" onClick={() => props.onUnifiedSelect?.({ engine: 'cc', modelId: 'claude-sonnet-4-6', providerId: 'anthropic', effort: 'high', fast: false, favoriteUid: null })} />
       <button data-testid="pick-codex-config" onClick={() => props.onUnifiedSelect?.({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false, favoriteUid: null })} />
       {/* 远程供应商栏里的行带着它所属的电脑(null = 任务所在电脑)。 */}
@@ -322,10 +346,61 @@ describe('CreateWorkerPopover', () => {
     resetProviderModelMemoryForTest();
   });
 
+  // 第二期「协作」(docs/plans/acp-plugin-bridge.md)：本机 Lead 的 Worker 可以放在插件引擎上。生产入口
+  // CreateWorkerPopover → onCreate；缺口：此前面板根本不列引擎，选了也会按内置 Harness 提交。
+  // 最小失败输入：选插件引擎后提交；再选回内置模型；不开启时不列引擎(远程控制 / SSH 的面板不变)。unit/jsdom。
+  // PR #11591 review：面板常驻挂载，关着时不订阅引擎列表；切到记过内置模型的角色时不再停在插件引擎上。
+  it('submits a plugin engine Worker only when plugin engines are offered, and a built-in pick replaces it', async () => {
+    const onCreate = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engines')).toBe('0');
+    unmount();
+
+    mocks.pluginEngineSubscriptions.length = 0;
+    const closed = render(<CreateWorkerPopover open={false} pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    expect(mocks.pluginEngineSubscriptions.length).toBeGreaterThan(0);
+    expect(mocks.pluginEngineSubscriptions.some(Boolean)).toBe(false);
+    closed.unmount();
+
+    const panel = render(<CreateWorkerPopover open pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engines')).toBe('1');
+    await user.click(screen.getByTestId('pick-plugin-engine'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('acp-plugin:dsh-acp:dsh');
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    const submitted = onCreate.mock.calls[0]![0] as Record<string, unknown>;
+    expect(submitted).toMatchObject({ agent: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'dsh-pro' });
+    expect(submitted.fast).toBeUndefined();
+    expect(submitted.worktree).toBeUndefined();
+
+    await user.click(screen.getByTestId('pick-claude-model'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('');
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    const builtIn = onCreate.mock.calls[1]![0] as Record<string, unknown>;
+    expect(builtIn.agent).toBe('claude-code');
+    expect(String(builtIn.providerId ?? '')).not.toContain('acp-plugin:');
+    panel.unmount();
+
+    // 「审查」记住了 Claude：先在别的角色选插件引擎，再切回「审查」，带回的是它记的内置模型。
+    render(<CreateWorkerPopover open pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const role = (id: string) => screen.getByRole('radio', { name: `orca.createWorker.templates.${id}.name` });
+    expect(role('reviewer').getAttribute('aria-checked')).toBe('true');
+    await user.click(role('tester'));
+    await user.click(screen.getByTestId('pick-plugin-engine'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('acp-plugin:dsh-acp:dsh');
+    await user.click(role('reviewer'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('');
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(3));
+    expect(onCreate.mock.calls[2]![0]).toMatchObject({ role: 'reviewer', agent: 'claude-code' });
+  });
+
   it('centers the setup and uses one model picker without a competing Harness control', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
 
-    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-raised');
     const overlay = panel?.parentElement;
     expect(overlay?.className).toContain('items-center');
     expect(overlay?.className).not.toContain('items-start');
@@ -353,7 +428,7 @@ describe('CreateWorkerPopover', () => {
       'orca.createWorker.initialTaskPlaceholder',
     ) as HTMLTextAreaElement;
     fireEvent.change(initialTask, { target: { value: 'Draft a plan' } });
-    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-raised');
     fireEvent.click(panel!.closest('.modal-scrim')!);
 
     expect(onClose).not.toHaveBeenCalled();
@@ -1327,6 +1402,61 @@ describe('CreateWorkerPopover', () => {
         .disabled,
     ).toBe(true);
   });
+
+  // #10313, unit: the real form must explain a restored, unusable selection and recover
+  // after an explicit pick. Existing isolation tests only asserted the disabled submit.
+  // Minimal input: saved route + unavailable model/source, with another usable row.
+  it.each(['removed', 'disabled', 'disconnected', 'default-source', 'empty'] as const)(
+    'explains an unavailable saved selection (%s) and submits only after a manual pick',
+    async (reason) => {
+      const savedModel = reason === 'default-source' ? 'removed-model' : 'gpt-5.5';
+      const savedProvider = reason === 'default-source' ? null : 'saved-provider';
+      writeWorkerCreationPrefs({
+        ...DEFAULT_WORKER_CREATION_PREFS,
+        modelSelectionByHost: {
+          [JSON.stringify([null, 'local'])]: {
+            agent: 'codex', agentDeviceId: null, model: savedModel,
+            providerId: savedProvider, effort: 'high', fast: false,
+          },
+        },
+      });
+      mocks.modelsByAgent.codex = reason === 'empty' ? [] : [model('gpt-5.5')];
+      mocks.localProviders = [
+        { id: 'saved-provider', name: 'Saved', connected: reason !== 'disconnected', agents: ['codex'],
+          models: { codex: reason === 'removed' || reason === 'empty' ? [] : [{ ...model('gpt-5.5'), disabled: reason === 'disabled' }] } },
+        { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+          models: { codex: mocks.modelsByAgent.codex } },
+      ];
+      const onCreate = vi.fn();
+      const props = { open: true, onClose: vi.fn(), onCreate };
+      mocks.providersLoading = true;
+      const view = render(<CreateWorkerPopover {...props} />);
+      expect(screen.queryByText('orca.createWorker.savedModelUnavailable')).toBeNull();
+      mocks.providersLoading = false;
+      view.rerender(<CreateWorkerPopover {...props} />);
+
+      const warning = screen.getByRole('status');
+      expect(warning.textContent).toContain(reason === 'empty'
+        ? 'orca.createWorker.noAvailableModels' : 'orca.createWorker.savedModelUnavailable');
+      expect(screen.getByTestId('model-selector').textContent).toBe(savedModel);
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(savedProvider ?? '');
+      const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(true);
+      fireEvent.click(submit);
+      expect(onCreate).not.toHaveBeenCalled();
+      if (reason === 'empty') return;
+
+      fireEvent.click(screen.getByTestId('pick-openai-row-bare'));
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(submit.disabled).toBe(false);
+      fireEvent.click(submit);
+      await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'gpt-5.5', providerId: 'openai',
+      })));
+      // This local host has no location capability, so its request must omit that field.
+      expect(onCreate.mock.calls[0][0]).not.toHaveProperty('agentDeviceId');
+    },
+  );
 
   it('mounts the standard panel with provider sections for local creation', async () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
@@ -2705,7 +2835,10 @@ describe('CreateWorkerPopover remote providers', () => {
         remoteAgentDevices={change === 'old-host' ? undefined : devices} />);
       if (change === 'account') {
         expect(screen.getByTestId('model-selector').dataset.agentDevice).toBe('');
+        expect(screen.queryByText('orca.createWorker.savedModelUnavailable')).toBeNull();
       } else {
+        // #10313: blocked remote/older-host routes need an explanation too; never pick a fallback.
+        expect((await screen.findByRole('status')).textContent).toContain('orca.createWorker.savedModelUnavailable');
         expect(screen.getByTestId('model-selector').dataset.agentDevice).toBe('agent-pc');
         expect(screen.getByTestId('model-selector').dataset.effort).toBe('high');
         expect((screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement).disabled).toBe(true);
@@ -2848,11 +2981,17 @@ describe('local Worker project selection', () => {
   const context: WorkerProjectContext = {recordedDirectory: '/repo', inherited: project, selected: project, dialogue: false, projects: []};
   const projectContext = vi.fn();
   beforeEach(() => {
+    // jsdom has no layout observer; the shared branch menu now observes its list.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     projectContext.mockReset().mockResolvedValue(context);
     (window as unknown as {electronAPI: unknown}).electronAPI = {localDb: {orcaWorkflows: {projectContext}}, worktreeListBranches: vi.fn().mockResolvedValue({branches: ['main']})};
   });
-  afterEach(() => {cleanup(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); delete (window as unknown as {electronAPI?: unknown}).electronAPI;});
+  afterEach(() => {cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); delete (window as unknown as {electronAPI?: unknown}).electronAPI;});
   // Native picker cancellation does not select a project. Rejected IPC must also leave
   // the modal usable; previous field tests never opened the actual folder popover.
   it.each(['cancel', 'error'] as const)('keeps the selected project ready, closable and submittable after native picker %s', async (outcome) => {
@@ -2943,8 +3082,10 @@ describe('local Worker project selection', () => {
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
     expect(branchButton.textContent).toBe('main');
   });
-  it('displays the remote source as origin/main but submits its full ref without fetching', async () => {
-    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main'], remoteDefaultBranch: 'refs/remotes/origin/main'});
+  // #12391: Git can shorten a local origin/main to the same label as the remote.
+  // Click each real picker group and verify it submits the corresponding ref.
+  it.each(['local', 'remote'] as const)('submits the full ref for the selected %s origin/main', async (group) => {
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main', 'origin/main'], remoteDefaultBranch: 'refs/remotes/origin/main'});
     window.electronAPI.worktreeBranchSyncStatus = vi.fn().mockResolvedValue({branch: 'main', remote: 'origin', remoteBranch: 'main', remoteOnly: false, ahead: 0, behind: 0, dirtyFiles: 0});
     window.electronAPI.worktreeSyncBranch = vi.fn();
     const onCreate = vi.fn();
@@ -2954,11 +3095,13 @@ describe('local Worker project selection', () => {
     const branchButton = screen.getByRole('button', {name: 'newChat.branchChip.label'});
     expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
     fireEvent.click(branchButton);
-    fireEvent.click(await screen.findByRole('option', {name: 'origin/main'}));
+    const branchGroup = await screen.findByRole('group', {name: `newChat.branchSync.${group}Group`});
+    fireEvent.click(within(branchGroup).getByRole('option', {name: 'origin/main'}));
     expect(branchButton.textContent).toBe('origin/main');
     expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
-    expect(onCreate).toHaveBeenLastCalledWith({worktree: {sourceBranch: 'refs/remotes/origin/main'}});
+    const sourceBranch = group === 'local' ? 'refs/heads/origin/main' : 'refs/remotes/origin/main';
+    expect(onCreate).toHaveBeenLastCalledWith({worktree: {sourceBranch}});
     expect(window.electronAPI.worktreeSyncBranch).not.toHaveBeenCalled();
   });
   it('omits workingDir for unchanged inheritance and resets worktree choice on reopening', async () => {
@@ -2972,14 +3115,21 @@ describe('local Worker project selection', () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields).not.toHaveProperty('worktree');
   });
-  it('submits a detected checkout explicitly while keeping its own branch', async () => {
-    const inherited = {...project, directory: '/checkout', branch: 'feature', isWorktree: true};
+  // #12391: the picker sends the attached branch explicitly. A remote-looking name
+  // must keep its local ref in the request, while remaining readable in the chip.
+  it.each([
+    {branch: 'feature', sourceBranch: 'feature'},
+    {branch: 'origin/main', sourceBranch: 'refs/heads/origin/main'},
+  ])('keeps the detected checkout on its own branch $branch', async ({branch, sourceBranch}) => {
+    const inherited = {...project, directory: '/checkout', branch, headState: 'branch' as const, isWorktree: true};
     projectContext.mockResolvedValue({...context, inherited, selected: inherited});
     const {result} = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields.workingDir).toBe('/checkout');
-    expect(result.current.branch).toBe('feature');
+    expect(result.current.branch).toBe(branch);
     expect(result.current.fields).not.toHaveProperty('projectPath');
+    act(() => result.current.setChecked(true));
+    expect(result.current.fields.worktree).toEqual({sourceBranch});
   });
   it('ignores an old project response and resets checkbox and source on each selection', async () => {
     let resolveOld!: (value: WorkerProjectContext['selected']) => void;
@@ -3042,22 +3192,22 @@ describe('local Worker project selection', () => {
   );
   // Unit/jsdom: production form selection now reads a repository's main-task branch memory.
   // Previous cases only covered checkout HEAD. Missing refs/read failures must display and submit HEAD.
-  it.each(['remembered', 'remote-default', 'missing', 'read-failed'])('uses actual default branch for another project: %s', async scenario => {
+  it.each(['remembered', 'local-origin-name', 'remote-default', 'missing', 'read-failed'])('uses actual default branch for another project: %s', async scenario => {
     window.electronAPI.getNewMakerWorktreeBranchPreference = vi.fn().mockImplementation(async () => {
       if (scenario === 'read-failed') throw new Error('old host');
-      return { baseRepo: '/other', sourceBranch: scenario === 'remote-default' ? 'refs/remotes/origin/main' : 'release', revision: 1 };
+      return { baseRepo: '/other', sourceBranch: scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'local-origin-name' ? 'origin/main' : 'release', revision: 1 };
     });
-    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({ branches: scenario === 'missing' ? ['main'] : ['main', 'release'], remoteDefaultBranch: 'refs/remotes/origin/main' });
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({ branches: scenario === 'missing' ? ['main'] : ['main', 'release', 'origin/main'], remoteDefaultBranch: 'refs/remotes/origin/main' });
     projectContext.mockImplementation(async (_id, dir) => dir ? { ...project, directory: '/other', baseRepo: '/other' } : context);
     const { result } = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(window.electronAPI.getNewMakerWorktreeBranchPreference).not.toHaveBeenCalled();
     act(() => result.current.select('/other'));
     await waitFor(() => expect(result.current.context?.selected.directory).toBe('/other'));
-    const expected = scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'remembered' ? 'release' : project.branch;
+    const expected = scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'remembered' ? 'release' : scenario === 'local-origin-name' ? 'origin/main' : project.branch;
     expect(result.current.branch).toBe(expected);
     act(() => result.current.setChecked(true));
-    expect(result.current.fields.worktree?.sourceBranch).toBe(expected);
+    expect(result.current.fields.worktree?.sourceBranch).toBe(scenario === 'local-origin-name' ? 'refs/heads/origin/main' : expected);
     act(() => result.current.setSourceBranch('manual'));
     expect(result.current.fields.worktree?.sourceBranch).toBe('manual');
   });

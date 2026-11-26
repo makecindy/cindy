@@ -1,6 +1,7 @@
-import fs from 'node:fs/promises';
+import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
+import { readBotDmThreadContextNote } from '../../../desktop/src/main/maker-ipc/botDmThreadContext.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
 import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
@@ -10,14 +11,50 @@ import { createSessionStderrOptions, isSessionRunningError } from '../../../desk
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
 import { createWireNoteMemory } from '../../../desktop/src/main/maker-ipc/wireNoteMemory.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
+import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
+import { createHostContextRecovery } from './context-recovery.ts';
+import { createHostSilentStop } from './silent-stop.ts';
+import { createHostWorkingDirectory } from './working-directory.ts';
+import { clearSealedCodexPlanState, readCodexPlanState } from '../../../desktop/src/main/localDb/codexPlanState.ts';
+import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
+import { peekGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
+import { createTurnModelAttribution } from '../../../desktop/src/main/maker-ipc/turnModelAttribution.ts';
+import { patchMessageAgentMetaWithResultRow } from '../../../desktop/src/main/localDb/messageMutations.ts';
+import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { latestVisiblePreview } from '../../../desktop/src/main/localDb/latestMessageText.ts';
+import { sessionListPreviewPatch } from '../../../desktop/src/main/sessionTaskSummary.logic.ts';
+import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
+import { persistAndHydrateSessionProvider } from '../../../desktop/src/main/maker-ipc/sessionProviderBootstrap.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { eq } from 'drizzle-orm';
+import { isPiPromptRpcTimeoutError } from '../../../desktop/src/shared/inputError.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
-import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
+import { syncBackgroundCommandWork } from '../../../desktop/src/main/maker-host/claude-background-command-work-sync.ts';
+import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
+import { beginTurnChangeSetAtDispatch } from '../../../desktop/src/main/turn-change-set/dispatchBoundary.ts';
+import { setSessionProvider, clearSessionProvider, getSessionProvider, hydrateSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { redactEventForRenderer } from '../../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { isQuietScheduledOutput } from '../../../desktop/src/main/scheduler-host/silent-output.ts';
+import { claudeOpusPlanTerminalErrorData, defaultDecisionForPending, handleInteractionDismissedEvent, localizeRuntimeRecoveryEvent, routeStandaloneTextEvent } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
+import { uiText } from '../../../desktop/src/main/uiText.ts';
+import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.ts';
+import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../../../desktop/src/main/maker-ipc/gatewayProxyTokenRecovery.ts';
+import { contextSnapshotForStatus, isContextCompactionSnapshot } from '../../../desktop/src/main/maker-ipc/sessionContextSnapshot.ts';
+import { recordHostContextSnapshot } from './context-usage.ts';
+import { readTerminalTurnErrorSignals } from '../../../desktop/src/main/maker-ipc/terminalTurnErrorSignals.ts';
+import { isForegroundRunningStatus, noteAutoResumeProgress, noteForegroundTurnStarted, settleAutoResumeAttemptOnDone,
+  settleAutoResumeAttemptOnTerminalError } from '../../../desktop/src/main/maker-ipc/sessionEventAutoResumeSteps.ts';
+import { applySessionRuntimeOverrideForStart } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import { isSuccessfulAssistantReplyDoneData } from '../../../desktop/src/main/cindy-brain/assistantReplyHook.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -26,8 +63,23 @@ const errorText = error => error instanceof Error ? error.message : String(error
 /**
  * Node platform adapter for one maker-core turn. Queue order, recovery and
  * dispatch ownership belong to AgentInputCoordinator, never to this adapter.
- * A terminal is handed back only after all visible reply rows have settled.
+ * The coordinator receives a turn's terminal when it arrives, as on the desktop; the next input
+ * still waits until all visible reply rows have settled, because the turn counts as running
+ * (isRunning, the coordinator's dispatch boundary) until then.
  */
+/**
+ * Publishes an agent event to the Host's clients (the event stream and the device link read the
+ * hub). As on the desktop (sessionEventPreparation.ts broadcastEvent), what leaves is the
+ * renderer-boundary projection of the event; persistence and bookkeeping keep the original.
+ */
+// The English of settings.piPackages.failure.runtimeRetirementFailed, for a main i18n that lacks it (ui-text.ts).
+const RUNTIME_RETIREMENT_FAILED_EN = 'Pi extensions could not be refreshed. Restart Cindy before using Pi again.';
+
+export function publishAgentEvent(hub, sessionId, event, fields) {
+  const clientEvent = redactEventForRenderer(event);
+  hub.publish({ ...clientEvent, sessionId, event: clientEvent, ...fields });
+}
+
 export function createTurnExecutor(deps) {
   const turns = new Map();
 
@@ -35,6 +87,56 @@ export function createTurnExecutor(deps) {
   const bindings = new Map();
   const wireNotes = createWireNoteMemory();
   const log = createLogger('host-input');
+  // Context recovery of a terminal error (context-recovery.ts); without a recovery factory the
+  // listener behaves as before.
+  const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
+    isRecoverable: deps.isContextRecoveryOpen, isErrorSuppressed: deps.isSessionErrorSuppressed,
+    publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
+  // The desktop's silent-stop continuation (silent-stop.ts), with the input coordinator's ports; an
+  // executor without them (a unit fixture) ends a silent-stop done as any done.
+  const silentStop = deps.silentStopCoordinator ? createHostSilentStop({
+    coordinator: deps.silentStopCoordinator,
+    guard: () => deps.getAutoResume?.()?.silentStopAutoResumeGuard ?? null,
+    listActivity: () => deps.productTurn?.listActivity ?? null,
+    isProfileHeld: () => deps.isProfileHeld?.() === true,
+    isStopping: () => deps.isStoppingRuntime() === true,
+    writeRow: (id, message, options) => behindDurableWrites(id, `silent-stop-row:${id}`, () => deps.persistMessage(id, message, options)),
+    // As the desktop broadcasts the banner (register.ts surfaceSilentStopExhaustedBanner, source as there),
+    // with the turn's input so /api/chat ends on it.
+    publishFailure: (id, turn, data) => publishAgentEvent(deps.hub, id, { type: 'error', data, source: 'claude-code' }, turnStreamFields(turn)),
+    isTurnCurrent: (id, turn) => turns.get(id) === turn,
+    isAwaitingDecision: (id, turn) => turns.get(id) === turn && turn.silentStopPending === true && !turn.terminal,
+    // The listener keeps only the turn's own generation (listen): the continuation's events carry the new one.
+    adoptGeneration: (turn, generation) => {
+      turn.preContinuationGeneration = turn.generation;
+      turn.generation = generation;
+      turn.continuedSilentStopDoneAt = turn.silentStopDoneAt;
+      turn.silentStopDoneAt = undefined;
+      turn.silentStopPending = false;
+    },
+    rollbackGeneration: (turn, generation) => {
+      if (turn.generation !== generation) return;
+      turn.generation = turn.preContinuationGeneration;
+      turn.silentStopDoneAt = turn.continuedSilentStopDoneAt;
+      turn.silentStopPending = true;
+    },
+    finalizeChangeSet: (id, turn) => { if (turn.changeRecordStarted) void finalizeTurnChangeSet(id, null, 'complete'); },
+    endTurn: (id, turn, reason) => endSilentStopTurn(id, turn, reason),
+    usageTrackers: () => deps.usage ?? null,
+    log,
+  }) : null;
+  // The fields a turn's events carry for its clients: its input, and the input an automatic resume continues.
+  const turnStreamFields = turn => ({ inputClientId: turn.clientId, ...(turn.resumeOf ? { autoResumeOf: turn.resumeOf } : {}) });
+  // The auto-resume bookkeeping steps of the desktop's event preparation (sessionEventAutoResumeSteps.ts),
+  // over the auto-resume runtime (auto-resume.ts). The failed-turn assistant pairing map is the
+  // desktop's; the Host only keeps it so a new turn drops a stale entry, as there.
+  const pendingFailedTurnAssistantPersistId = new Map();
+  function autoResumeStepDeps() {
+    const autoResume = deps.getAutoResume?.();
+    return autoResume ? { autoResumeBookkeeping: autoResume.autoResumeBookkeeping, pendingFailedTurnAssistantPersistId,
+      silentStopAutoResumeGuard: autoResume.silentStopAutoResumeGuard,
+      interruptedTurnAutoResumeGuard: autoResume.interruptedTurnAutoResumeGuard, usageLimitAutoResume: undefined } : null;
+  }
   function historyFor(id) {
     let history = histories.get(id);
     if (!history) {
@@ -51,15 +153,136 @@ export function createTurnExecutor(deps) {
     return history;
   }
 
-  function finish(sessionId, turn, error, event) {
+  async function retryHistoryWrites(id, history, turn) {
+    await history.retryFailedWrites();
+    if (turn) turn.persistenceError = null;
+    if (turn?.terminal && !turn.interruptedByShutdown) {
+      deps.assertCurrent();
+      await deps.markEnded?.(id, turn.endedAt);
+    }
+  }
+
+  // The Git baseline of one turn, settled as the desktop's event delivery settles it
+  // (sessionEventDelivery.ts: a done takes the after-edit savepoint, a terminal error cancels the
+  // baseline), each at most once for this turn of this instance. A failed turn that reports its
+  // error and then its done settles both, as there. A stop the Host settles itself takes the
+  // savepoint once the engine is idle and closes both, so a late done or error of the stopped
+  // turn takes nothing from the next turn's baseline.
+  function settleGitBaseline(sessionId, turn, kind) {
+    const git = turn.gitBaseline;
+    // Only this turn's accepted dispatch can own a baseline. Host-originated
+    // adapters may deliver terminals without having opened one.
+    if (!git) return;
+    const snapshot = deps.getGitSnapshot?.();
+    if (kind === 'end') {
+      if (git.ended) return;
+      git.ended = true;
+      void snapshot?.onTurnEnd(sessionId);
+    } else if (kind === 'abort') {
+      if (git.aborted || git.ended) return;
+      git.aborted = true;
+      snapshot?.onTurnAbort(sessionId);
+    } else {
+      if (!git.aborted && !git.ended) void snapshot?.onTurnEnd(sessionId);
+      git.aborted = git.ended = true;
+    }
+  }
+
+  function startGitBaseline(sessionId, signal, prepareSnapshot) {
+    const turn = turns.get(sessionId);
+    const snapshot = deps.getGitSnapshot?.();
+    if (!turn || !snapshot) return;
+    turn.gitBaseline = { aborted: false, ended: false };
+    return prepareSnapshot ? prepareSnapshot(snapshot) : snapshot.onTurnStart(sessionId, signal);
+  }
+
+  // The desktop's list preview refresh after a done (sessionTaskSummary.ts refreshSessionListPreview, called
+  // by sessionEventTerminal.ts once the write queue has drained): the latest visible message goes to the task
+  // list, whatever the pinned section shows. A failure is logged and swallowed, as there.
+  async function refreshListPreview(sessionId) {
+    const owner = deps.getOwner?.();
+    try {
+      const preview = await latestVisiblePreview(sessionId);
+      if (!deps.isCurrent() || (deps.getOwner && deps.getOwner() !== owner)) return;
+      deps.hub.publish({ type: 'session_changed', sessionId, patch: sessionListPreviewPatch(preview) });
+    } catch (error) {
+      log.warn('refresh session list preview failed (swallowed)', { sessionId, error: String(error) });
+    }
+  }
+
+  // As the desktop's terminal stage (sessionEventTerminal.ts), in the same write queue and before an
+  // error row: the last top-level reply since the previous seal gets its seal. A successful done (for
+  // Codex, also requiring raw status completed) seals it completed, with the native fork anchor. A
+  // terminal error or an unsuccessful done seals it failed, so later history reads neither take a
+  // progress note for the final answer nor a stopped plan for a finished one. Teammate result ids are not
+  // passed: the Host refuses teammate tasks. Without a terminal event nothing is sealed; the id is
+  // consumed either way so it cannot seal a later turn. A paused write queue keeps the seal for its retry
+  // and reports the failure itself (onPersistenceError); the rejected promise only says so.
+  function sealLastReply(sessionId, history, failed, event) {
+    const sealId = history.consumeLastTopLevelAssistantPersistId(sessionId);
+    if (!sealId || (!failed && !event)) return;
+    const succeeded = !failed && event?.type === 'done'
+      && isSuccessfulAssistantReplyDoneData(event.data)
+      && (event.source !== 'codex' || history.isSuccessfulCodexDoneEventData(event.data));
+    const nativeForkAnchor = succeeded ? event.agentMeta?.nativeForkAnchor : undefined;
+    void (succeeded
+      ? history.markAssistantTurnCompleted(sessionId, sealId, nativeForkAnchor ? { nativeForkAnchor } : undefined)
+      : history.markAssistantTurnFailed(sessionId, sealId)).catch(() => {});
+  }
+
+  // The desktop's terminal stage runs on every done and terminal error, also those that do not end the
+  // Host's turn: a continuation boundary of the foreground turn, and a background turn's terminal. There it
+  // writes the reply block (with the event's agent meta), the orphan tool results, seals the last reply,
+  // and resets the per-turn persistence state (keeping what a late background result still needs), so
+  // the segments before and after a continuation stay two replies with a seal each.
+  function settleTurnBoundary(sessionId, history, event, usageSlot = null) {
+    const agentMeta = event.agentMeta ?? null;
+    history.flushAssistantBlock(sessionId, agentMeta);
+    // The usage target the desktop's terminal stage consumes after the reply block (sessionEventTerminal.ts).
+    const consumed = history.consumeLastAssistantPersistId(sessionId);
+    if (usageSlot) usageSlot.consumed = consumed;
+    history.flushOrphanToolResults(sessionId, agentMeta);
+    sealLastReply(sessionId, history, event.type !== 'done', event);
+    history.preserveTurnPersistStateForBackground(sessionId);
+    history.resetTurnPersistState(sessionId);
+    // The desktop refreshes the list preview after every done that is not a continuation boundary
+    // (sessionEventTerminal.ts), a background turn's done included, once the writes have drained.
+    if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+      void history.drain().then(() => { if (deps.isCurrent()) return refreshListPreview(sessionId); }, () => {});
+    }
+  }
+
+  // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.
+  function finish(sessionId, turn, error, event, recoveryOwnsError = false, usageSlot = null) {
     if (turn.terminal) return turn.settlement;
     turn.terminal = true;
-    turn.endedAt = Date.now();
+    // A stop the engine acknowledged without a terminal event: the engines' stop paths end in a
+    // done on the desktop, which takes the after-edit savepoint there.
+    if (!event && !error && turn.abortRequested && !deps.isStoppingRuntime()) settleGitBaseline(sessionId, turn, 'stopped');
+    // A silent stop that did not continue ended at its done (silent-stop.ts), as the desktop marks it there.
+    turn.endedAt = turn.silentStopDoneAt ?? Date.now();
     turn.interruptedByShutdown = deps.isStoppingRuntime();
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
+    // As the desktop's terminal stage and stop (sessionEventTerminal.ts, register.ts abort): the usage target
+    // is consumed with the seal, so it cannot attach a later turn's usage to this turn's reply.
+    const consumed = history.consumeLastAssistantPersistId(sessionId);
+    if (usageSlot) usageSlot.consumed = consumed;
     history.flushOrphanToolResults(sessionId, event?.agentMeta ?? null);
-    if (error) history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+    sealLastReply(sessionId, history, Boolean(error), event);
+    if (error && !recoveryOwnsError) {
+      // As the desktop's terminal stage (sessionEventTerminal.ts): while an automatic resume holds this
+      // error (pending or deferred, sessionErrorSuppression.ts), its row is not written; the bookkeeping
+      // keeps it, with the turn's start for the clear cap, and writes it once if the resume gives up.
+      if (event && deps.isSessionErrorSuppressed?.(sessionId, event) === true && deps.holdSuppressedError) {
+        history.saveTurnStartedAtForDeferred(sessionId);
+        deps.holdSuppressedError(sessionId, { ...event.data, message: error });
+      } else {
+        history.onTurnErrorEvent(sessionId, { ...event?.data, message: error }, event?.agentMeta ?? null);
+        // A new terminal replaces an older interruption's replacement (sessionEventTerminal.ts).
+        if (event && isTerminalTurnErrorEvent(event)) autoResumeStepDeps()?.autoResumeBookkeeping.discardReplacementProvenByProviderEvent(sessionId);
+      }
+    }
     if (error) history.persistCodexPlanOnTerminalError(sessionId);
     else if (event) history.persistCodexPlanOnDone(sessionId, event.data);
     history.preserveTurnPersistStateForBackground(sessionId);
@@ -69,6 +292,9 @@ export function createTurnExecutor(deps) {
         try { await deps.markEnded?.(sessionId, turn.endedAt); }
         catch (failure) { turn.persistenceError = errorText(failure); deps.onPersistenceError(sessionId, turn.persistenceError); }
       }
+      // Only after a done, as the desktop; not awaited, so the turn's end is not held by the read. The
+      // pinned card summary that follows it there is not generated on the Host (release table 甲 13).
+      if (event?.type === 'done' && deps.isCurrent()) void refreshListPreview(sessionId);
       turn.running = false;
       if (turns.get(sessionId) === turn) {
         // Some providers become idle after abort without emitting done. Publish
@@ -79,41 +305,431 @@ export function createTurnExecutor(deps) {
           deps.hub.publish({ type: 'input_receipt', sessionId, inputClientId: turn.clientId,
             clientId: turn.clientId, status: 'interrupted' });
         }
-        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta);
+        deps.onTerminal(sessionId, error ? 'error' : 'done', error, turn.terminalMeta, turn.direct === true,
+          turn.terminalHandedOver === true);
       }
     });
     return turn.settlement;
   }
 
+  // Desktop's exact-instance binding (sessionBindingLifecycle.ts): when the bound
+  // instance closes, the snapshot state is released, then the unfinished turn
+  // change record; a replaced instance only drops its record, and a late close of
+  // an instance that is no longer bound changes nothing.
+  function releaseBinding(sessionId) {
+    if (!bindings.has(sessionId)) return;
+    deps.getGitSnapshot?.()?.onSessionClosed(sessionId);
+    clearPendingTurnChangeSets(sessionId);
+    // As the desktop's close (sessionBindingLifecycle.ts teardown, finalizeClosedSession): the closed
+    // runtime's deferred failures and the task's list activity record go.
+    deps.productTurn?.closed(sessionId, bindings.get(sessionId).session);
+    listActivityInTurn.delete(sessionId);
+    // As the desktop's session close (register.ts :6064–6070, sessionBindingLifecycle.ts): the task's usage
+    // tables and its failed-turn usage handoff go with the runtime.
+    deps.usage?.clear(sessionId);
+    pendingFailedTurnAssistantPersistId.delete(sessionId);
+    // As the desktop's turn observer teardown: the closed runtime's silent-stop decision goes. Its turn
+    // cannot continue on it and no terminal will come (the runtime already sent its done): it ends here.
+    const bound = bindings.get(sessionId).session;
+    silentStop?.released(sessionId, bound.instanceId);
+    const turn = turns.get(sessionId);
+    if (turn?.silentStopPending && !turn.terminal && turn.session === bound) {
+      turn.silentStopPending = false;
+      void finish(sessionId, turn);
+    }
+  }
+
+  // A silent-stop done closes its segment's rows as the desktop's terminal stage does for it (the reply
+  // block, its seal and the list preview: settleTurnBoundary). The Host's turn stays open for the decision
+  // (silent-stop.ts): the coordinator does not get this done (handTerminalToCoordinator), and the next input
+  // waits. The turn's end is not marked here: the desktop marks it at this done (markTurnEndedAfterPersistDrain),
+  // so a crash or an account boundary during the decision or the continuation leaves it looking finished.
+  // On the Host it stays a running turn until it really ends (review item 2): a settle without a continuation
+  // marks the end at the done's time (finish), a continuation at its own end, and an interruption marks none.
+  function settleSilentStopSegment(sessionId, turn, session, history, event, usageSlot = null) {
+    turn.silentStopPending = true;
+    turn.silentStopDoneAt = Date.now();
+    settleTurnBoundary(sessionId, history, event, usageSlot);
+    silentStop.decideLater(session, turn, event);
+  }
+
+  // A silent stop that does not continue ends its turn as a done (silentStopSettle.ts): the turn's finish
+  // hands the coordinator its done and runs the settled-turn hooks. Host-only (/api/chat, chat.mjs): a
+  // stream that followed the silent stop ends with the recorded receipt (skipped, or its decision failed);
+  // an exhausted one already ended on its banner's error, a stopped one on its interrupted receipt.
+  function endSilentStopTurn(sessionId, turn, reason) {
+    turn.silentStopPending = false;
+    if (turn.resumeOf !== undefined) deps.resumeAnswered?.(sessionId, turn.resumeOf);
+    void finish(sessionId, turn).then(() => {
+      // A turn the owner boundary interrupted gets no receipt from here (/api/chat ends on the boundary's).
+      if (reason === 'exhausted' || turn.abortRequested || turn.interruptedByShutdown
+        || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
+      deps.hub.publish({ type: 'input_receipt', sessionId, ...turnStreamFields(turn), clientId: turn.clientId, status: 'recorded' });
+    }, () => {});
+  }
+
+  // The task list activity of the desktop (SessionListActivityTracker, product-turn.ts), at the desktop's
+  // points: a foreground running status starts it (sessionEventPreparation.ts), a foreground not-running
+  // status ends it once the event batch is over (sessionEventDelivery.ts, statusOnly), a turn's done or
+  // terminal error ends it (sessionEventTerminal.ts), held while an automatic resume or a context recovery
+  // owns the turn, which commits it later through the product-turn failure gate. Goal turns write none.
+  const listActivityInTurn = new Set();
+  const activityIdentity = (session, event) => event.sessionTurnGeneration === undefined ? undefined
+    : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`;
+
+  // Claude's background-activity detection (claude-session-background-activity.ts) reads the logical
+  // turn's start and end at the desktop's points: a running status of the foreground turn starts it
+  // (sessionEventPreparation.ts); a done, a terminal error or a foreground running=false status ends
+  // it, refreshing the background command work (sessionEventDelivery.ts); a task update refreshes
+  // that work. Idle release reads the result (idle-release.ts). A silent-stop done whose decision is
+  // pending keeps the logical turn going, as the desktop's preparation notes it; its settle ends it.
+  function noteBackgroundActivity(session, event) {
+    if (silentStop?.isScheduled(event)) {
+      noteClaudeSessionTurnState(session.id, true);
+      return;
+    }
+    const continuation = isTurnContinuationBoundaryEvent(event);
+    if (event.type === 'status' && event.data?.isRunning === true && event.turnScope !== 'background') {
+      noteClaudeSessionTurnState(session.id, true);
+    } else if ((event.type === 'done' && !continuation) || isTerminalTurnErrorEvent(event)
+      || (event.type === 'status' && event.data?.isRunning === false && !continuation && event.turnScope !== 'background')) {
+      syncBackgroundCommandWork(session);
+      noteClaudeSessionTurnState(session.id, false);
+    } else if (event.type === 'agent_task_update') {
+      syncBackgroundCommandWork(session);
+    }
+  }
+
+  // As the desktop's event preparation (sessionEventPreparation.ts) hands a terminal to the input
+  // coordinator: a product done (not a continuation boundary, not a silent-stop done, which the
+  // desktop decides on later) and a terminal error with its message and structured signals. The
+  // desktop leaves out the planned close of a remote daemon; the Host runs no remote tasks.
+  // Whether the terminal is this input's and current is the coordinator's own decision
+  // (shouldIgnoreUnownedTerminal, isFencedStaleTerminal).
+  function handTerminalToCoordinator(sessionId, event) {
+    if (!deps.handTerminal) return false;
+    const meta = { sessionTurnGeneration: event.sessionTurnGeneration, sessionInstanceId: event.sessionInstanceId };
+    if (event.type === 'done') {
+      if (isTurnContinuationBoundaryEvent(event) || event.data?.silentStop === true) return false;
+      deps.handTerminal(sessionId, 'done', undefined, undefined, meta);
+      return true;
+    }
+    if (!isTerminalTurnErrorEvent(event)) return false;
+    const { message, signals } = readTerminalTurnErrorSignals(event, redactEventForRenderer(event));
+    deps.handTerminal(sessionId, 'error', message, signals, meta);
+    return true;
+  }
+
+  // The desktop's preparation steps that come before it hands a terminal to the coordinator
+  // (sessionEventPreparation.ts :219, :363, :409, :483): the first event of a resume's attempt, a
+  // foreground running status starting a new attempt, a done or terminal error settling it.
+  function noteAutoResumeEventBeforeTerminal(session, event) {
+    const steps = autoResumeStepDeps();
+    if (!steps) return;
+    if (typeof event.turnAttemptToken === 'number') steps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
+    if (event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) {
+      // The turn's start for the clear cap is noted by the Host at dispatch (beginHostTurn, the send
+      // transaction); subagent observation is the desktop's renderer feature.
+      noteForegroundTurnStarted(steps, session, event, { noteTurnStarted: () => {}, noteSubagentObservationTurnStarted: () => {} });
+    }
+    if (event.type === 'done') settleAutoResumeAttemptOnDone(steps, session, event, isTurnContinuationBoundaryEvent(event));
+    if (isTerminalTurnErrorEvent(event)) settleAutoResumeAttemptOnTerminalError(steps, session, event);
+  }
+
+  // The desktop's ports of these steps (register.ts), as the Host has them. The accepted input of the
+  // notice is this turn's; its provenance only tells a bot's private reply, and the Host refuses bot
+  // inputs at admission.
+  function standaloneTextPorts(session) {
+    return { redactEventForRenderer, agentInputCoordinatorHolder: {
+      getActiveInputClientId(id, generation) {
+        const turn = turns.get(id);
+        if (!turn || turn.session !== session || turn.terminal || !turn.clientId) return null;
+        return typeof generation === 'number' && typeof turn.generation === 'number' && generation !== turn.generation
+          ? null : turn.clientId;
+      },
+      getAcceptedInputProvenance: () => null,
+    } };
+  }
+  // The pending card leaves the Host's broker (interactions.mjs) as the desktop's clearPendingInteraction;
+  // the decision of a question or plan is saved, as the desktop's persistInteractionDecision; the
+  // floating island is a desktop window.
+  function interactionDismissedPorts(sessionId, history) {
+    return {
+      handleAgentIslandInteractionDismissed: () => {},
+      clearPendingInteraction: requestId => deps.interactions?.clearPending(requestId, sessionId) ?? null,
+      defaultDecisionForPending,
+      persistInteractionDecision: (id, persistId, kind, request, decision) => {
+        if (kind === 'ask_user_question' || kind === 'plan_review') history.onInteractionResolved(id, persistId, kind, request, decision);
+      },
+      broadcastToAllWindows: (channel, payload) => {
+        if (channel === MAKER_PUSH.INTERACTION_DISMISSED) deps.hub.publish({ type: 'interaction_dismissed', ...payload });
+      },
+    };
+  }
+
+  // The product-turn bookkeeping runs inside the event callback, before the turn's finish: a throw there
+  // would leave the turn without its end. The desktop has no such guard; the Host adds one, so a failure
+  // costs at most this turn's activity time and is logged (task id and error name only).
+  function guardProductTurn(sessionId, step) {
+    try {
+      return step() ?? null;
+    } catch (error) {
+      // deps.productTurnLog: a test reads the warning there; the Host itself logs as the executor does.
+      (deps.productTurnLog ?? log).warn('product turn bookkeeping failed', { sessionId, error: error instanceof Error ? error.name : typeof error });
+      return null;
+    }
+  }
+
+  // The desktop's terminal stage for the product turn (sessionEventTerminal.ts), in its order. A
+  // terminal an automatic resume holds (its error row suppressed) defers its owner, as the shared
+  // deferContextRecoveryTerminal does; a context recovery that claimed it deferred it already (its
+  // claim). The turn's list activity then ends, held while either owns it or a resume is pending or
+  // deferred. A successful reply's done clears the owner; an unsuccessful terminal that nothing holds
+  // goes through the finalizer at once. The Host writes the error row of a gateway key recovery and of
+  // a planned close at once (it has no deferred persist to settle them later), so those are not held.
+  function settleProductTurn(session, event, owner, claim) {
+    const sessionId = session.id;
+    const productTurn = deps.productTurn;
+    const suppressed = deps.isSessionErrorSuppressed?.(sessionId, event) === true;
+    const recoveryOwns = claim !== 'idle';
+    if (suppressed) productTurn.defer(owner);
+    listActivityInTurn.delete(sessionId);
+    const resumeHeld = deps.isAutoResumeHeld?.(sessionId) === true;
+    if (event.turnOrigin?.kind !== 'goal') {
+      // The desktop also holds a silent-stop done's end (sessionEventTerminal.ts): the continuation drops
+      // it, a settle without one commits it (silent-stop.ts).
+      productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event),
+        hold: suppressed || recoveryOwns || resumeHeld || silentStop?.isScheduled(event) === true });
+    }
+    const successfulReply = event.type === 'done' && isSuccessfulAssistantReplyDoneData(event.data);
+    if (successfulReply && !recoveryOwns && !resumeHeld
+      && deps.getAutoResume?.()?.autoResumeBookkeeping.hasSuppressedError(sessionId) !== true) productTurn.finish(owner);
+    if (!successfulReply && !recoveryOwns && !suppressed) productTurn.interrupt(sessionId, owner);
+  }
+
+  // The turn usage recorders (usage-recording.ts) where the desktop's pipeline runs them: after the terminal
+  // stage, for every event its preparation keeps (sessionEventPipeline.ts :61–71). A done or terminal error
+  // takes its usage target from that stage (`consumed`); a late one (after the Host's turn ended, or of
+  // another generation) takes only a failed turn's handed-over id (release table row 13).
+  function recordTurnUsage(session, event, history, consumed) {
+    const usage = deps.usage;
+    if (!usage) return;
+    const terminalError = isTerminalTurnErrorEvent(event);
+    const target = event.type === 'done' || terminalError
+      ? usage.usageTarget(session.id, event, consumed, pendingFailedTurnAssistantPersistId, terminalError) : undefined;
+    // The owner the input runtime was bound to when its turns started (input-queue.mjs assertCurrent).
+    usage.record(session, event, target, history, deps.runtimeOwner?.());
+  }
+  // The usage steps of the desktop's preparation for the foreground turn (sessionEventPreparation.ts): a
+  // running status starts the turn's usage state, a terminal error drops its model (:391–395), and its end
+  // (a final done, a terminal error, a not-running status) is noted for the next start.
+  function noteUsageTurnState(session, event) {
+    const usage = deps.usage;
+    if (!usage || event.turnScope === 'background') return;
+    const boundary = isTurnContinuationBoundaryEvent(event);
+    if (event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) usage.noteRunningStatus(session, event);
+    else if (event.type === 'status' && event.data?.isRunning === false && !boundary) usage.noteTurnEnded(session.id);
+    if (isTerminalTurnErrorEvent(event)) {
+      usage.noteTerminalError(event, session.id);
+      usage.noteTurnEnded(session.id);
+    } else if (event.type === 'done' && !boundary && event.data?.silentStop !== true) usage.noteTurnEnded(session.id);
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
+    if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
     bindings.get(sessionId)?.unsubscribe();
     const history = historyFor(sessionId);
+    const standalonePorts = standaloneTextPorts(session);
+    const dismissedPorts = interactionDismissedPorts(sessionId, history);
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
     deps.interactions?.attach(session, sessionId, { history, isCurrent: deps.isCurrent,
       isPaused: () => deps.isExecutionPaused?.(sessionId) === true });
+    // As the desktop wires a runtime (register.ts): the owner it was wired under, which a runtime's own
+    // Plan change is saved for.
+    const ownerDb = deps.getOwner?.() ?? null;
     const unsubscribe = session.onEvent(event => {
+      // As the desktop's emitWiredSessionEvent: a Plan mode the runtime changed itself is saved (behind
+      // the task's permission queue, only while the owner, this binding and the runtime's value hold), in
+      // or out of a turn, and is not delivered as a turn event.
+      if (event.type === 'plan_mode_changed') {
+        deps.persistAgentPlanModeChange?.({ ownerDb, sessionBindings: { getSession: id => bindings.get(id)?.session } }, session, event);
+        return;
+      }
+      // The coordinator gets a terminal before the Host's own turn filters below, which only keep the
+      // Host's records, publishing and rows: a follow-up of Session.holdEventStream was handled by the
+      // host that held it (as the desktop), and an owner that is not current has its coordinator closing.
+      const prepared = !event.hostProjection && deps.isCurrent();
+      // As the desktop's preparation (sessionEventPreparation.ts and its shared steps), in or out of a
+      // turn and in its order: a standalone notice is its own row, not a reply nor a client event; a
+      // Claude Opus plan-mode terminal error carries its normalized reason before the coordinator and the
+      // records see it; then, after the attempt's bookkeeping, a card the runtime closed itself leaves the
+      // pending cards with its decision saved, and a Codex generated image is stored and delivered as its
+      // imagegen tool rows (agent/generated-images.ts), which the stream waits for
+      // (Session.holdEventStream); the raw image event, with its bytes, is neither history nor sent.
+      if (prepared) {
+        if (routeStandaloneTextEvent(standalonePorts, session, event, history.onStandaloneTextEvent)) return;
+        const opusPlanErrorData = claudeOpusPlanTerminalErrorData({ log }, session, event);
+        if (opusPlanErrorData) event = { ...event, data: opusPlanErrorData };
+      }
+      if (prepared) noteAutoResumeEventBeforeTerminal(session, event);
+      const handedOver = prepared && handTerminalToCoordinator(sessionId, event);
+      if (prepared) {
+        if (handleInteractionDismissedEvent(dismissedPorts, session, event)) return;
+        if (event.type === 'image' && event.source === 'codex' && deps.deliverCodexGeneratedImage) {
+          if (!isQuietScheduledOutput(event)) session.holdEventStream(deps.deliverCodexGeneratedImage(sessionId, event));
+          return;
+        }
+      }
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
+      // The context usage a status event carries, decided as the desktop decides it
+      // (sessionEventPreparation.ts: before its turn bookkeeping, from the shared rules) and written
+      // once the event is delivered, as the desktop writes it (sessionEventSnapshots.ts). The
+      // `event.data` check is the Host's own guard (the desktop reads a status event's data as
+      // present); a status without data carries no snapshot either way.
+      const contextSnapshot = event.type === 'status' && event.data
+        ? contextSnapshotForStatus(isContextCompactionSnapshot(session, event, event.data), event.data)
+        : null;
+      const recordContextSnapshot = () => {
+        if (contextSnapshot) void recordHostContextSnapshot(sessionId, contextSnapshot.contextTokens, contextSnapshot.contextWindow);
+      };
       if (event.turnScope !== 'background') {
-        if (turn.terminal || event.hostProjection) return;
-        if (typeof event.sessionTurnGeneration === 'number' && typeof turn.generation === 'number'
-          && event.sessionTurnGeneration !== turn.generation) return;
+        if (event.hostProjection) return;
+        if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
+          ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) {
+          // Another generation's event is not this turn's; its usage is still recorded, once (release table row 13).
+          recordTurnUsage(session, event, history, undefined);
+          return;
+        }
+        // A silent-stop done of this turn gets one decision (silent-stop.ts); a second one is dropped, as the
+        // desktop's preparation drops it.
+        if (!turn.terminal && silentStop?.schedule(session, event) === 'duplicate') return;
+        noteBackgroundActivity(session, event);
+        noteUsageTurnState(session, event);
+        if (deps.productTurn && event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) {
+          if (!listActivityInTurn.has(sessionId) || event.sessionTurnGeneration !== undefined) {
+            deps.productTurn.listActivity.start(sessionId, activityIdentity(session, event));
+          }
+          listActivityInTurn.add(sessionId);
+        }
+        if (turn.terminal) {
+          recordContextSnapshot();
+          // The turn has ended for the Host; only its Git baseline still listens.
+          if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
+          else if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
+          // Usage that arrives after the turn ended (a failed turn's paired done) is still recorded, once,
+          // without rows or client events, as on the desktop (release table row 13).
+          recordTurnUsage(session, event, history, undefined);
+          return;
+        }
       }
+      if (event.turnScope === 'background') noteBackgroundActivity(session, event);
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
+      // Desktop records Codex's native turn diff from the event stream (register.ts)
+      // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
+      noteTurnDiffEvent(sessionId, event, session.remoteHostId !== null);
+      // As the desktop (sessionEventPreparation.ts): the diff is kept by the change record only; it is
+      // not saved as history or sent to clients (it can be several megabytes).
+      if (event.type === 'turn_diff') return;
+      if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+        const rawTurn = event.data?.raw;
+        // Desktop settles a silent-stop done once its guard declines to resume (settleSilentStopDone,
+        // silent-stop.ts); an executor without the continuation settles it now.
+        if (event.data?.silentStop === true) { if (!silentStop?.isScheduled(event)) void finalizeTurnChangeSet(sessionId, null, 'complete'); }
+        else void finalizeTurnChangeSet(sessionId, typeof rawTurn?.id === 'string' ? rawTurn.id : null,
+          rawTurn && rawTurn.status !== 'completed' ? 'partial' : 'complete');
+      }
+      if (turn.changeRecordStarted && isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
-      deps.hub.publish({ ...event, sessionId, event, ...stream, inputClientId: turn.clientId });
+      // As the desktop's preparation, after the event's bookkeeping: substantive output proves a resume.
+      const steps = autoResumeStepDeps();
+      if (steps) noteAutoResumeProgress(steps, session, event);
+      // As the desktop (sessionEventDelivery.ts): a turn that ended on a rejected Cindy AI Key
+      // reports the current key, which resynchronizes the credentials.
+      const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
+      if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
+      const fields = { ...stream, ...turnStreamFields(turn) };
+      // Host-only (/api/chat, chat.mjs): a silent-stop done whose decision is pending does not end the
+      // stream; the continuation, the banner or the recorded receipt does.
+      if (silentStop?.isScheduled(event)) fields.silentStopPending = true;
+      // A terminal error the coordinator took over for an automatic resume (handed over above): its
+      // clients see it with the takeover, as the desktop's window sees the error and the activity row,
+      // and a stream that waits for this input follows the resume instead of ending here.
+      if (handedOver && event.turnScope !== 'background' && isTerminalTurnErrorEvent(event)) {
+        const pending = deps.autoResumePendingOf?.(sessionId, turn.resumeOf ?? turn.clientId);
+        if (pending) fields.autoResumePending = pending;
+      }
+      // Recovery claims a turn's terminal error synchronously, after the coordinator has it (above), as on
+      // the desktop: its preparation hands it over first, its delivery and terminal stages claim it.
+      // The product turn's owner (task, runtime instance, turn generation) at its terminal, captured before
+      // anything can start the next turn (sessionEventTerminal.ts terminalOwner).
+      const productOwner = deps.productTurn && (event.type === 'done' || isTerminalTurnErrorEvent(event))
+        && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)
+        ? guardProductTurn(sessionId, () => deps.productTurn.capture(session, event)) : null;
+      const recoveryTerminal = recovery && event.type === 'error' && isTerminalTurnErrorEvent(event)
+        && event.turnScope !== 'background'
+        ? { session, event, history, fields, isStopping: deps.isStoppingRuntime(), isGatewayProxyTokenRecovery: gatewayKeyRejected,
+          // A recovery that claims the terminal holds its failure; its final failure settles it.
+          deferProductTurn: () => { if (productOwner) deps.productTurn.defer(productOwner); },
+          notifyProductTurn: () => { if (productOwner) deps.productTurn.interrupt(sessionId, productOwner); } }
+        : null;
+      const claim = recoveryTerminal ? recovery.claim(recoveryTerminal) : 'idle';
+      if (claim === 'idle') publishAgentEvent(deps.hub, sessionId, event, fields);
+      recordContextSnapshot();
+      if (deps.productTurn && event.type === 'status' && event.data?.isRunning === false && event.turnScope !== 'background'
+        && !isTurnContinuationBoundaryEvent(event) && listActivityInTurn.delete(sessionId) && event.turnOrigin?.kind !== 'goal') {
+        deps.productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event), statusOnly: true,
+          hold: deps.isAutoResumeHeld?.(sessionId) === true });
+      }
+      // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) settleGitBaseline(sessionId, turn, 'end');
+      if (isTerminalTurnErrorEvent(event)) settleGitBaseline(sessionId, turn, 'abort');
+      // The terminal stage's usage target (finish, settleTurnBoundary), for the recorders below.
+      const usageSlot = { consumed: undefined };
+      if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
+        && (event.turnScope === 'background' || isTurnContinuationBoundaryEvent(event))) settleTurnBoundary(sessionId, history, event, usageSlot);
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
+        if (silentStop?.isScheduled(event)) {
+          if (productOwner) guardProductTurn(sessionId, () => settleProductTurn(session, event, productOwner, claim));
+          settleSilentStopSegment(sessionId, turn, session, history, event, usageSlot);
+          recordTurnUsage(session, event, history, usageSlot.consumed);
+          return;
+        }
+        // As the desktop's turn observer: a terminal that is not a silent stop ends a pending decision.
+        silentStop?.supersede(sessionId);
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
           sessionInstanceId: event.sessionInstanceId };
+        // A resumed turn that ended without another takeover answered the input it continued.
+        if (turn.resumeOf !== undefined && !fields.autoResumePending) deps.resumeAnswered?.(sessionId, turn.resumeOf);
         const error = event.type === 'error'
           ? event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error')
           : undefined;
-        void finish(sessionId, turn, error, event);
+        // The coordinator has this terminal already; finish then only wakes it once the rows settle.
+        if (handedOver) turn.terminalHandedOver = true;
+        if (productOwner) guardProductTurn(sessionId, () => settleProductTurn(session, event, productOwner, claim));
+        void finish(sessionId, turn, error, event, claim !== 'idle', usageSlot);
+        if (claim !== 'idle') recovery.settle(recoveryTerminal, claim, () => turn.settlement);
       }
+      recordTurnUsage(session, event, history, usageSlot.consumed);
     });
-    bindings.set(sessionId, { session, unsubscribe });
+    const unsubscribeStatus = session.onStatusChange?.(status => {
+      if (status === 'closed' && bindings.get(sessionId)?.session === session) releaseBinding(sessionId);
+    });
+    // As the desktop (register.ts passes session.onRuntimeRecovery to its event pipeline): the receipt of
+    // a runtime retirement that failed after its turn (agent/pi-packages.ts retires Pi runtimes) becomes
+    // the localized notice of sessionEventPreparationSteps.ts, saved and published outside any turn, for
+    // the owner and runtime it was wired under only. Its copy is the main i18n (ui-text.ts).
+    const unsubscribeRecovery = session.onRuntimeRecovery?.(event => {
+      if (!deps.isCurrent() || bindings.get(sessionId)?.session !== session) return;
+      const localized = localizeRuntimeRecoveryEvent(event, key => uiText(key, RUNTIME_RETIREMENT_FAILED_EN));
+      const stream = history.event(session, localized);
+      publishAgentEvent(deps.hub, sessionId, localized, stream);
+    });
+    bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); unsubscribeRecovery?.(); } });
+    // A runtime that replaces this task's runtime takes over its held failures (register.ts onBind).
+    deps.productTurn?.rebind(sessionId, session);
   }
 
   async function readExecutionSession(id) {
@@ -121,8 +737,61 @@ export function createTurnExecutor(deps) {
     const row = await deps.readSession(id);
     deps.assertCurrent();
     assertHostTaskExecutionSupported(row);
-    deps.assertProviderExecutionSupported?.(id, row.providerId);
+    deps.assertProviderExecutionSupported?.(id, row.providerId, row.sdkSessionId);
     return row;
+  }
+
+  async function assertPiSkillPreparationReady(id, dir, assertCurrent, maySwitchHarness = false) {
+    assertCurrent();
+    const row = await deps.readSession(id);
+    assertCurrent();
+    if (row.source === 'review' || row.workingDir !== dir || row.remoteHostId || row.agentDeviceId || row.orcaRole ||
+        (!maySwitchHarness && makerKind(row.agentKind) !== 'pi') ||
+        turns.get(id)?.running || deps.getMaker()?.getSession(id)?.isTurnRunning?.()) {
+      throwIpcError('PRECONDITION_FAILED', maySwitchHarness ? 'The selected Pi route is not ready' : 'Pi session is unavailable');
+    }
+    assertHostTaskExecutionSupported(row);
+    deps.assertProviderExecutionSupported?.(id, row.providerId, row.sdkSessionId);
+  }
+
+  // As the desktop's bootstrapSession (register.ts) once the runtime has started: the task row takes the
+  // start's provider (a route the start admission rerouted or pinned included), and a failed write
+  // refuses the start. A start on an accepted runtime override keeps the saved provider baseline, as the
+  // desktop's `providerId: runtimeOverride ? undefined : o.providerId`.
+  async function persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride = null) {
+    try {
+      const db = getDbClient().drizzle;
+      await persistAndHydrateSessionProvider({
+        sessionId: session.id,
+        providerId: runtimeOverride ? undefined : opts.providerId,
+        updateProviderId: async (targetSessionId, providerId) => {
+          deps.assertCurrent();
+          assertAccess?.();
+          await db.update(sessions).set({ providerId }).where(eq(sessions.id, targetSessionId));
+        },
+        readProviderId: async (targetSessionId) => {
+          const [pRow] = await db
+            .select({ providerId: sessions.providerId })
+            .from(sessions)
+            .where(eq(sessions.id, targetSessionId))
+            .limit(1);
+          return pRow?.providerId;
+        },
+        hydrateSessionProvider: (...args) => { assertAccess?.(); hydrateSessionProvider(...args); },
+      });
+    } catch (err) {
+      log.warn('session provider persistence failed; refusing task startup', {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // A duplicate create can reuse a running Session; do not interrupt its turn.
+      await deps.getMaker().closeSessionIfCurrent(session, 'requested', { onlyIfIdle: true }).catch((closeError) => {
+        log.warn('failed to close task after provider persistence failure', {
+          sessionId: session.id, error: String(closeError),
+        });
+      });
+      throwIpcError('PRECONDITION_FAILED', 'Could not save the selected model provider. Retry the task.');
+    }
   }
 
   async function readAutoReviewHistory(id) {
@@ -142,6 +811,8 @@ export function createTurnExecutor(deps) {
     const maker = deps.getMaker();
     const session = maker.getSession(id);
     deps.interactions?.detach(id);
+    // The bound instance closes here; release it before the binding goes away.
+    releaseBinding(id);
     bindings.get(id)?.unsubscribe();
     bindings.delete(id);
     wireNotes.reset(id);
@@ -156,9 +827,40 @@ export function createTurnExecutor(deps) {
     listen(id, session);
   }
 
+  // The desktop's write FIFO does not pause on a failed write (messagePersistBroadcaster.ts
+  // enqueueDurableWrite pauses only when given onPersistenceError, which the desktop never passes);
+  // the Host's pauses the task's reply writes after one, until it is retried. Used for two reads (the
+  // plan snapshot, the goal note) and two best-effort writes (clearing a sealed plan, recording the
+  // turn's model and its model-change card): they wait behind the task's writes, as on the desktop,
+  // and their failure goes back to the caller (which skips the note or logs) without pausing the task.
+  function behindDurableWrites(id, label, fn) {
+    return historyFor(id).enqueueDurableWrite(label, () => Promise.resolve().then(fn)
+      .then(value => ({ value }), error => ({ error })))
+      .then(result => { if ('error' in result) throw result.error; return result.value; });
+  }
+
   const reconcileCreateOptsWithDb = createSessionOptionsReconciler({ log, readSession: readExecutionSession });
-  const statDirectory = deps.statDirectory ?? fs.stat;
-  const transaction = createMakerSendTransaction({
+  // The desktop's working-directory check and recovery (working-directory.ts).
+  const workingDirectory = createHostWorkingDirectory({
+    stat: deps.statDirectory,
+    readBoundWorkingDir: async id => [deps.getMaker().getSession(id)?.workDir || null,
+      await readExecutionSession(id).then(row => row.workingDir ?? null, () => null)],
+    listActiveSessions: () => deps.getMaker().listActiveSessions?.() ?? [],
+    log,
+  });
+  const statDirectory = workingDirectory.statDirectory;
+  const transactionDeps = {
+    // A model or engine the user picked lands when the message is sent, before the runtime is read
+    // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
+    applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
+    prepareUnhealthySession: deps.prepareUnhealthySession,
+    prepareRuntimeTurn(id, message, signal) {
+      const turn = turns.get(id);
+      if (!turn) return;
+      return deps.getTaskRuntimePlugins?.()?.prepareRuntimeTurn(id, message, signal, turn.check);
+    },
+    prepareRuntimePrompt: id => deps.getTaskRuntimePlugins?.()?.prepareTaskPromptForSend(id),
+    composeRuntimeContext: (id, text, signal) => deps.getTaskRuntimePlugins?.()?.composeRuntimeContext(id, text, signal),
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
     getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
@@ -173,15 +875,14 @@ export function createTurnExecutor(deps) {
       if (session) assertHostTaskExecutionSupported(session);
       if (createOpts) assertHostTaskExecutionSupported(createOpts);
     },
-    checkWorkDirExists: async (id, dir) => {
+    checkWorkDirExists: async (id, ...args) => {
       await readExecutionSession(id);
-      if (!dir) return true;
-      try { return (await statDirectory(dir)).isDirectory(); }
-      catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
-        throw error;
-      }
+      return workingDirectory.checkWorkDirExists(id, ...args);
     },
+    resolveRecoveredWorkingDir: workingDirectory.resolveRecoveredWorkingDir,
+    isPersistedWorktreeFallback: workingDirectory.isPersistedWorktreeFallback,
+    peekWorkingDirectoryRecoveryNote: workingDirectory.peekWorkingDirectoryRecoveryNote,
+    consumeWorkingDirectoryRecoveryNote: workingDirectory.consumeWorkingDirectoryRecoveryNote,
     statDirectory,
     readSessionWorkingDirFromDb: async id => (await readExecutionSession(id)).workingDir ?? null,
     readSessionWorkingDirState: async id => ({ exists: true, workingDir: (await readExecutionSession(id)).workingDir ?? null }),
@@ -197,9 +898,16 @@ export function createTurnExecutor(deps) {
     readSessionExtraDirsFromDb: deps.readSessionExtraDirs ?? (async () => []),
     readSessionWritableDirsFromDb: deps.readSessionWritableDirs ?? (async () => []),
     withRehydrateCloseSuppressed,
-    bootstrapSession: async opts => {
-      const turn = turns.get(opts.id);
+    // assertAccess and nativeHistoryResume as the desktop's bootstrapSession (register.ts) takes them
+    // from a committed engine switch (agentSwitchDepsCore.ts createSwitchedSessionBootstrap): the owner
+    // check before the start, and a parked native session that must resume or fail (the switch then
+    // handles the failure; no fresh start here).
+    bootstrapSession: async (opts, assertAccess, nativeHistoryResume = false, routeStartupSignal) => {
+      const previous = turns.get(opts.id);
+      const turn = previous?.running ? previous : undefined;
       turn?.check();
+      assertAccess?.();
+      if (nativeHistoryResume) opts.vendorOptions = { ...opts.vendorOptions, _cindyRequireNativeResume: true };
       const preparing = (async () => {
         const stored = await readExecutionSession(opts.id);
         assertHostTaskExecutionSupported(opts);
@@ -210,15 +918,40 @@ export function createTurnExecutor(deps) {
           readPersistedWritableDirs: deps.readSessionWritableDirs ?? (async () => []),
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
+        deps.assertCurrent();
+        assertAccess?.();
         turn?.check();
-        const session = await deps.getMaker().createSession({ ...opts,
-          resumeSessionId: opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined),
-        }, turn?.sendOpts.signal);
+        // The resume id is known before the start admission reads it: a verified resume of the task's
+        // stored route keeps that route (register.ts admitLocalRoute). The admission may reroute
+        // `providerId` before createSession freezes it (start-options.ts).
+        // Kept for the flow of o.resumeSessionId in the desktop's bootstrapSession, which the admission
+        // reads already set. Every current caller brings the task row's id (the shared options
+        // reconciler, the cold Pi check, the engine switch, storedSessionOptions), so the fallback to
+        // stored.sdkSessionId takes no different value; for that reason no test covers this step alone.
+        opts.resumeSessionId = opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined);
+        // The accepted runtime mutation (an automatic route fallback) wins over the stored route,
+        // before the start admission, through the desktop's own step. The Host refuses provider-group
+        // tasks at admission (send-preflight.ts), so a provider group never decides the source.
+        const runtimeOverride = applySessionRuntimeOverrideForStart(opts, false);
+        await deps.admitLocalRoute(opts);
+        assertAccess?.();
+        turn?.check();
+        const turnSignal = turn?.sendOpts.signal;
+        const signal = routeStartupSignal && turnSignal ? AbortSignal.any([routeStartupSignal, turnSignal])
+          : routeStartupSignal ?? turnSignal;
+        const taskPlugins = deps.getTaskRuntimePlugins?.();
+        const session = await (taskPlugins
+          ? taskPlugins.createSessionWithRuntimePlugins({ ...opts }, signal)
+          : deps.getMaker().createSession({ ...opts }, signal));
+        deps.assertCurrent();
+        turn?.check();
+        await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
         wireNotes.reset(opts.id);
-        bindTurnSession(opts.id, session);
+        if (turn) bindTurnSession(opts.id, session);
+        else listen(opts.id, session);
         return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
       })();
       if (turn) turn.preparing = preparing;
@@ -226,15 +959,25 @@ export function createTurnExecutor(deps) {
     },
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
+    readReplyQuoteNote,
+    readBotThreadNote: readBotDmThreadContextNote,
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
+    // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
+    captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),
+    // The turn's user row, through the one entry the desktop writes it from (register.ts:17811,
+    // createUserMessageDurably): it recharges the resume budgets for a person's message, registers an
+    // auto-resume's pending outcome, and writes the row behind the task's reply rows with its
+    // transcript anchor. A failed write goes back to the transaction, as on the desktop: it does not
+    // pause the task's reply writes and is not written later (auto-resume.ts). As on the desktop, the
+    // turn is checked once, before the row queues behind the reply rows; a turn cancelled while it
+    // waits still gets its row, as register.ts:17811 passes createUserMessageDurably unwrapped. There is
+    // no other path: an executor without the auto-resume runtime refuses to write a user row.
     createDbMessage: async (id, message, options) => {
-      const history = historyFor(id);
-      await history.drain();
       const turn = turns.get(id);
       turn?.check();
-      const transcriptParentUuid = history.getLastAssistantTranscriptUuid(id);
-      return deps.persistMessage(id, { ...message, agentKind: turn?.dbKind,
-        agentMeta: { ...message.agentMeta, ...(transcriptParentUuid ? { transcriptParentUuid } : {}) } }, options);
+      const autoResume = deps.getAutoResume?.();
+      if (!autoResume) throw new Error('user row write requires the auto-resume runtime (input-queue.mjs)');
+      return autoResume.createUserMessage(id, { ...message, agentKind: turn?.dbKind }, options);
     },
     isSessionRunningError,
     reconcileCreateOptsWithDb,
@@ -243,6 +986,7 @@ export function createTurnExecutor(deps) {
       const turn = turns.get(id);
       // The shared reconciler refreshes execution settings before bootstrap;
       // recovery also needs the current task directory and native identity.
+      if (!turn?.running || !turn.createOpts) return deps.storedSessionOptions(stored);
       return { ...turn.createOpts, workingDir: stored.workingDir,
         resumeSessionId: turn.createOpts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined };
     },
@@ -252,6 +996,7 @@ export function createTurnExecutor(deps) {
     },
     assertScheduledDispatchRoute: async id => { await readExecutionSession(id); },
     beforeProviderStart: async id => {
+      deps.getTaskRuntimePlugins?.()?.assertTaskPromptCurrent(id);
       const turn = turns.get(id);
       turn.check();
       await turn.sendOpts.beforeProviderStart?.();
@@ -268,6 +1013,10 @@ export function createTurnExecutor(deps) {
       deps.assertProviderExecutionSupported?.(id, turn.createOpts.providerId);
     },
     ackInterruptedTurnDispatched: deps.ackInterruptedTurnDispatched,
+    // The pending handoff summary (handoff-pending.ts): sent once with the next accepted send, as
+    // on the desktop (register.ts peekPendingHandoff / consumePendingHandoff).
+    peekPendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.peek(id) : undefined,
+    consumePendingHandoff: deps.pendingHandoff ? id => deps.pendingHandoff.consume(id) : undefined,
     isClearBoundaryCurrent: deps.isClearBoundaryCurrent,
     rewindPersistedUserMessageAfterClear: deps.rewindPersistedUserMessageAfterClear,
     readPiUserEntry: deps.readPiUserEntry ? async (id, clientId) => {
@@ -291,10 +1040,41 @@ export function createTurnExecutor(deps) {
         }
       }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
+    // Sending to an archived task makes it active first (task-restore.ts), as on the desktop.
+    restoreArchivedSessionForSend: deps.restoreArchivedSessionForSend,
+    // Desktop register.ts: a direct (non-queued) user turn takes the Git baseline
+    // before dispatch and drops it when the turn is not dispatched.
+    beforeDispatchDirectUserTurn: startGitBaseline,
+    onUndispatchedDirectUserTurn: id => { const turn = turns.get(id); if (turn) settleGitBaseline(id, turn, 'abort'); },
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
+    // The plan reconciliation and goal notes, read behind the task's durable writes, as register.ts
+    // reads them behind its write FIFO (so a reply still being stored is not missed).
+    peekPlanReconcileNote: async id => {
+      const snapshot = await behindDurableWrites(id, `plan-reconcile-read:${id}`, () => readCodexPlanState(id));
+      if (!snapshot) return null;
+      if (snapshot.state === 'sealed') return { note: buildCompletedPlanGuardNote(), sealedTurnId: snapshot.turnId };
+      const openSteps = snapshot.plan.filter(item => item.status !== 'completed').map(item => item.step);
+      if (openSteps.length === 0 && snapshot.state !== 'interrupted') return null;
+      return { note: buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length }) };
+    },
+    consumeSealedPlanReconcileNote: (id, turnId) =>
+      behindDurableWrites(id, `plan-seal-consume:${id}:${turnId}`, () => clearSealedCodexPlanState(id, turnId)),
+    peekGoalInactiveNote: id => behindDurableWrites(id, `goal-inactive-read:${id}`, () => peekGoalInactiveNote(id)),
+    // Which model ran a dispatched user turn, and a model-change card when it changed (turnModelAttribution.ts).
+    onModelDispatched: (id, clientId) => createTurnModelAttribution({
+      maker: deps.getMaker(), getSessionProvider,
+      captureDataOwnerBroadcastScope: () => deps.getOwner?.() ?? null,
+      isDataOwnerBroadcastScopeCurrent: owner => (deps.getOwner?.() ?? null) === owner && deps.isCurrent(),
+      enqueueDurableWrite: (label, write) => behindDurableWrites(id, label, write),
+      patchMessageAgentMeta: async (sessionId, messageClientId, patch) =>
+        (await patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, messageClientId, patch)) !== null,
+      createDbMessage: (sessionId, body) => deps.persistMessage(sessionId, body),
+      log,
+    })(id, clientId),
     log,
-  });
+  };
+  const transaction = createMakerSendTransaction(transactionDeps);
 
   function assertSteerCurrent(id, opts) {
     deps.assertCurrent();
@@ -360,19 +1140,65 @@ export function createTurnExecutor(deps) {
     });
   }
 
-  async function send(sessionId, message, createOpts, sendOpts) {
-    createOpts = { ...createOpts };
+  // The record a dispatched turn runs under. The listener only accepts events of the record's
+  // instance and generation (listen), and the shared transaction's hooks read it (turns.get), so
+  // every dispatch, an input's send or a context recovery's replay, opens one.
+  function openTurn(sessionId, createOpts, sendOpts, clientId) {
+    // Until this turn reserves its own generation, events of the previous one are recognised by theirs.
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
-      createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId };
+      createOpts, sendOpts, clientId, previousGeneration: turns.get(sessionId)?.generation };
     turns.set(sessionId, turn);
-    const check = () => {
+    const ownerGeneration = getActiveAppSession().generation;
+    turn.check = () => {
+      if (getActiveAppSession().generation !== ownerGeneration) throw new Error('input runtime owner changed');
       deps.assertCurrent();
       sendOpts.signal?.throwIfAborted();
       if (turns.get(sessionId) !== turn) throw new Error('input runtime was replaced');
     };
-    turn.check = check;
+    return turn;
+  }
+
+  // Runs the shared send transaction for a turn once it is prepared, binding the instance and
+  // generation it reserves (bindTurnSession listens to that instance). A dispatch that throws
+  // leaves the record not running.
+  async function dispatchTurn(sessionId, turn, message, dispatch) {
+    try {
+      await turn.preparing;
+      turn.check();
+      return await dispatch(sessionId, message, turn.createOpts, {
+        ...turn.sendOpts,
+        onVendorTurnReserved: generation => {
+          turn.check();
+          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
+          // As the desktop's provider start (sessionTurnObserver.ts): a newer turn ends a pending silent-stop decision.
+          silentStop?.supersede(sessionId);
+          turn.generation = generation;
+          turn.sendOpts.onVendorTurnReserved?.(generation);
+        },
+      });
+    } catch (error) {
+      turn.running = false;
+      throw error;
+    }
+  }
+
+  // As the desktop's sendToAgentAccepted (register.ts), every send of a task runs under that
+  // task's send lock, shared with the entries that change its runtime or route
+  // (session-route-lock.mjs) and with context recovery. Held until the send is accepted or refused.
+  function send(sessionId, message, createOpts, sendOpts) {
+    return withSendToSessionLock(sessionId, () => sendUnlocked(sessionId, message, createOpts, sendOpts));
+  }
+
+  async function sendUnlocked(sessionId, message, createOpts, sendOpts) {
+    createOpts = { ...createOpts };
+    sendOpts = sendOpts ?? {};
+    const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
+    // An automatic resume continues an earlier input whose stream (/api/chat) still waits for it.
+    if (sendOpts.persistUserMessage?.autoResume === true) turn.resumeOf = deps.resumeOriginOf?.(sessionId);
+    const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
+      check();
       const stored = await readExecutionSession(sessionId);
       const queuedPlan = createOpts.planMode;
       await reconcileCreateOptsWithDb(sessionId, createOpts);
@@ -381,7 +1207,6 @@ export function createTurnExecutor(deps) {
       createOpts.planMode = queuedPlan;
       createOpts.workingDir = stored.workingDir || '';
       turn.dbKind = dbKind(createOpts.agentKind);
-      await deps.beforeSessionStart?.(sessionId, createOpts.agentKind);
       check();
       assertHostTaskExecutionSupported(createOpts);
       deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
@@ -399,18 +1224,9 @@ export function createTurnExecutor(deps) {
       }
       setSessionProvider(sessionId, createOpts.providerId ?? null);
     })();
+    const result = await dispatchTurn(sessionId, turn, message,
+      (...args) => transaction.sendToAgentAccepted(...args));
     try {
-      await turn.preparing;
-      check();
-      const result = await transaction.sendToAgentAccepted(sessionId, message, createOpts, {
-        ...sendOpts,
-        onVendorTurnReserved: generation => {
-          check();
-          bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
-          turn.generation = generation;
-          sendOpts.onVendorTurnReserved?.(generation);
-        },
-      });
       if (!result.accepted) {
         turn.running = false;
         if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
@@ -427,11 +1243,142 @@ export function createTurnExecutor(deps) {
     }
   }
 
+  // A context recovery's replay of the user's message (contextRecoveryAssembly.ts
+  // replayContextRecoveryWithPorts, the desktop's sendToAgentAcceptedUnlocked): a turn of its own
+  // through the same shared transaction, with no input-queue item, no new user row and no send lock
+  // (recovery holds it). Recovery has closed the task's runtime and waited for the claimed turn's
+  // settlement before it replays; a turn of the task still running, or a live runtime, means
+  // something started since, so the replay is refused. As on the desktop, its Git baseline is the
+  // transaction's: a replay has no persistUserMessage, so beforeDispatchDirectUserTurn opens it and
+  // onUndispatchedDirectUserTurn drops it when the replay is refused or fails. Its turn carries the
+  // claimed input's client id, only to stamp its events and receipts (Host-only: /api/chat ends a
+  // message's stream on a terminal of its own client id); no user row is written for it.
+  async function replay(sessionId, message, createOpts, sendOpts = {}) {
+    if (turns.get(sessionId)?.running || deps.getMaker().getSession(sessionId)) return { accepted: false };
+    createOpts = { ...createOpts };
+    const turn = openTurn(sessionId, createOpts, sendOpts, recovery?.replayClientId(sessionId));
+    turn.preparing = (async () => {
+      await readExecutionSession(sessionId);
+      assertHostTaskExecutionSupported(createOpts);
+      deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
+      turn.check();
+    })();
+    const result = await dispatchTurn(sessionId, turn, message, (...args) => transaction.sendToAgentAccepted(...args));
+    if (!result.accepted) {
+      turn.running = false;
+      if (deps.isCurrent()) await deps.markEnded?.(sessionId, Date.now());
+    }
+    return result;
+  }
+
   return {
     send,
+    /**
+     * What starting a task's runtime outside a turn reads, as the desktop binds the same functions
+     * for the send transaction and for a cold Pi runtime's window check (register.ts
+     * createColdPiRehydrationForWindowVerification): the start options with the stderr capture, the
+     * working directory check, the Orca and directory option preparation, and the bootstrap, which
+     * creates the runtime and listens to it as a send does.
+     */
+    startPorts: {
+      buildCreateOptsWithStderr: transactionDeps.buildCreateOptsWithStderr,
+      checkWorkDirExists: transactionDeps.checkWorkDirExists,
+      synthesizeOrcaVendorOptionsFromDb: transactionDeps.synthesizeOrcaVendorOptionsFromDb,
+      readSessionExtraDirsFromDb: transactionDeps.readSessionExtraDirsFromDb,
+      readSessionWritableDirsFromDb: transactionDeps.readSessionWritableDirsFromDb,
+      ensureRemoteReadyForSessionStart: transactionDeps.ensureRemoteReadyForSessionStart,
+      bootstrapSession: transactionDeps.bootstrapSession,
+      broadcastSessionCreated: transactionDeps.broadcastSessionCreated,
+    },
+    /** Forgets a task's working-directory recovery at its archive or delete (working-directory.ts). */
+    discardWorkingDirectoryRecovery: id => workingDirectory.discardWorkingDirectoryRecovery(id),
+    /** The engine of a task as its message persistence knows it (the desktop's getSessionDbAgentKind). */
+    sessionDbAgentKind: id => histories.get(id)?.getSessionDbAgentKind(id) ?? null,
+    /** Rows of a task's turn not in the database yet, as the history view shows them (the desktop's
+     * getSessionThinkingSnapshots, which its history view reads, bootstrap-electron.ts readHistoryLiveMessages). */
+    liveHistory: id => histories.get(id)?.getSessionThinkingSnapshots(id) ?? [],
+    /** On shutdown, before stopping tasks: waits (bounded) for context recoveries in flight to end. */
+    drainRecoveriesForShutdown: () => recovery?.drainForShutdown(),
+    /** A recovery's replay was accepted (the recovery factory's onRebuilt). */
+    noteRecoveryRebuilt: id => recovery?.noteRebuilt(id),
+    replay,
+    /** Writes the queued history of every task, as the desktop's drainPersistQueue. */
+    async drainHistories() { await Promise.all([...histories.values()].map(history => history.drain())); },
+    /** A rebuilt native context has seen no environment notes (contextRecoveryRebuilt). */
+    resetWireNotes: id => wireNotes.reset(id),
+    /**
+     * Closes a task's runtime outside a turn, as a runtime refresh does: the executor lets go of the
+     * instance (interactions, binding, environment notes) before Maker closes it. A working-directory
+     * move closes an idle runtime this way (session-move.ts).
+     */
+    closeRuntime: id => closeRuntime(id),
+    /** The runtime the Host binds for a task (the product-turn failure gate's current-owner check). */
+    boundSession: id => bindings.get(id)?.session,
+    async beforeDispatchUserTurn(id, item, signal, prepareSnapshot) {
+      const turn = turns.get(id);
+      const live = deps.getMaker()?.getSession(id);
+      if (live) {
+        await beginTurnChangeSetAtDispatch(live, item.clientId);
+        turn.changeRecordStarted = true;
+      }
+      turn.check();
+      await startGitBaseline(id, signal, prepareSnapshot);
+    },
+    onUndispatchedUserTurn(id) {
+      const turn = turns.get(id);
+      if (!turn) return;
+      if (turn.changeRecordStarted) clearPendingTurnChangeSets(id);
+      settleGitBaseline(id, turn, 'abort');
+    },
+    wireHostSession(session) {
+      deps.assertCurrent();
+      if (deps.getMaker()?.getSession(session.id) !== session) throw new Error('Host Session was replaced');
+      listen(session.id, session);
+    },
+    async beginHostTurn(id) {
+      deps.assertCurrent();
+      const session = deps.getMaker()?.getSession(id);
+      if (!session) throw new Error('Host Session is unavailable');
+      const previous = turns.get(id);
+      const generation = session.getTurnGeneration?.();
+      if (previous?.running) {
+        if (previous.session === session && previous.generation === generation) return;
+        throw new Error('Host turn is already running');
+      }
+      const turn = { session, generation, direct: true, running: true, terminal: false, dbKind: dbKind(session.agentKind) };
+      turns.set(id, turn);
+      listen(id, session);
+      historyFor(id).noteTurnStarted(id);
+      turn.preparing = (async () => {
+        await deps.markStarted?.(id);
+        deps.assertCurrent();
+        if (turns.get(id) !== turn || deps.getMaker()?.getSession(id) !== session) throw new Error('Host Session was replaced');
+      })();
+      try { await turn.preparing; }
+      catch (error) { turn.running = false; throw error; }
+    },
     steer,
     readExecutionSession,
     readAutoReviewHistory,
+    assertPiSkillPreparationReady,
+    async preparePiSkillRuntime(id, dir, assertStartupCurrent) {
+      await assertPiSkillPreparationReady(id, dir, assertStartupCurrent);
+      assertStartupCurrent();
+      const maker = deps.getMaker();
+      const initial = maker.getSession(id);
+      try {
+        await transaction.preparePiSkillRuntime(id, dir, {}, assertStartupCurrent);
+        assertStartupCurrent();
+      } catch (error) {
+        try { assertStartupCurrent(); }
+        catch (admissionError) {
+          const started = maker.getSession(id);
+          if (started && started !== initial) await maker.closeSessionIfCurrent(started, 'runtime-refresh', { onlyIfIdle: true });
+          throw admissionError;
+        }
+        throw error;
+      }
+    },
     async restoreSession(id, options, assertCurrent) {
       deps.assertCurrent(); await assertCurrent();
       await readExecutionSession(id);
@@ -441,21 +1388,66 @@ export function createTurnExecutor(deps) {
       const maker = deps.getMaker();
       let session = maker.getSession(id);
       if (!session) {
-        session = await maker.createSession({ ...options, id });
-        rememberLiveSessionSettings(session, options);
+        // As every runtime start (the bootstrap above): the start admission, then the start's provider
+        // on the task row.
+        const start = { ...options, id };
+        // As the bootstrap above (the desktop restores through bootstrapSession too).
+        const runtimeOverride = applySessionRuntimeOverrideForStart(start, false);
+        await deps.admitLocalRoute(start);
+        deps.assertCurrent(); await assertCurrent();
+        session = await maker.createSession({ ...start });
+        await persistStartedSessionProvider(session, start, undefined, runtimeOverride);
+        rememberLiveSessionSettings(session, start);
       }
       deps.assertCurrent(); await assertCurrent();
       listen(id, session);
       return session;
     },
+    behindDurableWrites,
     enqueueDurableWrite(id, label, fn) { return historyFor(id).enqueueDurableWrite(label, fn); },
+    /** A task's event persistence, for the auto-resume runtime (auto-resume.ts) and the reply anchor. */
+    autoResumeHistory: id => historyFor(id),
+    // The coordinator's hooks for a user turn stored but not dispatched, as register.ts passes them:
+    // a retryable error row (the desktop's onTurnErrorEvent with the Pi prompt-timeout reason), and
+    // for a Pi prompt timeout, closing the stuck native process (no replay; the user retries).
+    // Host-only: the input's interrupted receipt once its error row is stored. /api/chat (chat.mjs)
+    // ends a message's stream on it; without it a stream for this input waited for a terminal event
+    // that never comes. Only this path sends it: an error claimed by context recovery (or, later,
+    // held by an automatic continuation) stores no row here, so that stream stays open.
+    persistTerminalSendError(id, message, inputClientId) {
+      const history = historyFor(id);
+      history.onTurnErrorEvent(id, {
+        message, ...(isPiPromptRpcTimeoutError({ message }) ? { reason: 'pi-prompt-timeout' } : {}),
+      }, null);
+      if (typeof inputClientId !== 'string') return;
+      void history.drain().then(() => {
+        if (history.hasFailedWrites() || !deps.isCurrent()) return;
+        deps.hub.publish({ type: 'input_receipt', sessionId: id, inputClientId, clientId: inputClientId, status: 'interrupted' });
+      });
+    },
+    onPersistedSendRejected(id, message) {
+      if (!isPiPromptRpcTimeoutError({ message })) return;
+      void closeRuntime(id).catch(error => {
+        log.warn('failed to close unhealthy PI session after prompt timeout', { sessionId: id, error: errorText(error) });
+      });
+    },
+    recordRuntimeControlError(id, data) { historyFor(id).onTurnErrorEvent(id, data, null); },
     isRunning(id) { return turns.get(id)?.running === true; },
+    // The turn has its terminal and its rows are still settling: still running for dispatch (isRunning).
+    isSettling(id) { const turn = turns.get(id); return turn?.terminal === true && turn.running === true; },
     isInputRunning(id, clientId) { const turn = turns.get(id); return turn?.clientId === clientId && turn.running; },
+    // Context recovery has claimed this input's terminal error and is rebuilding before its replay:
+    // the input is still being answered (the replay carries its client id).
+    isInputRecovering(id, clientId) { return recovery?.replayClientId(id) === clientId; },
+    /** A context recovery of the task is running: part of its turn (input-queue.mjs releaseDesktopHold). */
+    isRecovering(id) { return recovery?.isRecovering(id) === true; },
     reconcileIdle(id) {
       const turn = turns.get(id);
       if (!turn?.abortRequested || turn.terminal || turn.session?.isTurnRunning?.() !== false) return false;
-      // finish owns the durable terminal. Its asynchronous settlement releases
-      // the coordinator; returning true here would let the next input overtake it.
+      // finish owns the durable terminal and its asynchronous settlement wakes the coordinator. What
+      // holds the next input until the rows settle is isRunning (the coordinator rechecks it before any
+      // dispatch; input-queue.test.mjs 'the next input is not dispatched before the reply rows settle');
+      // this only reports that the turn has not been reconciled, so no idle is claimed while it writes.
       void finish(id, turn);
       return false;
     },
@@ -478,23 +1470,33 @@ export function createTurnExecutor(deps) {
       if (!turn) return;
       const history = historyFor(id);
       await history.drain();
-      await history.retryFailedWrites();
-      turn.persistenceError = null;
-      if (turn.terminal && !turn.interruptedByShutdown) { deps.assertCurrent(); await deps.markEnded?.(id, turn.endedAt); }
+      await retryHistoryWrites(id, history, turn);
     },
-    async close(id) {
+    async close(id, canRetryPersistence) {
       deps.interactions?.detach(id);
       const turn = turns.get(id);
       await turn?.settlement;
       const history = histories.get(id);
       await history?.drain();
-      if (history?.hasFailedWrites()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+      if (history && (history.hasFailedWrites() || (canRetryPersistence && turn?.persistenceError))) {
+        if (!canRetryPersistence?.()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+        deps.assertCurrent();
+        try { await retryHistoryWrites(id, history, turn); }
+        catch (error) {
+          if (turn) turn.persistenceError = errorText(error);
+          deps.onPersistenceError(id, error);
+          throw error;
+        }
+      }
+      releaseBinding(id);
       bindings.get(id)?.unsubscribe();
       bindings.delete(id);
       history?.clearSessionPersistState(id);
       histories.delete(id);
       wireNotes.reset(id);
       clearSessionProvider(id);
+      // The desktop session runtime cleanup clears the effort axis with the provider.
+      setSessionEffort(id, null);
       await deps.getMaker()?.closeSession?.(id);
       turns.delete(id);
     },

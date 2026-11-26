@@ -14,6 +14,7 @@ import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js'
 import type { Envelope } from './protocol.js';
 import { parseProviderSharePeer } from './providerSharePeer.js';
 import { parseSharedTaskPeer } from './sharedTaskPeer.js';
+import { PROVIDER_SHARE_INSIGHTS_DIAGNOSTIC_CHANNEL, shortDeviceRef } from './stallDiagnostics.js';
 
 /** Warn before the queue is full: 3/4 of the message cap, or 4 MiB pending. */
 export const BACKLOG_WARN_MESSAGES = 48;
@@ -38,7 +39,8 @@ export interface BacklogPeer {
 /** Registered channel names only; anything else is logged (and remembered) as unknown. */
 export function isBacklogChannel(channel: unknown): channel is string {
   return typeof channel === 'string'
-    && (REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel));
+    && (channel === PROVIDER_SHARE_INSIGHTS_DIAGNOSTIC_CHANNEL
+      || REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel));
 }
 
 function knownChannel(channel: unknown): string {
@@ -66,10 +68,10 @@ const kib = (bytes: number) => Math.round(bytes / 1024);
  */
 export function backlogPeerTag(id: string): string {
   const share = parseProviderSharePeer(id);
-  if (share) return `share:${share.deviceId.slice(0, 8)}`;
+  if (share) return `share:${shortDeviceRef(share.deviceId)}`;
   const task = parseSharedTaskPeer(id);
-  if (task) return `task:${task.deviceId.slice(0, 8)}`;
-  return id.slice(0, 8);
+  if (task) return `task:${shortDeviceRef(task.deviceId)}`;
+  return shortDeviceRef(id);
 }
 
 /** Split a peer's queue into frames last written directly and those using the relay socket. */

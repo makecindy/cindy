@@ -85,3 +85,41 @@ it('reserves the four native slots while probes are still pending', async () => 
   expect(await open()).toBeNull();
   expect(h.peer).toHaveBeenCalledTimes(5);
 });
+
+// #10142: existing dedup tests never exercised in-flight file queue/progress.
+// Actual adapter read must fan out progress and preserve a shared read when one
+// HTTP consumer cancels. Unit: deferred peer boundary, no filesystem or sleeps.
+it('shares file queue/progress with duplicate readers and cancels only the last consumer', async () => {
+  await open();
+  const reader = await h.bridge.mock.calls[0][2]({});
+  let finish!: (value: any) => void;
+  h.peer.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const one = new AbortController(), two = new AbortController();
+  const activity1 = Object.assign(vi.fn(), { signal: one.signal });
+  const activity2 = Object.assign(vi.fn(), { signal: two.signal });
+  const write1 = vi.fn(), write2 = vi.fn();
+  const pending1 = reader.read(metadata.size - 4, metadata.size - 1, write1, activity1);
+  const rejected = expect(pending1).rejects.toThrow('FILE_PEER_CANCELLED');
+  const pending2 = reader.read(metadata.size - 4, metadata.size - 1, write2, activity2);
+  expect(activity1).toHaveBeenLastCalledWith('queued', 0);
+  expect(activity2).toHaveBeenLastCalledWith('queued', 0);
+  const call = h.peer.mock.calls[1];
+  call[5](); call[4](2, 4);
+  expect(activity1).toHaveBeenLastCalledWith('active', 2);
+  expect(activity2).toHaveBeenLastCalledWith('active', 2);
+  one.abort(); await rejected;
+  expect(call[3].aborted).toBe(false);
+  h.bytes.mockResolvedValueOnce(new Uint8Array(4));
+  finish({ ...metadata, size: 4 }); await pending2;
+  expect(write1).not.toHaveBeenCalled(); expect(write2).toHaveBeenCalledOnce();
+  expect(h.peer).toHaveBeenCalledTimes(2);
+
+  h.peer.mockImplementationOnce((_d, _u, _r, signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('FILE_PEER_CANCELLED')));
+  }));
+  const three = new AbortController(), activity3 = Object.assign(vi.fn(), { signal: three.signal });
+  const pending3 = reader.read(1024 * 1024, 1024 * 1024 + 1, vi.fn(), activity3);
+  const rejected3 = expect(pending3).rejects.toThrow('FILE_PEER_CANCELLED');
+  three.abort(); await rejected3;
+  expect(h.peer.mock.calls[2][3].aborted).toBe(true);
+});

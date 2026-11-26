@@ -12,6 +12,7 @@
  */
 
 export type MemoryToolErrorCode =
+  | 'PRECONDITION_FAILED'
   | 'MAKER_MEMORY_NOT_READY'
   | 'NOT_FOUND'
   | 'ALREADY_EXISTS'
@@ -20,11 +21,17 @@ export type MemoryToolErrorCode =
 
 export interface MemoryToolError {
   code: MemoryToolErrorCode;
+  reason?: 'HOST_PROFILE_RELEASE_FAILED';
   message: string;
 }
 
 /** 把 unknown error 分类成结构化 {code, message}. 纯函数, 不抛 */
 export function classifyMemoryError(err: unknown): MemoryToolError {
+  if (err instanceof Error && 'code' in err && err.code === 'PRECONDITION_FAILED'
+    && 'reason' in err && err.reason === 'HOST_PROFILE_RELEASE_FAILED') {
+    // The Host supplies localized guidance after the MCP boundary. Never serialize a storage path.
+    return { code: err.code, reason: err.reason, message: '' };
+  }
   const message = err instanceof Error ? err.message : String(err);
   // maker-core MemoryError 抛的 message 形如 "memory:<code> <description>",
   // 见 packages/maker-core/src/memory/types.ts MemoryError.constructor
@@ -42,7 +49,8 @@ export function classifyMemoryError(err: unknown): MemoryToolError {
       code === 'title-too-long' ||
       code === 'description-has-newline' ||
       code === 'shard-too-large' ||
-      code === 'path-traversal'
+      code === 'path-traversal' ||
+      code === 'ambiguous-address'
     ) {
       return { code: 'INVALID_PARAMS', message };
     }

@@ -59,6 +59,28 @@ describe('createPeerLinksPushScheduler', () => {
     expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
+  // MagicLizi was already reachable without a control link. Unit: an empty links list
+  // with a changing transport route must produce the same pushes as a business link.
+  it('publishes transport changes before a control link is opened', () => {
+    let current = snap([]);
+    const broadcast = vi.fn();
+    const scheduler = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    const publish = (agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes']) => {
+      current = { ...current, agentNetRoutes };
+      scheduler.schedule();
+      vi.advanceTimersByTime(250);
+    };
+
+    publish([{ deviceId: 'a', path: 'connecting', rttMs: null }]);
+    publish([{ deviceId: 'a', path: 'relay', rttMs: 20 }]);
+    publish([{ deviceId: 'a', path: 'relay', rttMs: 25 }]);
+    publish([{ deviceId: 'a', path: 'direct', rttMs: 3 }]);
+    publish([]);
+
+    expect(broadcast.mock.calls.map(([snapshot]) => snapshot.agentNetRoutes[0]?.path ?? null))
+      .toEqual(['connecting', 'relay', 'direct', null]);
+  });
+
   it('dispose 取消待发广播并忘记上次结构,下一段链路从头比较', () => {
     const current = snap([{ deviceId: 'a', path: 'relay', rttMs: null, open: true }]);
     const broadcast = vi.fn();
@@ -105,6 +127,42 @@ describe('createPeerLinksPushScheduler', () => {
     for (const set of handlers.values()) expect(set.size).toBe(0);
   });
 
+  // 2026-11-18 用户要求拓扑中间那台电脑也写出它实际用的连接方式。主连接重连换了传输时对端集合可能完全不变，
+  // 原来的 key 只看对端，推送会被吞掉、要等下一次 2 秒轮询。最小失败输入：links 相同、relayProtocol 从 agent-net 变为 device-link。tier:unit。
+  it('本机主连接换了传输(Agent-Net ↔ Device Link)即使对端没变也广播', () => {
+    const links: LinkInput[] = [{ deviceId: 'a', path: 'relay', rttMs: 10, open: true }];
+    let current: DeviceLinkPeerLinksSnapshot = { ...snap(links), relayProtocol: 'agent-net' };
+    const broadcast = vi.fn();
+    const s = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+
+    current = { ...snap(links), relayProtocol: 'device-link' };
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith(current);
+  });
+
+  // 2026-11-18 用户要求中转点写出 Agent-Net 走的是 UDP 还是 WS:只换了这条路(UDP 不通退回 WebSocket)也要马上推，
+  // 否则页面要等下一次轮询才改字。最小失败输入:同一 Agent-Net 主连接,relayTransport 从 udp 变成 websocket。
+  it('经中转的数据在 UDP 与 WebSocket 之间切换也广播', () => {
+    const links: LinkInput[] = [{ deviceId: 'a', path: 'relay', rttMs: 10, open: true }];
+    let current: DeviceLinkPeerLinksSnapshot = { ...snap(links), relayProtocol: 'agent-net', relayTransport: 'udp' };
+    const broadcast = vi.fn();
+    const s = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+
+    current = { ...snap(links, 42), relayProtocol: 'agent-net', relayTransport: 'websocket' };
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith(current);
+  });
+
   it('结构 key 与顺序无关、忽略 rttMs 与业务收发时刻', () => {
     const a = snap([
       { deviceId: 'b', path: 'relay', rttMs: 1, open: true, sentAgoMs: 10 },
@@ -115,5 +173,29 @@ describe('createPeerLinksPushScheduler', () => {
       { deviceId: 'b', path: 'relay', rttMs: 77, open: true },
     ], null);
     expect(peerLinksStructureKey(a)).toBe(peerLinksStructureKey(b));
+  });
+
+  // 2026-11-22 双路延迟与手动选路偏好:偏好变化或双路测速从单路变双路时结构 key 变化并触发广播,单纯数值波动不广播。tier: unit。
+  it('Agent-Net 选路偏好或双路可达状态变化会改变结构 key,纯 RTT 数值波动不变', () => {
+    const base: DeviceLinkPeerLinksSnapshot = {
+      links: [],
+      relayRttMs: 14,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 220, directRttMs: 220, relayRttMs: null, pathPreference: 'auto' }],
+    };
+    const bothMeasured: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 215, directRttMs: 215, relayRttMs: 86, pathPreference: 'auto' }],
+    };
+    const jitterOnly: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 218, directRttMs: 218, relayRttMs: 89, pathPreference: 'auto' }],
+    };
+    const prefChanged: DeviceLinkPeerLinksSnapshot = {
+      ...base,
+      agentNetRoutes: [{ deviceId: 'a', path: 'direct', rttMs: 218, directRttMs: 218, relayRttMs: 89, pathPreference: 'relay' }],
+    };
+    expect(peerLinksStructureKey(bothMeasured)).not.toBe(peerLinksStructureKey(base));
+    expect(peerLinksStructureKey(jitterOnly)).toBe(peerLinksStructureKey(bothMeasured));
+    expect(peerLinksStructureKey(prefChanged)).not.toBe(peerLinksStructureKey(jitterOnly));
   });
 });

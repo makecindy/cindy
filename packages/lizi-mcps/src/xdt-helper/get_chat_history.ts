@@ -23,6 +23,7 @@ import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
 import { resolveHistoryScope } from './_history_scope.js';
+import { containsManagedImageReference, HISTORY_IMAGE_VIEW_HINT } from './historyImageHint.js';
 
 const ROLE_VALUES = [
   'user',
@@ -284,13 +285,16 @@ export function registerGetChatHistoryTool(
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
+        if (m.clientId !== undefined) out.clientId = m.clientId;
         if (m.agentMeta !== null && m.agentMeta !== undefined) out.agentMeta = m.agentMeta;
         if (m.rewindAt !== null) out.rewindAt = new Date(m.rewindAt).toISOString();
         return out;
       });
+      const imageViewHint = containsManagedImageReference(messagesOut) ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {};
       return okPayload({
         sessions: sessionsMap,
         messages: messagesOut,
+        ...imageViewHint,
         nextCursor: page.nextCursor ? encodeCursor(page.nextCursor) : null,
         hasMore: page.hasMore,
         query: {

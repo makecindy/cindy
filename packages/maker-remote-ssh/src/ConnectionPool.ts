@@ -15,7 +15,7 @@
 
 import { EventEmitter } from 'node:events';
 
-import { RemoteHost, type RemoteHostDeps, type StatusListener } from './RemoteHost.js';
+import { RemoteHost, type ConnectOpts, type RemoteHostDeps, type StatusListener } from './RemoteHost.js';
 import { FileHostKeyStore, type HostKeyStore } from './hostKeys.js';
 import { effectiveAuthenticationFingerprint } from './sshAuthentication.js';
 import type { HostConfig, HostSnapshot } from './types.js';
@@ -32,6 +32,7 @@ export interface ConnectionPoolDeps {
   /** Pre-built store; overrides `knownHostsPath` (mainly for tests). */
   hostKeys?: HostKeyStore;
   formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
 }
 
 export class ConnectionPool {
@@ -105,14 +106,25 @@ export class ConnectionPool {
     return Array.from(this.hosts.values()).map((h) => h.snapshot());
   }
 
-  async connect(id: string): Promise<void> {
+  async connect(id: string, options?: ConnectOpts): Promise<void> {
     const host = this.requireHost(id);
-    await host.connect();
+    await host.connect(options);
   }
 
   async disconnect(id: string): Promise<void> {
     const host = this.hosts.get(id);
     if (host) await host.disconnect();
+  }
+
+  /**
+   * The system network changed or the machine woke: give hosts that dropped
+   * and exhausted their bounded reconnect one more bounded round. Hosts that
+   * never connected, were disconnected by the user or failed auth are untouched.
+   */
+  retryAfterNetworkChange(): string[] {
+    const retried: string[] = [];
+    for (const [id, host] of this.hosts) if (host.retryAfterNetworkChange()) retried.push(id);
+    return retried;
   }
 
   /**
@@ -138,6 +150,7 @@ export class ConnectionPool {
       logger: this.deps.logger,
       hostKeys: this.hostKeys,
       formatHostKeyError: this.deps.formatHostKeyError,
+      formatAgentUnavailableError: this.deps.formatAgentUnavailableError,
     });
     host.onStatus((snap) => this.events.emit('status', snap));
     this.hosts.set(cfg.id, host);

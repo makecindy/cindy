@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 /**
  * 插件安装／更新确认框（docs/dev-rules/plugin-security-and-authoring.md §3.1）。
  *
@@ -6,18 +7,17 @@
  * 另需明确确认替换。无论确认、取消还是被 Main 收起（超时、账号切换），答案都会回给 Main。
  * 落位前 Main 还会在锁内用同一份包复核，确认框本身不是授权事实。
  */
-import { useEffect, type ReactNode } from 'react';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
-import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
-import { cn } from '@/lib/utils';
+import { PluginPermissionList, usePluginPermissionFacts } from '@/features/plugin/PluginPermissionList';
 import type { GhostPermissionItem } from '../../shared/ghost';
-import type {
-  GhostInstallConsentFacts,
-  GhostInstallConsentRequest,
+import {
+  ghostInstallSourceNoticeKey,
+  type GhostInstallConsentFacts,
+  type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent';
 
 type Translate = ReturnType<typeof useTranslation>['t'];
@@ -42,85 +42,55 @@ export function ghostInstallConsentSourceLabel(
     : origin;
 }
 
-function ConsentPermissionRow({
-  item,
-  change,
-}: {
-  item: GhostPermissionItem;
+function ConsentSection({ title, items, countLabel, change }: {
+  title: string;
+  items: readonly GhostPermissionItem[];
+  countLabel?: string;
   change?: 'added' | 'removed';
 }) {
-  const { t } = useTranslation();
-  const Icon = permissionItemIcon(item);
-  const hostDetail = permissionItemDetail(item, t);
+  const displayFacts = usePluginPermissionFacts(items);
   return (
-    <li className={cn('flex items-start gap-2.5 py-1.5', change === 'removed' && 'opacity-60')}>
-      <Icon
-        size={16}
-        strokeWidth={1.8}
-        className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
-        aria-hidden="true"
-      />
-      <div className="min-w-0 flex-1">
-        <p
-          className={cn(
-            // labelArgs 含作者可控的无空格长串（域名、工具名），必须可断行。
-            'break-words text-13 leading-5 text-[var(--confirm-title)]',
-            change === 'removed' && 'line-through',
-          )}
-        >
-          {t(`settings.ghosts.perm.${item.labelKey}`, item.labelArgs)}
-        </p>
-        {hostDetail ? (
-          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[1.5] text-[var(--text-tertiary)]">
-            {hostDetail}
-          </p>
-        ) : null}
-        {item.detail ? (
-          <p className="mt-0.5 whitespace-pre-line break-words text-12 leading-[1.5] text-[var(--text-tertiary)]">
-            {item.detail}
-          </p>
-        ) : null}
-      </div>
-      {change === 'added' ? (
-        // 权限新增是一次 diff，沿用 diff 语义色（跨主题 token）。徽章是 chrome，不可选中。
-        <span className="mt-0.5 shrink-0 select-none rounded-full px-1.5 py-px text-11 font-medium bg-[var(--diff-add-bg)] text-[var(--diff-add-fg)]">
-          {t('settings.ghosts.installConsent.addedBadge')}
-        </span>
-      ) : null}
-    </li>
-  );
-}
-
-function ConsentSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="mt-3 first:mt-0">
-      <h3 className="text-12 font-medium leading-[1.5] text-[var(--text-secondary)]">{title}</h3>
-      <ul className="mt-1">{children}</ul>
+    <section className="mt-4 first:mt-0">
+      <h3 className="mb-3 flex flex-wrap items-baseline gap-x-2 text-14 font-medium leading-[1.43] text-[var(--confirm-title)]">
+        <span>{title}</span>
+        {countLabel ? <span className="text-12 tabular-nums text-[var(--text-secondary)]">{countLabel}</span> : null}
+      </h3>
+      <PluginPermissionList items={displayFacts} change={change} showAll />
     </section>
   );
 }
 
-export function GhostInstallConsentContent({ facts, capabilityOnly = false, replacement = false, sourceChanged = false }: {
-  facts: GhostInstallConsentFacts; capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
+export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false }: {
+  facts: GhostInstallConsentFacts; origin?: GhostInstallConsentRequest['origin'];
+  communityMarket?: GhostInstallConsentRequest['communityMarket'];
+  capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
 }) {
   const { t } = useTranslation();
   if (facts.kind === 'install') {
+    const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
       <div>
         <p className="text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.installDescription')}
         </p>
+        {sourceNotice ? (
+          <p className={sourceNotice === 'settings.ghosts.market.communityDisclaimer'
+            ? 'mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]'
+            : 'mt-2 text-13 leading-[1.54] text-[var(--confirm-desc)]'}>
+            {t(sourceNotice)}
+          </p>
+        ) : null}
         <div className="mt-3">
           {facts.permissions.length === 0 ? (
             <p className="text-13 leading-5 text-[var(--confirm-desc)]">
               {t('settings.ghosts.installConsent.noPermissions')}
             </p>
           ) : (
-            <ConsentSection title={t('settings.ghosts.installConsent.grantsTitle')}>
-              {facts.permissions.map((item) => (
-                <ConsentPermissionRow key={item.key} item={item} />
-              ))}
-            </ConsentSection>
+            <ConsentSection
+              title={t('settings.ghosts.installConsent.grantsTitle')}
+              items={facts.permissions}
+              countLabel={t('settings.ghosts.perm.itemCount', { count: facts.permissions.length })}
+            />
           )}
         </div>
       </div>
@@ -141,18 +111,18 @@ export function GhostInstallConsentContent({ facts, capabilityOnly = false, repl
       ) : null}
       <div className="mt-3">
         {facts.added.length > 0 ? (
-          <ConsentSection title={t('settings.ghosts.installConsent.addedTitle')}>
-            {facts.added.map((item) => (
-              <ConsentPermissionRow key={item.key} item={item} change="added" />
-            ))}
-          </ConsentSection>
+          <ConsentSection
+            title={t('settings.ghosts.installConsent.addedTitle')}
+            items={facts.added}
+            change="added"
+          />
         ) : null}
         {facts.removed.length > 0 ? (
-          <ConsentSection title={t('settings.ghosts.installConsent.removedTitle')}>
-            {facts.removed.map((item) => (
-              <ConsentPermissionRow key={item.key} item={item} change="removed" />
-            ))}
-          </ConsentSection>
+          <ConsentSection
+            title={t('settings.ghosts.installConsent.removedTitle')}
+            items={facts.removed}
+            change="removed"
+          />
         ) : null}
         {facts.unchangedCount > 0 ? (
           <p className="mt-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
@@ -186,6 +156,7 @@ export function GhostInstallConsentHost() {
 
   useEffect(() => {
     const aborts = new Map<string, AbortController>();
+    let disconnect: (() => void) | undefined;
     const unsubscribeDismissed = window.electronAPI.ghosts.onInstallConsentDismissed(
       (payload) => {
         if (payload && typeof payload.requestId === 'string') {
@@ -199,6 +170,11 @@ export function GhostInstallConsentHost() {
         const request = payload;
         const abort = new AbortController();
         aborts.set(request.requestId, abort);
+        if (window.electronAPI.hostConnection?.client === 'browser') {
+          disconnect ??= window.electronAPI.hostConnection.onStateChanged(state => {
+            if (state.status !== 'connected') for (const pendingAbort of aborts.values()) pendingAbort.abort();
+          });
+        }
         void (async () => {
           let confirmed = false;
           try {
@@ -227,18 +203,18 @@ export function GhostInstallConsentHost() {
                         source,
                       }),
                 content: <>
-                  {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
-                    <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
+                  {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
                     {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
                     {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
                   </div>}
-                  <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly}
+                  <GhostInstallConsentContent facts={facts} origin={request.origin} communityMarket={request.communityMarket} capabilityOnly={capabilityOnly}
                     replacement={replacement} sourceChanged={request.target?.sourceChanged} />
                 </>,
-                maxWidth: 460,
+                maxWidth: 440,
                 contentSelectable: true,
                 describeContent: true,
                 confirmText:
@@ -250,8 +226,10 @@ export function GhostInstallConsentHost() {
               },
               abort.signal,
             );
+            confirmed = confirmed && !abort.signal.aborted;
           } finally {
             aborts.delete(request.requestId);
+            if (!aborts.size) { disconnect?.(); disconnect = undefined; }
             try {
               await window.electronAPI.ghosts.resolveInstallConsent(request.requestId, confirmed);
             } catch {
@@ -264,6 +242,8 @@ export function GhostInstallConsentHost() {
     return () => {
       unsubscribeRequest();
       unsubscribeDismissed();
+      disconnect?.();
+      disconnect = undefined;
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
     };

@@ -616,6 +616,30 @@ fn responses_never_outgrow_requests() {
     assert_eq!(responder.poll_transmit(1_000, &mut buffer), None, "a forged packet unlocked sending");
 }
 
+/// 两端的发包上限不同也要互通：收包上限 `max_packet_size` 两端一致，各自按 `send_packet_size` 发。2026-11-16 起 Desktop 发得比 1400 短
+/// （经 VPN 时 1400 字节的包会被拆片，见 `Config::send_packet_size`），旧版和别的端仍发 1400。谁发起都一样：握手回复不长过请求、
+/// 也不长过回复方自己的上限；丢包后的校验恢复和两个方向的大数据都要完整（收到的包被拒收时 `SecurePeer` 直接报错）。
+#[test]
+fn peers_with_different_send_sizes_interoperate() {
+    use agent_net_sim::{LinkProfile, Workload};
+    let old = Config::default();
+    let new = Config { send_packet_size: 1317, ..Config::default() };
+    // 往返 120 毫秒、默认 128 个分片的窗口：速度卡在窗口上，会发校验包，丢掉的满长度分片要靠它在对端算回来。
+    let link = LinkProfile { bits_per_second: 20_000_000, delay_us: 60_000, loss: 0.02, queue_us: 50_000, ..LinkProfile::default() };
+    let workload = Workload { a_to_b_bytes: 2 << 20, b_to_a_bytes: 2 << 20, ..Workload::default() };
+    for (initiator, responder, new_side) in [(new.clone(), old.clone(), 0), (old, new, 1)] {
+        for seed in 1..=4 {
+            let (a, b) = SecurePeer::<AesGcm>::pair_configs(initiator.clone(), responder.clone(), seed, true, 0);
+            let outcome = run(a, b, link.clone(), link.clone(), &workload, seed);
+            assert!(outcome.finished && outcome.violation.is_none(), "new side {new_side}, seed {seed}: {:?} {:?}", outcome.violation, outcome.final_states);
+            assert!(outcome.largest_packet[new_side] <= 1317, "new side sent {} bytes", outcome.largest_packet[new_side]);
+            assert_eq!(outcome.largest_packet[1 - new_side], 1400, "old side should still send full-size packets");
+            let recovered = outcome.final_stats[new_side].as_ref().map_or(0, |stats| stats.recovered_segments);
+            assert!(recovered > 0, "new side {new_side}, seed {seed}: no full-size segment was recovered from parity");
+        }
+    }
+}
+
 /// 前向保密：握手一结束两端的一次性私钥就被销毁；事后拿到两端的长期私钥和完整抓包，也解不开录下的数据。
 /// 第一条消息只受长期密钥保护，偷到响应方私钥的人能看出发起方是谁，这是 IK 模式的已知性质。
 #[test]
@@ -1361,4 +1385,99 @@ fn connection_ids_change_again_when_the_first_validation_was_lost() {
     pair.exchange(b"second local move survived");
     assert!(wire_ids(&pair.wire, 0).is_disjoint(&old), "the stale system notification suppressed a later unannounced move");
     pair.assert_live();
+}
+
+/// 测试价值（备用路径测速的连接号保留）
+/// - 生产入口与可观察结果：`Endpoint::measure` + `Endpoint::poll_probe_rtt` + `Endpoint::stats().unknown_destination`。
+/// - Bug／规则依据：直连（1 ms）比中转（20 ms 单程）快时，对端回复 `PathFrame::Response` 后在同一轮 `flush` 立刻作废
+///   该回复所用的目的连接号，作废通知经直连抢先到达本机，导致仍在途的中转 `Response` 因查不到连接号被丢弃，UI 永远「测速中…」。
+/// - 现有覆盖缺口：此前无测试在“活跃直连明显快于备用路径且同时收发业务数据”下验证 `measure` / `poll_probe_rtt` 与连接号延迟作废。
+/// - 最小失败输入：已建立直连（单程 1 ms）且满 8 号池的一对 `Endpoint`，单侧对单程 20 ms 的备用路径发起 `measure`。
+/// - tier：Rust integration，虚拟时钟与真实加密，无真实 socket。
+#[test]
+fn standby_measure_response_survives_faster_active_path() {
+    let mut pair = RoutingPair::new(1_200, true);
+    let standby = [SocketAddr::from(([203, 0, 113, 10], 3478)), SocketAddr::from(([203, 0, 113, 11], 3478))];
+    let direct_delay_us = 1_000;
+    let standby_delay_us = 20_000;
+
+    // 模拟忙碌中的双向收发，同时单侧发起备用路径测速。
+    let busy_payload = vec![0x5Au8; 16_384];
+    for side in 0..2 {
+        assert_eq!(pair.nodes[side].connection_mut(pair.handles[side]).expect("connection").send(pair.now, &busy_payload), busy_payload.len());
+    }
+    let retired_before = pair.connection(0).security_stats().connection_ids_retired;
+    assert!(pair.nodes[0].measure(pair.now, pair.handles[0], standby[1]));
+
+    let mut in_flight: Vec<(u64, usize, SocketAddr, Vec<u8>)> = Vec::new();
+    let mut measured: Option<(SocketAddr, u64)> = None;
+    let mut received = [Vec::new(), Vec::new()];
+    let step = |pair: &mut RoutingPair,
+                in_flight: &mut Vec<(u64, usize, SocketAddr, Vec<u8>)>,
+                measured: &mut Option<(SocketAddr, u64)>,
+                received: &mut [Vec<u8>; 2],
+                duration_us: u64| {
+        let until = pair.now + duration_us;
+        while pair.now < until {
+            pair.now += 1_000;
+            let mut due = Vec::new();
+            in_flight.retain(|item| {
+                if item.0 <= pair.now {
+                    due.push(item.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            for (_, to_side, from, packet) in due {
+                pair.nodes[to_side].on_datagram(pair.now, from, &packet);
+            }
+            for side in 0..2 {
+                pair.nodes[side].tick(pair.now);
+                for (packet, to) in drain(&mut pair.nodes[side], pair.now) {
+                    let (from, delay) = if to == pair.addresses[1 - side] {
+                        (pair.addresses[side], direct_delay_us)
+                    } else if to == standby[1 - side] {
+                        (standby[side], standby_delay_us)
+                    } else {
+                        continue;
+                    };
+                    in_flight.push((pair.now + delay, 1 - side, from, packet));
+                }
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = pair.nodes[side].connection_mut(pair.handles[side]).expect("connection").recv(pair.now, &mut buf);
+                    if n == 0 {
+                        break;
+                    }
+                    received[side].extend_from_slice(&buf[..n]);
+                }
+            }
+            if measured.is_none() {
+                *measured = pair.nodes[0].poll_probe_rtt(pair.handles[0]);
+            }
+        }
+    };
+
+    // 1 秒内必须测出备用路径往返，且不丢回复、不切离直连、不丢业务数据。
+    step(&mut pair, &mut in_flight, &mut measured, &mut received, 1_000_000);
+    let (addr, rtt_us) = measured.expect("standby measure response must not be dropped by premature id retirement");
+    assert_eq!(addr, standby[1]);
+    assert!((35_000..=55_000).contains(&rtt_us), "unexpected standby rtt_us={rtt_us}");
+    assert_eq!(pair.nodes[0].stats().unknown_destination, 0, "response destination id was retired while still in flight");
+    assert_eq!(pair.nodes[0].peer_addr(pair.handles[0]), Some(pair.addresses[1]));
+    assert_eq!(pair.nodes[1].peer_addr(pair.handles[1]), Some(pair.addresses[0]));
+    assert_eq!(received[0], busy_payload);
+    assert_eq!(received[1], busy_payload);
+
+    // 保留窗口（3 秒）过后，对端应自动作废并补齐该临时连接号，且不产生虚假唤醒。
+    step(&mut pair, &mut in_flight, &mut measured, &mut received, 3_500_000);
+    assert!(
+        pair.connection(0).security_stats().connection_ids_retired > retired_before,
+        "temporary standby response connection id should retire after the hold window"
+    );
+    pair.assert_live();
+    for side in 0..2 {
+        assert!(!pair.nodes[side].next_wake().is_some_and(|at| at <= pair.now), "spurious wake on side {side}");
+    }
 }

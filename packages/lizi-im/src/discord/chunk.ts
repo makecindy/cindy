@@ -71,6 +71,11 @@ export function chunkDiscordText(text: string, limit = MAX_MESSAGE_LEN): string[
   return chunks;
 }
 
+export function chunkDiscordFinalText(text: string): string[] {
+  if (!text.trim()) return [];
+  return chunkDiscordText(text).filter((chunk) => chunk.trim().length > 0);
+}
+
 function splitPreservingNewlines(text: string): string[] {
   const matches = text.match(/[^\n]*\n|[^\n]+/g);
   return matches ?? [''];

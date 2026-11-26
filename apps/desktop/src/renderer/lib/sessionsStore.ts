@@ -33,7 +33,7 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
  *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
  *                                   sessionsBus.onRefresh / sessionsPush.onCreated
- *                                   走这条。
+ *                                   走这条，且带 isCurrent：重拉期间保留旧列表。
  *
  * 自订阅（模块加载时一次性挂上，hook 不再重复订阅）：
  *   - sessionsBus.onPatch                → patchLocal
@@ -61,7 +61,11 @@ import {
   onPatch,
   onRefresh,
 } from '@/lib/sessionsBus';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerIdCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 
 // V1.7：取消 16 条上限，全量拉取由 Sidebar 中部滚动条承载。
 // 后端硬上限 1000，覆盖几乎所有真实用户的 Session 总数。
@@ -111,6 +115,7 @@ function withoutHiddenSessions(list: Session[]): Session[] {
 interface SessionSpendOverride {
   revision: number;
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   /** CN 构建推送只带结构化金额,与 totalCostUsd 一样需要防旧列表覆盖。 */
   totalMoney?: NonNullable<Session['totalMoney']>;
 }
@@ -547,6 +552,9 @@ function applySessionSpendOverrides(list: Session[], afterRevision: number): Ses
       override.totalCostUsd !== session.totalCostUsd
     ) {
       patch.totalCostUsd = override.totalCostUsd;
+    }
+    if (override.totalCostUsdIsApproximate !== undefined && override.totalCostUsdIsApproximate !== session.totalCostUsdIsApproximate) {
+      patch.totalCostUsdIsApproximate = override.totalCostUsdIsApproximate;
     }
     if (override.totalMoney && !sameMoney(override.totalMoney, session.totalMoney)) {
       patch.totalMoney = override.totalMoney;
@@ -1170,6 +1178,7 @@ export const sessionsStore = {
       const prev = sessionSpendOverrides.get(id);
       sessionSpendOverrides.set(id, {
         revision: sessionSpendRevision,
+        totalCostUsdIsApproximate: patch.totalCostUsdIsApproximate ?? prev?.totalCostUsdIsApproximate,
         totalCostUsd: patch.totalCostUsd ?? prev?.totalCostUsd,
         totalMoney: patch.totalMoney ?? prev?.totalMoney,
       });
@@ -1322,7 +1331,12 @@ export const sessionsStore = {
  * 守卫 window/electronAPI 的存在性，规避 SSR / 测试 / preload 未就绪场景。 */
 
 function refreshAfterNotification(): void {
-  void sessionsStore.forceRefreshAll().catch(() => {
+  // 通知只说明列表有变化，不让当前列表失效：重拉期间保留已显示的行，读回后整体替换。
+  // 先清桶会让 findById 在重拉的这段时间里查不到任何任务，正在显示的任务（例如协同侧栏
+  // 里刚收到消息的 Worker）会被整块卸载再重新挂载。账号切换由 reset 清空，这里只防迟到的
+  // 读结果写进另一个账号的缓存；同账号的代次变化不丢弃这次刷新。
+  const owner = getDataOwnerGeneration();
+  void sessionsStore.forceRefreshAll(() => isDataOwnerIdCurrent(owner)).catch(() => {
     // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
   });
 }
@@ -1377,11 +1391,12 @@ if (typeof window !== 'undefined') {
   });
 
   window.electronAPI?.onUsageSessionSpendChanged?.(
-    ({ sessionId, totalMoney, totalCostUsd }, ownerStamp) => {
+    ({ sessionId, totalMoney, totalCostUsd, totalCostUsdIsApproximate }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       sessionsStore.patchLocal(sessionId, {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
+        ...(totalCostUsdIsApproximate !== undefined && { totalCostUsdIsApproximate }),
       });
     },
   );
@@ -1407,6 +1422,8 @@ if (typeof window !== 'undefined') {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
+      // A follow-up may have been absent from every loaded task list until its first worker committed.
+      if (patch.sideChatPromoted) refreshAfterNotification();
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;

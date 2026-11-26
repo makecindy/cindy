@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   remoteSessions: [] as Array<{ id: string; title: string; deviceLinkDeviceId: string; orcaRole: 'lead' | 'worker' | null }>,
   pinSessionOrigin: vi.fn(),
+  readOnDevice: vi.fn(async (id: string) => ({ id })),
+  merge: vi.fn(),
+  getSessionDeviceId: vi.fn<(sessionId: string) => string | undefined>(() => undefined),
   resolveSessionRoute: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   getSession: vi.fn(async (sessionId: string) => ({
     id: sessionId,
@@ -21,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     status: 'active',
   })),
   resolveSessionMessageText: vi.fn(async () => 'Target message\nfull text'),
+  listSessions: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
 function deferred<T>() {
@@ -36,6 +40,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...actual, useNavigate: () => mocks.navigate };
 });
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, values?: { name?: string }) => values?.name ?? key,
   }),
@@ -43,14 +48,20 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => mocks.remoteSessions,
   useRemoteSessionTitle: () => null,
-  getSessionDeviceId: () => undefined,
+  getSessionDeviceId: mocks.getSessionDeviceId,
   remoteProjectsStore: {
-    getSessionDeviceId: () => undefined,
+    getSessionDeviceId: mocks.getSessionDeviceId,
     getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
     pinSessionOrigin: mocks.pinSessionOrigin,
+    getDeviceSessions: (device: string) => mocks.remoteSessions.filter(row => row.deviceLinkDeviceId === device),
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
+    getDeviceName: () => 'Host',
+    addSessionDetail: mocks.merge,
   },
 }));
-vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession }));
+vi.mock('@/lib/makerTransport', async (original) => ({ ...await original<typeof import('@/lib/makerTransport')>(), getSessionOnDevice: mocks.readOnDevice }));
+vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession, list: mocks.listSessions,
+  resolveReferences: async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }] }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, success: vi.fn() } }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'this-mac' }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -72,11 +83,16 @@ import {
   SessionNavigationModeProvider,
   useSidebarTargetSessionId,
 } from '@/features/cc-agent/embeddedSessionNavigation';
+import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { AutomationOriginBadge } from '../AutomationOriginBadge';
 import { MessageSourceLabels } from '../MessageSourceLabels';
 import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
+import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen, resolveLinkedTaskStatus } from '../BotStartedTasks';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
 
 function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   return (
@@ -108,12 +124,147 @@ describe('sidebar-embedded session navigation boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.remoteSessions = [];
+    mocks.getSessionDeviceId.mockReset();
+    __resetStickySessionOriginForTest();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true, value: { maker: { openSessionInNewWindow: mocks.openSessionInNewWindow } },
     });
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: mocks.writeText },
     });
+  });
+
+  // Regression: a device::task receipt used to render inert text. Existing link tests
+  // did not exercise the teammate receipt consumers. Unit tier: click production UI.
+  it.each(['footer', 'chip', 'letter'] as const)('opens a cross-device %s task reference', async (kind) => {
+    const task = { sessionId: 'remote-mac::remote-task', title: 'Remote work', created: true };
+    render(kind === 'footer' ? <BotStartedTasksFooter tasks={[task]} />
+      : kind === 'chip' ? <BotStartedTasks tasks={[task]} />
+      : <BotTaskLetterOpen senderSessionId={task.sessionId} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/remote-task', undefined));
+    expect(mocks.readOnDevice).toHaveBeenCalledWith('remote-task', 'remote-mac');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', { id: 'remote-task' }, { remote: true });
+  });
+
+  // Device priority is observable through the routed transport origin: a wrong
+  // fallback sends the owner to another computer's task. Existing cases had no host.
+  it.each([
+    { receipt: 'task-a', expectedDevice: 'chat-mac', remote: true },
+    { receipt: 'receipt-mac::task-a', expectedDevice: 'receipt-mac', remote: true },
+    { receipt: 'this-mac::task-a', expectedDevice: undefined, remote: false },
+  ])('resolves $receipt from a remote chat to $expectedDevice', async ({ receipt, expectedDevice, remote }) => {
+    mocks.getSessionDeviceId.mockImplementation((id) => id === 'host-chat' ? 'chat-mac' : undefined);
+    render(<BotStartedTasksFooter
+      hostSessionId="host-chat"
+      tasks={[{ sessionId: receipt, title: 'Task A', created: true }]}
+    />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/task-a', undefined));
+    if (expectedDevice) {
+      expect(mocks.readOnDevice).toHaveBeenCalledExactlyOnceWith('task-a', expectedDevice);
+    } else {
+      expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
+    }
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', remote ? { id: 'task-a' } : null, { remote });
+  });
+
+  it('keeps same-device qualified receipts local and preserves embedded navigation boundaries', async () => {
+    const task = { sessionId: 'this-mac::local-task', title: 'Local work', created: true };
+    const view = render(<BotStartedTasksFooter tasks={[task]} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/local-task', undefined));
+    expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
+    view.rerender(embedded(<BotStartedTasksFooter tasks={[task]} />));
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // 2026-11-21: the started-task line shows the task's live state so the owner and the teammate
+  // see a stalled or blocked task without opening it. Unit tier: real run and attention stores
+  // drive the production footer; a task nobody reports on shows no state rather than a guess.
+  it('shows the live state of a started task beside its link', () => {
+    const sessionId = `started-status-${Math.random().toString(36).slice(2, 8)}`;
+    const update = (isRunning: boolean) => makerChatStore.__applyStatusUpdateForTest(sessionId, {
+      sessionId, status: isRunning ? 'Working' : 'Done', tokenUsage: 1, costUsd: 0, contextTokens: 1, contextWindow: 10, isRunning,
+    });
+    const status = () => screen.queryByTestId('bot-started-task-status')?.getAttribute('data-status') ?? null;
+    try {
+      render(<BotStartedTasksFooter tasks={[{ sessionId, title: 'Fix login', created: true }]} />);
+      expect(status()).toBeNull();
+      act(() => update(true));
+      expect(status()).toBe('running');
+      expect(screen.getByText('chat.botStartedTasks.status.running')).toBeTruthy();
+      act(() => addSessionAttention(sessionId, 'awaiting'));
+      expect(status()).toBe('needs-action');
+      act(() => { clearSessionAttention(sessionId); update(false); addSessionAttention(sessionId, 'error'); });
+      expect(status()).toBe('error');
+    } finally {
+      act(() => { clearSessionAttention(sessionId, { intent: 'explicit' }); makerChatStore.purgeSession(sessionId); });
+    }
+  });
+
+  // Review of d7d084eac8: the standalone chip is one button whose aria-label names the action,
+  // which hides the state inside it from screen readers. The state must describe the button.
+  it('describes a started-task chip button with its live state for screen readers', () => {
+    const sessionId = `chip-status-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      render(<BotStartedTasks tasks={[{ sessionId, title: 'Fix login', created: true }]} />);
+      expect(screen.getByRole('button').getAttribute('aria-describedby')).toBeNull();
+      act(() => addSessionAttention(sessionId, 'awaiting'));
+      const describedBy = screen.getByRole('button').getAttribute('aria-describedby');
+      expect(describedBy ? document.getElementById(describedBy)?.textContent : null).toContain('chat.botStartedTasks.status.needsAction');
+    } finally {
+      act(() => clearSessionAttention(sessionId, { intent: 'explicit' }));
+    }
+  });
+
+  // Walk-through for #12051: a task this computer knows reads Idle; an archived one keeps only its
+  // link, instead of reading Idle only when the archive list happens to be loaded. Unit tier.
+  it('reads idle for a known active task and nothing for an archived one', async () => {
+    const now = new Date().toISOString();
+    const rows = [
+      { id: 'known-active', title: 'Active', status: 'active', source: 'desktop', createdAt: now, updatedAt: now },
+      { id: 'known-archived', title: 'Archived', status: 'archived', source: 'desktop', createdAt: now, updatedAt: now },
+    ];
+    mocks.listSessions.mockResolvedValueOnce(rows);
+    await act(async () => { await sessionsStore.ensureByFilter('all', { fresh: true }); });
+    // Review of 0a74014b87: archiving keeps an error dot (only deletion clears it); the archived
+    // row must still show no state at all.
+    act(() => addSessionAttention('known-archived', 'error'));
+    try {
+      render(<BotStartedTasksFooter tasks={[
+        { sessionId: 'known-active', title: 'Active', created: true },
+        { sessionId: 'known-archived', title: 'Archived', created: true },
+      ]} />);
+      expect(screen.getAllByTestId('bot-started-task-status').map((node) => node.getAttribute('data-status'))).toEqual(['idle']);
+    } finally {
+      act(() => { clearSessionAttention('known-archived', { intent: 'explicit' }); sessionsStore.reset(); });
+    }
+  });
+
+  // Review of #12031: in a chat hosted on another computer, a receipt naming this computer
+  // (`this-mac::id`) fell back to the chat's computer and read the wrong feed. Unit tier.
+  it('reads this computer for a receipt that names it, even in a remote chat', () => {
+    mocks.getSessionDeviceId.mockImplementation((id) => id === 'host-chat' ? 'chat-mac' : undefined);
+    const sessionId = `own-task-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      render(<BotStartedTasksFooter hostSessionId="host-chat" tasks={[{ sessionId: `this-mac::${sessionId}`, title: 'Own', created: true }]} />);
+      act(() => makerChatStore.__applyStatusUpdateForTest(sessionId, {
+        sessionId, status: 'Working', tokenUsage: 1, costUsd: 0, contextTokens: 1, contextWindow: 10, isRunning: true,
+      }));
+      expect(screen.getByTestId('bot-started-task-status').getAttribute('data-status')).toBe('running');
+    } finally {
+      act(() => makerChatStore.purgeSession(sessionId));
+    }
+  });
+
+  it.each([
+    { name: 'a pending approval outranks running', input: { run: { isRunning: true, hasError: false, hasPendingAskUser: false, hasPendingPermission: true, hasPendingPlanReview: false, hasPendingPluginSetup: false }, livePhase: undefined, attention: undefined, known: true }, expected: 'needs-action' },
+    { name: 'a known local task with no activity is idle', input: { run: undefined, livePhase: undefined, attention: 'done' as const, known: true }, expected: 'idle' },
+    { name: 'a remote task with a silent feed says nothing', input: { run: undefined, livePhase: undefined, attention: undefined, known: false }, expected: null },
+    { name: 'a remote completed turn is idle', input: { run: undefined, livePhase: 'completed' as const, attention: undefined, known: false }, expected: 'idle' },
+  ])('started-task state: $name', ({ input, expected }) => {
+    expect(resolveLinkedTaskStatus(input)).toBe(expected);
   });
 
   it('keeps worker content identity while targeting the visible Lead sidebar bucket', () => {
@@ -151,7 +302,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     render(<SessionLinkChip href="cindy://session/same?device=mac-b" label="Task" />);
     fireEvent.click(screen.getByRole('button', { name: 'Task' }));
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('mac-b', 'same');
+    expect(mocks.readOnDevice).not.toHaveBeenCalled();
     expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('same', right, { remote: true });
   });
 
@@ -222,8 +373,8 @@ describe('sidebar-embedded session navigation boundary', () => {
     fireEvent.click(screen.getByRole('button'));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/archived-task', undefined));
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'archived-task');
-    expect(mocks.pinSessionOrigin.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.readOnDevice).toHaveBeenCalledWith('archived-task', 'remote-mac');
+    expect(mocks.merge.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.resolveSessionRoute.mock.invocationCallOrder[0]!,
     );
   });

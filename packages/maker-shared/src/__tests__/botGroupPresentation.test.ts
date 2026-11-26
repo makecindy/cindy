@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  interleaveBotGroupWork,
   botGroupBodyParts,
   botGroupComposerPlanState,
   botGroupErrorVariant,
@@ -12,7 +13,10 @@ import {
   projectBotGroupExecutionFailures,
   botGroupExecutionFailureBatches,
   botGroupSidebarPlanPreview,
+  chatGroupHumanDisplayName,
+  chatGroupMemberName,
   chatGroupMembership,
+  chatGroupOwnerName,
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
@@ -125,6 +129,21 @@ describe('execution failures are a projection of the current snapshot', () => {
     const pages = mergeBotGroupMessages([source], [{ ...source, id: 'latest', sequence: 100 }]);
     expect(projectBotGroupExecutionFailures(pages, [failure])).toHaveLength(3);
     expect(projectBotGroupExecutionFailures(pages, []).map(item => item.id)).toEqual(['source', 'latest']);
+  });
+
+  // Unit: a late failure beside an old request must not pull newer work before its request.
+  it('anchors live work to real history when projected failures update or disappear', () => {
+    const pages = [{ ...source, createdAt: 10 },
+      { ...source, id: 'request', sequence: 5, createdAt: 30 },
+      { ...source, id: 'later', sequence: 6, createdAt: 50 }];
+    const work = [{ id: 'work', startedAt: 40 }];
+    for (const updatedAt of [100, 200]) {
+      const rows = projectBotGroupExecutionFailures(pages, [{ ...failure, updatedAt }]);
+      expect(interleaveBotGroupWork(rows, work).map(row => row.value.id))
+        .toEqual(['source', 'execution-failure:run:1', 'request', 'work', 'later']);
+    }
+    expect(interleaveBotGroupWork(projectBotGroupExecutionFailures(pages, []), work).map(row => row.value.id))
+      .toEqual(['source', 'request', 'work', 'later']);
   });
 
   it('does not anchor a notice on a tombstone even if an older server returns that execution', () => {
@@ -365,7 +384,7 @@ describe('group body component display', () => {
 describe('unclaimed talk turn controls', () => {
   it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
     const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
-    const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
+    const future = { position: 1, canStop: true, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
     const value = plan({ kind: 'talk', status: 'running', currentStep: 0, canManage: true, supportsPendingSkip: true, steps: [current, future] });
     expect(canSkipBotGroupPlanStep(value, current)).toBe(false);
     expect(canSkipBotGroupPlanStep(value, future)).toBe(true);
@@ -376,7 +395,7 @@ describe('unclaimed talk turn controls', () => {
     expect(canSkipBotGroupPlanStep(value, { ...future, status: 'skipped' })).toBe(false);
   });
   const queued = () => plan({ kind: 'talk', status: 'running', canManage: true,
-    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', executionId: 'run', executionStatus: 'queued' }],
+    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', canStop: true, executionId: 'run', executionStatus: 'queued' }],
   });
   it('labels queued work without claiming that the device started it', () => {
     const value = queued();
@@ -390,7 +409,7 @@ describe('unclaimed talk turn controls', () => {
     for (const overrides of [{ kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }, { currentStep: 1 }]) {
       expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, value.steps[0])).toBe(false);
     }
-    for (const overrides of [{ executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
+    for (const overrides of [{ canStop: false }, { canStop: undefined }, { executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
       expect(canSkipBotGroupPlanStep(value, { ...value.steps[0], ...overrides })).toBe(false);
     }
   });
@@ -415,5 +434,66 @@ describe('unclaimed talk turn controls', () => {
     expect(botGroupPlanStepState(value, value.steps[2])).toBe('done');
     // A division step hands work over; it is never a spoken turn.
     expect(botGroupPlanStepState({ ...value, kind: 'work' }, value.steps[0])).toBe('done');
+  });
+});
+
+// Unit: live executions were appended after newer chat messages on both clients.
+// Their original timestamps, independent identities and removal must survive refreshes.
+it('keeps concurrent execution updates between their original neighboring messages', () => {
+  const messages = [{ id: 'request', createdAt: 10 }, { id: 'later', createdAt: 30 }];
+  const first = { id: 'first', startedAt: 20, status: 'running' };
+  const second = { id: 'second', startedAt: 25, status: 'queued' };
+  const ids = (work: typeof first[], rows = messages) => interleaveBotGroupWork(rows, work).map(row => row.value.id);
+  expect(ids([second, first])).toEqual(['request', 'first', 'second', 'later']);
+  expect(ids([{ ...first, status: 'stopping' }, second], [...messages, { id: 'newest', createdAt: 40 }]))
+    .toEqual(['request', 'first', 'second', 'later', 'newest']);
+  expect(ids([second])).toEqual(['request', 'second', 'later']);
+  expect(ids([])).toEqual(['request', 'later']);
+});
+
+// Server receipts can precede their durable message row; source identity must beat delayed starts.
+describe('receipt-backed live execution placement', () => {
+  it('uses the source row before a delayed start without cloning the work', () => {
+    const work = { executionId: 'a', sourceMessageId: 'request', startedAt: 50 };
+    const entries = interleaveBotGroupWork([{ id: 'request', createdAt: 10 }, { id: 'later', createdAt: 30 }], [work]);
+    expect(entries.map(entry => entry.kind)).toEqual(['message', 'work', 'message']);
+    expect(entries[1]!.value).toBe(work);
+  });
+  it('recognizes the receipt alias of an optimistic row', () => {
+    const work = { executionId: 'a', sourceMessageId: 'server-request' };
+    const entries = interleaveBotGroupWork([{ id: 'pending:request', serverMessageId: 'server-request', createdAt: 10 }, { id: 'later', createdAt: 30 }], [work]);
+    expect(entries.map(entry => entry.kind)).toEqual(['message', 'work', 'message']);
+    expect(entries[1]!.value).toBe(work);
+  });
+  it('retires a live row already represented by the completed process', () => {
+    const answer = { id: 'answer', createdAt: 50, process: { executionId: 'a' } };
+    expect(interleaveBotGroupWork([answer], [{ executionId: 'a', timelineAt: 20 }])).toEqual([{ kind: 'message', value: answer, index: 0 }]);
+  });
+});
+
+// Optimistic timestamps use the local clock; persisted row order remains authoritative.
+it('pins receipt-backed work to its exact row despite differing source clocks', () => {
+  const own = { executionId: 'a', sourceMessageId: 'server-own' };
+  const other = { executionId: 'b', sourceMessageId: 'other' };
+  const entries = interleaveBotGroupWork([{ id: 'local-own', serverMessageId: 'server-own', createdAt: 50 }, { id: 'other', createdAt: 30 }], [other, own]);
+  expect(entries.map(entry => entry.kind === 'message' ? entry.value.id : entry.value.executionId)).toEqual(['local-own', 'a', 'other', 'b']);
+});
+
+// Basis: bot-group-chat.md §5 enterprise identity; verifies · Org suffix, nickname override,
+// idempotency, and companion owner name without nested org suffix (unit tier).
+describe('enterprise human display name formatting', () => {
+  it('appends · OrgName only for humans with showOrgName and no group nickname', () => {
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行 · 星辰科技', orgName: '星辰科技', showOrgName: true })).toBe('林知行 · 星辰科技');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '阿行', nickname: '阿行', orgName: '星辰科技', showOrgName: true })).toBe('阿行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'human', name: '林知行', orgName: '星辰科技', showOrgName: false })).toBe('林知行');
+    expect(chatGroupHumanDisplayName({ actorKind: 'bot', name: 'Cindy', orgName: '星辰科技', showOrgName: true })).toBe('Cindy');
+  });
+
+  it('keeps companion owner labels on the human base name without nested org suffixes', () => {
+    const owner = { id: 'h1', kind: 'human', state: 'joined', name: '林知行' };
+    const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Cindy', ownerActorId: 'h1', ownerName: '林知行' };
+    expect(chatGroupOwnerName(bot, [owner, bot])).toBe('林知行');
+    expect(chatGroupMemberName(bot, [owner, bot])).toBe('Cindy (林知行)');
   });
 });

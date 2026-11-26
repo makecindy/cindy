@@ -13,6 +13,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
+  isFailureRetryProviderModelAutoRefreshTrigger,
   isForcedProviderModelAutoRefreshTrigger,
   type BuiltinRefreshableProviderId,
   type ProviderModelAutoRefreshTrigger,
@@ -125,8 +126,10 @@ export function createProviderModelRefreshCoordinator(
       return catalogInflight.promise;
     }
     const now = deps.now();
+    // Network recovery: the startup load may have fallen back to a saved copy while offline.
+    const retryFailed = isFailureRetryProviderModelAutoRefreshTrigger(trigger);
     if (catalogStartupGraceUntil !== undefined) {
-      if (now < catalogStartupGraceUntil) {
+      if (now < catalogStartupGraceUntil && !retryFailed) {
         deps.log.debug('model catalog auto-refresh skipped by startup grace', {
           trigger,
           remainingMs: catalogStartupGraceUntil - now,
@@ -139,7 +142,11 @@ export function createProviderModelRefreshCoordinator(
     const cooldownMs = catalogLastFailureAt === undefined
       ? PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS
       : PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
-    if (cooldownStartedAt !== undefined && now - cooldownStartedAt < cooldownMs) {
+    if (
+      cooldownStartedAt !== undefined &&
+      now - cooldownStartedAt < cooldownMs &&
+      !(retryFailed && catalogLastFailureAt !== undefined)
+    ) {
       deps.log.debug('model catalog auto-refresh skipped by cooldown', {
         trigger,
         cooldown: catalogLastFailureAt === undefined ? 'normal' : 'failure-retry',
@@ -175,11 +182,13 @@ export function createProviderModelRefreshCoordinator(
    * @param bypassJoin 跳过「合并到在途请求」这一步,直接发起新的一次刷新。只由下方
    *   forced-follow-up 链内部使用(它已经等过那次在途请求),外部调用方一律不传 ——
    *   传了就会绕过 in-flight 合并、可能并发起两个 codex app-server。
+   * @param retryFailed 只跳过失败冷却:上次失败的来源立刻重试,上次成功的仍服从正常冷却。
    */
   function refresh(
     providerId: BuiltinRefreshableProviderId,
     force: boolean,
     bypassJoin = false,
+    retryFailed = false,
   ): Promise<void> {
     syncScope();
     const providerGeneration = providerGenerations.get(providerId) ?? 0;
@@ -215,6 +224,7 @@ export function createProviderModelRefreshCoordinator(
     const cooldownStartedAt = previousFailure ?? previousAttempt;
     if (
       !force &&
+      !(retryFailed && previousFailure !== undefined) &&
       cooldownStartedAt !== undefined &&
       now - cooldownStartedAt < activeCooldown
     ) {
@@ -283,12 +293,14 @@ export function createProviderModelRefreshCoordinator(
       syncScope();
       const connectedIds = new Set<BuiltinRefreshableProviderId>();
       for (const provider of providers) {
+        const subscription = provider.subscriptionAccountPool ?? provider.subscriptionPool;
+        const refreshId = subscription ?? provider.id;
         if (
-          provider.source === 'builtin' &&
+          (provider.source === 'builtin' || subscription === 'anthropic' || subscription === 'openai') &&
           provider.connected &&
-          isBuiltinRefreshableProviderId(provider.id)
+          isBuiltinRefreshableProviderId(refreshId)
         ) {
-          connectedIds.add(provider.id);
+          connectedIds.add(refreshId);
         }
       }
 
@@ -299,7 +311,10 @@ export function createProviderModelRefreshCoordinator(
       // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
-      const results = await Promise.allSettled(ids.map((id) => refresh(id, force)));
+      const retryFailed = isFailureRetryProviderModelAutoRefreshTrigger(trigger);
+      const results = await Promise.allSettled(
+        ids.map((id) => refresh(id, force, false, retryFailed)),
+      );
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
         deps.log.warn('provider model auto-refresh failed', {

@@ -1,5 +1,5 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { z } from 'zod';
 
@@ -12,6 +12,7 @@ export type SessionQueueControlErrorCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
   | 'NOT_AUTHORIZED'
+  | 'UNSUPPORTED_CAPABILITY'
   | 'INVALID_ARGS';
 
 /** 排队消息转插话未成功、消息仍留在队列时的原因。 */
@@ -39,12 +40,14 @@ export interface SessionRuntimeProfile {
 }
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
+  permissionMode?: PermissionMode;
   runtimeGeneration?: number;
   baselineProfile?: SessionRuntimeProfile;
   effectiveProfile?: SessionRuntimeProfile;
   pendingMutation?: {
     generation: number;
-    source: 'agent' | 'fallback';
+    /** user = 用户在面板里登记、下一次发送才生效的选择。 */
+    source: 'agent' | 'fallback' | 'user';
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
@@ -52,20 +55,25 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
 
 export interface SessionControlDeps {
   getSessionContext: () => LiziMcpSessionContext;
+  controlSession?(params: {
+    targetSessionId: string;
+    action: 'pause' | 'resume' | 'retry' | 'compact';
+    instructions?: string;
+  }): Promise<ControlResult<{ result: unknown }, string>>;
   updateQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     message: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   cancelQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   /** 把一条排队消息转为插话;没插成时消息留在队列,返回 delivery=queued + reason。 */
   steerQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<
@@ -80,7 +88,7 @@ export interface SessionControlDeps {
   >;
   /** 调整一条排队消息的位置(position 越界放队尾),返回实际最终位置。 */
   moveQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     position: number;
@@ -88,7 +96,7 @@ export interface SessionControlDeps {
     ControlResult<{ queuedMessageId: string; position: number }, SessionQueueControlErrorCode>
   >;
   steerSession(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     message: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionSteerErrorCode>>;
@@ -116,6 +124,7 @@ export interface SessionControlDeps {
       providerId?: string | null;
       effort?: Effort;
       fastMode?: boolean | 'ultrafast';
+      permissionMode?: PermissionMode;
     };
   }): Promise<
     ControlResult<
@@ -125,9 +134,10 @@ export interface SessionControlDeps {
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
+        permissionMode?: PermissionMode;
       },
-      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
-    >
+      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
+    > & { data?: Record<string, unknown> }
   >;
 }
 
@@ -135,11 +145,35 @@ function requireCallerSession(deps: SessionControlDeps): string | null {
   return deps.getSessionContext().sessionId ?? null;
 }
 
-function mapControlFailure(result: { ok: false; errorCode: string; message: string }) {
+function mapControlFailure(result: { ok: false; errorCode: string; message: string; data?: Record<string, unknown> }) {
   if (result.errorCode === 'HOST_NOT_READY') {
     return errorPayload('HOST_NOT_READY', `${BRAND_NAME} 主进程会话服务尚未就绪，请稍后重试。`);
   }
-  return errorPayload(result.errorCode, result.message);
+  return errorPayload(result.errorCode, result.message, result.data);
+}
+
+export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps: SessionControlDeps): void {
+  if (!deps.controlSession) return;
+  registry.register({
+    name: 'control_session', category: 'control',
+    description: '控制本机指定任务：pause 暂停后续输入和待答交互的执行，不中止已在运行的模型或工具；' +
+      '暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。' +
+      'resume 解除执行暂停并恢复原队列；retry 复用原错误重试；compact 复用引擎原生手动压缩。' +
+      '送达未知的消息不会自动重放；显式 resume/retry 沿用用户继续／重试入口，调用前须核实投递状态。' +
+      '原生能力不支持时明确报错。Agent 与声明 control 的插件共用原生产事务。',
+    inputShape: {
+      session_id: z.string().min(1),
+      action: z.enum(['pause', 'resume', 'retry', 'compact']),
+      instructions: z.string().max(32768).optional().describe('仅 compact 支持的压缩说明。'),
+    },
+    handler: async ({ session_id, action, instructions }) => {
+      if (instructions !== undefined && action !== 'compact')
+        return errorPayload('INVALID_ARGS', 'instructions is only supported for compact');
+      const result = await deps.controlSession!({ targetSessionId: session_id, action,
+        ...(instructions !== undefined ? { instructions } : {}) });
+      return result.ok ? okPayload({ session_id, action, result: result.result }) : mapControlFailure(result);
+    },
+  });
 }
 
 export function registerUpdateSessionQueuedMessageTool(
@@ -151,7 +185,7 @@ export function registerUpdateSessionQueuedMessageTool(
     category: 'control',
     description:
       '修改你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能修改当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能修改自己投递的消息；声明 control 的插件仅可编辑任务界面允许编辑的待发消息，其余类型返回 UNSUPPORTED_CAPABILITY。正在投递的消息不可修改。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
@@ -159,11 +193,11 @@ export function registerUpdateSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, message }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.updateQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         message,
@@ -187,18 +221,18 @@ export function registerCancelSessionQueuedMessageTool(
     category: 'control',
     description:
       '撤回你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能撤回当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能撤回自己投递的消息；声明 control 的插件可撤回所有来源的待发消息。正在投递或已消费的消息不可撤回。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.cancelQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -217,7 +251,7 @@ export function registerCancelSessionQueuedMessageTool(
 // 机器消息;用户手打、伙伴委派、插件、定时任务消息不可操作。
 const SESSION_QUEUE_MANAGEABLE_SCOPE =
   '可操作的是你通过 send_to_session 投递的消息,或你自己任务队列里由其它任务 / 协同成员发来的机器消息;' +
-  '用户手打、伙伴委派、插件、定时任务消息不可操作。';
+  '任务不能操作用户手打、伙伴委派、插件、定时任务消息；声明 control 的插件可管理所有来源的待发消息。';
 
 export function registerSteerSessionQueuedMessageTool(
   registry: XdtHelperToolRegistry,
@@ -238,11 +272,11 @@ export function registerSteerSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.steerQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -274,11 +308,11 @@ export function registerMoveSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, position }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.moveQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         position,
@@ -309,11 +343,11 @@ export function registerSteerSessionTool(
     },
     handler: async ({ session_id, message }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法记录插话来源。');
       }
       const result = await deps.steerSession({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         message,
       });
@@ -365,7 +399,7 @@ export function registerGetSessionRuntimeTool(
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
       '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
-      '不返回提示词正文、工具参数或凭证。',
+      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
     },
@@ -382,6 +416,7 @@ export function registerGetSessionRuntimeTool(
         phase: runtime.phase,
         active: runtime.phase === 'running' || runtime.phase === 'needs-interaction',
         record_status: runtime.recordStatus ?? null,
+        ...(runtime.permissionMode !== undefined ? { permission_mode: runtime.permissionMode } : {}),
         source: runtime.source,
         attention: runtime.attention,
         workflow: runtime.workflow,
@@ -430,7 +465,8 @@ export function registerSetSessionRuntimeTool(
       '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
       '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
       '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
-      '省略 harness 保持临时调整语义。不修改全局默认选择。',
+      '省略 harness 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略 harness 改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
+      '协同 Worker 出错或撞用量上限时，登记新选择后用 send_to_worker 发下一条消息：宿主先换到新路线再启动，不会先用旧路线。不修改全局默认选择。',
     inputShape: {
       harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
@@ -443,6 +479,8 @@ export function registerSetSessionRuntimeTool(
       model: z.string().min(1).optional().describe('目标模型 id。'),
       effort: z.enum(EFFORT_VALUES).optional().describe('推理强度。省略表示保持当前值。'),
       fast: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('false=标准，true=快速，ultrafast=超快（仅支持该档位的 Codex 模型）。'),
+      permission_mode: z.enum(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']).optional()
+        .describe('任务权限档，复用界面的权限提交与回滚；提高权限走逐次确认。持有任务操作授权的调用任务不支持修改自身权限（含混合 patch），返回 UNSUPPORTED_CAPABILITY。'),
       expected_generation: z
         .number()
         .int()
@@ -451,7 +489,7 @@ export function registerSetSessionRuntimeTool(
           '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
         ),
     },
-    handler: async ({ session_id, harness, provider_id, model, effort, fast, expected_generation }) => {
+    handler: async ({ session_id, harness, provider_id, model, effort, fast, permission_mode, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
       if (!targetSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，请显式提供 session_id。');
@@ -463,9 +501,10 @@ export function registerSetSessionRuntimeTool(
         provider_id === undefined &&
         model === undefined &&
         effort === undefined &&
-        fast === undefined
+        fast === undefined &&
+        permission_mode === undefined
       ) {
-        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort 或 fast 之一。');
+        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort、fast 或 permission_mode 之一。');
       }
       if (expected_generation === undefined) {
         // schema 已必填,此分支为纵深防御:任何绕过 zod 的调用路径仍拿到同一引导。
@@ -480,6 +519,7 @@ export function registerSetSessionRuntimeTool(
           ...(model !== undefined ? { model } : {}),
           ...(effort !== undefined ? { effort } : {}),
           ...(fast !== undefined ? { fastMode: fast } : {}),
+          ...(permission_mode !== undefined ? { permissionMode: permission_mode } : {}),
         },
       });
       if (!result.ok) return mapControlFailure(result);
@@ -487,6 +527,7 @@ export function registerSetSessionRuntimeTool(
         session_id: targetSessionId,
         status: result.status,
         generation: result.generation,
+        ...(result.permissionMode !== undefined ? { permission_mode: result.permissionMode } : {}),
         effective: runtimeProfilePayload(result.effectiveProfile),
         pending: result.pendingMutation
           ? {

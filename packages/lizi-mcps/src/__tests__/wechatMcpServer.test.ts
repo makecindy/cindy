@@ -7,10 +7,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createWechatMcpServer } from '../cindy_wechatMcpServer';
+import type { WechatBotMcpHostDeps } from '../types';
 
 describe('cindy_wechat proactive routing', () => {
-  it('sends only to the host-resolved known peer', async () => {
-    const sendMessage = vi.fn(async () => ({ ok: true, messageId: 'msg-1' }));
+  it('sends only to the host-resolved known peer and exposes a rejection reason', async () => {
+    const sendMessage = vi.fn<WechatBotMcpHostDeps['sendMessage']>()
+      .mockResolvedValueOnce({ ok: true, messageId: 'msg-1' })
+      .mockResolvedValueOnce({ ok: false, reason: 'SEND_REJECTED:1205' });
     const server = createWechatMcpServer({
       getActivePeerIdForSession: () => null,
       getMostRecentPeerId: () => 'peer-history',
@@ -28,6 +31,22 @@ describe('cindy_wechat proactive routing', () => {
       });
       expect(sendMessage).toHaveBeenCalledWith('peer-session', 'hello');
       expect(JSON.stringify(result)).toContain('msg-1');
+
+      // #7791, unit: the protocol test stops at the iLink error. A rejected
+      // host send must carry its reason through the actual MCP tool response.
+      const rejected = await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'send_message_to_user', args: { text: 'hello' } },
+      });
+      expect(rejected).toMatchObject({
+        isError: true,
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            ok: false, errorCode: 'SEND_FAILED', error: 'SEND_REJECTED:1205',
+          }, null, 2),
+        }],
+      });
     } finally {
       await client.close();
       await server.close();

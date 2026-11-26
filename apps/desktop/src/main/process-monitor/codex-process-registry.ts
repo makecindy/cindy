@@ -6,6 +6,7 @@
  * 枚举，不会看到内部 host key、URL 或启动参数。
  */
 
+import { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import type { AgentProcessRole } from '../../shared/processMonitor.js';
@@ -18,6 +19,7 @@ interface Registration {
   sessionId: string | null;
   instanceId: string;
   identity: symbol;
+  codexChild?: ChildProcess;
 }
 
 const registrations = new Map<number, Registration>();
@@ -34,6 +36,7 @@ export function registerAgentProcess(
   kind: MonitoredAgentKind,
   role: AgentProcessRole,
   sessionId?: string | null,
+  codexChild?: ChildProcess,
 ): () => void {
   const identity = Symbol(`${kind}-process-${pid}`);
   registrations.set(pid, {
@@ -42,6 +45,7 @@ export function registerAgentProcess(
     sessionId: sessionId ?? null,
     instanceId: randomUUID(),
     identity,
+    codexChild,
   });
   let disposed = false;
   return () => {
@@ -52,8 +56,8 @@ export function registerAgentProcess(
   };
 }
 
-export function registerCodexProcessRole(pid: number, role: AgentProcessRole): () => void {
-  return registerAgentProcess(pid, 'codex', role);
+export function registerCodexProcessRole(pid: number, role: AgentProcessRole, child?: ChildProcess): () => void {
+  return registerAgentProcess(pid, 'codex', role, null, child);
 }
 
 export function resolveAgentProcessRegistration(pid: number): AgentProcessRegistration | null {
@@ -67,13 +71,27 @@ export function resolveAgentProcessRegistration(pid: number): AgentProcessRegist
   };
 }
 
-/** 当前仍登记的本地 Codex app-server PID；只代表登记事实，调用方须再核对 PPID。 */
+/** 当前仍登记的本地 Codex app-server PID。登记本身不提供发信号的权限。 */
 export function listCodexProcessPids(): number[] {
   const pids: number[] = [];
   for (const [pid, registration] of registrations) {
     if (registration.kind === 'codex') pids.push(pid);
   }
   return pids;
+}
+
+/** Only the original registered spawn can authorize a quit-time tree walk. */
+export function listCodexProcessReapTargets(): Array<{ pid: number; isCurrent: () => boolean }> {
+  return listCodexProcessPids().map(pid => {
+    const registration = registrations.get(pid)!;
+    const child = registration.codexChild;
+    return {
+      pid,
+      isCurrent: () => registrations.get(pid) === registration && child instanceof ChildProcess
+        && child.pid === pid && !!child.spawnfile && !child.killed
+        && child.exitCode === null && child.signalCode === null,
+    };
+  });
 }
 
 export function resolveCodexProcessRole(pid: number): AgentProcessRole | null {

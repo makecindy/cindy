@@ -68,3 +68,17 @@ it('keeps untyped JSON receipts and does not sniff explicitly non-SSE content', 
   text.onEnd?.();
   expect(resolve(usage)).toBeUndefined();
 });
+
+it('carries the served response model only for an unambiguous usage receipt', () => {
+  const resolve = registerUsagePricing('routed', true);
+  const capture = captureUsagePricing('routed', 'priority');
+  const key = { inputTokens: 23, outputTokens: 4, cacheReadTokens: 0 };
+  const add = (model: string) => capture({ model, usage: { input_tokens: 23, output_tokens: 4 } });
+  add('actual-model');
+  expect(resolve(key)).toEqual({ model: 'actual-model', priceVariant: 'priority' });
+  add('model-a');
+  add('model-b');
+  expect(resolve(key)?.model).toBeUndefined();
+  expect(resolve(key)?.model).toBeUndefined();
+  clearUsagePricing('routed');
+});

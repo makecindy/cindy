@@ -182,6 +182,7 @@ export function parseToolLoopReviewDecision(text: string): ToolLoopReviewDecisio
 export function createToolLoopReviewer(deps: ToolLoopReviewerDeps): ToolLoopReviewer {
   return async (request, { signal }) => {
     const result = await deps.requestText(buildToolLoopReviewPrompt(request), {
+      source: 'tool-loop-review', sessionId: request.sessionId,
       maxTokens: TOOL_LOOP_REVIEW_MAX_TOKENS,
       timeoutMs: TOOL_LOOP_REVIEW_TIMEOUT_MS,
       disableReasoning: true,

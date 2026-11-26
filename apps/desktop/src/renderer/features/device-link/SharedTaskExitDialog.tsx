@@ -9,6 +9,7 @@ import { remoteProjectsStore } from './remoteProjectsStore';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { closeOwnedSharedTask } from './closeOwnedSharedTask';
 import { notifySharedTaskMembershipChanged } from './useSharedTaskTasks';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 export type SharedTaskExitTarget =
   | { kind: 'close'; sharedTaskId: string; title: string; hostDeviceId?: string }
@@ -66,7 +67,7 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
       if (current()) { pending.current = false; setBusy(false); }
     }
   };
-  return <ConfirmDialog presentation="standard" cancelFirst
+  return <ConfirmDialog
     open={owner.dataOwnerId === dataOwnerId && current()}
     onOpenChange={(open) => { if (!open && !pending.current) onDismiss(); }}
     title={t(leaving ? 'sharedTask.leaveTitle' : 'sharedTask.cancelTitle')}
@@ -75,6 +76,6 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
       <p className="mt-3 text-12 text-[var(--text-secondary)]">{t(leaving ? 'sharedTask.othersUnaffected' : 'sharedTask.recordsKept')}</p></div>}
     cancelText={t(leaving ? 'sharedTask.leaveKeep' : 'sharedTask.closeAllKeep')}
     confirmText={t(leaving ? 'sharedTask.leaveShort' : 'sharedTask.cancelSharing')}
-    confirmVariant="destructive" loading={busy} zIndex={10002} maxWidth={440}
+    confirmVariant="destructive" loading={busy} zIndex={Z_INDEX_LAYERS['modal-nested']} maxWidth={440}
     onConfirm={() => void confirm()} />;
 }

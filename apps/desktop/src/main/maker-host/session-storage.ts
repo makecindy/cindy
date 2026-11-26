@@ -15,6 +15,7 @@ import { and, eq, inArray, ne } from 'drizzle-orm';
 import { pruneSessionContextWindowBudget } from './session-context-budget-store.js';
 
 import { getDbClient } from '../localDb/client/current.js';
+import { captureNativeHistoryBackupCleanup } from '../remote-agent/controller/nativeHistoryBackup.js';
 import { OwnerSessionStorage } from '../localDb/sessionStorageAdapter.js';
 import { sessions } from '../localDb/schema.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
@@ -27,6 +28,26 @@ export class DesktopSessionStorage extends OwnerSessionStorage {
         pruneSessionContextWindowBudget(sessionId);
       },
     });
+  }
+
+  override async update(id: string, patch: Parameters<OwnerSessionStorage['update']>[1]) {
+    const cleanup = patch.sdkSessionId !== undefined ? captureNativeHistoryBackupCleanup(id) : undefined;
+    const result = await super.update(id, patch);
+    cleanup?.();
+    return result;
+  }
+
+  override async compareAndClearSdkSessionId(id: string, expectedSdkSessionId: string) {
+    const cleanup = captureNativeHistoryBackupCleanup(id);
+    const cleared = await super.compareAndClearSdkSessionId(id, expectedSdkSessionId);
+    if (cleared) cleanup();
+    return cleared;
+  }
+
+  override async delete(id: string) {
+    const cleanup = captureNativeHistoryBackupCleanup(id, true);
+    await super.delete(id);
+    cleanup();
   }
 }
 

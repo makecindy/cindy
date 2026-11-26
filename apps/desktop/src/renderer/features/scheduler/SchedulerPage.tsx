@@ -460,6 +460,11 @@ export function SchedulerPage() {
         toast.warning(t('scheduler.list.promote.noWorkingDir'));
         return;
       }
+      // 插件引擎只在装了插件的这台电脑上，项目自动化会提交给所有成员。
+      if (s.agentKind === 'acp' || s.modelAgentKind === 'acp') {
+        toast.warning(t('scheduler.list.promote.pluginEngine'));
+        return;
+      }
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
           workingDir: s.workingDir,
@@ -630,6 +635,7 @@ export function SchedulerPage() {
             {selected && (
               <RunHistoryPane
                 schedule={selected}
+                connectionSetupVisible={!formOpen}
                 onRunNow={handleRunNow}
                 onTogglePause={handleTogglePause}
                 onEdit={handleEdit}

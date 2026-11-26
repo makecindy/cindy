@@ -1,6 +1,6 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
-import { openHtmlFileByPreference } from './useOpenWithMenu';
+import { openHtmlFileByPreference } from './messageLinkActions';
 import { DocSearchBar } from '@/features/cc-agent/workdir-browse/DocSearchBar';
 import {
   AttachmentCollectionPreview,
@@ -48,6 +48,7 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { PlaintextEditor, type PlaintextEditorHandle } from '@/components/markdown/PlaintextEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 const FileLightbox = lazy(() =>
   import('./FileLightbox').then((module) => ({ default: module.FileLightbox })),
@@ -74,7 +75,7 @@ interface TextLightboxProps {
 // IPC response also carries `limitMb` so dynamic copy stays single-sourced.
 const OVERSIZE_LIMIT_MB = 10;
 const OVERSIZE_LIMIT = OVERSIZE_LIMIT_MB * 1024 * 1024;
-const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = 9999;
+const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = Z_INDEX_LAYERS.fullscreen;
 
 /**
  * Markdown line-scroll anchor selection (pure, unit-tested).
@@ -130,7 +131,7 @@ export function TextLightbox(props: TextLightboxProps) {
         <>
           <PreviewScrim onClose={props.onClose} />
           <div
-            className={cn('z-[9999] flex items-center justify-center', PREVIEW_PANEL_CLASS)}
+            className={cn('z-fullscreen flex items-center justify-center', PREVIEW_PANEL_CLASS)}
             style={PREVIEW_PANEL_STYLE}
           >
             <PreviewHeader
@@ -613,7 +614,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
         />
 
         {search ? (
-          <div className="absolute right-4 top-[72px] z-20">
+          <div className="absolute right-4 top-[72px] z-page-float">
             <DocSearchBar
               ref={searchInput}
               query={query}
@@ -657,7 +658,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
             )}
           >
             <TriangleAlert size={32} className="text-[var(--msg-tool-card-chevron)]" />
-            <div className="text-14 font-semibold text-[var(--msg-tool-card-text)]">
+            <div className="text-14 font-medium text-[var(--msg-tool-card-text)]">
               {t('chat.textLightbox.cannotRead')}
             </div>
             <div className="text-13 text-[var(--msg-tool-card-chevron)]">
@@ -679,7 +680,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
             )}
           >
             <TriangleAlert size={40} className="text-[var(--msg-tool-card-chevron)]" />
-            <div className="text-16 font-semibold text-[var(--msg-tool-card-text)]">
+            <div className="text-16 font-medium text-[var(--msg-tool-card-text)]">
               {t('chat.textLightbox.oversizeTitle')}
             </div>
             <div

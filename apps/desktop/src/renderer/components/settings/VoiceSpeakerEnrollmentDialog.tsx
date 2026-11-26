@@ -25,7 +25,7 @@ import {
 const log = createLogger('VoiceSpeakerEnrollmentDialog');
 const CLIP_INDEXES = Array.from({ length: VOICE_SPEAKER_ENROLLMENT_CLIP_COUNT }, (_, index) => index);
 
-type EnrollErrorKey = Extract<VoiceSpeakerEnrollResult, { ok: false }>['reason'] | 'microphone' | 'noAudio';
+type EnrollErrorKey = Extract<VoiceSpeakerEnrollResult, { ok: false }>['reason'] | 'microphone' | 'device-unavailable' | 'noAudio';
 
 type EnrollError = { key: EnrollErrorKey; clipIndex?: number };
 
@@ -114,7 +114,7 @@ export function VoiceSpeakerEnrollmentDialog({
       const permission = await requestRendererMicrophonePermission();
       if (controller.signal.aborted) return;
       if (!permission.ok) {
-        setError({ key: 'microphone' });
+        setError({ key: permission.status === 'device-unavailable' ? 'device-unavailable' : 'microphone' });
         return;
       }
       const clip = await recordSpeakerEnrollmentClip({
@@ -178,7 +178,9 @@ export function VoiceSpeakerEnrollmentDialog({
 
   const allRecorded = clips.every((clip) => clip !== null);
   const errorText = error
-    ? t(`settings.voiceInput.speakerFilter.enroll.errors.${error.key}`, {
+    ? error.key === 'device-unavailable'
+      ? t('settings.voiceInput.microphone.errors.deviceUnavailable')
+      : t(`settings.voiceInput.speakerFilter.enroll.errors.${error.key}`, {
         index: (error.clipIndex ?? 0) + 1,
       })
     : null;
@@ -195,7 +197,7 @@ export function VoiceSpeakerEnrollmentDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
@@ -211,13 +213,13 @@ export function VoiceSpeakerEnrollmentDialog({
             if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2',
             'flex flex-col gap-4 p-5 outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         >
           <div className="flex flex-col gap-1.5">
-            <Dialog.Title className="text-18 font-semibold leading-[1.35] text-[var(--settings-section-title)]">
+            <Dialog.Title className="text-18 font-medium leading-[1.35] text-[var(--settings-section-title)]">
               {t('settings.voiceInput.speakerFilter.enroll.title')}
             </Dialog.Title>
             <Dialog.Description className="text-13 leading-[1.5] text-[var(--settings-section-sublabel)]">

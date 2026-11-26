@@ -17,6 +17,8 @@ export function mapMembershipToMobileUser(
 ): MobileUser {
   return {
     id: membership.id,
+    tapdbChargeAlias: membership.tapdbChargeAlias,
+    tapdbUsageAlias: membership.tapdbUsageAlias,
     name: membership.displayName || membership.email || 'Cindy',
     // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(首字母兜底)。
     avatar: membership.avatarUrl ?? null,

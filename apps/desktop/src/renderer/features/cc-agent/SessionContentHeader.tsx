@@ -1,3 +1,5 @@
+import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
@@ -25,7 +27,7 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Ellipsis, Pin } from 'lucide-react';
+import { ArrowLeft, Ellipsis, MessagesSquare, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -38,12 +40,14 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import {
   prefetchDirtyWorktreeForRemoval,
+  isDirtyWorktree,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
@@ -65,13 +69,9 @@ import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import {
-  archiveConfirmDescription,
-  loadActiveBoundScheduleNames,
-} from '@/features/scheduler/lib/archiveScheduleWarning';
+import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
-import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
@@ -84,55 +84,8 @@ import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 
 const log = createLogger('SessionContentHeader');
-
-/**
- * 任务在本机、Agent 在同账号另一台电脑上运行:标明那台电脑，离线时如实提示(不自动改在本机跑)。
- * 图标与侧栏同款:Agent 图标 + 右上信号波纹。
- */
-function AgentDeviceIndicator({
-  deviceId,
-  agentKind,
-}: {
-  deviceId: string;
-  agentKind: Session['agentKind'];
-}) {
-  const { t } = useTranslation();
-  const devices = useDeviceLinkDeviceList();
-  // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
-  const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
-  const device = devices?.find((item) => item.deviceId === deviceId);
-  const name = deviceDisplayName(deviceId, device?.name || providerShareDeviceName(deviceId));
-  const offline = device ? !device.online : false;
-  const vendor = agentKindToVendor(agentKind);
-  return (
-    <Tip
-      text={t(
-        offline ? 'ccAgent.sessionHeader.agentDeviceOffline' : 'ccAgent.sessionHeader.agentDevice',
-        { device: name },
-      )}
-    >
-      <span
-        role="img"
-        aria-label={t('ccAgent.sessionHeader.agentDevice', { device: name })}
-        className="inline-flex"
-        style={WINDOW_NO_DRAG_STYLE}
-      >
-        {/* 波纹向右上溢出约 3px,右边距比其它标题前缀图标多留一些。 */}
-        <VendorIcon
-          vendor={vendor}
-          size={vendor === 'cc' ? 14 : 13}
-          remote
-          colorClassName="text-[var(--cmd-palette-item-meta)]"
-          className={cn('mr-2', offline && 'opacity-75')}
-        />
-      </span>
-    </Tip>
-  );
-}
 
 /**
  * 注册器组件：由路由直挂的 CCAgentSessionView 条件渲染（仅当该实例"拥有"
@@ -204,6 +157,7 @@ export function SessionContentHeader({
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
   // 或存量半移动行的会话，不能靠 cwd 猜归属。
   const { confirm: confirmDialog } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
@@ -522,25 +476,13 @@ export function SessionContentHeader({
         // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
         // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
         // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
-        if (preflight !== 'clean' || scheduleNames.length > 0) {
-          const ok = await confirmDialog({
-            title: t('ccAgent.sidebar.confirmArchive.title'),
-            description: archiveConfirmDescription(t, {
-              dirtyWorktree: preflight === 'dirty',
-              scheduleNames,
-            }),
-            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-          });
-          if (!ok) {
-            return false;
-          }
-        }
-        return true;
+        return preflight === 'clean' && scheduleNames.length === 0
+          ? true
+          : confirmTaskArchive(preflight, scheduleNames);
       },
     });
   }, [
-    confirmDialog,
+    confirmTaskArchive,
     remoteWritesBlocked,
     runSessionAction,
     runningSessionIds,
@@ -566,7 +508,7 @@ export function SessionContentHeader({
     // P1 预检:worktree 有未提交更改时确认文案追加警告。删除始终弹确认框,所以
     // 用不到三态 —— 预检失败时少一行警告文案,不会变成静默放行。
     const dirtyWorktree =
-      (await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId)) === 'dirty';
+      isDirtyWorktree(await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId));
     const ok = await confirmDialog({
       title: t('ccAgent.sidebar.confirmDelete.title'),
       description:
@@ -574,6 +516,7 @@ export function SessionContentHeader({
         (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmDelete.dirtyWorktreeWarning') : ''),
       confirmText: t('ccAgent.sidebar.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
     const visibleSessionIds = getVisibleSidebarSessionIds();
@@ -591,6 +534,7 @@ export function SessionContentHeader({
     await runSessionAction(session.id, 'delete', {
       activeSessionId: session.id,
       deleteRedirectRoute,
+      deleteTarget: session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined,
     });
   }, [
     confirmDialog,
@@ -598,6 +542,8 @@ export function SessionContentHeader({
     routeSessionById,
     runSessionAction,
     session.id,
+    session.sideChatPromoted,
+    session.source,
     showRemoteWriteBlockedToast,
     t,
   ]);
@@ -606,7 +552,7 @@ export function SessionContentHeader({
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
-      {session.source === 'side-chat' && session.parentSessionId && (
+      {!session.sideChatPromoted && session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
             aria-label={t('chat.sideChat.returnMain')}
@@ -646,10 +592,18 @@ export function SessionContentHeader({
           />
         </Tip>
       )}
-      {!isEditing && !remoteIconKind && session.agentDeviceId && (
-        <AgentDeviceIndicator deviceId={session.agentDeviceId} agentKind={session.agentKind} />
-      )}
+      {/* Agent 在另一台电脑运行时，标题不再加标识(2026-11-17 用户要求)：侧栏任务图标的波纹与悬停说明已标明运行电脑。 */}
 
+      {session.workspaceKind === 'dialogue' ? (
+        <span className="mr-1 inline-flex size-5 shrink-0 items-center justify-center text-[var(--text-secondary)]" aria-hidden="true">
+          <MessagesSquare size={16} strokeWidth={1.75} />
+        </span>
+      ) : !sharedGuest && sessionProjectDirectory(session) ? (
+        <SessionProjectMenuButton
+          key={`${session.deviceLinkDeviceId ?? ''}:${session.remoteHostId ?? ''}:${sessionProjectDirectory(session)}`}
+          session={session} disabled={remoteWritesBlocked}
+        />
+      ) : null}
       {isEditing ? (
         <div style={WINDOW_NO_DRAG_STYLE}>
           <SessionRenameInput
@@ -726,7 +680,7 @@ export function SessionContentHeader({
               <button
                 ref={menuTriggerRef}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--cmd-palette-item-meta)] transition-colors',
                   'hover:bg-titlebar-button-hover hover:text-foreground',
                   'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',

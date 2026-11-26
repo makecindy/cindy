@@ -5,6 +5,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { download } from '../downloader/index.js';
+import { createDownloadProgressReporter } from '../downloader/progressReporter.js';
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import { extractMakeToolArchive } from '../cindy-make/toolArchive.js';
 import { isBinaryVersionNotOlder, probeBinaryVersion } from './binary-version-probe.js';
 import { createLogger } from '../logger.js';
@@ -139,6 +141,8 @@ export async function installPiBinaryRelease(
   deps: Pick<PiBinaryUpdateDeps, 'download' | 'extract' | 'probe'> = piBinaryUpdateDefaults,
   platform = process.platform, signal: AbortSignal = AbortSignal.timeout(180_000),
   onPhase?: (phase: 'download' | 'verify' | 'activate') => void,
+  /** Standard download progress (bytes, retries, speed, time left) for the settings row. */
+  onDownloadProgress?: (progress: DownloadProgress) => void,
 ): Promise<{ binaryPath: string; version: string }> {
   let failureStage: PiBinaryUpdateFailureStage = 'prepare';
   try {
@@ -153,7 +157,16 @@ export async function installPiBinaryRelease(
       await fs.mkdir(unpacked);
       failureStage = 'download';
       onPhase?.('download');
-      await deps.download({ url: release.url, sha256: release.sha256, targetPath: archive, signal });
+      const reporter = onDownloadProgress
+        ? createDownloadProgressReporter({ initialPhase: 'downloading', emit: onDownloadProgress })
+        : null;
+      await deps.download({
+        url: release.url,
+        sha256: release.sha256,
+        targetPath: archive,
+        signal,
+        ...(reporter?.callbacks ?? {}),
+      });
       failureStage = 'extract';
       await deps.extract(archive, unpacked, release, signal);
       const nested = path.join(unpacked, 'pi', release.executable);

@@ -1,23 +1,42 @@
 /**
- * 模型选择器「模型组」一格里的内容：用户在设置里建的路线。选中后新任务第一条消息发出前
- * 由 Cindy 按这一项的规则选一个具体模型，之后任务不再换；手动选普通模型即取消。
- * 行样式与模型行一致：18px 图标盒、名字 14/500、说明 12 次级色，选中整行底色。
+ * 模型选择器里的模型组：用户在设置里建的模式。新任务里选中后，第一条消息发出前由 Cindy 按这个模式的规则选一个
+ * 具体模型；进行中的任务里选它，当场按规则换一次(model-groups.md §5)。之后都不会自己再换；手动选普通模型即取消。
+ * 出现在「模型组」一格、「全部」(不搜索时整段、搜索时只列命中的)和「收藏」(只列收藏的模式)。
+ * 行样式与模型行一致：18px 图标盒、名字 14/500、说明 12 次级色，选中整行底色；行尾 ☆ 收藏。
+ * 本机选择器「其他电脑」那几段各有一格列那台电脑自己的模式(model-groups.md §6.3)：选中后由那台选来源，
+ * 这些行不带 ☆(收藏只记本机的模式)，也没有管理入口(那台的模式在那台上改)。
  */
-import { Settings2, Waypoints } from 'lucide-react';
+import { Settings2, Star, Waypoints } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
+import { toggleModelGroupFavorite, useModelGroupFavorites } from '@/features/model-groups/modelGroupFavorites';
 import { cn } from '@/lib/utils';
 
 import type { ModelGroupRoute, ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
 
 export interface ModelGroupsPickerProps {
   config: ModelGroupsConfig;
-  /** 当前选中的路线；null = 用普通模型。 */
+  /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
-  /** 打开设置里的「模型组」。 */
-  onManage(): void;
+  /** 打开设置里的「模型组」。组属于另一台电脑(远程控制它的伙伴)时不传：这台电脑的设置管不到那边的组。 */
+  onManage?(): void;
+  /** 另一台电脑自己的模式，每台一格；只列有模式的电脑。选中的 selection 带上那台的 deviceId。 */
+  devices?: readonly ModelGroupsPickerDevice[];
+  /** 选择器打开时读一次各台电脑的模式(15 秒内复用上次的答案)。 */
+  readDevices?(): void;
+}
+
+export interface ModelGroupsPickerDevice {
+  deviceId: string;
+  name: string;
+  config: ModelGroupsConfig;
+}
+
+export function isModelGroupSelected(active: ModelGroupSelection | null | undefined, row: ModelGroupSelection): boolean {
+  return !!active && active.type === row.type && active.id === row.id && (active.deviceId ?? null) === (row.deviceId ?? null);
 }
 
 interface PickerRow {
@@ -26,14 +45,23 @@ interface PickerRow {
   hint: string;
 }
 
-export function useModelGroupPickerRows(config: ModelGroupsConfig): PickerRow[] {
+export function useModelGroupPickerRows(config: ModelGroupsConfig, deviceId?: string): PickerRow[] {
   const { t } = useTranslation();
+  return buildModelGroupPickerRows(config, t, deviceId);
+}
+
+/** 选择器里一个模式的一行：名字与「来源数 · 选法 · 推理强度」。 */
+export function buildModelGroupPickerRows(config: ModelGroupsConfig, t: TFunction, deviceId?: string): PickerRow[] {
   const hint = (route: ModelGroupRoute) => [
     t('modelGroups.sourceCount', { count: route.candidates.length }),
     t(`modelGroups.strategy.${route.strategy}.title`),
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
-  return config.routes.map((route) => ({ selection: { type: 'route', id: route.id }, name: route.name, hint: hint(route) }));
+  return config.routes.map((route) => ({
+    selection: { type: 'route', id: route.id, ...(deviceId ? { deviceId } : {}) },
+    name: route.name,
+    hint: hint(route),
+  }));
 }
 
 function matches(rows: readonly PickerRow[], query: string): PickerRow[] {
@@ -46,6 +74,18 @@ export function matchModelGroupRows(rows: readonly PickerRow[], query: string): 
   return matches(rows, query).length;
 }
 
+/** 「收藏」里有几个收藏的模式(已删除的模式不算)。 */
+export function useFavoriteModelGroupCount(config: ModelGroupsConfig): number {
+  const favorites = useModelGroupFavorites();
+  return config.routes.filter((route) => favorites.includes(route.id)).length;
+}
+
+/**
+ * 这一段放在哪里：rail = 「模型组」一格(含空态与管理入口)；all = 「全部」不搜索时整段列出；
+ * search = 「全部」搜索时只列命中的；favorites = 「收藏」里只列收藏的模式。
+ */
+export type ModelGroupsPickerVariant = 'rail' | 'all' | 'search' | 'favorites';
+
 export function ModelGroupIcon({ size }: { size: number }) {
   return <Waypoints size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
@@ -54,21 +94,31 @@ export function ModelGroupsPickerSection({
   picker,
   query,
   onPicked,
-  /** 「全部」里的搜索结果：只列命中的行，不显示空态与管理入口。 */
-  searchOnly = false,
+  variant = 'rail',
+  deviceId,
 }: {
   picker: ModelGroupsPickerProps;
   query: string;
   onPicked(): void;
-  searchOnly?: boolean;
+  variant?: ModelGroupsPickerVariant;
+  /** 列另一台电脑的模式(picker.devices 里的那台)。 */
+  deviceId?: string;
 }) {
   const { t } = useTranslation();
-  const rows = useModelGroupPickerRows(picker.config);
+  const device = deviceId ? picker.devices?.find((item) => item.deviceId === deviceId) : undefined;
+  const rows = useModelGroupPickerRows(device?.config ?? picker.config, device?.deviceId);
+  const starEnabled = !device;
+  const favorites = useModelGroupFavorites();
+  const shown = variant === 'favorites'
+    ? favorites.flatMap((id) => rows.filter((row) => row.selection.id === id))
+    : matches(rows, query);
   const groups = [
-    { key: 'routes', label: t('modelGroups.routes'), rows: matches(rows, query) },
+    { key: 'modes', label: device ? t('modelGroups.picker.deviceTitle', { device: device.name }) : t('modelGroups.title'), rows: shown },
   ].filter((group) => group.rows.length > 0);
+  // 只有「模型组」一格显示空态与管理入口；其余位置没有可列的就不占地方。
+  const searchOnly = variant !== 'rail';
   const manage = () => {
-    picker.onManage();
+    picker.onManage?.();
     onPicked();
   };
   if (searchOnly && groups.length === 0) return null;
@@ -82,17 +132,21 @@ export function ModelGroupsPickerSection({
       {groups.map((group) => (
         <div key={group.key} role="group" aria-label={group.label}>
           <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
-            <span className="truncate">{group.label}</span>
+            <span title={group.label} className="truncate">{group.label}</span>
           </div>
           {group.rows.map((row) => {
-            const selected = picker.active?.type === row.selection.type && picker.active.id === row.selection.id;
+            const selected = isModelGroupSelected(picker.active, row.selection);
+            const favorite = starEnabled && favorites.includes(row.selection.id);
+            const starLabel = favorite
+              ? t('newChat.modelSelector.unified.removeFavorite')
+              : t('newChat.modelSelector.unified.addFavorite');
             const choose = () => {
               picker.onSelect(row.selection);
               onPicked();
             };
             return (
               <div
-                key={row.selection.id}
+                key={`${row.selection.deviceId ?? ''}:${row.selection.id}`}
                 role="option"
                 aria-selected={selected}
                 tabIndex={0}
@@ -115,7 +169,28 @@ export function ModelGroupsPickerSection({
                   <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
                     <ModelGroupIcon size={16} />
                   </span>
-                  <span className="min-w-0 truncate font-medium leading-5">{row.name}</span>
+                  <span title={row.name} className="min-w-0 truncate font-medium leading-5">{row.name}</span>
+                  {/* 与模型行的 ☆ 同一个样子：收藏后常亮，未收藏的悬停或键盘聚焦时出现。 */}
+                  {starEnabled && <button
+                    type="button"
+                    data-model-group-favorite={row.selection.id}
+                    aria-pressed={favorite}
+                    title={starLabel}
+                    aria-label={starLabel}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleModelGroupFavorite(row.selection.id);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    className={cn(
+                      'ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
+                      favorite
+                        ? 'text-[var(--favorite-star)] opacity-100'
+                        : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
+                    )}
+                  >
+                    <Star size={14} fill={favorite ? 'currentColor' : 'none'} aria-hidden />
+                  </button>}
                 </div>
                 {row.hint && (
                   <div title={row.hint} className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
@@ -127,7 +202,7 @@ export function ModelGroupsPickerSection({
           })}
         </div>
       ))}
-      {!searchOnly && (
+      {!searchOnly && !device && picker.onManage && (
         <div
           role="option"
           aria-selected={false}

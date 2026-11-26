@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 替 {{person}}"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "停止我發起的",
@@ -124,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}無法回覆：目前模型不支援圖片。",
         "advice": "請切換至支援圖片的模型。",
-        "details": "請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。"
+        "details": "請切換至支援圖片的模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}無法回覆：目前沒有可用模型。",
@@ -288,7 +291,7 @@
     "organizerSaveFailed": "負責人沒能更換，請再試一次",
     "projectDir": "專案資料夾",
     "projectDirNone": "沒選",
-    "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+    "projectDirNote": "可選擇這台電腦上現有的專案。留空時，優先使用儲存庫對應的專案，其次使用執行夥伴自己的專案。Git 專案分工使用獨立 worktree。",
     "add": "新增夥伴",
     "projectDirOnComputer": "在電腦上選擇或更換",
     "memberActions": "{{name}} 的操作",
@@ -306,6 +309,8 @@
       "loading": "正在讀取群組設定…",
       "unavailable": "群組設定讀取失敗，請重試"
     },
+    "allowMemberInvites": "允許所有成員邀請朋友",
+    "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
     "allowMentionAllBots": "允許 @所有夥伴",
     "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
   },
@@ -313,6 +318,7 @@
     "memberLimit": "一個群聊需要 2–6 位夥伴",
     "memberUnavailable": "有夥伴現在無法使用，換一位再試",
     "mentionUnavailable": "點名的成員已無法使用，請重新選擇後傳送",
+    "mentionAmbiguous": "有多位成員叫「{{name}}」，請從 @ 清單選擇要找的那位",
     "notFound": "這個群聊已不存在",
     "hostNotReady": "Cindy 還在準備中，請稍後重試",
     "planOpen": "正在分工，做完或停止後才能安排新的",
@@ -541,7 +547,7 @@
     "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
     "work": "分工",
     "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
-    "ownFolder": "群組自己的資料夾",
+    "ownFolder": "自動選擇",
     "archive": "封存群組",
     "unarchive": "取消封存",
     "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
@@ -577,6 +583,11 @@
     "transferHint": "對方成為群主，你將成為管理員。",
     "removeTitle": "將 {{name}} 移出群組？",
     "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "移出僅影響這個群，夥伴仍保留在你的帳號中。",
+    "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
+    "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
+    "stopAndRemove": "停止並移出",
     "confirm": "確認",
     "inviteTitle": "邀請加入群聊",
     "reusableLink": "長期有效 · 可供多人重複使用",
@@ -635,5 +646,6 @@
     },
     "externalFormatError": "請從原訊息重新開啟完整連結。"
   },
-  "waitingForOwner": "等待主人確認"
+  "waitingForOwner": "等待主人確認",
+  "externalBadge": "外部"
 }

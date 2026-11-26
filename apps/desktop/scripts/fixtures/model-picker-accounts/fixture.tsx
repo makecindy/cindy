@@ -2,7 +2,7 @@ import { beginProvidersRefresh, commitProvidersSnapshot } from '../../../src/ren
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { ModelSelector } from '../../../src/renderer/components/new-chat/ModelSelector';
 import type { ProviderView } from '@cindy/model-providers';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import {
   ModelSourceDetails,
   ModelSourceUsageProvider,
@@ -28,8 +28,16 @@ const providers = [
   },
 ] as unknown as ProviderView[];
 
+const partialCodex = ctx.case === 'unconfirmed-codex' || ctx.case === 'retained-codex';
+if (partialCodex) providers.splice(0, providers.length, {
+  id: 'openai', name: 'OpenAI', source: 'builtin', connected: true,
+  auth: { method: 'oauth', native: 'codex' }, agents: ['codex'], routing: { codex: {} },
+  models: { codex: ctx.case === 'retained-codex' ? [{ id: 'gpt-6.2-astra', name: 'GPT-6.2 Astra',
+    contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] : [] }, subscriptionReadUnavailable: true,
+  ...(ctx.case === 'retained-codex' ? { subscriptionModelsConfirmedAt: Date.UTC(2026, 10, 19, 15, 38) } : {}),
+} as ProviderView);
 const owner = getDataOwnerGeneration();
-const snapshot = {dataOwnerId:owner.dataOwnerId,ownerGeneration:owner.generation,providers,providerOrder:['anthropic']};
+const snapshot = {dataOwnerId:owner.dataOwnerId,ownerGeneration:owner.generation,providers,providerOrder:providers.map(provider => provider.id)};
 commitProvidersSnapshot(beginProvidersRefresh(), snapshot);
 
 void mountPage({
@@ -83,6 +91,7 @@ void mountPage({
             running: 0,
             limit: 4,
             plan: 'pro',
+            ...(ctx.case.startsWith('official-plan-name') ? { planTier: 'pro', planDisplayName: 'Ultra' } : {}),
             usage: {
               claude: { ...(ctx.case.startsWith('quota-') ? { fiveHour: { utilization: ctx.case === 'quota-low' ? 92 : ctx.case === 'quota-partial' ? 20 : 100, resetsAt: Date.now() / 1000 + 32 * 60 } } : {}), sevenDay: { utilization: 20, resetsAt: Date.now() / 1000 + (ctx.case === 'reset-urgent' || ctx.case === 'full-panel' ? 5 * 3600 : ctx.case === 'reset-soon' || ctx.case === 'unknown' || ctx.case === 'full-panel-warning' ? 12 * 3600 : 2 * 86400) } },
             },
@@ -90,8 +99,25 @@ void mountPage({
         ],
       }),
     },
+    deviceLink: {
+      onRemotePush: subscription('remotePush'),
+      invoke: async (_deviceId: string, channel: string) => {
+        if (channel === 'maker:subscription-accounts')
+          return { providerId: 'anthropic', configured: false, accounts: [] };
+        if (channel === 'maker:usage:claude-subscription')
+          return { sevenDay: { utilization: 40, resetsAt: Date.now() / 1000 + 3600 } };
+        throw new Error(`Unexpected remote channel: ${channel}`);
+      },
+    },
   }),
   render: (ctx) => {
+    if (partialCodex) return (
+      <main className="flex h-screen items-end justify-end p-4">
+        <ModelSelector modelId="gpt-6.2-astra" currentProviderId="openai" vendorKey="codex"
+          actualRoute sourceDisconnected={ctx.case === 'unconfirmed-codex'} effort="high" onModelChange={() => {}} onEffortChange={() => {}}
+          remoteAgent={undefined} useMorphPopover />
+      </main>
+    );
     if (ctx.case.startsWith('full-panel')) return (
       <main className="flex h-screen items-end justify-end p-4">
         <div data-full-picker-trigger>
@@ -102,7 +128,8 @@ void mountPage({
         </div>
       </main>
     );
-    const scope = { deviceId: null, ...(['bound', 'session-bound'].includes(ctx.case) ? { taskId: 'existing-task' } : {}) };
+    const scope = { deviceId: ctx.case === 'legacy-remote' ? 'other-device' : null,
+      ...(['bound', 'session-bound'].includes(ctx.case) ? { taskId: 'existing-task' } : {}) };
     return (
       <div className="p-4">
         <SessionSubscriptionAccountProvider

@@ -31,6 +31,22 @@ Windows 的 SIGTERM 也会强杀进程，因此先通过 CDP `Browser.close` 请
 发现、握手、命令和后续等待共用原有宽限期，只有期限耗尽才 SIGKILL；POSIX 保留 SIGTERM。
 退出修正由 `sync.mjs` 的 LOCAL_PATCH 保留，回归见 `src/__tests__/chrome-stop.test.ts`。
 
+托管 Chrome 的启动错误只属于本次浏览器操作，不得进入主进程的未捕获异常路径。
+`sync.mjs` 的 LOCAL_PATCH 在首次资料预热与正式启动中共用 `shim/chrome-startup.ts`：
+先等待子进程的 `spawn` / `error`，再轮询资料文件或 CDP；启动期间的错误与提前退出立即
+结束启动等待。提前退出后最多等 250ms 让 stderr 排空，再判断 singleton 恢复和生成诊断；
+管道一直不关闭也不会拖到 CDP / 资料预热时限。诊断沿用脱敏、2000 字符 stderr 上限和
+`chromeLaunchHints`，包含 profile / port / bootstrap 阶段，并以 cause 和错误字段保留原始失败。
+结束后释放轮询计时器、启动监听与 stderr，进程级 error 接收器保留到 close。
+每次 spawn 前重新校验路径；自动探测路径发生 ENOENT 时，在同一次启动中最多重新发现
+并尝试另一安装一次。Linux OOM 包装只在确认由包装 shell 以 127 退出、且对本次 executable
+重新 stat 明确得到 ENOENT 时使用同一重发现额度；其他非零退出、文件仍存在、权限 / stat
+错误不推断为缺失。显式 `executablePath`（包括 profile 覆盖）不得自动换浏览器；
+不存在或启动失败时原样报告失败，下一次操作可以重试。发现逻辑本身不缓存候选。
+回归在 `src/__tests__/chrome-startup.test.ts`，宿主失败回执与重试见 Desktop 的
+`browser-backend/__tests__/external-chrome-backend.test.ts`。侧边栏和「我的浏览器」不经过
+这条托管 Chrome spawn 路径，不改变它们的页面、插件或授权行为。
+
 「使用我的浏览器登录态」目前是**每次冷启动重新复制**，不是首次导入：只在 Agent 浏览器
 里新增或续期的 Cookie 会被来源覆盖，站点 Local Storage / IndexedDB 也不跨快照保留。
 这与默认专用 profile 的长期保留不同，修复退出及会话恢复不改变这项既有行为。
@@ -112,6 +128,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 13 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
 | 14 | macOS 上用户在别的 App 点链接，打开的是 Agent 浏览器而不是自己的浏览器 | Agent 浏览器优先选用系统默认浏览器的同一个 App，只换 `--user-data-dir`；LaunchServices 按 bundle id 投递打开链接事件，会落到任意一个同 App 实例 | host 的 `ExternalLinkHandoff`（`browser-backend/external-link-handoff.ts`，仅 macOS）在浏览器级 `Fetch.enable` 只暂停 Document 请求：新标签无 opener、创建时即带 http(s) URL、首个请求无 Referer，且当时没有 Agent `open` 在途（含 1 秒余量），即判为外部链接——先 `open -n -a <App> --args <url>`（新进程经 Chrome 单例转交给用户的默认 profile 实例，未运行则启动它），成功后 `failRequest` + `closeTarget`，请求从未发出，一次性登录链接不会被用掉；转交失败则放行。⌘ 点击靠 Referer、网页弹窗靠 opener 排除。新增建标签的 action 必须同样计入 `trackTabOpen`，否则 Agent 标签会被当成外部链接转走 |
 | 15 | `navigate` 永远不返回,20 秒导航超时不起作用(Tailscale 文档、react.dev 上点过一次站内链接后必现) | 页面里跨站 iframe 中的 worker(如 reCAPTCHA)随 iframe 销毁后,`playwright-core` < 1.63 仍把它的会话留在网络管理器里;导航守卫每次 `page.route` / `page.unroute` 都会给这个已不存在的会话发 `Network.setCacheDisabled`,浏览器回的错误不带会话编号,Playwright 对不上挂起的命令,等待永不结束 | `playwright-core` 保持 ≥ 1.63.0(三处 `package.json` 同步)。**不要**给 `route` / `unroute` 加超时绕过:卸载等待被放弃后,Playwright 分发层仍认为拦截在位,下一次 `route` 不再真正装上,导航守卫会隔一次失效一次。回归:`node --import tsx scripts/eval-browser-tasks.mjs --check` |
+| 16 | `read` 一次读两个页面永远不返回(先做过一次浏览器操作后,读 `tailscale.com/kb/1241/tailscale-up` 与它 308 跳转到的 `/docs/reference/tailscale-cli/up`,4/4 必现),DOM 读取的 20 秒时限也不起作用 | 每次按 targetId 找页面(`getPageForTargetId`)都会对**所有**标签页调 `pageTargetId`,即 `newCDPSession` → `Target.attachToTarget`;Chrome 对正在跳转的那个标签页不回这条命令,Playwright 也不设期限,于是任何标签页的查找都挂住。`readBrowserDom` 的计时器原先在查找之后才启动,所以没有兜底 | `sync.mjs` 的 LOCAL_PATCH 给 `pageTargetId` 加 3 秒期限:超时按「查不到」处理(所有调用方本来就接住失败,继续查其它标签页或按 `/json/list` 的网址匹配),晚到的会话随即 detach;`readBrowserDom` 的总时限从查找页面之前开始计时。不要把这个期限挪到 `route` / `unroute`(见 #15)。回归:`src/__tests__/page-target-lookup.test.ts`、`interaction-proxy-policy.test.ts` 的 `bounds a stalled page lookup`;本机夹具复现不出,真实复现见 [BrowserMCP 对比实测](../../../docs/benchmarks/browsermcp-2026-11-14/README.md) |
 
 ### 4.1 per-start 代理不变量
 

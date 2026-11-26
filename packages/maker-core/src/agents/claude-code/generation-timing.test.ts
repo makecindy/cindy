@@ -691,7 +691,7 @@ describe('claude generation pause boundaries', () => {
       generationReliable: true,
     });
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done', isError: false },
     }));
     if (hasEnvelope) {
       expect(events).toContainEqual(expect.objectContaining({
@@ -1476,6 +1476,120 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
+  // Real Claude turns: a quarter finished without their speed chart. When the result aggregate
+  // and the request segments disagree (subagent output counted on one side only), the legacy
+  // counters fail closed, and the chart went with them although the meter only ever timed the
+  // parent's own requests. Unit tier through translateSdkMessage; smallest input: one parent
+  // request, one child request, and a result that leaves the child out.
+  it('keeps the parent speed chart when subagent output makes the turn aggregate disagree', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 80 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    // The legacy usage-paired timing still fails closed...
+    expect(doneStatus?.data).toMatchObject({ generationReliable: false });
+    // ...but the finished turn keeps the chart of the parent's own request.
+    const done = events.find((event) => event.type === 'done');
+    expect((done?.data as { generationTrace?: { requests: number } })?.generationTrace).toMatchObject({ requests: 1 });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
   it('fails closed when a subagent is present but parent streamed output is incomplete', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -2196,6 +2310,7 @@ describe('claude live token speed', () => {
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
     flow(0, thinking, 107, 0, 20_000, 500);
     stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    expect(speed(20_000)?.measurement).toEqual({ latest: null, average: null });
     // The request really thought three tokens for every estimated one: 300 tok/s.
     stream({ type: 'message_delta', usage: { output_tokens: 6_000, output_tokens_details: { thinking_tokens: 6_000 } } }, 20_000);
     expect(speed(20_000)).toMatchObject({ tokens: 6_000, elapsedMs: 20_000, average: 300 });
@@ -2206,6 +2321,7 @@ describe('claude live token speed', () => {
     flow(0, thinking, 107, 25_000, 45_000, 500);
     // The same summary now counts for what it stood for last time, while it is still streaming.
     const live = speed(45_000);
+    expect(live?.measurement).toMatchObject({ average: 300, latest: { kind: 'request', rate: 300, measuredAt: 20_000 } });
     expect(live?.tokens).toBeGreaterThan(11_000);
     expect(live?.tokens).toBeLessThan(12_300);
     expect(Math.min(...readings)).toBeGreaterThan(270);
@@ -2310,5 +2426,216 @@ describe('claude live token speed', () => {
     // No reading may collapse towards zero after thinking or spike on a flushed burst.
     expect(Math.min(...readings) / realTps).toBeGreaterThan(0.4);
     expect(Math.max(...readings) / realTps).toBeLessThan(2.2);
+  });
+
+  it('publishes live thinking rate within 2.5s for non-Claude verbatim thinking streams', () => {
+    const { stream, speed, flow, thinking, finish, readings } = speedHarness();
+    stream({ type: 'message_start', message: { model: 'antigravity/gemini-4-hydrogen', usage: { input_tokens: 10 } } }, 0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    flow(0, thinking, 107, 0, 2_500, 250);
+    expect(readings.length).toBeGreaterThan(0);
+    expect(speed(2_500)?.rate).toBeGreaterThan(150);
+    finish();
+  });
+});
+
+describe('claude proxied response usage segments', () => {
+  const MESSAGE_ID = '0217956000000000000000000000000000000000000000000000';
+
+  function requestStart(usage: Record<string, number>, id = MESSAGE_ID, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_start',
+        message: { id, model: 'deepseek-flash-latest', usage },
+      },
+    };
+  }
+
+  function requestDelta(usage: Record<string, number>, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage,
+      },
+    };
+  }
+
+  function requestStop(parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: { type: 'message_stop' },
+    };
+  }
+
+  function completedRequest(info: {
+    usage: Record<string, number>;
+    id?: string;
+    parent?: string;
+  }) {
+    return [
+      requestStart(info.usage, info.id, info.parent),
+      requestDelta(info.usage, info.parent),
+      requestStop(info.parent),
+    ] as const;
+  }
+
+  function toolResult(parent?: string) {
+    return {
+      type: 'user' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }],
+      },
+    };
+  }
+
+  function resultEvent(usage: Record<string, number>) {
+    return {
+      type: 'result' as const,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      result: 'ok',
+      usage,
+      modelUsage: {
+        'deepseek-flash-latest': {
+          inputTokens: usage.input_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 0,
+        },
+      },
+    };
+  }
+
+  async function run(...events: Array<Record<string, unknown>>) {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    for (const event of events) translateSdkMessage(event as never, queue, ctx);
+    queue.end();
+    const out: AgentEvent[] = [];
+    for await (const event of queue) out.push(event);
+    return out.find((event) => event.type === 'done')?.data as
+      | { usageSegments?: Array<Record<string, unknown>> }
+      | undefined;
+  }
+
+  it('merges provider cycles that reuse one message id into a single request segment', async () => {
+    // A proxied response is split into a thinking cycle and a text cycle. Both carry
+    // the same provider message id; the first message_delta reports no output yet.
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+      }),
+      resultEvent({
+        input_tokens: 2000,
+        cache_read_input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        output_tokens: 120,
+      }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(1);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 120,
+      cacheReadTokens: 50000,
+      complete: true,
+    });
+  });
+
+  it('keeps distinct provider message ids as separate request segments', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, output_tokens: 20 },
+        id: 'another-message-id',
+      }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('starts a new segment when a tool result separates requests reusing one id', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      toolResult(),
+      ...completedRequest({ usage: { input_tokens: 2000, output_tokens: 20 } }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('does not drop a concurrent stream split-cycle record when another parent reports a tool result', async () => {
+    // Stream A's two cycles straddle a tool result belonging to stream B. Clearing
+    // split-cycle bookkeeping globally would split A's response and bill it twice.
+    const done = await run(
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000 },
+        parent: 'agent-a',
+      }),
+      toolResult('agent-b'),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+        parent: 'agent-a',
+      }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, cache_read_input_tokens: 60000, output_tokens: 10 },
+        parent: 'agent-b',
+      }),
+      resultEvent({ input_tokens: 2000, cache_read_input_tokens: 100000, output_tokens: 130 }),
+    );
+
+    const agentA = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-a'));
+    const agentB = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-b'));
+    expect(agentA).toHaveLength(1);
+    expect(agentA?.[0]).toMatchObject({ inputTokens: 1000, outputTokens: 120, cacheReadTokens: 50000 });
+    expect(agentB).toHaveLength(1);
+    expect(agentB?.[0]).toMatchObject({ inputTokens: 2000, outputTokens: 10, cacheReadTokens: 60000 });
+  });
+
+  it('starts a fresh segment when a retry reuses the id of a billable partial response', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        retry_delay_ms: 1000,
+        error_status: 529,
+        error: 'overloaded_error',
+      },
+      ...completedRequest({ usage: { input_tokens: 1200, cache_read_input_tokens: 60000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1200, cache_read_input_tokens: 60000, output_tokens: 80 },
+      }),
+      resultEvent({ input_tokens: 2200, cache_read_input_tokens: 110000, output_tokens: 80 }),
+    );
+
+    // The failed attempt stays billable; the retry and its own split cycles merge once.
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      cacheReadTokens: 50000,
+    });
+    expect(done?.usageSegments?.[1]).toMatchObject({
+      inputTokens: 1200,
+      outputTokens: 80,
+      cacheReadTokens: 60000,
+    });
   });
 });

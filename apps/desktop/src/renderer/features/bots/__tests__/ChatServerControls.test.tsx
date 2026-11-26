@@ -21,6 +21,16 @@ import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMa
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
 
+// Native dictation is covered in useBotGroupVoiceInput.test.tsx; keep this
+// thread/send suite independent of microphone and account-service setup.
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
+  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+}) }; });
+
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   mask: vi.fn(), mentions: vi.fn(), refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
@@ -53,7 +63,7 @@ beforeEach(() => {
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
   discardDraft(botGroupThreadDraftKey(group.id, 'root'));
   mocks.materialize.mockReset().mockImplementation(async files => [...files]);
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
   mocks.mask.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_OPERATION' });
   mocks.mentions.mockResolvedValue({ ok: true, mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false });
@@ -177,6 +187,33 @@ describe('chat interaction controls', () => {
     await screen.findByText('No config');
     expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
   });
+  // Unit at the real Provider: every group page mounts it, and each read pages all mentions.
+  // Before: the 15s timer kept reading while the window was hidden. With background throttling off
+  // (a running turn or voice call) document.hidden stays false, so the main broadcast must count too.
+  it.each(['document visibility', 'main window broadcast'] as const)('pauses AI reply reads while hidden by %s and reads once on return', async source => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    let documentHidden = false, broadcast = (_hidden: boolean) => {};
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => documentHidden);
+    onTestFinished(() => visibility.mockRestore());
+    Object.assign(window.electronAPI, { onWindowHiddenChange: (listener: (hidden: boolean) => void) => { broadcast = listener; return () => {}; } });
+    const setHidden = (hidden: boolean) => act(async () => {
+      if (source === 'main window broadcast') broadcast(hidden);
+      else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
+    });
+    mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    await screen.findByText('Config ready');
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
+    await setHidden(true);
+    await act(async () => { vi.advanceTimersByTime(45_000); });
+    expect(mocks.mask).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(2));
+    // A visible page keeps reading for scheduled windows.
+    await act(async () => { vi.advanceTimersByTime(15_000); });
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(3));
+  });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
     state.settings.trigger = 'scheduled';
@@ -204,7 +241,7 @@ describe('chat interaction controls', () => {
     const joined = vi.fn();
     render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
     await screen.findByText('Invited group');
-    const toggle = screen.queryByRole('switch', { name: 'bots.groupChat.mask.joinSetup' });
+    const toggle = screen.queryByRole('checkbox', { name: 'bots.groupChat.mask.joinSetup' });
     expect(!!toggle).toBe(supported);
     if (toggle) fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: k('accept') }));
@@ -514,6 +551,8 @@ describe('chat interaction controls', () => {
     const oldRow = (await screen.findByText('Reply 2')).closest('article');
     const root = screen.getByText('Root message').closest('article')!;
     fireEvent.click(within(root).getByRole('button', { name: k('reactionCount') }));
+    // Sharing intentionally retains all loaded DOM; normal reading only mounts a viewport window.
+    act(() => shareSelectionStore.enter('bot-group:room:thread:root'));
     await screen.findByText('Reply 101');
     expect(screen.getByText('Reply 2').closest('article')).toBe(oldRow);
     expect(screen.getByText('Reply 51')).toBeTruthy();
@@ -866,6 +905,29 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // PR #10371 review (component): the shared-name hold read the live roster before the retry
+  // rule, so a member renamed to the same name after a failed send blocked its retry. A retry
+  // keeps its own roster and clientId; only a newly typed @ is held.
+  it('retries a failed typed thread reply after another member takes the same name, and holds only a retyped one', async () => {
+    mocks.reply.mockResolvedValue({ ok: false, errorCode: 'REQUEST_TIMEOUT' });
+    const ann = { botId: 'bot', name: 'Ann', status: 'active' as const };
+    const view = render(<ChatThreadPanel group={{ ...group, members: [ann] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '@Ann hello' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    const original = mocks.reply.mock.calls[0]![0];
+    view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members: [ann, { ...ann, botId: 'namesake' }] } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    await waitFor(() => expect(input.value).toBe('@Ann hello'));
+    fireEvent.change(input, { target: { value: '@Ann hello again' } });
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('bots.groupChat.errors.mentionAmbiguous'));
+    expect(mocks.reply).toHaveBeenCalledTimes(2);
+  });
+
   // Regression: thread mode hid the attachment menu and silently sent text only.
   // Real panel + useAttachments; unit tier, picking a single image is the minimal input.
   // #8084 / r4429774858: also-send must carry its image before the main share receipt arrives.
@@ -1167,9 +1229,11 @@ describe('chat interaction controls', () => {
       type(input, '@Ann ', 4);
       fireEvent.keyDown(input, { key: 'Escape' });
       fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
-      // A retyped name is a manual @: both namesakes, as in the main composer.
-      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['ann-chris', 'ann-dana'] });
+      // A retyped name is a manual @. Two members share it, so it names neither: the reply is
+      // held with its draft until one is picked, as in the main composer (incident 2026-11-13).
+      expect((await screen.findByRole('alert')).textContent).toContain('bots.groupChat.errors.mentionAmbiguous');
+      expect(mocks.reply).not.toHaveBeenCalled();
+      expect(input.value).toBe('@Ann ');
     });
 
     it('moves the caret past the space when a re-pick leaves the text unchanged, and does not pull it back later', () => {
@@ -1231,7 +1295,7 @@ describe('chat interaction controls', () => {
 
     // One retry rule (bot-group-chat.md): a failed reply is retried with the same clientId only when the
     // text and its targets are unchanged. Each row edits the draft between attempts without changing the text.
-    // Comparing only the text fails rows 1 and 4; comparing the pick records fails row 3; re-resolving
+    // Comparing only the text fails row 1; comparing the pick records fails row 3; re-resolving
     // against the live roster fails the roster-refresh test above.
     const pickAt = (input: HTMLTextAreaElement, caret: number, option: number) => {
       // As a user would: click back into the box with the caret after the name, then pick.
@@ -1247,8 +1311,6 @@ describe('chat interaction controls', () => {
       { row: 'pick the same teammate for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Bo '),
         // The typed query `Bo` also matches the untranslated 所有人 key here, so Bo is the second option.
         edit: (input: HTMLTextAreaElement) => pickAt(input, 3, 1), text: '@Bo ', first: ['bo'], second: ['bo'], reused: true },
-      { row: 'pick one namesake for a typed mention', draft: (input: HTMLTextAreaElement) => type(input, '@Ann '),
-        edit: (input: HTMLTextAreaElement) => pickAt(input, 4, 1), text: '@Ann ', first: ['ann-chris', 'ann-dana'], second: ['ann-dana'], reused: false },
     ])('retries a failed reply after "$row" with reused clientId = $reused', async ({ draft, edit, text, first, second, reused }) => {
       const input = renderThread();
       mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' });

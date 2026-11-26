@@ -27,6 +27,8 @@
  * 正确。后续要精确区分时再与 maker-core 一起演进。
  */
 
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
+import { refineCreatedTaskTitle } from '../maker-ipc/createdTaskTitles.js';
 import { beginChannelToolScope } from '../im/shared/channelToolScope.js';
 import { getSessionRuntimeStartOverride } from '../maker-ipc/sessionRuntimeControl.js';
 
@@ -35,13 +37,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import { materializeTaskImageTextResult } from '../cindy-media/taskImageDelivery';
-import { rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { materializeTaskImageTextResult, TASK_IMAGE_MAX_BYTES } from '../cindy-media/taskImageDelivery';
+import { isUnsafeLocalTaskImagePath, localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
-  AgentKind,
+  EngineKind,
+  InteractionRequest,
   PermissionMode,
   TurnPermissionOrigin,
   UserContentBlock,
@@ -56,6 +59,7 @@ import {
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -112,7 +116,9 @@ import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemot
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
+  SHARED_PREFS_CHANNEL,
   getWorkspacePref,
+  isSharedPrefsAdopted,
   isWorkspacePrefsMigrated,
   resolveWorkspacePrefOverrides,
   type HookPrefsChannel,
@@ -121,6 +127,7 @@ import { getDesktopProviderService } from '../maker-host/createDesktopProviderSe
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
+
 import { bindInputHandoffChannelNotice } from '../im/shared/inputHandoffChannelNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
 import {
@@ -149,15 +156,16 @@ import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defa
 import { resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import { decodeAttachments, sanitizeAttachmentName } from './attachments.js';
 import {
+  HOOK_INTERACTION_TIMEOUT_MS,
   cancelHookInteraction,
   composeInteractionCard,
   registerHookInteraction,
 } from './interactions.js';
-import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs, resolveRelativeImageRefs } from './outbound.js';
+import { compressInlineImage } from '../mcp-integrations/inlineImageCompressor.js';
 import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { imText } from '../im/shared/imText.js';
 import { modernLocaleOf } from '../../shared/locale.js';
-import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -165,12 +173,12 @@ function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin
   switch (value) {
     case 'telegram':
     case 'feishu':
-      // `source.im=telegram|feishu` identifies the official server-backed hook
-      // here, not the authenticated personal-bot adapter that shares the same
+    case 'discord':
+      // `source.im=telegram|feishu|discord` identifies the official server-backed
+      // hook here, not the authenticated personal-bot adapter that shares the same
       // channel id. Keep managed package mutations on the Desktop confirmation
       // path: a personal-bot `im` origin would let an official relay turn skip it.
       return { kind: 'hook', source: value };
-    case 'discord':
     case 'slack':
     case 'wechat':
     case 'dingtalk':
@@ -194,6 +202,25 @@ type HookDispatchOverrides = {
 };
 type HookWorkspaceCtx = { alias: string | undefined; teamId: string | null };
 
+/** 官方 Discord 任务在 sessions.source / vendorOptions.source 里的值(与个人 Discord bot 的 'discord' 区分)。 */
+const DISCORD_HOOK_SESSION_SOURCE = 'discord-hook';
+
+/** 官方 hook 新任务落库的 sessions.source; 官方 Slack 与未知渠道不写(保持 desktop)。 */
+function hookSessionSource(sourceIm: string | undefined): 'telegram' | 'x' | 'feishu' | 'discord-hook' | null {
+  switch (sourceIm) {
+    case 'telegram':
+    case 'x':
+    case 'feishu':
+      return sourceIm;
+    // 个人 Discord bot 的会话是 'discord': 启动时会被强制归入「对话」分组并改写成托管目录,
+    // 个人渠道的默认路由跟随也按它认行。官方任务必须用自己的值, 才不会被个人 bot 的逻辑接管。
+    case 'discord':
+      return DISCORD_HOOK_SESSION_SOURCE;
+    default:
+      return null;
+  }
+}
+
 /**
  * 新任务路由取值链的全部输入(同步读本机文件, 不碰供应商目录): 目录偏好合并后的
  * 显式值、目录来源偏好、IM 默认设置。resolveNewSessionConfig 与「跟随默认」的指纹
@@ -203,31 +230,46 @@ function hookDefaultInputs(
   overrides: HookDispatchOverrides,
   sourceIm: string | null | undefined,
   workspaceCtx: HookWorkspaceCtx | undefined,
+  sharedProject = false,
 ) {
   const prefsChannel: HookPrefsChannel | null =
     sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
       ? sourceIm
       : null;
   const workspaceAlias = workspaceCtx?.alias;
+  // 官方 Discord 上线时共用配置已经是正本: 它没有按渠道的旧偏好要并入, 也没有 /model 卡,
+  // 服务端便签(dispatch options)不再作数 —— 生来就按「已并入、已迁移」只读共用那一份,
+  // 不读个人 Discord bot 的 'discord' 默认值。
+  const sharedOnly = sourceIm === 'discord';
+  // 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts): 这个渠道原有的按渠道偏好并入
+  // 之后, 一律读共用的那一份; 并入之前(升级后还没连上过服务端)沿用它自己的那份。
+  const shared =
+    sharedProject || sharedOnly || (prefsChannel !== null && isSharedPrefsAdopted(prefsChannel));
+  const readsPrefs = prefsChannel !== null || sharedOnly;
   const localPref =
-    prefsChannel !== null && workspaceAlias
-      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+    readsPrefs && workspaceAlias
+      ? shared || prefsChannel === null
+        ? getWorkspacePref(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const mergedOverrides = resolveWorkspacePrefOverrides(
     localPref,
     overrides,
-    prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
+    sharedOnly ||
+      (prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel)),
   );
-  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  // 项目级来源偏好(纯本地, 用户在设置页该项目那一行显式选的来源)优先于草稿默认来源。
   const workdirRoute =
-    prefsChannel !== null && workspaceAlias
-      ? getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+    readsPrefs && workspaceAlias
+      ? shared || prefsChannel === null
+        ? getWorkspaceProviderRoute(SHARED_PREFS_CHANNEL, null, workspaceAlias)
+        : getWorkspaceProviderRoute(prefsChannel, workspaceCtx.teamId, workspaceAlias)
       : null;
   const workdirProviderId = workdirRoute?.providerId ?? null;
-  // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
-  // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
-  // 改写另一入口的新会话路由。
-  const imDefaults = readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined);
+  // 官方机器人与个人 Bot 是两个独立入口。个人 Bot 各用自己渠道的那份(如 channel='telegram');
+  // 官方机器人(含 Slack)统一读 global —— 没单独配置过的项目在哪个官方机器人里都按同一份
+  // 默认跑, 也避免任一个人 Bot 的设置卡静默改写官方入口的新任务路由。
+  const imDefaults = readImDefaultSettings();
   return { channel: prefsChannel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults };
 }
 
@@ -240,6 +282,31 @@ function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): 
   return JSON.stringify(['hook', channel, mergedOverrides.agentKind, mergedOverrides.model,
     mergedOverrides.effort, workdirProviderId, fingerprintImDefaultSettings(imDefaults),
     ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
+}
+
+/** Plugin IM entrances use the same canonical project settings and resolver as official bots. */
+export function sharedImProjectFingerprint(alias: string): string {
+  return JSON.stringify(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+/**
+ * 共享项目设置的「默认设置指纹」, 与 resolveSharedImProjectConfig 返回的 fingerprint 同一口径
+ * (固定模型时相等): 个人飞书 bot 绑定了项目的群任务跟随这一行时, 每条消息只比这个, 不必每次解析。
+ */
+export function sharedImProjectDefaultsFingerprint(alias: string): string {
+  return hookDefaultsFingerprint(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+/** `providerSnapshot`: 一次解析多个项目时共用同一份供应商目录(缺省现取)。 */
+export function resolveSharedImProjectConfig(
+  alias: string,
+  log: { warn(msg: string): void },
+  providerSnapshot?: ProviderView[],
+) {
+  return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
+    log, 'slack', { alias, teamId: null }, providerSnapshot, true);
 }
 
 /**
@@ -255,8 +322,9 @@ async function resolveNewSessionConfig(
   sourceIm?: string | null,
   workspaceCtx?: HookWorkspaceCtx,
   providerSnapshot?: ProviderView[],
+  sharedProject = false,
 ): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
-  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx);
+  const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx, sharedProject);
   const fingerprint = hookDefaultsFingerprint(inputs);
   let providers: ProviderView[] | null = null;
   try {
@@ -574,6 +642,26 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
   };
 }
 
+/**
+ * 发给渠道的图片超过单图上限时的压缩阶梯: 先保细节(大边长、高质量), 不行再逐级缩小。
+ * 与给模型看的内联缩略图不同, 这里要让人在聊天里还能看清截图上的字。
+ */
+const OUTBOUND_IMAGE_SHRINK_LADDER = [
+  { maxEdgePx: 4096, webpQuality: 85 },
+  { maxEdgePx: 3072, webpQuality: 82 },
+  { maxEdgePx: 2560, webpQuality: 80 },
+  { maxEdgePx: 2048, webpQuality: 76 },
+  { maxEdgePx: 1600, webpQuality: 72 },
+] as const;
+
+function shrinkOutboundImage(bytes: Buffer, mimeType: string, maxBytes: number) {
+  return compressInlineImage(bytes, mimeType, {
+    targetBytes: maxBytes,
+    ladder: OUTBOUND_IMAGE_SHRINK_LADDER,
+    timeoutMs: 15_000,
+  });
+}
+
 /** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
 function formatHookIncompleteNotice(skippedNames: string[]): string {
   const locale = getResolvedMainLocale();
@@ -611,14 +699,32 @@ async function collectOutboundForFinalText(
   const canReadLocal = allowedFileRoots.length > 0;
   // The public projection is drawn from this whole turn. Import its image URLs
   // once so a temporary source changing cannot split the body from its attachment.
-  const scanText = stripInternalWebCitations(texts.wholeTurn);
+  // 按工作目录写的相对路径图片先补成绝对路径, 再与绝对路径的图片一起导入(否则它们不会被发出,
+  // 引用还会原样留在正文里)。
+  const sourceScanText = stripInternalWebCitations(texts.wholeTurn);
+  const relativeImages = canReadLocal
+    ? await resolveRelativeImageRefs(sourceScanText, allowedFileRoots)
+    : new Map<string, string>();
+  const scanText = rewriteTaskImageReferences(sourceScanText, relativeImages);
   const materialized = canReadLocal
     ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
+  // 没导入成功的本机图片里, 哪些是因为超过导入上限: 提示里要写明上限, 而不是只说「未能发送」。
+  const oversizedLocalImages = new Set<string>();
+  for (const failed of 'failures' in materialized ? materialized.failures : []) {
+    const absPath = localTaskImagePath(failed);
+    if (!absPath || isUnsafeLocalTaskImagePath(absPath)) continue;
+    try {
+      if ((await fs.stat(absPath)).size > TASK_IMAGE_MAX_BYTES) oversizedLocalImages.add(absPath);
+    } catch { /* 文件已不在: 按普通的未能发送提示 */ }
+  }
   // Recipients cannot open this computer's files: links to local paths keep only their label.
   const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
-    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements));
+    : rewriteTaskImageReferences(
+      rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), relativeImages),
+      materialized.replacements,
+    ));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
@@ -632,6 +738,13 @@ async function collectOutboundForFinalText(
       ...(canReadLocal && relayXVideo ? { relayVideo: relayXVideo } : {}),
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       formatIncompleteNotice: formatHookIncompleteNotice,
+      // 超过单图上限的图片在本机压一份再发; 远程任务读不到本机文件, 不涉及。
+      ...(canReadLocal ? { shrinkImage: shrinkOutboundImage } : {}),
+      localImageOverLimitMiB: (absPath) => oversizedLocalImages.has(absPath)
+        ? Math.floor(TASK_IMAGE_MAX_BYTES / (1024 * 1024)) : undefined,
+      formatOverLimitName: (name, limitMiB) => t('imBot.outboundAttachmentOverLimit', getResolvedMainLocale())
+        .replace('{{name}}', name)
+        .replace('{{limit}}', String(limitMiB)),
       log,
     });
     if (collected.skipped > 0) {
@@ -650,6 +763,14 @@ async function collectOutboundForFinalText(
   }
 }
 
+function refineHookTaskTitle(req: HookRunRequest, subject: string): void {
+  const naming = req.topicNaming;
+  void refineCreatedTaskTitle(req.sessionId, subject, naming && {
+    initialTitle: naming.initialTitle,
+    format: topic => formatTaskTopicTitle(topic, naming.channel, naming.context ? { context: naming.context } : undefined),
+  });
+}
+
 export function createMakerHookSessionRunner(deps: {
   log: { info(msg: string): void; warn(msg: string): void };
 }): HookSessionRunner {
@@ -658,21 +779,26 @@ export function createMakerHookSessionRunner(deps: {
   const runner = {
     isBusy: (sessionId) => isSessionInTurn(sessionId),
 
-    async inspect(sessionId) {
+    async inspect(sessionId, checkArchivedDir) {
       const [meta, row] = await Promise.all([
         getMaker().getSessionMeta(sessionId),
         getSessionRowSnapshotStrict(sessionId),
       ]);
       if (!meta && !row) return null;
-      const usable =
-        !!row &&
-        row.status !== 'archived' &&
-        row.status !== 'deleted' &&
-        row.remoteHostId == null &&
-        row.orcaRole !== 'worker';
-      // workDir 以 maker meta 为权威(scheduler 同做法), row 兜底
+      const localTask = !!row && row.remoteHostId == null && row.orcaRole !== 'worker';
+      const usable = localTask && row.status !== 'archived' && row.status !== 'deleted';
       const workingDir = meta?.workDir ?? row?.workingDir ?? null;
-      return { workingDir, usable };
+      if (localTask && row.status === 'archived' && !row.orcaRemoteLead && row.source !== 'bot'
+        && workingDir && checkArchivedDir?.(workingDir)) {
+        // Archive cleanup can remove a dedicated worktree. Only resume in a surviving directory.
+        try {
+          return { workingDir, usable, resumableArchive: (await fs.stat(workingDir)).isDirectory() };
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
+      }
+      return { workingDir, usable, companionOwned: row?.source === 'bot' };
     },
 
     async run(req: HookRunRequest, releaseSendLock = (): void => {}) {
@@ -706,7 +832,7 @@ export function createMakerHookSessionRunner(deps: {
           )
         : null;
       const recordNewTaskDefaultRoute = async (sessionId: string): Promise<void> => {
-        if (!resolved || !['telegram', 'slack', 'x', 'feishu'].includes(req.source?.im ?? '')) return;
+        if (!resolved || !['telegram', 'slack', 'x', 'feishu', 'discord'].includes(req.source?.im ?? '')) return;
         assertAccount?.();
         await writeHookDefaultRouteRecord(sessionId, resolved.fingerprint).catch((err) => {
           log.warn(`hook default route record failed: ${String(err)}`);
@@ -717,7 +843,7 @@ export function createMakerHookSessionRunner(deps: {
       let effort = resolved?.effort;
       let resumeSessionId: string | undefined;
       let companionFastMode: boolean | 'ultrafast' | undefined;
-      let effectiveAgentKind: AgentKind = resolved?.agentKind ?? 'claude-code';
+      let effectiveAgentKind: EngineKind = resolved?.agentKind ?? 'claude-code';
       // 新建路径 resolved 必有值(capabilities 校验过); 复用路径由下方 meta 覆盖
       let permissionMode: PermissionMode = (resolved?.permissionMode ??
         'bypassPermissions') as PermissionMode;
@@ -738,6 +864,7 @@ export function createMakerHookSessionRunner(deps: {
           workingDir = meta.workDir;
           model = meta.model;
           resumeSessionId = meta.sdkSessionId;
+          // 插件引擎任务(docs/plans/acp-plugin-bridge.md)同样接官方渠道：按它自己的引擎与 providerId 恢复。
           effectiveAgentKind = meta.agentKind;
         }
         effort = req.companionBotId ? meta?.effort : undefined;
@@ -753,10 +880,15 @@ export function createMakerHookSessionRunner(deps: {
         agentDeviceId = row?.agentDeviceId ?? meta?.agentDeviceId ?? null;
       }
 
-      const fail = (msg: string, finalText = ''): HookRunOutcome => ({
+      const fail = (
+        msg: string,
+        finalText = '',
+        errorReason?: string | null,
+      ): HookRunOutcome => ({
         status: 'error',
         finalText,
         errorMessage: msg,
+        ...(errorReason ? { errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
 
@@ -780,9 +912,11 @@ export function createMakerHookSessionRunner(deps: {
        * 上一版把它跟临时降档一起删了, 而两者本来无关 —— 原注释就写着“即使复用
        * 会话已是安全档、不需要切档, 也要持住这段独占”)。
        */
-      // 官方飞书 / Lark 的话题轮次同属多人可见的群轮次(deriveLaneKind), 同样持有 lease。
+      // 官方飞书 / Lark 的话题轮次与官方 Discord 的服务器频道轮次同属多人可见的群轮次
+      // (deriveLaneKind), 同样持有 lease。
       const isOfficialGroupTurn =
-        (req.source?.im === 'telegram' || req.source?.im === 'feishu') && req.laneKind === 'group';
+        (req.source?.im === 'telegram' || req.source?.im === 'feishu' || req.source?.im === 'discord') &&
+        req.laneKind === 'group';
       let releaseTelegramGroupTurnLease: (() => void) | null = null;
       let releaseGroupHistoryAccess: (() => void) | null = null;
       const releaseGroupHistory = (): void => {
@@ -853,7 +987,8 @@ export function createMakerHookSessionRunner(deps: {
           ? {
               vendorOptions: {
                 // 官方飞书刻意不用 'feishu': 那是个人飞书 bot 会话的来源值, 会让
-                // cindy_feishu_bot 把本会话当成个人 bot 渠道。
+                // cindy_feishu_bot 把本会话当成个人 bot 渠道。官方 Discord 同理不用
+                // 'discord'(个人 Discord bot 与 cindy_discord 工具的渠道值)。
                 source:
                   req.source?.im === 'telegram'
                     ? 'telegram'
@@ -861,7 +996,9 @@ export function createMakerHookSessionRunner(deps: {
                       ? 'x'
                       : req.source?.im === 'feishu'
                         ? 'feishu-hook'
-                        : 'slack-hook',
+                        : req.source?.im === 'discord'
+                          ? DISCORD_HOOK_SESSION_SOURCE
+                          : 'slack-hook',
               },
             }
           : {}),
@@ -917,13 +1054,10 @@ export function createMakerHookSessionRunner(deps: {
             setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
-          if (
-            req.source?.im === 'telegram' ||
-            req.source?.im === 'x' ||
-            req.source?.im === 'feishu'
-          ) {
+          const createOnlySessionSource = hookSessionSource(req.source?.im);
+          if (createOnlySessionSource !== null) {
             assertAccount?.();
-            await setSessionSourceInDb(req.sessionId, req.source.im);
+            await setSessionSourceInDb(req.sessionId, createOnlySessionSource);
           }
           assertAccount?.();
           await recordNewTaskDefaultRoute(req.sessionId);
@@ -940,6 +1074,7 @@ export function createMakerHookSessionRunner(deps: {
           }
           assertAccount?.();
           broadcastSessionCreated(req.sessionId);
+          refineHookTaskTitle(req, '');
           return {
             status: 'ok',
             finalText: '',
@@ -960,7 +1095,8 @@ export function createMakerHookSessionRunner(deps: {
           const recovered = await getSessionRowSnapshotStrict(req.sessionId);
           assertAccount?.();
           if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
-          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, createOpts.agentKind, createOpts.agentDeviceId);
+          // createOpts.agentKind is effectiveAgentKind (built-in, see above).
+          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, effectiveAgentKind, createOpts.agentDeviceId);
           Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
           if (runtimeOverride.model) {
             setSessionEffort(req.sessionId, runtimeOverride.effort);
@@ -1214,11 +1350,9 @@ export function createMakerHookSessionRunner(deps: {
         if (sessionProviderId && accountStillCurrent()) {
           await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if (
-          (req.source?.im === 'telegram' || req.source?.im === 'x' || req.source?.im === 'feishu') &&
-          accountStillCurrent()
-        ) {
-          await setSessionSourceInDb(session.id, req.source.im);
+        const newSessionSource = hookSessionSource(req.source?.im);
+        if (newSessionSource !== null && accountStillCurrent()) {
+          await setSessionSourceInDb(session.id, newSessionSource);
         }
         if (accountStillCurrent()) await recordNewTaskDefaultRoute(session.id);
         if (accountStillCurrent()) broadcastSessionCreated(session.id);
@@ -1396,7 +1530,7 @@ export function createMakerHookSessionRunner(deps: {
       const publicCompanionNote = req.companionBotId
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale(), { replyStyle: false })}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1591,6 +1725,21 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                ...(req.onQuestion ? {
+                  questionTimeoutMs: HOOK_INTERACTION_TIMEOUT_MS,
+                  presentQuestion: async (question, controls) => {
+                    if (question.delivery !== 'async') {
+                      pendingInteractionNotices.set(question.requestId, awaitingInteractionNotice(question.kind));
+                      activeObserver?.markInteractionBoundary();
+                      activeObserver?.setNotice(awaitingInteractionNotice(question.kind));
+                      void controls.settled.finally(() => {
+                        pendingInteractionNotices.delete(question.requestId);
+                        activeObserver?.setNotice([...pendingInteractionNotices.values()].at(-1) ?? null);
+                      }).catch(() => undefined);
+                    }
+                    await req.onQuestion!(question, controls);
+                  },
+                } : {}),
                 sourceDescription: describeInteractionSource({
                   channelName: req.source?.im ?? req.origin.connectionName,
                   chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
@@ -1621,6 +1770,8 @@ export function createMakerHookSessionRunner(deps: {
             // accepted hook turn is headless; preparation and queue wait are
             // still part of the unrelated interactive turn.
             markHeadlessTurnDispatched();
+            assertAccount?.();
+            refineHookTaskTitle(req, req.userText?.trim() || req.source?.userText?.trim() || '');
             // send 被接受才落 user 消息(与 scheduler 同序: 不让 agent 在
             // "消息没存下"的情况下空跑); 失败即整体失败
             // agentMeta 形状受 CcMeta 约束, 只放 origin(scheduleId 已携带
@@ -1648,8 +1799,11 @@ export function createMakerHookSessionRunner(deps: {
                   : {}),
               },
             });
-            await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
-            turnChangeSetStarted = true;
+            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
+            if (hasBuiltinAgentKind(session)) {
+              await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
+              turnChangeSetStarted = true;
+            }
             // 每次被接受的 IM 消息都是一次用户发送: bump userSendAt 让排序
             // 时间轴与桌面端 sendMessage 口径一致, sessions:patched 广播顺带把
             // 复用/接管会话即时重排序(新建路径已在广播前落过, 这里更新为实际
@@ -1715,7 +1869,7 @@ export function createMakerHookSessionRunner(deps: {
             surface: 'official',
           })
           : err instanceof Error ? err.message : String(err);
-        return { ...fail(message), ...collected };
+        return { ...fail(message, '', observer.errorReason), ...collected };
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1891,6 +2045,7 @@ function beginContinuationWatch(
         status: 'error',
         finalText: '',
         errorMessage,
+        ...(observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
       });
       return;
@@ -1910,6 +2065,7 @@ function beginContinuationWatch(
         status: errorMessage === null ? 'ok' : 'error',
         finalText: collected.finalText,
         errorMessage,
+        ...(errorMessage !== null && observer.errorReason ? { errorReason: observer.errorReason } : {}),
         durationMs: Date.now() - startedAt,
         ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
       });

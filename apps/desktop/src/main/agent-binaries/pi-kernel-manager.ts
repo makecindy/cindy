@@ -7,15 +7,12 @@ import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 import { getBaseUrl, getPlatformKey } from '../manifestService.js';
 import { probeBinaryVersion, isBinaryVersionNotOlder } from './binary-version-probe.js';
 import { installPiBinaryRelease, parsePiRelease, piBinaryUpdateDefaults, piBinaryUpdateError, type PiBinaryRelease } from './pi-self-update.js';
+import { PiKernelError, resolveSelectedPiBinary, VERSION, type Selection } from './pi-kernel-selection.js';
 
-const VERSION = /^\d+\.\d+\.\d+$/;
+// Moved to pi-kernel-selection.ts (no Electron); the Settings, IPC and MCP callers import it from here.
+export { PiKernelError };
+
 interface Release extends PiBinaryRelease { size?: number; publishedAt?: string; releaseUrl?: string }
-interface Selection { schema: 1; source: PiKernelSource; version: string; directory: string }
-export class PiKernelError extends Error {
-  constructor(readonly reason: 'busy' | 'version-changed' | 'install-failed' | 'selection-invalid') {
-    super(reason);
-  }
-}
 
 export function parseOfficialPiRelease(value: unknown, base: string, platform = process.platform): Release {
   const asset = (value as { pi?: Record<string, unknown> } | null)?.pi;
@@ -87,32 +84,10 @@ export class PiKernelManager {
 
   private selectionFile(): string { return path.join(this.deps.root, 'selected.json'); }
   hasSelection(): boolean { return readAtomicFileSync(this.selectionFile()) !== null; }
-  private readSelection(): Selection | null {
-    const raw = readAtomicFileSync(this.selectionFile());
-    if (raw === null) return null;
-    try {
-      const s = JSON.parse(raw) as Selection;
-      if (s.schema !== 1 || !['official', 'upstream'].includes(s.source) || !VERSION.test(s.version)
-        || typeof s.directory !== 'string' || !s.directory.startsWith(`${s.version}-`)
-        || !/^\d+\.\d+\.\d+-[a-f0-9-]{36}$/.test(s.directory)) throw new Error();
-      return s;
-    } catch { throw new PiKernelError('selection-invalid'); }
-  }
 
   /** A saved downgrade wins over every higher leftover install. Never silently reselect. */
   async selectedBinary(signal?: AbortSignal): Promise<string | null> {
-    const selection = this.readSelection();
-    if (!selection) return null;
-    const directory = path.join(this.deps.root, selection.directory);
-    const executable = process.platform === 'win32' ? 'pi.exe' : 'pi';
-    const binary = path.join(directory, executable);
-    try {
-      if (!(await fs.lstat(directory)).isDirectory() || (await fs.lstat(binary)).isSymbolicLink()) throw new Error();
-      await fs.access(path.join(directory, '.verified'));
-      // Native/manual self-updates remain usable; the executable is the version authority.
-      if (!await this.deps.probe(binary, signal)) throw new Error();
-      return binary;
-    } catch { throw new PiKernelError('selection-invalid'); }
+    return resolveSelectedPiBinary(this.deps.root, (binary, probeSignal) => this.deps.probe(binary, probeSignal), signal);
   }
 
   async state(): Promise<PiKernelState> {
@@ -157,9 +132,14 @@ export class PiKernelManager {
             return current;
           }
         }
-        const installed = await this.deps.install(this.deps.root, release, undefined, process.platform, signal, phase => {
-          this.operation = { source: request.source, phase };
-        });
+        const installed = await this.deps.install(
+          this.deps.root, release, undefined, process.platform, signal,
+          phase => { this.operation = { source: request.source, phase }; },
+          // Polled every few seconds by Settings; keep the latest snapshot on the operation.
+          download => {
+            if (this.operation?.phase === 'download') this.operation = { ...this.operation, download };
+          },
+        );
         let activated = false;
         try {
           signal.throwIfAborted();

@@ -41,6 +41,7 @@ import { imText } from '../im/shared/imText';
 
 import {
   composeInteractionModel,
+  isOneTimePermission,
   truncateInline as truncate,
   BTN_LABEL_MAX,
   HOOK_PERMISSION_INPUT_SUMMARY_MAX,
@@ -141,6 +142,7 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
     ? summarizeInput(model.input)
     : truncate(action.preview, HOOK_PERMISSION_INPUT_SUMMARY_MAX);
   const handoff = autoReviewUnavailablePromptLine(req) !== null
+    || (req.kind === 'permission' && isOneTimePermission(req))
     || (req.kind === 'permission' && !!req.metadata?.mcpApp && (req.metadata.mcpApp as { scope?: string }).scope !== 'session');
   const body = [
     permissionPromptDescription(req) ?? '',
@@ -157,7 +159,7 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
       body,
       buttons: [
         { id: 'perm:allow', label: imText('imBot.text.hook.interaction.allowOnce'), style: allowOnce.style },
-        // Auto-review handoffs (AI ask or unavailable) only ever allow this one call.
+        // 只允许单次的确认不提供任务级选择。
         ...(handoff ? [] : [{ id: 'perm:always', label: imText('imBot.text.hook.interaction.alwaysAllowForSession'), style: allowAlways.style }]),
         { id: 'perm:deny', label: imText('imBot.text.hook.interaction.deny'), style: deny.style },
       ],

@@ -89,12 +89,19 @@ export type DesktopHostReply =
     }
   | null;
 export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'unavailable';
+/** Only the local settings renderer receives an installation path. */
+export type LocalDesktopPermissions = RemoteDesktopPermissions & {
+  appBundlePath?: string;
+  separateWindowRetries?: DesktopPermission[];
+  /** macOS 27.3+: Cindy may control chosen apps only; remote keyboard and mouse need the whole Mac. */
+  accessibilityChosenAppsOnly?: true;
+};
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;
   enable(enabled: boolean): Promise<void>;
   windowsSupport(enabled: boolean): Promise<void>;
   stop(): Promise<void>;
-  permissions(): Promise<RemoteDesktopPermissions>;
+  permissions(): Promise<LocalDesktopPermissions>;
   openPermission(permission: DesktopPermission): Promise<void>;
   dismissPermissionGuide(): Promise<void>;
 }

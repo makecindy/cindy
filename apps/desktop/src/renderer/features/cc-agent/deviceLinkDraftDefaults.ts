@@ -22,6 +22,7 @@ import {
 } from '@cindy/model-providers';
 import type { AgentCapabilities, AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
+import { pickCloudDraftModel } from '@/features/cloud-settings/cloudDraftCatalog';
 
 /** 被控端当前草稿的原始值(maker:get-new-maker-defaults 隧道返回;字段全可选)。 */
 export interface RemoteDraftDefaults {
@@ -53,6 +54,11 @@ export interface RemoteDraftDefaults {
    * 不参与 resolveDeviceLinkDraftDefaults 的 per-vendor 解析(消费方直接读)。
    */
   worktreeEnabled?: boolean;
+  /**
+   * 被控端新建任务当前选中的引擎(vendor 无关根字段)。控制端进入「到这台电脑新建任务」时
+   * 切到这个引擎;旧版被控端不回 → undefined → 保持控制端当前引擎。
+   */
+  selectedAgentKind?: AgentKind;
 }
 
 /** 校准后可直接 seed 控制端草稿 holder 的一组值。 */
@@ -133,6 +139,8 @@ export function resolveDeviceLinkWorktreeEnabled(
  *     最终 effort 仍按目标模型 efforts 校验(不支持则落 defaultEffort);fast 仍按 agent×模型 能力门控。
  *   - permissionMode:被控端支持该档才带,否则 undefined(非按模型记)。
  *   - providerId:原样透传(下游 clamp;非按模型记)。
+ *   - catalogDeviceId 是托管云实例时,model / providerId 改由它已连接的供应商目录选定
+ *     (pickCloudDraftModel);其它电脑保持上述 capabilities 口径。
  * capabilities.availableModels 为空(理论不该发生)→ 退化返回安全兜底。
  */
 export function resolveDeviceLinkDraftDefaults(
@@ -141,9 +149,10 @@ export function resolveDeviceLinkDraftDefaults(
   targetModel?: string,
   agentKind?: AgentKind,
   providers?: ProviderView[],
+  catalogDeviceId?: string | null,
 ): DeviceLinkDraftSelection {
   const models = capabilities.availableModels;
-  const providerId = remoteDraft?.providerId ?? null;
+  let providerId = remoteDraft?.providerId ?? null;
   const permissionMode = pickPermissionMode(capabilities, remoteDraft?.permissionMode);
 
   // 要解析哪个模型:控制端本次显式 targetModel(切模型)永远优先。初始 seed 只有在**新端明确
@@ -168,8 +177,16 @@ export function resolveDeviceLinkDraftDefaults(
     (remoteDraft?.modelChosenByUser === false && providerId === null
       ? (markedDefault ?? remoteDraft.model)
       : remoteDraft?.model);
+  const cloudPick = pickCloudDraftModel({
+    catalogDeviceId, providers, agentKind, providerId,
+    wantedModel: targetModel ?? remoteDraft?.model,
+    explicit: targetModel !== undefined || remoteDraft?.modelChosenByUser !== false,
+  });
+  // 云实例已读到权威的空目录:不把冷启动占位当成可发消息的默认模型。
+  if (cloudPick === null) return { model: '', effort: 'high', fastMode: false, permissionMode, providerId: null };
+  if (cloudPick) providerId = cloudPick.providerId;
 
-  if (models.length === 0) {
+  if (models.length === 0 && !cloudPick) {
     return {
       model: wantedModelId ?? '',
       effort: (remoteDraft?.effort as Effort | null | undefined) ?? 'high',
@@ -179,7 +196,7 @@ export function resolveDeviceLinkDraftDefaults(
     };
   }
 
-  const chosen = models.find((m) => m.id === wantedModelId) ?? models[0];
+  const chosen = cloudPick?.model ?? models.find((m) => m.id === wantedModelId) ?? models[0];
   const selectedProviderId =
     agentKind && providers?.length
       ? remoteDraft?.providerId ??

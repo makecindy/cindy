@@ -114,9 +114,9 @@ describe('listSessionTasks 配对', () => {
     expect(running[0].title).toBe('By clientId');
   });
 
-  it('collab:* toolCall 无 update 时 provider = codex', () => {
+  it('collab spawn toolCall 无 update 时 provider = codex', () => {
     const { running } = listSessionTasks({
-      messages: [toolUse('c3', 'toolu-3', 'collab:reviewer', { description: 'review it' })],
+      messages: [toolUse('c3', 'toolu-3', 'collab:spawnAgent', { description: 'review it' })],
       taskUpdates: undefined,
       isSessionStreaming: true,
     });

@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { Transform, type TransformCallback } from 'node:stream';
 import { TextDecoder } from 'node:util';
 
+import { shortenResponsesItemId } from './proxy/transform.js';
 import { ChatBridgeToolContext, type ChatBridgeToolSpec } from './tool-context.js';
 import type { ResponsesRequest } from './types.js';
 
@@ -83,10 +84,11 @@ function adaptItemId(item: Record<string, unknown>): Record<string, unknown> {
 /**
  * Legacy histories (Pi / chat-completions bridges) minted the tool item `id` from the invocation's
  * `call_...` id (issue #4023, `Invalid 'input[5].id': 'call_00_…'. Expected an ID that begins with 'ctc'`).
- * It is a known, non-opaque shape, so it is rewritten to the target dialect like the other known
- * prefixes instead of being forwarded and rejected. The suffix is kept, so ids stay unique.
+ * Other saved histories contain tool items with message-shaped `msg_...` ids (issue #9645).
+ * These known shapes are rewritten to the target dialect instead of being forwarded and rejected.
+ * The suffix is kept; invocation pairing remains in the unchanged `call_id`.
  */
-const LEGACY_CALL_ITEM_ID_PREFIX = 'call_';
+const LEGACY_TOOL_ITEM_ID_PREFIXES = ['call_', 'msg_'] as const;
 
 /** Repair only known dialect mismatches; opaque provider ids and absent ids stay intact.
  * `call_id` identifies the invocation/result pair and must never be rewritten.
@@ -97,10 +99,13 @@ function normalizeToolItemId(item: Record<string, unknown>): Record<string, unkn
       : item.type === 'function_call' ? ['ctc_', 'fc_']
         : item.type === 'function_call_output' ? ['ctco_', 'fco_'] : null;
   if (!prefixes || typeof item.id !== 'string') return item;
-  const from = item.id.startsWith(prefixes[0]) ? prefixes[0]
-    : item.id.startsWith(LEGACY_CALL_ITEM_ID_PREFIX) ? LEGACY_CALL_ITEM_ID_PREFIX : null;
-  if (from === null) return item;
-  return { ...item, id: prefixes[1] + item.id.slice(from.length) };
+  const id = item.id;
+  const from = id.startsWith(prefixes[0]) ? prefixes[0]
+    : LEGACY_TOOL_ITEM_ID_PREFIXES.find(prefix => id.startsWith(prefix));
+  if (from === undefined) return item;
+  // Prefix repair can grow a valid 64-character msg_ output into a 65-character ctco_ id.
+  // Apply the existing stable wire limit after rewriting, including SSE item references.
+  return { ...item, id: shortenResponsesItemId(prefixes[1] + id.slice(from.length)) };
 }
 
 /**
@@ -123,9 +128,9 @@ export function normalizeResponsesToolItemIds(body: unknown): Record<string, unk
 
 /** SSE argument events reference the output item, not the invocation's call_id. */
 function customToolEvent(event: Record<string, unknown>): Record<string, unknown> {
-  return typeof event.item_id === 'string' && event.item_id.startsWith('fc_')
-    ? { ...event, item_id: 'ctc_' + event.item_id.slice(3) }
-    : event;
+  // Use the item's rules for references too, including legacy msg_ / call_ responses.
+  const item = normalizeToolItemId({ type: 'custom_tool_call', id: event.item_id });
+  return item.id !== event.item_id ? { ...event, item_id: item.id } : event;
 }
 
 interface AdaptedCall {

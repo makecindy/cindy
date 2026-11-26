@@ -1,8 +1,7 @@
-import { RotateCcw } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Button } from '@/components/ui/button';
-import { Tip } from '@/components/ui/tooltip';
+import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
 
 export function DefaultOverrideControls({
   isCustomized,
@@ -34,21 +33,38 @@ export function DefaultOverrideControls({
           {t('settings.defaults.customizedBadge')}
         </span>
       ) : null}
-      {/* Per-setting reset (CONTROLS decision 3): 28px quiet pill icon button on the shared Button. */}
-      <Tip text={t('settings.defaults.restore')} side="top">
-        <Button
-          data-settings-search-action="Restore this setting to its default value"
-          variant="secondary"
-          tone="quiet"
-          size="sm"
-          className="w-7 px-0"
-          onClick={onReset}
-          disabled={resetDisabled}
-          aria-label={label ?? t('settings.defaults.restore')}
-        >
-          <RotateCcw size={15} aria-hidden />
-        </Button>
-      </Tip>
+      {/* Per-setting reset (CONTROLS decision 3): shared 28px quiet icon button. */}
+      <RestoreDefaultButton
+        data-settings-search-action="Restore this setting to its default value"
+        label={label}
+        onClick={onReset}
+        disabled={resetDisabled}
+      />
+    </div>
+  );
+}
+
+/** A saved override and how to clear it, for a single-control row that offers a reset. */
+export interface DefaultOverrideReset {
+  customized: boolean;
+  disabled?: boolean;
+  onReset(): void;
+}
+
+/**
+ * The row's control with DefaultOverrideControls in front of it. Without `reset` the control is
+ * returned unchanged, so callers that do not pass one render the control exactly as given.
+ */
+export function withDefaultOverride(control: ReactNode, reset?: DefaultOverrideReset) {
+  if (!reset) return control;
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <DefaultOverrideControls
+        isCustomized={reset.customized}
+        disabled={reset.disabled}
+        onReset={reset.onReset}
+      />
+      {control}
     </div>
   );
 }
