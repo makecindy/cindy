@@ -78,19 +78,24 @@ export interface PluginMarketInstallationRecord {
   /**
    * 远程管理操作的安装证据（契约 V2.9，服务端与自定义市场记录都可能带）：这条记录是哪一次远程
    * `management:begin` 安装／更新提交的。`controller` 是发起方设备身份的本机不可逆标识（不存原始设备号），
-   * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包。投影时要求包摘要仍等于记录当前的值、keyId 等于
-   * 当前密钥、controller 等于请求方，否则缺省。其它路径重装或更新都会整条重写记录，旧值不会残留。
+   * `keyId` 是算它的密钥，`rawManifestSha256` 是当次装入的包，`approval` 是那次落位后实例的批准令牌。投影时要求
+   * 包摘要仍等于记录当前的值、keyId 等于当前密钥、controller 等于请求方、当前实例的批准令牌等于 `approval`，否则缺省。
+   * 批准令牌每次落位都新铸，所以无论哪条路径（包括旧版本客户端）整条复制记录、把绑定带了过去，只要实例被重新
+   * 落位过，绑定就对不上；只有那次落位本身还在时才会成立。
    * 契约 V2.10：继承来的绑定清除，本次事务新生成的绑定保留。
    * - markRemovedRecord、restoreDisconnectedInstallation、replaceManifestIdentityAfterPackageCommit 的调用方都只持有
    *   继承的旧记录，不会生成新绑定，所以一律经 withoutRemoteOperationBinding 清除。
    * - migrateSimulatorInstallation 有两个调用方：远程更新提交时会生成本次操作的新绑定，中断迁移的恢复只复制旧记录。
    *   因此新绑定只能由调用方显式传入，`next` 里带来的一律不认，缺省即清除。
    * - 换装失败时原样恢复整条旧记录（restoreInstallation）会保留，因为包也回到了那一份。
+   * - 只补元数据、不换包的写回（backfillServerRoot、stampNamespaceIfAbsent、backfillMissingNamespacesFromCatalog、
+   *   首次补 raw 摘要）保留绑定：那次落位仍在，归属不变。namespace 补写改变记录键，进行中的读取会重读一次。
    * - 其余新绑定都随整条新记录经 upsertInstallation／upsertInstallationAndClearOptOut 写入。
    * 这样「操作号相等 ⇒ 当前包就是那次操作装的」才成立。
    *
-   * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省；降级时旧版本保留未知字段、
-   * 重写记录时丢弃，结果都是缺省（控制端未确认）。
+   * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省。降级后旧版本有的写回整条
+   * 复制记录（保留绑定），有的整条重写（丢弃）；升级回来后，保留下来的绑定只在那次落位仍在时成立，实例被重新落位过
+   * 就因批准令牌对不上而按未确认处理。
    */
   remoteOperationBinding?: {
     operationId: string;

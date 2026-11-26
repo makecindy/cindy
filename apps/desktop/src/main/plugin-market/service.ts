@@ -1198,15 +1198,40 @@ interface InstalledOperationEvidence {
  */
 function evidenceStillCurrent(
   evidence: InstalledOperationEvidence,
-  ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>>,
+  ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null,
   current: InstalledGhost | undefined | 'unchecked',
-): boolean {
-  if (JSON.stringify(ledgerNow[pluginLedgerRecordKey(evidence.record)]) !== JSON.stringify(evidence.record)) return false;
-  if (current === 'unchecked') return true;
-  return Boolean(current &&
-    installedGhostStoragePart(current) === installedGhostStoragePart(evidence.ghost) &&
+): 'current' | 'changed' | 'unverifiable' {
+  // 读不到账本或读不到当前实例：无法核实，按未证实处理，但不是「换装」，不触发重读。
+  if (!ledgerNow) return 'unverifiable';
+  if (JSON.stringify(ledgerNow[pluginLedgerRecordKey(evidence.record)]) !== JSON.stringify(evidence.record)) return 'changed';
+  if (current === 'unchecked') return 'current';
+  if (!current) return 'unverifiable';
+  return installedGhostStoragePart(current) === installedGhostStoragePart(evidence.ghost) &&
     ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(evidence.ghost.approval) &&
-    current.manifest.version === evidence.ghost.manifest.version);
+    current.manifest.version === evidence.ghost.manifest.version
+    ? 'current'
+    : 'changed';
+}
+
+/**
+ * 契约 V2.10：这些条目里有没有可能成为 `'self'` 的——条目已装或可更新，且它投影时那份快照里，同一实例的
+ * 已装记录带着操作证据（还没比对控制端）。只看内存里的快照，不读文件；没有时整次投影不读密钥、账本或实例。
+ */
+function mayCarryOperationEvidence(items: readonly PluginMarketItem[]): boolean {
+  const bound = new Map<LocalInstallSnapshot, Set<string>>();
+  return items.some((item) => {
+    if (item.installState !== 'installed' && item.installState !== 'update-available') return false;
+    const local = itemInstallSnapshots.get(item);
+    if (!local) return false;
+    let keys = bound.get(local);
+    if (!keys) {
+      keys = new Set(Object.values(local.installations)
+        .filter((record) => record.installed && record.remoteOperationBinding !== undefined)
+        .map(marketInstanceKey));
+      bound.set(local, keys);
+    }
+    return keys.has(marketInstanceKey(item));
+  });
 }
 
 function indexByGhostId<T>(items: readonly T[], ghostId: (item: T) => string): Map<string, T[]> {
@@ -3798,13 +3823,20 @@ export class PluginMarketService {
     let tag: string | null = null;
     let keyId: string | null = null;
     let ledger: PluginMarketLedger | null = null;
-    if (items.length > 0 && controller && canCaptureMarketOwner()) {
-      const owner = captureMarketOwner();
-      const sourceIds = await this.preparedSourceIds();
-      requireSameMarketOwner(owner);
-      tag = sourceIds.controllerTag?.(controller) ?? null;
-      keyId = sourceIds.keyId();
-      ledger = this.ledgerForOwner(owner);
+    // 没有任何条目带操作证据时（空页、未安装、本机装的、旧记录）不读密钥文件，整次投影零额外读取。
+    if (controller && mayCarryOperationEvidence(items) && canCaptureMarketOwner()) {
+      try {
+        const owner = captureMarketOwner();
+        const sourceIds = await this.preparedSourceIds();
+        requireSameMarketOwner(owner);
+        tag = sourceIds.controllerTag?.(controller) ?? null;
+        keyId = sourceIds.keyId();
+        ledger = this.ledgerForOwner(owner);
+      } catch {
+        // 换号或密钥不可用：不给任何 'self'（下面一律 'unattributed'），是否整次作废由出口的 current() 决定。
+        tag = keyId = null;
+        ledger = null;
+      }
     }
     // 以下全部同步：响应里的实例、账本复核与归属出自同一时刻。快照出口的整份列表在这里读（它本来就要读），
     // 其它出口只对候选按实例读。
@@ -3817,7 +3849,7 @@ export class PluginMarketService {
       return instances.get(part);
     };
     const evidenceBySnapshot = new Map<LocalInstallSnapshot, Map<string, InstalledOperationEvidence>>();
-    let ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null = null;
+    let ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null | undefined;
     return items.map((item) => {
       const local = itemInstallSnapshots.get(item);
       let operationId: string | undefined;
@@ -3829,14 +3861,14 @@ export class PluginMarketService {
         }
         const candidate = evidence.get(marketInstanceKey(item));
         if (candidate) {
-          if (!ledgerNow) {
+          if (ledgerNow === undefined) {
             // 读不到账本就无法复核，按未证实处理（不让整次读取失败）。
-            try { ledgerNow = ledger.read().installations; } catch { ledgerNow = {}; }
+            try { ledgerNow = ledger.read().installations; } catch { ledgerNow = null; }
           }
-          if (evidenceStillCurrent(candidate, ledgerNow, currentInstance(installedGhostStoragePart(candidate.ghost)))) {
-            operationId = candidate.operationId;
-          }
-          else live?.onChanged?.();
+          const verdict = evidenceStillCurrent(candidate, ledgerNow, currentInstance(installedGhostStoragePart(candidate.ghost)));
+          if (verdict === 'current') operationId = candidate.operationId;
+          // 只有确有换装的证据才让出口重读；读不到（注册表答不了、账本不可读）直接按未证实给出，不重复读取。
+          else if (verdict === 'changed') live?.onChanged?.();
         }
       }
       return projectInstalledOperationAttribution(item, operationId);

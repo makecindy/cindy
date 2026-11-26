@@ -3132,6 +3132,7 @@ describe('installed operation attribution through remote management (V2.10)', ()
   function remoteManagement(service: PluginMarketService, options: {
     gate?: (read: 'snapshot' | 'catalog' | 'detail') => Promise<void>;
     projects?: () => Promise<never[]>;
+    instance?: (instanceKey: string) => InstalledGhost | undefined;
   } = {}) {
     const gated = async <V>(read: 'snapshot' | 'catalog' | 'detail', value: Promise<V>): Promise<V> => {
       const result = await value;
@@ -3148,7 +3149,8 @@ describe('installed operation attribution through remote management (V2.10)', ()
       list: () => { reads.list++; return projected(); },
       instance: (instanceKey) => {
         reads.instance.push(instanceKey);
-        return projected().find((ghost) => installedGhostStoragePart(ghost) === instanceKey);
+        return options.instance ? options.instance(instanceKey)
+          : projected().find((ghost) => installedGhostStoragePart(ghost) === instanceKey);
       },
       capture: () => () => true,
       captureReceipt: () => () => true,
@@ -3458,6 +3460,75 @@ describe('installed operation attribution through remote management (V2.10)', ()
         },
       });
       expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('does not pair the evidence with a snapshot instance replaced before the ledger was written', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== 'snapshot') return;
+          runtime.ghosts = runtime.ghosts.map((ghost) => ({
+            ...ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-0000000000b3' } }));
+        },
+      });
+      const response = await remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+      const item = itemOf((response.market as { items: Wire[] }).items, m.pluginId);
+      expect(pick(item, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect((response.ghosts as Array<{ approval: { revision: string } }>)[0]!.approval.revision)
+        .toBe('00000000-0000-4000-8000-0000000000b3');
+    });
+
+    /* 测试价值（PR #12731 推送前自审）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 market-detail／read:'catalog'；市场读取次数、密钥目录是否被创建；
+     *   PluginMarketService.withInstalledOperationIds 在换号时的结果。
+     * - 缺口：读不到当前实例（注册表答不了）被当成换装，整次重读并重复服务端请求；没有任何候选时仍读写密钥文件；
+     *   换号发生在投影的 await 间隙会让整次读取抛错；旧版本客户端整条复制记录保留绑定后的投影未直接覆盖。
+     * - 改前失败：前两条在 0a4e2ba9f1 上失败（读两次、创建了密钥目录）；换号一条改前抛错；旧客户端一条改前即通过（覆盖既有保证）。
+     */
+    it('does not re-read when the current instance cannot be read, and degrades quietly', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      let detailReads = 0;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => { if (read === 'detail') detailReads++; },
+        instance: () => undefined,
+      });
+      expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(detailReads).toBe(1);
+    });
+
+    it('reads no key file when nothing on the page can carry operation evidence', async () => {
+      const h = harness([serverSummary()], []);
+      const remote = remoteManagement(h.service);
+      const keyDir = path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR);
+      expect(fs.existsSync(keyDir)).toBe(false);
+      await remote.detail('phone-a', PLUGIN_ID);
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+      expect(fs.existsSync(keyDir)).toBe(false);
+    });
+
+    it('degrades instead of failing when the account changes during attribution', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      const item = await m.h.service.detail(m.pluginId);
+      const pending = m.h.service.withInstalledOperationIds([item], 'phone-a', { instance: () => undefined });
+      runtime.session = { ...runtime.session, generation: runtime.session.generation + 1 };
+      expect(pick((await pending)[0] as unknown as Wire, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('stays correct when an older client copies the record and keeps the binding', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      // An older client rewrites the record by copying it (e.g. a reconnect), keeping the unknown field.
+      const record = m.h.ledger.installationForGhost('alpha')!;
+      m.h.ledger.upsertInstallation({ ...record, updatedAt: '2026-11-26T06:00:00.000Z' });
+      // Same placement still on disk: it is still the installation X placed.
+      expect(await m.remote.seen('phone-a', m.pluginId)).toEqual(SELF('op-0000000000000001'));
+      // The package is placed again (new approval revision) while the copied binding stays: never 'self'.
+      runtime.ghosts = runtime.ghosts.map((ghost) => ({
+        ...ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-0000000000c4' } }));
+      expect(await m.remote.seen('phone-a', m.pluginId)).toEqual(UNATTRIBUTED());
     });
 
     /* 测试价值（#12731 维护者复审 91359dd6f2：目录、推荐、详情不得新增主线程全量安装扫描）

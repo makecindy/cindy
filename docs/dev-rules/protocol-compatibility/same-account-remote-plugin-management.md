@@ -196,7 +196,8 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
     成功时，Host 在安装记录里写可选字段 `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256, approval}`。
     `controller` 是发起方设备身份（device-link 的 controllerDeviceId）用本机来源标识密钥、独立域名 HMAC 得到的不可逆
     标识，不存原始设备号；`keyId` 同来源标识。其它路径（电脑本机、后台自动更新、Agent、`install-file`、
-    `install-share`）不写，并且会整条重写记录，旧证据不残留。
+    `install-share`）不写，并且会整条重写记录。凡是整条复制旧记录的写回（包括旧版本客户端）即使把绑定带了过去，
+    也因绑定里的 `approval`（那次落位的批准令牌，每次落位新铸）只在那次落位仍在时成立。
   - 只在远程管理的 snapshot（含 catalog、recommendations）与 market-detail 响应里、只对发起那次操作的控制端给出，
     且要求记录为已安装、包摘要等于记录与磁盘上的包、keyId 等于当前密钥；证据按完整实例身份（`pluginId` + `ghostId` +
     `namespace`，缺省即根）关联，同一 `pluginId` 在另一个 namespace 的实例拿不到它。电脑本机界面与同账号的其它控制端看不到，
@@ -204,7 +205,8 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 形状 `^[A-Za-z0-9_-]{8,128}$`；不合形状的操作号照常执行，只是不留证据。操作号不是机密，但不记日志。
   - 持久化在账本里，Host 重启、原操作回执丢失后仍然可用。控制端设备身份在重连、App 重启、Host 重启后不变；
     App 重装或重新配对后身份变了，或密钥重建后，旧证据不再投影，控制端按未确认处理。
-  - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省，降级时保留或重写丢弃，结果都是缺省。
+  - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省。降级时旧版本有的写回保留绑定、
+    有的丢弃；升级回来后，保留的绑定只在那次落位仍在时成立，否则按未确认处理。
   - 实现：`plugin-market/service.ts` 的 `withInstalledOperationIds`、`remotePluginManagement.ts` 的 `withOperations`。
 - **当前安装的归属 `installedOperationAttribution`**（2026-11-26 新增，市场条目可选字段，取值 `'self' | 'unattributed'`）：
   - 来由：手机插件市场 #12684 的复审要求控制端能区分「确认是这次操作装的」「已变更或无法证实」「旧 Host 未提供

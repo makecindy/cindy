@@ -348,6 +348,7 @@ import {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
 } from '../../shared/pluginIdentity.js';
+import { projectInstalledOperationAttribution } from '../../shared/pluginMarket.js';
 import { LEGACY_SIMULATOR_ID, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 import type { GhostInstallReceipt } from './ghostInstallReceipt.js';
 import { allocateArchiveInstanceKey, selectMarketPluginIdForInstance } from './pluginInstanceRegistry.js';
@@ -9445,7 +9446,9 @@ export function registerGhostIpc(): void {
     instance: (instanceKey) => {
       if (isAppSessionBoundaryPending()) return undefined;
       const ghost = getGhostManager().findInstalledInstance(instanceKey);
-      return ghost && isGhostAvailableForActiveSession(instanceKey) ? ghost : undefined;
+      // 与 availableGhosts() 同一口径，且不再查第二次实例。
+      return ghost && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest))
+        ? ghost : undefined;
     },
     publication: {
       prepare: async (id, expected) => {
@@ -9516,7 +9519,9 @@ export function registerGhostIpc(): void {
       },
       installedOperations: (items, controller, live) => {
         const services = requireRemotePluginManagementServices();
-        return services.market.installedOperations ? services.market.installedOperations(items, controller, live) : Promise.resolve([...items]);
+        return services.market.installedOperations ? services.market.installedOperations(items, controller, live)
+          // 服务层不支持归属：已装条目一律 'unattributed'，不把条目上可能带着的字段原样放出。
+          : Promise.resolve(items.map((item) => projectInstalledOperationAttribution(item, null)));
       },
     },
     setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },
