@@ -41,6 +41,37 @@ import {
   type VoiceInputSyncErrorResult,
 } from '../../shared/voiceInputData.js';
 
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields, isSettingBoolean } from '../maker-host/settings-inspection.js';
+import { SUPPORTED_LOCALES } from '../../shared/locale.js';
+import { normalizeVoiceInputShortcut } from '../../shared/voiceInputData.js';
+
+/** Read only the persisted settings projection. Never hydrates/reconciles the dictionary sidecar. */
+export function inspectVoiceInputSettings(ownerRoot: string, platform = process.platform) {
+  const inspection = inspectSettingsJson(path.join(ownerRoot, DATA_FILE_NAME), (raw) => {
+    if (raw.settings !== undefined && !isSettingsRecord(raw.settings)) throw new Error('invalid settings');
+    // Dictionary/history are content, not settings. Do not normalize or return them.
+    const settings = { ...(raw.settings ?? {}) } as Record<string, unknown>;
+    for (const key of ['dictionaryEntries', 'dictionaryCandidates', 'suppressedAutomaticDictionaryTexts', 'customDictionary']) delete settings[key];
+    validateOptionalSettingsFields(settings, {
+      language: value => value === 'auto' || (typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value)),
+      microphoneDeviceId: value => value === null || typeof value === 'string',
+      muteSystemAudio: isSettingBoolean, playInteractionSound: isSettingBoolean, playStartSound: isSettingBoolean,
+      fastActivationEnabled: isSettingBoolean, refinementEnabled: isSettingBoolean,
+      refinementInstructions: value => typeof value === 'string', autoDictionaryEnabled: isSettingBoolean,
+      dictionarySyncEnabled: isSettingBoolean, dictionarySyncEnabledOverride: value => value === null || typeof value === 'boolean',
+      shortcut: value => value === null || normalizeVoiceInputShortcut(value) !== null,
+    });
+    return normalizeVoiceInputSettings(settings, platform);
+  }, 8 * 1024 * 1024);
+  if (inspection.status !== 'ready') return inspection;
+  const persisted = isSettingsRecord(inspection.raw.settings) ? inspection.raw.settings : {};
+  const keys = ['language', 'microphoneDeviceId', 'muteSystemAudio', 'playInteractionSound', 'playStartSound', 'fastActivationEnabled',
+    'refinementEnabled', 'refinementInstructions', 'autoDictionaryEnabled', 'dictionarySyncEnabled', 'dictionarySyncEnabledOverride', 'shortcut'];
+  const raw = Object.fromEntries(keys.filter(key => Object.hasOwn(persisted, key)).map(key => [key, persisted[key]]));
+  return { ...inspection, raw };
+}
+
 const log = createLogger('voice-input:data-store');
 const DATA_FILE_NAME = 'voice-input-data.v1.json';
 let ipcRegistered = false;

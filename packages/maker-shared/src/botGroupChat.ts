@@ -179,6 +179,16 @@ export interface BotGroupMemberView {
   role?: 'owner' | 'admin' | 'member' | 'guest';
   displayName?: string;
   nickname?: string | null;
+  /** Enterprise organization name when visible to this viewer; absent on older servers or personal accounts. */
+  orgName?: string | null;
+  /** Leaf department name; strictly present only when the viewer belongs to the same organization. */
+  department?: string | null;
+  /** Full department path joined with " / "; strictly same-organization viewers only. */
+  departmentPath?: string | null;
+  /** True only for enterprise viewers looking at a human outside their own organization. */
+  external?: boolean;
+  /** True when the member's organization name should be appended to their default display name. */
+  showOrgName?: boolean;
   ownerActorId?: string;
   ownerName?: string;
   isOwned?: boolean;
@@ -606,6 +616,23 @@ export interface BotGroupRoundView {
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 
+export function chatGroupNotificationMode(
+  room: { default_notification_scope?: 'all' | 'mentions' },
+  read?: { muted?: boolean; notification_scope?: 'all' | 'mentions' | null },
+): ChatGroupNotificationMode {
+  return read?.muted ? 'none' : read?.notification_scope ?? room.default_notification_scope ?? 'all';
+}
+
+export function chatGroupNotificationPreference(
+  room: Parameters<typeof chatGroupNotificationMode>[0],
+  read: Parameters<typeof chatGroupNotificationMode>[1],
+): { notificationMode: ChatGroupNotificationMode; notificationModeInherited: boolean } {
+  return {
+    notificationMode: chatGroupNotificationMode(room, read),
+    notificationModeInherited: !read?.muted && read?.notification_scope == null,
+  };
+}
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
@@ -632,6 +659,8 @@ export interface BotGroupSummary {
   supportsMemberAvatar?: boolean;
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
+  /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
+  notificationModeInherited?: boolean;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -657,6 +686,10 @@ export interface BotGroupSummary {
   revision?: number;
   id: string;
   name: string;
+  /** Owning enterprise organization name for org-created groups; absent for personal groups or older servers. */
+  orgName?: string | null;
+  /** True only for enterprise viewers when the group belongs to another org/personal or contains external humans. */
+  external?: boolean;
   replyMode: BotGroupReplyMode;
   speakingMode: BotGroupSpeakingMode;
   members: BotGroupMemberView[];
@@ -700,6 +733,8 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Timeline is readable. Retry incomplete execution or plan information at this deadline. */
+  metadataRetryAt?: number;
   /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
   historyRevision?: string;
   /** Current authorized versions of already displayed messages, including deletion tombstones. */
@@ -774,7 +809,7 @@ export interface BotGroupFailure {
 }
 
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
-export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
+export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | (BotGroupFailure & { retryAt?: number });
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
 export type BotGroupMutationResult = {
   ok: true;

@@ -13,6 +13,7 @@ import type {
   CreateProjectFromTaskResult,
   PreparedProjectFromTask,
 } from '../../../../shared/projectsRoot';
+import { Checkbox } from '@/components/ui/checkbox';
 
 type NameError = 'nameTaken' | 'nameInvalid' | null;
 
@@ -199,9 +200,7 @@ export function NewProjectFromTaskDialog({
             </FormField>
             {showRemember && (
               <label className="flex min-h-9 items-center gap-2 text-13 text-[var(--text-primary)]">
-                <input
-                  type="checkbox"
-                  className="size-4 shrink-0 accent-[var(--text-primary)]"
+                <Checkbox
                   checked={remember}
                   disabled={creating}
                   onChange={(event) => setRemember(event.target.checked)}

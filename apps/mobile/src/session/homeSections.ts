@@ -135,12 +135,16 @@ export function buildHomeSections(
     for (const project of home.projects) bucket(project.deviceId ?? '').projects.push(project);
     for (const chat of home.chats) bucket(homeRowDeviceKey(chat)).chats.push(chat);
     const labels = new Map(home.deviceFilters.map(device => [device.deviceId, device.label]));
-    for (const id of new Set([...labels.keys(), ...devices.keys()])) {
-      if (id === null) continue;
+    const deviceIds = [...new Set([...labels.keys(), ...devices.keys()])]
+      .filter((id): id is string => id !== null && devices.has(id));
+    const hideDeviceHeading = home.selectedDeviceId !== null || deviceIds.length === 1;
+    for (const id of deviceIds) {
       const contents = devices.get(id);
       if (!contents) continue;
       const key = 'device:' + id;
-      const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
+      const title = hideDeviceHeading
+        ? null
+        : labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
       const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
         if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
         const scopedKey = key + ':' + row.key;
@@ -650,6 +654,8 @@ function snoozeLabel(until: number): string {
  * Inbox never uses unread as a settled marker. Automation runs are individually actionable.
  * A teammate's main conversation is one row placed by whose turn it is and left out while idle
  * and read (2026-11-20 user decision); teammate rows lead their section, most recent first.
+ * Tasks within a section follow time alone, newest activity first: unread or waiting decides the
+ * section, never the order inside it (2026-11-25 user decision). Snoozed rows wake soonest first.
  */
 export function buildInboxHomeSections(
   home: MobileHomePresentation,
@@ -695,7 +701,8 @@ export function buildInboxHomeSections(
     data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
       ? group === 'snoozed'
         ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
-        : compareSessionItemsByPriority(a.item, b.item, ctx)
+        : activityMsFromIso(b.item.lastActivityAt) - activityMsFromIso(a.item.lastActivityAt)
+          || compareSessionListStrings(a.item.session.id, b.item.session.id)
       : 0);
     const listed = teammates.filter(entry => teammateInboxSection(entry.status, entry.snooze, nowMs) === group)
       .sort((a, b) => (group === 'snoozed' ? taskSnoozeUntil(a.snooze ?? {}) - taskSnoozeUntil(b.snooze ?? {}) : 0)

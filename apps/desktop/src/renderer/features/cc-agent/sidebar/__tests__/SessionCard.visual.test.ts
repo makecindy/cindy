@@ -157,6 +157,7 @@ vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     ensureInitialMessages: mocks.ensureInitialMessages,
     subscribeAll: () => () => {},
+    hasPendingIssueConfirm: () => false,
     getRunningSnapshot: () =>
       new Map(
         [...mocks.pendingPluginSetupSessionIds].map((sessionId) => [

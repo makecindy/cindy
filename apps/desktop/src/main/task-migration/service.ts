@@ -1317,6 +1317,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       projectMove: {
         sessionId: result.sessionId,
         workingDir: result.workingDir,
+        projectDir: result.projectDir ?? null,
         workspaceKind: result.workspaceKind,
       },
     };

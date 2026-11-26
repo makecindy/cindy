@@ -19,6 +19,7 @@
  *   那台没开开关或报告不可用的引擎仍被列出。
  * - tier：unit(jsdom，渲染真实组件，外部 hook 用内存替身)。
  */
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -337,8 +338,9 @@ it('asks the controlled computer to republish plugin engine models on picker ref
 // 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
 it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
   vi.useFakeTimers();
-  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
-  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
+  // The old peer sends a generic ID and no icon, so only the name identifies Antigravity.
+  const newlyEnabled = engine('legacy:cli', 'Antigravity', { models: [] });
+  const newlyPublished = engine('legacy:cli', 'Antigravity', {
     models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
   });
   let hasEngineOnPeer = false;
@@ -375,7 +377,8 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
       draft.result.current.refresh();
       await Promise.resolve();
     });
-    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    // A legacy peer can omit artwork. The local catalogue supplies the approved mark.
+    expect(draft.result.current.engines).toEqual([{ ...newlyEnabled, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
     // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
@@ -391,7 +394,7 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
     // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
     draft.rerender({ active: true });
     await act(async () => { await Promise.resolve(); });
-    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(draft.result.current.engines).toEqual([{ ...newlyPublished, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
@@ -826,22 +829,33 @@ describe('plugin engines in the new-task picker', () => {
 
 // 2026-11-19 用户决定：Agent 公布了自己的模式时，权限菜单显示这些模式并在末尾保留「全部允许」(插件基座通用)。
 describe('agent working modes of a plugin engine', () => {
-  it('starts in the agent’s default mode and keeps only modes the engine offers', () => {
-    const start = (permissionMode?: 'plan' | 'ask' | 'bypassPermissions') =>
-      resolveActivePluginEngine([agy, dsh], { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) })!
-        .permissionMode;
+  it('starts in the agent’s default mode, carries unified draft permissions and fails closed when unsupported', () => {
+    const start = (permissionMode?: 'plan' | 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions', fallback?: 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions') =>
+      resolveActivePluginEngine(
+        [agy, dsh],
+        { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) },
+        fallback,
+      )!.permissionMode;
     expect(start()).toBe('default');
     expect(start('plan')).toBe('plan');
     expect(start('bypassPermissions')).toBe('bypassPermissions');
-    // Cindy's generic 'ask' is not one of this agent's modes: the agent's default instead.
+    // Unified cross-harness fallback: built-in permission carries into Antigravity when selection omitted it.
+    expect(start(undefined, 'bypassPermissions')).toBe('bypassPermissions');
+    expect(start(undefined, 'auto')).toBe('auto');
+    expect(start(undefined, 'acceptEdits')).toBe('acceptEdits');
+    // Cindy's canonical 'ask' is recognized as Antigravity's 'default' mode.
     expect(start('ask')).toBe('default');
-    // An engine without modes keeps Cindy's two; a removed engine keeps only Full access.
+    expect(start(undefined, 'ask')).toBe('default');
+    // Generic ACP without agent modes keeps bypassPermissions, recognizes 'default' as 'ask', and fails closed for 'auto'/'plan'.
+    expect(pluginEnginePermissionMode('bypassPermissions', dsh)).toBe('bypassPermissions');
+    expect(pluginEnginePermissionMode('default', dsh)).toBe('ask');
+    expect(pluginEnginePermissionMode('auto', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('plan', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('bypassPermissions', null)).toBe('bypassPermissions');
     expect(pluginEnginePermissionMode('plan', null)).toBe('ask');
   });
 
-  it('lists the agent’s modes in its order with Full access last in the permission menu', async () => {
+  it('lists the agent’s modes in its order with unified labels and Full access last in the permission menu', async () => {
     const onPermissionModeChange = vi.fn();
     render(React.createElement(PermissionSelector, {
       permissionMode: 'plan', onPermissionModeChange, pluginEngineModes: agy.permissionModes, useMorphPopover: false,
@@ -851,7 +865,7 @@ describe('agent working modes of a plugin engine', () => {
     await act(async () => {
       fireEvent.click(trigger);
     });
-    const labels = ['Default', 'Accept edits', 'Auto', 'Plan', 'Full access'];
+    const labels = agy.permissionModes.map((mode) => mode.displayName);
     const options = labels.map((label) => screen.getAllByText(label).at(-1)!);
     expect(options.map((node) => labels.indexOf(node.textContent!))).toEqual([0, 1, 2, 3, 4]);
     for (let index = 1; index < options.length; index += 1) {
@@ -938,6 +952,76 @@ describe('a task running on a plugin engine', () => {
       fireEvent.click(within(list).getByRole('option', { name: /Plain/ }));
     });
     expect(onSelectModel).toHaveBeenLastCalledWith('plain');
+  });
+
+  // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
+  it.each(['plugin panel', 'unified menu', 'unified menu with a pending engine switch'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
+    const [pro, flash, plain] = leveled.models;
+    const engine = {
+      ...leveled,
+      models: [
+        { ...pro!, defaultEffort: 'low' as const, declaredDefaultEffort: 'high' as const },
+        { ...flash!, declaredDefaultEffort: null },
+        plain!,
+      ],
+    };
+    const selection = { providerId: engine.providerId, modelId: 'pro' };
+    const active = resolveActivePluginEngine([engine], selection)!;
+    const pendingSwitch = surface === 'unified menu with a pending engine switch';
+    const unifiedMenu = surface !== 'plugin panel';
+    const nextEngine = {
+      ...agy,
+      models: [{ ...engine.models[0]!, displayName: 'Next model' }],
+    };
+    const pendingSelection = { providerId: nextEngine.providerId, modelId: 'pro', effort: 'high' as const };
+    const onSelect = vi.fn((picked: typeof selection) => {
+      const target = picked.providerId === engine.providerId ? engine : nextEngine;
+      return resolvePluginEngineSessionSwitchEffort(picked, target, selection, pendingSwitch ? pendingSelection : null) === 'high';
+    });
+    expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
+
+    render(React.createElement(ModelSelector, {
+      modelId: 'pro',
+      effort: '',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc',
+      remoteAgent: undefined,
+      actualRoute: true,
+      ...(unifiedMenu ? {
+        pluginEngines: {
+          engines: pendingSwitch ? [engine, nextEngine] : [engine],
+          active: pendingSwitch ? pendingSelection : selection,
+          running: selection,
+          onSelect,
+        },
+      } : {}),
+      pluginEngineSession: {
+        providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
+      },
+    }));
+    const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
+    await act(async () => { fireEvent.click(trigger); });
+    const list = await screen.findByRole('listbox', { name: 'Models' });
+    const group = unifiedMenu ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    if (pendingSwitch) {
+      const next = within(list).getByRole('group', { name: 'Antigravity' });
+      const nextRow = within(next).getByRole('option', { name: /Next model/ });
+      expect(levelOf(nextRow)).toBe('high');
+      await act(async () => { fireEvent.click(nextRow); });
+      expect(onSelect).toHaveReturnedWith(true);
+      await act(async () => { fireEvent.click(trigger); });
+    }
+    if (unifiedMenu) {
+      const search = screen.getByRole('textbox', { name: 'Search models' });
+      await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
+      const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
+      expect(levelOf(row)).toBe('high');
+      await act(async () => { fireEvent.click(row); });
+      expect(onSelect).toHaveBeenLastCalledWith(selection);
+      expect(onSelect).toHaveLastReturnedWith(true);
+    }
   });
 
   it('falls back to the generic engine label when the plugin is gone', () => {

@@ -103,6 +103,7 @@ function deps(overrides: Partial<ProviderGroupRemoteHandlerDeps> = {}) {
       return { kind: 'member' as const, member: MINI, label: 'Mini', resolved: [] };
     }),
     view: vi.fn(async () => ({ providerId: 'anthropic', config: CONFIG, members: [] })),
+    memberViews: vi.fn<ProviderGroupRouter['memberViews']>(() => new Map()),
     running: vi.fn(() => 0),
     markCooling: vi.fn(),
     coolingUntil: vi.fn(() => null),

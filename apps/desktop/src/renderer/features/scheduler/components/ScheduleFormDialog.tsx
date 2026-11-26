@@ -27,7 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { Select } from '@/components/ui/select';
-import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
+import { isGitlabMrTriggerUrl, PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -1051,8 +1051,7 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton
@@ -1375,14 +1374,15 @@ export function ScheduleFormDialog({
                             {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
                               placeholder="https://github.com/owner/repo/pull/123" />}
                           </FormField>
-                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                          {(!form.prUrl || /^https:\/\/github\.com\//i.test(form.prUrl)) &&
+                            <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />}
                           <FormField label={t('scheduler.prTrigger.condition')}>
                             {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
                               options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
                               onValueChange={value => setField('prChange', value as PrChange)} />}
                           </FormField>
                           <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
-                            <Checkbox checked={!form.manual} onChange={event => {
+                            <Checkbox disabled={isGitlabMrTriggerUrl(form.prUrl)} checked={!form.manual} onChange={event => {
                               const enabled = event.currentTarget.checked;
                               setField('manual', !enabled);
                               if (enabled) setField('recurring', true);

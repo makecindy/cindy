@@ -507,14 +507,22 @@ describe('BotHomeComputerSetting', () => {
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
   });
 
-  it('shows why a move did not happen', async () => {
+  // #12112, unit: distinguish oversized skills from older hosts' generic version refusals;
+  // either refusal keeps the owner on the current buddy instead of navigating to the target.
+  it.each([
+    { code: 'OFFLINE', key: 'switchOffline' },
+    { code: 'TARGET_OUTDATED', key: 'targetOutdated' },
+    { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated' },
+    { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 } },
+  ])('shows why a move did not happen ($code)', async ({ code, key, oversizedSkill }) => {
     maker.getCompanionHomeChoices.mockResolvedValue(local());
-    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'OFFLINE' });
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code, oversizedSkill });
     show(snapshot('desk'));
     openMenu();
     fireEvent.click(await screen.findByText('bots.cloud.switchTo:{"device":"Laptop"}'));
     fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"Laptop"}' }));
-    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.cloud.switchOffline:{"name":"Mia","device":"Laptop"}');
+    const params = { name: 'Mia', device: 'Laptop', ...(oversizedSkill && { context: 'skill', ...oversizedSkill }) };
+    expect((await screen.findByRole('alert')).textContent).toBe(`bots.cloud.${key}:${JSON.stringify(params)}`);
     expect(h.navigate).not.toHaveBeenCalled();
   });
 
@@ -606,5 +614,35 @@ describe('CompanionShadowBanner', () => {
     fireEvent.click(screen.getByText('bots.cloud.continueHere'));
     await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenCalledWith('mia'));
     await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
+  });
+
+  // 2026-11-25 missing profile snapshot confirmation: another computer asks once before continuing with default profile.
+  it('asks for confirmation on PROFILE_SNAPSHOT_MISSING and retries with allowMissingProfile', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion
+      .mockResolvedValueOnce({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' })
+      .mockResolvedValueOnce({ ok: true });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.missingProfileTitle:{"name":"Mia"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', { allowMissingProfile: true }));
+    await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
+  });
+
+  it('asks for confirmation on PROFILE_SNAPSHOT_MISSING in CloudCompanionOfflineView and continues with allowMissingProfile', async () => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion
+      .mockResolvedValueOnce({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' })
+      .mockResolvedValueOnce({ ok: true });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.missingProfileTitle:{"name":"Mia"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.missingProfileConfirm' }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia', { allowMissingProfile: true }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
   });
 });
