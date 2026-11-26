@@ -84,6 +84,7 @@ import type {
   AgentInputToolLoopDetails,
   AutoResumeAgentSwitchCause,
   AutoResumeInfo,
+  ReconnectHandoff,
   RecoveryCheckpoint,
 } from '../../shared/agentInputQueue.js';
 import {
@@ -542,6 +543,7 @@ export interface AgentInputCoordinatorDeps {
     options: {
       surfaceError: boolean;
       owner: SuppressedTurnErrorOwner;
+      reconnectHandoff?: ReconnectHandoff;
       /** 自愈候选改由供应商组接管：把暂存的失败交给这次登记，继续先不呈现。 */
       providerGroupSwitchHoldId?: number;
     },
@@ -982,6 +984,7 @@ interface SessionInputState {
    * activeTurn 里)也能被识破,不再二次入队。
    */
   recentEnqueuedClientIds: string[];
+  withdrawnQueueClientIds: string[];
   generation: number;
   /** Latest authoritative `/clear` token for device-link optimistic input preconditions. */
   clearBoundaryMs: number | null;
@@ -1059,6 +1062,7 @@ function createInitialInputState(
     credentialSwitchRetryGeneration: null,
     botCapabilityRefreshVersion: 0,
     recentEnqueuedClientIds: [],
+    withdrawnQueueClientIds: [],
     generation,
     clearBoundaryMs,
   };
@@ -1415,6 +1419,8 @@ function isManualUiOrigin(origin: AgentInputQueuedMessage['origin']): boolean {
 }
 
 export class AgentInputCoordinator {
+  private readonly projectionHost = crypto.randomUUID();
+  private projectionSequence = 0;
   private readonly terminalRecoveryOwners = new WeakMap<object, {
     instanceId: string; generation: number;
   }>();
@@ -1433,7 +1439,8 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
-  private readonly remoteAccountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string>();
+  /** null waits for a local account snapshot, a device id waits for that executor. */
+  private readonly accountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string | null>();
   private readonly remoteAccountFallbackUsed = new WeakSet<AgentInputQueuedMessage>();
   private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
     waiting: boolean;
@@ -1500,6 +1507,8 @@ export class AgentInputCoordinator {
    * 并用 stateRef 防止 clearSession 后迟到的旧结果复活新上下文。
    */
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
+  /** Bound to the accepted input even if a scheduled continuation later hands it back. */
+  private readonly reconnectRecoveries = new WeakMap<NonNullable<AgentInputRecovery>, ReconnectHandoff | 'accepted'>();
   /** Manual retries reading this recovery may overlap each other and a late Worker steer ACK. */
   private readonly manualRetryClaims = new WeakMap<Extract<AgentInputRecovery, { kind: 'active-turn' }>, number>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
@@ -1697,6 +1706,15 @@ export class AgentInputCoordinator {
 
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
+  }
+
+  /**
+   * Re-emit the projection when a live session's runtime capability changes
+   * (for example, an ACP engine revoking same-turn steering after -32601),
+   * without touching queue persistence.
+   */
+  refreshProjection(sessionId: string): void {
+    this.deps.emitProjection(this.getProjection(sessionId));
   }
 
   /** Retry a failed current snapshot without rewriting successful or unrestored queues. */
@@ -2240,6 +2258,9 @@ export class AgentInputCoordinator {
 
   private rememberEnqueuedClientId(state: SessionInputState, clientId: string): void {
     if (!clientId) return;
+    if (state.withdrawnQueueClientIds.includes(clientId)) {
+      state.withdrawnQueueClientIds = state.withdrawnQueueClientIds.filter((id) => id !== clientId);
+    }
     // Treat the bounded list as an MRU window. A queued item may be accepted
     // later as a same-turn steer; refreshing it here keeps the post-acceptance
     // weak-link retry window intact without growing a second dedupe mechanism.
@@ -2434,7 +2455,7 @@ export class AgentInputCoordinator {
     // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
     const queueHeadRecovery = state.recovery;
     if (queueHeadRecovery?.kind === 'queue-head' && !automaticOrigin &&
-      (!this.remoteAccountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
+      (!this.accountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
       const abandonedClientId = queueHeadRecovery.clientId;
       if (isUiContinuationItem(item)) {
         state.error = null;
@@ -4309,6 +4330,12 @@ export class AgentInputCoordinator {
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
     if (removed) {
       state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter((id) => id !== clientId);
+      if (!admissionFailed) {
+        state.withdrawnQueueClientIds.push(clientId);
+        if (state.withdrawnQueueClientIds.length > AgentInputCoordinator.RECENT_ENQUEUED_CLIENT_IDS_LIMIT) {
+          state.withdrawnQueueClientIds.shift();
+        }
+      }
     }
     if (removed) this.removePendingCompactWaitClientId(state, removed.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
@@ -4604,8 +4631,8 @@ export class AgentInputCoordinator {
     next.splice(insertIndex, 0, entry);
     const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
-    if (this.clearDisplacedRemoteAccountWait(state)) {
-      this.scheduleDrain(sessionId, 'remote-account-head-moved');
+    if (this.clearDisplacedAccountWait(state)) {
+      this.scheduleDrain(sessionId, 'account-wait-head-moved');
     }
     if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
       this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
@@ -5442,7 +5469,7 @@ export class AgentInputCoordinator {
   }
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
-    const wait = state.recovery?.kind === 'queue-head' && this.remoteAccountWaits.has(state.recovery)
+    const wait = state.recovery?.kind === 'queue-head' && typeof this.accountWaits.get(state.recovery) === 'string'
       ? state.recovery.clientId : null;
     const pendingQueue = state.pendingQueue.map((item) => {
       const projected = this.toProjectedItem(item);
@@ -5472,14 +5499,24 @@ export class AgentInputCoordinator {
       !groupSwitchHeld && state.autoResumeAttemptToken === null && !state.recovery
         ? state.detachedSteerPersistenceError?.message ?? null : null
     );
+    const reconnectHandoff = turnError && state.errorReason === 'codex_reconnect_stalled' && state.recovery
+      ? this.reconnectRecoveries.get(state.recovery) : undefined;
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
         ? { ...state.recovery, item: this.toProjectedItem(state.recovery.item) }
         : state.recovery;
+    const pendingSteers = this.steerRequestLineages.get(sessionId);
     return {
       sessionId,
       pendingQueue,
       turnInProgress: this.isDispatchBoundaryBusy(sessionId, state),
+      queueSnapshot: {
+        host: this.projectionHost,
+        sequence: ++this.projectionSequence,
+        ...(pendingSteers?.size ? { pendingSteerClientIds: [...pendingSteers.keys()] } : {}),
+        ...(this.isQueueRestored(sessionId) ? { dispatchClientId: state.activeTurn?.item?.clientId ?? null } : {}),
+      },
+      ...(state.withdrawnQueueClientIds.length ? { withdrawnQueueClientIds: [...state.withdrawnQueueClientIds] } : {}),
       // Modern projections always carry the explicit null token for a session
       // that has never been cleared.  Only an older controlled Desktop can
       // omit the field at the wire boundary; keeping null here lets a remote
@@ -5502,6 +5539,7 @@ export class AgentInputCoordinator {
         ? { errorPersistId: state.errorPersistBinding.persistId }
         : {}),
       ...(turnError && state.errorCanContinue ? { errorCanContinue: true } : {}),
+      ...(reconnectHandoff && reconnectHandoff !== 'accepted' ? { reconnectHandoff } : {}),
       ...(turnError && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(turnError && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       ...(turnError && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
@@ -6511,11 +6549,11 @@ export class AgentInputCoordinator {
         if (err instanceof RemoteAccountReadUnavailable && this.manualUiInputs.has(head) && !isAutomaticOriginItem(head)
           && !head.sourcePlugin && !head.botTaskCoordination) {
           const recovery = latest.recovery;
-          this.remoteAccountWaits.set(recovery, err.deviceId);
+          this.accountWaits.set(recovery, err.deviceId);
           latest.error = null;
           if (!this.remoteAccountFallbackUsed.has(head)) {
             this.remoteAccountFallbackUsed.add(head);
-            const timer = setTimeout(() => this.resumeRemoteAccountWait(sessionId, recovery), 10_000);
+            const timer = setTimeout(() => this.resumeAccountWait(sessionId, recovery), 10_000);
             timer.unref?.();
           }
           this.emit(sessionId);
@@ -6711,6 +6749,17 @@ export class AgentInputCoordinator {
       clearErrorProjectionSignals(latest);
       latest.stickyError = null;
       latest.recovery = { kind: 'queue-head', clientId: item.clientId };
+      if (result.kind === 'host-send' && result.accountReadRetryAt !== undefined && !latest.queueAbortPending
+        && latest.pendingQueue[0] === item) {
+        const recovery = latest.recovery;
+        this.accountWaits.set(recovery, null);
+        latest.error = `[CODEX_ACCOUNT_READ_RETRY] retryAtMs=${result.accountReadRetryAt}`;
+        const timer = setTimeout(() => this.resumeAccountWait(sessionId, recovery),
+          Math.max(0, result.accountReadRetryAt - Date.now()));
+        timer.unref?.();
+        this.emit(sessionId);
+        return;
+      }
       if (routeUnchanged && latest.pendingQueue[0] === item &&
           result.kind === 'host-send' && result.code === 'LAZY_CREATE_FAILED' &&
           !isAutomaticOriginItem(item) && !item.sourcePlugin && !item.botTaskCoordination && !item.orcaReportDelivery &&
@@ -6962,23 +7011,25 @@ export class AgentInputCoordinator {
   onRemoteAccountDeviceReady(deviceId: string): void {
     for (const [sessionId, state] of this.states) {
       const recovery = state.recovery;
-      if (recovery && this.remoteAccountWaits.get(recovery) === deviceId) this.resumeRemoteAccountWait(sessionId, recovery);
+      if (recovery && this.accountWaits.get(recovery) === deviceId) this.resumeAccountWait(sessionId, recovery);
     }
   }
 
-  private resumeRemoteAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
+  private resumeAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
     const state = this.states.get(sessionId);
     if (state?.recovery !== recovery || recovery.kind !== 'queue-head' ||
       state.pendingQueue[0]?.clientId !== recovery.clientId) return;
     state.recovery = null;
-    this.scheduleDrain(sessionId, 'remote-account-recheck');
+    if (this.accountWaits.get(recovery) === null) state.error = null;
+    this.scheduleDrain(sessionId, 'account-recheck');
     this.emit(sessionId);
   }
 
-  private clearDisplacedRemoteAccountWait(state: SessionInputState): boolean {
+  private clearDisplacedAccountWait(state: SessionInputState): boolean {
     const recovery = state.recovery;
-    if (recovery?.kind !== 'queue-head' || !this.remoteAccountWaits.has(recovery) ||
+    if (recovery?.kind !== 'queue-head' || !this.accountWaits.has(recovery) ||
       state.pendingQueue[0]?.clientId === recovery.clientId) return false;
+    if (this.accountWaits.get(recovery) === null) state.error = null;
     state.recovery = null;
     return true;
   }
@@ -7066,7 +7117,7 @@ export class AgentInputCoordinator {
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
-    this.clearDisplacedRemoteAccountWait(state);
+    this.clearDisplacedAccountWait(state);
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 
@@ -8077,9 +8128,16 @@ export class AgentInputCoordinator {
       if (cause === 'overload' || cause === 'usage-limit') return null;
     }
     try {
-      return (
-        this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null
-      );
+      const recovery = this.states.get(sessionId)?.recovery;
+      const hookSignals: InterruptedTurnErrorSignals = { ...signals, message };
+      if (signals?.reason === 'codex_reconnect_stalled' && recovery) {
+        this.reconnectRecoveries.set(recovery, 'accepted');
+        hookSignals.recordReconnectHandoff = handoff => {
+          this.reconnectRecoveries.set(recovery, handoff);
+          signals.recordReconnectHandoff?.(handoff);
+        };
+      }
+      return this.deps.onResumableTurnError(sessionId, hookSignals, item) ?? null;
     } catch (err) {
       log.warn('onResumableTurnError failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -8258,6 +8316,7 @@ export class AgentInputCoordinator {
     options: {
       surfaceError: boolean;
       owner: SuppressedTurnErrorOwner;
+      reconnectHandoff?: ReconnectHandoff;
       providerGroupSwitchHoldId?: number;
     },
   ): void {
@@ -8695,6 +8754,7 @@ export class AgentInputCoordinator {
     if (surfacedMessage) {
       state.error = message ?? null;
       clearErrorProjectionSignals(state);
+      if (state.recovery && this.reconnectRecoveries.has(state.recovery)) state.errorReason = 'codex_reconnect_stalled';
     }
     if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
     if (
@@ -9075,9 +9135,11 @@ export class AgentInputCoordinator {
         }
         if (deferredPersistSuppressed) {
           const holdId = this.getProviderGroupSwitchHoldId(sessionId);
+          const reconnectHandoff = state.recovery && this.reconnectRecoveries.get(state.recovery);
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: terminalEvent.supersededByUser !== true,
             owner: { generation: active.generation, clientId: active.item!.clientId },
+            ...(reconnectHandoff && reconnectHandoff !== 'accepted' ? { reconnectHandoff } : {}),
             ...(holdId !== null ? { providerGroupSwitchHoldId: holdId } : {}),
           });
         }

@@ -22,6 +22,7 @@ import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/p
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import type { MobileModelFavorite } from './unifiedMobileModels';
 
 export const PLUGIN_ENGINE_AGENT_KIND = 'acp' as const;
 export const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
@@ -334,15 +335,19 @@ export interface UnifiedMobilePluginEngineRow {
   modelId: string;
   title: string;
   subtitle?: string;
+  engineName?: string;
   /** 引擎不可用时插件给的说明。 */
   notice?: string;
   iconDataUrl?: string;
   /** 这一行将使用的思考深度(没有可选档位时为 null)。 */
   effort: PluginEngineEffort | null;
   efforts: PluginEngineEffort[];
+  defaultEffort?: PluginEngineEffort;
   effortLabel: string;
   selected: boolean;
   disabled: boolean;
+  /** 收藏区行携带原收藏记录，普通引擎行不带。 */
+  favorite?: MobileModelFavorite;
 }
 
 export interface UnifiedMobilePluginEngineQuota {
@@ -434,10 +439,12 @@ export function buildPluginEngineGroups(
           modelId: model.id,
           title: model.isDefault ? labels.defaultModel : model.displayName,
           ...(model.description ? { subtitle: model.description } : {}),
+          engineName: engine.name,
           ...(!selectable ? { notice: labels.unavailable(engine.name, engine.availability.message) } : {}),
           ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
           effort,
           efforts: [...model.efforts],
+          ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
           effortLabel: effort ? labels.effort(effort) : '',
           selected,
           disabled: !selectable,
@@ -446,6 +453,65 @@ export function buildPluginEngineGroups(
     if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, providerId: engine.providerId, title: engine.name, rows });
   }
   return groups;
+}
+
+/**
+ * 解析收藏列表里的插件引擎条目：已隐藏但可用的引擎照常解析（与内置隐藏供应商同口径）；
+ * 不可用引擎或已移除的模型返回 null，不删原收藏。
+ */
+export function resolveMobilePluginEngineFavorite(
+  item: MobileModelFavorite,
+  engines: readonly MobilePluginEngine[],
+  labels: {
+    defaultModel: string;
+    effort(id: PluginEngineEffort): string;
+  },
+): UnifiedMobilePluginEngineRow | null {
+  if (!isPluginEngineProviderId(item.providerId)) return null;
+  const engine = engines.find((candidate) => candidate.providerId === item.providerId);
+  if (!engine || !isPluginEngineSelectable(engine)) return null;
+  let title: string;
+  let efforts: PluginEngineEffort[];
+  let defaultEffort: PluginEngineEffort | undefined;
+  if (item.modelId === PLUGIN_ENGINE_DEFAULT_MODEL) {
+    if (engine.defaultModelAllowed === false) return null;
+    title = labels.defaultModel;
+    efforts = [];
+  } else {
+    const model = engine.models.find((candidate) => candidate.id === item.modelId);
+    if (!model) return null;
+    title = model.displayName;
+    efforts = [...model.efforts];
+    defaultEffort = model.defaultEffort;
+  }
+  const effort = resolvePluginEngineEffort(engine, item.modelId, item.effort);
+  return {
+    key: item.uid,
+    providerId: engine.providerId,
+    modelId: item.modelId,
+    title,
+    subtitle: engine.name,
+    engineName: engine.name,
+    ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+    effort,
+    efforts,
+    ...(defaultEffort ? { defaultEffort } : {}),
+    effortLabel: effort ? labels.effort(effort) : '',
+    selected: false,
+    disabled: false,
+    favorite: item,
+  };
+}
+
+/** 插件引擎收藏行是否命中搜索词。 */
+export function matchesPluginEngineFavoriteQuery(
+  row: UnifiedMobilePluginEngineRow,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return [row.title, row.subtitle, row.engineName, row.modelId]
+    .some((value) => value?.toLowerCase().includes(needle));
 }
 
 // —— 按电脑缓存的引擎列表 ——

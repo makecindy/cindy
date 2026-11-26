@@ -435,6 +435,36 @@ export type SessionGracefulStopResult =
   | { status: 'requested'; turnGeneration: number }
   | { status: 'unconfirmed'; turnGeneration: number; reason: string };
 
+const MAX_STALL_DIAGNOSTIC_TOOLS = 5;
+const SAFE_TOOL_LABEL_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** ACP 规范定义的固定 ToolKind 白名单；ACP 的 toolName 来自展示标题，不能当工具标识符放行。 */
+const ACP_TOOL_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read',
+  'edit',
+  'delete',
+  'move',
+  'search',
+  'execute',
+  'think',
+  'fetch',
+  'switch_mode',
+  'other',
+]);
+
+/**
+ * 仅保留受控工具标识，供超时告警日志与错误详情使用：
+ * ACP 会话只认固定 ToolKind 白名单，避免标题里的短文件名（如 payroll.csv / .env）或命令进入诊断。
+ */
+function safeActiveToolLabel(agentKind: EngineKind, data: Record<string, unknown>): string | null {
+  if (agentKind === 'acp' || typeof data.acpKind === 'string') {
+    const acpKind = typeof data.acpKind === 'string' ? data.acpKind.trim().toLowerCase() : '';
+    return ACP_TOOL_KIND_ALLOWLIST.has(acpKind) ? acpKind : null;
+  }
+  const toolName = typeof data.toolName === 'string' ? data.toolName.trim() : '';
+  if (toolName && SAFE_TOOL_LABEL_RE.test(toolName)) return toolName;
+  return null;
+}
+
 type TurnControlState = {
   generation: number;
   toolLoopMonitor: ToolLoopMonitor | null;
@@ -442,6 +472,8 @@ type TurnControlState = {
   /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
   awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
+  /** 仅保存无用户正文的安全工具标签（短标识符或 ACP kind），供超时诊断使用。 */
+  activeToolLabels: Map<string, string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
   gracefulStopState: SessionGracefulStopState;
@@ -1707,9 +1739,9 @@ export class Session {
   }
 
   /** Self-close: only claims the cause when no teardown has started yet. */
-  private closeFromRuntime(): Promise<void> {
+  private closeFromRuntime(crashMessage?: string): Promise<void> {
     if (!this.terminationStarted && this.status !== 'closed') this.runtimeInitiatedClose = true;
-    return this.close();
+    return this.beginClose({ reason: 'navigation' }, crashMessage);
   }
 
   /**
@@ -1718,6 +1750,16 @@ export class Session {
    * Account boundaries go through `detach({ reason: 'account-boundary' })`.
    */
   close(opts?: AgentSessionTeardownOptions & { contextClearGeneration?: number }): Promise<void> {
+    const contextClearCancelled = this.agentKind === 'pi'
+      && opts?.contextClearGeneration === this.turnGeneration;
+    return this.beginClose(opts ?? { reason: 'navigation' }, undefined, contextClearCancelled);
+  }
+
+  private beginClose(
+    teardown: AgentSessionTeardownOptions,
+    crashMessage?: string,
+    contextClearCancelled = false,
+  ): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
@@ -1735,9 +1777,7 @@ export class Session {
       reject = onReject;
     });
     this.closePromise = closing;
-    const contextClearCancelled = this.agentKind === 'pi'
-      && opts?.contextClearGeneration === this.turnGeneration;
-    void this.performClose(opts ?? { reason: 'navigation' }, contextClearCancelled).then(resolve, reject);
+    void this.performClose(teardown, crashMessage, contextClearCancelled).then(resolve, reject);
     return closing;
   }
 
@@ -1827,16 +1867,30 @@ export class Session {
     return true;
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions, contextClearCancelled: boolean): Promise<void> {
+  private async performClose(
+    teardown: AgentSessionTeardownOptions,
+    crashMessage: string | undefined,
+    contextClearCancelled: boolean,
+  ): Promise<void> {
     let closeSucceeded = false;
     try {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(
-        SESSION_CLOSED_MID_TURN_MESSAGE,
-        contextClearCancelled || (teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.()),
-      );
+      const interruptedCompaction = teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.();
+      if (crashMessage !== undefined) {
+        // A crash before the first send also belongs to this runtime. Publish
+        // once, under the close fence, before cancelling the send reservation.
+        if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+          this.emitUnfinishedTurn(crashMessage, 'session_event_loop_crashed', interruptedCompaction);
+        }
+      } else {
+        this.settleUnfinishedTurn(
+          SESSION_CLOSED_MID_TURN_MESSAGE,
+          'session_closed_mid_turn',
+          contextClearCancelled || interruptedCompaction,
+        );
+      }
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1876,16 +1930,20 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string, wasCancelled = false): void {
+  private settleUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
+    this.emitUnfinishedTurn(message, reason, interruptedCompaction);
+  }
+
+  private emitUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     const usage = this.handle.getPendingTurnUsage?.();
-    if (wasCancelled || this.abortRecoveryScheduledFor === this.turnGeneration) {
+    if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
-        message, isTerminal: true, reason: 'session_event_loop_crashed',
+        message, isTerminal: true, reason,
         ...(usage ? { usage } : {}),
-      }, source: this.eventSource });
+      }, source: this.eventSource, sessionTurnGeneration: this.turnGeneration });
     }
   }
 
@@ -1939,7 +1997,7 @@ export class Session {
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
-        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn');
         await this.handle.close(teardown);
       }
       detachSucceeded = true;
@@ -1991,6 +2049,11 @@ export class Session {
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
   ): () => void {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
+  onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
+    return this.handle.onCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {
@@ -2723,6 +2786,7 @@ export class Session {
       pendingToolLoop: null,
       awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
+      activeToolLabels: new Map(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
       gracefulStopState: 'none',
@@ -2846,8 +2910,14 @@ export class Session {
       if (data.runtimeActivity === 'snapshot') {
         return;
       }
-      if (toolUseId) control.activeToolIds.add(toolUseId);
-      else control.anonymousActiveTools += 1;
+      if (toolUseId) {
+        control.activeToolIds.add(toolUseId);
+        const label = safeActiveToolLabel(this.agentKind, data);
+        if (label) control.activeToolLabels.set(toolUseId, label);
+        else control.activeToolLabels.delete(toolUseId);
+      } else {
+        control.anonymousActiveTools += 1;
+      }
       return;
     }
     if (event.type === 'tool_result_full' || event.type === 'tool_result') {
@@ -2857,7 +2927,10 @@ export class Session {
           ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
           : []),
       ];
-      for (const id of ids) control.activeToolIds.delete(id);
+      for (const id of ids) {
+        control.activeToolIds.delete(id);
+        control.activeToolLabels.delete(id);
+      }
       if (ids.length === 0 && control.anonymousActiveTools > 0) {
         control.anonymousActiveTools -= 1;
       }
@@ -3615,12 +3688,36 @@ export class Session {
     if (this.hasRunningBackgroundTasks()) return;
     const now = Date.now();
     const msSinceLastEvent = this.lastEventAt > 0 ? now - this.lastEventAt : null;
+    const control =
+      this.turnControlState?.generation === this.turnGeneration
+        ? this.turnControlState
+        : null;
+    const activeToolCount = control
+      ? control.activeToolIds.size + control.anonymousActiveTools
+      : 0;
+    const activeToolIds = control
+      ? [...control.activeToolIds].slice(0, MAX_STALL_DIAGNOSTIC_TOOLS)
+      : [];
+    const activeTools = control
+      ? activeToolIds.map((id) => {
+          const label = control.activeToolLabels.get(id);
+          return label ? `${label}/${id}` : id;
+        })
+      : [];
     this.logger.warn('turn stall watchdog tripped — no product activity, interrupting turn', {
       turnStallMs: this.turnStallMs,
       lastEventType: this.lastEventType,
       msSinceLastEvent,
+      ...(activeToolCount > 0 ? { activeToolCount } : {}),
+      ...(activeTools.length > 0 ? { activeTools } : {}),
     });
     const minutes = Math.round(this.turnStallMs / 60_000);
+    const activeToolDetail = activeTools.length > 0
+      ? `: ${activeTools.join(', ')}${activeToolCount > activeTools.length ? `, +${activeToolCount - activeTools.length} more` : ''}`
+      : '';
+    const stallCause = activeToolCount > 0
+      ? `${activeToolCount} unfinished tool call${activeToolCount === 1 ? '' : 's'} still pending${activeToolDetail}`
+      : 'upstream, tools and the agent subprocess were all silent';
     this.fanOutEvent({
       type: 'error',
       data: {
@@ -3628,7 +3725,7 @@ export class Session {
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         message:
           `This turn produced no activity at all for ${minutes} minutes ` +
-          '(upstream, tools and the agent subprocess were all silent); ' +
+          `(${stallCause}); ` +
           'it was interrupted automatically. You can send the next message to continue.',
         isTerminal: true,
         reason: this.handle.isPreparingUserTurn?.()
@@ -3637,6 +3734,8 @@ export class Session {
         turnStallMs: this.turnStallMs,
         lastEventType: this.lastEventType,
         msSinceLastEvent,
+        ...(activeToolCount > 0 ? { activeToolCount } : {}),
+        ...(activeToolIds.length > 0 ? { activeToolIds } : {}),
       },
       source: this.eventSource,
     } as AgentEvent);
@@ -3882,25 +3981,16 @@ export class Session {
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);
       }
     } catch (e) {
-      this.logger.error('event loop crashed', { error: String(e) });
-      if (this.closePromise || this.status === 'closed') return;
-      // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      const closing = this.closeFromRuntime();
-      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
-        this.fanOutEvent({
-          type: 'error',
-          data: {
-            message: `Session event loop stopped unexpectedly: ${String(e)}`,
-            isTerminal: true,
-            reason: 'session_event_loop_crashed',
-          },
-          source: this.eventSource,
-        });
-      }
+      if (this.terminationStarted || this.status === 'closed') return;
+      const detail = redactSensitiveText(String(e));
+      this.logger.error('event loop crashed', {
+        error: detail,
+        ...(e instanceof Error && e.stack ? { stack: redactSensitiveText(e.stack) } : {}),
+      });
       try {
-        await closing;
+        await this.closeFromRuntime(`Session event loop stopped unexpectedly: ${detail}`);
       } catch (closeError) {
-        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+        this.logger.warn('event-loop crash handle close failed', { error: redactSensitiveText(String(closeError)) });
       }
       return;
     }
@@ -3925,7 +4015,7 @@ export class Session {
     this.runtimeInitiatedClose = true;
     this.terminationStarted = true;
     this.closePromise = Promise.resolve();
-    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event');
+    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event', 'session_event_loop_crashed');
     this.clearTurnStallWatchdog();
     this.cancelSendReservation(this.sendReservation);
     this.sendReservation = null;

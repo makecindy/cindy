@@ -46,4 +46,14 @@ describe('model groups store', () => {
     expect(readModelGroupsConfig().routes.map(modelGroupAutoSwitchOn)).toEqual([true, true]);
     expect(JSON.stringify(JSON.parse(fs.readFileSync(paths.file, 'utf8')))).not.toContain('autoSwitch');
   });
+
+  // 2026-11-26 审查发现：给自动合成的路由加的例外只存在内存里，写盘时被漏掉；只加了例外时整个文件还会被删掉。
+  // 失效后果：例外一保存就消失。最小输入：只有一条自动路由的图片例外。
+  it('keeps the exceptions of an automatic provider route on disk', () => {
+    paths.file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mg-store-')), 'model-groups.json');
+    const vision = { when: { type: 'image' as const }, use: 'vision' as const };
+    writeModelGroupsConfig({ routes: [], autoExceptions: { 'auto:openai': [vision] } });
+    expect(readModelGroupsConfig().autoExceptions).toEqual({ 'auto:openai': [vision] });
+    expect(JSON.parse(fs.readFileSync(paths.file, 'utf8')).autoExceptions).toEqual({ 'auto:openai': [vision] });
+  });
 });
