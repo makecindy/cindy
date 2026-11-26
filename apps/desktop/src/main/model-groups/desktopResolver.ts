@@ -143,7 +143,8 @@ function innerQuota(source: { providerId: string; model: string; agentKind: 'cc'
     const value = (async (): Promise<ModelGroupInnerQuota | null> => {
       // 用到时才加载组与账号池的运行时，不把它们拉进启动时就加载的模块。
       const { getProviderGroupRouter } = await import('../provider-group/runtime.js');
-      const view = await getProviderGroupRouter().view(source.providerId, { model: source.model, agentKind: agent });
+      const router = getProviderGroupRouter();
+      const view = await router.view(source.providerId, { model: source.model, agentKind: agent });
       const now = Date.now();
       // 组所在电脑给的每台状态：能接新任务的才参与；满载只是忙，不算额度用完。
       const members: SchedulableMember[] = view.members.map((member) => {
@@ -154,7 +155,10 @@ function innerQuota(source: { providerId: string; model: string; agentKind: 'cc'
           urgency: state?.urgency ?? null, fiveHourTight: member.fiveHourTight === true, headroom: state?.headroom ?? null,
         };
       });
-      const next = members.find((member) => member.key === pickRouteMember(members, config.strategy, { keepUnknownQuota: true }).key);
+      const next = members.find((member) => member.key === pickRouteMember(members, config.strategy, {
+        // 「轮流」「按比例」接着组里真实的进度预判，不然总报第一台(只读，不推进)。
+        ...router.pickProgress?.(source.providerId), keepUnknownQuota: true,
+      }).key);
       if (!next) return { limited: !view.members.some((member) => member.state === 'full'), urgency: null, fiveHourTight: false, headroom: null };
       return { limited: false, urgency: next.urgency ?? null, fiveHourTight: next.fiveHourTight === true, headroom: next.headroom ?? null };
     })().catch(() => null);

@@ -4,7 +4,7 @@
  *   一格选了智能路由时链里出现哪些具体模型、什么顺序；buildAuxiliaryRouteOptions(设置里那几格的候选)列出哪些路由、能不能选。
  * - 规则依据：2026-11-26 用户裁决「辅助模型也要能用路由」(shared/auxiliaryModelChain.ts 的 AUXILIARY_ROUTE_REF_PREFIX)。
  * - 现有覆盖缺口：resolveAuxiliaryModelChain.test.ts 只覆盖具体模型；路由引用的展开、顺序、已删除的路由都没有测试。
- * - 最小失败输入：路由引用原样留在链里(发请求时认不出，整格失效)；停用的或别的电脑上的成员被列进本机一次性请求；
+ * - 最小失败输入：路由引用原样留在链里(发请求时认不出，整格失效)；时段例外改走的路由没被采用；解析失败后每次读链都重新选路；停用的或别的电脑上的成员被列进本机一次性请求；
  *   路由此刻会选的那个没排到最前；路由删掉后链里还留着它、或界面上显示成一串 id。
  * - tier：unit，配置与解析器都是注入的假实现，不读文件、不启动 Electron。
  * - 实测耗时：单独运行约 1 秒（pnpm exec vitest run src/main/utility-model/__tests__/auxiliaryRouteRefs.test.ts）。
@@ -81,6 +81,26 @@ describe('auxiliary models that point at a smart route', () => {
     await flush();
     await flush();
     expect(getEffectiveAuxiliaryModelChain().refs).toEqual([pin('byok-1', 'byok-codex/gpt-6-luna'), pin('openai', 'gpt-6-luna')]);
+  });
+
+  // 2026-11-26 Greptile：时段例外此刻把这条路由改走另一条时，辅助请求也要用那一条的成员(与新任务选路同一个判断)。
+  it('follows a time-of-day exception to the route it currently uses', () => {
+    h.config = { routes: [MERGED, { ...MINE, id: 'r-hours', exceptions: [{ when: { type: 'hours', from: 0, to: 24 }, use: { type: 'route', routeId: MERGED.id } }] }] };
+    h.models = ['route:r-hours'];
+    expect(getEffectiveAuxiliaryModelChain().refs).toEqual([pin('openai', 'gpt-6-luna'), pin('byok-1', 'byok-codex/gpt-6-luna')]);
+  });
+
+  // 2026-11-26 Greptile：解析失败或选不出本机来源时也等满刷新间隔，不随每次读链重新跑一遍选路。
+  it('waits out the refresh interval after a failed or unavailable resolve', async () => {
+    h.config = { routes: [{ ...MERGED, id: 'src:auto:openai:luna3' }, MINE] };
+    h.models = ['route:src:auto:openai:luna3'];
+    h.resolve.mockRejectedValueOnce(new Error('catalog unavailable'));
+    getEffectiveAuxiliaryModelChain();
+    await flush();
+    getEffectiveAuxiliaryModelChain();
+    getEffectiveAuxiliaryModelChain();
+    await flush();
+    expect(h.resolve).toHaveBeenCalledTimes(1);
   });
 
   it('drops a deleted route from the chain and offers it as an unavailable, nameless entry', () => {

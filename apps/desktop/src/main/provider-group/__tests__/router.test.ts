@@ -12,6 +12,7 @@ import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter, PROVIDER_GROUP_PICK_QUICK_MS, type ProviderGroupRouterDeps } from '../router';
+import { pickRouteMember } from '../scheduler';
 import { SHARED_GROUP_STATUS_CAPS_CACHE_MS, SHARED_GROUP_STATUS_TIMEOUT_MS } from '../sharedStatus';
 // The full @cindy/device-link barrel is not under test here. The reachable
 // router/directory modules use only these three real helpers; re-export the
@@ -105,6 +106,22 @@ describe('subscription pools within a group', () => {
       if (pick.kind === 'member') counts[pick.member.kind === 'local' ? 'local' : 'remote']++;
     }
     expect(counts).toEqual({ local: 40, remote: 20 });
+  });
+
+  // 2026-11-26 Greptile：外层智能路由预判电脑组下一台时要接着组里真实的轮流进度，不然「轮流」总报第一台。
+  it('exposes its rotation progress so a read-only preview predicts the next real pick', async () => {
+    const router = harness({}, {}, [], { ...config, strategy: 'rotate' }, {
+      readPoolScheduling: async () => summary(1, 0),
+    });
+    const first = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
+    const progress = router.pickProgress?.('anthropic');
+    expect(progress?.lastPicked).toBe(first.kind === 'member' ? first.member.key : 'none');
+    const members = [LOCAL, remote].map(m => ({ key: m.key, usable: true, paused: false, running: 0,
+      limit: Number.POSITIVE_INFINITY, weight: 1, urgency: null, fiveHourTight: false, headroom: null }));
+    const predicted = pickRouteMember(members, 'rotate', { ...progress, keepUnknownQuota: true }).key;
+    const second = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
+    expect(second.kind === 'member' ? second.member.key : null).toBe(predicted);
+    expect(predicted).not.toBe(progress?.lastPicked);
   });
 
   it('counts concurrent provisional picks even when a busy sibling hides them in the pool total', async () => {

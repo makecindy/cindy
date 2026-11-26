@@ -6,7 +6,7 @@
  * 一个供应商里的几个账号、几台电脑上同一个供应商合成的组，也是同一套选法、同一个选择函数，选法在这里改。
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
-import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
 import { useInRouterContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -94,18 +94,41 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
   const { t } = useTranslation();
   const [view, setView] = useState<SubscriptionPoolView | null>(null);
   const [saving, setSaving] = useState(false);
+  // 正在读时再来的变化合成读完后补读一次：账号池连发变化(额度刷新、几个账号依次更新)时不堆起并发读取。
+  const reading = useRef<{ providerId: string; again: boolean } | null>(null);
   const read = useCallback(async () => {
+    const providerId = provider.id;
+    if (reading.current?.providerId === providerId) {
+      reading.current.again = true;
+      return;
+    }
+    reading.current = { providerId, again: false };
     try {
-      setView(await window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId: provider.id }));
-    } catch {
-      // 读不到就不列这一行；供应商页里仍能看到账号和原因。
-      setView(null);
+      do {
+        reading.current.again = false;
+        let next: SubscriptionPoolView | null;
+        try {
+          next = await window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId });
+        } catch {
+          // 读不到就不列这一行；供应商页里仍能看到账号和原因。
+          next = null;
+        }
+        if (reading.current?.providerId !== providerId) return;
+        setView(next);
+      } while (reading.current.again);
+    } finally {
+      if (reading.current?.providerId === providerId) reading.current = null;
     }
   }, [provider.id]);
   useEffect(() => {
     void read();
-    return window.electronAPI.subscriptionAccounts.onChanged(() => { void read(); });
-  }, [read]);
+    // 只响应这个供应商的账号变化：页上每个供应商各有一行，别的连接变了不重读。
+    const off = window.electronAPI.subscriptionAccounts.onChanged((event) => { if (event.providerId === provider.id) void read(); });
+    return () => {
+      off();
+      reading.current = null;
+    };
+  }, [provider.id, read]);
   if (!view || view.accounts.length < 2) return <>{plain}</>;
   const change = async (strategy: RouteStrategy) => {
     setSaving(true);

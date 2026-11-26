@@ -148,6 +148,8 @@ export interface ProviderGroupRouter {
   memberViews(providerId: string): ReadonlyMap<string, () => Promise<ProviderGroupView>>;
   /** 经本组分到这台、正在运行的任务数。 */
   running(providerId: string, memberKey: string): number;
+  /** 本组「轮流」「按比例」此刻的进度(只读副本)：外层智能路由预判下一台时与真正分配用同一份。 */
+  pickProgress?(providerId: string): { lastPicked: string | null; roundPicks?: number; weightCounters?: ReadonlyMap<string, number> };
   markCooling(providerId: string, memberKey: string, until: number, model?: string): void;
   coolingUntil(providerId: string, memberKey: string, model?: string): number | null;
   /** 记一次「这一轮试过这台」，返回这一轮已试过的全部。 */
@@ -526,6 +528,14 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     },
 
     running,
+    pickProgress(providerId) {
+      const counters = weightCounters.get(providerId);
+      return {
+        lastPicked: lastPicked.get(providerId) ?? null,
+        roundPicks: roundPicks.get(providerId),
+        ...(counters ? { weightCounters: new Map(counters) } : {}),
+      };
+    },
 
     markCooling(providerId, memberKey, until, model) {
       const key = coolKey(providerId, memberKey);

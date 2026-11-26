@@ -14,6 +14,7 @@ import { OWN_ROUTES_PROVIDER_ID, type AuxiliaryModelOption } from '../../shared/
 import type { ModelGroupCandidate, ModelGroupRoute } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
+import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 
 const PREFERRED_TTL_MS = 30_000;
 const MINE = OWN_ROUTES_PROVIDER_ID;
@@ -38,7 +39,8 @@ function localCandidates(route: ModelGroupRoute): ModelGroupCandidate[] {
   return route.candidates.filter((candidate) => !candidate.off && !candidate.agentDeviceId);
 }
 
-const preferred = new Map<string, { scope: string; pin: string; at: number }>();
+/** 路由此刻会先用的本机来源；pin 为 null = 这次解析没选出本机来源或解析失败(同样等满刷新间隔再试)。 */
+const preferred = new Map<string, { scope: string; pin: string | null; at: number }>();
 const refreshing = new Set<string>();
 
 function refreshPreferred(routeId: string): void {
@@ -54,10 +56,10 @@ function refreshPreferred(routeId: string): void {
     }))
     .then((result) => {
       if (activeOwnerScopeKey() !== scope) return;
-      if (result.outcome === 'routed' && !result.route.agentDeviceId) preferred.set(key, { scope, pin: pinOf(result.route), at: Date.now() });
-      else preferred.delete(key);
+      // 每次尝试都记下时间：选不出本机来源或失败时也等满刷新间隔，不随每次读辅助链重新解析。
+      preferred.set(key, { scope, pin: result.outcome === 'routed' && !result.route.agentDeviceId ? pinOf(result.route) : null, at: Date.now() });
     })
-    .catch(() => undefined)
+    .catch(() => { if (activeOwnerScopeKey() === scope) preferred.set(key, { scope, pin: null, at: Date.now() }); })
     .finally(() => refreshing.delete(key));
 }
 
@@ -66,9 +68,16 @@ function refreshPreferred(routeId: string): void {
  * 辅助模型与 Subagent 共用：它们都只能用本机的来源，也都不能等一次选路。
  */
 export function localRouteCandidatesInPickOrder(routeId: string): ModelGroupCandidate[] {
-  const route = routes().find((item) => item.id === routeId);
-  if (!route) return [];
-  const members = localCandidates(route);
+  let config: ReturnType<typeof readModelGroupsConfig>;
+  try {
+    config = readModelGroupsConfig();
+  } catch {
+    return [];
+  }
+  // 按此刻生效的那条展开：时段例外把这条路由改走另一条时，用那一条的成员(与选路同一个判断)。
+  const target = modelGroupRouteFor(config, { type: 'route', id: routeId }, Date.now());
+  if (target.outcome !== 'found') return [];
+  const members = localCandidates(target.route);
   if (members.length === 0) return [];
   refreshPreferred(routeId);
   const first = preferred.get(`${activeOwnerScopeKey()}\u0000${routeId}`)?.pin;
