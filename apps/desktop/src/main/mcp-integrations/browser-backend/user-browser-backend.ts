@@ -19,7 +19,6 @@
 
 import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { RecipeBrowserSessions } from '@cindy/browser-control-runtime';
 import { buildDomReadSource } from '@cindy/browser-control-runtime/dom-read';
@@ -28,7 +27,7 @@ import type {
   BrowserExtensionClientInfo,
   BrowserExtensionJobResult,
 } from '../../browser-extension/bridge.js';
-import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
+import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadBatchSync, UploadSizeError } from './rsb-webview-upload-policy.js';
 import type { BackendRequest, BackendResult, BrowserBackend } from './types.js';
 
 export interface UserBrowserPageControl {
@@ -182,14 +181,12 @@ const UPLOAD_BATCH_BYTES_MAX = 30_000_000;
 /** One piece of a larger upload. All pieces wait in the page's memory, which bounds the whole batch. */
 const UPLOAD_CHUNK_BYTES = 4_000_000;
 const UPLOAD_CHUNKED_BYTES_MAX = 1024 * 1024 * 1024;
-function uploadTooLarge(action: BackendRequest['action'], chunked: boolean): BackendResult {
-  return actionFailed(
-    action,
-    chunked
-      ? '上传文件总大小超过 1 GB,文件要先放进页面内存,扩展处理不了这么大。请告知用户在页面上手动选择文件,或分批上传'
-      : `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本(之后分块传输,最大 1 GB),或分批上传`,
-    'BROWSER_RUNTIME_INVALID_REQUEST',
-  );
+function uploadTooLarge(action: BackendRequest['action'], scope: 'file' | 'batch'): BackendResult {
+  const manual = '请告知用户在原浏览器的当前页面手动选择文件，选好后 Cindy 可以继续操作。';
+  const message = scope === 'file'
+    ? `单个文件超过 1 GiB，扩展无法把它安全地放入页面内存。${manual}`
+    : `这些文件合计超过 1 GiB。如果每个文件都能单独上传，可以按当前扩展支持的大小分批上传。${manual}`;
+  return actionFailed(action, message, 'BROWSER_RUNTIME_INVALID_REQUEST');
 }
 
 const UPLOAD_MIME: Record<string, string> = {
@@ -269,6 +266,9 @@ export class UserBrowserBackend implements BrowserBackend {
       this.noteSessionTab(request, result);
       return result;
     } catch (err) {
+      if (request.action === 'upload' && err instanceof UploadSizeError && err.limit === UPLOAD_CHUNKED_BYTES_MAX) {
+        return uploadTooLarge(request.action, err.scope);
+      }
       this.opts.logger.warn('user-browser backend call threw', {
         action: request.action,
         err: err instanceof Error ? err.message : String(err),
@@ -1479,9 +1479,9 @@ export class UserBrowserBackend implements BrowserBackend {
       typeof sessionId === 'string' && sessionId && this.opts.resolveUploadRoots
         ? await this.opts.resolveUploadRoots(sessionId)
         : [];
-    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX);
-    let total = 0;
-    for (const file of paths) total += (await fs.stat(file)).size;
+    const { files: paths, totalBytes: total } = resolveUploadBatchSync(
+      req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX,
+    );
     const chunked = extensionAtLeast(
       this.connectedClients(gate.control).find((c) => c.id === record.clientId)?.version,
       USER_BROWSER_CHUNKED_UPLOAD_VERSION,
@@ -1489,7 +1489,13 @@ export class UserBrowserBackend implements BrowserBackend {
     const ref = req.inputRef ?? req.ref;
     const inputTarget = ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' };
     if (total > UPLOAD_BATCH_BYTES_MAX) {
-      if (!chunked || total > UPLOAD_CHUNKED_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      if (!chunked) {
+        return actionFailed(
+          req.action,
+          `上传文件总大小超过约 30 MB。请告知用户把 Cindy 浏览器扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本，或在原浏览器的当前页面手动选择文件。`,
+          'BROWSER_RUNTIME_INVALID_REQUEST',
+        );
+      }
       return this.uploadInChunks(req, gate.control, record, inputTarget, paths, roots);
     }
     const files: Array<{ name: string; data: string; mimeType: string }> = [];
@@ -1499,7 +1505,13 @@ export class UserBrowserBackend implements BrowserBackend {
       // cannot pull bytes from outside the allowed roots. One file at a time bounds memory.
       const bytes = readRecipeInputFileSync(file, roots);
       read += bytes.length;
-      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      if (read > UPLOAD_BATCH_BYTES_MAX) {
+        return actionFailed(
+          req.action,
+          '读取时文件大小发生变化，请重新上传，或在原浏览器的当前页面手动选择文件。',
+          'BROWSER_RUNTIME_INVALID_REQUEST',
+        );
+      }
       files.push({
         name: path.basename(file),
         data: bytes.toString('base64'),
@@ -1549,7 +1561,7 @@ export class UserBrowserBackend implements BrowserBackend {
             total += count;
             if (total > UPLOAD_CHUNKED_BYTES_MAX) {
               void step({ op: 'abort' }).catch(() => {});
-              return uploadTooLarge(req.action, true);
+              return uploadTooLarge(req.action, offset > UPLOAD_CHUNKED_BYTES_MAX ? 'file' : 'batch');
             }
             const sent = await step({
               op: 'chunk',

@@ -30,7 +30,13 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 }));
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getLastCreatedTaskWorkspace,
+  getLastDeviceTaskWorkspace,
+  rememberCreatedTaskWorkspace,
+  rememberDeviceTaskWorkspace,
+  resolveDeviceSwitchWorkspace,
+} from '@/state/lastCreatedTaskWorkspace';
 import { applyPluginEngineDraftRoute } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
@@ -77,6 +83,113 @@ describe('last successful new task takes precedence over the viewed task', () =>
     rememberCreatedTaskWorkspace('owner-a', remote);
     localStorage.setItem(localStorage.key(0)!, JSON.stringify({ workingDir: '/wrong-computer' }));
     expect(getLastCreatedTaskWorkspace('owner-a')).toBeNull();
+  });
+});
+
+describe('per-device workspace memory when switching computers in new task', () => {
+  it('remembers each computer’s last selected project independently and collapses managed worktrees', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, {
+      remoteHostId: null,
+      workingDir: '/local/cindy/.cindy-worktrees/task-1',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', {
+      remoteHostId: null,
+      workingDir: '/studio/app/',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'win-b', {
+      remoteHostId: null,
+      workingDir: 'C:\\Work\\Game\\',
+    });
+
+    expect(resolveDeviceSwitchWorkspace('owner-a', null)).toEqual({
+      workingDir: '/local/cindy',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'win-b')).toEqual({
+      workingDir: 'C:/Work/Game',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    // Another account never sees owner-a's paths.
+    expect(resolveDeviceSwitchWorkspace('owner-b', 'studio-a')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+  });
+
+  it('remembers explicit dialogue on one computer without overwriting another computer’s project', () => {
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: null, workingDir: '/studio/app' });
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: null, workingDir: null });
+
+    // Local explicit dialogue overrides the local default directory fallback.
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+  });
+
+  it('falls back to the local default directory or legacy lastCreatedTaskWorkspace when a computer has no per-device entry', () => {
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: '/local/default',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-new', '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+
+    // Legacy single-entry record (pre-upgrade) still restores when switching to that computer.
+    localStorage.setItem(
+      'cindy:lastCreatedTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        deviceId: 'studio-legacy',
+        deviceName: 'Legacy Studio',
+        remoteHostId: null,
+        workingDir: '/legacy/repo',
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-legacy')).toEqual({
+      remoteHostId: null,
+      workingDir: '/legacy/repo',
+    });
+  });
+
+  it('preserves SSH remoteHostId only for local computer entries and ignores damaged per-device records', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: 'ssh-dev', workingDir: '/srv/app' });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: 'ssh-dev', workingDir: '/studio/app' });
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toEqual({
+      remoteHostId: 'ssh-dev',
+      workingDir: '/srv/app',
+    });
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toEqual({
+      remoteHostId: null,
+      workingDir: '/studio/app',
+    });
+
+    localStorage.setItem(
+      'cindy:lastDeviceTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        local: { remoteHostId: 'ssh-without-dir', workingDir: null },
+        'device:studio-a': { remoteHostId: 'illegal-ssh', workingDir: '/studio/app' },
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toBeNull();
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toBeNull();
   });
 });
 
