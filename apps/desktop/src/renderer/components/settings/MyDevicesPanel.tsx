@@ -46,6 +46,8 @@ import { appLabel, deviceLabel, platformLabel, relativeTime, selfDeviceName } fr
 import { LocalNetworkPermission } from './LocalNetworkPermission';
 import { DeviceIdentityConflictRow, useDeviceIdentityConflict } from '@/features/device-link/DeviceIdentityConflict';
 import appI18n from 'i18next';
+import type { SshDeviceHostView } from '../../../shared/sshAccess';
+import { SshDeviceHostRow } from './SshDeviceHostRow';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -270,10 +272,16 @@ export function MyDevicesPanel({
   focusDeviceId,
   focusRequestKey,
   cloud,
+  sshHosts,
 }: {
   s: DeviceLinkSettings;
   variant?: 'all' | 'self' | 'others' | 'cloud';
   selfSettings?: ReactNode;
+  /** SSH to the other devices (this computer as controller); absent, the cards have no SSH row. */
+  sshHosts?: {
+    hosts: ReadonlyMap<string, SshDeviceHostView>;
+    restore: (deviceId: string) => Promise<void>;
+  };
   /** 深链要聚焦的设备(本实例渲染了该设备时才处理)。 */
   focusDeviceId?: string | null;
   /** 聚焦请求的唯一键;同一设备被再次请求时随之变化。 */
@@ -565,6 +573,7 @@ export function MyDevicesPanel({
             const inbound = inboundToggleState(s.enabled, revokedControllers.has(d.deviceId));
             const isControlling = controlling.has(d.deviceId);
             const cloudStatus = cloud?.status(d.deviceId) ?? null;
+            const sshView = sshHosts?.hosts.get(d.deviceId) ?? null;
             // A cloud instance's own name (one per instance, as everywhere else it shows).
             const title =
               cloud?.displayName?.(d) ?? deviceLabel({ ...d, name: deviceDisplayName(d.deviceId, d.name, s.devices ?? []) }, t);
@@ -722,6 +731,12 @@ export function MyDevicesPanel({
                       onToggle={(v) => void onInboundChange(d.deviceId, v)}
                     />
                   </AccessRow>
+                  {/* SSH to that device, kept by this computer (shown once that device offered SSH access). */}
+                  {sshView && sshHosts && (
+                    <AccessRow label={t('settings.remoteControl.sshAccess.device.rowName')}>
+                      <SshDeviceHostRow view={sshView} name={title} onRestore={sshHosts.restore} />
+                    </AccessRow>
+                  )}
                 </div>
               </li>
             );

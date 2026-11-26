@@ -7348,7 +7348,26 @@
         "sessionsEnded": "Beendete SSH-Sitzungen: {{count}}",
         "sessionsUnsupported": "Dieser Computer kann SSH-Sitzungen noch nicht beenden",
         "endSessionsFailed": "SSH-Sitzungen konnten nicht beendet werden",
-        "toggleFailed": "SSH-Zugriff konnte nicht geändert werden"
+        "toggleFailed": "SSH-Zugriff konnte nicht geändert werden",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Terminalbefehl kopieren",
+          "connect": "Verbinden",
+          "connected": "Mit {{name}} verbunden",
+          "restore": "Zu SSH-Remote-Hosts hinzufügen",
+          "restoreFailed": "{{name}} konnte nicht zu den SSH-Remote-Hosts hinzugefügt werden",
+          "userDeleted": "Du hast es aus den SSH-Remote-Hosts gelöscht.",
+          "needsUpdate": "Cindy-Update nötig: Cindy auf diesem Gerät unterstützt den SSH-Zugriff noch nicht.",
+          "controlOff": "„Steuern“ ist aus, deshalb richtet Cindy SSH für dieses Gerät nicht ein.",
+          "refused": "Dieses Gerät hat den SSH-Schlüssel dieses Computers nicht angenommen.",
+          "pending": "SSH wird eingerichtet…",
+          "unavailable": {
+            "off": "Nicht verfügbar: Auf diesem Gerät ist der SSH-Zugriff aus.",
+            "blocked": "Nicht verfügbar: Der SSH-Server auf diesem Gerät läuft nicht.",
+            "revoked": "Nicht verfügbar: Dieses Gerät hat den Zugriff dieses Computers widerrufen.",
+            "removed": "Nicht verfügbar: Dieses Gerät gehört nicht mehr zu deinem Konto."
+          }
+        }
       }
     },
     "tina": {

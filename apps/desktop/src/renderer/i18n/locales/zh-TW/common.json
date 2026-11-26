@@ -7305,7 +7305,26 @@
         "sessionsEnded": "已中斷 {{count}} 個 SSH 工作階段",
         "sessionsUnsupported": "這台電腦暫不支援中斷 SSH 工作階段",
         "endSessionsFailed": "未能中斷 SSH 工作階段",
-        "toggleFailed": "未能變更 SSH 存取設定"
+        "toggleFailed": "未能變更 SSH 存取設定",
+        "device": {
+          "rowName": "SSH",
+          "copy": "複製終端機命令",
+          "connect": "連線",
+          "connected": "已連線到 {{name}}",
+          "restore": "加入 SSH 遠端主機",
+          "restoreFailed": "未能將 {{name}} 加入 SSH 遠端主機",
+          "userDeleted": "你已將它從 SSH 遠端主機中刪除。",
+          "needsUpdate": "需要更新 Cindy：這台裝置上的 Cindy 還不支援 SSH 存取。",
+          "controlOff": "你關閉了「控制它」，Cindy 不會為它設定 SSH。",
+          "refused": "這台裝置沒有接受本機的 SSH 公鑰。",
+          "pending": "正在設定 SSH…",
+          "unavailable": {
+            "off": "暫不可用：對方關閉了 SSH 存取。",
+            "blocked": "暫不可用：對方的 SSH 服務沒有執行。",
+            "revoked": "暫不可用：對方撤銷了本機的存取權限。",
+            "removed": "暫不可用：這台裝置已不在你的帳號中。"
+          }
+        }
       }
     },
     "tina": {

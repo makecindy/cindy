@@ -7305,7 +7305,26 @@
         "sessionsEnded": "已斷 {{count}} 個 SSH 連線",
         "sessionsUnsupported": "此機暫不能斷 SSH 連線",
         "endSessionsFailed": "斷 SSH 連線未成",
-        "toggleFailed": "改 SSH 存取之設未成"
+        "toggleFailed": "改 SSH 存取之設未成",
+        "device": {
+          "rowName": "SSH",
+          "copy": "錄終端機命令",
+          "connect": "連",
+          "connected": "已連 {{name}}",
+          "restore": "增入 SSH 遠方主機",
+          "restoreFailed": "增 {{name}} 入 SSH 遠方主機未成",
+          "userDeleted": "君已自 SSH 遠方主機中刪之。",
+          "needsUpdate": "須更新 Cindy：此裝置之 Cindy 尚不支援 SSH 存取。",
+          "controlOff": "君已闔「控之」，Cindy 不為其設 SSH。",
+          "refused": "此裝置未納此機之 SSH 公鑰。",
+          "pending": "方設 SSH…",
+          "unavailable": {
+            "off": "暫不可用：彼已闔 SSH 存取。",
+            "blocked": "暫不可用：彼之 SSH 服務未行。",
+            "revoked": "暫不可用：彼已撤此機之存取權柄。",
+            "removed": "暫不可用：此裝置已不在君之名籍中。"
+          }
+        }
       }
     },
     "tina": {

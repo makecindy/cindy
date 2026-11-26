@@ -39,6 +39,7 @@ import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { SshAccessSetting } from './SshAccessSetting';
+import { useSshDeviceHosts } from './SshDeviceHostRow';
 import { selfDeviceName } from './deviceLabels';
 import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
@@ -134,6 +135,8 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
   );
   // 「允许我的其他设备通过 SSH 连接这台电脑」在本机卡上提示其它设备通常使用的终端别名。
   const selfDevice = s.devices?.find((device) => device.isSelf);
+  // 其它设备卡片上的 SSH 一行(本机作为控制端维护的主机),整页只读一份。
+  const sshHosts = useSshDeviceHosts(deviceLinkAvailable);
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const location = useLocation();
   const [sshOpen, setSshOpen] = useState(
@@ -236,6 +239,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                           s={s}
                           variant="cloud"
                           cloud={cloud}
+                          sshHosts={sshHosts}
                           focusDeviceId={deepLink.focusDeviceId}
                           focusRequestKey={deepLink.focusRequestKey}
                         />
@@ -248,6 +252,7 @@ export function RemoteControlSection({ children }: { children?: ReactNode }) {
                     s={s}
                     variant="others"
                     cloud={cloud}
+                    sshHosts={sshHosts}
                     focusDeviceId={deepLink.focusDeviceId}
                     focusRequestKey={deepLink.focusRequestKey}
                   />

@@ -7305,7 +7305,26 @@
         "sessionsEnded": "已断开 {{count}} 个 SSH 会话",
         "sessionsUnsupported": "这台电脑暂不支持断开 SSH 会话",
         "endSessionsFailed": "未能断开 SSH 会话",
-        "toggleFailed": "未能更改 SSH 访问设置"
+        "toggleFailed": "未能更改 SSH 访问设置",
+        "device": {
+          "rowName": "SSH",
+          "copy": "复制终端命令",
+          "connect": "连接",
+          "connected": "已连接到 {{name}}",
+          "restore": "添加到 SSH 远程主机",
+          "restoreFailed": "未能把 {{name}} 添加到 SSH 远程主机",
+          "userDeleted": "你已把它从 SSH 远程主机中删除。",
+          "needsUpdate": "需要更新 Cindy：这台设备上的 Cindy 还不支持 SSH 访问。",
+          "controlOff": "你关闭了「控制它」，Cindy 不会为它设置 SSH。",
+          "refused": "这台设备没有接受本机的 SSH 公钥。",
+          "pending": "正在设置 SSH…",
+          "unavailable": {
+            "off": "暂不可用：对方关闭了 SSH 访问。",
+            "blocked": "暂不可用：对方的 SSH 服务没有运行。",
+            "revoked": "暂不可用：对方撤销了本机的访问权限。",
+            "removed": "暂不可用：这台设备已不在你的账号里。"
+          }
+        }
       }
     },
     "tina": {

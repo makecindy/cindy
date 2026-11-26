@@ -7348,7 +7348,26 @@
         "sessionsEnded": "SSH sessions ended: {{count}}",
         "sessionsUnsupported": "This computer can’t end SSH sessions yet",
         "endSessionsFailed": "Couldn’t end SSH sessions",
-        "toggleFailed": "Couldn’t change SSH access"
+        "toggleFailed": "Couldn’t change SSH access",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copy terminal command",
+          "connect": "Connect",
+          "connected": "Connected to {{name}}",
+          "restore": "Add to SSH remote hosts",
+          "restoreFailed": "Couldn’t add {{name}} to SSH remote hosts",
+          "userDeleted": "You deleted it from SSH remote hosts.",
+          "needsUpdate": "Needs a Cindy update: Cindy on this device doesn’t support SSH access yet.",
+          "controlOff": "“Control it” is off, so Cindy doesn’t set up SSH for it.",
+          "refused": "This device didn’t accept this computer’s SSH key.",
+          "pending": "Setting up SSH…",
+          "unavailable": {
+            "off": "Unavailable: SSH access is off on that device.",
+            "blocked": "Unavailable: the SSH server on that device isn’t running.",
+            "revoked": "Unavailable: that device revoked this computer’s access.",
+            "removed": "Unavailable: that device is no longer in your account."
+          }
+        }
       }
     },
     "tina": {

@@ -7305,7 +7305,26 @@
         "sessionsEnded": "{{count}} 件の SSH セッションを切断しました",
         "sessionsUnsupported": "このコンピューターではまだ SSH セッションを切断できません",
         "endSessionsFailed": "SSH セッションを切断できませんでした",
-        "toggleFailed": "SSH アクセスの設定を変更できませんでした"
+        "toggleFailed": "SSH アクセスの設定を変更できませんでした",
+        "device": {
+          "rowName": "SSH",
+          "copy": "ターミナルのコマンドをコピー",
+          "connect": "接続",
+          "connected": "{{name}} に接続しました",
+          "restore": "SSH リモートホストに追加",
+          "restoreFailed": "{{name}} を SSH リモートホストに追加できませんでした",
+          "userDeleted": "SSH リモートホストから削除済みです。",
+          "needsUpdate": "Cindy の更新が必要です: このデバイスの Cindy はまだ SSH アクセスに対応していません。",
+          "controlOff": "「操作する」がオフのため、Cindy はこのデバイスの SSH を設定しません。",
+          "refused": "このデバイスは本機の SSH 公開鍵を受け入れませんでした。",
+          "pending": "SSH を設定しています…",
+          "unavailable": {
+            "off": "利用できません: 相手側で SSH アクセスがオフになっています。",
+            "blocked": "利用できません: 相手側の SSH サーバーが動いていません。",
+            "revoked": "利用できません: 相手側が本機のアクセス権を撤回しました。",
+            "removed": "利用できません: このデバイスはアカウントにもう登録されていません。"
+          }
+        }
       }
     },
     "tina": {

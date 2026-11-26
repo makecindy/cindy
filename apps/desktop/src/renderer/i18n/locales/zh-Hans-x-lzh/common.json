@@ -7305,7 +7305,26 @@
         "sessionsEnded": "已断 {{count}} 个 SSH 连接",
         "sessionsUnsupported": "此机暂不能断 SSH 连接",
         "endSessionsFailed": "断 SSH 连接未成",
-        "toggleFailed": "改 SSH 访问之设未成"
+        "toggleFailed": "改 SSH 访问之设未成",
+        "device": {
+          "rowName": "SSH",
+          "copy": "录终端命令",
+          "connect": "连",
+          "connected": "已连 {{name}}",
+          "restore": "增入 SSH 远方主机",
+          "restoreFailed": "增 {{name}} 入 SSH 远方主机未成",
+          "userDeleted": "君已自 SSH 远方主机中删之。",
+          "needsUpdate": "须更新 Cindy：此设备之 Cindy 尚不支持 SSH 访问。",
+          "controlOff": "君已阖「控之」，Cindy 不为其设 SSH。",
+          "refused": "此设备未纳此机之 SSH 公钥。",
+          "pending": "方设 SSH…",
+          "unavailable": {
+            "off": "暂不可用：彼已阖 SSH 访问。",
+            "blocked": "暂不可用：彼之 SSH 服务未行。",
+            "revoked": "暂不可用：彼已撤此机之访问权柄。",
+            "removed": "暂不可用：此设备已不在君之名籍中。"
+          }
+        }
       }
     },
     "tina": {

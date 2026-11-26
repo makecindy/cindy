@@ -7417,7 +7417,26 @@
         "sessionsEnded": "Sessions SSH fermées : {{count}}",
         "sessionsUnsupported": "Cet ordinateur ne peut pas encore fermer les sessions SSH",
         "endSessionsFailed": "Impossible de fermer les sessions SSH",
-        "toggleFailed": "Impossible de modifier l'accès SSH"
+        "toggleFailed": "Impossible de modifier l'accès SSH",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copier la commande du terminal",
+          "connect": "Se connecter",
+          "connected": "Connecté à {{name}}",
+          "restore": "Ajouter aux hôtes distants SSH",
+          "restoreFailed": "Impossible d'ajouter {{name}} aux hôtes distants SSH",
+          "userDeleted": "Vous l'avez supprimé des hôtes distants SSH.",
+          "needsUpdate": "Mise à jour de Cindy requise : Cindy sur cet appareil ne prend pas encore en charge l'accès SSH.",
+          "controlOff": "« Le contrôler » est désactivé : Cindy ne configure donc pas SSH pour cet appareil.",
+          "refused": "Cet appareil n'a pas accepté la clé SSH de cet ordinateur.",
+          "pending": "Configuration de SSH…",
+          "unavailable": {
+            "off": "Indisponible : l'accès SSH est désactivé sur cet appareil.",
+            "blocked": "Indisponible : le serveur SSH de cet appareil n'est pas en cours d'exécution.",
+            "revoked": "Indisponible : cet appareil a révoqué l'accès de cet ordinateur.",
+            "removed": "Indisponible : cet appareil ne fait plus partie de votre compte."
+          }
+        }
       }
     },
     "tina": {

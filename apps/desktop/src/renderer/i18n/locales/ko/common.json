@@ -7305,7 +7305,26 @@
         "sessionsEnded": "SSH 세션 {{count}}개를 종료했습니다",
         "sessionsUnsupported": "이 컴퓨터에서는 아직 SSH 세션을 종료할 수 없습니다",
         "endSessionsFailed": "SSH 세션을 종료하지 못했습니다",
-        "toggleFailed": "SSH 접근 설정을 변경하지 못했습니다"
+        "toggleFailed": "SSH 접근 설정을 변경하지 못했습니다",
+        "device": {
+          "rowName": "SSH",
+          "copy": "터미널 명령 복사",
+          "connect": "연결",
+          "connected": "{{name}}에 연결했습니다",
+          "restore": "SSH 원격 호스트에 추가",
+          "restoreFailed": "SSH 원격 호스트에 {{name}}을(를) 추가하지 못했습니다",
+          "userDeleted": "SSH 원격 호스트에서 삭제했습니다.",
+          "needsUpdate": "Cindy 업데이트 필요: 이 기기의 Cindy는 아직 SSH 접근을 지원하지 않습니다.",
+          "controlOff": "‘제어하기’가 꺼져 있어 Cindy가 이 기기의 SSH를 설정하지 않습니다.",
+          "refused": "이 기기가 본 기기의 SSH 공개 키를 받아들이지 않았습니다.",
+          "pending": "SSH 설정 중…",
+          "unavailable": {
+            "off": "사용 불가: 상대 기기에서 SSH 접근이 꺼져 있습니다.",
+            "blocked": "사용 불가: 상대 기기의 SSH 서버가 실행 중이 아닙니다.",
+            "revoked": "사용 불가: 상대 기기가 본 기기의 액세스 권한을 철회했습니다.",
+            "removed": "사용 불가: 이 기기는 더 이상 내 계정에 없습니다."
+          }
+        }
       }
     },
     "tina": {

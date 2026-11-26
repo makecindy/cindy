@@ -7417,7 +7417,26 @@
         "sessionsEnded": "Sesiones SSH cerradas: {{count}}",
         "sessionsUnsupported": "Esta computadora todavía no puede cerrar sesiones SSH",
         "endSessionsFailed": "No se pudieron cerrar las sesiones SSH",
-        "toggleFailed": "No se pudo cambiar el acceso SSH"
+        "toggleFailed": "No se pudo cambiar el acceso SSH",
+        "device": {
+          "rowName": "SSH",
+          "copy": "Copiar comando de terminal",
+          "connect": "Conectar",
+          "connected": "Conectado a {{name}}",
+          "restore": "Añadir a hosts remotos SSH",
+          "restoreFailed": "No se pudo añadir {{name}} a hosts remotos SSH",
+          "userDeleted": "Lo eliminaste de los hosts remotos SSH.",
+          "needsUpdate": "Necesita actualizar Cindy: Cindy en este dispositivo aún no admite el acceso SSH.",
+          "controlOff": "«Controlarlo» está desactivado, así que Cindy no configura SSH para este dispositivo.",
+          "refused": "Este dispositivo no aceptó la clave SSH de esta computadora.",
+          "pending": "Configurando SSH…",
+          "unavailable": {
+            "off": "No disponible: el acceso SSH está desactivado en ese dispositivo.",
+            "blocked": "No disponible: el servidor SSH de ese dispositivo no se está ejecutando.",
+            "revoked": "No disponible: ese dispositivo revocó el acceso de esta computadora.",
+            "removed": "No disponible: ese dispositivo ya no está en tu cuenta."
+          }
+        }
       }
     },
     "tina": {
