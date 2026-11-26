@@ -317,8 +317,7 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
   并先做插件引擎准入；`AcpAgent` 启动时剥离全部 MCP 服务、记忆、插件花名册、Skill 清单与展开、伙伴画像、附加目录与宿主说明，并将权限模式固定为 `ask`。
   握手后强要求对端声明 `initialize._meta.permissionGate.supported === true`：未声明时立即关闭进程并 fail-closed 抛出
   `AgentStartupStoppedError(NotSupportedError('reviewMode', reason: 'sdk-missing'))`。声明支持时，每轮强制发送 `scope: 'all-tool-calls'`，
-  在 `decidePermission` 强制执行不可绕过的只读审查闸（即使处于 `bypassPermissions` 也不放行）：仅允许 `read` / `search` 且全部路径（含 `locations`、
-  `rawInput` 及搜索通配符选择器）经 `resolveReviewReadPath` 验证落在工作目录或 `reviewReadPaths` 内、非凭据路径且无硬链接逃逸；`edit`、`delete`、
+  在 `decidePermission` 强制执行不可绕过的只读审查闸（即使处于 `bypassPermissions` 也不放行）：因外部插件 `permissionGate` 仅在调用前拦截、无法在搜索执行或结果层逐文件过滤凭据与软硬链接，仅允许目标为具体常规文件（`stat.isFile()`）的 `read` / `search` 且全部路径经 `resolveReviewReadPath` 验证落在工作目录或 `reviewReadPaths` 内、非凭据路径且无硬链接逃逸；目录级搜索（如 `Grep` / `Glob` 扫描目录或省略路径）、`edit`、`delete`、
   `move`、`execute`、`fetch` 或未知/不可验证调用一律拒绝。直接消息附件在发送/插话前经 `assertReviewMessageContentPaths` 校验。
 - **共享任务（Shared Tasks）**：`AgentInputCreateOpts.agentKind` 与主进程 `readSharedTaskTaskCreateOpts` / `requireQueuedMessage` 接受 `acp`，
   访客消息由宿主盖章保留任务自身的 `agentKind = acp`、`providerId`、`model`、`effort`、`agentDeviceId` 与权限档（剥离访客自报覆盖字段）；
