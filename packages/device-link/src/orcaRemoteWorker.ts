@@ -97,8 +97,16 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  /** A failed plugin catalog read is not a successful empty catalog. */
   pluginEngineCatalogUnavailable?: true;
-  pluginEngines?: Array<{ providerId: string; name: string; available: boolean; message?: string; models: Array<{ id: string; label: string; efforts?: readonly string[] }> }>;
+  /** Plugin engines offered on the execution computer (or selected provider location). */
+  pluginEngines?: Array<{
+    providerId: string;
+    name: string;
+    available: boolean;
+    message?: string;
+    models: Array<{ id: string; label: string; efforts?: string[] }>;
+  }>;
 }
 
 export interface OrcaRemoteWorkerModel {

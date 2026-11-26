@@ -944,3 +944,90 @@ it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, wi
     expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '198.51.100.7:3478' });
   } finally { await transport.close(); vi.useRealTimers(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端原生引擎（`udp-rebind`）在换网/发送错误/UDP 黑洞后重绑了新的本地 UDP 端口，
+ *   `NativeTransport` 从 `poll` 的 `udpRebind` 读取新端口并同步 `dial.udp.port`、清空旧 STUN `mapped` 候选并向现有连接重报、
+ *   对同一代 `gen` 仅触发一次 `onLocalPortChanged(port, reason)`，随后新一轮 STUN 映射回到 `candidates()`。
+ * - Bug 依据：PR #12887 审计发现桌面默认改走 Rust 原生引擎（#12184）后，原生端不会重绑 UDP socket，`NativeTransport` 也未同步
+ *   `udpPort` / `onLocalPortChanged`，导致网络切换或休眠唤醒后继续对外宣告旧端口且无法回调发现层/日志。
+ * - 现有覆盖缺口：已有原生测试的 `udpPort` 全程不变，未覆盖 `poll` 返回 `udpRebind` 时的端口更新、去重和候选重报。
+ * - 最小失败输入：1 条已建立通道 + 旧 STUN 映射；引擎连续两轮 `poll` 上报同一 `udpRebind`（`gen: 1, port: 41001, reason: 'udp-blackhole'`），随后上报新映射。
+ * - tier：unit，真实 `NativeTransport`/`NativeChannel`，内存引擎桩 + 假计时器；约 15 毫秒。 */
+it('syncs dial port, re-announces candidates, and notifies onLocalPortChanged once per udpRebind generation', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native-rebind'), remote = generateIdentity('remote-rebind');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let nextStream = 0;
+  let udpPort = 40000;
+  let mapped: Array<{ address: string; port: number }> = [{ address: '203.0.113.1', port: 40000 }];
+  let udpRebind: { gen: number; port: number; reason: string } | null = null;
+  const writes: string[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      if (command.op === 'identity') {
+        return { deviceId: local.deviceId, transportKey: local.transportKey, udpPort, features: ['stun', 'path-routing', 'udp-rebind'] } as T;
+      }
+      if (command.op === 'openStream') return (++nextStream) as T;
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        writes.push(bytes.toString('utf8'));
+        return bytes.length as T;
+      }
+      if (command.op === 'poll') {
+        return {
+          packets: [],
+          mapped,
+          udpPort,
+          udpRebind,
+          connections: [{
+            id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
+            remoteKey: remote.transportKey, path: { link: 1 }, events: [], data: [],
+            rttUs: 20_000, sent: 1, received: 1, rotations: 0,
+          }],
+        } as T;
+      }
+      return true as T;
+    },
+    async destroy() {},
+  };
+  const portChanges: Array<{ port: number; reason: string }> = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, {
+      admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+      relayIdOf: () => remote.deviceId,
+      onIncoming: () => undefined,
+      onLocalPortChanged: (port, reason) => { portChanges.push({ port, reason }); },
+    }, ['192.168.1.5'], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.dial.udp?.port).toBe(40000);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 40000 },
+      { address: '192.168.1.5', port: 40000 },
+    ]);
+
+    // Engine rebounds UDP socket on silent blackhole; repeated polls with the same gen notify once.
+    udpPort = 41001;
+    mapped = [];
+    udpRebind = { gen: 1, port: 41001, reason: 'udp-blackhole' };
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.dial.udp?.port).toBe(41001);
+    expect(transport.candidates()).toEqual([{ address: '192.168.1.5', port: 41001 }]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+    expect(writes.some(w => w.includes('"192.168.1.5"') && w.includes('41001'))).toBe(true);
+
+    // Fresh STUN mapping arrives for the rebound port.
+    mapped = [{ address: '203.0.113.1', port: 51001 }];
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 51001 },
+      { address: '192.168.1.5', port: 41001 },
+    ]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+  } finally {
+    await transport?.close();
+    vi.useRealTimers();
+  }
+});

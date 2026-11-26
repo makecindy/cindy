@@ -1,4 +1,5 @@
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Eye, EyeOff, Power, MoreHorizontal } from 'lucide-react';
 import { toast } from '@/lib/toast';
@@ -490,12 +491,13 @@ function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
               {status}
             </span>
             {plan && (
-              <span
+              <Badge
                 data-testid="quota-plan-badge"
-                className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+                tone="outline"
+                className="ml-auto max-w-[65%] whitespace-normal break-words"
               >
                 {plan}
-              </span>
+              </Badge>
             )}
           </div>
         </div>
@@ -566,12 +568,13 @@ function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
                       </span>
                     )}
                     {plan && (
-                      <span
+                      <Badge
                         data-testid="quota-plan-badge"
-                        className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+                        tone="outline"
+                        className="ml-auto max-w-[65%] whitespace-normal break-words"
                       >
                         {plan}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {hasWindows && usage && (

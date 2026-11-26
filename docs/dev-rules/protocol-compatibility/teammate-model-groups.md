@@ -11,9 +11,11 @@
   agentKind / 供应商连接 id / 模型 id / 运行位置），只有同账号可读的目录级标识，不含凭证。这台电脑没有模型组时省略。
   控制端按不可信数据解析：Desktop 复用 `normalizeModelGroupsConfig`，Mobile 只保留显示所需字段并限 32 组 × 16 来源。
   旧控制端忽略该字段，组项按具体模型显示。
-- **选择与补全**：控制端选组只在这一项写上 `modelGroup`（具体模型暂为原来的模型，新加的一项用组里第一个来源）。
+- **选择与补全**：控制端选组只在这一项写上 `modelGroup`（具体模型暂为原来的模型）。
   伙伴所在电脑保存（`models` 动作）或新建（`create` 动作）时，先按组的规则预览一次，把具体模型换成组此刻会选的来源；
   这台电脑没有这个组时去掉组、按控制端带来的具体模型；组暂时用不了时保留原来的具体模型。补全后照常经既有模型可用性验证。
+- **默认模型**：`models.default` 同样追加可选 `modelGroups`，`models.setDefault` 保存时按同一规则补全（2026-11-26，见
+  [伙伴设置动作](teammate-settings-management-action.md)）。
 - **旧主机**：不下发 `modelGroups`，新控制端不显示模型组；即使带 `modelGroup` 提交，旧主机解析丢弃字段，按具体模型保存。
 - 无新增 channel、权限、数据库 migration、服务端或中转改动（字段在既有 remote resource 读写 payload 内，自建中转透明转发）、
   原生 fingerprint 变化。

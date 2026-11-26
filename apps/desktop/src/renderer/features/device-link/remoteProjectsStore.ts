@@ -1,5 +1,10 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { projectSessionWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getOfflineInboxIntent,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -522,9 +527,12 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingStatus(
-          withPendingFirstSend(withPendingTitle(s)),
-          shard.deviceId,
+        const projected = projectSessionWithOfflineInboxIntent(
+          withPendingStatus(
+            withPendingFirstSend(withPendingTitle(s)),
+            shard.deviceId,
+          ),
+          getOfflineInboxIntent(shard.deviceId, s.id),
         );
         flat.push(projected);
         const pinnedDeviceId = pinnedOrigins.get(s.id);
@@ -597,6 +605,10 @@ function recompute(): void {
   recomputeArchivedLoadedDeviceIds();
   subs.forEach((fn) => fn());
 }
+
+subscribeOfflineInboxIntents(() => {
+  if (shards.size > 0) recompute();
+});
 
 /** 更新某个状态桶的读取态但不通知；调用方与其它 mutation 合并成一次通知。 */
 function setSessionStatusLoading(

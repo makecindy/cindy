@@ -48,7 +48,7 @@
 ## 普通任务远程创建与项目发现（2026-11-11）
 
 同一 `maker:session:handoff` 通道增加 `ordinaryCreateVersion: 1`、`projectCatalogVersion: 1` 能力。
-显式选择插件引擎的普通任务仅在接收端另外声明 `pluginEngineCreate: 1` 时发送。`create.agentKind` 增加 `acp`，
+显式选择插件引擎的普通任务仅在接收端另外声明 `ordinaryCreatePluginEngine: 1` 时发送。`create.agentKind` 增加 `acp`，
 `create.providerId` 指定引擎，与 `model` 和 `agentDeviceId` 一起绑定在现有创建回执里。远程来源限同账号电脑，
 接收端用现有插件目录准入再创建。旧 Desktop 与只支持内置引擎的 Node Host 不声明该能力，显式选择 ACP 时不发送创建请求。
 不变更 channel、授权规则或中转帧。回归见 `sessionHandoffRemote.test.ts` 和 Node Host `device-link.test.mjs`。

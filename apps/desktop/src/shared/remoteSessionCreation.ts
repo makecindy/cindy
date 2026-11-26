@@ -7,8 +7,9 @@ export const remoteSessionCreationSchema = z.object({
   workingDir: z.string().trim().min(1).max(4096).optional(),
   useWorktree: z.boolean().optional(),
   agentKind: z.enum(['claude-code', 'codex', 'pi', 'acp']).optional(),
-  providerId: z.string().trim().min(1).max(512).optional(),
   model: z.string().min(1).max(512).optional(),
+  /** Plugin engine provider id (`acp-plugin:...`) when `agentKind === 'acp'`. */
+  providerId: z.string().trim().min(1).max(256).optional(),
   effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
   fast: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
   agentDeviceId: z.string().trim().min(1).max(128).nullable().optional(),

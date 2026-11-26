@@ -1,8 +1,10 @@
 import type { AgentKind } from '@cindy/model-providers';
+import { GLM_REALTIME_FLASH } from './glmRealtimeDiscovery.js';
 import { alibabaSystemVoices } from './alibabaSpeechVoices.js';
 import { normalizeSpeechVoiceId, type SpeechVoice } from './voiceConversation.js';
 
-export const REALTIME_PROTOCOLS = ['openai-realtime', 'qwen-audio-realtime'] as const;
+export const COMPATIBLE_REALTIME_PROTOCOLS = ['openai-realtime', 'qwen-audio-realtime'] as const;
+const REALTIME_PROTOCOLS = [...COMPATIBLE_REALTIME_PROTOCOLS, 'glm-realtime'] as const;
 export type RealtimeProtocol = (typeof REALTIME_PROTOCOLS)[number];
 export type RealtimeVoiceSelection = {
   mode: 'realtime';
@@ -81,6 +83,9 @@ export function realtimeSystemVoices(protocol: RealtimeProtocol, modelId: string
     return ['marin', 'cedar', 'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse']
       .map(id => ({ id, name: id }));
   }
+  if (protocol === 'glm-realtime')
+    return ['tongtong', 'female-tianmei', 'male-qn-daxuesheng', 'male-qn-jingying', 'lovely_girl', 'female-shaonv']
+      .map(id => ({ id, name: id }));
   if (!isQwenRealtimeModel(modelId)) return [];
   if (modelId.startsWith('qwen-audio-3.1-')) {
     return [
@@ -105,6 +110,8 @@ export function officialRealtimeProtocol(base: URL, modelId: string): RealtimePr
       .test(modelId) || /^gpt-4o(?:-mini)?-realtime-preview(?:-\d{4}-\d{2}-\d{2})?$/.test(modelId);
     return conversational ? 'openai-realtime' : undefined;
   }
+  if (base.hostname === 'open.bigmodel.cn' && /^\/api\/paas\/v4\/?$/.test(base.pathname))
+    return modelId === GLM_REALTIME_FLASH ? 'glm-realtime' : undefined;
   if (!isQwenRealtimeModel(modelId)) return;
   if (base.hostname === 'token-plan.cn-beijing.maas.aliyuncs.com')
     return modelId === 'qwen-audio-3.0-realtime-plus' ? 'qwen-audio-realtime' : undefined;

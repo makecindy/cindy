@@ -48,6 +48,7 @@ import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
+import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -1920,6 +1921,56 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  it('propagates runtime capability updates (e.g. steering revocation) to the controller handle', async () => {
+    const listeners = new Set<(capabilities: NonNullable<AgentSessionHandle['negotiatedCapabilities']>) => void>();
+    let currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: true },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId: string) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          get negotiatedCapabilities() {
+            return currentCapabilities;
+          },
+          onCapabilitiesChange(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+          },
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(true);
+    const observed: boolean[] = [];
+    const unsubscribe = handle.onCapabilitiesChange?.((caps) => observed.push(caps.sameTurnSteer.supported));
+
+    currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: false, reason: 'sdk-missing' },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    for (const listener of listeners) listener(currentCapabilities);
+
+    await vi.waitFor(() => {
+      expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(false);
+    });
+    expect(observed).toEqual([false]);
+    unsubscribe?.();
+
+    await handle.close({ reason: 'navigation' });
+    expect(listeners.size).toBe(0);
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -3051,6 +3102,34 @@ describe('shared startup lease budget', () => {
     expect(f.disposed).toHaveLength(disposedBeforeExpiry + 1);
     expect(liveSharedTaskTarget('historical', f.owner)).toBeNull();
     await resumed.close();
+  });
+
+  // #6777, unit: the same JSON terminal goes through the real starter, poll decoder
+  // and projection. A received share with a current grant is required to bind its amount.
+  it.each(['shared', 'ordinary', 'old sender', 'access changed'])('admits an executor estimate from a live run (%s)', async mode => {
+    const f = fixture();
+    f.state.ready = true;
+    const device = mode === 'ordinary' ? 'ordinary-peer' : f.owner;
+    const handle = await f.open('historical', device);
+    const epoch = guestPermission.epoch;
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      if (mode === 'access changed') guestPermission.epoch++;
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {
+        usage: { promptTokens: 10 }, ...(mode !== 'old sender' && { sharedTurnValue: { amount: 0.12, currency: 'CNY' } }),
+      } } });
+      for await (const event of handle.events()) {
+        if (event.type !== 'done') continue;
+        expect(sharedTurnReceipt(event, 'historical', device)?.money).toEqual(mode === 'shared'
+          ? { amount: 0.12, currency: 'CNY', kind: 'value-estimate', approximate: true } : undefined);
+        return;
+      }
+      throw new Error('Missing Codex terminal');
+    } finally {
+      guestPermission.epoch = epoch;
+      await handle.close();
+    }
   });
 
   // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim

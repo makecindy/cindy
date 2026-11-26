@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import { Directory, File, Paths } from "expo-file-system";
 import { getRandomBytes } from "expo-crypto";
 import {
@@ -16,6 +17,60 @@ export interface McpAppNativeDocument {
   close(): Promise<void>;
 }
 let swept = false;
+
+// A fitting resource iframe can still take the WKWebView's pan for a 2px
+// rounding difference. WebKit gives the drag to the parent only with both axes
+// clipped. Leave real overflow and the author's scroll containers alone.
+const IOS_INLINE_SCROLL = `<script data-cindy-ios-scroll>
+document.addEventListener('DOMContentLoaded', () => {
+  // WebKit zooms a small focused text field beyond the fixed native card slot.
+  // Increase just its editing size and let WebKit keep its normal pinch range.
+  const editingSize = document.createElement('style');
+  editingSize.textContent = 'input:focus { font-size: 16px !important }';
+  document.addEventListener('focus', event => {
+    // The previous field can disappear without firing blur. Measure the next
+    // field with the App's own styles, including any explicit larger font.
+    editingSize.remove();
+    const input = event.target;
+    if (input instanceof HTMLInputElement && !input.readOnly &&
+        ['text', 'search', 'email', 'tel', 'url', 'password'].includes(input.type) &&
+        parseFloat(getComputedStyle(input).fontSize) < 16) {
+      document.head.append(editingSize);
+      input.addEventListener('blur', () => editingSize.remove(), { once: true });
+    }
+  }, true);
+  const root = document.documentElement;
+  const body = document.body;
+  if (!body) return;
+  const style = document.createElement('style');
+  style.media = 'not all';
+  // First cascade layer: explicit plugin styles take precedence.
+  style.textContent = '@layer { :where(html) { overflow: clip } }';
+  document.head.prepend(style);
+
+  const defaultOverflow = value => value === 'visible' || value === 'clip';
+  const fitsViewport = () => {
+    if (innerHeight <= 0 || innerWidth <= 0 ||
+        Math.max(root.scrollHeight, body.scrollHeight) > innerHeight + 2 ||
+        Math.max(root.scrollWidth, body.scrollWidth) > innerWidth) return false;
+    const rootStyle = getComputedStyle(root);
+    const bodyStyle = getComputedStyle(body);
+    return defaultOverflow(rootStyle.overflowX) && defaultOverflow(rootStyle.overflowY) &&
+      bodyStyle.overflowX === 'visible' && bodyStyle.overflowY === 'visible';
+  };
+  const update = () => {
+    const media = fitsViewport() ? 'all' : 'not all';
+    if (style.media !== media) style.media = media;
+  };
+  const size = new ResizeObserver(update);
+  size.observe(root, { box: 'border-box' });
+  size.observe(body, { box: 'border-box' });
+  window.addEventListener('resize', update);
+  // Positioned content can change scroll extents without resizing either box.
+  document.addEventListener('touchstart', update, { passive: true, capture: true });
+  update();
+}, { once: true });
+</script>`;
 
 // Only geometry leaves the resource. The existing sandbox checks its window and
 // origin; the native View consumes this notification locally, before MCP routing.
@@ -211,7 +266,7 @@ export async function prepareMcpAppNativeDocument(
     const html = (await import("@cindy/maker-shared/mcp-app-sdk")).withHostAppSdk(
       document.html, new URL(HOST_APP_SDK_PATH, resourceUrl).href,
       addon ? { coreUrl: new URL(CINDY_VIEW_STATE_SDK_PATH, resourceUrl).href, reactUrl: new URL(CINDY_VIEW_STATE_REACT_SDK_PATH, resourceUrl).href } : undefined,
-      MCP_APP_FOCUS_SCRIPT,
+      MCP_APP_FOCUS_SCRIPT + (Platform.OS === "ios" ? IOS_INLINE_SCROLL : ""),
     );
     resource.writeSync(html);
     const resourceOrigin = new URL(resourceUrl).origin;
