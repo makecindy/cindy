@@ -12000,7 +12000,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
         }
       },
       "settings": {
@@ -12415,6 +12417,8 @@
           "accessToolsHint": "可用 {{name}} 已有之工具与君之私人数据，结果全群可见。原有操作审批照常；撤回之后，已成之操作不可撤销。",
           "capabilitiesRow": "{{name}} 之工具与授权",
           "accessMenu": "于本群之权柄",
+          "assistantComputer": "执行之机",
+          "chooseComputer": "择机",
           "notifications": {
             "title": "消息告知",
             "all": "凡讯皆告",

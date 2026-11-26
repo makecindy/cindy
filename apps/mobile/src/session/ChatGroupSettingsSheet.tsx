@@ -296,16 +296,23 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           {archived && !dissolved ? <Notice>{k('archived')}</Notice> : null}
           {soleOwner && !archived && !dissolved ? <Notice>{k('soleOwnerHint')}</Notice> : null}
           <About k={k} group={group} canEdit={writable} canFill={direct} onEdit={openEdit} />
-          {!dissolved && me?.actorId && (direct || maskRow) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
+          {!dissolved && me?.actorId && (direct || maskRow || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
             {direct ? <ActionInfoRow key="profile" lead={avatar(identityOf(me))} label={k('myProfile')} value={me.name} accessibilityLabel={k('myProfile')}
               onPress={() => { setNickname(me.nickname ?? ''); setPage({ kind: 'profile' }); }} testID="botGroup.settings.profile" /> : null}
+            {group.assistantComputers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+              disabled={!online || archived || busy || (direct && !management?.ready) || !group.assistantComputers.length}
+              sections={[{ id: 'computer', options: group.assistantComputers.map(device => ({ id: device.id, title: device.name, selected: device.id === group.assistantDeviceId })) }]}
+              onSelect={deviceId => { if (deviceId !== group.assistantDeviceId) void settings('assistantDevice', { deviceId }); }}>
+              {open => <ActionInfoRow label={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
+                value={group.assistantComputers?.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
+            </BotGroupMenu> : null}
             {maskRow ? <ActionInfoRow key="mask" testID="botGroup.settings.mask"
               lead={maskCompanion ? <GroupMaskAvatar self={mask!.state!.self} companion={maskCompanion} deviceId={host.deviceId} />
                 : <RowIcon><Reply size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow ? undefined : k('me')} mode={group.notificationMode}
+            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">

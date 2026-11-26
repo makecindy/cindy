@@ -603,9 +603,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
     const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
-    const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+    const inferAuthor = threadRootId && !mentions.all && !mentions.allBots && !mentions.botIds.length;
+    const root = inferAuthor ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,

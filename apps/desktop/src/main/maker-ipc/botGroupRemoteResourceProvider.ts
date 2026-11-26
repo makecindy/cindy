@@ -579,6 +579,14 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           ownerService();
           return { result: receipt, effects: [] };
         }
+        case 'assistantDevice': {
+          const deviceId = input.deviceId;
+          if (!current.chatServer || typeof deviceId !== 'string' || !visibleGroup.assistantComputers?.some(device => device.id === deviceId))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'DEVICE_UNAVAILABLE');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'assistantDevice', deviceId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
         case 'notifications': {
           if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');

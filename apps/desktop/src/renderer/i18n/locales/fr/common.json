@@ -12138,7 +12138,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
           "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, choisissez un ordinateur pour ce groupe afin de poursuivre cette demande.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "L’ordinateur choisi par {{name}} pour ce groupe est hors ligne."
         }
       },
       "settings": {
@@ -12559,6 +12561,8 @@
           "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les règles d’approbation restent applicables ; révoquer l’accès n’annule pas les actions déjà effectuées.",
           "capabilitiesRow": "Outils et accès de {{name}}",
           "accessMenu": "Autorisations ici",
+          "assistantComputer": "Ordinateur d’exécution",
+          "chooseComputer": "Choisir un ordinateur",
           "notifications": {
             "title": "Notifications de messages",
             "all": "Tous les messages",

@@ -91,6 +91,26 @@ it.each(['member', 'guest'] as const)('keeps %s read-only based on account membe
   ]);
 });
 
+it('sets the execution computer for a phone-joined member without assuming a device', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.assistantComputers = [{ id: 'studio', name: 'Mac Studio' }];
+  snapshot.room.assistant_device_id = null;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (path, method, body, actor) => {
+    if (path.endsWith('/assistant-device') && method === 'POST') {
+      expect(actor).toBeUndefined();
+      snapshot.room.assistant_device_id = body.deviceId;
+      return { deviceId: body.deviceId };
+    }
+    return original(path, method, body, actor);
+  });
+  await render();
+  expect(result.group?.assistantDeviceId).toBeNull();
+  await act(async () => { await result.act('assistantDevice', { deviceId: 'studio' }); });
+  expect(result.group?.assistantDeviceId).toBe('studio');
+  expect(writes()).toHaveLength(1);
+});
+
 it('lets an ordinary member save notifications without a manager or online computer, and refreshes personal changes', async () => {
   snapshot.members[0].role = 'member';
   snapshot.reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null }];

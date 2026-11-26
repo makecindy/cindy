@@ -408,6 +408,12 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
+                {group.assistantComputers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
+                  <Select size="compact" label={t(key('assistantComputer'))} value={group.assistantDeviceId ?? 'unselected'}
+                    disabled={busy || !!group.archived || !group.assistantComputers.length}
+                    options={[...(!group.assistantDeviceId ? [{ value: 'unselected', label: t(key('chooseComputer')), disabled: true }] : []),
+                      ...group.assistantComputers.map(device => ({ value: device.id, label: device.name }))]}
+                    onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
                 {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
                   groupId={group.id} mode={group.notificationMode} disabled={busy || !!group.archived} />}
               </SettingsCard>

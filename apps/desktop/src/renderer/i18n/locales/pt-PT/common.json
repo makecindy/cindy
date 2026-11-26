@@ -12138,7 +12138,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar o pedido.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
         }
       },
       "settings": {
@@ -12559,6 +12561,8 @@
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e as suas informações privadas. Os resultados são visíveis para todos os membros. As aprovações continuam a aplicar-se; revogar o acesso não permite anular ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
           "accessMenu": "Permissões neste grupo",
+          "assistantComputer": "Computador de execução",
+          "chooseComputer": "Selecionar computador",
           "notifications": {
             "title": "Notificações de mensagens",
             "all": "Todas as mensagens",

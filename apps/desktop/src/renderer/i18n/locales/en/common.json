@@ -12046,7 +12046,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
           "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "Choose the computer that should handle this request for {{name}}.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "The computer {{name}} selected for this group is offline."
         }
       },
       "settings": {
@@ -12331,6 +12333,8 @@
         "copyFailed": "Could not copy. Select the link and copy it manually.",
         "createDescription": "Choose companions, or create the group first and invite people to join.",
         "settings": {
+          "assistantComputer": "Execution computer",
+          "chooseComputer": "Choose a computer",
           "notifications": {
             "title": "Message notifications",
             "all": "All messages",
