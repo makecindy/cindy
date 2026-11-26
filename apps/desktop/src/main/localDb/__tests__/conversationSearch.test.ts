@@ -233,6 +233,23 @@ describe('explicit task search', () => {
       db.prepare('UPDATE messages SET created_at = 1000 WHERE id = ?').run('same-message');
       const newest = await searchConversations({ query: '+ 登录', limit: 1 });
       expect(newest.results.map((item) => item.session.id)).toEqual(['same']);
+      // #13173: adding an indexed OR alternative must not discard an
+      // unindexed emoji/punctuation term before visible-message verification.
+      // Unit: the same production SQLite entry; earlier tests used CJK words only.
+      add('emoji-only', 'one', '🔥 build failed');
+      add('punctuation-only', 'gapped', '!!!');
+      add('indexed-only', 'both', 'cache');
+      add('emoji-and-cache', 'same', '🔥 cache');
+      for (const query of ['"🔥" cache', '"!!!" cache']) {
+        const mixed = await searchConversations({ query });
+        const messageIds = mixed.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId));
+        expect(messageIds.sort()).toEqual([
+          query.includes('🔥') ? 'emoji-only' : 'punctuation-only',
+          'indexed-only', 'emoji-and-cache',
+        ].sort());
+      }
+      const mixedAll = await searchConversations({ query: '+ "🔥" cache' });
+      expect(mixedAll.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId))).toEqual(['emoji-and-cache']);
       for (let index = 0; index < 1001; index++) add(`wide-${index}`, 'one', 'wide');
       const querySpy = vi.spyOn(client, 'query');
       const capped = await searchConversations({ query: '+ wide' });

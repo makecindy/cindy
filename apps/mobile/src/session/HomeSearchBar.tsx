@@ -15,8 +15,10 @@ import {
 } from "@/platform/chrome";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
+  fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -166,8 +168,8 @@ const makeStyles = (colors: ThemeColors) =>
     partial: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
-      lineHeight: 18,
-      fontWeight: "400",
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
       marginTop: spacing.xs,
     },
     row: {

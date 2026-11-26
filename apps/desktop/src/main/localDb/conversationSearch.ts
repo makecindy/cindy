@@ -174,7 +174,14 @@ export async function searchConversations(
     // hit on hidden attachment metadata must not satisfy any query term.
     const hits: Array<{ session: ConversationSearchSessionSummary; hit: ConversationSearchContentHit }> = [];
     const counts = new Map<string, number>();
-    const match = buildMessagesFtsMatch(literalQuery, parsedQuery.all ? 'AND' : 'OR');
+    // An OR alternative with no FTS tokens (emoji or punctuation) can match on
+    // its own. Filtering by only the indexed alternatives would lose that hit.
+    // Reuse the bounded visible-message scan in that case. AND can still use
+    // indexed terms to narrow candidates before verifying every literal term.
+    const hasUnindexedAlternative = !parsedQuery.all
+      && parsedQuery.terms.some((term) => buildMessagesFtsMatch(term.text) === null);
+    const match = hasUnindexedAlternative ? null
+      : buildMessagesFtsMatch(literalQuery, parsedQuery.all ? 'AND' : 'OR');
     let poolCapped = false;
     for (let page = 0; page < EXPLICIT_CONTENT_MAX_PAGES; page++) {
       const rows = await getDbClient().query<{
