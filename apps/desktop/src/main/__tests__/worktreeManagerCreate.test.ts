@@ -195,6 +195,80 @@ describe('createWorktree naming authority', () => {
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
 
+  // A slow awaitFullCheckout (e.g. large repo / slow Git LFS) must release the
+  // repo-level create queue once `git worktree add` + checkout lease succeed,
+  // so other creates on the same baseRepo proceed without colliding on branch/path,
+  // and non-interactive checkouts must never block on terminal credential prompts.
+  it('releases the repo create queue before awaitFullCheckout runs and disables terminal prompts', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    const createdRefs: string[] = [];
+    let enteredFirstCheckout!: () => void;
+    const firstCheckoutStarted = new Promise<void>((resolve) => { enteredFirstCheckout = resolve; });
+    let finishFirstCheckout!: () => void;
+    const firstCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishFirstCheckout = () => resolve({ stdout: '', stderr: '' });
+    });
+    const firstPath = path.join(baseRepo, '.cindy-worktrees', 'shared');
+    let fullCheckoutEnv: Record<string, string> | undefined;
+    let stageCheckoutEnv: Record<string, string> | undefined;
+
+    gitExecMock.mockImplementation((args: string[], cwd?: string, opts?: { extraEnv?: Record<string, string> }) => {
+      const wtIdx = args.indexOf('worktree');
+      if (wtIdx >= 0 && args[wtIdx + 1] === 'add') {
+        const bIdx = args.indexOf('-b');
+        if (bIdx >= 0 && args[bIdx + 1]) createdRefs.push(`refs/heads/${args[bIdx + 1]}`);
+        const targetDir = args[bIdx >= 0 ? bIdx + 2 : wtIdx + 2];
+        if (targetDir) fs.mkdirSync(targetDir, { recursive: true });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'branch' && args[1] === '--all') {
+        return { stdout: createdRefs.join('\n'), stderr: '' };
+      }
+      if (args[0] === 'checkout' && cwd === firstPath && args.includes('.')) {
+        fullCheckoutEnv = opts?.extraEnv;
+        enteredFirstCheckout();
+        return firstCheckout;
+      }
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        stageCheckoutEnv = opts?.extraEnv;
+        return { stdout: '', stderr: '' };
+      }
+      return previousGit(args, cwd, opts);
+    });
+
+    const first = manager.createWorktree(
+      { sessionId: 'slow-full-checkout', baseRepo, name: 'shared', sourceBranch: 'main' },
+      { awaitFullCheckout: true },
+    );
+    try {
+      await firstCheckoutStarted;
+      const second = await manager.createWorktree({
+        sessionId: 'concurrent-staged',
+        baseRepo,
+        name: 'shared',
+        sourceBranch: 'main',
+      });
+      expect(second).toMatchObject({
+        ok: true,
+        meta: {
+          name: 'shared-2',
+          branch: 'cindy/shared-2',
+          path: path.join(baseRepo, '.cindy-worktrees', 'shared-2'),
+        },
+      });
+      expect(fullCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+      expect(stageCheckoutEnv).toMatchObject({ LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' });
+    } finally {
+      finishFirstCheckout();
+      await first;
+    }
+
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      meta: { name: 'shared', branch: 'cindy/shared', path: firstPath },
+    });
+  });
+
   // Worker failure compensation must wait for checkout; successful creation must not.
   // Existing lease tests do not exercise the new opt-in wait handle (unit tier, fake I/O).
   it.each([false, true])('tracks checkout without delaying success; setup failure=%s waits before rollback', async (failSetup) => {
