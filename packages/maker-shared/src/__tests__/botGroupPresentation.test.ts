@@ -18,6 +18,8 @@ import {
   chatGroupMembership,
   chatGroupOwnerName,
   botGroupNewMessageCount,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   botGroupActivityAt,
   latestBotGroupMessage,
 } from '../botGroupPresentation.js';
@@ -80,6 +82,60 @@ it.each([undefined, 'root'])('counts delayed capability notices in their lane (%
     { ...notice, threadRootId: threadRootId ? undefined : 'other' },
   ] as BotGroupMessageView[];
   expect(botGroupNewMessageCount(excluded, 10, threadRootId)).toBe(0);
+});
+
+describe('group main timeline unread boundary', () => {
+  const row = (id: string, sequence: number, overrides: Partial<BotGroupMessageView> & { pending?: boolean } = {}) => ({
+    id, sequence, kind: 'message' as const, authorKind: 'bot' as const, authorBotId: 'mimi', authorName: 'Mimi',
+    content: id, mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], attachments: [],
+    createdAt: sequence * 1000, ...overrides,
+  });
+
+  it('finds the first incoming message after a sequence or time boundary only when earlier real messages exist', () => {
+    const messages = [
+      row('sys', 1, { kind: 'notice', authorKind: 'system' }),
+      row('read', 2, { authorKind: 'user', isSelf: true, createdAt: 2000 }),
+      row('deleted', 3, { deleted: true, createdAt: 3000 }),
+      row('mine', 4, { authorKind: 'user', isSelf: true, createdAt: 4000 }),
+      row('first-unread', 5, { authorKind: 'user', isSelf: false, createdAt: 5000 }),
+      row('second-unread', 6, { createdAt: 6000 }),
+    ];
+    expect(hasUnreadBotGroupMessages(messages, { kind: 'sequence', sequence: '2', throughSequence: 6n })).toBe(true);
+    expect(findFirstUnreadBotGroupMessageId(messages, { kind: 'sequence', sequence: '2', throughSequence: 6n })).toBe('first-unread');
+    expect(findFirstUnreadBotGroupMessageId(messages, { kind: 'time', at: 2000, throughSequence: 6n })).toBe('first-unread');
+    expect(findFirstUnreadBotGroupMessageId(messages, { kind: 'sequence', sequence: '6', throughSequence: 6n })).toBeNull();
+    expect(findFirstUnreadBotGroupMessageId(messages, null)).toBeNull();
+  });
+
+  it('omits the divider when no earlier real message sits above the first unread row', () => {
+    const onlyUnread = [
+      row('sys', 1, { kind: 'notice', authorKind: 'system' }),
+      row('u1', 2, { createdAt: 2000 }),
+      row('u2', 3, { createdAt: 3000 }),
+    ];
+    expect(hasUnreadBotGroupMessages(onlyUnread, { kind: 'sequence', sequence: '0', throughSequence: 3n })).toBe(true);
+    expect(findFirstUnreadBotGroupMessageId(onlyUnread, { kind: 'sequence', sequence: '0', throughSequence: 3n })).toBeNull();
+
+    // Once an earlier read page is prepended, the true boundary appears above u1.
+    const withEarlier = [row('old', 1, { createdAt: 1000 }), row('u1', 2, { createdAt: 2000 })];
+    expect(findFirstUnreadBotGroupMessageId(withEarlier, { kind: 'sequence', sequence: '1', throughSequence: 2n })).toBe('u1');
+  });
+
+  it('supports BigInt server sequences, plan cards, capability notices, and ignores pending/thread/malformed inputs', () => {
+    const messages = [
+      row('read', 1, { serverSequence: '9007199254740992' }),
+      row('thread-reply', 2, { serverSequence: '9007199254740993', threadRootId: 'read' }),
+      row('optimistic', 3, { serverSequence: '9007199254740994', pending: true }),
+      row('plan', 4, { serverSequence: '9007199254740995', kind: 'plan', planId: 'p1' }),
+    ];
+    expect(findFirstUnreadBotGroupMessageId(messages, { kind: 'sequence', sequence: '9007199254740992', throughSequence: 9007199254740995n })).toBe('plan');
+    expect(findFirstUnreadBotGroupMessageId(messages, { kind: 'sequence', sequence: 'not-a-seq', throughSequence: 9007199254740995n })).toBeNull();
+    const withCapability = [
+      row('read', 1),
+      row('cap', 2, { kind: 'notice', authorKind: 'bot', capabilityNoticeCode: 'GROUP_AUTHORIZATION_REQUIRED' }),
+    ];
+    expect(findFirstUnreadBotGroupMessageId(withCapability, { kind: 'sequence', sequence: '1', throughSequence: 2n })).toBe('cap');
+  });
 });
 
 describe('server group membership affordances', () => {

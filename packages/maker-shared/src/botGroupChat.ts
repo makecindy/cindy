@@ -747,6 +747,11 @@ export interface BotGroupDetail extends BotGroupSummary {
    * older hosts and servers without read state.
    */
   threads?: BotGroupThreadSummary[];
+  /**
+   * Server-owned main timeline read cursor (`main` read_seq) for this account before this view is
+   * marked read. Omitted by local groups, older hosts and servers without read state.
+   */
+  readSequence?: string;
 }
 
 export type BotGroupErrorCode =

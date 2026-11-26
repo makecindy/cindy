@@ -427,6 +427,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     ...(text(record.orgName, MAX_NAME) ? { orgName: text(record.orgName, MAX_NAME)! } : {}),
     ...(record.external === true ? { external: true } : {}),
     serverBacked: record.serverBacked === true,
+    ...(typeof record.readSequence === 'string' && /^\d{1,30}$/.test(record.readSequence) ? { readSequence: record.readSequence } : {}),
     singleSpeaker: record.singleSpeaker === true,
     independentReplies: record.independentReplies === true,
     canStopAll: false, supportsOwnedStop: record.supportsOwnedStop === true,

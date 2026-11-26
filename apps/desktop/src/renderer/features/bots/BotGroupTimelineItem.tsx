@@ -301,6 +301,26 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
   );
 }
 
+/** Unread boundary on the group main timeline, matching the 1:1 companion chat's NEW divider. */
+export function BotGroupUnreadDivider({ thread = false }: { thread?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid={thread ? 'bot-group-thread-new-replies' : 'bot-group-new-messages'}
+      data-selection-quote-scope=""
+      className="mt-4 flex select-none items-center gap-3 first:mt-0"
+      role="separator"
+      aria-label={t('bots.chat.newMessagesBoundary')}
+    >
+      {!thread && <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />}
+      <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
+        {t('bots.chat.newMessagesBoundary')}
+      </span>
+      <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
+    </div>
+  );
+}
+
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {

@@ -310,7 +310,7 @@ export function chatThreadMetadata(page: ChatPage, selfId: string) {
     if (!card || shares[card.messageId]?.bySelf) continue;
     shares[card.messageId] = { messageId: message.id, bySelf: message.authorId === selfId };
   }
-  const read = page.snapshot.reads?.find(read => read.thread_key === page.threadRootId);
+  const read = page.snapshot.reads?.find(read => read.thread_key === (page.threadRootId ?? 'main'));
   return { shares, readSeq: page.snapshot.reads ? read?.read_seq ?? '0' : undefined,
     following: page.snapshot.reads && page.threadRootId ? read?.following === true : undefined };
 }
