@@ -7983,6 +7983,10 @@
           "label": "Alternar barra lateral",
           "description": "Recolher ou expandir a barra lateral da lista de sessões"
         },
+        "copy-session-link": {
+          "label": "Copiar ligação da sessão",
+          "description": "Copiar a ligação da sessão aberta"
+        },
         "session-history-back": {
           "label": "Tarefa anterior",
           "description": "Voltar à tarefa que visualizou anteriormente"
@@ -15828,7 +15832,6 @@
       "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para a enviar. Pode tentar novamente ou continuar numa nova tarefa.",
       "upstreamStatusError": "O serviço a montante devolveu {{status}}, pelo que a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
-      "upstreamEmpty550": "O serviço do modelo devolveu HTTP 550 com uma resposta vazia",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "A tua mensagem não foi enviada. Seleciona «Tentar novamente» para a enviar sem alterações. Se enviares uma nova mensagem, esta substitui a anterior.",
       "retryTitle": "Reenviar a última mensagem",
@@ -16969,6 +16972,8 @@
       "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "O serviço de contas do Codex está temporariamente indisponível.",
+      "rechecking": "O serviço de contas do Codex está temporariamente indisponível. Nova tentativa às {{resetAt}}.",
       "poolModelLimited": "Foi atingido o limite de utilização da subscrição para este modelo. Pode mudar de modelo.",
       "poolRetryUntil": "Tente novamente após {{resetAt}}.",
       "poolOtherSignedOut": "Outra conta de subscrição tem a sessão terminada. Inicie sessão no computador que executa a tarefa e tente novamente.",

@@ -7871,6 +7871,10 @@
           "label": "顯隱側欄",
           "description": "收或展左側差事錄"
         },
+        "copy-session-link": {
+          "label": "錄差事連結",
+          "description": "錄當前差事之連結"
+        },
         "session-history-back": {
           "label": "前一差事",
           "description": "循瀏覽之序，歸前所啟之差事"
@@ -15652,7 +15656,6 @@
       "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
@@ -16738,6 +16741,8 @@
       "retryIn": "{{seconds}} 秒後自試"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 帳號服務暫不可達。",
+      "rechecking": "Codex 帳號服務暫不可達，至 {{resetAt}} 將復試。",
       "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
       "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",

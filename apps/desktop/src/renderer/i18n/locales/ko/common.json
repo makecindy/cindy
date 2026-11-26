@@ -7871,6 +7871,10 @@
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
         },
+        "copy-session-link": {
+          "label": "세션 링크 복사",
+          "description": "열려 있는 세션의 링크 복사"
+        },
         "session-history-back": {
           "label": "이전 세션",
           "description": "탐색 순서대로 이전에 열었던 세션으로 돌아갑니다"
@@ -15662,7 +15666,6 @@
       "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
       "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
-      "upstreamEmpty550": "모델 서비스에서 빈 응답과 함께 HTTP 550을 반환했어요",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -16739,6 +16742,8 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "unreachable": "현재 Codex 계정 서비스에 연결할 수 없습니다.",
+      "rechecking": "현재 Codex 계정 서비스에 연결할 수 없습니다. {{resetAt}}에 다시 시도합니다.",
       "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
       "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
       "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",

@@ -7871,6 +7871,10 @@
           "label": "切換側邊欄",
           "description": "收起或展開左側任務列表"
         },
+        "copy-session-link": {
+          "label": "複製任務連結",
+          "description": "複製目前開啟的任務連結"
+        },
         "session-history-back": {
           "label": "上一個任務",
           "description": "依瀏覽順序回到上一個開啟的任務"
@@ -15661,7 +15665,6 @@
       "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
       "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",
       "messageNotSent": "這則訊息未送出。",
-      "upstreamEmpty550": "模型服務回傳 HTTP 550（無回應內容）",
       "replyFailed": "回覆未完成",
       "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
@@ -16739,6 +16742,8 @@
       "retryIn": "{{seconds}} 秒後自動重試"
     },
     "subscriptionAccountError": {
+      "unreachable": "暫時無法連上 Codex 帳號服務。",
+      "rechecking": "暫時無法連上 Codex 帳號服務，將於 {{resetAt}} 自動重試。",
       "poolModelLimited": "目前模型的訂閱額度已達上限。可以先切換模型。",
       "poolRetryUntil": "可在 {{resetAt}} 後重試。",
       "poolOtherSignedOut": "另有訂閱帳號已登出，可在執行任務的電腦上重新登入後重試。",

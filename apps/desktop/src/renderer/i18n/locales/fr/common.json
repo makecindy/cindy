@@ -7983,6 +7983,10 @@
           "label": "Afficher/masquer la barre latérale",
           "description": "Réduire ou développer la barre latérale de la liste des sessions"
         },
+        "copy-session-link": {
+          "label": "Copier le lien de la session",
+          "description": "Copier le lien de la session ouverte"
+        },
         "session-history-back": {
           "label": "Tâche précédente",
           "description": "Revenir à la tâche consultée précédemment"
@@ -15828,7 +15832,6 @@
       "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
       "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
-      "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
@@ -16969,6 +16972,8 @@
       "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+      "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
       "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
       "poolRetryUntil": "Réessayez après {{resetAt}}.",
       "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",

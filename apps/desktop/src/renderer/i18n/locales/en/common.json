@@ -7914,6 +7914,10 @@
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"
         },
+        "copy-session-link": {
+          "label": "Copy session link",
+          "description": "Copy the link to the open session"
+        },
         "session-history-back": {
           "label": "Previous task",
           "description": "Go back to the task you viewed before"
@@ -15728,7 +15732,6 @@
       "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
       "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",
       "messageNotSent": "Your message was not sent.",
-      "upstreamEmpty550": "The model service returned HTTP 550 with an empty response",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
@@ -16814,6 +16817,8 @@
       "retryIn": "Retrying automatically in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "The Codex account service is temporarily unreachable.",
+      "rechecking": "The Codex account service is temporarily unreachable. Retrying at {{resetAt}}.",
       "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
       "poolRetryUntil": "Retry after {{resetAt}}.",
       "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
