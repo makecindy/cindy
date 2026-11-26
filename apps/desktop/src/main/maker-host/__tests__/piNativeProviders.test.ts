@@ -3254,6 +3254,42 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(custom).toMatchObject({ maxTokensField: 'max_tokens', supportsDeveloperRole: false });
     expect(custom).not.toHaveProperty('thinkingFormat');
   });
+
+  // #12928, unit: a model the user named explicitly (nameExplicit) must keep that name
+  // even when the active catalog carries a different one. Before the guard at
+  // pi-native-catalog.ts:442, a catalog name overwrote it unconditionally, so a stale or
+  // corrupted catalog entry silently replaced what the user (or a correct DB snapshot) said.
+  // Assert the emitted spec name, not the encoding: this case is about which name wins.
+  it.each([
+    ['explicit name wins over the catalog', true, '·'],
+    ['an unnamed preset row still takes the catalog name', false, '路'],
+  ])('%s', (_label, nameExplicit, expected) => {
+    const explicit = 'DeepSeek V4.1 Flash 1017 · OpenCode Go';
+    const catalogName = 'DeepSeek V4.1 Flash 1017 路 OpenCode Go';
+    const config = {
+      id: 'magpie-local', name: 'Magpie', auth: { method: 'apiKey' as const },
+      runtimes: { pi: piRuntime({
+        baseUrl: 'http://127.0.0.1:3425/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'opencode-go/deepseek-v4.1-flash', name: explicit,
+          ...(nameExplicit ? { nameExplicit: true as const } : {}) }],
+      }) },
+    };
+    const projected = buildUserProvider(config as never, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const catalog: Catalog = {
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, projected].map(provider =>
+        provider.id !== 'magpie-local' ? provider : {
+          ...provider,
+          models: { ...provider.models, pi: (provider.models.pi ?? []).map(model =>
+            model.id !== 'opencode-go/deepseek-v4.1-flash' ? model : { ...model, name: catalogName }) },
+        }),
+    } as Catalog;
+
+    const name = buildPiNativeProvidersFromConfigs([config], () => 'k', undefined, undefined, catalog)
+      .providers[0]?.models[0]?.name;
+    expect(name).toContain(expected);
+    if (nameExplicit) expect(name).toBe(explicit);
+  });
 });
 
 
