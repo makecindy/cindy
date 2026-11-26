@@ -38172,6 +38172,63 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
   });
 });
 
+// #11335, unit: resume a Lead whose helper is healthy but whose thread lacks
+// Orca. Exercise the send boundary and retry budget without real timers or I/O.
+describe('resumed Orca Lead readiness', () => {
+  it.each(['ready', 'failed', 'persistent', 'absent', 'disabled', 'ordinary'] as const)(
+    'scopes recovery and dispatch to the original thread (%s)', async mode => {
+      const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+      const agent = new CodexAgent(createDeps());
+      let resumes = 0;
+      let now = Date.now();
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const probes: string[] = [];
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.ThreadResume) {
+          resumes++;
+          expect(params).toMatchObject({ threadId });
+          return { thread: { id: threadId }, model: 'gpt-5.4' };
+        }
+        if (method === Method.McpServerStatusList) {
+          const { serverName } = params as { serverName: string };
+          expect(params).toMatchObject({ threadId });
+          probes.push(serverName);
+          if (serverName === 'cindy_orca' && (mode === 'persistent' || (mode === 'failed' && resumes === 1))) {
+            return { data: [{ name: serverName, runtimeStatus: 'failed', tools: {} }], nextCursor: null };
+          }
+          if (serverName === 'cindy_orca' && mode === 'absent') return { data: [], nextCursor: null };
+          const tools = serverName === 'cindy_orca' ? { send_to_worker: {}, get_workspace_info: {} } : { list_tools: {}, call_tool: {} };
+          return { data: [{ name: serverName, runtimeStatus: 'connected', tools }], nextCursor: null };
+        }
+        if (method === Method.ThreadBackgroundTerminalsList) return { data: [], nextCursor: null };
+        if (method === Method.TurnStart) return { turn: { id: 'lead-turn' } };
+        return undefined;
+      }, { buildSessionMcpConfig: () => ({
+        'mcp_servers.cindy_helper.command': 'helper',
+        'mcp_servers.cindy_orca.command': 'orca',
+        ...(mode === 'disabled' ? { 'mcp_servers.cindy_orca.enabled': false } : {}),
+      }) });
+      try {
+        const handle = await agent.startSession({ sessionId: 'orca-readiness', resumeSessionId: threadId,
+          vendorOptions: mode === 'ordinary' ? {} : { orcaRole: 'lead' }, model: 'gpt-5.4', workingDir: '/repo' });
+        const inputs = ['first', 'second', 'third', 'fourth'];
+        const resumeCounts = [];
+        for (const content of inputs) {
+          await handle.send({ type: 'user', content });
+          resumeCounts.push(resumes);
+          host.getThreadHandlers()?.turnCompleted?.({ threadId, turn: { id: 'lead-turn', status: 'completed' } });
+          if (content !== 'first') now += 60_000;
+        }
+        expect(resumeCounts).toEqual(mode === 'persistent' ? [2, 2, 3, 3] : Array(4).fill(mode === 'failed' ? 2 : 1));
+        expect(probes.filter(name => name === 'cindy_orca')).toHaveLength(
+          { ready: 1, failed: 3, absent: 1, persistent: 5, disabled: 0, ordinary: 0 }[mode]);
+        expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart).map(([, params]) => params))
+          .toMatchObject(inputs.map(text => ({ threadId, input: [{ type: 'text', text }] })));
+        await handle.close();
+      } finally { await agent.dispose(); }
+    });
+});
+
 describe('expected helper runtime lifecycle', () => {
   // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
   // Unit tier, real Agent lifecycle; no timers/processes. Warn once for a

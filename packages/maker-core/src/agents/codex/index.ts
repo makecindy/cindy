@@ -7446,11 +7446,12 @@ assertRouteCurrent();
     let mcpRecoveryAbort: AbortController | undefined;
     let mcpRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
-    const expectedGatewayNames = ['cindy_helper', 'cindy'];
+    const expectedGatewayNames = ['cindy_helper', 'cindy', 'cindy_orca'];
     const expectedRuntimeMcpConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
       if (!config || reviewMode) return null;
-      const expected = expectedGatewayNames.filter(name => config[`mcp_servers.${name}.enabled`] !== false
+      const expected = expectedGatewayNames.filter(name => (name !== 'cindy_orca' || vo.orcaRole === 'lead')
+        && config[`mcp_servers.${name}.enabled`] !== false
         && ['url', 'command'].some(key => {
           const value = config[`mcp_servers.${name}.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
