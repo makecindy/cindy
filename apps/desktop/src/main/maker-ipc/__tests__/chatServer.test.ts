@@ -765,6 +765,35 @@ describe('Chat Server result delivery and refresh', () => {
       expect(writes).toEqual([]);
     }
   });
+  // Unit regression from Android through a desktop: a personal device write has no room delta.
+  it('reads the new execution computer after a switch with a warm group history', async () => {
+    let saved: ChatHistoryState | undefined;
+    deps.chatHistoryStore = () => ({ read: async () => saved, write: async (_room, state) => { saved = state ?? undefined; } });
+    const computers = [{ id: 'mac', name: 'Mac' }, { id: 'win', name: 'Windows' }];
+    let selected = 'mac';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupAssistantDevice: 1 } } };
+      if (route.startsWith('/changes?')) return { body: { cursor: '8', changes: [] } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), assistant_device_id: selected },
+        assistantComputers: computers, members: [], messages: [], cursor: '8' } };
+      if (route.endsWith('/assistant-device') && method === 'POST') {
+        selected = body.deviceId;
+        return { body: { deviceId: selected } };
+      }
+      return response(route);
+    });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'mac' } });
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'assistantDevice', deviceId: 'win' } })).toMatchObject({ ok: true });
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'win' } });
+    // Another installation edits the same membership; the room cursor is still 8.
+    await vi.advanceTimersByTimeAsync(2000);
+    selected = 'mac';
+    const socket = fixture.sockets.at(-1)!;
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+      changes: [{ type: 'membership.changed', entityId: roomId, data: { state: 'joined' } }] }));
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: { assistantDeviceId: 'mac' } });
+  });
   // Notification preferences use the same save/refresh path as existing personal settings.
   it.each([['mentions', true], ['none', true], ['all', true], ['mentions', false]] as const)(
     'saves %s as the human member through the existing preference flow with capability=%s', async (mode, supported) => {

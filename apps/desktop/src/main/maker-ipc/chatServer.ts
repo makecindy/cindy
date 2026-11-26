@@ -814,6 +814,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (targetId === roomId) deps.onChanged?.({ groupId: sourceId, change: 'messages' }, scope);
     }, CHANGE_COALESCE_MS));
   };
+  const membershipChanged = (roomId: string) => {
+    // A personal membership edit may leave the conversation cursor unchanged.
+    history()?.invalidate(roomId, true);
+    changed(roomId, true);
+  };
   // A receipt that reads one of my loaded messages is the only one worth a re-read: the rest of a
   // detail read (executions, plans) is not needed for it, and each message changes at most once.
   const pendingReceiptRefresh = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1519,7 +1524,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               // Only the account's own preferences reach this actor scope; consumers read the key themselves.
               if (change.type === 'preference.changed' && typeof change.entityId === 'string') deps.onAccountPreferenceChanged?.(change.entityId);
               if (change.type === 'conversation.updated' && change.data?.dissolvedAt) retirePlanning(change.entityId);
-              if (change.type === 'membership.changed' || change.type === 'conversation.updated') changed(change.entityId);
+              if (change.type === 'membership.changed') membershipChanged(change.entityId);
+              else if (change.type === 'conversation.updated') changed(change.entityId);
               // A Thread read on another device clears its unread here too.
               if (change.type === 'read.changed' && typeof change.entityId === 'string') {
                 const reads = readChanges.get(change.entityId) ?? [];
@@ -4149,7 +4155,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (action.type === 'assistantDevice') {
         if (!boundAssistantDevice) throw new Error('CHAT_UNAVAILABLE');
         await api(`/conversations/${target}/assistant-device`, 'POST', { operationId: randomUUID(), deviceId: action.deviceId });
-        changed(target);
+        membershipChanged(target);
         return {};
       }
       if (action.type === 'notifications') {
