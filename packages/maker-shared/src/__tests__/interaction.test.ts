@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  askQuestionOptions,
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
   asyncQuestionReplyDisplayText,
@@ -538,14 +539,19 @@ describe('interaction shared model', () => {
         header: '选择',
         multiSelect: true,
         options: [
-          { label: 'React Native', description: '原生端' },
-          { label: 'Expo' },
+          { label: 'React Native', description: '原生端', preview: '  const app = true;\n' },
+          { label: 'Expo', preview: '   \n  ' },
         ],
       },
       { question: 123 },
     ]);
 
     expect(questions).toHaveLength(1);
+    expect(questions[0].options).toEqual([
+      { label: 'React Native', description: '原生端', preview: '  const app = true;\n' },
+      { label: 'Expo' },
+    ]);
+    expect(askQuestionOptions(questions[0])).toEqual(questions[0].options);
     const answer = encodeMultiSelectAnswer(
       questions[0].options ?? [],
       new Set(['Expo']),

@@ -233,6 +233,11 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
             </Title>
           </div>
           <div className={cn("flex min-h-0 flex-col gap-4 px-4 pb-2 pt-1", !embedded && "overflow-y-auto")}>
+            {embedded && (
+              <p className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
+                {t('settings.mcp.dialog.embeddedGuide')}
+              </p>
+            )}
             <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
               {t(teammate ? 'settings.mcp.dialog.teammateDesc' : 'settings.mcp.dialog.desc')}
             </Description>

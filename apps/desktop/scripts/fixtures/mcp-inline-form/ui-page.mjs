@@ -14,6 +14,7 @@ export default {
     'list-error': { about: 'Unreadable local configuration stays visible and deletable beside healthy tools', viewport: { width: 320, height: 700 } },
     list: { about: 'External tools section and transport scope' },
     default: { about: 'The existing Settings form expanded in the message flow' },
+    teammate: { about: 'The inline form for a buddy with a partially filled proposal' },
     narrow: { about: 'Inline form at 320 px', viewport: { width: 320, height: 1100 } },
     invalid: { about: 'Original validation and focus in the embedded form' },
     'result-error': { about: 'Saved configuration remains saved when result delivery fails; retry and cancel remain available' },

@@ -35,10 +35,13 @@ void mountPage({
   render: context => {
     rejectResult = context.case === 'result-error';
     unreadable = context.case === 'list-error';
-    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: context.case.startsWith('local')
-      ? { name: 'Local tools', transport: 'stdio' as const, command: 'npx', args: ['-y', 'example-mcp'] } : {} };
+    const teammate = context.case === 'teammate';
+    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture',
+      proposal: teammate ? { name: 'Example' }
+        : context.case.startsWith('local')
+          ? { name: 'Local tools', transport: 'stdio' as const, command: 'npx', args: ['-y', 'example-mcp'] } : {} };
     if (context.case.startsWith('list')) return <McpServersSection />;
-    const form = <McpSetupPrompt request={request} />;
+    const form = <McpSetupPrompt request={request} teammate={teammate} />;
     if (context.case === 'layout') return <AppFrame>
       <div className="relative min-h-0 flex-1" data-ui-mcp-layout>
         <MessageStream workingDir="/project" sessionId="mcp-form-fixture" messages={[]} historyLoaded

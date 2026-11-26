@@ -72,8 +72,12 @@ Node 请求及其子进程一并结束，晚到的授权或子进程启动会被
 
 声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
 只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
-SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
-没有宿主路径。取消用 cindy.downloads.cancel({id})。
+SHA-256 必填，单文件最多 8 GiB。bytes 可选：知道精确字节数时照旧传入；只拿得到发布者签名的
+SHA-256 时可以省略，宿主改用响应声明的大小（Content-Length 或 Content-Range）先预留缓存再写盘，
+响应没有声明大小、超过 8 GiB 或重连后大小变化都直接失败，内容仍以 SHA-256 为准。较早的宿主要求
+bytes，省略时返回 ok:false；需要兼容它们时，在失败后改用其他途径取得大小再带 bytes 重试。
+下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+bytes 为实际字节数，没有宿主路径。取消用 cindy.downloads.cancel({id})。
 订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
 phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
 无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
