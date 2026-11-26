@@ -42,6 +42,8 @@ export function codexResetScope(accountId: string): string {
 }
 export interface SubscriptionAccountConfig {
   id: string;
+  /** Owner-local persistent requirement; never supplied by account commands. */
+  externalRuntime?: 'external-claude';
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
   lastConfirmedIdentity?: string;
   /** Owner-local recovery guard for an explicitly requested Claude re-login. No credentials. */

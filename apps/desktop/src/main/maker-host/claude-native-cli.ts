@@ -2,7 +2,7 @@ import { cloudCliAuthorization } from '../host-settings/managementCliAuthorizati
 import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import { cleanProcessEnv } from '@cindy/maker-core';
+import { cleanProcessEnv, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
 import { createLogger } from '../logger.js';
@@ -39,7 +39,9 @@ export type ClaudeCliLoginResult =
 export function createClaudeNativeCli(ports: {
   binaryPath(): string | null;
   resolveOutboundProxy(url: string): string | null | undefined | Promise<string | null | undefined>;
-  readStatus(options: { binary: string; env: NodeJS.ProcessEnv; timeoutMs: number }): Promise<ClaudeCliLoginStatus | null>;
+  readStatus(options: { binary: string; env: NodeJS.ProcessEnv; timeoutMs: number; settingsEnv?: Readonly<Record<string, string>> }): Promise<ClaudeCliLoginStatus | null>;
+  /** Optional trusted local profile selection; never applies to gateway sessions. */
+  resolveRuntime?(configDir?: string): NativeSubscriptionAccount['claudeRuntime'];
 }) {
 const log = createLogger('claude-native-cli');
 setClaudeCliLoginStatusListenerErrorHandler((err) => {
@@ -91,32 +93,41 @@ async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
   return { HTTPS_PROXY: bridge, https_proxy: bridge, ...noProxy };
 }
 
-function cliBinaryPath(): string | null {
-  return ports.binaryPath();
+function cliBinaryPath(configDir?: string): string | null {
+  return ports.resolveRuntime?.(configDir)?.executablePath ?? ports.binaryPath();
 }
 
 /**
  * 默认账号不设配置目录，继续共用终端的凭证库。显式的额外账号只为本次 CLI
  * 子进程设置目录；process.env 的 CLAUDE_CONFIG_DIR 在 boot 期已被剥离。
  */
-async function cliEnv(options: { network: boolean; configDir?: string }): Promise<NodeJS.ProcessEnv> {
-  return {
+async function cliLaunch(options: { network: boolean; configDir?: string; signal?: AbortSignal }): Promise<{ binary: string; env: NodeJS.ProcessEnv; settingsEnv?: Readonly<Record<string, string>> }> {
+  const external = ports.resolveRuntime?.(options.configDir);
+  if (external) {
+    if (cloudManagementExecution()) throw new Error('External Claude runtime is only available for local CLI operations');
+    await external.prepare(options.signal);
+    return { binary: external.executablePath, env: { ...cleanProcessEnv(), ...external.env }, settingsEnv: external.env };
+  }
+  const binary = ports.binaryPath();
+  if (!binary) throw new Error('claude cli unavailable');
+  return { binary, env: {
     ...cleanProcessEnv(),
     ...(options.network ? await claudeCliNetworkEnv() : {}),
     ...(options.configDir ? { CLAUDE_CONFIG_DIR: options.configDir } : {}),
-  };
+  } };
 }
 
 function runCli(
   args: string[],
-  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; cloudLogin?: boolean },
+  options: { binary: string; env: NodeJS.ProcessEnv; settingsEnv?: Readonly<Record<string, string>>; timeoutMs: number; signal?: AbortSignal; cloudLogin?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string; reason?: 'timeout' | 'cancelled' }> {
-  const binary = cliBinaryPath();
+  const binary = options.binary;
   if (!binary) return Promise.reject(new Error('claude cli unavailable'));
+  if (options.signal?.aborted) return Promise.resolve({ code: null, stdout: '', stderr: '', reason: 'cancelled' });
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(binary, [...runtimeSettingsArgs(options.settingsEnv), ...args], { env: options.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     } catch (err) {
       reject(err);
       return;
@@ -157,6 +168,10 @@ function runCli(
   });
 }
 
+function runtimeSettingsArgs(env?: Readonly<Record<string, string>>): string[] {
+  return env ? ['--settings', JSON.stringify({ env }), '--setting-sources', 'user'] : [];
+}
+
 /** Local display helper for usage payloads; status parsing lives in maker-core. */
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -180,10 +195,9 @@ function readProfileStatus(configDir: string, force = false): Promise<ClaudeCliL
     : entry.flight;
   if (!force && entry.value && Date.now() - entry.at < STATUS_FAILURE_BACKOFF_MS) return Promise.resolve(entry.value);
   const flight = (async () => {
-    const binary = cliBinaryPath();
-    if (!binary) throw new Error('claude cli unavailable');
+    const launch = await cliLaunch({ network: false, configDir });
     const status = await ports.readStatus({
-      binary, env: await cliEnv({ network: false, configDir }), timeoutMs: STATUS_TIMEOUT_MS,
+      ...launch, timeoutMs: STATUS_TIMEOUT_MS,
     });
     if (!status) throw new Error('claude auth status unavailable');
     entry.value = status;
@@ -224,8 +238,7 @@ function refreshClaudeCliLoginStatus(options?: { force?: boolean; configDir?: st
   const flight = (async () => {
     try {
       const status = await ports.readStatus({
-        binary: cliBinaryPath()!,
-        env: await cliEnv({ network: false }),
+        ...(await cliLaunch({ network: false })),
         timeoutMs: STATUS_TIMEOUT_MS,
       });
         if (!status) {
@@ -293,12 +306,11 @@ const PLAN_USAGE_REQUEST_ID = 'cindy-plan-usage';
  * `rate_limits` 时抛错,由调用方退避。
  */
 async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlanUsage | null> {
-  const binary = cliBinaryPath();
-  if (!binary) throw new Error('claude cli unavailable');
-  const env = await cliEnv({ network: true, configDir });
+  const { binary, env, settingsEnv } = await cliLaunch({ network: true, configDir });
   // --setting-sources user:不读工作区的项目级设置(它们可改写上游 / 鉴权);
   // --strict-mcp-config:不拉起用户配置的 MCP server;--no-session-persistence:不落会话记录。
   const args = [
+    ...runtimeSettingsArgs(settingsEnv),
     '-p',
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
@@ -440,21 +452,25 @@ async function runClaudeCliLogin(
 ): Promise<ClaudeCliLoginResult> {
   let before: ClaudeCliLoginStatus;
   try {
-    before = await refreshClaudeCliLoginStatus({ force: true, configDir, requireFresh: options.renew });
+    before = await refreshClaudeCliLoginStatus({
+      force: true, configDir, requireFresh: options.renew || !!ports.resolveRuntime?.(configDir),
+    });
   } catch {
     return { ok: false, reason: 'local_unavailable' };
   }
   if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
   if (before.loggedIn && !options.renew) return { ok: true, status: before };
   if (before.notSubscription) return { ok: false, reason: 'not_a_subscription' };
-  if (!cliBinaryPath()) return { ok: false, reason: 'local_unavailable' };
+  if (!cliBinaryPath(configDir)) return { ok: false, reason: 'local_unavailable' };
   const expectedEmail = options.expectedEmail?.trim() || (options.renew ? before.email : undefined);
   try {
+    const launch = await cliLaunch({ network: true, configDir, signal });
+    const cloudLogin = !!cloudManagementExecution();
     // --email is only a browser hint. Verify the returned identity below as well.
     const result = await runCli(['auth', 'login', '--claudeai', ...(expectedEmail ? ['--email', expectedEmail] : [])], {
-      env: { ...await cliEnv({ network: true, configDir }),
-        ...(cloudManagementExecution() && process.platform === 'linux' ? { BROWSER: '/bin/true' } : {}) },
-      cloudLogin: !!cloudManagementExecution(),
+      ...launch,
+      env: { ...launch.env, ...(cloudLogin && process.platform === 'linux' ? { BROWSER: '/bin/true' } : {}) },
+      cloudLogin,
       timeoutMs: LOGIN_TIMEOUT_MS,
       signal,
     });

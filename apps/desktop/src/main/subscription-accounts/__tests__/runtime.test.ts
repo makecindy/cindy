@@ -18,6 +18,7 @@ import {
   type BaseAgent,
   type AgentSessionHandle,
   type StartSessionOptions,
+  type NativeSubscriptionAccount,
   type ForkSdkSessionOptions,
   type Logger,
   type SendOptions,
@@ -61,6 +62,8 @@ const h = vi.hoisted(() => ({
   apiAllowed: true,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
+  externalRuntime: undefined as undefined | { executablePath: string; env: Record<string, string>; prepare: () => Promise<void> },
+  externalAccountId: 'default',
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
 vi.mock('../placement.js', () => {
@@ -226,6 +229,10 @@ vi.mock('../legacyAccountAccess.js', () => ({
   subscriptionRouteAllowsModel: (provider: string, model: string, options: unknown) => h.routeAllowed(model, options, provider),
   setLegacyCodexAccountPaused: h.setLegacyPaused,
 }));
+vi.mock('../../maker-host/external-claude-runtime.js', () => ({
+  externalClaudeRuntimeForDirectory: (directory?: string) =>
+    directory === '/external/terminal-profile' ? h.externalRuntime : undefined,
+}));
 vi.mock('../store.js', () => ({
   readPool: (p: SubscriptionProvider) => h.pools[p] ?? null,
   readLegacyCodexAccountId: (id: string) => h.pools.openai?.legacyCodexAccounts?.[id],
@@ -235,7 +242,8 @@ vi.mock('../store.js', () => ({
     strategy: 'least',
     accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }],
   }),
-  accountDirectory: (p: string, id: string) => [p, id].join('/'),
+  accountDirectory: (p: string, id: string) => p === 'anthropic' && id === h.externalAccountId && h.externalRuntime
+    ? '/external/terminal-profile' : [p, id].join('/'),
   accountOwnerPrefix: () => h.owner.replaceAll(':', '-'),
   readAccountBinding: (key: string) => h.bindings.get(key),
   readProviderBoundAccountIds: (kind: string, providerId: string) => new Set([...h.bindings.values()]
@@ -373,6 +381,8 @@ let generation = 0;
 beforeEach(() => {
   h.apiMembers = [];
   h.apiAllowed = true;
+  h.externalRuntime = undefined;
+  h.externalAccountId = 'default';
   h.afterPoolWrite = undefined;
   h.owner = 'owner-a:' + ++generation;
   h.bound = true;
@@ -9041,4 +9051,60 @@ describe('unreachable account service', () => {
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
   });
+});
+
+// Unit: the wizard's explicit default-account command must preserve the selected
+// external profile/capability through discovery and session admission. Existing
+// tests used only stock directory names and could miss a login/run identity split.
+it('connects the external terminal default and leases that same runtime without a new login', async () => {
+  h.bound = false;
+  h.pools = { anthropic: { strategy: 'least', disconnected: true,
+    accounts: [{ ...account('default'), externalRuntime: 'external-claude' }] } };
+  h.externalRuntime = {
+    executablePath: '/external/claude',
+    env: { CLAUDE_CONFIG_DIR: '/external/terminal-profile', HTTPS_PROXY: 'http://127.0.0.1:19000' },
+    prepare: vi.fn(async () => {}),
+  };
+  await runSubscriptionAccountCommand({
+    action: 'connect', target: 'default', providerId: 'anthropic', loginKey: 'external-terminal',
+  });
+  expect(h.read).toHaveBeenCalledWith('anthropic', '/external/terminal-profile');
+  expect(h.login).not.toHaveBeenCalled();
+  const lease = await acquireSubscriptionAccount('anthropic', undefined, [], true);
+  try {
+    expect(lease?.account.configDir).toBe('/external/terminal-profile');
+    expect(lease?.account.defaultProfile).toBe(false);
+    expect(lease?.account.claudeRuntime).toBe(h.externalRuntime);
+  } finally { lease?.release(); }
+  const probe = vi.fn(async (_profile: NativeSubscriptionAccount) => []);
+  setSubscriptionPoolClaudeModelProbe(probe);
+  try {
+    await refreshSubscriptionPoolClaudeModels(true);
+    expect(probe).toHaveBeenCalled();
+    expect(probe.mock.calls[0]?.[0]).toMatchObject({
+      configDir: '/external/terminal-profile', defaultProfile: false, claudeRuntime: h.externalRuntime,
+    });
+  } finally { setSubscriptionPoolClaudeModelProbe(null); }
+});
+
+// Unit: an independent external provider must not relocate an already-existing
+// default account or its historical sessions. Only its own account gets the capability.
+it('keeps an existing default profile separate from a new external provider', async () => {
+  const externalId = 'cindy-111111111111-22222222-2222-2222-2222-222222222222';
+  const providerId = 'anthropic-sub-abcdef12';
+  h.externalAccountId = externalId;
+  h.externalRuntime = { executablePath: '/external/claude', env: { CLAUDE_CONFIG_DIR: '/external/terminal-profile' }, prepare: async () => {} };
+  h.pools.anthropic = { strategy: 'least', accounts: [account('default'), { ...account(externalId), externalRuntime: 'external-claude' }] };
+  h.created[providerId] = { kind: 'anthropic', name: 'Terminal Claude', account: externalId };
+  h.placement[`anthropic:${externalId}`] = providerId;
+  const original = await acquireSubscriptionAccount('anthropic', undefined, [], true);
+  const external = await acquireSubscriptionAccount(providerId, undefined, [], true);
+  try {
+    expect(original?.accountId).toBe('default');
+    expect(original?.account.configDir).toBe('anthropic/default');
+    expect(original?.account.claudeRuntime).toBeUndefined();
+    expect(external?.accountId).toBe(externalId);
+    expect(external?.account.configDir).toBe('/external/terminal-profile');
+    expect(external?.account.claudeRuntime).toBe(h.externalRuntime);
+  } finally { original?.release(); external?.release(); }
 });

@@ -40,6 +40,16 @@ export interface AuthAdapterOptions {
   model?: string;
 }
 
+/** Trusted, local-only runtime selected by the executing host for one native account.
+ * It carries no credential material and is never accepted from serialized requests.
+ */
+export interface NativeClaudeRuntime {
+  executablePath: string;
+  env: Readonly<Record<string, string>>;
+  /** Reject when the selected executable/network policy is unavailable; never fall back. */
+  prepare(signal?: AbortSignal): Promise<void>;
+}
+
 /** A directory capability, minted by the executing host after owner/route checks. */
 export interface NativeSubscriptionAccount {
   id: string;
@@ -47,6 +57,7 @@ export interface NativeSubscriptionAccount {
   readonly sharedProviderId?: string;
   configDir: string;
   defaultProfile?: boolean;
+  claudeRuntime?: NativeClaudeRuntime;
   assertCurrent(): void;
   readState(): Promise<AuthState>;
   /** Codex-only existing host bridge; credentials never leave the executing host. */

@@ -127,9 +127,9 @@ Windows 的无覆盖发布子进程保留每次 15 秒的超时。子进程结�
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
-Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
+Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做官方 CLI 的外壳，默认使用受管程序：
 
-- 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
+- 登录只拉起选定官方 CLI 的 `claude auth login --claudeai`，登录态只读
   `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
   预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
   登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
@@ -144,6 +144,10 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
   CLI 用它（优先于 `CLAUDE_CONFIG_DIR`）决定读哪条钥匙串登录，空值会退回默认登录。
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
+  显式登记的[外部运行时账号](../external-claude-runtime.md) 是本机可选例外：本实例配置选择未修改的官方 CLI、
+  独立 profile 及凭据无关的网络环境；账号必须有持久的 `externalRuntime` 标记。
+  登录、状态、用量与会话使用同一配置，配置缺失或预检查失败时拒绝回退。凭据仍由 CLI 自己管理，
+  公司网关和远程执行不使用该外部路径；这不是系统级进程树隔离。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，

@@ -113,6 +113,8 @@ export interface ReadClaudeCliStatusOptions {
   binary: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  /** Trusted host network/profile selection, never user-provided credentials. */
+  settingsEnv?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -145,7 +147,7 @@ function readStatusOutput(options: ReadClaudeCliStatusOptions, args: readonly st
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   execFile(
     options.binary,
-    [...args],
+    options.settingsEnv ? ['--settings', JSON.stringify({ env: options.settingsEnv }), '--setting-sources', 'user', ...args] : [...args],
     {
       env: options.env,
       timeout: options.timeoutMs,

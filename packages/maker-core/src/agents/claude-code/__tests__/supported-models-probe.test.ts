@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type AuthAdapter, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const sdkMock = vi.hoisted(() => ({
@@ -35,7 +35,7 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createAgent(authenticated: boolean): { agent: ClaudeCodeAgent; getState: ReturnType<typeof vi.fn> } {
+function createAgent(authenticated: boolean, requiresNativeSubscriptionAccount?: () => boolean): { agent: ClaudeCodeAgent; getState: ReturnType<typeof vi.fn> } {
   const getState = vi.fn(async () => (authenticated ? { authenticated: true } : { authenticated: false }));
   const auth: AuthAdapter = {
     getState,
@@ -52,6 +52,7 @@ function createAgent(authenticated: boolean): { agent: ClaudeCodeAgent; getState
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    requiresNativeSubscriptionAccount,
   };
   return { agent: new ClaudeCodeAgent(deps), getState };
 }
@@ -90,6 +91,47 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
     const received: unknown[] = [];
     for await (const item of prompt) received.push(item);
     expect(received).toEqual([]);
+  });
+
+  // Unit: model discovery must use the same selected executable/profile as the
+  // real session. The old probe only used deps.binaryPath and had no preflight.
+  it('pins external runtime model discovery and propagates a rejected preflight without dispatch', async () => {
+    const configDir = path.join(os.tmpdir(), 'synthetic-external-claude-profile');
+    const account: NativeSubscriptionAccount = {
+      id: 'default', configDir, assertCurrent: vi.fn(), readState: async () => ({ authenticated: true }),
+      claudeRuntime: {
+        executablePath: path.join(os.tmpdir(), 'synthetic-external-claude.exe'),
+        env: { HTTPS_PROXY: 'http://127.0.0.1:17890', CLAUDE_CONFIG_DIR: configDir },
+        prepare: vi.fn(async () => {}),
+      },
+    };
+    const q = fakeQuery(async () => [{ value: 'sonnet' }]);
+    sdkMock.query.mockReturnValue(q);
+    const { agent } = createAgent(true);
+    const onSupportedModels = vi.fn();
+    await expect(agent.refreshLocalModels({ [NATIVE_SUBSCRIPTION_ACCOUNT]: account, onSupportedModels })).resolves.toBe(true);
+    const options = sdkMock.query.mock.calls[0][0].options;
+    expect(options.pathToClaudeCodeExecutable).toBe(account.claudeRuntime!.executablePath);
+    expect(options.env.CLAUDE_CONFIG_DIR).toBe(configDir);
+    expect(options.settings.env).toEqual(account.claudeRuntime!.env);
+    expect(account.claudeRuntime!.prepare).toHaveBeenCalledOnce();
+    expect(q.close).toHaveBeenCalledOnce();
+    const failure = new Error('approved proxy unavailable');
+    vi.mocked(account.claudeRuntime!.prepare).mockRejectedValueOnce(failure);
+    await expect(agent.refreshLocalModels({ [NATIVE_SUBSCRIPTION_ACCOUNT]: account, onSupportedModels, throwOnError: true }))
+      .rejects.toBe(failure);
+    expect(sdkMock.query).toHaveBeenCalledOnce();
+  });
+
+  it('does not probe the bundled profile when external-default discovery lacks an account capability', async () => {
+    const { agent, getState } = createAgent(true, () => true);
+    setClaudeSupportedModelsListener(vi.fn());
+    sdkMock.query.mockReturnValue(fakeQuery(async () => []));
+    await expect(agent.refreshLocalModels()).resolves.toBe(false);
+    await expect(agent.refreshLocalModels({ throwOnError: true }))
+      .rejects.toThrow('Select the configured Claude subscription provider');
+    expect(getState).not.toHaveBeenCalled();
+    expect(sdkMock.query).not.toHaveBeenCalled();
   });
 
   it('未登录订阅或 host 未接监听器时不起 CLI', async () => {

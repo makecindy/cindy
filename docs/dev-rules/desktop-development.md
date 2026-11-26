@@ -33,7 +33,7 @@ token 已过期，且本机 Codex 有同账号／workspace、有效期明确且�
 本机授权，避免旧 Release 快照挡住已恢复的登录。有效期未知或账号无法确认时保持原优先级；
 与 Release 共用 userData 的 Dev 不自动切换来源。实现与回归见
 `maker-host/codex-shared-auth.ts`、`codexAuthIsolatedSandbox.test.ts`。
-Claude Code 的配置目录同样不隔离：Dev 与正式版
+未显式配置外部运行时的 Claude Code 默认账号，其配置目录同样不隔离：Dev 与正式版
 一样使用 CLI 默认的 `~/.claude`（不设 `CLAUDE_CONFIG_DIR`），所以直接沿用本机 Claude Code
 的订阅登录；在 Dev 里「使用 Claude Code 登录」等同于在终端运行 `claude auth login`，「断开」
 只撤销本实例的使用许可。代价是多个 Dev 实例与安装版在同机共用 `~/.claude` 下的 Claude 转录
@@ -127,7 +127,8 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
   时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
 - `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、Cindy 账号登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录 Cindy 账号）；OpenAI 模型登录态按
-  上述只读例外复用，Claude Code 按上述约定使用默认 `~/.claude`。命名沙箱每个名字一条独立沙箱，
+  上述只读例外复用，Claude Code 默认账号按上述约定使用 `~/.claude`；显式登记的
+  [外部运行时账号](../external-claude-runtime.md) 始终使用自己的 profile，不随沙箱切换。命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
   用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
   数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**

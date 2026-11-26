@@ -722,6 +722,11 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Claude-only opt-in: local native calls must carry an owner-bound account capability.
+   * Keeps default status from authenticating an unbound bundled-runtime fallback.
+   * Never consulted by gateway, remote or non-Claude execution.
+   */
+  requiresNativeSubscriptionAccount?: () => boolean;
   /** Opaque companion credential identity, freshly resolved at startup. No values enter the harness. */
   resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */

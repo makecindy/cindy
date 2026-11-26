@@ -8,7 +8,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type AuthAdapter, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import { sanitizeClaudeProjectKey } from '../claude-projects-fs.js';
 
@@ -122,7 +122,7 @@ function createFakeQuery(stream = createControlledStream()) {
     setModel: vi.fn(async () => {
       if (closed) throw new Error('ProcessTransport is not ready for writing');
     }),
-    applyFlagSettings: vi.fn(async () => {
+    applyFlagSettings: vi.fn(async (_settings?: Record<string, unknown>) => {
       if (closed) throw new Error('ProcessTransport is not ready for writing');
     }),
     interrupt: vi.fn(async () => {}),
@@ -156,6 +156,82 @@ afterEach(async () => {
 });
 
 describe('Claude extraDirs mid-session rebuild', () => {
+  // Unit: a directory-triggered resume/fork must repeat the external account's
+  // preflight and preserve its executable/profile. Earlier rebuild coverage had
+  // no externally selected runtime or network pinning (minimal input: one new dir).
+  it('rechecks the external runtime before resume and pins later settings updates', async () => {
+    const workingDir = await makeTempDir();
+    const configDir = await makeTempDir();
+    const addedDir = await makeTempDir();
+    const sdkSessionId = 'external-resume';
+    const projectDir = path.join(configDir, 'projects', sanitizeClaudeProjectKey(await fs.realpath(workingDir)));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, `${sdkSessionId}.jsonl`), '{"type":"summary"}\n', 'utf8');
+    const account: NativeSubscriptionAccount = {
+      id: 'default', configDir, assertCurrent: vi.fn(), readState: async () => ({ authenticated: true }),
+      claudeRuntime: {
+        executablePath: path.join(configDir, 'external-claude.exe'),
+        env: { HTTPS_PROXY: 'http://127.0.0.1:17890', BROWSER: path.join(configDir, 'browser.exe') },
+        prepare: vi.fn(async () => {}),
+      },
+    };
+    const first = createFakeQuery();
+    const nativeSettings = first.applyFlagSettings;
+    sdkMock.query.mockReturnValue(first);
+    const handle = await new ClaudeCodeAgent(createDeps()).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'anthropic', resumeSessionId: sdkSessionId,
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    });
+    try {
+      await first.applyFlagSettings({ env: { HTTPS_PROXY: 'http://unapproved.invalid:80' } });
+      expect(nativeSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+        env: expect.objectContaining({ HTTPS_PROXY: 'http://127.0.0.1:17890', CLAUDE_CONFIG_DIR: configDir }),
+      }));
+      await handle.setExtraDirs?.([addedDir]);
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      await handle.send({ type: 'user', content: 'inspect new directory' });
+      expect(account.claudeRuntime!.prepare).toHaveBeenCalledTimes(2);
+      expect(sdkMock.query).toHaveBeenCalledTimes(2);
+      const next = sdkMock.query.mock.calls[1][0].options;
+      expect(next.pathToClaudeCodeExecutable).toBe(account.claudeRuntime!.executablePath);
+      expect(next.env.CLAUDE_CONFIG_DIR).toBe(configDir);
+      expect(next.env.HTTPS_PROXY).toBe('http://127.0.0.1:17890');
+      expect(next.resume).toBe(sdkSessionId);
+      expect(next.forkSession).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('does not spawn a replacement when close wins during external preflight', async () => {
+    const workingDir = await makeTempDir();
+    const configDir = await makeTempDir();
+    const addedDir = await makeTempDir();
+    let release!: () => void;
+    let entered!: () => void;
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    const preflight = new Promise<void>(resolve => { release = resolve; });
+    let rebuildSignal: AbortSignal | undefined;
+    const prepare = vi.fn(async (_signal?: AbortSignal) => {});
+    const account: NativeSubscriptionAccount = {
+      id: 'default', configDir, assertCurrent() {}, readState: async () => ({ authenticated: true }),
+      claudeRuntime: { executablePath: path.join(configDir, 'external.exe'), env: {}, prepare },
+    };
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const handle = await new ClaudeCodeAgent(createDeps()).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'anthropic', [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    });
+    prepare.mockImplementationOnce(async signal => { rebuildSignal = signal; entered(); await preflight; });
+    await handle.setExtraDirs?.([addedDir]);
+    const sent = handle.send({ type: 'user', content: 'inspect new directory' }).catch(error => error);
+    try {
+      await preparing;
+      await handle.close();
+      expect(rebuildSignal?.aborted).toBe(true);
+      release();
+      expect(await sent).toBeInstanceOf(Error);
+      expect(sdkMock.query).toHaveBeenCalledOnce();
+    } finally { release(); await handle.close(); }
+  });
+
   // 测试价值：startSession / send 必须把 hosted 虚拟目录传进 SDK Query，模型才能从原生环境信息看到它们。
   // Bug：hosted 曾省略 additionalDirectories；PR #8797 修复后又把旧控制端真实路径交给 SDK。
   // 最小失败输入：虚拟根内目录混入本机真实存在的根外目录，或缺少 mirrorRoot；启动与 setter 后都须隔离。

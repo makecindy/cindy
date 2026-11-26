@@ -14,6 +14,10 @@ const h = vi.hoisted(() => ({
   bridge: vi.fn(async () => 'http://127.0.0.1:5555'),
   spawn: vi.fn(),
   workers: [] as EventEmitter[],
+  external: undefined as undefined | { executablePath: string; env: Record<string, string>; prepare: ReturnType<typeof vi.fn> },
+  cloudLogin: false,
+  brokenCustomConfig: false,
+  presentCloudAuthorization: vi.fn(async (_text: string) => {}),
 }));
 
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => '/tmp/cindy-test-user-data' } }));
@@ -23,6 +27,18 @@ vi.mock('@cindy/maker-core', async () => {
   return { cleanProcessEnv: () => ({ PATH: '/usr/bin' }), parseClaudeCliLoginStatus: actual.parseClaudeCliLoginStatus };
 });
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
+vi.mock('../../host-settings/managementCalls.js', () => ({ cloudManagementExecution: () => h.cloudLogin ? {} : undefined }));
+vi.mock('../../host-settings/managementCliAuthorization.js', () => ({ cloudCliAuthorization: () => h.presentCloudAuthorization }));
+vi.mock('../external-claude-runtime.js', () => ({
+  externalClaudeRuntimeForDirectory: (directory?: string) => {
+    if (h.brokenCustomConfig) throw new Error('invalid external runtime config');
+    return !directory || directory === '/external/profile' ? h.external : undefined;
+  },
+  externalClaudeDirectoryForAccount: () => h.external?.env.CLAUDE_CONFIG_DIR,
+  isDefaultClaudeDirectory: (directory?: string) => directory === undefined,
+  peekExternalClaudeAccountId: () => h.external ? 'default' : undefined,
+}));
+vi.mock('../../subscription-accounts/store.js', () => ({ isExternalClaudeAccount: () => !!h.external }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -40,12 +56,13 @@ vi.mock('../cli-proxy-bridge.js', () => ({ ensureCliProxyBridge: h.bridge }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('node:worker_threads', () => ({
   Worker: class extends EventEmitter {
-    constructor(_file: string, { workerData }: { workerData: { binary: string; env: NodeJS.ProcessEnv } }) {
+    constructor(_file: string, { workerData }: { workerData: { binary: string; env: NodeJS.ProcessEnv; settingsEnv?: Record<string, string> } }) {
       super();
       h.workers.push(this);
       // The worker transport is simulated; existing status/login cases still
       // drive the production client and observe the public authentication result.
-      const child = h.spawn(workerData.binary, ['auth', 'status', '--json'], { env: workerData.env });
+      const prefix = workerData.settingsEnv ? ['--settings', JSON.stringify({ env: workerData.settingsEnv }), '--setting-sources', 'user'] : [];
+      const child = h.spawn(workerData.binary, [...prefix, 'auth', 'status', '--json'], { env: workerData.env });
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.once('error', (error: Error) => this.emit('error', error));
@@ -107,6 +124,10 @@ function argsOf(call: unknown[]): string[] {
 beforeEach(() => {
   resetClaudeNativeCliForTest();
   h.binary = '/opt/cindy/claude';
+  h.external = undefined;
+  h.brokenCustomConfig = false;
+  h.cloudLogin = false;
+  h.presentCloudAuthorization.mockClear();
   h.envProxy = false;
   h.resolved = null;
   h.resolveError = null;
@@ -308,6 +329,92 @@ describe('登录态读取', () => {
     await expect(readClaudeCliLoginStatus({ maxAgeMs: 30_000, staleWhileRevalidate: true })).resolves.toMatchObject({
       loggedIn: true,
     });
+    expect(h.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Unit regression: production login/status must select one external profile and
+// reject its failed preflight; previous coverage only exercised the bundled CLI.
+// Minimal failing input: configured external runtime with an unavailable bundled binary.
+describe('external Claude runtime selection', () => {
+  it('keeps the stock default status available when only an unrelated custom runtime config is broken', async () => {
+    h.brokenCustomConfig = true;
+    h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await expect(refreshClaudeCliLoginStatus({ force: true })).resolves.toMatchObject({ loggedIn: true });
+    expect(h.spawn.mock.calls[0][0]).toBe('/opt/cindy/claude');
+  });
+  const external = () => ({
+    executablePath: '/external/claude',
+    env: { CLAUDE_CONFIG_DIR: '/external/profile', HTTPS_PROXY: 'http://127.0.0.1:19000', BROWSER: '/external/browser' },
+    prepare: vi.fn(async () => {}),
+  });
+
+  // The newer cloud login relay must not replace an external runtime's required
+  // browser policy. Reject before preflight/dispatch, while stock cloud login remains supported.
+  it('refuses cloud management of a local external runtime without changing its browser', async () => {
+    h.external = external();
+    h.cloudLogin = true;
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toEqual({ ok: false, reason: 'local_unavailable' });
+    expect(h.external.prepare).not.toHaveBeenCalled();
+    expect(h.spawn).not.toHaveBeenCalled();
+    expect(h.presentCloudAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('preserves the stock cloud authorization relay without an external runtime', async () => {
+    h.cloudLogin = true;
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }))
+      .mockImplementationOnce(() => fakeChild({ stdout: 'Synthetic cloud login prompt', code: 0 }))
+      .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toMatchObject({ ok: true });
+    expect(h.spawn.mock.calls[1][0]).toBe('/opt/cindy/claude');
+    expect(h.spawn.mock.calls[1][1]).toEqual(['auth', 'login', '--claudeai']);
+    expect(h.spawn.mock.calls[1][2].env.BROWSER).toBe(process.platform === 'linux' ? '/bin/true' : undefined);
+    expect(h.presentCloudAuthorization).toHaveBeenCalledWith('Synthetic cloud login prompt');
+  });
+
+  it('uses the external executable, profile and pinned settings for login and both status queries', async () => {
+    h.binary = null;
+    h.external = external();
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }))
+      .mockImplementationOnce(() => fakeChild({ code: 0 }))
+      .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toMatchObject({ ok: true });
+    expect(h.spawn).toHaveBeenCalledTimes(3);
+    for (const [binary, args, options] of h.spawn.mock.calls) {
+      expect(binary).toBe('/external/claude');
+      expect(options.env).toMatchObject(h.external.env);
+      expect(args.slice(0, 2)).toEqual(['--settings', JSON.stringify({ env: h.external.env })]);
+      expect(args.slice(2, 4)).toEqual(['--setting-sources', 'user']);
+    }
+    expect(h.external.prepare).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not reuse stale logged-in status or fall back to bundled login when preflight fails', async () => {
+    h.external = external();
+    h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockClear();
+    h.external.prepare.mockRejectedValue(new Error('approved proxy unavailable'));
+    await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toEqual({ ok: false, reason: 'local_unavailable' });
+    expect(h.spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps other account directories on their bundled CLI route', async () => {
+    h.external = external();
+    h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await expect(refreshClaudeCliLoginStatus({ configDir: '/profiles/other' })).resolves.toMatchObject({ loggedIn: true });
+    expect(h.spawn.mock.calls[0][0]).toBe('/opt/cindy/claude');
+    expect(h.spawn.mock.calls[0][2].env.CLAUDE_CONFIG_DIR).toBe('/profiles/other');
+    expect(h.external.prepare).not.toHaveBeenCalled();
+  });
+
+  it('does not open login when cancelled during the external preflight', async () => {
+    h.external = external();
+    const abort = new AbortController();
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT }));
+    h.external.prepare.mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => { abort.abort(); });
+    await expect(runClaudeCliLogin(abort.signal)).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     expect(h.spawn).toHaveBeenCalledTimes(1);
   });
 });
