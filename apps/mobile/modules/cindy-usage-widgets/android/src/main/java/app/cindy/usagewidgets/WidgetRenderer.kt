@@ -561,7 +561,8 @@ object WidgetRenderer {
       val isCurrent = f.isToday(lastDay)
       val todayLabel = if (isCurrent) f.s("today") else f.monthDay(lastDay)
       val averageLabel = "${f.s("dailyAverage")} ${f.tokens(average)} ${f.s("tokenUnit")}"
-      val todayValue = "${f.text("valueBasis")} ${f.money(today.total)}"
+      val estimate = f.referenceValue(today.total, today.hasMissingEstimate, today.acpEstimate != null)
+      val todayValue = if (today.hasMissingEstimate) estimate else "${f.text("valueBasis")} $estimate"
       val small = sys(11f, pal.ink3)
       when (family) {
         WidgetFamily.Strip -> {
@@ -582,7 +583,7 @@ object WidgetRenderer {
           if (isCurrent) p.fitText(f.monthDay(lastDay), left, y, small, width, Align.End)
           y += p.lineHeight(small) + 4f
           y += tokenFigure(today.totalTokens, left, y, width, 38f)
-          p.fitText(if (today.totalTokens > 0 || !isCurrent) todayValue else f.text("todayNone"), left, y, small, width)
+          p.fitText(if (today.totalTokens > 0 || !isCurrent) todayValue else f.text("todayNone"), left, y, small, width, minScale = 0.8f)
           y += p.lineHeight(small)
           val letterStyle = sys(9.5f, pal.ink3)
           val lettersTop = h - 12f - p.lineHeight(letterStyle)
@@ -603,6 +604,7 @@ object WidgetRenderer {
           val width = w - 32f
           val total = daily.sumOf { it.total }
           val paid = daily.sumOf { it.paid }
+          val periodMissing = daily.any { it.hasMissingEstimate }
           val tokens = daily.sumOf { it.totalTokens }
           var y = 16f
           val header = if (isCurrent) "$todayLabel · ${f.monthDay(lastDay)} ${f.weekday(lastDay)}" else "$todayLabel ${f.weekday(lastDay)}"
@@ -612,7 +614,8 @@ object WidgetRenderer {
           p.fitText(scope, left + width - scopeWidth, y, small, scopeWidth, Align.End)
           y += p.lineHeight(small) + 5f
           y += tokenFigure(today.totalTokens, left, y, width, 46f) + 3f
-          p.fitText("${f.text("valueBasisLong")} ${f.money(today.total)}", left, y, small, width)
+          val detailValue = if (today.hasMissingEstimate) estimate else "${f.text("valueBasisLong")} $estimate"
+          p.fitText(detailValue, left, y, small, width, minScale = 0.8f)
           y += p.lineHeight(small)
 
           // Everything below hangs from the bottom; the space above absorbs the rest.
@@ -621,7 +624,8 @@ object WidgetRenderer {
           val gridStyle = sys(10.5f, pal.ink2)
           val rowHeight = max(6f, max(p.lineHeight(gridStyle), p.lineHeight(num(14f, pal.ink))))
           val splitHeight = 4f + 8f + gridRows * rowHeight + max(0, gridRows - 1) * 5f
-          val summaryHeight = max(p.lineHeight(small), p.lineHeight(num(18f, pal.ink)))
+          val figureHeight = max(p.lineHeight(small), p.lineHeight(num(18f, pal.ink)))
+          val summaryHeight = figureHeight + if (periodMissing) p.lineHeight(small) else 0f
           val dateStyle = sys(10f, pal.ink3)
           val legendHeight = p.lineHeight(sys(10f, pal.ink3)) + 5f
           val barsHeight = 100f
@@ -638,7 +642,7 @@ object WidgetRenderer {
           by += 0.5f + 9f
           val monthLabel = f.s(if (snapshot.usage.scope == "local") "monthScopeLocal" else "monthScopeAll").substringBefore(" · ")
           var sx = left
-          val baseline = by + (summaryHeight - p.lineHeight(num(18f, pal.ink))) + p.ascent(num(18f, pal.ink))
+          val baseline = by + (figureHeight - p.lineHeight(num(18f, pal.ink))) + p.ascent(num(18f, pal.ink))
           p.textAt(monthLabel, sx, baseline, small)
           sx += p.textWidth(monthLabel, small) + 6f
           val tokenText = f.tokens(tokens)
@@ -647,8 +651,13 @@ object WidgetRenderer {
           val unit = f.s("tokenUnit")
           p.textAt(unit, sx, baseline, small)
           sx += p.textWidth(unit, small) + 4f
-          val paidText = "${f.text("valueBasis")} ${f.money(total)} · ${f.s("paid")} ${f.money(paid)}"
-          p.fitText(paidText, sx, by + (summaryHeight - p.lineHeight(small)) / 2, small, left + width - sx, Align.End, minScale = 0.8f)
+          val periodValue = f.referenceValue(total, periodMissing, daily.any { it.acpEstimate != null })
+          val paidText = "${f.text("valueBasis")} $periodValue · ${f.s("paid")} ${f.money(paid)}"
+          if (periodMissing) {
+            p.fitText(paidText, left, by + figureHeight, small, width, minScale = 0.8f)
+          } else {
+            p.fitText(paidText, sx, by + (figureHeight - p.lineHeight(small)) / 2, small, left + width - sx, Align.End, minScale = 0.8f)
+          }
           by += summaryHeight + 8f
           breakdownSplit(rows, tokens, breakdown, left, by, width, rowHeight)
         }
@@ -659,7 +668,7 @@ object WidgetRenderer {
           p.fitText(todayLabel, left, y, small, leftWidth)
           y += p.lineHeight(small) + 4f
           y += tokenFigure(today.totalTokens, left, y, leftWidth, 36f)
-          p.fitText(todayValue, left, y, small, leftWidth)
+          p.fitText(todayValue, left, y, small, leftWidth, minScale = 0.8f)
           val rows = breakdown.ranked(3) { breakdown.value(today, it) }
           val rowStyle = sys(10.5f, pal.ink2)
           val rowHeight = max(6f, max(p.lineHeight(rowStyle), p.lineHeight(num(14f, pal.ink))))

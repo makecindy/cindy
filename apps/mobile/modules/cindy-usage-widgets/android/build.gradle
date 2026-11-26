@@ -13,6 +13,8 @@ android {
 }
 dependencies {
   implementation 'androidx.core:core:1.15.0'
+  testImplementation 'org.json:json:20240303'
+  testImplementation 'junit:junit:4.13.2'
 }
 
 // Same number font as the macOS menu bar panel and the iOS widgets (OFL), taken from the desktop
