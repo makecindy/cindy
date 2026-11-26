@@ -5959,7 +5959,7 @@
       "uninstallTitle": "¿Desinstalar la extensión Pi?",
       "uninstallDescription": "{{name}} se eliminará de este dispositivo. Las tareas Pi que ya están abiertas mantienen la extensión anterior hasta que se cierran.",
       "confirmUninstall": "Desinstalar",
-      "extensionDialogConfirm": "Confirmar",
+      "extensionDialogConfirm": "Continuar",
       "cancel": "Cancelar",
       "resources": {
         "extension": "Código de extensión",
@@ -9883,7 +9883,7 @@
       "allow": "Permitir",
       "deny": "Denegar",
       "questionTitle": "Se necesita tu intervención",
-      "submit": "Enviar",
+      "submit": "Enviar respuesta",
       "planTitle": "Revisión del plan",
       "approve": "Aprobar",
       "requestChanges": "Solicitar cambios",
@@ -12466,7 +12466,7 @@
           "soleOwnerHint": "Eres el único miembro que queda. Archiva este grupo para conservar su historial y restaurarlo más adelante.",
           "archive": "Archivar grupo",
           "archiveHint": "Al archivar este grupo, se deshabilita para todos los miembros y se detienen los mensajes nuevos y las ejecuciones de los amigos. El historial se conserva. Busca el grupo para ver su historial o desarchivarlo.",
-          "confirm": "Confirmar",
+          "confirm": "Continuar",
           "lastOwner": "Transfiere la propiedad a otro miembro antes de salir o quitar al propietario actual.",
           "conflict": "Alguien actualizó este grupo. Actualiza y vuelve a intentarlo.",
           "unarchive": "Desarchivar grupo",
@@ -13339,7 +13339,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmar",
+      "confirm": "Continuar",
       "cancel": "Cancelar",
       "dontShowAgain": "No volver a mostrar"
     },
@@ -15563,7 +15563,7 @@
       "back": "Atrás",
       "skip": "Omitir",
       "next": "Siguiente",
-      "submit": "Enviar",
+      "submit": "Enviar respuesta",
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",

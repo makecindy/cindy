@@ -5959,7 +5959,7 @@
       "uninstallTitle": "Désinstaller l'extension Pi ?",
       "uninstallDescription": "{{name}} sera supprimée de cet appareil. Les tâches Pi déjà ouvertes conservent l'ancienne extension jusqu'à leur fermeture.",
       "confirmUninstall": "Désinstaller",
-      "extensionDialogConfirm": "Confirmer",
+      "extensionDialogConfirm": "Continuer",
       "cancel": "Annuler",
       "resources": {
         "extension": "Code de l'extension",
@@ -9883,7 +9883,7 @@
       "allow": "Autoriser",
       "deny": "Refuser",
       "questionTitle": "Votre réponse est requise",
-      "submit": "Envoyer",
+      "submit": "Envoyer la réponse",
       "planTitle": "Revue du plan",
       "approve": "Approuver",
       "requestChanges": "Demander des modifications",
@@ -12466,7 +12466,7 @@
           "soleOwnerHint": "Vous êtes le dernier membre. Archivez ce groupe pour conserver son historique et le restaurer plus tard.",
           "archive": "Archiver le groupe",
           "archiveHint": "L'archivage désactive ce groupe pour tous les membres, ce qui bloque les nouveaux messages et les exécutions des amis. L'historique est conservé. Recherchez le groupe pour consulter son historique ou le désarchiver.",
-          "confirm": "Confirmer",
+          "confirm": "Continuer",
           "lastOwner": "Transférez la propriété à un autre membre avant de quitter le groupe ou de retirer le propriétaire actuel.",
           "conflict": "Quelqu'un a modifié ce groupe. Actualisez et réessayez.",
           "unarchive": "Désarchiver le groupe",
@@ -13339,7 +13339,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmer",
+      "confirm": "Continuer",
       "cancel": "Annuler",
       "dontShowAgain": "Ne plus afficher"
     },
@@ -15563,7 +15563,7 @@
       "back": "Retour",
       "skip": "Passer",
       "next": "Suivant",
-      "submit": "Envoyer",
+      "submit": "Envoyer la réponse",
       "sendAndContinue": "Envoyer et continuer",
       "close": "Fermer",
       "customAnswer": "Saisir autre chose…",

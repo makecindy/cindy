@@ -384,7 +384,7 @@
       "passages": {
         "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
         "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
-        "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+        "p3": "Make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
       },
       "errors": {
         "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
