@@ -883,8 +883,6 @@ export class AgentIslandService {
    * is on; it has no error presentation.
    */
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
-    // Keep the OS notification when this event has no enabled Cindy sound.
-    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
     if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
@@ -943,7 +941,7 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
+    // ownsTaskAlert covers the visible island and Live Activity; only unhandled events reach the OS.
     for (const event of result.events) {
       if (this.ownsTaskAlert(event.kind)) continue;
       try {

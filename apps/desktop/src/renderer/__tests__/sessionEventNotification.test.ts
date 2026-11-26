@@ -1,4 +1,3 @@
-import { DEFAULT_AGENT_ISLAND_SOUND_SETTINGS } from '../../shared/agentIsland';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,8 +15,6 @@ const gates = vi.hoisted(() => ({
   desktop: true,
   feishu: false,
   islandEnabled: false,
-  soundEnabled: true,
-  completionSound: true,
   islandSupported: false,
 }));
 
@@ -29,7 +26,6 @@ vi.mock('@/hooks/useFeishuNotificationSettings', () => ({
 }));
 vi.mock('@/hooks/useAgentIslandSettings', () => ({
   getAgentIslandEnabled: () => gates.islandEnabled,
-  getAgentIslandSoundSettings: () => ({ enabled: gates.soundEnabled, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: gates.completionSound ? DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete : { type: 'builtin', id: 'none' } } }),
   isAgentIslandSupported: () => gates.islandSupported,
 }));
 
@@ -73,8 +69,6 @@ describe('shared session event notifications', () => {
     gates.desktop = true;
     gates.feishu = false;
     gates.islandEnabled = false;
-    gates.soundEnabled = true;
-    gates.completionSound = true;
     gates.islandSupported = false;
     vi.clearAllMocks();
     getSession.mockResolvedValue({ source: 'desktop', feishuOpenId: null });
@@ -219,18 +213,15 @@ describe('shared session event notifications', () => {
     );
   });
 
-  // Unit: the old island gate swallowed the OS notification selected as the sound source.
-  it('keeps the OS notification available for an unconfigured event sound with the island enabled', () => {
+  // Unit regression: enabling Agent Island suppresses desktop notifications for all task
+  // event kinds without coupling suppression to 8-bit event sound configuration.
+  it.each(['done', 'needs-reply', 'error'] as const)('keeps desktop notifications suppressed for %s whenever Agent Island is enabled', (kind) => {
     gates.islandSupported = true;
     gates.islandEnabled = true;
-    gates.completionSound = false;
-    sendSessionEventNotification('system-sound', 'Task', 'done');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
-    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: false, feishu: false, mobile: true } }));
-    gates.soundEnabled = false;
-    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
-    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
+    sendSessionEventNotification('island-suppress', 'Task', kind);
+    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      channels: { desktop: false, feishu: false, mobile: true },
+    }));
   });
 
   it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {

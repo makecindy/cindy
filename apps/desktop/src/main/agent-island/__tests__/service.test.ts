@@ -3584,10 +3584,11 @@ describe('AgentIslandService native publishing', () => {
     expect(liveActivity.sync).toHaveBeenCalledWith(null);
   });
 
-  // Unit regression: completion without a Cindy sound must use OS settings, while
-  // another configured event still plays only its own sound. Covers both native surfaces.
+  // Unit regression: turning off event sounds or setting an event to none must keep
+  // alert ownership on Agent Notch / Live Activity instead of re-enabling OS popups,
+  // while still only silencing fallback OS toasts when a Cindy sound actually plays.
   it.each(['configured', 'none', 'disabled'].flatMap(choice =>
-    [false, true].map(liveOnly => ({ choice, liveOnly }))))('uses per-event sound ownership (%j)', async ({ choice, liveOnly }) => {
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('keeps task alert ownership independent of event sound settings (%j)', async ({ choice, liveOnly }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const playSound = vi.fn(() => true);
@@ -3608,12 +3609,15 @@ describe('AgentIslandService native publishing', () => {
     service.handleAgentEvent({ sessionId: 'sound-policy', agentKind: 'codex' }, doneEvent());
     expect(playSound.mock.calls.length > 0).toBe(choice === 'configured');
     expect(service.shouldSilenceTaskNotification('done')).toBe(choice === 'configured');
-    expect(service.ownsTaskAlert('done')).toBe(choice === 'configured');
+    expect(service.ownsTaskAlert('done')).toBe(true);
+    expect(service.ownsTaskAlert('needs-reply')).toBe(true);
+    expect(service.ownsTaskAlert('error')).toBe(!liveOnly);
     expect(service.shouldSilenceTaskNotification('needs-reply')).toBe(choice !== 'disabled');
     expect(service.shouldSilenceTaskNotification('error')).toBe(choice !== 'disabled');
     liveOwnsAlerts = false;
     service.setEnabled(false);
     expect(service.shouldSilenceTaskNotification('done')).toBe(false);
+    expect(service.ownsTaskAlert('done')).toBe(false);
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
@@ -7856,20 +7860,32 @@ describe('Agent Island device sessions', () => {
     service.resetRuntimeState();
   });
 
-  // Unit regression: with the island on, a remote completion without a Cindy sound used to
-  // reach neither the island sound nor the OS notification.
-  it('hands remote completions to the OS when the island has no sound for them', async () => {
+  // Unit regression: disabling event sounds or setting completion sound to none must not
+  // fall back to OS notifications while Agent Notch or Live Activity owns remote task alerts.
+  it.each(['none', 'disabled'].flatMap(choice =>
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('keeps remote completions off OS notifications without an event sound (%j)', async ({ choice, liveOnly }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const playSound = vi.fn(() => true);
     const onDeviceSessionEvent = vi.fn();
-    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound }, onDeviceSessionEvent });
-    syncEnabledForTest(service, publish);
-    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } } });
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => liveOnly };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper: playSound,
+      onDeviceSessionEvent,
+    });
+    if (liveOnly) service.setEnabled(false);
+    else syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: choice !== 'disabled',
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } },
+    });
     service.setDeviceSessions([deviceSession('running')]);
     service.setDeviceSessions([deviceSession('completed')]);
     expect(playSound).not.toHaveBeenCalled();
-    expect(onDeviceSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'remote-1', kind: 'done' }));
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
   });
 
   it('hands observed transitions to desktop notifications when the island is off', async () => {
