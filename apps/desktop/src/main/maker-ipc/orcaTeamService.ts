@@ -17,11 +17,10 @@ import {
   sessionInstanceToken,
 } from './orcaDispatchClaims.js';
 import {
-  clearWorkerArrears,
-  currentTurnGeneration,
+  currentTurnSeq,
   evaluateTurnGate,
   forgetTurnGate,
-  leadSettleCount,
+  noteTurnEvent,
 } from './orcaTurnGate.js';
 import { setOrcaTurnGateEvaluator } from '../maker-host/claude-hooks/orca-turn-gate-hook.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
@@ -749,7 +748,7 @@ export function findFocusTargetWorker<
  */
 async function evaluateLeadTurnGateFor(
   deps: OrcaTeamServiceDeps,
-  params: { leadSessionId: string; turnGeneration: number; finalText?: string },
+  params: { leadSessionId: string; finalText?: string; turnGeneration?: number },
 ): Promise<string | undefined> {
   const text = params.finalText?.trim();
   if (!text) return undefined;
@@ -757,9 +756,14 @@ async function evaluateLeadTurnGateFor(
   const workers = await deps.listWorkersByLead(params.leadSessionId);
   if (workers.length === 0) return undefined;
 
+  // 回合归属只认引擎代次:同一段文字在连续回合里出现时,文本无法区分它们。
+  if (typeof params.turnGeneration === 'number') {
+    noteTurnEvent(params.leadSessionId, params.turnGeneration);
+  }
+
   return evaluateTurnGate({
     leadSessionId: params.leadSessionId,
-    turnGeneration: params.turnGeneration,
+    turnSeq: currentTurnSeq(params.leadSessionId),
     finalText: text,
     workers: workers
       .filter((worker): worker is typeof worker & { label: string } => Boolean(worker.label))
@@ -1530,9 +1534,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const delivery = result.mode === 'queued' ? 'queued' : 'direct';
       noteLeadDispatchFact(link.leadSessionId, {
         dispatchId: result.clientId,
-        turnGeneration: dispatchTurnGeneration,
-        // 收口次数比代次可靠：代次由事件推出来，可能还停在上一轮；这个不等事件顺序。
-        settlesAtAccept: leadSettleCount(link.leadSessionId),
+        turnSeq: currentTurnSeq(link.leadSessionId),
         workerId: target.id,
         workerLabel,
         delivery,
@@ -1540,8 +1542,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         ...(leadRuntime ? { instanceToken: sessionInstanceToken(leadRuntime) } : {}),
         at: Date.now(),
       });
-      // 真的给了它活,先前等回答的欠账就算处理过。
-      clearWorkerArrears(link.leadSessionId, target.id);
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2479,7 +2479,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
    */
   evaluateLeadTurnGate(params: {
     leadSessionId: string;
-    turnGeneration: number;
     finalText?: string;
   }): Promise<string | undefined> {
     return evaluateLeadTurnGateFor(deps, params);
@@ -2712,11 +2711,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   // 闸门判定入口交给引擎侧 Stop hook 的转发层；hook 绑的是 Cindy session id，
   // 与宿主 settle 共用同一份判定，一个会话一个否决点。
   setOrcaTurnGateEvaluator((sessionId, finalText) =>
-    evaluateLeadTurnGateFor(deps, {
-      leadSessionId: sessionId,
-      turnGeneration: currentTurnGeneration(sessionId) ?? 0,
-      finalText,
-    }),
+    // 回合号由宿主发；拿不到就是宿主还没见过这一回合，闸门据此静默放行。
+    evaluateLeadTurnGateFor(deps, { leadSessionId: sessionId, finalText }),
   );
   return service;
 }

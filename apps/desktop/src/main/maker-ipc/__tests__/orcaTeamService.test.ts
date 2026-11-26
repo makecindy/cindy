@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { dispatchFactsForTurn, resetDispatchClaimState } from '../orcaDispatchClaims';
+import { evaluateTurnGate, forgetTurnGate } from '../orcaTurnGate';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -504,6 +505,23 @@ describe('dispatch claim reminder on lead turn settle', () => {
     expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
   });
 
+  // 定时任务/唤醒重试会把一模一样的话连发多个回合,文本无法区分它们。
+  it('judges identical text again in a later turn', async () => {
+    resetDispatchClaimState();
+    forgetTurnGate();
+    const { deps, service } = createDeps();
+
+    for (const turnGeneration of [2, 3]) {
+      await service.handleLeadTurnSettled({
+        leadSessionId: 'lead-1',
+        turnGeneration,
+        finalText: 'wake_kind=dispatched',
+      });
+    }
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores a session that leads no workers', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
@@ -524,6 +542,20 @@ describe('dispatch claim reminder on lead turn settle', () => {
     await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 1 });
 
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  // 宿主还没见过任何回合时没有可信的回合号,宁可不判也不拿 0 当本回合。
+  it('fails open when the session has no turn recorded yet', async () => {
+    resetDispatchClaimState();
+
+    expect(
+      await evaluateTurnGate({
+        leadSessionId: 'lead-1',
+        turnSeq: 0,
+        finalText: 'wake_kind=dispatched',
+        workers: [{ label: 'developer2', status: 'running' }],
+      }),
+    ).toBeUndefined();
   });
 });
 

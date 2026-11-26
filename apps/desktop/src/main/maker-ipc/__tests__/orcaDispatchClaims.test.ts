@@ -15,7 +15,7 @@ function fact(overrides: Partial<LeadDispatchFact> = {}): LeadDispatchFact {
     workerId: 'worker-1',
     workerLabel: 'research',
     dispatchId: 'mq-1',
-    turnGeneration: 0,
+    turnSeq: 0,
     delivery: 'queued',
     at: Date.now(),
     ...overrides,
@@ -35,7 +35,7 @@ describe('host dispatch fact ledger', () => {
       'lead-1',
       fact({
         dispatchId: 'mq-old',
-        turnGeneration: 8,
+        turnSeq: 8,
         instanceToken: sessionInstanceToken(oldSession),
       }),
     );
@@ -45,7 +45,7 @@ describe('host dispatch fact ledger', () => {
       'lead-1',
       fact({
         dispatchId: 'mq-new',
-        turnGeneration: 1,
+        turnSeq: 1,
         instanceToken: sessionInstanceToken(newSession),
       }),
     );
@@ -54,9 +54,9 @@ describe('host dispatch fact ledger', () => {
   });
 
   it('keeps the current ledger when a late fact from an older turn lands', () => {
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-1', turnGeneration: 4 }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-1', turnSeq: 4 }));
     // 投递落地晚于所属轮次收口：迟到的旧凭据不改账本轮次，也不抹掉现有凭据。
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2', turnGeneration: 2 }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2', turnSeq: 2 }));
 
     expect(dispatchFactsForTurn('lead-1', 4).map((entry) => entry.dispatchId)).toEqual([
       'mq-1',
@@ -76,7 +76,7 @@ describe('host dispatch fact ledger', () => {
   it('keeps the credentials when the turn counter rolls back', () => {
     // 轮次回退通常只是会话实例重建，凭据还在 Lead 自己的上下文里。
     // 跟着清掉的话，它引用一个真实存在的带凭证编号就会被判成无中生有。
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-real', turnGeneration: 9 }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-real', turnSeq: 9 }));
     // 先把账本推到第 9 轮，再回退：这样才真的走进回退分支。
     expect(dispatchFactsForTurn('lead-1', 9)).toHaveLength(1);
     expect(dispatchFactsForTurn('lead-1', 2).map((entry) => entry.dispatchId)).toEqual(['mq-real']);
@@ -86,9 +86,9 @@ describe('host dispatch fact ledger', () => {
   it('treats an unknown turn number as neither progress nor a rollback', () => {
     // Stop hook 可能在本轮事件投递前触发，那时宿主只知道「0」。
     // 当成回退处理会清掉提醒额度，同一句声称就会被反复纠正。
-    expect(consumeDispatchClaimReminder('lead-1', 3, 'spoken:research')).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 3)).toBe(true);
     expect(dispatchFactsForTurn('lead-1', 0)).toEqual([]);
-    expect(consumeDispatchClaimReminder('lead-1', 0, 'spoken:research')).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 0)).toBe(false);
   });
 
   it('forgets facts older than the retention window', () => {
@@ -154,24 +154,25 @@ describe('claim reminder budget', () => {
     expect(consumeDispatchClaimReminder('lead-1', 4)).toBe(true);
   });
 
-  it('corrects a different claim on the next turn, so a later dispatch is still checked', () => {
-    expect(consumeDispatchClaimReminder('lead-1', 5, 'id:aaaaaaaaaaaa')).toBe(true);
+  it('corrects a new claim even on the turn right after a correction', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 5)).toBe(true);
     // 一轮里可派多次：按会话静默会把后来那几次的假凭据一起放过。
-    expect(consumeDispatchClaimReminder('lead-1', 6, 'id:bbbbbbbbbbbb')).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 6)).toBe(true);
   });
 
-  it('corrects one claim once, even when a later turn restates it', () => {
-    expect(consumeDispatchClaimReminder('lead-1', 7, 'id:cccccccccccc')).toBe(true);
-    // 复述同一件事不是新问题：每轮都纠一遍就是「一单纠正四次」。
-    expect(consumeDispatchClaimReminder('lead-1', 8, 'id:cccccccccccc')).toBe(false);
-    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:cccccccccccc')).toBe(false);
+  it('corrects the same sentence again on a later turn', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 7)).toBe(true);
+    // 不按声称身份跨轮静默：反复坚持同一句假话不能免费过关。
+    // 真话靠判定器看到账本里的派发行放行，不靠压制提醒次数。
+    expect(consumeDispatchClaimReminder('lead-1', 8)).toBe(true);
   });
 
   it('re-arms after the session instance restarts', () => {
-    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:dddddddddddd')).toBe(true);
-    expect(consumeDispatchClaimReminder('lead-1', 9, 'id:dddddddddddd')).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 9)).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 10)).toBe(true);
 
     // 重建实例后轮次从 1 重来：旧实例的提醒额度不能压住新实例。
     expect(consumeDispatchClaimReminder('lead-1', 1)).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 1)).toBe(false);
   });
 });
