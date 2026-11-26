@@ -2457,6 +2457,45 @@ describe("market read fences and lost-receipt facts", () => {
         const rowText = [...element.querySelectorAll("span")].map((span) => span.textContent).filter((text) => /^plugins\.market\.(waiting|installing|resultUnknownDetail)$/.test(text ?? ""));
         expect({ list: sheet().includes("plugins.checks.status.awaitingYou"), rowText }).toEqual({ list: true, rowText: ["plugins.market.waiting"] });
       });
+      // Dispatcher (2026-11-26; Host invariant: reading `'self'` implies the operation's receipt said succeeded). A
+      // failed receipt this phone has seen is final: nothing read afterwards (the receipt gone, the computer's record
+      // naming this phone's operation as `'self'`) turns it into a success. Only a result still unknown is settled
+      // from the computer's facts. Tier: unit/jsdom.
+      it.each([
+        ["the row's own attempt", false],
+        ["a pending check, through the list's \"Check result\"", true],
+      ] as const)("%s sees the operation failed; the computer then restarts (receipt gone) and its record names this phone's operation: still failed, never opened", async (_name, viaCheck) => {
+        const world: World = { ...fresh(), ...(viaCheck ? { loseAnswer: true } : {}) };
+        const requests = wire(world);
+        const original = fixture.wire.getMockImplementation()!;
+        fixture.wire.mockImplementation(async (device: string, channel: string, args?: any[], options?: any) => {
+          const reply: any = await original(device, channel, args, options);
+          // The computer committed the package and bound it to this phone, yet its receipt for this operation says failed
+          // (a step after the package landed failed). The phone sees that receipt as the answer's reply or a lookup's.
+          if (args?.[0]?.actionId === "management:answer" || (args?.[0]?.actionId === "management:operation" && world.installed.size))
+            return { ...reply, result: { operationId: args![0].input.operationId, phase: "failed", errorCode: "PLUGIN_INSTALL_CHANGED" } };
+          return reply;
+        });
+        await installAndAllow();
+        if (viaCheck) {
+          await click("plugins.slotHolder.show");
+          await click("plugins.checks.verify");
+        }
+        await settle(30);
+        expect(__retainedForTests.conclusions().map((item: any) => [item.result, item.readback])).toEqual([["failed", "none"]]);
+        expect(world.installed.get("demo")).toBe("screen-operation");          // the computer's record: this phone's operation
+        // The computer restarts: the receipt is gone. Back online, and the person looks again where they can.
+        world.operation = () => { throw new Error("[NOT_FOUND] no such operation"); };
+        const reads = lightReads(requests);
+        fixture.online = false; await rerender();
+        fixture.online = true; await rerender();
+        await settle(30);
+        if (!byId("plugins.checks")) await click("plugins.slotHolder.show").catch(() => undefined);
+        expect({ results: __retainedForTests.conclusions().map((item: any) => [item.result, item.readback]), checks: __retainedForTests.checks().length,
+          readAfter: lightReads(requests) - reads, open: !!byId("plugins.checks.open"), opened: openedIds(),
+          lookups: writes(requests).filter((write) => write.startsWith("operation")).length >= (viaCheck ? 1 : 0) })
+          .toEqual({ results: [["failed", "none"]], checks: 0, readAfter: 0, open: false, opened: [], lookups: true });
+      });
       const installedRow = () => ({ key: JSON.stringify(["mac", "plugins", "plugin", "_root__demo"]), host: { deviceId: "mac", deviceName: "Mac" },
         item: { ref: { collectionId: "plugins", kind: "plugin", id: "_root__demo" }, revision: "1", display: { title: "Demo" }, actions: [{ id: "disable", label: "Enabled" }] } });
       it("an install's read is still out; the person opens that plugin's installed detail and flips its switch; the read proves the install while the switch is written; the detail is read again after the write: seen", async () => {
