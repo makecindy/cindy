@@ -46,7 +46,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   /** "View and decide": opens the consent once its operation holds the computer's slot; false when it cannot. */
   onDecide(operationId: string): boolean;
   onClose(): void;
-  /** "Open plugin": the page reads the computer once more and opens only what that read proves. */
+  /** "Open plugin": the page opens, in the press itself, the instance this line shows as proven. */
   onOpenChecked(operationId: string): void;
   /** "Go to Installed": closes the list and shows the installed segment of the record's computer (V2.10 ③). */
   onShowInstalled(who: PluginSlotHolder): void;
@@ -61,6 +61,25 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   // Only what is still settled then counts (`tellPluginConclusion`): one being read again, or that could not be read
   // after all, stays listed.
   const settledSeen = useRef(new Set<string>());
+  // "Open plugin" opens at once what its line shows, so what a line shows as proven must have been read while this
+  // list is open (a success is a past result: the plugin may have been replaced since). Successes proven before the
+  // list was opened are read again, once each, as soon as their computer can be read; until that read is back their
+  // line has no "Open plugin". One proven while the list is open was read just now.
+  const provenBefore = useRef<Set<string> | undefined>(undefined);
+  const proven = (item: PluginCheckConclusion) => item.readback === "verified" && !item.told
+    && (item.result === "succeeded" || item.result === "installed") && item.entry !== "uninstall";
+  const readable = (deviceId: string) => canOpen(deviceId) && isOnline(deviceId);
+  if (!visible) provenBefore.current = undefined;
+  else provenBefore.current ??= new Set(conclusions.filter(proven).map((item) => item.operationId));
+  useEffect(() => {
+    for (const operationId of [...(provenBefore.current ?? [])]) {
+      const conclusion = conclusions.find((item) => item.operationId === operationId);
+      if (!conclusion || !proven(conclusion)) { provenBefore.current!.delete(operationId); continue; }
+      if (!readable(conclusion.who.deviceId)) continue;
+      provenBefore.current!.delete(operationId);
+      void retryPluginCheckReadback(operationId);
+    }
+  });
   if (!visible) seen.current.clear();
   useEffect(() => {
     if (!visible) { setBlocked([]); return; }
@@ -112,8 +131,11 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       case "verified":
         // Already shown to the person elsewhere (its own view opened or showed it): nothing more to open from here.
         if (conclusion.told) return { text: done };
-        return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.operationId }
-          : { text: done, openUnavailable: true };
+        if (!canOpen(conclusion.who.deviceId)) return { text: done, openUnavailable: true };
+        // Proven before this list was opened and about to be read again (this render's effect): not offered yet.
+        if (provenBefore.current?.has(conclusion.operationId) && isOnline(conclusion.who.deviceId))
+          return { text: t("plugins.checks.result.readingBack"), stop: conclusion.operationId };
+        return { text: done, open: conclusion.operationId };
       // Being read: nothing to do but wait, or stop following it (the read is dropped; nothing is sent).
       case "pending": return conclusion.told ? { text: done } : { text: t("plugins.checks.result.readingBack"), stop: conclusion.operationId };
       // The success stands as a past result; the computer's facts now do not name this operation's instance.

@@ -194,9 +194,11 @@ setPluginPendingCheckSource({
 function conclude(entry: { ownerKey: string }, conclusion: PluginCheckConclusion) {
   const next = [...conclusions.filter((item) => item.operationId !== conclusion.operationId),
     { ...conclusion, ownerKey: entry.ownerKey, seq: ++conclusionSeq }];
-  // The oldest go first, but never one still listed (a success the person has not been shown).
+  // The oldest go first, but never one still listed (a result the person has not been shown), and never the one that
+  // just ended (its row or the list of checks is about to say how).
   let extra = next.length - CONCLUSIONS_KEPT;
-  conclusions = extra <= 0 ? next : next.filter((item) => pluginConclusionListed(item) || extra-- <= 0);
+  conclusions = extra <= 0 ? next
+    : next.filter((item, index) => index === next.length - 1 || pluginConclusionListed(item) || extra-- <= 0);
   // A read lives no longer than its conclusion.
   for (const operationId of [...readbacks.keys()]) if (!conclusions.some((item) => item.operationId === operationId)) readbacks.delete(operationId);
   notifyChecks();
@@ -211,12 +213,12 @@ type Finished = NonNullable<ManagementEntry["lastCheck"]>;
  * - Every read of it is issued after the result. Read again before an earlier read came back: only the newest read
  *   issued settles it (an earlier reply landing last is older).
  * - "Open" only for the instance that one response proves (`pluginOperationOpens`, controller rule ④). A response that
- *   says its market part is incomplete and has no record of the plugin settles nothing: the same as a failed read.
+ *   has an instance of the plugin but no market record of it settles nothing: the same as a failed read.
  * - A failed read leaves it listed, to be read again: by "Read again", and by itself once each time its computer becomes
  *   reachable again for the page (`setReadbackAvailable`), including when that happened while the read was out.
  *   Never on a timer.
- * - Nothing is opened by this read: a view the person is waiting in (the row that started the install, the installed
- *   detail of that instance) shows its conclusion; otherwise it stays listed until the person looks at it.
+ * - Nothing is opened by this read, and nothing is prompted: its conclusion is listed at the top of the page until the
+ *   person has seen it (in the list of checks, or on the installed detail of that very instance).
  * Only reads; dropped when the account changed, when the person was shown how it settled, or on "Stop tracking".
  */
 interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished; reads: number }
@@ -252,10 +254,11 @@ async function readBack(operationId: string): Promise<boolean> {
   }
   if (opens?.open) { conclude(job, { ...latest(), readback: "verified", instanceKey: opens.instanceKey }); return true; }
   if (opens && opens.reason !== "unread") { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return true; }
-  // Not read, and its computer became reachable while this read was out (it was not when the read was issued, or it
-  // went away and came back since): that comeback's one read is this one, now. A read issued while it was reachable
-  // and that simply failed is not read again by itself.
-  if (!opens && reachableNow(deviceId) && (!issued.reachable || (reachable.get(deviceId)?.edges ?? 0) !== issued.edges)) { void readBack(operationId); return false; }
+  // Not read (the read failed, or its response had the instance without its record), and its computer became reachable
+  // while this read was out (it was not when the read was issued, or it went away and came back since): that
+  // comeback's one read is this one, now. A read issued while it was reachable and that simply failed is not read
+  // again by itself.
+  if (reachableNow(deviceId) && (!issued.reachable || (reachable.get(deviceId)?.edges ?? 0) !== issued.edges)) { void readBack(operationId); return false; }
   conclude(job, { ...latest(), readback: "failed", instanceKey: undefined });
   return true;
 }
@@ -363,9 +366,9 @@ export const AFTER_RECEIPT_GONE: Record<PluginSlotEntry, AfterReceiptGone> = {
  * - An instance of it is only a lead (a local package can share id and namespace): only the Host's own evidence makes it
  *   this attempt's result (contract V2.10 ①), and only as that one response gives it (controller rule ④): the market
  *   record in the same installed snapshot as the instance (`market.items` beside `ghosts`, which the Host checks against
- *   each other in that response). No other request's attribution is combined with these instances. The record missing
- *   from a complete response leaves it unconfirmed ("mismatch"); missing from a response that says its market part is
- *   incomplete, it settles nothing yet (still a pending check). The original operation is never sent again.
+ *   each other in that response). No other request's attribution is combined with these instances. An instance whose
+ *   record is missing from that response settles nothing yet (still a pending check, whatever the response says about
+ *   its market part). The original operation is never sent again.
  * Valid only while these facts are still the ones read by the newest installed read issued (the controller derives it
  * when asked); a new lookup clears them.
  */
@@ -377,7 +380,10 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   const valid = () => !entry.dead && isMobileAuthOwnerCurrent(entry.owner) && controller.currentMissingReceiptFacts() === facts
     && controller.getState().operationId === check.operationId;
   const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
-    if (!valid() || !controller.untrack()) return;
+    if (!valid()) return;
+    // A write of this operation is still on its way (Allow's reply has not come): not let go yet. These facts settle it
+    // once that write is over (the controller's next change comes back here).
+    if (!controller.untrack()) { if (entry.settling === facts) entry.settling = undefined; return; }
     // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
@@ -389,9 +395,9 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
   // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
   const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
   if (opens.open) { settle("installed", opens.instanceKey); return; }
-  // An instance is there, but this response says its market part is incomplete and names no record of the plugin (the
-  // computer just restarted and cannot reach its catalog or a custom market yet): nothing proves or disproves it. It
-  // stays a pending check; "Check result" looks the operation up and reads the facts again.
+  // An instance is there, but this response has no market record of the plugin (the computer cannot reach its catalog
+  // or a custom market, the market was removed, or the row is simply not in this response): nothing proves or
+  // disproves it. It stays a pending check; "Check result" looks the operation up and reads the facts again.
   if (opens.reason === "unread") return;
   settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" ? "notInstalled" : "mismatch");
 }

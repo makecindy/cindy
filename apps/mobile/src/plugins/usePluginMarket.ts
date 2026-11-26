@@ -149,6 +149,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     return () => { disposed = true; };
   }, [storageKey, owner]);
   useEffect(() => { if (installedDeviceId) setChoice(undefined); }, [installedDeviceId]);
+  const installedChoice = useRef(installedDeviceId);
+  installedChoice.current = installedDeviceId;
   const has = (id: string | undefined) => !!id && targets.some((host) => host.deviceId === id);
   const onlineId = (id: string | undefined) => {
     const host = id ? targets.find((candidate) => candidate.deviceId === id) : undefined;
@@ -502,6 +504,10 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (installRef.current?.id !== attempt.id) return;
     setInstall(null);
     installRef.current = null;
+    // The market stays on the computer the install was on (it was held there while it ran) unless the person chose a
+    // computer themselves: an automatic pick must not move it to another computer the moment the install ends. A
+    // specific computer picked in the Installed tab meanwhile applies from here on, as before.
+    setChoice((current) => current ?? (installedChoice.current ? undefined : attempt.target.deviceId));
     slot.release(attempt.token);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, [slot]);
@@ -627,9 +633,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         if (applied.current.has(conclusion.operationId + ":done")) continue;
         applied.current.add(conclusion.operationId + ":done");
         invalidateComputer(on, pluginId);
-        // An open market detail of it is read again (a read of it still out is dropped): it then says installed.
+        // An open market detail of it says installed from now on (also while it is read again, and when that read
+        // fails): it must not offer "Install" for what the top of the page says is done.
         const open = liveDetail.current;
-        if (open && open.item.pluginId === pluginId && open.target.deviceId === on) void readDetail(open.item, open.target);
+        if (open && open.item.pluginId === pluginId && open.target.deviceId === on)
+          void readDetail({ ...open.item, installState: "installed" }, open.target);
         continue;
       }
       const key = conclusion.operationId + ":" + conclusion.result;

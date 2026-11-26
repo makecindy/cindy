@@ -2290,6 +2290,15 @@ it("installs from the market through the existing consent sheet; its result is l
     input: { kind: "install", pluginId: "market/demo", expectedReleaseId: "demo@1" } });
   expect(requests.find((request) => request.actionId === "management:begin")!.input).not.toHaveProperty("expectedInstalledApproval");
   expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  // Browsing and installing never fall back to the full v1 snapshot on a paging Host. One install costs five light
+  // installed reads: three before the result (the controller's, as for any operation), and two after it (the record's
+  // own read, which settles the result, and the controller's read after a result, which only this controller would
+  // use). All of them are counted, not a window of them.
+  const snapshots = requests.filter((request) => request.actionId === "management:snapshot").map((request) => request.input?.read);
+  expect(snapshots.filter((read) => read === undefined)).toEqual([]);
+  expect(snapshots.filter((read) => read === "installed")).toHaveLength(5);
+  const answeredAt = requests.findIndex((request) => request.actionId === "management:answer");
+  expect(requests.slice(answeredAt).filter((request) => request.actionId === "management:snapshot" && request.input?.read === "installed")).toHaveLength(2);
   // The result does not change the page by itself: the market stays, the row is done, the result is listed at the top.
   expect(fixture.props.get("header").title).not.toBe("Demo");
   expect(shownMarket().installBusy).toBe(false);
@@ -2299,11 +2308,7 @@ it("installs from the market through the existing consent sheet; its result is l
   expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
     expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
   expect(fixture.props.get("header").title).toBe("Demo");
-  // Browsing and installing never fall back to the full v1 snapshot on a paging Host (up to the post-commit
-  // readback; the installed detail opened afterwards keeps its existing controller and reads).
-  const answeredAt = requests.findIndex((request) => request.actionId === "management:answer");
-  expect(requests.slice(0, answeredAt + 2).filter((request) => request.actionId === "management:snapshot")
-    .map((request) => request.input?.read)).toEqual(["capabilities", "catalog", "catalog", "installed", "installed", "installed", "installed"]);
+  // (The list read once more as it opened; the installed detail opened afterwards keeps its existing controller and reads.)
 });
 
 // Contract V2.10: once the one read of the computer after the result has landed, the market row ends at once and the

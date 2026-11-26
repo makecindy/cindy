@@ -166,6 +166,20 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     await flush();
     assert();
   });
+  // Pre-push review, round 5: after `checks=recordMissing` a `market=` scenario still answered as a computer that cannot
+  // read its market, so the documented market paths ("install, then Open plugin"; `market=readbackFailed` then "Read
+  // again") ended as "could not read". Minimal failing input on 7951455227: the seed, then `market=normal`. Tier: unit.
+  it("a market scenario after checks=recordMissing answers installed reads as a computer that can read its market", async () => {
+    const after = await seedPluginChecksForVisualMock("recordMissing");
+    await flush();
+    after!();
+    await flush();
+    expect(__retainedForTests.checks().map((c) => c.recordMissing)).toEqual([true]);
+    expect(setPluginMarketVisualScenario("normal", true)).toBe(true);
+    const read = pluginMarketVisualManagement("management:snapshot", { read: "installed" }) as { result: { market: { unavailableReason: string | null; items: Array<{ sourceType: string }> } } };
+    expect({ unavailableReason: read.result.market.unavailableReason, serverRecords: read.result.market.items.some((item) => item.sourceType === "server") })
+      .toEqual({ unavailableReason: null, serverRecords: true });
+  });
   // Two operations at once, for the notice at the top: both proven ("2 … have a result"), or one proven beside one still
   // waiting to be checked ("2 … need a look").
   it.each([
