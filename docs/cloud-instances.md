@@ -6,7 +6,7 @@
 ## 启用条件
 
 - 入口是端点清单的可选字段 `cloudInstanceApiBaseUrl`。只接受 `https:`，不能带用户名密码、query 或 fragment。
-  仓内公开清单不含此字段。
+  国内正式清单（`config/endpoint.json`）已填写，Global 清单不填；发布见[端点清单说明](../config/README.md)。
 - 总开关是 `cloudInstancesEnabled()`（`main/cloud-settings-client/enabled.ts`）：本应用就是云实例，或任一区域的清单
   配了该字段。未启用时不注册云实例 IPC、不给窗口云桥、不建登录窗口、不监听、不发请求。
 - 启用不影响启动：启动过程不访问 CIS，未登录或处于本地模式时也不访问。主窗口可用且已登录后才查询准入；
@@ -14,7 +14,7 @@
 - 实例模式由 `--cloud-instance` 加 `CINDY_POD_*` 环境变量进入（`main/instance-runtime/config.ts`，仅 Linux），
   参数不全直接拒绝启动。普通桌面不注册实例运行时的任何调用。
 
-源码联调把含该字段的完整清单放仓库外，每次启动传 `--endpoints-file=<绝对路径>`，
+联调其他 CIS 时，把含该字段的完整清单放仓库外，每次启动传 `--endpoints-file=<绝对路径>`，
 见 [Desktop 开发规则](dev-rules/desktop-development.md)。
 
 ## 控制端
