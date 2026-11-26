@@ -939,7 +939,7 @@ const PINNED_DISPATCH_PORTS = {
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
     'remoteDesktop', 'requestRemoteDesktop', 'remoteCredentialHost', 'fetchLocalMediaToOss', 'transcribeRemoteVoiceInput',
     'readTelegramRemoteStatus', 'setTelegramRemoteOnline', 'adviseAndRecordVoiceInputDictionaryLearning',
-    'buildMobileDictionarySnapshot'],
+    'buildMobileDictionarySnapshot', 'sshAccessTarget'],
 };
 
 test('every port the Host passes the inbound dispatch has the class pinned here', () => {

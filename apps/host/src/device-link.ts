@@ -139,6 +139,8 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   projectInteractionDismissedForRemote: 'read',
   projectInteractionRequestForRemote: 'read',
   remoteWorkingDirRejectionToIpcError: 'read',
+  // SSH access target (ssh-access/sshAccessTargetCore.ts): not assembled on the Host yet.
+  sshAccessTarget: 'unbound',
 } as const satisfies Record<keyof InboundDispatchPorts, 'read' | 'service-gate' | 'refused-at-entry' | 'unbound'>);
 type UnboundDispatchPort = { [K in keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD]:
   (typeof HOST_DISPATCH_PORTS_WHILE_HELD)[K] extends 'unbound' ? K : never }[keyof typeof HOST_DISPATCH_PORTS_WHILE_HELD];

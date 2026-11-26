@@ -81,6 +81,7 @@ import {
   type NotifySender,
   DeviceLinkError,
   resolveRemoteInvokeTimeoutMs,
+  SSH_ACCESS_ANNOUNCE_CHANNEL,
 } from '@cindy/device-link';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
@@ -115,6 +116,7 @@ import {
 import {
   forgetLastKnownDeviceName,
   normalizeCachedDeviceName,
+  onDeviceLinkSettingChanged,
   readDeviceLinkSettings,
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
@@ -144,10 +146,14 @@ import {
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
 } from './dispatch.desktop';
+import { createDesktopSshAccessTarget } from '../ssh-access/sshAccessTarget.desktop.js';
+import { broadcastSshAccessChanged } from '../ssh-access/ipc.desktop.js';
+import type { SshAccessTarget } from '../ssh-access/sshAccessTargetCore.js';
 import {
   clearControllerPlatforms,
   getControllerPlatform,
   getControllerApp,
+  isDesktopPlatform,
   isMobilePlatform,
   knownMobileDeviceIds,
   setControllerPlatform,
@@ -427,9 +433,14 @@ async function runControllerDisplayNamesFromDirectory(
   presenceRequestEpoch: number,
 ): Promise<void> {
   try {
+    const startedAt = Date.now();
     const result = await deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', {
       timeoutMs: 10_000,
     });
+    // The SSH access target reuses a complete list instead of reading its own (sshAccessTargetCore.ts membership).
+    if (result.partial !== true && generation === controllerDisplayNameRefreshGeneration) {
+      sshAccessTarget?.noteDeviceList((result.devices ?? []).map((device) => device.deviceId), startedAt);
+    }
     if (
       generation !== controllerDisplayNameRefreshGeneration ||
       !isLatestControllerDisplayNameDirectoryRefresh(directoryRequestSequence) ||
@@ -810,6 +821,20 @@ let unsubscribeDictionaryChanged: (() => void) | null = null;
  */
 function isDeviceRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
+}
+
+/**
+ * 「允许我的其他设备 SSH 到这台电脑」的被控端(ssh-access/sshAccessTargetCore.ts)。随设备互联服务创建一次，
+ * 随连接持有权启停；登出时清空本机 authorized keys 里这个 profile 的那一段。
+ */
+let sshAccessTarget: SshAccessTarget | null = null;
+
+/** The account's device ids for the SSH access membership check; a partial (one-leg) answer proves nothing. */
+async function readSshAccessDeviceDirectory(): Promise<readonly string[] | null> {
+  const scope = activeOwnerScopeKey();
+  const result = await deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', { timeoutMs: 10_000 });
+  if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending() || result.partial === true || !Array.isArray(result.devices)) return null;
+  return result.devices.map((device) => device.deviceId);
 }
 
 const remoteControlConsent = new RemoteControlConsent({
@@ -1537,6 +1562,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     ) {
       handleMobilePeerOnline(snap.deviceId);
     }
+    // SSH access: a desktop of this account came online; tell it this computer's state if it concerns it.
+    if (wasOnline !== true && snap.online && isDesktopPlatform(snap.platform) && !isScopedPeer(snap.deviceId)
+      && !isDeviceRevoked(snap.deviceId)) {
+      sshAccessTarget?.peerOnline(snap.deviceId);
+    }
   });
 
   let updateRelaunchControllersBusy = false;
@@ -1742,6 +1772,21 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     else notifyLocalDictionaryChanged();
   });
 
+  // 「允许我的其他设备 SSH 到这台电脑」的被控端：只在持有连接的实例上运行(onAcquire / teardownActiveLink)。
+  sshAccessTarget = createDesktopSshAccessTarget({
+    onlineDesktopPeers: () => [...presenceOnlineByDevice]
+      .filter(([deviceId, online]) => online && !isScopedPeer(deviceId) && deviceId !== client?.getSelfDeviceId()
+        && isDesktopPlatform(getControllerPlatform(deviceId)))
+      .map(([deviceId]) => deviceId),
+    sendAnnounce: (deviceId, payload) => client?.sendPush(deviceId, SSH_ACCESS_ANNOUNCE_CHANNEL, payload),
+    revokeDevice: (deviceId) => revokeController(deviceId),
+    deviceName: (deviceId) => getControllerName(deviceId),
+    readDeviceDirectory: () => readSshAccessDeviceDirectory(),
+    notifyChanged: () => broadcastSshAccessChanged(),
+  });
+  const stopSshAccessSettingsWatch = onDeviceLinkSettingChanged(() => sshAccessTarget?.settingsChanged());
+  onQuit('ssh-access-target', () => { stopSshAccessSettingsWatch(); sshAccessTarget?.deactivate(); });
+
   // 同机多实例单持有者仲裁:共享 userData(同 deviceId)的多个实例中,只有认领
   // 成功的持有者才连 relay,其余被动待命 —— 否则 relay 的 last-wins 顶号语义会
   // 让双活实例无限互踢(4409 循环),手机端远程连接在实例间漂移。见 ./ownership.ts。
@@ -1782,10 +1827,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       });
       startProviderShareRuntime(broadcast, { invoke: remoteBackgroundInvoke });
       client?.start();
+      // Rewrites the derived authorized-keys file for the signed-in owner and clears the cloud boot gate.
+      void sshAccessTarget?.activate();
       stopNetworkWatch?.();
       stopNetworkWatch = watchNetworkChanges(() => {
         if (linkTornDown || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
         client?.notifyNetworkChanged();
+        sshAccessTarget?.networkChanged();
         // Agent-Net 主连接自己探测（Device Link 的探测在那条连接里由本机回答，到不了中转）。关着时不做任何事。
         agentNetNetworkChanged();
       });
@@ -1874,6 +1922,8 @@ function syncWithAuthState(isAuthenticated: boolean, realmChanged = false): void
   } else {
     authRealmReconnectGeneration += 1;
     stopArbitrationAndTeardown();
+    // Signed out: the previous owner's SSH keys leave this computer's authorized keys (the record stays with them).
+    void sshAccessTarget?.signedOut();
   }
 }
 
@@ -1977,6 +2027,7 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  sshAccessTarget?.deactivate();
   stopSharingPolicy?.(); stopSharingPolicy = null;
   pluginDeviceSync.reset();
   pluginSyncAccess.reset();
@@ -2374,6 +2425,8 @@ function startBusyReporting(): void {
     pollExternalKeepAwakeChange();
     if (!client) return;
     pollExternalSettingsChange();
+    // Another instance may have changed the master switch, a revocation or the SSH access choice (cheap compare).
+    sshAccessTarget?.settingsChanged();
     const busy = pollBusyChange(); // 只在 busy 与 dedupe 基线翻转时返回新值,否则 null
     if (busy === null) return;
     client.sendPresence({ busy });

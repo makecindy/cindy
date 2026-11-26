@@ -5034,6 +5034,7 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
+  sshAccess: import('../shared/sshAccess').SshAccessApi;
   taskManagement: import('../shared/taskManagement').TaskManagementApi;
   sidebarSettings: {
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;

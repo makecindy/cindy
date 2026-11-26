@@ -40,6 +40,7 @@ import {
   remoteWorkingDirRejectionToIpcError,
   type RemoteWorkingDirGuard,
 } from './remote-workdir-guard';
+import { currentSshAccessTarget } from '../ssh-access/sshAccessTarget.desktop.js';
 import { createInboundDispatch } from "./dispatch.js";
 export type * from "./dispatch.js";
 
@@ -168,5 +169,7 @@ export const {
   sanitizeBotAuthorizationMetaForRemote: (...args) => sanitizeBotAuthorizationMetaForRemote(...args),
   projectInteractionDismissedForRemote: (...args) => projectInteractionDismissedForRemote(...args),
   projectInteractionRequestForRemote: (...args) => projectInteractionRequestForRemote(...args),
-  remoteWorkingDirRejectionToIpcError: (...args) => remoteWorkingDirRejectionToIpcError(...args)
+  remoteWorkingDirRejectionToIpcError: (...args) => remoteWorkingDirRejectionToIpcError(...args),
+  // Created by the device-link service once it starts; read per request.
+  sshAccessTarget: () => currentSshAccessTarget(),
 });

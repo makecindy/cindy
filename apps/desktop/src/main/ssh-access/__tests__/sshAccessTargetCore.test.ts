@@ -5,8 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SshAccessAnnounce } from '@cindy/device-link';
 import { CLOUD_GUEST_FILE_MARKER } from '../authorizedKeysFile.js';
 import { createSshAccessTarget, type SshAccessSettings, type SshAccessTarget } from '../sshAccessTargetCore.js';
+import { handleSshAccessRequest } from '../ipc.desktop.js';
 
 vi.mock('../../logger', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }) }));
+// The settings IPC body (ipc.desktop.ts) is exercised below without Electron or the desktop assembly.
+vi.mock('electron', () => ({ ipcMain: { handle() {} }, BrowserWindow: { getAllWindows: () => [] } }));
+vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent() {}, isTrustedAppRendererWindow: () => true }));
+vi.mock('../sshAccessTarget.desktop.js', () => ({ currentSshAccessTarget: () => null }));
 
 // 测试价值
 // - 生产入口与可观察结果：createSshAccessTarget 的 activate / handleRemote / settingsChanged / noteDeviceList / readLocal /
@@ -301,5 +306,35 @@ describe('SSH access target: announce', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     // Off: only the peer that still has a key here hears it again.
     expect(h.announces.map(([id]) => id)).toEqual(['laptop']);
+  });
+});
+
+// 设置 IPC 的业务体：结构校验在调用被控端之前，被控端错误映射成 IPC 错误码且不带内部细节
+// (engineering-conventions §2、electron-security §5)。真实被控端驱动一条完整的添加 / 移除，其余用替身计数。
+describe('SSH access settings IPC body', () => {
+  it('runs the operations on the real target and maps its errors', async () => {
+    h.settings.sshAccessEnabled = true;
+    const target = makeTarget();
+    await target.activate();
+    const added = await handleSshAccessRequest(target, { operation: 'add-key', publicKey: `${KEY_C} me@home`, label: 'Work laptop' });
+    expect(added).toMatchObject({ fingerprint: 'SHA256:XySgr8Xym3UBX0xPo8AkyHRPb4jhTA2wFX9VQNbhHCU',
+      state: { manualKeys: [{ label: 'Work laptop', active: true }] } });
+    await expect(handleSshAccessRequest(target, { operation: 'add-key', publicKey: KEY_C })).rejects.toThrow('[ALREADY_EXISTS]');
+    await expect(handleSshAccessRequest(target, { operation: 'add-key', publicKey: `no-pty ${KEY_A}` })).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(handleSshAccessRequest(target, { operation: 'remove-key', fingerprint: 'SHA256:XySgr8Xym3UBX0xPo8AkyHRPb4jhTA2wFX9VQNbhHCU' }))
+      .resolves.toMatchObject({ manualKeys: [] });
+    expect(h.terminated).toEqual([['SHA256:XySgr8Xym3UBX0xPo8AkyHRPb4jhTA2wFX9VQNbhHCU']]);
+  });
+
+  it('rejects malformed requests before the target and hides unexpected failures', async () => {
+    const calls: string[] = [];
+    const fake = new Proxy({}, { get: (_target, name) => async () => { calls.push(String(name)); throw new Error('/Users/someone/.ssh: EACCES'); } });
+    for (const request of [{ operation: 'drop-all' }, { operation: 'read', extra: 1 }, { operation: 'remove-key', fingerprint: 'md5:aa' },
+      { operation: 'add-key', publicKey: 'x'.repeat(5000) }, { operation: 'set-enabled', enabled: 'yes' }, { operation: 'remove-device' }]) {
+      await expect(handleSshAccessRequest(fake as SshAccessTarget, request), JSON.stringify(request).slice(0, 60)).rejects.toThrow('[INVALID_PARAMS]');
+    }
+    expect(calls).toEqual([]);
+    await expect(handleSshAccessRequest(null, { operation: 'read' })).rejects.toThrow('[PRECONDITION_FAILED]');
+    await expect(handleSshAccessRequest(fake as SshAccessTarget, { operation: 'end-sessions' })).rejects.toThrow(/^\[INTERNAL\] SSH access request failed$/);
   });
 });
