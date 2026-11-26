@@ -1718,17 +1718,17 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
-  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+  it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
     h.chat.server = true;
-    const data = group({ openPlan: null });
+    const data = group({ openPlan: null, ...(direct ? { conversationKind: 'direct' as const } : {}) });
     data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
     await render(data);
     await type('@');
-    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(!!byId('botGroup.mention.self')).toBe(!direct);
     expect(byId('botGroup.mention.mimi')).not.toBeNull();
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: direct ? ['abu'] : ['self', 'abu'] } }));
   });
 
   it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
@@ -2048,6 +2048,19 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // Unit: a regular member can switch their computer even through a desktop with no personal-mask entry.
+  it.each([true, false])('switches the member’s group assistant computer in settings (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, assistantDeviceId: 'mac',
+      assistantComputers: [{ id: 'mac', name: 'Mac' }, { id: 'win', name: 'Windows' }] });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.assistantComputer.action.win');
+    expect(direct ? manage : h.chat.act).toHaveBeenCalledWith('assistantDevice', direct ? { deviceId: 'win' } : { expectedRevision: 5, deviceId: 'win' });
+  });
 
   // Unit regression for #13029: the native menu can persist a displayed inherited
   // mode on the real settings sheet, while selecting the confirmed mode is a no-op.

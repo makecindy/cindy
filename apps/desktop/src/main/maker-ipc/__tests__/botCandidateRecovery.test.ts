@@ -480,6 +480,10 @@ describe('model group failure handling', () => {
     // Seen on a Pi task with a dead Agnes AI key: the status only exists as the text's prefix.
     ['a dead key reported only as text', { sdkError: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}',
       message: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}' }, 'connection'],
+    // 2026-11-26 audit: a provider's account pool with no account left used to retry the same source twice first.
+    ['an OpenAI account pool with no account left', { message: 'No subscription account is available' }, 'connection'],
+    ['every pooled account limited for this model', { message: '[SUBSCRIPTION_POOL_MODEL_LIMITED] Subscription usage limit for this model' }, 'connection'],
+    ['every pooled account busy', { message: '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit' }, 'connection'],
     ['a removed model', { reason: 'model_unavailable' }, 'model'],
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
     ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],

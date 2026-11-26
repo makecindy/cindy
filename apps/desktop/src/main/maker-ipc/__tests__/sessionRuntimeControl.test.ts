@@ -30,6 +30,7 @@ import {
   sessionRuntimeControlOwnerEpochMatches,
   sessionRuntimeGenerationMatches,
   settlePendingSessionRuntimeMutation,
+  startSessionRuntimeFallbackTurn,
   type SessionRuntimeProfile,
 } from '../sessionRuntimeControl.js';
 
@@ -834,6 +835,21 @@ describe('session runtime fallback selection', () => {
         maxHops: 2,
       }),
     ).toMatchObject({ providerId: 'other', model: 'gpt-main' });
+  });
+
+  // Unit, 2026-11-26 smart-routing audit: the tried list used to be cleared only by a model change,
+  // so a long task whose every source had failed once (A's quota, later B's) never failed over again,
+  // even after A reset. Minimal input: A→B fallback, then a new turn. The fallback hop is kept: it
+  // still tells that the task runs on a substitute.
+  it('lets earlier failed sources take over again from the next turn on', () => {
+    const sessionId = 'long-task';
+    const other = { ...current, providerId: 'xd' };
+    acceptSessionRuntimeMutation({ sessionId, source: 'fallback', previousProfile: current, profile: other, deferred: false });
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toHaveLength(2);
+
+    startSessionRuntimeFallbackTurn(sessionId);
+
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({ visitedRoutes: [], fallbackHop: 1 });
   });
 
   it('does not record a failed candidate against a stale generation', () => {

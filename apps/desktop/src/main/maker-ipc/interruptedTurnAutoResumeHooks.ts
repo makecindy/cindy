@@ -1,5 +1,5 @@
 import type { AgentInputCoordinatorDeps } from './agent-input-coordinator.js';
-import { recoveryRequiresImageInput, type AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { recoveryRequiresImageInput, type AgentInputQueuedMessage, type ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import { MODEL_GROUP_LIMITS } from '../../shared/modelGroups.js';
 import { canRecoverUndeliveredOrcaReport } from '../../shared/sharedTaskRecovery.js';
 import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -108,7 +108,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
   } = {
     onResumableTurnErrorDiscarded: (
       sessionId: string,
-      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner; providerGroupSwitchHoldId?: number },
+      options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner; reconnectHandoff?: ReconnectHandoff; providerGroupSwitchHoldId?: number },
     ) => {
       if (options.providerGroupSwitchHoldId !== undefined) {
         const deferred = autoResumeBookkeeping.takeDeferredError(sessionId, options.owner);
@@ -121,7 +121,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         return;
       }
       if (options.surfaceError) {
-        autoResumeBookkeeping.surfaceSuppressedError(sessionId, { deferredOwner: options.owner });
+        autoResumeBookkeeping.surfaceSuppressedError(sessionId, { deferredOwner: options.owner, ...(options.reconnectHandoff ? { reconnectHandoff: options.reconnectHandoff } : {}) });
       } else {
         autoResumeBookkeeping.flushSuppressedError(sessionId, { deferredOwner: options.owner });
       }
@@ -158,6 +158,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
           sessionId,
           action: decision.action,
         });
+        if (signals.reason === 'codex_reconnect_stalled') {
+          if (decision.action === 'exhausted') signals.recordReconnectHandoff?.('exhausted');
+          else if (decision.why === 'disabled') signals.recordReconnectHandoff?.('disabled');
+        }
         return null;
       }
       // 接管:压住这条错误的落库与横幅,只在聊天流里显示低调的自愈提示。

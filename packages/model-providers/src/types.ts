@@ -191,6 +191,8 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Originating BYOK preset, available even when this runtime contains no models. */
+  catalogPresetId?: string;
   /** Verified public connection preset for aggregate usage reporting. */
   usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;
