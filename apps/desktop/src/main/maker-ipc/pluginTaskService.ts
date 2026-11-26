@@ -1123,11 +1123,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           await save(row, run);
         }
       }),
-    discard: (taskId: string, item: OwnedQueuedInput, status: 'cancelled' | 'failed') =>
+    discard: (taskId: string, item: OwnedQueuedInput, status: 'cancelled' | 'failed',
+      withdrawRejected?: () => Promise<void>) =>
       exclusive(async () => {
         for (const row of await deps.store.forSession(taskId)) {
           const run = JSON.parse(row.payload) as PluginTaskRun;
-          if (terminal(run) || !queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
+          if (!queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
             continue;
           // A late queue cleanup for an older accepted input cannot settle a
           // newer recovery attempt. Unknown aliases still represent rejection
@@ -1140,9 +1141,19 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             item.clientId !== latestAccepted
           )
             continue;
-          run.status = status;
-          run.completedAt = now();
-          await save(row, run);
+          if (terminal(run)) {
+            // A previous host may have saved the failed receipt but retained its original input.
+            if (run.status !== 'failed' || item.clientId !== run.inputMessageId) continue;
+          } else {
+            run.status = status;
+            run.completedAt = now();
+            await save(row, run);
+          }
+          // Follow-ups only observe another task's message. Only the sender owns its queue row.
+          if (status === 'failed' && !run.followUpOf && withdrawRejected) {
+            deps.assertCurrent();
+            await withdrawRejected();
+          }
         }
       }),
   };

@@ -20737,7 +20737,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         'failed', inputCoordinator.getProjection(sessionId).error).catch(() => {
         log.warn('Bot group undispatched input settlement failed', { sessionId });
       });
-      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed'));
+      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed', async () => {
+        if (inputCoordinator.discardRejectedInput(sessionId, item)) await awaitAgentInputQueueSnapshotPersistence(sessionId);
+      }));
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);

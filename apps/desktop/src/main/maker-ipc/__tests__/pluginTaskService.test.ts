@@ -1,3 +1,4 @@
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../agent-input-coordinator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -1335,6 +1336,80 @@ describe('plugin ordinary task receipts', () => {
     ).resolves.toBeUndefined();
     expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'failed' });
   });
+  // Unit, #13300: receipt-only tests missed the restored queue head after a pre-accept rejection.
+  it('withdraws the rejected plugin input from the live queue and restart snapshot', async () => {
+    const f = fixture();
+    const run = await f.send();
+    const task = await f.create();
+    const other = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision,
+      requestKey: 'second', text: 'next' });
+    const sid = run.taskId;
+    type Item = Parameters<AgentInputCoordinator['enqueue']>[1];
+    const item = (clientId: string): Item => ({
+      clientId, text: 'hello', persistedContent: 'hello', model: 'model', effort: 'medium',
+      permissionMode: 'default', workingDir: '/repo',
+      chatMessage: { clientId, role: 'user', content: 'hello', isStreaming: false, createdAt: new Date(0).toISOString() },
+      createOpts: { agentKind: 'codex', model: 'model', effort: 'medium', permissionMode: 'default',
+        workingDir: '/repo', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+    });
+    const snapshots = new Map<string, Item[]>();
+    let busy = true;
+    let settlement: Promise<void> | undefined;
+    let original!: Item;
+    const deps: AgentInputCoordinatorDeps = {
+      isTurnRunning: () => busy, hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => undefined, createUserMessage: vi.fn(), touchUserSend: async () => {},
+      steerToAgent: vi.fn(), abortSession: vi.fn(), emitProjection: vi.fn(),
+      loadQueueSnapshot: async id => snapshots.get(id) ?? [],
+      persistQueueSnapshot: (id, items) => { snapshots.set(id, structuredClone(items)); },
+      sendToAgent: async () => {
+        busy = true;
+        return { kind: 'host-send', accepted: false, code: 'LAZY_CREATE_FAILED', message: 'unavailable' };
+      },
+      onRejectedUserTurn: (id, rejected) => {
+        original = rejected;
+        settlement = f.service.discard(id, rejected, 'failed', async () => { queue.discardRejectedInput(id, rejected); });
+      },
+    };
+    const queue = new AgentInputCoordinator(deps);
+    for (const id of [sid, 'other-session']) await queue.ensureQueueRestored(id);
+    queue.enqueue(sid, item(run.inputMessageId));
+    queue.enqueue(sid, item(other.inputMessageId));
+    queue.enqueue('other-session', item(run.inputMessageId));
+    busy = false;
+    queue.wakeSession(sid, 'test');
+    await vi.waitFor(() => expect(settlement).toBeDefined());
+    await settlement;
+    expect((await f.service.getRun('p', run.runId)).status).toBe('failed');
+    const ids = (items: readonly Item[]) => items.map(row => row.clientId);
+    expect({ live: ids(queue.getProjection(sid).pendingQueue), saved: ids(snapshots.get(sid)!) })
+      .toEqual({ live: [other.inputMessageId], saved: [other.inputMessageId] });
+    expect(ids(queue.getProjection('other-session').pendingQueue)).toEqual([run.inputMessageId]);
+    const revision = f.rows.get(run.runId)!.revision;
+    await f.service.discard(sid, original, 'failed', async () => {
+      expect(queue.discardRejectedInput(sid, original)).toBe(false);
+    });
+    expect(f.rows.get(run.runId)!.revision).toBe(revision);
+    const restarted = new AgentInputCoordinator(deps);
+    await restarted.ensureQueueRestored(sid);
+    expect(ids(restarted.getProjection(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    // Once a queued steer is in progress it still appears in the queue until vendor acceptance.
+    const consuming = queue.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    let release!: () => void;
+    const steerEntered = new Promise<void>(entered => {
+      deps.steerToAgent = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); };
+    });
+    const steering = queue.steer(sid, consuming, { removeFromQueue: true });
+    await steerEntered;
+    try {
+      expect(queue.discardRejectedInput(sid, consuming)).toBe(false);
+      expect(ids(queue.getQueueControlSnapshot(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    } finally {
+      release();
+      await steering;
+    }
+  });
+
   it('keeps multi-hop recovery aliases but never adopts an unrelated user input', async () => {
     const f = fixture();
     const run = await f.send();

@@ -4294,6 +4294,14 @@ export class AgentInputCoordinator {
     return this.removeQueuedInput(sessionId, clientId);
   }
 
+  /** A receipt can settle asynchronously while the user edits or retries the same clientId. */
+  discardRejectedInput(sessionId: string, item: AgentInputQueuedMessage): boolean {
+    const state = this.states.get(sessionId);
+    if (!state?.pendingQueue.includes(item) || state.steeringQueueClientIds.includes(item.clientId)) return false;
+    this.removeQueuedInput(sessionId, item.clientId, true);
+    return true;
+  }
+
   /** Failed admission releases callbacks without publishing a user withdrawal. */
   private removeQueuedInput(sessionId: string, clientId: string, admissionFailed = false): AgentInputProjection {
     const state = this.getState(sessionId);
