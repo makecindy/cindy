@@ -22652,6 +22652,16 @@
     "refresh": "重新整理配額"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入方式",
       "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",

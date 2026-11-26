@@ -22741,6 +22741,16 @@
     "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Weitere Anmeldeoptionen",
+      "connect": "Vorhandene Anmeldung verbinden…",
+      "found": "{{count}} verfügbar",
+      "title": "Anmeldungen auf {{device}}",
+      "note": "Cindy und die CLI verwenden dieselbe Kontokonfiguration.",
+      "attach": "Verbinden",
+      "choose": "Anderen Ordner wählen…",
+      "unverified": "Die Anmeldung konnte nicht bestätigt werden."
+    },
     "pluginSignIn": {
       "method": "Anmeldemethode",
       "secretHint": "Der Schlüssel geht nur an das Plugin, das ihn im eigenen Ordner dieses Kontos speichert. Cindy speichert ihn nicht und sendet ihn nicht an andere Computer.",

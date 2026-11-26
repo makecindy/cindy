@@ -172,6 +172,7 @@ vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
 }));
 vi.mock('../nativeCli.js', () => ({
   readNativeAccount: h.read,
+  readExistingLogin: async () => ({ login: { identity: (await h.read()).identity } }),
   codexAccountRpc: h.rpc,
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
@@ -3060,6 +3061,24 @@ describe('Claude account renewal', () => {
   // Standard, independent PR #10086 review: snapshot guards covered new leases,
   // but an idle live handle could send through a profile being renewed or left
   // on the wrong identity. Exercise the real wrapper, not its guard in isolation.
+  // Unit: an external CLI can switch identities while a live task still has a fresh cache.
+  // The renewal tests change identity through Cindy. A terminal-side change must also stop send.
+  it('rechecks an externally linked subscription before a live task sends again', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('second'), linkedLogin: { directory: '/fixture', identity: 'original' } }];
+    h.read.mockResolvedValue({ authenticated: true, identity: 'original' });
+    const nativeSend = vi.fn(async () => {});
+    const handle = await withSubscriptionAccounts({
+      kind: 'claude-code', startSession: async () => ({
+        id: 'linked', send: nativeSend, close: async () => {},
+        events: async function* () { yield { type: 'done', data: {} }; },
+      }),
+    } as unknown as BaseAgent).startSession({ providerId: 'anthropic', sessionId: 'linked' } as StartSessionOptions);
+    h.read.mockResolvedValue({ authenticated: true, identity: 'replacement' });
+    await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+    expect(nativeSend).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it.each(['account_mismatch', 'login_cancelled'])('protects an existing handle during renewal and after %s', async reason => {
     h.pools.anthropic!.accounts = [account('second')];
     let identity = 'second@example.test';

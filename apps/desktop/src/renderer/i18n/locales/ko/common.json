@@ -22652,6 +22652,16 @@
     "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "계정 추가 방법",
+      "connect": "기존 로그인 연결…",
+      "found": "연결 가능 {{count}}개",
+      "title": "{{device}}의 로그인",
+      "note": "Cindy와 CLI가 선택한 계정의 설정을 공유합니다.",
+      "attach": "연결",
+      "choose": "다른 폴더 선택…",
+      "unverified": "이 구독 로그인을 확인할 수 없습니다."
+    },
     "pluginSignIn": {
       "method": "로그인 방법",
       "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",

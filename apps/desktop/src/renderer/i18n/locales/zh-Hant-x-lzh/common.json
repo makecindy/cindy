@@ -22652,6 +22652,16 @@
     "refresh": "更新額度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多新增方式",
+      "connect": "連接既有登入…",
+      "found": "發現 {{count}} 個可連接的登入",
+      "title": "{{device}} 上的既有登入",
+      "note": "Cindy 將與終端機共用所選帳號的設定。",
+      "attach": "連接",
+      "choose": "選擇其他目錄…",
+      "unverified": "無法確認此目錄中的訂閱登入。"
+    },
     "pluginSignIn": {
       "method": "登入之法",
       "secretHint": "Key 唯付法器，藏於此帳號之篋；Cindy 不存，亦不傳他機。",

@@ -22956,6 +22956,16 @@
     "refresh": "Actualiser le quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Autres options d’ajout",
+      "connect": "Connecter une session existante…",
+      "found": "{{count}} disponibles",
+      "title": "Sessions sur {{device}}",
+      "note": "Cindy et le terminal utiliseront la même configuration de compte.",
+      "attach": "Connecter",
+      "choose": "Choisir un autre dossier…",
+      "unverified": "Impossible de vérifier cet abonnement."
+    },
     "pluginSignIn": {
       "method": "Méthode de connexion",
       "secretHint": "La clé est transmise uniquement au plugin, qui la conserve dans le dossier propre à ce compte. Cindy ne la stocke pas et ne l’envoie pas à d’autres ordinateurs.",

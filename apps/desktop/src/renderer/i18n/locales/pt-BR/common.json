@@ -22957,6 +22957,16 @@
     "refresh": "Atualizar cota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Outras formas de adicionar contas",
+      "connect": "Conectar um login existente…",
+      "found": "{{count}} disponíveis",
+      "title": "Logins em {{device}}",
+      "note": "O Cindy e a CLI usarão a mesma configuração de conta.",
+      "attach": "Conectar",
+      "choose": "Escolher outra pasta…",
+      "unverified": "Não foi possível verificar esta assinatura."
+    },
     "pluginSignIn": {
       "method": "Método de login",
       "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a armazena nem a envia para outros computadores.",

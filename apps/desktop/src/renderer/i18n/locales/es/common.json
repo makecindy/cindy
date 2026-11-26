@@ -22956,6 +22956,16 @@
     "refresh": "Actualizar cuota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Más formas de añadir una cuenta",
+      "connect": "Conectar una sesión existente…",
+      "found": "{{count}} disponibles",
+      "title": "Sesiones en {{device}}",
+      "note": "Cindy y la CLI compartirán la configuración de la cuenta.",
+      "attach": "Conectar",
+      "choose": "Elegir otra carpeta…",
+      "unverified": "No se pudo verificar la suscripción."
+    },
     "pluginSignIn": {
       "method": "Método de inicio de sesión",
       "secretHint": "La clave solo va al plugin, que la guarda en la carpeta propia de esta cuenta. Cindy no la guarda ni la envía a otros ordenadores.",
