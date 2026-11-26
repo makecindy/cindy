@@ -47,7 +47,12 @@ export type {
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
 export { startFeishuTurnCarrier } from './feishu/streamingText.js';
 export type { FeishuStreamingDeps, FeishuTurnCarrier } from './feishu/streamingText.js';
-export type { FeishuIMOptions } from './feishu/index.js';
+export type { FeishuIMOptions, FeishuReplyFormat } from './feishu/index.js';
+export {
+  FEISHU_TEXT_CONTENT_MAX_BYTES,
+  splitFeishuPlainText,
+  textMessageBytes,
+} from './feishu/textReply.js';
 export {
   decodeLaneUserId as decodeFeishuLaneUserId,
   encodeLaneUserId as encodeFeishuLaneUserId,

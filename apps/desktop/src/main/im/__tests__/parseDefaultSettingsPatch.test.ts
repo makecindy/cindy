@@ -81,6 +81,7 @@ describe('parseImDefaultSettingsPatch', () => {
     const nonDefault: ImDefaultSettings = {
       agentKind: 'codex',
       permissionMode: 'plan',
+      replyFormat: 'text',
       groupPermissionMode: 'bypassPermissions',
       agents: {
         'claude-code': { providerId: 'p-cc', model: 'm-cc', effort: 'low' },

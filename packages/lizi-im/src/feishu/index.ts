@@ -29,6 +29,7 @@ import type {
 } from '../types.js';
 
 import {
+  bindScope,
   createFeishuScope,
   registerDefaultScope,
   runInScope,
@@ -47,6 +48,8 @@ import {
 } from './ipc.js';
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
+import * as textReply from './textReply.js';
+import { resolveFeishuMediaUrl } from './mediaCache.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
 import { parseIncoming, type AttachmentRef } from './incomingContent.js';
 
@@ -65,11 +68,23 @@ export interface FeishuIMOptions {
   guests?: boolean;
   /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
   shouldAnnounceLifecycle?: () => boolean;
+  /**
+   * 回答形态: `card`(默认, 流式卡片) / `text`(纯文本, 整段一次性发送)。
+   *
+   * 传 getter 而不是值: 渠道设置改动后下一轮就生效, 不用重连传输层。
+   * 缺省 = card, 存量行为不变。
+   */
+  replyFormat?: () => FeishuReplyFormat;
 }
+
+/** 飞书回答形态。`text` 只改变回答的呈现, 不影响授权卡等交互卡片。 */
+export type FeishuReplyFormat = 'card' | 'text';
 
 export class FeishuIM extends BaseIM implements ChannelIM {
   /** 本实例的作用域: 所有模块状态、事件总线与凭证键名都挂在它上面。 */
   readonly scope: FeishuScope;
+  /** 回答形态(缺省 card)。每轮现读, 设置改了不必重连。 */
+  private readonly replyFormatOption: () => FeishuReplyFormat;
   /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
   private readonly offImStatus: () => void;
   /** 串行排空, 避免 connected 与失败重试重叠处理同一条目。 */
@@ -98,6 +113,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   constructor(host: IMHost, options: FeishuIMOptions = {}) {
     super('feishu', host);
+    this.replyFormatOption = options.replyFormat ?? (() => 'card');
     this.scope = createFeishuScope({
       host,
       log: this.log,
@@ -490,12 +506,71 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     text: string,
     opts?: { threadTs?: string; fallbackOpenerId?: string },
   ): Promise<{ messageId: string }> {
+    if (this.usesPlainTextReplies()) {
+      return this.sendWithDeferredOpenerConsume(
+        userId,
+        'markdown',
+        () => this.sendPlainText(userId, text, opts),
+        opts?.fallbackOpenerId,
+      );
+    }
     return this.sendWithDeferredOpenerConsume(
       userId,
       'markdown',
       () => outbound.sendText(userId, text, opts),
       opts?.fallbackOpenerId,
     );
+  }
+
+  /** 当前回答形态是否为纯文本(每轮现读, 缺省 card)。 */
+  private usesPlainTextReplies(): boolean {
+    return this.replyFormatOption() === 'text';
+  }
+
+  /**
+   * 纯文本终稿 IO: 正文按飞书单条上限切片顺序发出, 附件单独成条。
+   * 图片仍然走飞书的图片消息快路径(与卡片模式同一套解析), 只是不再内联进卡片。
+   */
+  private plainTextDeps(
+    userId: string,
+    opts?: { threadTs?: string },
+  ): textReply.PlainTextReplyDeps {
+    return {
+      sendText: (chunk) => outbound.sendText(userId, chunk, opts),
+      sendAttachment: async (absPath, displayName) => {
+        const result = await outbound.sendFile(userId, absPath, displayName, opts);
+        if (!result.ok) {
+          this.log.warn(
+            `plain-text reply attachment failed (${result.reason ?? 'unknown'}): ${absPath}`,
+          );
+        }
+        return result.ok;
+      },
+      resolveImageUrl: (url) => {
+        try {
+          const resolved = this.host.media?.resolveMediaUrl(url);
+          if (resolved) return resolved;
+          return resolveFeishuMediaUrl(url, this.host.paths.feishuMediaDir).absPath;
+        } catch (err) {
+          this.log.warn(
+            `plain-text reply: resolve managed image failed for ${url}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return null;
+        }
+      },
+      log: { warn: (message) => this.log.warn(message) },
+    };
+  }
+
+  /** 把一段文本按上限切片, 作为纯文本消息逐条发出; 空文本不发消息。 */
+  private async sendPlainText(
+    userId: string,
+    text: string,
+    opts?: { threadTs?: string },
+  ): Promise<{ messageId: string }> {
+    return textReply.deliverPlainTextFinal(this.plainTextDeps(userId, opts), text);
   }
 
   /**
@@ -514,6 +589,15 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     markdown: string,
     opts?: { threadTs?: string; fallbackOpenerId?: string },
   ): Promise<{ messageId: string }> {
+    // 纯文本模式: 提示语、自动任务播报也走 text, 整轮不出现任何「消息卡」。
+    if (this.usesPlainTextReplies()) {
+      return this.sendWithDeferredOpenerConsume(
+        userId,
+        'markdown',
+        () => this.sendPlainText(userId, markdown, opts),
+        opts?.fallbackOpenerId,
+      );
+    }
     return this.sendWithDeferredOpenerConsume(
       userId,
       'markdown',
@@ -527,7 +611,44 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     initial?: string,
     opts?: { threadTs?: string },
   ): Promise<StreamingTextHandle> {
+    if (this.usesPlainTextReplies()) return this.startPlainTextReply(userId, opts);
     return streamingText.start(userId, initial, opts);
+  }
+
+  /**
+   * 纯文本模式的「流式」handle: 中间帧(逐字增量、工具进度、过程记录)只留在
+   * 内存里, 收口时整段发出。这样编排层不需要区分两种渠道形态, 聊天里也不会
+   * 出现卡片或「过程记录」。
+   *
+   * 群主流 @ 开话题时先发了一张「思考中」开场白卡(不是本轮回答的一部分):
+   * 认领后撤回, 让话题里只剩文字答案; 撤回失败只告警, 不阻断回答。
+   */
+  private async startPlainTextReply(
+    userId: string,
+    opts?: { threadTs?: string },
+  ): Promise<StreamingTextHandle> {
+    const claimed = opts?.threadTs ? null : outbound.claimPatchableOpener(userId);
+    if (claimed) {
+      try {
+        const recalled = await outbound.recallOwnMessage(claimed);
+        if (recalled) outbound.rearmAnchorToTrigger(userId, claimed);
+        else this.log.warn('plain-text reply: thinking opener recall failed');
+      } catch (err) {
+        this.log.warn(
+          `plain-text reply: thinking opener recall failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    const deps = this.plainTextDeps(userId, opts);
+    return textReply.createPlainTextReplyHandle({
+      messageId: claimed ?? '',
+      deliver: async (text, extraAbsPaths) => {
+        await textReply.deliverPlainTextFinal(deps, text, extraAbsPaths);
+      },
+      bind: (fn) => bindScope(this.scope, fn),
+    });
   }
 
   /**
@@ -546,6 +667,25 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 时返回 true: 旧轮次已丢弃, 调用方不得用新 client 跨账号发。
    */
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
+    // 纯文本模式不把开场白卡就地改成回答: 认领后撤回它, 回答照常走
+    // sendMarkdownText(此时是纯文本), 话题里不会留下一张没内容的卡。
+    if (this.usesPlainTextReplies()) {
+      const openerId = outbound.claimPatchableOpener(userId);
+      if (openerId) {
+        try {
+          const recalled = await outbound.recallOwnMessage(openerId);
+          if (recalled) outbound.rearmAnchorToTrigger(userId, openerId);
+          else this.log.warn('plain-text reply: thinking opener recall failed');
+        } catch (err) {
+          this.log.warn(
+            `plain-text reply: thinking opener recall failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+      return false;
+    }
     // 重连空窗(stop→start 之间 client 已解绑): 暂存消费, 连接就绪后由
     // flushDeferredOpenerConsumes 排空(claim + patch)— 不认领(注册保留)、
     // 也不让本轮终态丢失或残留被下一条消息误认领。返回 **false**(仅入队,

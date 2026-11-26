@@ -280,6 +280,12 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
     飞书接口；官方飞书 / Lark 的通道经 `msg.op` 交给服务端执行（`hook-control/feishuTurnCarrier.ts`）。
     改飞书回复长什么样只改这一处，不在服务端或 hook-control 里另写排版。
 
+    渠道设置把回答形态切成纯文本（`replyFormat: 'text'`，默认仍是 `card`）时，同一位置换用
+    `@cindy/im` 的 `feishu/textReply.ts`：整段回答在收口时以 `msg_type='text'` 一次发送，中间帧与
+    过程记录都不进聊天；超过飞书单条消息上限时在内容边界切片、按顺序发多条，附件单独成条，空结果
+    不发占位（开场白卡认领后撤回）。授权 / 命令等交互卡片不受影响；两种形态的排版都只在
+    `@cindy/im` 里，服务端与 hook-control 不另写。
+
 ## 4. 状态模型（一轮）
 
 ```

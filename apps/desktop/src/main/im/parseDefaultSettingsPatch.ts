@@ -17,6 +17,7 @@ import {
   isImDefaultAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
+  isImReplyFormat,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsPatch,
@@ -48,6 +49,13 @@ export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatc
       throwIpcError('INVALID_PARAMS', 'im default groupPermissionMode invalid');
     }
     patch.groupPermissionMode = input.groupPermissionMode;
+  }
+  // 飞书回答形态(card / text)。漏解析 = 开关切了没反应, 与上面两条同理。
+  if ('replyFormat' in input) {
+    if (!isImReplyFormat(input.replyFormat)) {
+      throwIpcError('INVALID_PARAMS', 'im default replyFormat invalid');
+    }
+    patch.replyFormat = input.replyFormat;
   }
   if ('agents' in input) {
     if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {

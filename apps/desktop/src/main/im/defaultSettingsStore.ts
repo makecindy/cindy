@@ -22,6 +22,7 @@ import {
   isImDefaultAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
+  isImReplyFormat,
 } from '../../shared/imDefaultSettings.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
@@ -36,6 +37,7 @@ import { validateOptionalSettingsFields } from '../maker-host/settings-inspectio
 function validateInspectionSettings(raw: Record<string, unknown>): void {
   const nullableText = (value: unknown) => value === null || typeof value === 'string';
   validateOptionalSettingsFields(raw, { agentKind: isImDefaultAgentKind, permissionMode: isImDefaultPermissionMode,
+    replyFormat: isImReplyFormat,
     groupPermissionMode: isImDefaultPermissionMode, groupCtrPermissionMode: isImDefaultPermissionMode,
     providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort, agents: isRecord });
   if (isRecord(raw.agents)) for (const agent of ['claude-code', 'codex', 'pi']) {
@@ -102,6 +104,10 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
       ? r.permissionMode
       : IM_DEFAULT_SETTINGS.permissionMode,
+    // 旧文件没有这个键: 缺省 card = 升级后行为不变。
+    replyFormat: isImReplyFormat(r.replyFormat)
+      ? r.replyFormat
+      : IM_DEFAULT_SETTINGS.replyFormat,
     // 旧键 `groupCtrPermissionMode` 只在「群 /ctr」时期存在过, 读侧回落一次 ——
     // 已经存过该键的用户升级后必须保持原选择, 不能静默回默认(存量兼容)。
     groupPermissionMode: readGroupPermissionMode(r),
@@ -409,6 +415,9 @@ function settingsOverrides(
   if (value.permissionMode !== defaults.permissionMode) {
     overrides.permissionMode = value.permissionMode;
   }
+  if (value.replyFormat !== defaults.replyFormat) {
+    overrides.replyFormat = value.replyFormat;
+  }
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
@@ -426,6 +435,7 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   const keys: string[] = [];
   if (value.agentKind !== defaults.agentKind) keys.push('agentKind');
   if (value.permissionMode !== defaults.permissionMode) keys.push('permissionMode');
+  if (value.replyFormat !== defaults.replyFormat) keys.push('replyFormat');
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
@@ -446,6 +456,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
   return {
     agentKind: settings.agentKind,
     permissionMode: settings.permissionMode,
+    replyFormat: settings.replyFormat,
     groupPermissionMode: settings.groupPermissionMode,
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },

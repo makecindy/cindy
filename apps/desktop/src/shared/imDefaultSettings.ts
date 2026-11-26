@@ -1,6 +1,11 @@
 export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
 export type ImDefaultPermissionMode =
   'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
+/**
+ * 回答形态。`card` = 流式卡片(现状); `text` = 纯文本, 整段一次性发送,
+ * 不带过程记录。当前只有飞书消费这个字段。
+ */
+export type ImReplyFormat = 'card' | 'text';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 /**
  * IM channel scopes that keep independent new-conversation routing preferences.
@@ -25,6 +30,13 @@ export type ImDefaultAgentSettingsMap = Record<ImDefaultAgentKind, ImDefaultAgen
 export interface ImDefaultSettings {
   agentKind: ImDefaultAgentKind;
   permissionMode: ImDefaultPermissionMode;
+  /**
+   * 回答形态(当前仅 feishu 消费)。缺省 'card', 存量用户升级后行为不变。
+   *
+   * 'text' 走纯文本消息: 回答一次性整段发出、超长按平台上限切片; 工具进度不进
+   * 聊天, 也不出现「过程记录」。授权 / 命令等交互卡片不受影响。
+   */
+  replyFormat: ImReplyFormat;
   /**
    * **群里新建会话**统一用的权限档(当前仅 feishu 消费) —— 群/话题里 @bot 开
    * 新话题、群里 `/new`、群里 `/ctr` 全部以它为准, 不再各自继承上面那条
@@ -58,6 +70,7 @@ export interface ImDefaultSettingsState extends ImDefaultSettings {
 export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
   agentKind: 'claude-code',
   permissionMode: 'auto',
+  replyFormat: 'card',
   groupPermissionMode: 'auto',
   agents: {
     'claude-code': {
@@ -114,6 +127,8 @@ const PERMISSION_MODES = new Set<ImDefaultPermissionMode>([
   'bypassPermissions',
 ]);
 
+const REPLY_FORMATS = new Set<ImReplyFormat>(['card', 'text']);
+
 export const WECHAT_UNSUPPORTED_PERMISSION_MODES: readonly ImDefaultPermissionMode[] = [
   'acceptEdits',
   'bypassPermissions',
@@ -147,6 +162,10 @@ export function isImDefaultEffort(value: unknown): value is ImDefaultEffort {
 
 export function isImDefaultPermissionMode(value: unknown): value is ImDefaultPermissionMode {
   return typeof value === 'string' && PERMISSION_MODES.has(value as ImDefaultPermissionMode);
+}
+
+export function isImReplyFormat(value: unknown): value is ImReplyFormat {
+  return typeof value === 'string' && REPLY_FORMATS.has(value as ImReplyFormat);
 }
 
 export function isWechatUnsupportedPermissionMode(

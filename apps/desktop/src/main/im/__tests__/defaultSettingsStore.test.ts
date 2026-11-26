@@ -506,4 +506,33 @@ describe('im default settings store', () => {
     expect(persisted.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
     expect(persisted.channels.feishu.groupCtrPermissionMode).toBeUndefined();
   });
+
+  /**
+   * 飞书回答形态: 缺省 card = 升级后行为不变; 按渠道保存, 切回 card 只写一条。
+   */
+  it('reply format: card by default, per-channel text override, switch back clears it', () => {
+    expect(readImDefaultSettings('feishu').replyFormat).toBe('card');
+
+    writeImDefaultSettingsPatch({ replyFormat: 'text' }, 'feishu');
+    expect(readImDefaultSettings('feishu').replyFormat).toBe('text');
+    // 其它渠道不受影响。
+    expect(readImDefaultSettings('telegram').replyFormat).toBe('card');
+    expect(readImDefaultSettingsState('feishu').customizedKeys).toContain('replyFormat');
+
+    writeImDefaultSettingsPatch({ replyFormat: 'card' }, 'feishu');
+    expect(readImDefaultSettings('feishu').replyFormat).toBe('card');
+    expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
+  });
+
+  it('falls back reply format to card for persisted documents without the field', () => {
+    const without = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const normalized = __testing.normalize(without);
+    expect(normalized.replyFormat).toBe('card');
+    const unknown = __testing.normalize({ ...without, replyFormat: 'markdown' });
+    expect(unknown.replyFormat).toBe('card');
+  });
 });
