@@ -1,17 +1,20 @@
 /**
  * 测试价值
- * - 生产入口与可观察结果：LocalNetworkAccessService.read/request、readMacLanGateway 与 LocalNetworkReminderState；设置页和侧边栏提醒看到的
- *   granted / denied / unknown，只有系统已拒绝时才打开系统设置，以及侧边栏何时提醒。
+ * - 生产入口与可观察结果：LocalNetworkAccessService.read/request、parseLocalNetworkRequestOptions、
+ *   readMacLanGateway 与 LocalNetworkReminderState；设置页和侧边栏提醒看到的 granted / denied / unknown、
+ *   默认 request 只触发系统弹窗而不抢焦点跳系统设置、显式打开系统设置及其新窗口回退，以及侧边栏何时提醒。
  * - Bug／规则依据：2026-11-22 两台同局域网 Mac 的个人版都没有本地网络许可，直连长期退回中转；
- *   docs/dev-rules/remote-and-mobile-adaptation.md「macOS「本地网络」权限」。
- * - 现有覆盖缺口：此前没有任何本地网络许可检测。
- * - 最小失败输入：网关探测返回 EHOSTUNREACH；默认路由落在 utun（VPN）上；首次探测拒绝但系统询问后放行。
+ *   2026-11-26 macOS 27.3 实测确认 1.2 秒后强跳系统设置会顶掉原生授权弹窗，改为显式两步打开并支持新窗口重试。
+ *   见 docs/dev-rules/remote-and-mobile-adaptation.md「macOS「本地网络」权限」。
+ * - 现有覆盖缺口：此前单测假定 request() 1.2 秒后自动打开系统设置，未覆盖不抢焦点、显式打开、新窗口回退与参数校验。
+ * - 最小失败输入：网关探测返回 EHOSTUNREACH；默认路由落在 utun（VPN）上；显式 openSettings 首次普通打开、二次新窗口及新窗口报错回退；非法 IPC 参数。
  * - tier：unit，全部依赖注入，无真实网络与等待。
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
   LocalNetworkAccessService,
   classifyLocalNetworkProbe,
+  parseLocalNetworkRequestOptions,
   readMacLanGateway,
   type LocalNetworkAccessDeps,
   type LocalNetworkConnectOutcome,
@@ -20,7 +23,7 @@ import { LocalNetworkReminderState } from '../reminder';
 
 function service(outcomes: LocalNetworkConnectOutcome[], overrides: Partial<LocalNetworkAccessDeps> = {}) {
   let clock = 0;
-  const openSettings = vi.fn(async () => {});
+  const openSettings = vi.fn<(separateWindow: boolean) => Promise<void>>(async () => {});
   const connect = vi.fn(async () => outcomes.shift() ?? 'other');
   const deps: LocalNetworkAccessDeps = {
     platform: 'darwin',
@@ -48,6 +51,19 @@ describe('local network access', () => {
     expect(classifyLocalNetworkProbe(outcome)).toBe(expected);
   });
 
+  it('validates local-network request IPC options strictly', () => {
+    expect(parseLocalNetworkRequestOptions(undefined)).toEqual({});
+    expect(parseLocalNetworkRequestOptions({ openSettings: true })).toEqual({ openSettings: true });
+    expect(parseLocalNetworkRequestOptions({ openSettings: true, separateWindow: true })).toEqual({
+      openSettings: true,
+      separateWindow: true,
+    });
+    expect(parseLocalNetworkRequestOptions(null)).toBeNull();
+    expect(parseLocalNetworkRequestOptions([])).toBeNull();
+    expect(parseLocalNetworkRequestOptions({ openSettings: 'yes' })).toBeNull();
+    expect(parseLocalNetworkRequestOptions({ extra: true })).toBeNull();
+  });
+
   it('reports unknown without a LAN gateway and notRequired off macOS', async () => {
     expect(await service([], { lanGateway: async () => null }).access.read()).toBe('unknown');
     const windows = service(['hostUnreachable'], { platform: 'win32' });
@@ -56,18 +72,51 @@ describe('local network access', () => {
     expect(windows.connect).not.toHaveBeenCalled();
   });
 
-  it('opens System Settings only when access is still denied after the prompt window', async () => {
+  it('triggers the OS prompt without yanking focus to System Settings until explicitly requested', async () => {
     const answered = service(['hostUnreachable', 'refused']);
     expect(await answered.access.request()).toBe('granted');
     expect(answered.openSettings).not.toHaveBeenCalled();
+    expect(answered.access.settingsOpenStage).toBe('none');
 
     const decided = service(['hostUnreachable', 'hostUnreachable']);
     expect(await decided.access.request()).toBe('denied');
-    expect(decided.openSettings).toHaveBeenCalledTimes(1);
+    expect(decided.openSettings).not.toHaveBeenCalled();
+    expect(decided.access.settingsOpenStage).toBe('none');
 
     const alreadyAllowed = service(['refused']);
     expect(await alreadyAllowed.access.request()).toBe('granted');
     expect(alreadyAllowed.connect).toHaveBeenCalledTimes(1);
+    expect(alreadyAllowed.openSettings).not.toHaveBeenCalled();
+  });
+
+  it('opens System Settings on explicit request, retries in a separate window, and resets on grant', async () => {
+    const { access, openSettings } = service(['hostUnreachable', 'hostUnreachable', 'refused']);
+    expect(await access.request({ openSettings: true })).toBe('denied');
+    expect(openSettings).toHaveBeenNthCalledWith(1, false);
+    expect(access.settingsOpenStage).toBe('standard');
+
+    // Second explicit open uses a separate System Settings window to bypass stuck panes.
+    expect(await access.request({ openSettings: true })).toBe('denied');
+    expect(openSettings).toHaveBeenNthCalledWith(2, true);
+    expect(access.settingsOpenStage).toBe('separate');
+
+    // Grant clears settingsOpenStage without opening System Settings again.
+    expect(await access.request({ openSettings: true })).toBe('granted');
+    expect(openSettings).toHaveBeenCalledTimes(2);
+    expect(access.settingsOpenStage).toBe('none');
+  });
+
+  it('falls back to the standard System Settings window if launching a separate window fails', async () => {
+    const calls: boolean[] = [];
+    const { access } = service(['hostUnreachable', 'hostUnreachable'], {
+      openSettings: async (separate) => {
+        calls.push(separate);
+        if (separate) throw new Error('open -n refused');
+      },
+    });
+    expect(await access.request({ openSettings: true })).toBe('denied');
+    expect(await access.request({ openSettings: true, separateWindow: true })).toBe('denied');
+    expect(calls).toEqual([false, true, false]);
   });
 
   it('notifies listeners once per change so a grant can restart direct connections', async () => {

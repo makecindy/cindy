@@ -7408,7 +7408,8 @@
       "localNetwork": {
         "label": "Local network",
         "deniedHint": "Without this permission, computers and phones on the same network can't connect to this computer directly. They go through the relay, which is slower.",
-        "settingsHint": "Turn on Cindy in System Settings › Privacy & Security › Local Network. It takes effect as soon as you come back."
+        "promptedHint": "Click Allow in the macOS prompt. If no prompt appeared, open System Settings to turn it on manually.",
+        "settingsHint": "In Privacy & Security, open Local Network and turn on Cindy. If it isn't listed, click + to add this app—it takes effect as soon as you come back."
       }
     },
     "imBot": {

@@ -7477,7 +7477,8 @@
       "localNetwork": {
         "label": "Réseau local",
         "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
-        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+        "promptedHint": "Cliquez sur Autoriser dans la fenêtre macOS. Si aucune fenêtre n’apparaît, ouvrez Réglages Système pour l’activer manuellement.",
+        "settingsHint": "Dans Confidentialité et sécurité, ouvrez Réseau local et activez Cindy. Si l’app n’apparaît pas, cliquez sur + pour l’ajouter ; le changement s’applique dès votre retour."
       }
     },
     "imBot": {
