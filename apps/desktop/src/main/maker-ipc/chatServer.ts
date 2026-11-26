@@ -2804,6 +2804,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!invalidInput(refusal) && (!refusal || refusal instanceof ChatResponseError)) supportsTeammateMentions = false;
     }
     if (!refusal) return;
+    // The server refused the terminal result itself. Two families share one end state:
+    // - content refusal: retry once without the optional locator, then retire if still refused;
+    // - every other definitive refusal (#7394: 409 STALE_EXECUTOR / lease expiry, withdrawn
+    //   access, a gone room): nothing can change the outcome, so retire as a failure at once.
+    // A definitive `fail`/`cancel` refusal is not re-routed here: the group simply never learns —
+    // the same end state as before, and a newer executor's own result stays the only one shown.
+    if (definitiveRefusal(action, refusal)) { reportRefusal(run, action, refusal, payload.content, 1); throw new SettlementRefused(refusal); }
     if (!contentRefusal(action, refusal)) throw refusal;
     reportRefusal(run, action, refusal, payload.content, 1);
     if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
@@ -2824,6 +2831,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
       && error.status >= 400 && error.status < 500 && error.status !== 408
       && ['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message);
+  }
+  /**
+   * Any definitive refusal of the terminal result that is not a content validation: the lease is
+   * stale or expired (`STALE_EXECUTOR`/`STALE_EXECUTION`/`EXECUTION_EXPIRED`), access was
+   * withdrawn, or the room is gone. The content ladder cannot save it, and leaving it silent drops
+   * the turn in the group's eyes (#7394): retire it through the same `fail` ladder instead. Only a
+   * `complete` result takes this path — `fail`/`cancel` refusals end the turn as they always have.
+   */
+  function definitiveRefusal(action: string, error: unknown): error is ChatResponseError {
+    return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
+      && error.status >= 400 && error.status < 500 && !contentRefusal(action, error);
   }
   /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
   function dropProcessLocator(payload: Record<string, unknown>): boolean {
