@@ -65,8 +65,10 @@ export async function readLatestSessionTerminal(
 }
 
 /** Shared with the native sidebar's unresolved-error query. */
-export const undismissedSidebarError = sql`CASE WHEN json_valid(${messages.content})
-  THEN json_extract(${messages.content}, '$.dismissed') IS NOT 1 ELSE 1 END`;
+export function undismissedSidebarError() {
+  return sql`CASE WHEN json_valid(${messages.content})
+    THEN json_extract(${messages.content}, '$.dismissed') IS NOT 1 ELSE 1 END`;
+}
 
 /** Check just the candidate rows on their owning host and return IDs across the DB worker boundary. */
 export async function readSidebarErrorTailIds(
@@ -84,6 +86,6 @@ export async function readSidebarErrorTailIds(
         AND tail.created_at > COALESCE(requested.value, 0)
       ORDER BY tail.created_at DESC, tail.rowid DESC LIMIT 1
     )`)
-    .where(sql`CASE WHEN ${messages.role} = 'error' THEN ${undismissedSidebarError} ELSE 0 END`);
+    .where(sql`CASE WHEN ${messages.role} = 'error' THEN ${undismissedSidebarError()} ELSE 0 END`);
   return new Set(rows.map(row => row.id));
 }

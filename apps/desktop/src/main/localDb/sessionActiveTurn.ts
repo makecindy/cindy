@@ -745,7 +745,7 @@ export async function listErrorTailPendingRows(): Promise<
         // 先取可见尾行,再判 role/dismissed;不能回退到更早的未处理 error。
         eq(messages.role, 'error'),
         // 顶层 dismissed:true = 用户点过「忽略」(mergeDismissedIntoErrorContent 写入)。
-        undismissedSidebarError,
+        undismissedSidebarError(),
       ),
     );
   // 尾行判定保证每会话最多一行(同毫秒同 rowid 不可能并存)。
