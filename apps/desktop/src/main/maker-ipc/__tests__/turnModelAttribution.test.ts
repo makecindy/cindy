@@ -23,7 +23,7 @@ describe('turn model attribution', () => {
     `);
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
     const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    insert.run('m1', 'first', 's1', 'user', 'hello', JSON.stringify({ executionModel: { agentKind: 'codex', model: 'gpt-a', providerId: 'p' } }), 1);
+    insert.run('m1', 'first', 's1', 'user', 'hello', JSON.stringify({ executionModel: { agentKind: 'codex', model: 'gpt-a', providerId: 'previous-provider' } }), 1);
     insert.run('m2', 'second', 's1', 'user', 'again', null, 2);
     state.db = drizzle(sqlite, { schema: { messages, sessions } });
     let current = true;
@@ -53,7 +53,7 @@ describe('turn model attribution', () => {
     expect(f.patches).toEqual([{ clientId: 'second', executionModel: { agentKind: 'codex', model: 'gpt-b', providerId: 'p' } }]);
     expect(f.cards).toEqual([expect.objectContaining({
       clientId: 'model-change:second', role: 'assistant', agentKind: 'codex',
-      agentMeta: { modelChange: { fromModel: 'gpt-a', toModel: 'gpt-b', modelOnly: true } },
+      agentMeta: { modelChange: { fromModel: 'gpt-a', toModel: 'gpt-b', fromProviderId: 'previous-provider', toProviderId: 'p', modelOnly: true } },
     })]);
   });
 

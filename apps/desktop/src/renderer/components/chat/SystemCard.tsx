@@ -1,3 +1,4 @@
+import { formatTurnModelChange } from '@cindy/maker-shared/model-route';
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
@@ -1243,7 +1244,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const coverage = coverageKey ? t(coverageKey) : null;
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const modelOnly = data?.modelOnly === true;
-  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` :
+  const label = modelOnly ? formatTurnModelChange(data) :
     agentRelocationLabel(data, sessionId, t) ??
     t('chat.systemCard.agentSwitch.label', { from: fromLabel, to: toLabel });
 

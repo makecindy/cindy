@@ -1,3 +1,4 @@
+import type { TurnModelChange } from '@cindy/maker-shared/model-route';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
@@ -132,7 +133,7 @@ export interface CcMeta {
   /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
   pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
-  modelChange?: { fromModel: string; toModel: string; modelOnly: true };
+  modelChange?: TurnModelChange;
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
   mcpApp?: boolean;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];

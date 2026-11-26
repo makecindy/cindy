@@ -1,3 +1,4 @@
+import { formatTurnModelChange } from '@cindy/maker-shared/model-route';
 import { useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
 import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
@@ -5987,7 +5988,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
   const modelOnly = data?.modelOnly === true;
-  const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
+  const label = modelOnly ? formatTurnModelChange(data) : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
     ?? t('message.renderer.agentSwitchLabel', { from, to }));
   const modelLabel = modelOnly ? '' : toModel;
   const historyLabel = !coverageKey && (resumed || data?.nativeHistory === 'fallback')
