@@ -1938,9 +1938,11 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
+  readonly diagnostic?: 'pi-retry-history-frame-too-large';
 
-  constructor(msg: string, options?: ErrorOptions) {
+  constructor(msg: string, options?: ErrorOptions & { diagnostic?: TurnDispatchRejectedError['diagnostic'] }) {
     super(msg, options);
+    this.diagnostic = options?.diagnostic;
     this.name = 'TurnDispatchRejectedError';
   }
 }
@@ -2086,6 +2088,8 @@ export interface StartSessionOptions {
    * 暴露成模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Maker can verify that this start has no existing task metadata. */
+  isNewMakerTask?: () => Promise<boolean>;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an

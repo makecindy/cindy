@@ -949,6 +949,9 @@ export class Maker {
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
+        isNewMakerTask: opts.agentKind === 'pi'
+          ? async () => !opts.id || (await this.storage.get(id)) === null
+          : undefined,
         // 强制由 Maker 注入持久化 CAS，不能信任外部 CreateSessionOptions 自带回调。
         // Claude adapter 只在精确识别 invalid-resume 时调用；Codex 不消费该字段。
         // 对所有 claude-code 会话装配(不止 resume):全新会话也可能在首个 turn 崩溃前

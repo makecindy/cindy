@@ -735,7 +735,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     sameAccountCapabilities: () => (readMachineStatus || agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
     app: { getVersion: () => deps.version },
     ...tags, TASK_TAG_CHANNEL,
-    readDeviceLinkSettings: () => ({ ...settings.readDeviceLinkSettings(), remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled }),
+    readDeviceLinkSettings: (...args: Parameters<typeof settings.readDeviceLinkSettings>) => {
+      const snapshot = settings.readDeviceLinkSettings(...args);
+      return { ...snapshot, remoteControlEnabled: current() && snapshot.remoteControlEnabled };
+    },
     noteControllerAccessAllowed: access.noteControllerAccessAllowed,
     noteControllerAccessDenied: access.noteControllerAccessDenied,
     syncRemoteControlAccessGeneration: access.syncRemoteControlAccessGeneration,
