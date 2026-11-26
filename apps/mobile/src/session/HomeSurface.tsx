@@ -4,7 +4,6 @@ import { useOrcaQuestionRows } from './orcaQuestionRows';
 import { sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
 import { ProjectPickerIcon } from './ProjectPickerIcon';
 import { ProjectSettingsSheet } from './ProjectSettingsSheet';
-import { Settings as ProjectSettingsIcon } from 'lucide-react-native';
 import { useStableHomeSections, type HomeDisplayOrder } from './homeStableOrder';
 import { playHaptic } from '@/platform/haptics';
 import { TaskSnoozeSheet } from './TaskSnoozeSheet';
@@ -4594,10 +4593,6 @@ function ProjectRow({
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
-      {kind === 'project' && hostKey && project.deviceId && <Pressable accessibilityRole="button" accessibilityLabel={t('settings.projectInfo.title')}
-        hitSlop={8} onPress={event => {event.stopPropagation(); setSettingsOpen(true);}} style={{padding:8}}>
-        <ProjectSettingsIcon size={iconSize.lg} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
-      </Pressable>}
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
       {collapsedStatus?.dot ? (
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
@@ -4642,7 +4637,8 @@ function ProjectRow({
       ) : null}
       {actionable && swipe ? (
         <SwipeableProjectHeader projectKey={project.key} registry={swipe.registry}
-          onNewTask={onNewTask} onOpenTasks={onOpenProject} onSearch={onSearchProject}>
+          onNewTask={onNewTask} onOpenTasks={onOpenProject} onSearch={onSearchProject}
+          onSettings={hostKey && project.deviceId ? () => setSettingsOpen(true) : undefined}>
           {dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
         </SwipeableProjectHeader>
       ) : dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
