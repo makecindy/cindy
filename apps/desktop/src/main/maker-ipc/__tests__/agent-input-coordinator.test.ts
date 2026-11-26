@@ -20729,4 +20729,19 @@ describe('queue message hold (stop point)', () => {
     h.coordinator.remove(sid, 'a');
     expect(hasHold()).toBe(false);
   });
+
+  it('moves the stop point past a hidden answer to the next visible message', async () => {
+    const h = createHarness();
+    const sid = 'hold-async-middle';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('a', 'first'));
+    h.coordinator.enqueue(sid, makeItem('question-reply:answered:q1', 'hidden answer'));
+    h.coordinator.enqueue(sid, makeItem('c', 'last'));
+    await flush();
+    h.coordinator.hold(sid, 'a');
+    h.coordinator.remove(sid, 'a');
+    expect(heldIds(h, sid)).toEqual(['c']);
+    expect(queuedIds(h, sid)).toEqual(['question-reply:answered:q1', 'c']);
+  });
 });
