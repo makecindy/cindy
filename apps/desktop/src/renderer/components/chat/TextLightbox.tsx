@@ -13,7 +13,10 @@ import { isFileUrlHostHref, normalizeMarkdownImageSrc, toLocalFileUrl } from '@/
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageGalleryContext, ImageGalleryScopeContext, type GalleryImage } from './ImageGalleryContext';
-import { extractMarkdownGalleryImages } from './markdownImageTargets';
+import {
+  assignMarkdownGalleryOccurrences,
+  extractMarkdownGalleryImages,
+} from './markdownImageTargets';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import {
   PREVIEW_PANEL_CLASS,
@@ -553,24 +556,19 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       preserveLineCount: initialLine != null,
     });
     if (extracted.length === 0) return [];
-    const counts = new Map<string, number>();
     const out: GalleryImage[] = [];
-    for (const item of extracted) {
-      const mediaOrigin = isFileUrlHostHref(item.target, fileParentDir)
+    for (const { target, section, occurrence } of assignMarkdownGalleryOccurrences(extracted, filePath)) {
+      const mediaOrigin = isFileUrlHostHref(target, fileParentDir)
         ? undefined
         : previewRemoteMediaOrigin;
-      const normalized = normalizeMarkdownImageSrc(item.target, fileParentDir, true, mediaOrigin);
+      const normalized = normalizeMarkdownImageSrc(target, fileParentDir, true, mediaOrigin);
       if (!normalized) continue;
       const src = rewriteToRemoteMediaOrigin(normalized, mediaOrigin);
-      const section = item.sectionSuffix ? `${filePath}${item.sectionSuffix}` : filePath;
-      const countKey = `${section}\u0000${item.target}`;
-      const repeatIndex = counts.get(countKey) ?? 0;
-      counts.set(countKey, repeatIndex + 1);
       out.push({
         src,
         scope: filePath,
-        target: item.target,
-        occurrence: { section, index: repeatIndex },
+        target,
+        occurrence: { section, index: occurrence },
       });
     }
     return out;
@@ -816,13 +814,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
                 '[scrollbar-gutter:stable_both-edges]',
               )}
             >
-              <div
-                className="mx-auto max-w-5xl px-6 py-5"
-                style={{
-                  '--md-image-max-width': '100%',
-                  '--md-image-max-height': '65vh',
-                } as React.CSSProperties}
-              >
+              <div className="mx-auto max-w-5xl px-6 py-5">
                 <AttachmentCollectionContext.Provider value={null}>
                   <ImageGalleryContext.Provider value={documentGalleryImages}>
                     <ImageGalleryScopeContext.Provider value={filePath}>

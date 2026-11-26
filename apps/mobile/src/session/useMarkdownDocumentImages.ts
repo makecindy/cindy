@@ -17,6 +17,7 @@ import {
   type RemoteMediaSshContext,
 } from '@/session/fileBrowserGallery';
 import {
+  appendRemoteMediaMaxBytes,
   buildMarkdownDocumentGallery,
   collectMarkdownDocumentImages,
   fetchMarkdownDocumentImages,
@@ -119,7 +120,7 @@ export function useMarkdownDocumentImages({
       }
     }
     for (const rawUrl of plan.overLimitRawUrls) {
-      initial.set(rawUrl, { status: 'error' });
+      initial.set(rawUrl, { status: 'deferred' });
     }
     setResolvedImages(initial);
 
@@ -133,9 +134,10 @@ export function useMarkdownDocumentImages({
     ): Promise<string | null> => {
       const ossKeys = new Set<string>();
       let peerUrlToRelease: string | null = null;
+      const boundedPreviewUrl = appendRemoteMediaMaxBytes(target.fetchUrl, limits.maxBytes);
       try {
         const media = await resolveMobileRemoteMedia(
-          { kind: 'image', url: target.fetchUrl },
+          { kind: 'image', url: boundedPreviewUrl },
           {
             fetchRemoteMedia: async (url, opts) => {
               await openLink(deviceId);
@@ -152,7 +154,7 @@ export function useMarkdownDocumentImages({
           },
         );
         if (media.ossKey) ossKeys.add(media.ossKey);
-        if (cancelled) return null;
+        if (cancelled || abort.signal.aborted) return null;
         if (media.inlineBase64 && media.mimeType.startsWith('image/')) {
           return `data:${media.mimeType};base64,${media.inlineBase64}`;
         }
@@ -162,8 +164,13 @@ export function useMarkdownDocumentImages({
         if (media.url.startsWith('file://')) {
           peerUrlToRelease = media.url;
         }
+        // Reject oversize fallback responses before starting an HTTP download
+        // (e.g. older Desktop hosts that do not enforce `maxBytes`).
+        if (media.size > limits.maxBytes) {
+          return null;
+        }
         const mime = media.mimeType.startsWith('image/') ? media.mimeType : target.mimeType;
-        return await downloadRemoteMediaAsDataUri(media.url, mime, limits.maxBytes);
+        return await downloadRemoteMediaAsDataUri(media.url, mime, limits.maxBytes, abort.signal);
       } finally {
         if (peerUrlToRelease) releasePeerMedia(peerUrlToRelease);
         for (const key of ossKeys) deleteOssObjectRef.current(key);

@@ -125,6 +125,32 @@ export function extractMarkdownGalleryImages(
   return images;
 }
 
+export interface MarkdownGalleryOccurrenceRef {
+  target: string;
+  section: string;
+  occurrence: number;
+}
+
+/**
+ * Assign per-section occurrence indices matching `MarkdownRenderer`'s
+ * `gallerySection` (including carousel slide suffixes). Shared by chat
+ * `replyGalleryImages` and `TextLightbox` document galleries so repeated
+ * images across carousel slides or after carousels match the clicked slide.
+ */
+export function assignMarkdownGalleryOccurrences(
+  entries: readonly MarkdownGalleryImage[],
+  baseSection: string,
+): MarkdownGalleryOccurrenceRef[] {
+  const seen = new Map<string, number>();
+  return entries.map(({ target, sectionSuffix }) => {
+    const section = sectionSuffix ? `${baseSection}${sectionSuffix}` : baseSection;
+    const key = `${section}\u0000${target}`;
+    const occurrence = seen.get(key) ?? 0;
+    seen.set(key, occurrence + 1);
+    return { target, section, occurrence };
+  });
+}
+
 /**
  * Which repeat of `target` in `markdown` the rendered image at `offset` is (0 for
  * the first). Undefined when the image cannot be located.

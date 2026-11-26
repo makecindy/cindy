@@ -7,7 +7,7 @@
  * stay consistent with the surrounding Markdown surface.
  */
 
-import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { splitCarouselSlides } from '@cindy/maker-shared/markdown-carousel';
@@ -53,7 +53,6 @@ export const MarkdownCarouselBlock = memo(function MarkdownCarouselBlock({
   }
 
   const showControls = slides.length > 1;
-  const stageStyle = { '--md-image-margin-y': '0px' } as CSSProperties;
 
   return (
     <div
@@ -83,7 +82,6 @@ export const MarkdownCarouselBlock = memo(function MarkdownCarouselBlock({
       <div
         data-markdown-carousel-slide={safeIndex}
         className="flex min-h-[120px] flex-col items-center justify-center p-4 [&_p]:text-center"
-        style={stageStyle}
       >
         {renderSlide(slides[safeIndex], safeIndex)}
       </div>

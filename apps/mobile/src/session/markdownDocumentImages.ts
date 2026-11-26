@@ -65,6 +65,14 @@ export interface MarkdownDocumentImageEntry {
 
 export type MarkdownImageResolution =
   | { status: 'ready'; uri: string }
+  /**
+   * Inline WebView thumbnail could not be loaded (e.g. >40th image, over inline
+   * data-URI budget, oversize fallback, or transient error), while the image
+   * still has a valid `fetchUrl` in the gallery and remains tappable to open
+   * full-resolution `ImageLightbox` on demand.
+   */
+  | { status: 'deferred' }
+  /** Path or scheme is unresolvable / blocked by security boundary; not clickable. */
   | { status: 'error' };
 
 export interface ResolveMarkdownDocumentImageOptions {
@@ -282,6 +290,26 @@ export function planMarkdownDocumentImageFetches(
 }
 
 /**
+ * Attach a host-enforced `maxBytes` constraint to `xdt-file://` preview URLs
+ * so remote hosts reject oversize fallback uploads / SSH transfers before
+ * spending bandwidth. Non-`xdt-file://` URLs pass through unchanged.
+ */
+export function appendRemoteMediaMaxBytes(fetchUrl: string, maxBytes: number): string {
+  if (!fetchUrl.startsWith('xdt-file://') || !Number.isFinite(maxBytes) || maxBytes <= 0) {
+    return fetchUrl;
+  }
+  const capped = Math.floor(maxBytes);
+  if (/(?:[?&])maxBytes=/.test(fetchUrl)) {
+    return fetchUrl.replace(/([?&])maxBytes=[^&#]*/, `$1maxBytes=${capped}`);
+  }
+  const hashIdx = fetchUrl.indexOf('#');
+  const base = hashIdx >= 0 ? fetchUrl.slice(0, hashIdx) : fetchUrl;
+  const hash = hashIdx >= 0 ? fetchUrl.slice(hashIdx) : '';
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}maxBytes=${capped}${hash}`;
+}
+
+/**
  * Fetch Markdown document images with bounded concurrency and cumulative
  * data-URI memory budget, notifying `onResult` incrementally as each image
  * settles so the WebView can hydrate images progressively without reloading.
@@ -326,7 +354,7 @@ export async function fetchMarkdownDocumentImages(
       const remainingChars = totalBudget - usedChars;
       const maxBytes = Math.min(perImageMaxBytes, bytesForDataUriChars(remainingChars));
       if (maxBytes <= 0) {
-        record(target.rawUrl, { status: 'error' });
+        record(target.rawUrl, { status: 'deferred' });
         continue;
       }
       try {
@@ -336,13 +364,13 @@ export async function fetchMarkdownDocumentImages(
           usedChars += uri.length;
           record(target.rawUrl, { status: 'ready', uri });
         } else if (uri && uri.startsWith('data:image/') && usedChars + dataUriCharsForBytes(0) <= totalBudget) {
-          // Over budget: surface fallback instead of risking WebView OOM.
-          record(target.rawUrl, { status: 'error' });
+          // Over budget: keep slot tappable to open full-res ImageLightbox on demand.
+          record(target.rawUrl, { status: 'deferred' });
         } else {
-          record(target.rawUrl, { status: 'error' });
+          record(target.rawUrl, { status: 'deferred' });
         }
       } catch {
-        if (!isCancelled()) record(target.rawUrl, { status: 'error' });
+        if (!isCancelled()) record(target.rawUrl, { status: 'deferred' });
       }
     }
   };

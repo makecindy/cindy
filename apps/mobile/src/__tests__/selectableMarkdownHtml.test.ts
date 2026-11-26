@@ -285,6 +285,12 @@ describe('buildSelectableMarkdownHtml carousel & interactive images', () => {
     expect(html).toContain('data-xdt-img-index="2"');
     expect(html).toContain('window.__cindyUpdateMarkdownImage');
     expect(html).toContain("markdown-image:open:");
+    expect(html).toContain("status==='deferred'");
+    expect(html).toContain('xdt-md-img-deferred');
+    // Only truly unresolvable slots (`xdt-md-img-error`) block click-to-open;
+    // deferred slots remain tappable to open full-res ImageLightbox on demand.
+    expect(html).toContain("host.classList.contains('xdt-md-img-error')");
+    expect(html).not.toContain("host.classList.contains('xdt-md-img-deferred')");
   });
 
   it('keeps explicit empty imageSources allowlist sealed even if interactiveImages is set', () => {

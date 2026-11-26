@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  appendRemoteMediaMaxBytes,
   buildMarkdownDocumentGallery,
   collectMarkdownDocumentImages,
   fetchMarkdownDocumentImages,
@@ -132,8 +133,21 @@ describe('collectMarkdownDocumentImages + progressive fetch + gallery', () => {
 
     expect(seen).toEqual(['/tmp/a.png', '/tmp/b.png']);
     expect(map.get('/tmp/a.png')).toEqual({ status: 'ready', uri: 'data:image/webp;base64,AAAA' });
-    // Second image exceeds remaining totalBudgetChars → reported as error rather than overflowing WebView.
-    expect(map.get('/tmp/b.png')).toEqual({ status: 'error' });
+    // Second image exceeds remaining totalBudgetChars → marked deferred (not error)
+    // so the user can still tap it to open full-res ImageLightbox on demand.
+    expect(map.get('/tmp/b.png')).toEqual({ status: 'deferred' });
+  });
+
+  it('appends or updates host-enforced maxBytes only on xdt-file:// URLs', () => {
+    expect(
+      appendRemoteMediaMaxBytes('xdt-file://open?path=%2Ftmp%2Fanim.gif&v=123', 2097152),
+    ).toBe('xdt-file://open?path=%2Ftmp%2Fanim.gif&v=123&maxBytes=2097152');
+    expect(
+      appendRemoteMediaMaxBytes('xdt-file://open?path=%2Ftmp%2Fanim.gif&maxBytes=9999&v=1', 1024),
+    ).toBe('xdt-file://open?path=%2Ftmp%2Fanim.gif&maxBytes=1024&v=1');
+    expect(appendRemoteMediaMaxBytes('cindy-media://blobs/abc.png', 1024)).toBe(
+      'cindy-media://blobs/abc.png',
+    );
   });
 
   it('builds ImageLightbox gallery preserving hydrated previewUri and exact tapped index mapping', () => {

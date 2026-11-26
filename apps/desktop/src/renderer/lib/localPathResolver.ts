@@ -915,9 +915,8 @@ export function normalizeMarkdownImageSrc(
   // its URL-only leading slash before the native Windows path goes onward.
   const localPath = src.startsWith('file://') ? resolveLocalPath(src, workingDir) : stripWindowsDriveUriSlash(src);
   const resolvedAbs = normalizeResolvedPathSegments(resolveLocalPath(localPath, workingDir));
-  const url = toLocalFileUrl(resolvedAbs);
-  if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(url, origin.workdir)) {
+  if (origin?.kind === 'ssh' && !isSshRewritableMediaUrl(toLocalFileUrl(resolvedAbs), origin.workdir)) {
     return undefined;
   }
-  return url;
+  return toLocalFileUrl(resolvedAbs);
 }

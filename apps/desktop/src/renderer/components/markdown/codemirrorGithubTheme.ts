@@ -582,7 +582,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         padding: '0 var(--space-4) var(--space-3)',
         textAlign: 'center',
         color: muted,
-        fontSize: '13px',
+        fontSize: 'var(--text-13)',
         lineHeight: '1.45',
       },
       '.cm-md-carousel-bar': {
@@ -612,7 +612,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         borderRadius: 'var(--radius-full)',
         backgroundColor: board,
         cursor: 'pointer',
-        transition: 'width 120ms ease, background-color 120ms ease',
+        transition: 'width var(--motion-fast) var(--motion-ease-out), background-color var(--motion-fast) var(--motion-ease-out)',
       },
       '.cm-md-carousel-dot:hover': {
         backgroundColor: muted,
@@ -622,7 +622,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         backgroundColor: text,
       },
       '.cm-md-carousel-counter': {
-        fontSize: '12px',
+        fontSize: 'var(--text-12)',
         fontVariantNumeric: 'tabular-nums',
         color: muted,
       },
@@ -637,10 +637,10 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         border: `1px solid ${board}`,
         backgroundColor: 'var(--surface-elevated)',
         color: muted,
-        fontSize: '18px',
+        fontSize: 'var(--text-18)',
         lineHeight: '1',
         cursor: 'pointer',
-        transition: 'background-color 120ms ease, color 120ms ease',
+        transition: 'background-color var(--motion-fast) var(--motion-ease-out), color var(--motion-fast) var(--motion-ease-out)',
       },
       '.cm-md-carousel-btn:hover': {
         backgroundColor: 'var(--cmd-palette-item-hover)',

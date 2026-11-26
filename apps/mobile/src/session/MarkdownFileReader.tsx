@@ -107,7 +107,10 @@ export function MarkdownFileReader({
     if (!map || !webView || !loadedRef.current) return;
     const chunks: string[] = [];
     for (const [rawUrl, resolution] of map.entries()) {
-      const signature = resolution.status === 'ready' ? `ready:${resolution.uri.length}:${resolution.uri.slice(0, 32)}` : 'error';
+      const signature =
+        resolution.status === 'ready'
+          ? `ready:${resolution.uri.length}:${resolution.uri.slice(0, 32)}`
+          : resolution.status;
       if (!forceAll && appliedRef.current.get(rawUrl) === signature) continue;
       appliedRef.current.set(rawUrl, signature);
       chunks.push(buildImageHydrateJs(rawUrl, resolution));

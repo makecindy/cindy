@@ -910,6 +910,8 @@ function LightboxImage({
   onZoom,
   streaming = false,
   allowLocalFileOpen = false,
+  documentPreview = false,
+  insideCarousel = false,
   ...props
 }: {
   src?: string;
@@ -917,6 +919,8 @@ function LightboxImage({
   onZoom: (src: string) => void;
   streaming?: boolean;
   allowLocalFileOpen?: boolean;
+  documentPreview?: boolean;
+  insideCarousel?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
@@ -974,7 +978,7 @@ function LightboxImage({
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
         disabled={!src}
-        style={{ cursor: src ? 'pointer' : undefined, marginTop: 'var(--md-image-margin-y, 18px)', marginBottom: 'var(--md-image-margin-y, 18px)', padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
+        style={{ cursor: src ? 'pointer' : undefined, marginTop: insideCarousel ? 0 : 18, marginBottom: insideCarousel ? 0 : 18, padding: 0, border: 0, background: 'transparent', lineHeight: 0 }}
         onClick={() => {
           if (src) onZoom(src);
         }}
@@ -989,8 +993,8 @@ function LightboxImage({
           src={src}
           alt={alt ?? ''}
           style={{
-            maxWidth: 'var(--md-image-max-width, min(100%, 50vw, 480px))',
-            maxHeight: 'var(--md-image-max-height, min(40vh, 420px))',
+            maxWidth: documentPreview ? '100%' : 'min(100%, 50vw, 480px)',
+            maxHeight: documentPreview ? '65vh' : 'min(40vh, 420px)',
             height: 'auto',
           }}
           onError={onError}
@@ -2083,7 +2087,15 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
-            <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
+            <LightboxImage
+              streaming={false}
+              src={resolved}
+              alt={alt}
+              onZoom={setLightboxSrc}
+              documentPreview={enableDocumentGallery}
+              insideCarousel={insideCarousel}
+              {...imageProps}
+            />
           ) : null;
         }
         const writtenSrc = typeof rawLocalSrc === 'string' ? rawLocalSrc : src;
@@ -2124,6 +2136,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                       galleryTarget,
                       galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
                     })}
+                  documentPreview={enableDocumentGallery}
+                  insideCarousel={insideCarousel}
                   {...imageProps}
                   allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
