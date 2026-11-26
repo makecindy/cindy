@@ -450,17 +450,22 @@ async function rollbackCancelledRegistration(
   accountScope: CapturedAccountScope,
   appId: string,
 ): Promise<void> {
-  if (!isAccountScopeCurrent(accountScope)) return;
-  // 新一轮可能已经写入了自己的凭证; 只撤回仍然是这一轮的绑定。
-  if (storage.readCredentials()?.appId !== appId) return;
   try {
-    await wsClient.stop({
-      reason: 'registration-cancelled',
-      clearOwnerBeforeIdle: true,
-      discardPendingTopicLeases: true,
+    // 排进与 saveAndConnect 同一条连接生命周期队列: 新一轮的保存不会与这次
+    // 清理交错, 否则 stop/clear 可能落在刚建好的新绑定上。
+    await runInAccountScope(accountScope, async () => {
+      // 新一轮可能已经写入了自己的凭证; 只撤回仍然是这一轮的绑定。
+      if (storage.readCredentials()?.appId !== appId) return;
+      await wsClient.stop({
+        reason: 'registration-cancelled',
+        clearOwnerBeforeIdle: true,
+        discardPendingTopicLeases: true,
+      });
+      // stop 期间账号或绑定可能已经换人: 清理前再核对一次, 避免误清新绑定。
+      if (storage.readCredentials()?.appId !== appId) return;
+      outbound.forgetBoundAccount();
+      storage.clearAll();
     });
-    outbound.forgetBoundAccount();
-    storage.clearAll();
   } catch (err) {
     getLog().warn(
       `[feishu/ipc] registration rollback failed: ${err instanceof Error ? err.message : String(err)}`,

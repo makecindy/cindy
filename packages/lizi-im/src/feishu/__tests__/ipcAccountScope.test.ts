@@ -554,6 +554,78 @@ describe('Feishu IPC account scope', () => {
     expect(statuses).not.toContain('success');
   });
 
+  it('keeps a fresh binding when the cancelled round finishes its handshake later', async () => {
+    vi.useFakeTimers();
+    const firstConnecting = deferred<'connected'>();
+    mocks.start
+      .mockReturnValueOnce(firstConnecting.promise as never)
+      .mockResolvedValue('connected');
+    mocks.writeCredentials.mockImplementation((((creds: {
+      appId: string;
+      appSecret: string;
+      service: 'feishu' | 'lark';
+    }) => {
+      mocks.readCredentials.mockReturnValue(creds as never);
+      return true;
+    }) as never));
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: 'device-code',
+      userCode: 'user-code',
+      verificationUrl: 'https://example.test',
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration
+      .mockResolvedValueOnce({
+        status: 'success',
+        result: {
+          clientId: 'cli_old',
+          clientSecret: 'old-secret',
+          tenantBrand: 'feishu',
+          ownerOpenId: 'ou_old',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'success',
+        result: {
+          clientId: 'cli_new',
+          clientSecret: 'new-secret',
+          tenantBrand: 'feishu',
+          ownerOpenId: 'ou_new',
+        },
+      });
+
+    const begin = handlers.get('feishuBot:registration-begin');
+    await expect(Promise.resolve(begin?.({ service: 'feishu' }))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(1));
+
+    // 旧一轮还在握手时取消, 并立刻重新扫码走完新一轮。
+    cancelAppRegistration();
+    await expect(Promise.resolve(begin?.({ service: 'feishu' }))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mocks.writeCredentials).toHaveBeenLastCalledWith({
+      appId: 'cli_new',
+      appSecret: 'new-secret',
+      service: 'feishu',
+    });
+    const stopsAfterNewBinding = mocks.stop.mock.calls.length;
+
+    // 旧轮次这时才握手结束: 清理不能动新的凭证和连接。
+    firstConnecting.resolve('connected');
+    await vi.runAllTimersAsync();
+
+    // 旧轮次确实走到了清理路径(排队执行), 但因为绑定已换人而跳过。
+    expect(accountRun).toHaveBeenCalledTimes(3);
+    expect(mocks.readCredentials()).toMatchObject({ appId: 'cli_new' });
+    expect(mocks.clearAll).not.toHaveBeenCalled();
+    expect(mocks.stop.mock.calls.length).toBe(stopsAfterNewBinding);
+  });
+
 describe('Feishu credential connection semantics', () => {
   const credentials = {
     appId: 'cli_test',
