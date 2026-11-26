@@ -13085,6 +13085,9 @@ assertRouteCurrent();
         sessionHostForceRetired = true;
         subscriptionInvalidatedByTransport = false;
         resetCodexGenerationTiming(translatorRt);
+        // Either branch below ends the stream. Session then auto-closes without
+        // calling handle.close(), so retire the local bridge instance here.
+        if (!opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) closeCodexMcpInstance();
 
         const hadPendingWork =
           isTurnInFlight
