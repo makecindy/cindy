@@ -393,6 +393,19 @@ describe('appBadgeService', () => {
     expect(flashFrame).toHaveBeenLastCalledWith(false);
   });
 
+  // Re-enabling notifications can restore an unread group without a new alert (unit).
+  it('only flashes Windows for an increase beyond the restored unread groups', async () => {
+    await freshService('win32');
+    const send = registeredHandlers.get('notification:set-app-attention-count')!;
+    const snapshot = { sessionIds: [], dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+    await send({ sender: mainWebContents }, { ...snapshot, count: 1, windowsSilentIncrease: 1 });
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    expect(flashFrame).not.toHaveBeenCalled();
+
+    await send({ sender: mainWebContents }, { ...snapshot, count: 3, windowsSilentIncrease: 1 });
+    expect(flashFrame).toHaveBeenCalledWith(true);
+  });
+
   it('refreshes Windows descriptions without changing attention or flashing again', async () => {
     const service = await freshService('win32');
     await publish({ sender: mainWebContents }, 3);

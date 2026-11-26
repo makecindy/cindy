@@ -342,7 +342,7 @@ it('excludes archived group unread state from the app badge', () => {
 // The archived-group case does not exercise a visible, unread group with notifications disabled (unit).
 it('keeps muted group unread in navigation without adding it to the Windows taskbar badge', () => {
   vi.stubGlobal('electronAPI', { platform: 'win32', notificationSetAppAttentionCount: state.publish });
-  const group = { id: 'group', archived: false, notificationMode: 'all' };
+  const group = { id: 'group', archived: false, notificationMode: 'all', lastReplyAt: 100 };
   botState.groups = [group];
   botState.unreadGroups = new Set([group.id]);
   const view = render(<AppBadgeAttentionSync />);
@@ -360,4 +360,19 @@ it('keeps muted group unread in navigation without adding it to the Windows task
   view.rerender(<AppBadgeAttentionSync />);
   expect(navigation.result.current.teammates).toBe(2);
   expect(state.publish).not.toHaveBeenCalled();
+
+  botState.groups = [group, botState.groups[1]];
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+    count: 4,
+    windowsSilentIncrease: 1,
+  }));
+
+  botState.groups = [{ ...group, notificationMode: 'none' }];
+  view.rerender(<AppBadgeAttentionSync />);
+  botState.groups = [{ ...group, lastReplyAt: 200 }];
+  view.rerender(<AppBadgeAttentionSync />);
+  const latest = state.publish.mock.lastCall?.[0];
+  expect(latest).toEqual(expect.objectContaining({ count: 4 }));
+  expect(latest).not.toHaveProperty('windowsSilentIncrease');
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -38,14 +38,21 @@ export function AppBadgeAttentionSync() {
   const rosterRemoteBots = useRemoteBots();
   const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [cloud, rosterRemoteBots]);
   useCompanionIslandChats(allBots, bots, unread, remoteBots);
-  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
+  const groupReadRevision = useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
   const unreadLocalBots = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length;
-  const unreadGroups = groups.filter(group => !group.archived && isBotGroupUnread(group));
+  const unreadGroups = useMemo(
+    () => groups.filter(group => !group.archived && isBotGroupUnread(group)),
+    [groups, groupReadRevision],
+  );
   const teammates = unreadLocalBots + unreadGroups.length + remoteBots.filter(isRemoteBotUnread).length;
-  const systemBadgeGroups = window.electronAPI?.platform === 'win32'
-    ? unreadGroups.filter(group => group.notificationMode !== 'none').length
-    : unreadGroups.length;
+  const isWindows = window.electronAPI?.platform === 'win32';
   const owner = getDataOwnerGeneration();
+  const previousBadge = useRef<{
+    owner: typeof owner;
+    count: number;
+    sessionIds: string[];
+    mutedUnreadGroups: Map<string, number>;
+  } | null>(null);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
   const history = useCCSessions({ includeArchived: 'all' });
@@ -93,17 +100,38 @@ export function AppBadgeAttentionSync() {
     // 历史桶(includeArchived:'all')只用于补齐目录 ID 做去重，它的加载/失败不影响
     // 本桶的计数；用它 gate 整次推送会让角标永久停在旧值上(投影响应一次永不再发)。
     if (isLoading || error) return;
+    const previous = previousBadge.current?.owner === owner ? previousBadge.current : null;
+    const mutedUnreadGroups = new Map<string, number>();
+    let windowsSilentIncrease = 0;
+    if (isWindows) {
+      for (const group of unreadGroups) {
+        const lastReplyAt = group.lastReplyAt ?? 0;
+        if (group.notificationMode === 'none') {
+          mutedUnreadGroups.set(group.id, lastReplyAt);
+        } else {
+          const mutedAt = previous?.mutedUnreadGroups.get(group.id);
+          // Restoring the same unread should update the badge without alerting again.
+          if (mutedAt !== undefined && lastReplyAt <= mutedAt) windowsSilentIncrease += 1;
+        }
+      }
+    }
+    const badgeCount = count + unreadLocalBots + unreadGroups.length - mutedUnreadGroups.size;
+    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedUnreadGroups };
+    previousBadge.current = next;
+    if (previous?.count === badgeCount && previous.sessionIds === catalogSessionIds) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
-        count: count + unreadLocalBots + systemBadgeGroups,
+        count: badgeCount,
         sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
+        ...(windowsSilentIncrease > 0 ? { windowsSilentIncrease } : {}),
       })
       .catch((err: unknown) => {
+        if (previousBadge.current === next) previousBadge.current = previous;
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, unreadLocalBots, systemBadgeGroups, isLoading, error, catalogSessionIds, owner]);
+  }, [count, unreadLocalBots, unreadGroups, isWindows, isLoading, error, catalogSessionIds, owner]);
   return null;
 }
