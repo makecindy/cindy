@@ -47,6 +47,24 @@ const snapshot = () => pluginMarketVisualManagement("management:snapshot", { rea
 afterEach(() => { setPluginMarketVisualScenario("normal", true); });
 
 describe("mock market pending-check scenarios", () => {
+  // Maintainer review 03:52: market=readbackFailed puts a market install into "done, but could not read" (its row ends,
+  // the success waits in the list of checks with "Read again"): the installed reads right after the commit fail, the next
+  // one reads the plugin. Tier: unit.
+  it("readbackFailed: the three installed reads after an install commits fail, then the plugin is read", () => {
+    expect(setPluginMarketVisualScenario("readbackFailed", true)).toBe(true);
+    const operationId = "op-readback";
+    pluginMarketVisualManagement("management:begin", { operationId, kind: "install",
+      pluginId: "demo-market/demo-agenda", expectedReleaseId: "demo-agenda@1.4.2" });
+    expect(snapshot).not.toThrow();
+    const consent = (lookup(operationId).result as { consent?: { requestId: string } }).consent;
+    pluginMarketVisualManagement("management:answer", { operationId, requestId: consent!.requestId, confirmed: true });
+    let phase = "";
+    for (let poll = 0; poll < 10 && phase !== "succeeded"; poll++) phase = lookup(operationId).result.phase;
+    expect(phase).toBe("succeeded");
+    for (let read = 0; read < 3; read++) expect(snapshot).toThrow(/TIMEOUT/);
+    const read = snapshot() as { result: { ghosts: Array<{ manifest: { id: string } }> } };
+    expect(read.result.ghosts.map((ghost) => ghost.manifest.id)).toContain("demo-agenda");
+  });
   it.each([["lateConsent", "confirmation"], ["lateResult", "succeeded"], ["unreadResult", "succeeded"]] as const)(
     "%s: begin's reply lost, a protocol error first, then %s", (scenario, phase) => {
       expect(setPluginMarketVisualScenario(scenario, true)).toBe(true);

@@ -182,6 +182,7 @@ pnpm mobile:sim:whoami -- --mock --json
   | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
   | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |
   | 读取失败（更新预检） | `cindy://plugins?market=updateReadFailed`，同上 |
+  | 市场安装成功但没能读取（「已完成，但没能读取」，交给记录列表） | `cindy://plugins?market=readbackFailed`，在市场里安装任一未装插件并允许：装好后紧接着的三次已装读取失败，市场行以「已完成，但没能读取」结束，顶部提示与记录面板列出这条（「重新读取」）；点「重新读取」后读到，面板里显示「已完成」与「打开」（要再截先发 `market=normal` 再发这个） |
   | 市场详情读取失败（「重试」） | `cindy://plugins?market=detailReadFailed`，打开任一未装插件的市场详情（每个插件第一次读取失败，「重试」后正常；同一深链再发一次不重新造失败，要再截失败先发 `market=normal` 再发这个） |
   | 在电脑上完成配置 | 没有界面入口：已装详情的状态行只提供「连接电脑」「重试」（主干现状），`settings` 分支的这句提示点不到；`preview=1`（Missing API key）只显示状态 |
   | 进行中停住（其它入口不可用） | `cindy://plugins?market=hold`，安装或更新并允许后停在「进行中」 |

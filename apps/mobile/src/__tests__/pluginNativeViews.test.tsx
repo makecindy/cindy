@@ -1259,6 +1259,21 @@ it("makes the whole notice one button when it opens something, with its action a
   expect(onPress).toHaveBeenCalledOnce();
 });
 
+// Dispatcher U-1 (iOS eighth reshoot): at AX5 a tap at the left of the directory's notice row, under its icon, did
+// nothing; the text and the right side opened the list. A plain SwiftUI button hit-tests only what it draws, and the
+// compact notice draws no background. Its label now takes taps over its whole frame (padding included): the content
+// shape comes after its padding and frame. Failed on c6efda5691 (no content shape). The tap itself is verified on a
+// device. Tier: unit/jsdom.
+it.each([true, false])("a notice that opens something takes taps over its whole row (compact: %s)", (compact) => {
+  mount(PluginNativeNotice, { testID: "holder", title: "Another operation is under way", compact, onPress: vi.fn(),
+    actions: [{ label: "View", testID: "holder.view", onPress: vi.fn() }] });
+  const modifiers: any[] = bridge.props.get("holder.label").modifiers;
+  const at = (name: string) => modifiers.findIndex((modifier) => modifier && name in modifier);
+  expect(modifiers).toContainEqual({ contentShape: "rectangle" });
+  expect(at("contentShape")).toBeGreaterThan(at("frame"));
+  expect(at("contentShape")).toBeGreaterThan(at("padding"));
+});
+
 it.each(["light", "dark"] as const)("renders the actual top notice as a low-contrast status strip in %s and moves narrow actions below", (mode) => {
   bridge.mode = mode;
   const { container } = mount(PluginNativeNotice, { testID: "strip", title: "Computer offline", icon: "offline", actions: [{ label: "Connect computer", testID: "connect", onPress: vi.fn() }] });

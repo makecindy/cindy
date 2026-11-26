@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { View, useWindowDimensions } from "react-native";
 import { Host, HStack, Image, Text, VStack, Button } from "@expo/ui/swift-ui";
-import { background, buttonStyle, clipShape, controlSize, disabled, fixedSize, font, foregroundStyle, frame, onGeometryChange, padding } from "@expo/ui/swift-ui/modifiers";
+import { background, buttonStyle, clipShape, contentShape, controlSize, disabled, fixedSize, font, foregroundStyle, frame, onGeometryChange, padding, shapes } from "@expo/ui/swift-ui/modifiers";
 import { iconSize, radius, spacing, useTheme } from "@/theme";
 import type { PluginNoticeProps } from "./PluginNotice";
 
@@ -28,12 +28,15 @@ export function PluginNativeNotice({ title, detail, icon = "info", testID, actio
       fixedSize(stackedActions ? { horizontal: false, vertical: true } : { horizontal: true, vertical: false }),
       frame({ minHeight: 44 }), disabled(Boolean(action.disabled))]}
   />);
-  const notice = <VStack testID={onPress ? undefined : testID} alignment="leading" spacing={spacing.sm}
+  const notice = <VStack testID={onPress ? (testID ? testID + ".label" : undefined) : testID} alignment="leading" spacing={spacing.sm}
     modifiers={[
       padding({ horizontal: compact ? 0 : spacing.md, vertical: spacing.xs }),
       frame({ minHeight: 48, maxWidth: Infinity, alignment: "leading" }),
       ...(compact ? [] : [background(colors.surfaceChip), clipShape("roundedRectangle", radius.container)]),
       onGeometryChange(({ width: nextWidth }) => setMeasuredWidth((previous) => previous === nextWidth ? previous : nextWidth)),
+      // A plain button hit-tests only what it draws: a compact notice has no background, so the space beside the text
+      // (under the icon at large text sizes) took no taps (dispatcher U-1). Its whole frame, padding included, takes them.
+      ...(onPress ? [contentShape(shapes.rectangle())] : []),
     ]}>
     <HStack alignment={stackedActions ? "top" : "center"} spacing={spacing.sm}>
       <VStack modifiers={[frame({ width: iconSize.md, alignment: "top" })]}>

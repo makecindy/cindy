@@ -10,10 +10,10 @@ import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagemen
 export type PluginMarketVisualScenario =
   | "normal" | "outdated" | "unavailable" | "organization" | "customPartial" | "empty" | "readFailed"
   | "twoComputers" | "offline" | "hold" | "lateConsent" | "lateResult" | "unreadResult"
-  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed";
+  | "updateReleaseChanged" | "updateSourceChanged" | "updateReadFailed" | "detailReadFailed" | "readbackFailed";
 const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavailable", "organization", "customPartial", "empty",
   "readFailed", "twoComputers", "offline", "hold", "lateConsent", "lateResult", "unreadResult",
-  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed"];
+  "updateReleaseChanged", "updateSourceChanged", "updateReadFailed", "detailReadFailed", "readbackFailed"];
 /**
  * Scripted operations for the list of pending checks (`cindy://plugins?checks=<state>`, see pluginChecksVisualFixture):
  * how the mock computer answers lookups of one operation id. `waiting`: a protocol error every time (lookups stop);
@@ -46,6 +46,12 @@ export function rescriptVisualCheckOperation(operationId: string, behavior: Visu
  */
 const PENDING_CHECK_SCENARIOS: PluginMarketVisualScenario[] = ["lateConsent", "lateResult", "unreadResult"];
 let failInstalledRead = false, failInstalledReadOnCommit = false;
+/**
+ * `readbackFailed` (maintainer review 03:52): the installed reads right after an install commits fail (the row's own read,
+ * the controller's refresh and the list's read of it), so the row ends "done, but could not read" and the success waits
+ * in the list of checks; the next read ("Read again", or the computer coming back) succeeds.
+ */
+let failReadsAfterCommit = 0;
 /** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
 export const PLUGIN_MARKET_VISUAL_SECOND_DEVICE_ID = "cindy-visual-mock-second-mac";
 /** Device-list adjustments for the market scenarios; other scenarios keep the mock computers unchanged. */
@@ -73,6 +79,7 @@ export function setPluginMarketVisualScenario(value: unknown, enabled: boolean):
   scenario = value as PluginMarketVisualScenario;
   failedReads = 0;
   failedDetailReads.clear();
+  failReadsAfterCommit = 0;
   return true;
 }
 
@@ -256,7 +263,7 @@ export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdIn
 /** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
 export function resetPluginMarketVisualComputer() {
   installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; failInstalledRead = false;
-  failInstalledReadOnCommit = false; seedInstalled();
+  failInstalledReadOnCommit = false; failReadsAfterCommit = 0; seedInstalled();
 }
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
@@ -393,6 +400,7 @@ function receipt(operationId: string) {
     return { operationId, phase: "running" };
   installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE, operationId });
   if (scenario === "unreadResult" || failInstalledReadOnCommit) { failInstalledRead = true; failInstalledReadOnCommit = false; }
+  if (scenario === "readbackFailed") failReadsAfterCommit = 3;
   if (script?.behavior === "readingBack") holdInstalledReads = true;
   // Changed on the computer since: an older package of the same plugin replaced it.
   if (script?.behavior === "changed") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: "0.9.0" });
@@ -416,6 +424,7 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
       if (input.read === "catalog") return result(catalog(input.query as Record<string, unknown>));
       if (input.read === "recommendations") return result([]);
       if (failInstalledRead) { failInstalledRead = false; throw failure("TIMEOUT"); }
+      if (failReadsAfterCommit > 0) { failReadsAfterCommit -= 1; throw failure("TIMEOUT"); }
       return result(snapshot());
     case "management:market-detail": {
       const demo = demoFor(input.pluginId);
