@@ -7123,7 +7123,14 @@
           "routeUnavailable": "不可用",
           "routeMeasuring": "测速中…",
           "routeDirectUnavailableHint": "当前网络无法直连此设备",
-          "routePreferenceFailed": "切换线路失败，请重试"
+          "routePreferenceFailed": "切换线路失败，请重试",
+          "autoRule": {
+            "title": "自动选路规则",
+            "faster": "优先选择延迟更低的线路，低延迟微差时偏好直连。",
+            "thresholds": "中转比直连快 25–50 ms 以上自动切到中转；直连恢复至相差 15 ms 以内时切回直连。",
+            "cooldown": "常规切换间隔 30 秒防抖；当前线路大幅劣化（慢 2 倍且超 100 ms）时立即切换。",
+            "peerOverride": "若对端手动锁定了直连或中转，或对端版本较旧，则以对端设置或能力为准。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7271,6 +7278,99 @@
             "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
             "failed": "未能更新「{{name}}」上的 Cindy"
           }
+        },
+        "tabs": {
+          "aria": "拓扑视图",
+          "devices": "设备连接",
+          "providers": "远程供应商"
+        },
+        "providers": {
+          "empty": "当前没有运行中的远程供应商任务。发起任务时选择其他电脑或分享来的供应商，运行期间会在这里实时显示任务、中转和远程机器的连接路径。",
+          "noMatch": "没有匹配当前筛选条件的任务、机器或中转。",
+          "searchPlaceholder": "搜索任务、机器或中转…",
+          "clearFilter": "清除筛选",
+          "expand": "展开",
+          "collapse": "收起",
+          "groupTitle": "{{provider}} 供应商组",
+          "groupCount": "共 {{count}} 台",
+          "groupIdleSummary": "其余 {{count}} 台组内成员：{{online}} 在线 · {{offline}} 离线",
+          "filter": {
+            "aria": "按任务状态筛选",
+            "all": "全部关联任务 ({{count}})",
+            "running": "仅运行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "我的任务",
+            "path": "传输路径",
+            "machines": "远程供应商机器"
+          },
+          "usage": {
+            "remoteModel": "远程模型",
+            "remoteTask": "远程任务"
+          },
+          "bundle": {
+            "mixed": "{{running}} 个运行中 · {{ready}} 个就绪",
+            "runningOnly": "{{running}} 个运行中",
+            "readyOnly": "{{ready}} 个就绪",
+            "countBadge": "共 {{count}}",
+            "popoverTitle": "绑定至 {{name}} 的任务 ({{count}})"
+          },
+          "badge": {
+            "own": "我的电脑",
+            "groupMember": "组节点",
+            "share": "跨账号分享",
+            "shareShort": "分享",
+            "shareGroup": "跨账号分享组 · {{count}} 台",
+            "shareGroupShort": "分享组 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "官方",
+            "selfHostedShort": "自建",
+            "sharerRelayShort": "分享方中转",
+            "officialFull": "Cindy 官方中转",
+            "selfHostedFull": "我的自建中转",
+            "sharerRelayFull": "分享方自建中转"
+          },
+          "status": {
+            "ready": "在线就绪",
+            "busy": "忙碌",
+            "paused": "已暂停",
+            "idle": "空闲",
+            "standby": "在线待命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承载 {{count}} 个任务",
+            "ready": "已就绪 · 承载 {{count}} 个任务"
+          },
+          "popover": {
+            "models": "在用模型",
+            "tasksCount": "承载任务 ({{count}})",
+            "clickToOpenHint": "点击打开任务",
+            "relayHost": "中转地址",
+            "relayRegion": "区域",
+            "relayHop": "本机到中转",
+            "relayLoad": "经此中转",
+            "relayLoadValue": "{{machines}} 台机器 · {{tasks}} 个任务"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 台在线远程供应商当前无任务调用",
+            "show": "展开空闲供应商",
+            "hide": "收起空闲供应商"
+          },
+          "stats": {
+            "empty": "当前无运行中的远程供应商任务",
+            "tasks": "{{total}} 个任务",
+            "tasksWithRunning": "{{total}} 个任务（{{running}} 运行中）",
+            "machines": "{{active}} 台供应商机器",
+            "machinesWithTotal": "{{active}} 台活跃 / 共 {{total}} 台供应商机器",
+            "relays": "{{count}} 台中转"
+          },
+          "legend": {
+            "live": "蓝色流动虚线：正在收发消息",
+            "ready": "绿色实线：Agent-Net 链路已就绪",
+            "busy": "橙点：任务运行中 / 机器忙碌",
+            "error": "红色点线：无响应或已暂停"
+          }
         }
       }
     },
@@ -7399,7 +7499,8 @@
       "localNetwork": {
         "label": "本地网络",
         "deniedHint": "没有这个权限时，同一网络下的电脑和手机无法直接连接这台电脑，只能经中转，速度会变慢。",
-        "settingsHint": "请在「系统设置 › 隐私与安全性 › 本地网络」里打开 Cindy，回到这里会自动生效。"
+        "promptedHint": "请在弹出的系统窗口中点击「允许」；若没有弹窗，可前往系统设置手动开启。",
+        "settingsHint": "在「隐私与安全性」里找到「本地网络」并开启 Cindy；若列表里没有，点左下角「+」添加当前应用，回到这里会自动生效。"
       }
     },
     "imBot": {
@@ -7864,6 +7965,10 @@
         "toggle-sidebar": {
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"
+        },
+        "copy-session-link": {
+          "label": "复制任务链接",
+          "description": "复制当前打开的任务链接"
         },
         "session-history-back": {
           "label": "上一个任务",
@@ -11987,6 +12092,8 @@
         "loadEarlierFailed": "更早的消息没能加载，请再试一次",
         "emptyTitle": "群里还没有消息",
         "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
+        "emptyDescriptionWithAssistant": "可以 @Cindy，或从右上角邀请朋友和伙伴。",
+        "emptyDescriptionInvite": "可以从右上角邀请朋友和伙伴。",
         "roundEnded": "伙伴们说完了",
         "stepTag": "第 {{count}} 步",
         "sending": "发送中",
@@ -12318,7 +12425,7 @@
         "loginRequired": "请先登录当前账号，再重试。",
         "requestFailed": "群聊服务暂时无法连接，请稍后重试。",
         "copyFailed": "复制失败，请选中链接手动复制。",
-        "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
+        "createDescription": "创建后可以邀请朋友和伙伴。",
         "settings": {
           "notifications": {
             "title": "消息通知",
@@ -15622,7 +15729,6 @@
       "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
       "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
-      "upstreamEmpty550": "模型服务返回 HTTP 550（无响应内容）",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
       "retryTitle": "重新发送最后一条消息",
@@ -16699,6 +16805,8 @@
       "retryIn": "{{seconds}} 秒后自动重试"
     },
     "subscriptionAccountError": {
+      "unreachable": "暂时连不上 Codex 账号服务。",
+      "rechecking": "暂时连不上 Codex 账号服务，将于 {{resetAt}} 自动重试。",
       "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
       "poolRetryUntil": "可在 {{resetAt}} 后重试。",
       "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
@@ -19177,6 +19285,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "在伙伴设置中选择「{{restart}}」，可重建工作上下文并保留历史消息。想单独讨论一件事，可以在消息操作中选择「{{startTopic}}」。",
     "viewSkillDetails": "查看技能详情",
     "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载",
     "pluginSkillSetup": {
@@ -22653,6 +22762,16 @@
     "refresh": "刷新配额"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录方式",
       "secretHint": "Key 只交给插件，保存在这个账号自己的文件夹里；Cindy 不保存，也不会发到其他电脑。",

@@ -7123,7 +7123,14 @@
           "routeUnavailable": "사용 불가",
           "routeMeasuring": "측정 중…",
           "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다",
-          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요."
+          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요.",
+          "autoRule": {
+            "title": "자동 경로 선택 규칙",
+            "faster": "지연이 더 낮은 경로를 우선 선택하며, 미세한 차이일 때는 직접 연결을 선호합니다.",
+            "thresholds": "릴레이가 직접 연결보다 25–50 ms 이상 빠르면 릴레이로 전환하고, 직접 연결이 15 ms 이내로 회복되면 돌아옵니다.",
+            "cooldown": "일반 전환은 30초 쿨다운으로 튐을 방지하며, 현재 경로가 크게 나빠지면(2배 이상 느리고 100 ms 이상 차이) 즉시 전환합니다.",
+            "peerOverride": "상대 기기가 경로를 직접 고정했거나 구버전인 경우 상대 설정이나 기능을 따릅니다."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7271,6 +7278,99 @@
             "busy": "“{{name}}”에서 다른 업데이트가 진행 중입니다. 잠시 후 다시 시도하세요.",
             "failed": "“{{name}}”의 Cindy를 업데이트하지 못했습니다."
           }
+        },
+        "tabs": {
+          "aria": "토폴로지 보기",
+          "devices": "기기 연결",
+          "providers": "원격 제공자"
+        },
+        "providers": {
+          "empty": "현재 실행 중인 원격 제공자 작업이 없습니다. 다른 컴퓨터나 공유 제공자에서 작업이 실행되면 실시간 경로와 릴레이가 여기에 표시됩니다.",
+          "noMatch": "현재 필터와 일치하는 작업, 기기 또는 릴레이가 없습니다.",
+          "searchPlaceholder": "작업, 기기 또는 릴레이 검색…",
+          "clearFilter": "필터 지우기",
+          "expand": "펼치기",
+          "collapse": "접기",
+          "groupTitle": "{{provider}} 제공자 그룹",
+          "groupCount": "총 {{count}}대",
+          "groupIdleSummary": "나머지 {{count}}대: 온라인 {{online}} · 오프라인 {{offline}}",
+          "filter": {
+            "aria": "작업 상태별 필터",
+            "all": "전체 연결 작업 ({{count}})",
+            "running": "실행 중만 ({{count}})"
+          },
+          "columns": {
+            "tasks": "내 작업",
+            "path": "경로",
+            "machines": "원격 제공자 기기"
+          },
+          "usage": {
+            "remoteModel": "원격 모델",
+            "remoteTask": "원격 작업"
+          },
+          "bundle": {
+            "mixed": "실행 중 {{running}} · 대기 {{ready}}",
+            "runningOnly": "실행 중 {{running}}",
+            "readyOnly": "대기 {{ready}}",
+            "countBadge": "총 {{count}}",
+            "popoverTitle": "{{name}}의 작업 ({{count}})"
+          },
+          "badge": {
+            "own": "내 컴퓨터",
+            "groupMember": "그룹 노드",
+            "share": "공유 제공자",
+            "shareShort": "공유",
+            "shareGroup": "공유 그룹 · {{count}}대",
+            "shareGroupShort": "공유 그룹 · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "공식",
+            "selfHostedShort": "자체 구축",
+            "sharerRelayShort": "공유자 릴레이",
+            "officialFull": "Cindy 공식 릴레이",
+            "selfHostedFull": "내 자체 릴레이",
+            "sharerRelayFull": "공유자 자체 릴레이"
+          },
+          "status": {
+            "ready": "온라인",
+            "busy": "사용 중",
+            "paused": "일시 중지됨",
+            "idle": "유휴",
+            "standby": "대기 중"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 작업 {{count}}개",
+            "ready": "준비됨 · 작업 {{count}}개"
+          },
+          "popover": {
+            "models": "사용 모델",
+            "tasksCount": "연결된 작업 ({{count}})",
+            "clickToOpenHint": "클릭하여 열기",
+            "relayHost": "릴레이 호스트",
+            "relayRegion": "리전",
+            "relayHop": "로컬 → 릴레이",
+            "relayLoad": "이 릴레이 경유",
+            "relayLoadValue": "기기 {{machines}}대 · 작업 {{tasks}}개"
+          },
+          "idleStrip": {
+            "summary": "다른 온라인 원격 제공자 {{count}}대가 현재 대기 중입니다",
+            "show": "대기 제공자 펼치기",
+            "hide": "대기 제공자 접기"
+          },
+          "stats": {
+            "empty": "실행 중인 원격 제공자 작업 없음",
+            "tasks": "작업 {{total}}개",
+            "tasksWithRunning": "작업 {{total}}개 (실행 중 {{running}})",
+            "machines": "제공자 기기 {{active}}대",
+            "machinesWithTotal": "활성 {{active}} / 총 {{total}}대 제공자",
+            "relays": "릴레이 {{count}}개"
+          },
+          "legend": {
+            "live": "파란 점선: 메시지 송수신 중",
+            "ready": "초록 실선: Agent-Net 연결 준비됨",
+            "busy": "주황 점: 작업 실행 중 / 기기 사용 중",
+            "error": "빨간 점선: 응답 없음 또는 일시 중지"
+          }
         }
       }
     },
@@ -7399,7 +7499,8 @@
       "localNetwork": {
         "label": "로컬 네트워크",
         "deniedHint": "이 권한이 없으면 같은 네트워크의 컴퓨터와 휴대폰이 이 컴퓨터에 직접 연결할 수 없고 릴레이를 거쳐야 해서 느려집니다.",
-        "settingsHint": "시스템 설정 › 개인정보 보호 및 보안 › 로컬 네트워크에서 Cindy를 켜세요. 돌아오면 바로 적용됩니다."
+        "promptedHint": "macOS 권한 알림에서 허용을 클릭하세요. 알림이 뜨지 않으면 시스템 설정에서 직접 켤 수 있습니다.",
+        "settingsHint": "개인정보 보호 및 보안에서 로컬 네트워크를 열고 Cindy를 켜세요. 목록에 없으면 +를 눌러 이 앱을 추가하면 돌아오는 즉시 적용됩니다."
       }
     },
     "imBot": {
@@ -7870,6 +7971,10 @@
         "toggle-sidebar": {
           "label": "사이드바 전환",
           "description": "왼쪽 세션 목록을 접거나 펼칩니다"
+        },
+        "copy-session-link": {
+          "label": "세션 링크 복사",
+          "description": "열려 있는 세션의 링크 복사"
         },
         "session-history-back": {
           "label": "이전 세션",
@@ -11987,6 +12092,8 @@
         "loadEarlierFailed": "이전 메시지를 불러오지 못했습니다. 다시 시도하세요",
         "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
         "emptyDescription": "한마디 하면 동반자들이 이어서 대화합니다. @로 동반자를 지정하면 그 동반자만 답합니다.",
+        "emptyDescriptionWithAssistant": "@Cindy를 멘션하거나 오른쪽 위 초대 메뉴에서 사람을 초대하고 동반자를 추가할 수 있어요.",
+        "emptyDescriptionInvite": "오른쪽 위 초대 메뉴에서 사람을 초대하거나 동반자를 추가할 수 있어요.",
         "roundEnded": "동반자들이 말을 마쳤습니다",
         "stepTag": "{{count}}단계",
         "sending": "보내는 중",
@@ -12318,7 +12425,7 @@
         "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
         "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
         "copyFailed": "복사하지 못했습니다. 링크를 선택하여 직접 복사하세요.",
-        "createDescription": "동반자를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
+        "createDescription": "그룹을 만든 후 사람을 초대하거나 동반자를 추가할 수 있어요.",
         "settings": {
           "notifications": {
             "title": "메시지 알림",
@@ -15622,7 +15729,6 @@
       "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
       "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
-      "upstreamEmpty550": "모델 서비스에서 빈 응답과 함께 HTTP 550을 반환했어요",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -16699,6 +16805,8 @@
       "retryIn": "{{seconds}}초 후 자동 재시도"
     },
     "subscriptionAccountError": {
+      "unreachable": "현재 Codex 계정 서비스에 연결할 수 없습니다.",
+      "rechecking": "현재 Codex 계정 서비스에 연결할 수 없습니다. {{resetAt}}에 다시 시도합니다.",
       "poolModelLimited": "이 모델의 구독 사용량이 한도에 도달했습니다. 다른 모델로 전환할 수 있습니다.",
       "poolRetryUntil": "{{resetAt}} 이후에 다시 시도할 수 있습니다.",
       "poolOtherSignedOut": "다른 구독 계정이 로그아웃되어 있습니다. 작업을 실행하는 컴퓨터에서 로그인한 후 다시 시도할 수 있습니다.",
@@ -19177,6 +19285,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "동반자 설정에서 ‘{{restart}}’을 선택하면 메시지 기록을 유지하면서 작업 맥락을 다시 구성할 수 있습니다. 별도로 이야기하려면 메시지 메뉴에서 ‘{{startTopic}}’을 선택하세요.",
     "viewSkillDetails": "스킬 상세 보기",
     "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다.",
     "pluginSkillSetup": {
@@ -22653,6 +22762,16 @@
     "refresh": "할당량 새로고침"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "계정 추가 방법",
+      "connect": "기존 로그인 연결…",
+      "found": "연결 가능 {{count}}개",
+      "title": "{{device}}의 로그인",
+      "note": "Cindy와 CLI가 선택한 계정의 설정을 공유합니다.",
+      "attach": "연결",
+      "choose": "다른 폴더 선택…",
+      "unverified": "이 구독 로그인을 확인할 수 없습니다."
+    },
     "pluginSignIn": {
       "method": "로그인 방법",
       "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",

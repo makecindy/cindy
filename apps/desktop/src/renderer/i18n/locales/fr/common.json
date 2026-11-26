@@ -7235,7 +7235,14 @@
           "routeUnavailable": "Indisponible",
           "routeMeasuring": "Mesure…",
           "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
-          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer.",
+          "autoRule": {
+            "title": "Règles de routage automatique",
+            "faster": "Choisit le chemin le plus rapide, avec préférence pour le direct en cas d’écart minime.",
+            "thresholds": "Bascule sur le relais s’il gagne 25–50 ms+ ; revient au direct dès que l’écart descend sous 15 ms.",
+            "cooldown": "Temporisation de 30 s anti-oscillation ; bascule immédiate en cas de forte dégradation (≥ 2× plus lent et ≥ 100 ms d’écart).",
+            "peerOverride": "Si l’appareil distant a forcé direct/relais ou utilise une ancienne version, son réglage ou sa capacité prévaut."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7383,6 +7390,99 @@
             "busy": "« {{name}} » a déjà une mise à jour en cours d'exécution. Réessayez dans un instant.",
             "failed": "Impossible de mettre à jour Cindy sur « {{name}} »."
           }
+        },
+        "tabs": {
+          "aria": "Vue topologie",
+          "devices": "Connexions d’appareils",
+          "providers": "Fournisseurs distants"
+        },
+        "providers": {
+          "empty": "Aucune tâche n’est en cours d'exécution sur un fournisseur distant. Lorsqu’une tâche s’exécute sur un autre ordinateur ou fournisseur partagé, son trajet et son relais s’affichent ici.",
+          "noMatch": "Aucune tâche, machine ou relais ne correspond au filtre.",
+          "searchPlaceholder": "Rechercher tâches, machines ou relais…",
+          "clearFilter": "Effacer le filtre",
+          "expand": "Déplier",
+          "collapse": "Replier",
+          "groupTitle": "Groupe {{provider}}",
+          "groupCount": "{{count}} au total",
+          "groupIdleSummary": "{{count}} autres membres : {{online}} en ligne · {{offline}} hors ligne",
+          "filter": {
+            "aria": "Filtrer par état des tâches",
+            "all": "Toutes les tâches ({{count}})",
+            "running": "En cours d'exécution ({{count}})"
+          },
+          "columns": {
+            "tasks": "Mes tâches",
+            "path": "Trajet",
+            "machines": "Machines fournisseurs distantes"
+          },
+          "usage": {
+            "remoteModel": "Modèle distant",
+            "remoteTask": "Tâche distante"
+          },
+          "bundle": {
+            "mixed": "{{running}} en cours d'exécution · {{ready}} prêtes",
+            "runningOnly": "{{running}} en cours d'exécution",
+            "readyOnly": "{{ready}} prêtes",
+            "countBadge": "{{count}} tot.",
+            "popoverTitle": "Tâches sur {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "Mon ordinateur",
+            "groupMember": "Groupe",
+            "share": "Fournisseur partagé",
+            "shareShort": "Partagé",
+            "shareGroup": "Groupe partagé · {{count}}",
+            "shareGroupShort": "Groupe · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Officiel",
+            "selfHostedShort": "Auto-hébergé",
+            "sharerRelayShort": "Relais du partageur",
+            "officialFull": "Relais officiel Cindy",
+            "selfHostedFull": "Relais auto-hébergé",
+            "sharerRelayFull": "Relais auto-hébergé du partageur"
+          },
+          "status": {
+            "ready": "En ligne",
+            "busy": "Occupé",
+            "paused": "En pause",
+            "idle": "Inactif",
+            "standby": "En veille"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} tâches",
+            "ready": "Prêt · {{count}} tâches"
+          },
+          "popover": {
+            "models": "Modèles actifs",
+            "tasksCount": "Tâches liées ({{count}})",
+            "clickToOpenHint": "Cliquer pour ouvrir",
+            "relayHost": "Hôte relais",
+            "relayRegion": "Région",
+            "relayHop": "Local vers relais",
+            "relayLoad": "Via ce relais",
+            "relayLoadValue": "{{machines}} machines · {{tasks}} tâches"
+          },
+          "idleStrip": {
+            "summary": "{{count}} autres fournisseurs distants en ligne sont inactifs",
+            "show": "Afficher les fournisseurs inactifs",
+            "hide": "Masquer les fournisseurs inactifs"
+          },
+          "stats": {
+            "empty": "Aucune tâche en cours d'exécution sur un fournisseur distant",
+            "tasks": "{{total}} tâches",
+            "tasksWithRunning": "{{total}} tâches ({{running}} en cours d'exécution)",
+            "machines": "{{active}} machines fournisseurs",
+            "machinesWithTotal": "{{active}} actives / {{total}} fournisseurs",
+            "relays": "{{count}} relais"
+          },
+          "legend": {
+            "live": "Tirets bleus animés : échange de messages",
+            "ready": "Ligne verte : lien Agent-Net prêt",
+            "busy": "Point orange : tâche en cours d'exécution / occupé",
+            "error": "Pointillés rouges : sans réponse ou en pause"
+          }
         }
       }
     },
@@ -7511,7 +7611,8 @@
       "localNetwork": {
         "label": "Réseau local",
         "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
-        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+        "promptedHint": "Cliquez sur Autoriser dans la fenêtre macOS. Si aucune fenêtre n’apparaît, ouvrez Réglages Système pour l’activer manuellement.",
+        "settingsHint": "Dans Confidentialité et sécurité, ouvrez Réseau local et activez Cindy. Si l’app n’apparaît pas, cliquez sur + pour l’ajouter ; le changement s’applique dès votre retour."
       }
     },
     "imBot": {
@@ -7982,6 +8083,10 @@
         "toggle-sidebar": {
           "label": "Afficher/masquer la barre latérale",
           "description": "Réduire ou développer la barre latérale de la liste des sessions"
+        },
+        "copy-session-link": {
+          "label": "Copier le lien de la session",
+          "description": "Copier le lien de la session ouverte"
         },
         "session-history-back": {
           "label": "Tâche précédente",
@@ -12124,6 +12229,8 @@
         "loadEarlierFailed": "Impossible de charger les messages précédents. Réessayez.",
         "emptyTitle": "Aucun message dans ce groupe pour l'instant",
         "emptyDescription": "Dites quelque chose pour commencer et vos amis se joindront à la conversation. Mentionnez un ami avec @ pour que lui seul réponde.",
+        "emptyDescriptionWithAssistant": "Mentionnez @Cindy ou utilisez le menu d’invitation en haut à droite pour inviter des personnes ou ajouter des amis.",
+        "emptyDescriptionInvite": "Utilisez le menu d’invitation en haut à droite pour inviter des personnes ou ajouter des amis.",
         "roundEnded": "Les amis ont terminé",
         "stepTag": "Étape {{count}}",
         "sending": "Envoi",
@@ -12462,7 +12569,7 @@
         "loginRequired": "Connectez-vous à votre compte et réessayez.",
         "requestFailed": "Le service de conversation est indisponible. Réessayez dans un instant.",
         "copyFailed": "Impossible de copier. Sélectionnez le lien et copiez-le manuellement.",
-        "createDescription": "Choisissez des amis, ou créez d'abord le groupe et invitez des personnes à le rejoindre.",
+        "createDescription": "Une fois le groupe créé, vous pouvez inviter des personnes et ajouter des amis.",
         "settings": {
           "name": "Nom du groupe",
           "topic": "Sujet",
@@ -15787,7 +15894,6 @@
       "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
       "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
-      "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
@@ -16928,6 +17034,8 @@
       "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+      "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
       "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
       "poolRetryUntil": "Réessayez après {{resetAt}}.",
       "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
@@ -19427,6 +19535,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Dans les réglages de l’ami, choisis « {{restart}} » pour reconstruire le contexte de travail tout en conservant l’historique des messages. Pour une discussion à part, choisis « {{startTopic}} » dans les actions d’un message.",
     "viewSkillDetails": "Voir les détails du skill",
     "projectSkillNotLoaded": "Cette tâche Pi n'a pas chargé ce skill de projet. Les nouvelles tâches tenteront de le charger automatiquement.",
     "pluginSkillSetup": {
@@ -22957,6 +23066,16 @@
     "refresh": "Actualiser le quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Autres options d’ajout",
+      "connect": "Connecter une session existante…",
+      "found": "{{count}} disponibles",
+      "title": "Sessions sur {{device}}",
+      "note": "Cindy et le terminal utiliseront la même configuration de compte.",
+      "attach": "Connecter",
+      "choose": "Choisir un autre dossier…",
+      "unverified": "Impossible de vérifier cet abonnement."
+    },
     "pluginSignIn": {
       "method": "Méthode de connexion",
       "secretHint": "La clé est transmise uniquement au plugin, qui la conserve dans le dossier propre à ce compte. Cindy ne la stocke pas et ne l’envoie pas à d’autres ordinateurs.",

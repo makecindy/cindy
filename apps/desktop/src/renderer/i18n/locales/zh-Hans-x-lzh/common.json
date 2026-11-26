@@ -7123,7 +7123,14 @@
           "routeUnavailable": "不可达",
           "routeMeasuring": "测速中…",
           "routeDirectUnavailableHint": "今网路未能直达此器",
-          "routePreferenceFailed": "易道未成，请复试之"
+          "routePreferenceFailed": "易道未成，请复试之",
+          "autoRule": {
+            "title": "自动择路之规",
+            "faster": "择延迟更低之途，微差则尚直连。",
+            "thresholds": "中转快于直连 25–50 ms 以上则转中转；直连复至差 15 ms 以内则归直连。",
+            "cooldown": "常易隔三十息以防抖；若今途骤劣（慢二倍且逾 100 ms）则立易。",
+            "peerOverride": "若彼端自定直连或中转，或版本尚旧，则从彼端之设与能。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7271,6 +7278,99 @@
             "busy": "「{{name}}」方行他更，少顷再试",
             "failed": "未能更「{{name}}」之 Cindy"
           }
+        },
+        "tabs": {
+          "aria": "拓扑图观",
+          "devices": "器联",
+          "providers": "远供"
+        },
+        "providers": {
+          "empty": "今无方行之远供务。择他机或所享之供以启务，行间即见其径与驿。",
+          "noMatch": "无合此筛之务、机或驿。",
+          "searchPlaceholder": "索务、机或驿…",
+          "clearFilter": "清筛",
+          "expand": "展",
+          "collapse": "敛",
+          "groupTitle": "{{provider}} 供群",
+          "groupCount": "凡 {{count}} 机",
+          "groupIdleSummary": "余 {{count}} 机：在席 {{online}} · 离席 {{offline}}",
+          "filter": {
+            "aria": "依务态筛之",
+            "all": "诸系之务 ({{count}})",
+            "running": "唯行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "吾务",
+            "path": "通途",
+            "machines": "远供之机"
+          },
+          "usage": {
+            "remoteModel": "远模",
+            "remoteTask": "远务"
+          },
+          "bundle": {
+            "mixed": "{{running}} 行中 · {{ready}} 待命",
+            "runningOnly": "{{running}} 行中",
+            "readyOnly": "{{ready}} 待命",
+            "countBadge": "凡 {{count}}",
+            "popoverTitle": "系于 {{name}} 之务 ({{count}})"
+          },
+          "badge": {
+            "own": "吾机",
+            "groupMember": "群员",
+            "share": "他户所享",
+            "shareShort": "所享",
+            "shareGroup": "所享供群 · {{count}} 机",
+            "shareGroupShort": "享群 · {{count}} 机"
+          },
+          "relayRole": {
+            "officialShort": "官驿",
+            "selfHostedShort": "自驿",
+            "sharerRelayShort": "享主之驿",
+            "officialFull": "Cindy 官驿",
+            "selfHostedFull": "吾之自驿",
+            "sharerRelayFull": "享主自建之驿"
+          },
+          "status": {
+            "ready": "已备",
+            "busy": "方忙",
+            "paused": "已辍",
+            "idle": "闲置",
+            "standby": "候命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承 {{count}} 务",
+            "ready": "已备 · 承 {{count}} 务"
+          },
+          "popover": {
+            "models": "所用之模",
+            "tasksCount": "所承之务 ({{count}})",
+            "clickToOpenHint": "点之即赴",
+            "relayHost": "驿址",
+            "relayRegion": "域",
+            "relayHop": "本机至驿",
+            "relayLoad": "经此驿者",
+            "relayLoadValue": "{{machines}} 机 · {{tasks}} 务"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 远供在席候命，今无务召之",
+            "show": "展闲供",
+            "hide": "敛闲供"
+          },
+          "stats": {
+            "empty": "今无方行之远供务",
+            "tasks": "{{total}} 务",
+            "tasksWithRunning": "{{total}} 务（{{running}} 行中）",
+            "machines": "{{active}} 供机",
+            "machinesWithTotal": "活 {{active}} / 凡 {{total}} 供机",
+            "relays": "{{count}} 驿"
+          },
+          "legend": {
+            "live": "青虚流线：方通讯息",
+            "ready": "绿实线：Agent-Net 脉通",
+            "busy": "橙点：务行中 / 机方忙",
+            "error": "朱点线：不应或已辍"
+          }
         }
       }
     },
@@ -7399,7 +7499,8 @@
       "localNetwork": {
         "label": "本地网络",
         "deniedHint": "无此权，同网之电脑与手机不得直连此机，唯经中继，其速迟矣。",
-        "settingsHint": "请于「系统设置 › 隐私与安全性 › 本地网络」启 Cindy，归此即自生效。"
+        "promptedHint": "请于系统弹框中点「允许」；若无弹框，可往系统设置手启之。",
+        "settingsHint": "于「隐私与安全性」觅「本地网络」而启 Cindy；若列中无之，点「+」添此应用，归即自效。"
       }
     },
     "imBot": {
@@ -7870,6 +7971,10 @@
         "toggle-sidebar": {
           "label": "显隐侧栏",
           "description": "收或展左侧差事录"
+        },
+        "copy-session-link": {
+          "label": "录差事链接",
+          "description": "录当前差事之链接"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -11987,6 +12092,8 @@
         "loadEarlierFailed": "更早之讯未能载，请再试",
         "emptyTitle": "群议寂寂，尚无一言",
         "emptyDescription": "君先开言，群贤毕至，自当接续。@ 某同伴则仅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友与同伴。",
+        "emptyDescriptionInvite": "可自右上邀友与同伴。",
         "roundEnded": "同伴言毕",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12318,7 +12425,7 @@
         "loginRequired": "请先登录当前名籍，再试。",
         "requestFailed": "暂不能连群议服务，请稍后再试。",
         "copyFailed": "录之未成，请选取链接手录之。",
-        "createDescription": "可择同伴，亦可先立群议，再邀友入之。",
+        "createDescription": "群既立，可邀友与同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主题",
@@ -15613,7 +15720,6 @@
       "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
@@ -16699,6 +16805,8 @@
       "retryIn": "{{seconds}} 秒后自试"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 账号服务暂不可达。",
+      "rechecking": "Codex 账号服务暂不可达，至 {{resetAt}} 将复试。",
       "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
       "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
@@ -19177,6 +19285,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "于同伴设置中选「{{restart}}」，可重建当前语境，旧讯仍存。欲另议一事，可在消息操作中选「{{startTopic}}」。",
     "viewSkillDetails": "观技艺之详",
     "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
     "pluginSkillSetup": {
@@ -22653,6 +22762,16 @@
     "refresh": "更新额度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录之法",
       "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",

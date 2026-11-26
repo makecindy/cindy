@@ -191,20 +191,22 @@ export function NativePreviewHeader({
         testID={closeTestID}
       /> : null}
       <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
-        <Host {...host} matchContents style={{ maxWidth: "100%" }}>
-          <NativeText
-            testID="preview.title"
-            modifiers={[
-              font({ size: typeScale.body, weight: "semibold" }),
-              lineLimit(1),
-              padding({ horizontal: spacing.lg }),
-              frame({ height: SIZE }),
-              ...groupStyle,
-            ]}
-          >
-            {name}
-          </NativeText>
-        </Host>
+        {name === undefined ? null : (
+          <Host {...host} matchContents style={{ maxWidth: "100%" }}>
+            <NativeText
+              testID="preview.title"
+              modifiers={[
+                font({ size: typeScale.body, weight: "semibold" }),
+                lineLimit(1),
+                padding({ horizontal: spacing.lg }),
+                frame({ height: SIZE }),
+                ...groupStyle,
+              ]}
+            >
+              {name}
+            </NativeText>
+          </Host>
+        )}
       </View>
       {!rail ? <Host {...host} style={{ width: SIZE, height: SIZE }}>
         <Menu

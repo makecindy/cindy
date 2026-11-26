@@ -35,7 +35,7 @@ import { matchPath, useLocation, useNavigate, useMatch, useNavigation } from 're
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
+import { CountBadge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
@@ -115,7 +115,7 @@ export interface SidebarNavigationAction {
 }
 
 function EntryCountBadge({ count, className }: { count?: SidebarNavigationAction['count']; className?: string }) {
-  return count ? <NavigationCountBadge count={count.value} label={count.label} className={className} /> : null;
+  return count ? <CountBadge count={count.value} label={count.label} className={className} /> : null;
 }
 
 /** One definition per built-in entry, shared by the rows, the rail and More. */

@@ -424,10 +424,12 @@ export async function recordSchedulerTurnCost(
     estimatedAmounts?: RegionalMoney[];
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
+    /** A shared estimate has no independent local ledger entry if its message disappears. */
+    requireMessage?: true;
   },
   deps: SchedulerTurnCostFallbackDeps = defaultSchedulerTurnCostFallbackDeps,
 ): Promise<string | null> {
-  const { clientId, turnOrigin, actualAmounts, estimatedAmounts, ...segment } = args;
+  const { clientId, turnOrigin, actualAmounts, estimatedAmounts, requireMessage, ...segment } = args;
   const mixedActuals = actualAmounts && actualAmounts.length > 1;
   const includeEstimates = estimatedAmounts?.length && (estimatedAmounts.length > 1 || args.money.kind === 'actual-cost');
   const details = mixedActuals || includeEstimates
@@ -444,6 +446,7 @@ export async function recordSchedulerTurnCost(
     if (recorded) return null;
   }
   if (
+    requireMessage ||
     turnOrigin?.kind !== 'scheduler' ||
     typeof turnOrigin.runId !== 'string' ||
     !turnOrigin.runId

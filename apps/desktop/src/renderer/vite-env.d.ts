@@ -187,6 +187,7 @@ interface DeviceLinkPeerLinksSnapshot {
   traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  providerShareRoutes?: import('../shared/deviceLinkIpc').DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
   relayTransport?: 'udp' | 'websocket';
@@ -923,6 +924,7 @@ interface CCAgentUserMessagePersistedPayload {
 interface CCAgentAskUserQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface CCAgentAskUserQuestionItem {
@@ -4425,6 +4427,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
+    existingLogins?(request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult>;
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
