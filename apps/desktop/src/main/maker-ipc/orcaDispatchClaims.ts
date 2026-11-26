@@ -144,8 +144,13 @@ export interface UnbackedDispatchClaim {
   label: string;
 }
 
-/** 派发结果值闭集：这些值只可能来自工具返回。 */
-const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
+/**
+ * 派发结果值的引用形状：`wake_kind=<值>`。
+ *
+ * 值读到分隔符为止（字母、数字、下划线、连字符），所以 `queued_v2` 整段读完，
+ * 不会被截成合法的 `queued` 而漏检。
+ */
+const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([A-Za-z][A-Za-z0-9_-]*)/g;
 
 /**
  * 宿主会发出的 wake_kind 值（`send_to_worker` / `create_worker` 的返回闭集）。
@@ -161,11 +166,13 @@ const ISSUED_WAKE_KINDS = new Set(['resumed', 'already-active', 'queued', 'creat
  * 单条回复分不清是哪一种，误判会把真话纠成假话。
  */
 export function findUnbackedDispatchClaim(text: string): UnbackedDispatchClaim | null {
-  const wakeKind = text.match(WAKE_KIND_PATTERN);
-  if (!wakeKind) return null;
-  const token = wakeKind[1]!.toLowerCase();
-  if (ISSUED_WAKE_KINDS.has(token)) return null;
-  return { kind: 'wake-kind', token, label: 'wake_kind' };
+  // 一条回复里可能引用多处派发结果值：逐处读完再判，不能只看第一处就放行。
+  for (const match of text.matchAll(WAKE_KIND_PATTERN)) {
+    const token = match[1]!.toLowerCase();
+    if (ISSUED_WAKE_KINDS.has(token)) continue;
+    return { kind: 'wake-kind', token, label: 'wake_kind' };
+  }
+  return null;
 }
 
 /**

@@ -100,6 +100,21 @@ describe('unbacked dispatch claim detection', () => {
     });
   });
 
+  it('flags a protocol-external value in a later reference', () => {
+    // 只看第一处会漏检：第一处合法就放行，后面的假值再也没人看。
+    expect(
+      findUnbackedDispatchClaim('A: wake_kind=queued；B: wake_kind=accepted'),
+    ).toMatchObject({ kind: 'wake-kind', token: 'accepted' });
+  });
+
+  it('reads the whole value before checking it', () => {
+    // 值要读到分隔符为止：`queued_v2` 不是闭集里的值，不能被截成 `queued` 而放行。
+    expect(findUnbackedDispatchClaim('已派（wake_kind=queued_v2），在跑。')).toMatchObject({
+      kind: 'wake-kind',
+      token: 'queued_v2',
+    });
+  });
+
   it('flags a fabricated wake_kind even when the host dispatched in this session', () => {
     noteLeadDispatchFact('lead-1', fact());
 

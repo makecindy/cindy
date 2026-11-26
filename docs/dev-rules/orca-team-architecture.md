@@ -454,20 +454,22 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
-3a. **回复引用宿主凭据必须命中账本，不读 Lead 的散文（状态：不变量）**<br>
-   宿主自己记派发账：`send_to_worker` 被接受那一刻写下凭据（Worker、派发号、投递方式、
-   轮次、会话实例、可选的排队消息号），只来自真实动作，不来自模型输出。收口时只做两件事，
-   都不需要理解语义，也不调用模型：`wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都
-   没有，即无中生有；`queued_message_id`／`message_id`／`dispatch_id` 标签后的编号必须命中
-   账本里某个派发号或排队号，查不到就是引用了不存在的凭据。命中一处即判不一致：向该 Lead
-   注入一条纠正消息（点名是哪一处、是什么形状），同一轮至多一次；模型可以当场补派或改口，
-   第二次收口仍不一致只记日志，不再唤醒。账本非空时不判 `wake_kind`——那时分不清它复述的
-   是哪一次派发，误判代价高。零派发且不含凭据形状的普通问答轮不判（没有可比对的对象）。
+3a. **回复引用协议外派发结果值才纠正，编号一律不核对（状态：不变量）**<br>
+   收口核对只判闭集，不读 Lead 的散文，也不查账本：`wake_kind=<值>` 的值不在协议会返回的
+   集合（`resumed`／`already-active`／`queued`／`created`）里，那它就不可能是任何一次派发的
+   结果——这个判断不依赖账本里存了多少条，也不依赖会话是否重启过。一条回复里引用多处时，
+   逐处把值读完再判：`queued_v2` 不能被截成 `queued` 而放行；第一处合法不能掩盖后面那处。
+   编号（`queued_message_id`／`message_id`／`dispatch_id`）一律不核对：账本只在内存里
+   （24 小时、200 条），重启之后或过了保留期，一条真实编号与编造的编号在账本里长得完全
+   一样，查不到不等于编造，放行才不误伤真话。命中一处即注入一条宿主纠正消息（点名是哪
+   一处、是什么形状），同一轮至多一次，同一条假值在提醒窗口内不重复提醒；模型可以当场
+   补派或改口。普通问答轮不含协议形状，不判。
+   宿主仍记派发账（只来自真实动作，不来自模型输出），但核对不查它——它是流水，不是判据。
    Lead 收口不再需要额外工具调用，也不再存在声明入口、升级卡或能力开关；检查对正常派单
-   完全无感，只在回复引用了宿主没有的凭据时才说话。计划、分析、读文件都不构成派发，只有
-   工具返回的具体派发信号才算。实现指针：
-   `apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`（凭据账 + 令牌核对 +
-   每轮一次提醒）、`orcaTeamService.ts` 的 `noteLeadDispatchFact`／`handleLeadTurnSettled`、
+   完全无感，只在回复引用了协议不会返回的结果值时才说话。计划、分析、读文件都不构成派发，
+   只有工具返回的具体派发信号才算。实现指针：
+   `apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`（闭集判定 + 每轮一次提醒）、
+   `orcaTeamService.ts` 的 `handleLeadTurnSettled`、
    `sessionEventTerminal.ts` 的 lead 收口钩子，以及宿主提示行
    `chat.userMessage.orcaHostNoticeDispatchClaim`。与不变量 3 的分工：3 管「什么时候可以
    静默结束 turn」，本条只核对「收口时回复里出现的凭据是否有记录」。

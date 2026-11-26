@@ -16272,7 +16272,7 @@
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
       "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",
       "orcaFromHost": "호스트(Orca host)에서 온 메시지",
-      "orcaHostNoticeDispatchClaim": "이 답신은 Cindy에 기록되지 않은 파견을 인용했습니다. Lead에 수정을 요청했습니다.",
+      "orcaHostNoticeDispatchClaim": "이 답신은 프로토콜이 반환하지 않는 파견 결과를 인용했습니다. Lead에 수정을 요청했습니다.",
       "hookChannelFrom": "{{channel}}에서",
       "deviceSentMobileNamed": "휴대폰 \"{{name}}\"에서 보냄",
       "deviceSentMobile": "휴대폰에서 보냄",

@@ -16301,7 +16301,7 @@
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
       "orcaFromHost": "Nachricht von Cindy (Orca host)",
-      "orcaHostNoticeDispatchClaim": "Diese Antwort beruft sich auf eine Übergabe, die Cindy nicht verzeichnet hat; der Lead wurde um Korrektur gebeten.",
+      "orcaHostNoticeDispatchClaim": "Diese Antwort nennt ein Übergabe-Ergebnis, das das Protokoll nie zurückgibt; der Lead wurde um Korrektur gebeten.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",
