@@ -125,6 +125,14 @@ describe('Cindy Make outbox bridge guards', () => {
     expect(callbacks.canRun(record)).toBe(true);
   });
 
+  it('holds early side chat sends while the host is forking and releases the same queue on acknowledgement', () => {
+    const row = { id: 'session', source: 'side-chat', deviceLinkDeviceId: 'desktop', pendingLocalCreation: true };
+    const { record, callbacks } = harness([row]);
+    expect(callbacks.canRun(record)).toBe(false);
+    row.pendingLocalCreation = false;
+    expect(callbacks.canRun(record)).toBe(true);
+  });
+
   it('shares the authoritative task row between preparation and delivery policy', async () => {
     const { record, callbacks, invoke } = harness([]);
     const row = callbacks.readSessionOnce(record);
