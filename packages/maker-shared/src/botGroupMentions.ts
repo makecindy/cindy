@@ -137,14 +137,18 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[], tracked
   }
   // Reserve explicit spans before looking up typed names. A longer name may
   // start before a pick, or at the pick and extend into the surrounding text.
-  const picks = [...pickedByStart.values()].sort((a, b) => a.start - b.start);
-  let pickIndex = 0;
+  return scanMentionRanges(text, entries, [...pickedByStart.values()].sort((a, b) => a.start - b.start));
+}
+
+/** Match within the gaps between already identified, ordered mention ranges. */
+function scanMentionRanges(text: string, entries: readonly LabelEntry[], reserved: readonly MentionToken[] = []): MentionToken[] {
+  let reservedIndex = 0;
   const tokens: MentionToken[] = [];
   let index = text.indexOf('@');
   while (index >= 0) {
     let next = index + 1;
-    while (picks[pickIndex] && picks[pickIndex]!.start < index) pickIndex++;
-    const pick = picks[pickIndex];
+    while (reserved[reservedIndex] && reserved[reservedIndex]!.start < index) reservedIndex++;
+    const pick = reserved[reservedIndex];
     if (pick?.start === index) {
       tokens.push(pick);
       next = pick.end;
@@ -341,11 +345,16 @@ export function splitBotGroupMentionSegments(
 ): BotGroupTextSegment[] {
   const preferred = new Set(preferredLabels.map(label => label.trim()));
   const entries = [...new Set(labels.map((label) => label.trim()).filter(Boolean))]
-    .sort((a, b) => Number(preferred.has(b)) - Number(preferred.has(a)) || b.length - a.length)
+    .sort((a, b) => b.length - a.length)
     .map((label) => ({ label, all: false, botIds: [], aliasIds: [] }));
+  // Confirmed recipient/broadcast labels must be found before fallback names
+  // can consume their text, including a recipient starting at a later '@'.
+  const reserved = preferred.size
+    ? scanMentionRanges(text, entries.filter(entry => preferred.has(entry.label)))
+    : [];
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
-  for (const token of scanMentionTokens(text, entries)) {
+  for (const token of scanMentionRanges(text, entries, reserved)) {
     if (token.start > cursor) segments.push({ text: text.slice(cursor, token.start), mention: false });
     segments.push({ text: text.slice(token.start, token.end), mention: true });
     cursor = token.end;

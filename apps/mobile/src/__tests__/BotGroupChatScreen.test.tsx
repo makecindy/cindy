@@ -1700,14 +1700,14 @@ describe('group composer', () => {
   });
 
   it.each([
-    { draft: '', other: 'Ann Lee', typedAfter: 'Lee, can you check?', recipients: ['mimi'] },
-    { draft: '@Team', other: 'Team @Ann', typedAfter: '', recipients: ['xiaoman', 'mimi'] },
-  ])('sends and renders the avatar pick despite the longer name $other', async ({ draft, other, typedAfter, recipients }) => {
+    { draft: '', names: ['Ann', 'Ann Lee'], typedAfter: 'Lee, can you check?', recipients: ['mimi'], labels: ['@Ann'] },
+    { draft: '@Team', names: ['Ann', 'Team @Ann', 'Team'], typedAfter: '', recipients: ['xiaoman', 'mimi'], labels: ['@Team', '@Ann'] },
+    { draft: '@Team', names: ['Ann', 'Team @Ann'], typedAfter: '', recipients: ['mimi'], labels: ['@Ann'] },
+  ])('sends and renders the avatar pick with members $names', async ({ draft, names, typedAfter, recipients, labels }) => {
     const data = group();
-    const names = ['Ann', other, 'Team'];
     const chat = group({
       openPlan: null,
-      members: data.members.map((member, index) => ({ ...member, name: names[index]! })),
+      members: data.members.slice(0, names.length).map((member, index) => ({ ...member, name: names[index]! })),
       messages: [message('m1', 1, { authorBotId: 'mimi', authorName: 'Ann', content: 'Earlier reply' })],
     });
     await render(chat);
@@ -1720,9 +1720,14 @@ describe('group composer', () => {
     }));
     const { text: content, mentions } = h.chat.act.mock.lastCall[1];
     await render({ ...chat, messages: [...chat.messages, message('sent', 2, { authorKind: 'user', content, mentions })] });
-    const links = [...byId('botGroup.message.user')!.querySelectorAll('span[role="link"]')];
-    const labels = draft ? ['@Team', '@Ann'] : ['@Ann'];
+    const bubble = byId('botGroup.message.user')!;
+    const links = [...bubble.querySelectorAll('span[role="link"]')];
     expect(links.map(link => link.textContent)).toEqual(labels);
+    if (draft && labels.length === 1) {
+      const unaddressed = [...bubble.querySelectorAll('span[data-style]')].find(span => span.textContent === '@Team ');
+      expect(unaddressed).toBeDefined();
+      expect(JSON.parse(unaddressed!.getAttribute('data-style')!).color).toBeUndefined();
+    }
     for (const [index, link] of links.entries()) {
       expect(JSON.parse(link.getAttribute('data-style')!).color).toBeTruthy();
       await act(async () => (link as HTMLElement).click());
