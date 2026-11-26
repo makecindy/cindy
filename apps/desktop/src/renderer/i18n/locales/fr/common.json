@@ -7510,7 +7510,8 @@
       "localNetwork": {
         "label": "Réseau local",
         "deniedHint": "Sans cette autorisation, les ordinateurs et téléphones du même réseau ne peuvent pas se connecter directement à cet ordinateur. Ils passent par le relais, ce qui est plus lent.",
-        "settingsHint": "Activez Cindy dans Réglages Système › Confidentialité et sécurité › Réseau local. Le changement s’applique dès votre retour."
+        "promptedHint": "Cliquez sur Autoriser dans la fenêtre macOS. Si aucune fenêtre n’apparaît, ouvrez Réglages Système pour l’activer manuellement.",
+        "settingsHint": "Dans Confidentialité et sécurité, ouvrez Réseau local et activez Cindy. Si l’app n’apparaît pas, cliquez sur + pour l’ajouter ; le changement s’applique dès votre retour."
       }
     },
     "imBot": {
@@ -7981,6 +7982,10 @@
         "toggle-sidebar": {
           "label": "Afficher/masquer la barre latérale",
           "description": "Réduire ou développer la barre latérale de la liste des sessions"
+        },
+        "copy-session-link": {
+          "label": "Copier le lien de la session",
+          "description": "Copier le lien de la session ouverte"
         },
         "session-history-back": {
           "label": "Tâche précédente",
@@ -15786,7 +15791,6 @@
       "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
       "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
-      "upstreamEmpty550": "Le service du modèle a renvoyé HTTP 550 avec une réponse vide",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
@@ -16927,6 +16931,8 @@
       "retryIn": "Nouvelle tentative automatique dans {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Le service de comptes Codex est temporairement inaccessible.",
+      "rechecking": "Le service de comptes Codex est temporairement inaccessible. Nouvel essai à {{resetAt}}.",
       "poolModelLimited": "La limite d’utilisation de l’abonnement pour ce modèle est atteinte. Vous pouvez changer de modèle.",
       "poolRetryUntil": "Réessayez après {{resetAt}}.",
       "poolOtherSignedOut": "Un autre compte d’abonnement est déconnecté. Reconnectez-le sur l’ordinateur qui exécute la tâche, puis réessayez.",
