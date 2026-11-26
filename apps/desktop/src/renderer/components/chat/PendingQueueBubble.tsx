@@ -87,7 +87,8 @@ export function PendingQueueBubble({
   const movableRow = holdRow.movable;
   const [open, setOpen] = useState(false);
   // 暂停/继续是悬停才出现的图标按钮：平时不占位，悬停或键盘聚焦时才显形。
-  const holdButtonClass = `flex shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] opacity-0 hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)] focus-visible:opacity-100 group-hover:opacity-100 ${simplifiedBotConversation ? 'h-8 w-8' : 'h-6 w-6'}`;
+  // 悬停才出现，但必须一眼看出是按钮：描边 + 抬起的底色，而不是一个孤零零的灰色小图标。
+  const holdButtonClass = `flex shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] opacity-0 hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100 ${simplifiedBotConversation ? 'h-8 w-8' : 'h-6 w-6'}`;
   const sentAt = new Date(entry.chatMessage.createdAt ?? 0).getTime();
   const [statusShown, setStatusShown] = useState(!localSend || Date.now() - sentAt >= 600);
   useEffect(() => {
@@ -133,7 +134,7 @@ export function PendingQueueBubble({
                 aria-label={t('newChat.pendingQueue.holdAction')}
                 className={holdButtonClass}
               >
-                <Pause size={13} aria-hidden />
+                <Pause size={14} aria-hidden />
               </button>
             </Tip>
           )}
@@ -145,7 +146,7 @@ export function PendingQueueBubble({
                 aria-label={t('newChat.pendingQueue.releaseHoldAction')}
                 className={holdButtonClass}
               >
-                <Play size={13} aria-hidden />
+                <Play size={14} aria-hidden />
               </button>
             </Tip>
           )}
