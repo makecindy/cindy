@@ -29,7 +29,7 @@ import { useAutomationGroupCollapsed } from '../hooks/useAutomationGroupCollapse
 import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebarTime';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
-import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
+import { SessionItem } from './SessionItem';
 import type { SessionClickHandler, SessionClickModifiers } from './SessionItem';
 import {
   isSidebarNewWindowActivation,
@@ -361,14 +361,16 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // 告警行 —— 之后用户展开这个组会看到被锁住的两三条告警行而不是正常的前 5 条运行。
     const collapsedRef = useRef(collapsed);
     collapsedRef.current = collapsed;
+    const hasSelectionRef = useRef(false);
+    hasSelectionRef.current = (selectedSessionIds?.size ?? 0) > 0;
     const handleChildSessionClick = useCallback<SessionClickHandler>(
       (id, modifiers) => {
-        if (
-          !collapsedRef.current &&
-          !showAllRef.current &&
-          !hasSessionSelectionModifier(modifiers) &&
-          !(modifiers && isSidebarNewWindowActivation(modifiers))
-        ) {
+        const willNavigate =
+          !modifiers ||
+          (!modifiers.shiftKey &&
+            !hasSelectionRef.current &&
+            !isSidebarNewWindowActivation(modifiers));
+        if (!collapsedRef.current && !showAllRef.current && willNavigate) {
           freezeCurrentLayoutRef.current(id);
         }
         onSessionClick(id, modifiers);
@@ -484,22 +486,25 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     ) => {
       const targetId = headerSessionId;
       if (!targetId) return;
-      const hasClickModifier =
-        event != null &&
-        (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.button === 1);
-      if (hasClickModifier) {
-        onSessionClick(targetId, {
-          shiftKey: event.shiftKey,
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          altKey: event.altKey,
-          button: event.button,
-        });
-        return;
+      const modifiers: SessionClickModifiers | undefined = event
+        ? {
+            shiftKey: event.shiftKey,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            altKey: event.altKey,
+            button: event.button,
+          }
+        : undefined;
+      const willNavigate =
+        !modifiers ||
+        (!modifiers.shiftKey &&
+          !(selectedSessionIds && selectedSessionIds.size > 0) &&
+          !isSidebarNewWindowActivation(modifiers));
+      // 仅在展开 + 前 5 条态且确实导航时冻结当前布局;收起态未读子行随已读状态收回。
+      if (!collapsed && !showAll && willNavigate) {
+        freezeCurrentLayout(targetId);
       }
-      // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
-      if (!collapsed && !showAll) freezeCurrentLayout(targetId);
-      onSessionClick(targetId);
+      onSessionClick(targetId, modifiers);
     };
 
     return (

@@ -86,6 +86,29 @@ export function openTargetInNewWindow(
   return window.electronAPI?.maker?.openSessionInNewWindow(target, deviceId, messageClientId);
 }
 
+/**
+ * Collapsed rail flyout panels live outside the expanded sidebar scroll container,
+ * so they do not enter expanded range multi-select. Preserve primary-mod click and
+ * middle-click new-window activation by mapping them to a middle-click marker for
+ * the shared session-click handler (preserving offline remote guards), while other
+ * clicks fall back to plain programmatic navigation (`undefined`).
+ */
+export function resolveRailPanelClickModifiers(
+  modifiers?: SidebarClickModifiers,
+  platform?: string,
+): { shiftKey: false; metaKey: false; ctrlKey: false; altKey: false; button: 1 } | undefined {
+  if (modifiers && isSidebarNewWindowActivation(modifiers, platform)) {
+    return {
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      button: 1,
+    };
+  }
+  return undefined;
+}
+
 export type SidebarSessionClickAction =
   | { kind: 'open-new-window' }
   | { kind: 'update-selection'; selectedIds: Set<string>; anchorId: string }

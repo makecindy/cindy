@@ -4,6 +4,7 @@ import {
   getSidebarNewWindowShortcutKey,
   isSidebarNewWindowActivation,
   preventMiddleClickAutoscroll,
+  resolveRailPanelClickModifiers,
   resolveSidebarSessionClickAction,
 } from '../sidebarNewWindowActivation';
 import { companionWindowBootRoute } from '@/features/bots/companionChatTarget';
@@ -45,6 +46,28 @@ describe('sidebarNewWindowActivation', () => {
     const middlePrevent = vi.fn();
     preventMiddleClickAutoscroll({ button: 1, preventDefault: middlePrevent });
     expect(middlePrevent).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves new-window gestures in collapsed rail panels while suppressing panel multi-select', () => {
+    const macNewWin = resolveRailPanelClickModifiers({ metaKey: true, button: 0 }, 'darwin');
+    expect(macNewWin).toEqual({ shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, button: 1 });
+    // Even if expanded sidebar selection is non-empty, panel new-window click opens in a new window.
+    expect(
+      resolveSidebarSessionClickAction({
+        id: 's2',
+        modifiers: macNewWin,
+        selectedIds: new Set(['s1']),
+        anchorId: 's1',
+        getVisibleIds: () => ['s1', 's2'],
+        platform: 'darwin',
+      }),
+    ).toEqual({ kind: 'open-new-window' });
+
+    expect(resolveRailPanelClickModifiers({ ctrlKey: true, button: 0 }, 'win32')).toEqual(macNewWin);
+    expect(resolveRailPanelClickModifiers({ button: 1 }, 'linux')).toEqual(macNewWin);
+    expect(resolveRailPanelClickModifiers({ shiftKey: true, button: 0 }, 'darwin')).toBeUndefined();
+    expect(resolveRailPanelClickModifiers({ ctrlKey: true, button: 0 }, 'darwin')).toBeUndefined();
+    expect(resolveRailPanelClickModifiers({ button: 0 }, 'darwin')).toBeUndefined();
   });
 });
 
