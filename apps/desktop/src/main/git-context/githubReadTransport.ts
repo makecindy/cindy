@@ -36,12 +36,26 @@ export class GithubReadTransport {
   private activeRequests = 0;
   private waitQueue: Array<(acquired: boolean) => void> = [];
   private readonly maxConcurrent: number;
+  private readonly maxCacheEntries: number;
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly now = Date.now,
     maxConcurrent = DEFAULT_MAX_CONCURRENT_REQUESTS,
+    maxCacheEntries = MAX_CACHE_ENTRIES,
   ) {
     this.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+    this.maxCacheEntries = Math.max(1, Math.floor(maxCacheEntries));
+  }
+
+  private putCache(
+    key: string,
+    entry: { data: unknown; etag: string | null; observedAt: number },
+  ): void {
+    this.cache.delete(key);
+    while (this.cache.size >= this.maxCacheEntries) {
+      this.cache.delete(this.cache.keys().next().value!);
+    }
+    this.cache.set(key, entry);
   }
 
   invalidate(): void {
@@ -84,8 +98,7 @@ export class GithubReadTransport {
     const key = `${scope}:${path}:${JSON.stringify(options.body ?? null)}`;
     const cached = this.cache.get(key);
     if (!options.refresh && cached && cached.observedAt + (options.ttl ?? 60_000) > this.now()) {
-      this.cache.delete(key);
-      this.cache.set(key, cached);
+      this.putCache(key, cached);
       return cached.data;
     }
     const existing = this.pending.get(key);
@@ -146,8 +159,7 @@ export class GithubReadTransport {
         }
         if (response.status === 304 && cached) {
           cached.observedAt = this.now();
-          this.cache.delete(key);
-          this.cache.set(key, cached);
+          this.putCache(key, cached);
           if (cached.data && typeof cached.data === 'object')
             this.observations.set(cached.data, cached.observedAt);
           return cached.data;
@@ -165,10 +177,11 @@ export class GithubReadTransport {
         // Skip caching responses that can neither serve a TTL hit nor revalidate via If-None-Match
         // (e.g. POST /graphql status reads with ttl: 0), so they do not evict reusable REST ETags.
         const reusable = ttl > 0 || (!options.body && Boolean(etag));
-        this.cache.delete(key);
-        if (!reusable || JSON.stringify(data).length > 2_000_000) return data;
-        if (this.cache.size >= MAX_CACHE_ENTRIES) this.cache.delete(this.cache.keys().next().value!);
-        this.cache.set(key, { data, etag, observedAt });
+        if (!reusable || JSON.stringify(data).length > 2_000_000) {
+          this.cache.delete(key);
+          return data;
+        }
+        this.putCache(key, { data, etag, observedAt });
         return data;
       } finally {
         this.releaseSlot();
