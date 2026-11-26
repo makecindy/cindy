@@ -21,14 +21,16 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
+import { createPortMapSession, portMappingToCandidate } from './portMap.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { PathRouter } from './pathRouter.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_KIND, SESSION_LANE_KINDS,
-  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PathPreference, type PeerChannel, type PeerPathMetrics, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
-  type TransportOptions,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, classifyNatMapping, formatTransportDiagnosticsLog,
+  type PathPreference, type PeerChannel, type PeerPathMetrics, type PortMapController, type PortMappingEntry, type RosterEntry,
+  type SessionBodyWriter, type SessionLaneName, type Transport, type TransportDiagnostics, type TransportOptions,
 } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
@@ -467,12 +469,55 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   let activeStunServers = dedupeStunServers(options.stunServers ?? []);
   let gathering = 0;
   let roundFound: Address[] = [];
-  const publishCandidates = () => {
-    const next = normalizeCandidates(roundFound, publicOnly);
-    if (sameCandidateList(candidates, next)) return;
-    candidates.splice(0, candidates.length, ...next);
-    for (const channel of channels) channel.announceCandidates();
+  let stunObservations: Address[] = [];
+  let portMapped: PortMappingEntry | null = null;
+  let lastLoggedDiagnostics = '';
+  const computeDiagnostics = (): TransportDiagnostics => {
+    const localPort = udp ? endpoint.address().port : null;
+    const { natMapping, portPreserving } = classifyNatMapping(stunObservations, localPort);
+    let localCandidates = 0;
+    let publicCandidates = 0;
+    for (const candidate of candidates) {
+      if (isPrivate(candidate.address)) localCandidates += 1;
+      else publicCandidates += 1;
+    }
+    return {
+      natMapping,
+      portPreserving,
+      stunResponses: stunObservations.length,
+      portMapped: portMapped?.protocol ?? null,
+      localCandidates,
+      publicCandidates,
+    };
   };
+  const maybeLogDiagnostics = () => {
+    if (!options.onLog || (!stunObservations.length && !portMapped)) return;
+    const snapshot = computeDiagnostics();
+    const line = formatTransportDiagnosticsLog(snapshot);
+    if (line === lastLoggedDiagnostics) return;
+    lastLoggedDiagnostics = line;
+    const level = snapshot.natMapping === 'symmetric' || snapshot.natMapping === 'multi-egress' ? 'warn' : 'info';
+    options.onLog(level, line);
+  };
+  const publishCandidates = () => {
+    const mappedCandidate = portMappingToCandidate(portMapped);
+    const combined = mappedCandidate ? [...roundFound, mappedCandidate] : roundFound;
+    const next = normalizeCandidates(combined, publicOnly);
+    const changed = !sameCandidateList(candidates, next);
+    if (changed) {
+      candidates.splice(0, candidates.length, ...next);
+      for (const channel of channels) channel.announceCandidates();
+    }
+    maybeLogDiagnostics();
+  };
+  const enablePortMap = udp && !publicOnly && (options.createPortMap !== undefined || (options.portMapping !== false && bindAddress === '0.0.0.0'));
+  const portMapper: PortMapController | null = enablePortMap
+    ? (options.createPortMap ?? createPortMapSession)((mapping) => {
+        if (closed) return;
+        portMapped = mapping;
+        publishCandidates();
+      })
+    : null;
   const queryStunServers = (round: number, servers: readonly string[]) => {
     if (!servers.length || closed || round !== gathering) return;
     if (!stun) stun = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
@@ -481,6 +526,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     for (const server of servers) {
       void client.query(server).then((mapped) => {
         if (closed || round !== gathering || !mapped) return;
+        stunObservations.push(mapped);
         roundFound.push(mapped);
         publishCandidates();
       }).catch(() => undefined);
@@ -490,9 +536,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     const round = ++gathering;
     stun?.close();
     stun = null;
+    stunObservations = [];
     roundFound = localInterfaceCandidates(endpoint);
     publishCandidates();
     queryStunServers(round, activeStunServers);
+    portMapper?.refresh(endpoint.address().port);
   };
   if (udp) gather();
   const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
@@ -548,10 +596,14 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       const suspension = relayUdp?.suspension;
       return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
+    diagnostics() {
+      return computeDiagnostics();
+    },
     async close() {
       closed = true; stun?.close();
       // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。
       await endpoint.close();
+      await portMapper?.close().catch(() => undefined);
       relayUdp?.close();
       relay?.uplink.close();
     },

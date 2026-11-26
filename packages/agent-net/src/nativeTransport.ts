@@ -1,8 +1,9 @@
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
-  SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
-  type SessionWire, type Transport, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics,
+  SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, classifyNatMapping, formatTransportDiagnosticsLog,
+  type PeerChannel, type PortMapController, type PortMappingEntry, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
+  type SessionWire, type Transport, type TransportDiagnostics, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics,
 } from './types.js';
 import { PathRouter } from './pathRouter.js';
 import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } from './portableBytes.js';
@@ -230,6 +231,9 @@ export class NativeTransport implements Transport {
   private readonly features: Set<string>;
   private localAddresses: string[];
   private mapped: Address[] = [];
+  private portMapped: PortMappingEntry | null = null;
+  private readonly portMapper: PortMapController | null = null;
+  private lastLoggedDiagnostics = '';
   private candidateList: Address[] = [];
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
@@ -273,6 +277,13 @@ export class NativeTransport implements Transport {
     this.relayUdpName = options.relayUdpServer;
     this.stunServers = (options.stunServers ?? []).slice(0, MAX_STUN_SERVERS);
     this.localAddresses = addresses;
+    if (enhanced && identity.udpPort && !options.publicCandidatesOnly && options.createPortMap) {
+      this.portMapper = options.createPortMap((mapping) => {
+        if (this.closed) return;
+        this.portMapped = mapping;
+        this.updateCandidates();
+      });
+    }
     this.candidateList = this.computeCandidates();
     options.relay?.uplink.onDatagram((deviceId, bytes) => {
       if (this.closed) return;
@@ -297,6 +308,7 @@ export class NativeTransport implements Transport {
       // that can already reach peers over the relay WebSocket or the LAN.
       if (options.resolveUdpServer) void transport.resolveUdpServers();
       else await transport.startStun(transport.stunServers);
+      if (identity.udpPort) transport.portMapper?.refresh(identity.udpPort);
       if (transport.waits) transport.drive(); else transport.schedule();
       return transport;
     } catch (error) { await engine.destroy().catch(() => undefined); throw error; }
@@ -329,15 +341,46 @@ export class NativeTransport implements Transport {
     const local = this.localAddresses.filter(allowed).map(address => ({ address, port }));
     if (!this.enhanced) return local.slice(0, MAX_CANDIDATES);
     const seen = new Set<string>();
-    return [...local, ...this.mapped.filter(candidate => allowed(candidate.address))]
+    const portMapped = this.portMapped && allowed(this.portMapped.address)
+      ? [{ address: this.portMapped.address, port: this.portMapped.port }]
+      : [];
+    return [...local, ...this.mapped.filter(candidate => allowed(candidate.address)), ...portMapped]
       .filter(candidate => { const key = `${candidate.address}:${candidate.port}`; if (seen.has(key)) return false; seen.add(key); return true; })
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES);
   }
+  diagnostics(): TransportDiagnostics {
+    const { natMapping, portPreserving } = classifyNatMapping(this.mapped, this.identity.udpPort);
+    let localCandidates = 0;
+    let publicCandidates = 0;
+    for (const candidate of this.candidateList) {
+      if (isPrivate(candidate.address)) localCandidates += 1;
+      else publicCandidates += 1;
+    }
+    return {
+      natMapping,
+      portPreserving,
+      stunResponses: this.mapped.length,
+      portMapped: this.portMapped?.protocol ?? null,
+      localCandidates,
+      publicCandidates,
+    };
+  }
+  private maybeLogDiagnostics(): void {
+    if (!this.options.onLog || (!this.mapped.length && !this.portMapped)) return;
+    const snapshot = this.diagnostics();
+    const line = formatTransportDiagnosticsLog(snapshot);
+    if (line === this.lastLoggedDiagnostics) return;
+    this.lastLoggedDiagnostics = line;
+    const level = snapshot.natMapping === 'symmetric' || snapshot.natMapping === 'multi-egress' ? 'warn' : 'info';
+    this.options.onLog(level, line);
+  }
   private updateCandidates(): void {
     const next = this.computeCandidates();
-    if (JSON.stringify(next) === JSON.stringify(this.candidateList)) return;
-    this.candidateList = next;
-    for (const channel of this.channels.values()) channel.announceCandidates();
+    if (JSON.stringify(next) !== JSON.stringify(this.candidateList)) {
+      this.candidateList = next;
+      for (const channel of this.channels.values()) channel.announceCandidates();
+    }
+    this.maybeLogDiagnostics();
   }
   async configureUdpServer(server: string, extraStunServers: readonly string[] = []): Promise<void> {
     if (this.closed || !this.enhanced) return;
@@ -505,6 +548,7 @@ export class NativeTransport implements Transport {
     // Everything in flight goes again from the new address: poll for it now.
     this.wake();
     void this.refreshUdpServer();
+    if (this.identity.udpPort) this.portMapper?.refresh(this.identity.udpPort);
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
     void this.readAddresses().then(addresses => {
@@ -807,6 +851,7 @@ export class NativeTransport implements Transport {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.udpRefresh) clearInterval(this.udpRefresh); this.udpRefresh = null;
+    await this.portMapper?.close().catch(() => undefined);
     const ids = [...this.channels.keys(), ...this.waiting.keys()];
     for (const pending of this.waiting.values()) pending.reject(new Error('NATIVE_TRANSPORT_CLOSED'));
     this.waiting.clear();

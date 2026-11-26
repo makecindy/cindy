@@ -115,6 +115,66 @@ export interface RelayRoute {
   /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
   udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends' | 'probe-failed'; cooldownMs: number };
 }
+/**
+ * NAT mapping behavior inferred from STUN answers observed on the same local UDP socket:
+ * - `cone`: multiple STUN servers agree on the same external IP and port (EIM / hole-punch friendly).
+ * - `symmetric`: same external IP but different external ports per STUN server (EDM / symmetric NAT or proxy).
+ * - `multi-egress`: different external IPs across STUN servers (split-tunnel VPN or multi-homed egress).
+ * - `single-server`: only one STUN response observed so far; cannot yet distinguish cone vs symmetric.
+ * - `unknown`: no STUN response yet.
+ */
+export type NatMappingKind = 'unknown' | 'single-server' | 'cone' | 'symmetric' | 'multi-egress';
+export type PortMapProtocol = 'nat-pmp' | 'upnp';
+export interface PortMappingEntry {
+  address: string;
+  port: number;
+  lifetimeSec: number;
+  protocol: PortMapProtocol;
+}
+/** Portable lifecycle controller injected by Node callers (`portMap.ts`) so `nativeTransport.ts` remains RN-compatible. */
+export interface PortMapController {
+  refresh(internalPort: number): void;
+  current(): PortMappingEntry | null;
+  close(): Promise<void>;
+}
+/** Non-sensitive connectivity diagnostics summary (contains only enums and counts — never raw IPs, ports, or keys). */
+export interface TransportDiagnostics {
+  natMapping: NatMappingKind;
+  portPreserving: boolean | null;
+  stunResponses: number;
+  portMapped: PortMapProtocol | null;
+  localCandidates: number;
+  publicCandidates: number;
+}
+/**
+ * Classifies NAT mapping behavior from STUN responses observed on a single local UDP socket.
+ * Multiple identical IP:port answers indicate Endpoint-Independent Mapping (`cone`); same IP with
+ * distinct external ports indicates Symmetric NAT / EDM (`symmetric`); distinct external IPs indicate
+ * multi-egress split routing (`multi-egress`, e.g., VPN routing one STUN region differently).
+ */
+export function classifyNatMapping(
+  observations: readonly { address: string; port: number }[],
+  localPort?: number | null,
+): { natMapping: NatMappingKind; portPreserving: boolean | null } {
+  if (!observations.length) return { natMapping: 'unknown', portPreserving: null };
+  const ips = new Set(observations.map((entry) => entry.address));
+  const ports = new Set(observations.map((entry) => entry.port));
+  const portPreserving = typeof localPort === 'number' && localPort > 0
+    ? observations.every((entry) => entry.port === localPort)
+    : null;
+  if (observations.length === 1) return { natMapping: 'single-server', portPreserving };
+  if (ips.size > 1) return { natMapping: 'multi-egress', portPreserving };
+  if (ports.size > 1) return { natMapping: 'symmetric', portPreserving: false };
+  return { natMapping: 'cone', portPreserving };
+}
+/** Formats non-sensitive diagnostics for `onLog` (strictly enums and counts; never IPs, ports, or keys). */
+export function formatTransportDiagnosticsLog(diagnostics: TransportDiagnostics): string {
+  return `agent-net nat=${diagnostics.natMapping}`
+    + ` portPreserving=${diagnostics.portPreserving === null ? 'unknown' : String(diagnostics.portPreserving)}`
+    + ` stun=${diagnostics.stunResponses}`
+    + ` portMap=${diagnostics.portMapped ?? 'none'}`
+    + ` candidates=public:${diagnostics.publicCandidates},local:${diagnostics.localCandidates}`;
+}
 export interface Transport {
   readonly id: string;
   readonly dial: unknown;
@@ -133,6 +193,8 @@ export interface Transport {
    * the WebSocket itself is opened and pinged by the host (workerSocket.ts).
    */
   relayRoute?(): RelayRoute | null;
+  /** Current non-sensitive NAT/candidate diagnostics summary for troubleshooting direct-connect failures. */
+  diagnostics?(): TransportDiagnostics;
 }
 export interface TransportOptions {
   admit(remoteId: string): boolean;
@@ -166,6 +228,13 @@ export interface TransportOptions {
   resolveUdpServer?(server: string): Promise<string>;
   /** Optional plain-text transport lifecycle/fallback logger (no addresses, keys or payloads). */
   onLog?(level: 'info' | 'warn', message: string): void;
+  /**
+   * Best-effort NAT-PMP / UPnP router port mapping for the local UDP socket (defaults to enabled on Node when UDP is on
+   * and `publicCandidatesOnly` is not forced). Set `false` in tests or restricted environments.
+   */
+  portMapping?: boolean;
+  /** Optional custom port-mapping controller factory (used by `socket.ts` for NativeTransport and unit tests). */
+  createPortMap?(onMapped: (mapping: PortMappingEntry | null) => void): PortMapController;
 }
 /** Early stream events are bounded by the core's receive credit; do not lose them during admission. */
 export class ChannelEvents {
