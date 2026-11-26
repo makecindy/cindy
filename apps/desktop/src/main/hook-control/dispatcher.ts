@@ -217,6 +217,8 @@ export interface HookRunRequest {
    * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
    */
   isCancelRequested?: () => boolean;
+  /** 用户喊停或账号切换边界触发时立即 abort，供 runner 中断退避等待而不必等完延迟。 */
+  cancelSignal?: AbortSignal;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -953,7 +955,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, {
-    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; relayInFlight?: boolean;
+    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; cancelAbort?: AbortController; relayInFlight?: boolean;
   }>();
   /**
    * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
@@ -1954,7 +1956,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
     const runningEntry = {
-      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), relayInFlight: false,
+      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), cancelAbort: new AbortController(), relayInFlight: false,
     };
     runningByRequest.set(requestKey, runningEntry);
     const messageLifecycle = telegramLegacyLifecycle(
@@ -2099,6 +2101,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           ...xVideoRelayOption(task, runningEntry),
           // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
           isCancelRequested: () => cancelRequested.has(requestKey),
+          cancelSignal: runningEntry.cancelAbort.signal,
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
@@ -3212,7 +3215,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       // ack 的待补发与可回落表随账号走 —— 换账号后它们指向的连接与消息都不再
       // 属于当前主人, 留着既补不出去也是一份只涨不落的内存。
       ackReactions.reset();
@@ -3501,6 +3507,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         const sessionId = runningEntry.sessionId;
         cancelRequested.add(requestKey);
         runningEntry.relayAbort?.abort();
+        runningEntry.cancelAbort?.abort();
         log.info(`hook task ${requestId} cancel requested (stopping session ${sessionId})`);
         // 渠道里的 /stop 是用户明确喊停: 与桌面 Stop 同一套清理, 不只是 abort ——
         // 否则已排期的自动续跑会在喊停后原地复活, 进行中的 Goal 也会接着跑。
@@ -3567,7 +3574,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       latestPromptBySession.clear();
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       sendFns.clear();
       pendingTurnEnds.clear();
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);

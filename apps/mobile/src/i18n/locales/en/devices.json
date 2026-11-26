@@ -477,7 +477,14 @@
         "nextWeek": "Next week",
         "indefinite": "Indefinitely",
         "custom": "Custom…",
-        "invalidTime": "Choose a future date and time within one year."
+        "invalidTime": "Choose a future date and time within one year.",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
       },
       "taskListMode": {
         "enterInbox": "Switch to inbox",
@@ -828,9 +835,6 @@
     "connectionsEmpty": "No skills or connections selected.",
     "largeProfileRecovery": "This profile is too long to edit here. Edit the full profile on {{deviceName}}.",
     "addModel": "Add fallback model",
-    "removeModel": "Remove model",
-    "moveModelUp": "Move model up",
-    "backupModels": "Backup models ({{count}})",
     "settingsTitle": "Buddy settings",
     "name": "Name",
     "portraitNumber": "Portrait {{number}}",

@@ -1336,6 +1336,78 @@ describe('local-db:sessions:update handler wiring', () => {
     }
   });
 
+  // 2026-11-26: bound automation temporary switch across plugin engine and built-in harnesses.
+  // Production entry: createSessionRuntimeProjector + projectScheduledPreferences + persistSessionFields.
+  // Minimal failing input: a plugin-engine baseline projected as 'cc', or a built-in baseline skipped
+  // while the row temporarily holds agent_kind='acp'. Unit tier.
+  it('projects a saved plugin-engine baseline during a built-in override and vice versa', async () => {
+    const sessionId = 'pi-local';
+    const projection = createSessionRuntimeProjection({ broadcastSessionPatched });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+    });
+    const acpBaseline = JSON.stringify({
+      scopeId: 'acp-owner',
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+      scheduledModelBaseline: acpBaseline,
+    })).toMatchObject({
+      agentKind: 'acp',
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+      runtimeBaseline: undefined,
+      runtimeEffective: undefined,
+      runtimePending: null,
+      runtimeBaselineRecoveryPending: false,
+    });
+    const builtinBaseline = JSON.stringify({
+      scopeId: 'codex-owner',
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'acp' as unknown as Parameters<typeof projector>[0]['agentKind'],
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+      fastMode: false,
+      scheduledModelBaseline: builtinBaseline,
+    })).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+      runtimeBaselineRecoveryPending: true,
+    });
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,

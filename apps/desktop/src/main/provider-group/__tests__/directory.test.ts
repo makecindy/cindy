@@ -117,7 +117,7 @@ describe('listCandidates', () => {
       kind === 'device' ? 'one-host' : `share:s${i}`, account.id, account.name,
     ]));
     // Same normalization runs when saving and reading group settings; JSON is the persisted shape.
-    const config = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ strategy: 'round',
+    const config = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ strategy: 'rotate',
       members: candidates.map((candidate) => ({ ...candidate, limit: 4, weight: 1, paused: false })),
     })), 'openai')!;
     expect(config.members.map((m) => m.key)).toEqual(candidates.map((c) => c.key));
@@ -125,7 +125,7 @@ describe('listCandidates', () => {
     expect((await directory.listCandidates('openai', { ...config, members: config.members.slice(0, 1) }))
       .map((c) => c.blocked ?? null)).toEqual(['member', null]);
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 0, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 0 });
     const input = { providerId: 'openai', agentKind: 'codex' as const, model: 'gpt-5.4', localTask: true as const };
     const first = await router.pick(input);
     const second = await router.pick(input);
@@ -191,7 +191,7 @@ describe('listCandidates', () => {
   it('marks computers already in the group', async () => {
     const directory = createProviderGroupDirectory(deps());
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -221,7 +221,7 @@ describe('resolveMembers', () => {
       readClaudeUsage: async () => { await quota; return { updatedAt: 1_000, fiveHour: { utilization: 100 } }; },
     }));
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000 });
     const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
     const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
       ok: true,
@@ -251,7 +251,7 @@ describe('resolveMembers', () => {
       { key: 'off', kind: 'device', agentDeviceId: 'off', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
       { key: 'share', kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
     ];
-    const resolved = await directory.resolveMembers('anthropic', { strategy: 'least', autoSwitch: true, members });
+    const resolved = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members });
     expect(resolved.map((m) => m.appVersion)).toEqual(['0.1.104-beta', '1.0.0', '1.0.0', undefined]);
     expect(resolved[2].state).toBe('offline');
   });
@@ -266,7 +266,7 @@ describe('resolveMembers', () => {
     });
     const members = [member('local', null, 'anthropic'), member('device', 'mini', 'anthropic-1a2b3c4d'),
       member('device', 'mini', 'deepseek'), member('device', 'off', 'anthropic'), member('share', 'share:s1', 'anthropic')];
-    const result = await directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true, members });
+    const result = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members });
     expect(readClaudeUsage).toHaveBeenCalledTimes(2);
     expect(readClaudeUsage).toHaveBeenCalledWith(members[0]);
     expect(readClaudeUsage).toHaveBeenCalledWith(members[1]);
@@ -289,7 +289,7 @@ describe('resolveMembers', () => {
     const member = (providerId: string) => ({
       key: `mini:${providerId}`, kind: 'device' as const, agentDeviceId: 'mini', providerId, limit: 4, weight: 1, paused: false,
     });
-    const result = await directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true,
+    const result = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true,
       members: [member('anthropic-sub-0000abcd'), member('openai-sub-0000abcd')] });
     expect(result.map(entry => entry.state)).toEqual(['ok', 'ok']);
     expect(readClaudeUsage).not.toHaveBeenCalled();
@@ -313,7 +313,7 @@ describe('resolveMembers', () => {
     const members = [member('local', null, 'openai'), member('device', 'mini', 'openai'),
       member('device', 'mini', 'openai-api'), member('device', 'off', 'openai'),
       member('share', 'share:s1', 'openai'), member('local', null, 'openai-disabled')];
-    await directory.resolveMembers('openai', { strategy: 'least', autoSwitch: true, members });
+    await directory.resolveMembers('openai', { strategy: 'expiring', autoSwitch: true, members });
     expect(readCodexUsage.mock.calls.map(([entry]) => entry.key)).toEqual(members.slice(0, 2).map((m) => m.key));
   });
 
@@ -322,7 +322,7 @@ describe('resolveMembers', () => {
       listReceivedShares: () => [share('s1'), share('s2', { status: 'paused' })],
     }));
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
@@ -360,7 +360,7 @@ describe('resolveMembers', () => {
       key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
     });
     const resolved = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         member('device:mini:anthropic-1a2b3c4d', 'device', 'mini', 'anthropic-1a2b3c4d'),
@@ -391,7 +391,7 @@ describe('resolveMembers', () => {
       key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
     });
     const resolved = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         member('local', 'local', null, 'anthropic'),
@@ -409,7 +409,7 @@ describe('resolveMembers', () => {
   it('leaves the local count out when it cannot be read', async () => {
     const directory = createProviderGroupDirectory(deps({ localRunning: async () => { throw new Error('db busy'); } }));
     const [resolved] = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
     });
@@ -429,7 +429,7 @@ describe('resolveMembers', () => {
       }));
       const done = vi.fn();
       void directory.resolveMembers('anthropic', {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
       }).then(done);
@@ -462,7 +462,7 @@ describe('resolveMembers', () => {
     const d = deps();
     const directory = createProviderGroupDirectory(d);
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -566,7 +566,7 @@ describe('anonymous status with partial member reads', () => {
   // Real anonymous-status -> router -> directory entry, unit tier, in-memory
   // local accounts: 512 unpaused members must not cause 512 store checks.
   it('keeps configuration reads constant for a 512-member refresh', async () => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true,
       members: Array.from({ length: 512 }, (_, index) => ({
         key: `local-${index}`, kind: 'local', agentDeviceId: null, providerId: 'anthropic',
         limit: 4, weight: 1, paused: false,
@@ -575,7 +575,7 @@ describe('anonymous status with partial member reads', () => {
     const readGroup = vi.fn(() => config);
     const directory = createProviderGroupDirectory(deps({ localRunning: async () => 0 }));
     const router = createProviderGroupRouter({ directory, readGroup,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now() });
     const statusDeps = {
       scope: () => ({ router, isCurrent: () => true }) as ProviderGroupOwnerScope,
       readGroup, readCaps: vi.fn(), isIncapable: () => false,
@@ -593,7 +593,7 @@ describe('anonymous status with partial member reads', () => {
       try {
         let recover!: () => void;
         const delayed = new Promise<void>((resolve) => { recover = resolve; });
-        const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [
+        const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [
           { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
           ...['mini', 'other'].map((id): ProviderGroupMember => ({
             key: `device:${id}:anthropic`, kind: 'device', agentDeviceId: id, providerId: 'anthropic', limit: 4, weight: 1, paused: false,
@@ -613,7 +613,7 @@ describe('anonymous status with partial member reads', () => {
           },
         }));
         const router = createProviderGroupRouter({ directory, readGroup: () => config,
-          listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+          listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now() });
         const readCaps = vi.fn(async () => ({
           version: 1, agents: [{ kind: 'claude-code', available: true }], maxRuns: 4, uploadChunkBytes: 1024, maxPayloadBytes: 4096,
           virtualWorkspace: true, guestRelay: true,
@@ -681,7 +681,7 @@ describe('probe (waiting for a computer to come back, §6.1)', () => {
     const d = deps({ listDevices: async () => [device('self', { isSelf: true }), device('mini', { online: miniOnline })] });
     const directory = createProviderGroupDirectory(d);
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -741,7 +741,7 @@ describe('resolving members quickly when choosing a computer (2026-10-11)', () =
         readClaudeUsage: vi.fn(async (member: ProviderGroupMember) => member.key === MINI.key ? usage : null),
       }));
       const done = vi.fn();
-      void directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true, members: [MINI, OTHER] }, {
+      void directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members: [MINI, OTHER] }, {
         quickMs: 3_000,
         enough: (r) => r.state === 'ok',
       }).then(done);

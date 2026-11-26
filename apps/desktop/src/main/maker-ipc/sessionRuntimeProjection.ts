@@ -14,7 +14,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, isPluginEngineKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
-import { parseProfileModelBaseline, parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
@@ -78,8 +78,24 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
       projectSessionRuntimeControl(sessionId, baseline, agentDeviceId) as Record<string, unknown>,
     );
   };
-  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline) => {
-    const baseline: ScheduledModelSelection = {
+  const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector> => {
+    const permissionProjection = saved.permissionMode ? { permissionMode: saved.permissionMode } : {};
+    if (saved.agentKind === 'acp') {
+      return {
+        agentKind: 'acp' as unknown as NonNullable<ReturnType<SessionRuntimeProjector>['agentKind']>,
+        ...(saved.agentDeviceId !== undefined ? { agentDeviceId: saved.agentDeviceId } : {}),
+        model: saved.model,
+        providerId: saved.providerId,
+        effort: saved.effort ?? '',
+        fastMode: false as const,
+        ...permissionProjection,
+        runtimeBaseline: undefined,
+        runtimeEffective: undefined,
+        runtimePending: null,
+        runtimeBaselineRecoveryPending: false,
+      };
+    }
+    const baseline: SessionRuntimeProfile = {
       agentKind: saved.agentKind, model: saved.model, providerId: saved.providerId,
       ...(saved.agentDeviceId !== undefined ? { agentDeviceId: saved.agentDeviceId } : {}),
       effort: saved.effort, fastMode: saved.fastMode,
@@ -92,6 +108,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
       providerId: baseline.providerId,
       effort: baseline.effort ?? '',
       fastMode: baseline.fastMode,
+      ...permissionProjection,
       runtimeBaseline: baseline,
       runtimeEffective: baseline,
       runtimePending: null,
@@ -122,8 +139,8 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
     const runtimePluginsSelected = ports.runtimePluginsSelected(session.id);
     const pending = ports.pendingWorkerQuestion?.(session.id);
     const status = { runtimePluginsSelected, ...(pending === undefined ? {} : { orcaHasPendingQuestion: pending }) };
-    if (isPluginEngineKind(session.agentKind)) return status;
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
+    if (!baseline && isPluginEngineKind(session.agentKind)) return status;
     const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
       agentKind: dbToMakerAgentKind(session.agentKind),
       model: session.model,
@@ -182,7 +199,7 @@ export function createUpdateScheduledPreference(ports: {
     const db = getDbClient().drizzle;
     const [row] = await db.select({ baseline: sessions.scheduledModelBaseline }).from(sessions)
       .where(eq(sessions.id, sessionId)).limit(1);
-    const baseline = patch ? parseScheduledModelBaseline(row?.baseline) : parseProfileModelBaseline(row?.baseline);
+    const baseline = parseScheduledModelBaseline(row?.baseline);
     if (expectedBaseline !== undefined && row?.baseline !== expectedBaseline) return false;
     if (!baseline) return true;
     const updated = await db.update(sessions).set({

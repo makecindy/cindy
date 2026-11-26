@@ -1,4 +1,4 @@
-import { parseProfileModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
 import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -49,7 +49,7 @@ function configuredRoute(
   const isDraftChange = JSON.stringify(chain) !== JSON.stringify(state.chain);
   // An automation owns its temporary route until ordinary input restores it.
   // This also applies to companions following Cindy defaults and after restart.
-  if (!isDraftChange && parseProfileModelBaseline(state.scheduledModelBaseline) && (previous === undefined || previous === key)) return null;
+  if (!isDraftChange && parseScheduledModelBaseline(state.scheduledModelBaseline) && (previous === undefined || previous === key)) return null;
   // Following defaults must not undo a working fallback on every send. Only a
   // changed chain or an explicit save should supersede the accepted route.
   if (!isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
@@ -69,7 +69,7 @@ function configuredRoute(
 }
 
 function savedRuntimeRoute(state: BotRouteState): RuntimeRoute | null {
-  const baseline = parseProfileModelBaseline(state.scheduledModelBaseline);
+  const baseline = parseScheduledModelBaseline(state.scheduledModelBaseline);
   if (!baseline || baseline.pendingBotProfileVersion) return null;
   const { agentKind, model, providerId, effort, fastMode } = baseline;
   return { agentKind, model, providerId, effort, fastMode,
@@ -198,7 +198,7 @@ export function createBotModelRouteReconciler(deps: {
           throwIpcError('PRECONDITION_FAILED', '请先选择已开启的伙伴模型');
         }
         const key = configuredKey(state);
-        const previous = parseProfileModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
+        const previous = parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
           ? '' : configured.get(sessionId) ?? await deps.applied?.get(sessionId).catch(() => undefined);
         let commitPick: (() => void) | undefined;
         const route = await resolveConfiguredRoute(sessionId, state, previous, undefined, (commit) => { commitPick = commit; });
@@ -278,7 +278,7 @@ export function createBotModelRouteReconciler(deps: {
       const state = await deps.read(sessionId, 'apply');
       assertCurrent();
       if (!state) return false;
-      const baseline = parseProfileModelBaseline(state.scheduledModelBaseline);
+      const baseline = parseScheduledModelBaseline(state.scheduledModelBaseline);
       if (state.scheduledModelBaseline !== expectedBaseline || !baseline || baseline.pendingBotProfileVersion) {
         throw new ScheduledModelSelectionBusyError('Scheduled model selection changed before recovery');
       }
@@ -331,7 +331,7 @@ export function createBotModelRouteReconciler(deps: {
       if (!state?.chain.length) return null;
       const route = await resolveConfiguredRoute(
         sessionId, state,
-        parseProfileModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
+        parseScheduledModelBaseline(state.scheduledModelBaseline)?.pendingBotProfileVersion
           ? '' : configured.get(sessionId),
         draftChain ? normalizeBotModelChain(draftChain) : undefined,
       );

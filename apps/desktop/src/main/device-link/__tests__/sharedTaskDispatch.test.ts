@@ -16,6 +16,18 @@ function capture(): SharedTaskPeerCapture {
 }
 afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
 describe('sharedTask dispatch scope', () => {
+  it('admits only current repository differences for the active shared task', () => {
+    const invoke = (op: string, sessionId: string, source?: string) =>
+      assertSharedTaskInvoke(capture(), { channel: 'git-review:remote-op', args: [{ op, payload: { sessionId, source } }] });
+    expect(() => invoke('get', 'task')).not.toThrow();
+    expect(() => invoke('file-diff', 'task', 'staged')).not.toThrow();
+    expect(() => invoke('file-diff', 'task', 'unstaged')).not.toThrow();
+    expect(() => invoke('get', 'other')).toThrow('PERMISSION_DENIED');
+    expect(() => invoke('file-diff', 'task', 'commit')).toThrow('PERMISSION_DENIED');
+    for (const op of ['stage', 'commits', 'markdown-preview', 'image-preview', 'turn-get']) {
+      expect(() => invoke(op, 'task')).toThrow('PERMISSION_DENIED');
+    }
+  });
   it('reads subagent context only through the shared parent task', () => {
     for (const channel of ['local-db:subagent-runs:list', 'local-db:subagent-runs:detail', 'local-db:subagent-runs:transcript']) {
       const request = { sessionId: 'task', provider: 'pi', runIdOrAlias: 'child' };

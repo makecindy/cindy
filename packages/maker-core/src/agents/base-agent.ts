@@ -150,6 +150,20 @@ export interface PiMcpServerRef {
   };
 }
 
+/** One Host MCP `tools/call` output recorded for ACP empty-result backfill. */
+export interface McpToolResultReceipt {
+  fullText: string;
+  isError: boolean;
+}
+
+export interface McpToolResultQuery {
+  serverName: string;
+  toolName: string;
+  input?: unknown;
+}
+
+export type TakeMcpToolResult = (query: McpToolResultQuery) => McpToolResultReceipt | null;
+
 /** pi spawn 附加配置:host 的 MCP HTTP bridge / 外部 HTTP MCP 出口。 */
 export interface PiExtraSpawnConfig {
   mcpBridge?: {
@@ -167,6 +181,11 @@ export interface PiExtraSpawnConfig {
   disposeSessionCtx?: () => void;
   /** Close only the transports owned by a confirmed Agent process instance. */
   closeSessionInstance?: () => void;
+  /**
+   * Consumes one Host MCP `tools/call` result recorded for this session instance.
+   * Present only when `recordMcpToolResults: true` was requested (ACP engines).
+   */
+  takeMcpToolResult?: TakeMcpToolResult;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -377,6 +396,11 @@ export interface PiExtraSpawnConfigContext {
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
+  /**
+   * Record Host MCP `tools/call` responses for this session so ACP engines that omit
+   * `content`/`rawOutput` on `tool_call_update` can still backfill `tool_result_full`.
+   */
+  recordMcpToolResults?: boolean;
   /** SSH remote 会话的 host id;host 据此把 bridge URL 改成 remote-forward 地址。 */
   remoteHostId?: string | null;
 }
@@ -1266,6 +1290,8 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -1938,11 +1964,39 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
-  readonly diagnostic?: 'pi-retry-history-frame-too-large';
+  /**
+   * Bounded rejection cause for the host to act on. Only host-selected enums
+   * live here — never SDK/CLI text, prompts or task output.
+   * - `pi-retry-history-frame-too-large`: the history read needed to replay a
+   *   retry hit the local 16 MiB frame limit.
+   * - `pi-retry-history-unavailable`: the same history read failed for another
+   *   reason (upstream refused it, RPC error). The message was never accepted
+   *   by the provider, so the host must say "not sent" rather than "reply
+   *   failed".
+   */
+  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable';
+  /**
+   * Bounded HTTP status the upstream answered with (400–599), when the
+   * rejection carries one. A number only — never the upstream body.
+   */
+  readonly upstreamStatus?: number;
 
-  constructor(msg: string, options?: ErrorOptions & { diagnostic?: TurnDispatchRejectedError['diagnostic'] }) {
+  constructor(
+    msg: string,
+    options?: ErrorOptions & {
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      upstreamStatus?: number;
+    },
+  ) {
     super(msg, options);
     this.diagnostic = options?.diagnostic;
+    this.upstreamStatus =
+      typeof options?.upstreamStatus === 'number' &&
+      Number.isInteger(options.upstreamStatus) &&
+      options.upstreamStatus >= 400 &&
+      options.upstreamStatus <= 599
+        ? options.upstreamStatus
+        : undefined;
     this.name = 'TurnDispatchRejectedError';
   }
 }

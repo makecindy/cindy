@@ -110,7 +110,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'acp';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -420,7 +420,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
+    collabRaw?.worker === 'cc' || collabRaw?.worker === 'pi' || collabRaw?.worker === 'acp'
+      ? collabRaw.worker : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
@@ -458,7 +459,9 @@ function sanitize(raw: unknown): NewMakerDraft {
       // 无从看见/编辑(codex P2)。其余 Worker 配置(含 Team 默认权限)可耐久保留。
     };
   })();
-  const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
+  const collab: CollabDraft = collabWorker === 'acp' && (remoteHostId || r.deviceLinkDeviceId || !workerConfig?.providerId)
+    ? defaultCollab()
+    : { enabled: collabEnabled, worker: collabWorker, workerConfig };
   const newChatDefaultPermissionMode =
     r.newChatDefaultPermissionMode === 'auto' || r.newChatDefaultPermissionMode === 'bypassPermissions'
       ? r.newChatDefaultPermissionMode : null;
@@ -1141,7 +1144,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 工作区 picker、所选设备失效后的自动回落),挂在这里全部自动覆盖,新增第五条也不用
   // 再对齐一格(与 NewMakerDraftRoute.applyDraftTarget 的「按什么变了而不是走了哪条
   // 路径」同一思路)。
-  if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
+  if (next.collab.worker === 'acp' && (next.remoteHostId || next.deviceLinkDeviceId)) {
+    next.collab = defaultCollab();
+  } else if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
   } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
     next.collab = {
@@ -1476,7 +1481,7 @@ function patchVendorPrefsInternal(
     : currentDraft.pluginEngine;
   currentDraft = {
     ...currentDraft,
-    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,
+    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor, currentDraft.vendor) : currentDraft.vendor,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || marksSelection,

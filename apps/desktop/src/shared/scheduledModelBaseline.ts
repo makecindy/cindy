@@ -1,26 +1,33 @@
 import { isPluginEngineProviderIdShape } from './subscriptionAccounts';
-import type { MakerAgentKindWire } from './agentKindConversion';
+import type { MakerEngineKindWire } from './agentKindConversion';
 
-/** Only model preferences; native checkpoints and permission settings keep their own lifecycle. */
+export const SCHEDULED_BASELINE_PERMISSION_MODES = [
+  'ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
+] as const;
+export type ScheduledBaselinePermissionMode = (typeof SCHEDULED_BASELINE_PERMISSION_MODES)[number];
+
+export function isScheduledBaselinePermissionMode(value: unknown): value is ScheduledBaselinePermissionMode {
+  return typeof value === 'string' && (SCHEDULED_BASELINE_PERMISSION_MODES as readonly string[]).includes(value);
+}
+
+/** Model preferences and permission mode restored after a temporary scheduled switch; native checkpoints keep their own lifecycle. */
 export interface ScheduledModelBaseline {
   scopeId: string;
   /** Permanent profile save not yet accepted by the runtime; survives pause/restart. */
   pendingBotProfileVersion?: number;
-  agentKind: MakerAgentKindWire;
+  agentKind: MakerEngineKindWire;
   agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
   fastMode: boolean | 'ultrafast';
+  permissionMode?: ScheduledBaselinePermissionMode;
 }
 
-type ProfileBaseline = ScheduledModelBaseline | (Omit<ScheduledModelBaseline, 'agentKind'> & { agentKind: 'acp' });
-
-/** Profile saves also fence plugin routes, which are outside the built-in model catalog. */
-export function parseProfileModelBaseline(value: unknown): ProfileBaseline | null {
+export function parseScheduledModelBaseline(value: unknown): ScheduledModelBaseline | null {
   if (typeof value !== 'string' || !value) return null;
   try {
-    const parsed = JSON.parse(value) as Omit<ProfileBaseline, 'effort'> & {
+    const parsed = JSON.parse(value) as Omit<ScheduledModelBaseline, 'effort'> & {
       effort: ScheduledModelBaseline['effort'] | '';
     };
     // Older session rows used an empty string for models without adjustable effort.
@@ -30,19 +37,15 @@ export function parseProfileModelBaseline(value: unknown): ProfileBaseline | nul
       (parsed.agentDeviceId !== undefined && parsed.agentDeviceId !== null && typeof parsed.agentDeviceId !== 'string') ||
       typeof parsed.model !== 'string' || !parsed.model ||
       (parsed.providerId !== null && typeof parsed.providerId !== 'string') ||
+      (parsed.agentKind === 'acp' && (!parsed.providerId || !parsed.providerId.startsWith('acp-plugin:') || parsed.providerId.length <= 'acp-plugin:'.length)) ||
       (effort !== null && !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) ||
-      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast')) return null;
-    // Older clients saved the built-in fallback alongside the actual plugin provider.
-    if (parsed.agentKind === 'acp' || (parsed.agentKind === 'claude-code' && isPluginEngineProviderIdShape(parsed.providerId))) {
-      return { ...parsed, agentKind: 'acp', effort };
-    }
-    return { ...parsed, agentKind: parsed.agentKind, effort };
+      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast') ||
+      (parsed.permissionMode !== undefined && !isScheduledBaselinePermissionMode(parsed.permissionMode))) return null;
+    // Older profile saves recorded the Claude fallback alongside the plugin's provider.
+    const agentKind = parsed.agentKind === 'claude-code' && isPluginEngineProviderIdShape(parsed.providerId)
+      ? 'acp' : parsed.agentKind;
+    return { ...parsed, agentKind, effort, fastMode: agentKind === 'acp' ? false : parsed.fastMode };
   } catch {
     return null;
   }
-}
-
-export function parseScheduledModelBaseline(value: unknown): ScheduledModelBaseline | null {
-  const baseline = parseProfileModelBaseline(value);
-  return baseline?.agentKind === 'acp' ? null : baseline;
 }
