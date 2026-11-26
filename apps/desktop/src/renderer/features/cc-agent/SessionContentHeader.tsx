@@ -389,23 +389,19 @@ export function SessionContentHeader({
         }
       }
 
-      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
-      // (半移动)。判定不在这里做:归属只有共享写路径一处权威,renderer 的缓存/复核都是
-      // 异步镜像,任何「先查询再决定」都会有「查询通过后、写入前恰好回收」的窗口,把
-      // 主进程本会放行的移动挡在请求之前;这里照常发请求,被守卫拒绝时在下面映射成
-      // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(session.id, nextPatch);
+      const request = target.kind === 'dialogue'
+        ? { workspaceKind: 'dialogue' as const }
+        : { workspaceKind: 'project' as const, workingDir: targetWorkingDir };
+      patchLocal(session.id, { workspaceKind: request.workspaceKind, projectDir: targetWorkingDir ?? null });
       try {
-        await sessionService.update(session.id, nextPatch);
+        const moved = await sessionService.update(session.id, request);
+        patchLocal(session.id, { workingDir: moved.workingDir, projectDir: moved.projectDir, workspaceKind: moved.workspaceKind });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -753,7 +749,7 @@ export function SessionContentHeader({
           sessionId={newProjectSessionId}
           onOpenChange={closeNewProjectDialog}
           onCreated={(result) => {
-            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+            patchLocal(newProjectSessionId, { ...result.session, workspaceKind: 'project' });
             void recentWorkdirsStore.forceRefresh().catch(() => undefined);
             toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
           }}

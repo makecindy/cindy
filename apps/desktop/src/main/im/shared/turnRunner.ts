@@ -82,7 +82,7 @@ import {
 } from '../../maker-host/send-outcome';
 import { getDbClient } from '../../localDb/client/current';
 import { sessions as sessionsTable } from '../../localDb/schema';
-import { hydrateSessionProvider } from '../../maker-host/session-provider-store';
+import { getSessionProvider, hydrateSessionProvider } from '../../maker-host/session-provider-store';
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
@@ -192,7 +192,13 @@ import {
   tokenRateFromStatus,
   type TurnActivityState,
 } from './turnActivity';
-import { isQuotaExhaustionFailure, overloadRetryNotice, terminalErrorText, turnRetryNotice } from './turnRetryNotice';
+import {
+  isQuotaExhaustionFailure,
+  openAiSubscriptionReconnectNotice,
+  overloadRetryNotice,
+  terminalErrorText,
+  turnRetryNotice,
+} from './turnRetryNotice';
 import {
   CHANNEL_OVERLOAD_RETRY_MAX_ATTEMPTS,
   channelOverloadRetryDelayMs,
@@ -414,6 +420,7 @@ type BuiltinMakerSession = MakerSession;
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
+  waitingForAuthRetry?: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
   /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
@@ -1592,6 +1599,10 @@ export function createTurnRunner(
         : {}),
     };
 
+    // A new authenticated input resumes the existing FIFO after a subscription rejection.
+    const resumeQueued = state.waitingForAuthRetry;
+    state.waitingForAuthRetry = false;
+    if (resumeQueued && args.queueMode === 'external') maybeDispatchNextQueued(state, userId);
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
     // 接管模式下 desktop 侧 turn 正在跑) → 入队等当前 turn 结束后按序自动 send,
     // 不再以 SESSION_RUNNING pre-dispatch failure 报错打回(对齐 desktop 排队体验)。
@@ -1621,6 +1632,7 @@ export function createTurnRunner(
         armDispatchRetry(state, userId);
       }
       await notifyQueuedPosition(userId, item, state.sendQueue.length);
+      if (resumeQueued) maybeDispatchNextQueued(state, userId);
       return { kind: 'busy', reason: 'queued_internally' };
     }
 
@@ -2155,7 +2167,7 @@ export function createTurnRunner(
                     effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
                   permissionGuard: (request) => {
-                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input);
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input, request.metadata);
                     return guard.destructive
                       ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
                       : null;
@@ -2531,7 +2543,7 @@ export function createTurnRunner(
    * desktop 侧仍在跑时挂 retry timer 兜底 — 正常情况下它的 stray done 会先到。
    */
   function maybeDispatchNextQueued(state: SessionState, userId: string): void {
-    if (state.sendQueue.length === 0) return;
+    if (state.waitingForAuthRetry || state.sendQueue.length === 0) return;
     if (state.queue.length > 0) return;
     if (state.scheduledTranspond || state.pendingTranspondFinals > 0) return;
     if (state.makerSession.isTurnRunning()) {
@@ -4543,7 +4555,7 @@ export function createTurnRunner(
                     effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
                   permissionGuard: (request) => {
-                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input);
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input, request.metadata);
                     return guard.destructive
                       ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
                       : null;
@@ -4739,6 +4751,16 @@ export function createTurnRunner(
     const turn = state.queue.shift();
     if (!turn) return;
     userId = turn.userId;
+    const failedSession = state.makerSession;
+    const reconnect = !failedSession.remoteHostId && !failedSession.agentDeviceId
+      ? openAiSubscriptionReconnectNotice(errData, getSessionProvider(failedSession.id)) : null;
+    if (reconnect && deps.acquirePendingAgentSwitch) {
+      state.waitingForAuthRetry = true;
+      // Maker retires exactly this handle at the terminal boundary. The existing
+      // runtime-refresh observer retains the task and the undispatched FIFO.
+      void getMaker().closeSessionIfCurrent(failedSession, 'runtime-refresh', { afterCurrentTurn: true })
+        .catch(() => log.warn('Failed to retire rejected OpenAI subscription runtime'));
+    }
     const rawMsg =
       errData && typeof errData === 'object' && 'message' in errData
         ? String((errData as { message: unknown }).message)
@@ -4775,7 +4797,7 @@ export function createTurnRunner(
         // 建卡失败 → 下面按"没有输出面"处理(另发一条消息)。
       }
     }
-    const msg = terminalErrorText(
+    const msg = reconnect ?? terminalErrorText(
       errData,
       isQuotaExhaustionFailure(errData) ? {
         ...(await resolveSessionErrorContext(state.makerSession.id)),
@@ -4922,7 +4944,7 @@ export function createTurnRunner(
       if (output.kind === 'chunked-text') {
         if (adapter.handleTextInteraction) {
           if (req.kind === 'permission') {
-            const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
+            const guard = checkChannelDestructiveToolCall(req.toolName, req.input, req.metadata);
             if (guard.destructive) {
               log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
               return {
@@ -4963,7 +4985,7 @@ export function createTurnRunner(
       // Bash/PowerShell 命令含 rm/del/Remove-Item/find -delete/git clean -f 等。
       // 模型收到 deny 后通常会改用 AskUserQuestion 跟用户沟通。
       if (req.kind === 'permission') {
-        const guard = checkChannelDestructiveToolCall(req.toolName, req.input);
+        const guard = checkChannelDestructiveToolCall(req.toolName, req.input, req.metadata);
         if (guard.destructive) {
           log.warn(`destructive tool blocked: ${req.toolName} (${guard.reason})`);
           return {

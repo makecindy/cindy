@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 使用系统 .deb 安装包。Arch Linux 和 Omarchy 使用受管理的用户目录安装器，复用同一份经过校验的 .deb 内容，无需 Debian 包管理器。",
         "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请按 docs/linux.md 中的用户目录安装指南操作。",
         "item2": "点击更新后，系统 .deb 安装需要授权；用户目录安装无需系统密码即可切换版本。其他包管理器安装的版本请通过对应包管理器更新。",
-        "item3": "Linux x64 和 arm64 支持 Beta 渠道。Linux 仅在你选择重启时应用更新，不会在空闲时自动安装。"
+        "item3": "Linux x64 和 arm64 支持 Beta 渠道。用户目录安装可在空闲时自动安装更新；已配置免密授权的系统 .deb 安装也可在空闲时自动安装更新，其他系统 .deb 安装仅在你选择重启时应用更新。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "没找到答案？直接问你想做什么",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
       "autoUpdateDescription": "更新下载完成后，当这台电脑 10 分钟无操作且没有任务运行时，自动重启应用完成安装。",
-      "linuxUpdateDescription": "更新在你选择重启时生效。系统 .deb 安装需要系统密码，用户目录安装不需要。其他安装方式请通过对应包管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装需要系统密码，更新在你选择重启时生效；用户目录安装不需要密码，可在空闲时自动安装。其他安装方式请通过对应包管理器更新。",
       "autoUpdateEnabledToast": "已开启空闲时自动安装更新",
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商",
+        "icon": "连接图标",
+        "appearance": "名称与图标",
+        "ownImage": "选择自己的图片",
+        "imageError": "请选择 10 MB 以内的 PNG、JPG 或 WebP 图片。",
+        "connectionIcon": {
+          "default": "默认",
+          "personal": "个人",
+          "work": "工作"
+        },
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
@@ -5855,7 +5864,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
-      "extensionDialogConfirm": "确认",
+      "extensionDialogConfirm": "继续",
       "cancel": "取消",
       "resources": {
         "extension": "扩展代码",
@@ -7236,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，点击更新",
+          "downloading": "正在下载 {{version}}…",
+          "relaunching": "正在重启更新到 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新这台电脑上的 Cindy？",
+            "description": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后该设备会重启 Cindy，远程连接会短暂断开。",
+            "selfDescription": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后这台电脑上的 Cindy 会重启。",
+            "busyWarning": "该设备当前有运行中的任务或后台工作，重启会将其打断。",
+            "selfBusyWarning": "这台电脑当前有运行中的任务或后台工作，重启会将其打断。",
+            "linuxPermissionHint": "Linux 受管安装可能需要在目标设备上输入系统密码。",
+            "windowsPermissionHint": "若安装在受保护目录，可能需要在目标设备上确认系统权限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已开始将「{{name}}」更新到 {{version}}",
+            "relaunching": "「{{name}}」正在重启更新到 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已变化，请重新打开卡片确认",
+            "noUpdate": "「{{name}}」当前没有可安装的新版本",
+            "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
+            "failed": "未能更新「{{name}}」上的 Cindy"
           }
         }
       }
@@ -9552,6 +9585,7 @@
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "embeddedGuide": "助手为当前任务打开了 MCP 配置表单。请按服务供应商的说明核对已填信息，补全缺项，再保存配置。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
@@ -9763,7 +9797,7 @@
       "allow": "允许",
       "deny": "拒绝",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "发送答复",
       "planTitle": "计划待审核",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -12332,7 +12366,7 @@
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
           "archive": "归档群",
           "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
-          "confirm": "确认",
+          "confirm": "继续",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
           "unarchive": "取消归档",
@@ -13188,7 +13222,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "确认",
+      "confirm": "继续",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -13570,6 +13604,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，正在自动重试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂时没有可用容量。请直接在这里重发这条消息重试，或在 Cindy 里换一个模型。（在桌面端点「重试」也能继续任务，但结果不会回到这条消息里。）"
         },
+        "openAiReconnect": "请在 Cindy 设置 → 模型供应商 → OpenAI 中重新连接 ChatGPT，然后在这里发一条消息继续。",
         "audioInputUnavailable": "当前模型连接无法直接读取音频。可以让 Cindy 先把音频转成文字，再继续处理。",
         "toolLoop": {
           "generic": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
@@ -14729,27 +14764,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "默认权限",
             "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
           },
           "default": {
-            "label": "默认",
+            "label": "默认权限",
             "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
           },
           "acceptEdits": {
-            "label": "自动接受编辑",
+            "label": "允许编辑",
             "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
           },
           "auto": {
-            "label": "自动",
+            "label": "自动审批",
             "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
           },
           "plan": {
-            "label": "只规划",
+            "label": "计划模式",
             "description": "Agent 只分析和制定计划，不修改文件。"
           },
           "bypassPermissions": {
-            "label": "全部允许",
+            "label": "完全访问",
             "description": "Agent 请求的权限一律自动允许。"
           }
         }
@@ -15412,7 +15447,7 @@
       "back": "返回",
       "skip": "跳过",
       "next": "下一题",
-      "submit": "提交",
+      "submit": "发送答复",
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
@@ -15583,7 +15618,10 @@
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
+      "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
+      "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
+      "upstreamEmpty550": "模型服务返回 HTTP 550（无响应内容）",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
       "retryTitle": "重新发送最后一条消息",
@@ -15842,6 +15880,10 @@
       "diffUnchangedLines_one": "{{count}} 行未变",
       "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
+    },
+    "filePreview": {
+      "changed": "文件已变更",
+      "refreshHint": "点击刷新"
     },
     "textLightbox": {
       "unreadable": "无法读取该文件",
@@ -16418,7 +16460,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远端工作目录现在不可用。请确认那台电脑上的目录还在，然后重试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "电脑端暂时无法确认这条消息是否已经发出。请稍后再试，不要重复发送同一条。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与运行 Agent 的电脑通信，请查看错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "等待运行 Agent 的电脑响应超时，结果尚未确认。重试前先检查任务进展。",
+      "REMOTE_AGENT_TIMEOUT": "运行 Agent 的电脑还没回复。请先查看任务进展。如果任务还在运行或已有结果，就不用重试。",
       "REMOTE_AGENT_LINK_BUSY": "与运行 Agent 的电脑之间的通信繁忙，请稍后重试。",
       "REMOTE_AGENT_UNRESPONSIVE": "运行 Agent 的电脑多次未响应，调用被暂时暂停。请稍后重试。",
       "REMOTE_AGENT_OFFLINE": "运行 Agent 的电脑当前离线，待重新上线后重试。",
@@ -18436,6 +18478,7 @@
         "intervalChip": "完成后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定义 Cron",
         "intervalMinutes": "分钟（每 N 分钟）",
         "interval": "小时（每 N 小时）",
         "daily": "每天",

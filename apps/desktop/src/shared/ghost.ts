@@ -7675,7 +7675,8 @@ export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 
 /** Public artifact download; results deliberately exclude host filesystem paths. */
 export type GhostPipeDownloadRequest =
-  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes: number }
+  /** `bytes` may be omitted when only the SHA-256 is published; the response must then declare the size. */
+  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes?: number }
   | { type: 'download-request'; kind: 'cancel'; id: string };
 
 export type GhostPipeDownloadResult =
