@@ -159,7 +159,12 @@ import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
 import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
-import { assertTaskActionCurrent, captureTaskActionSyncGuard, TaskActionAuthorizationError, taskActionRevocationCode } from '../maker-ipc/taskActionAuthorization.js';
+import {
+  assertTaskActionCurrent,
+  captureTaskActionSyncGuard,
+  TaskActionAuthorizationError,
+  taskActionRevocationCode,
+} from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
