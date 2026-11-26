@@ -36,6 +36,16 @@ describe('model mark semantics', () => {
     expect(view.container.querySelector('linearGradient')).toBeTruthy();
   });
 
+  // Unit: a catalog model icon must not make personal and work copies indistinguishable.
+  it('uses a connection mark in the model picker even when the model has its own brand', () => {
+    const model = (logoKind?: 'personal' | 'work' | 'mark-magpie') =>
+      firstPath(<ModelIconMark providerId="zhipu-glm-cn" icon="claude" logoKind={logoKind} />);
+    expect(model('work')).toBe(firstPath(<ProviderMark providerId="zhipu-glm-cn" logoKind="work" />));
+    expect(model('work')).not.toBe(model('personal'));
+    expect(model('mark-magpie')).toBe(firstPath(<ProviderMark providerId="magpie" />));
+    expect(model()).toBe(firstPath(<AnthropicMark />));
+  });
+
   // Unit: two visible provider marks must own their paint servers. Removing a
   // hidden selector must not remove the gradient referenced by the composer.
   it('keeps spectrum marks independent when another instance is removed', () => {

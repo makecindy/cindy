@@ -2846,7 +2846,7 @@
         "description": "O Ubuntu utiliza pacotes .deb de sistema. O Arch Linux e o Omarchy utilizam o instalador gerido ao nível do utilizador com o mesmo conteúdo .deb verificado, sem um gestor de pacotes Debian.",
         "item1": "Ubuntu: utilize sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: siga o guia de instalação de utilizador em docs/linux.md.",
         "item2": "Após escolher Atualizar, as instalações .deb de sistema pedem autorização; as instalações geridas ao nível do utilizador mudam de versão sem palavra-passe de sistema. Outras instalações geridas por pacotes utilizam o respetivo gestor de pacotes.",
-        "item3": "O Linux x64 e arm64 suportam o canal Beta. As atualizações do Linux só são aplicadas quando optar por reiniciar, nunca automaticamente durante a inatividade."
+        "item3": "O Linux x64 e arm64 suportam o canal Beta. As instalações geridas ao nível do utilizador podem instalar atualizações automaticamente durante a inatividade; as instalações .deb de sistema com autorização sem palavra-passe também podem instalar atualizações durante a inatividade, enquanto as restantes só as aplicam quando optar por reiniciar."
       },
       "qnaTitle": "Perguntar diretamente",
       "qnaDescription": "Ainda precisa de ajuda? Pergunte como fazer o que tem em mente.",
@@ -2921,7 +2921,7 @@
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
       "autoUpdateDescription": "Após concluir a transferência de uma atualização, reiniciar a aplicação para a instalar quando este computador estiver inativo há 10 minutos e não houver tarefas em execução.",
-      "linuxUpdateDescription": "As atualizações exigem um reinício escolhido por si. As instalações .deb de sistema pedem a palavra-passe do sistema; as instalações geridas ao nível do utilizador não. Outras instalações utilizam o respetivo gestor de pacotes.",
+      "linuxUpdateDescription": "As instalações .deb de sistema pedem a palavra-passe do sistema, por isso as atualizações são aplicadas no reinício escolhido por si. As instalações geridas ao nível do utilizador não precisam de palavra-passe e podem ser instaladas quando o computador está inativo. Outras instalações utilizam o respetivo gestor de pacotes.",
       "autoUpdateEnabledToast": "Instalação de atualizações durante a inatividade ativada",
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível guardar as definições de atualização automática",
@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Desativar este fornecedor",
         "enableProvider": "Ativar este fornecedor",
+        "icon": "Ícone da ligação",
+        "appearance": "Nome e ícone",
+        "ownImage": "Escolher imagem",
+        "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predefinido",
+          "personal": "Pessoal",
+          "work": "Trabalho"
+        },
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
@@ -5958,7 +5967,7 @@
       "uninstallTitle": "Desinstalar extensão Pi?",
       "uninstallDescription": "{{name}} será removida deste dispositivo. As tarefas Pi já abertas mantêm a extensão antiga até serem fechadas.",
       "confirmUninstall": "Desinstalar",
-      "extensionDialogConfirm": "Confirmar",
+      "extensionDialogConfirm": "Continuar",
       "cancel": "Cancelar",
       "resources": {
         "extension": "Código da extensão",
@@ -7225,7 +7234,14 @@
           "routeUnavailable": "Indisponível",
           "routeMeasuring": "A medir…",
           "routeDirectUnavailableHint": "A ligação direta não está disponível nesta rede de momento",
-          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente."
+          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente.",
+          "autoRule": {
+            "title": "Regras de encaminhamento automático",
+            "faster": "Escolhe a rota com menor latência, preferindo direta quando a diferença é mínima.",
+            "thresholds": "Muda para relay quando é 25–50 ms+ mais rápido; regressa a direta quando fica a ≤ 15 ms do relay.",
+            "cooldown": "Intervalo de 30 s para evitar oscilações; muda de imediato em degradação grave (≥ 2× mais lento e ≥ 100 ms pior).",
+            "peerOverride": "Se o outro dispositivo fixou direta/relay ou usa uma versão antiga, prevalece a definição ou capacidade dele."
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7348,6 +7364,123 @@
           "disableBlocked": {
             "controller-encryption-required": "Este computador tem «Usar apenas Agent-Net» ativado. Desative essa opção aqui antes de voltar o outro computador para Device Link.",
             "agent-net-only-relay": "Esta ligação usa uma rede que só suporta Agent-Net. Escolha primeiro uma rota compatível com Device Link."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Versão {{version}} disponível — clique para atualizar",
+          "downloading": "A transferir {{version}}…",
+          "relaunching": "A reiniciar para instalar {{version}}…",
+          "confirm": {
+            "title": "Atualizar o Cindy em «{{name}}»?",
+            "selfTitle": "Atualizar o Cindy neste computador?",
+            "description": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado nesse dispositivo. A ligação remota será interrompida brevemente.",
+            "selfDescription": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado neste computador.",
+            "busyWarning": "Tarefas em curso ou processos em segundo plano nesse dispositivo serão interrompidos pelo reinício.",
+            "selfBusyWarning": "Tarefas em curso ou processos em segundo plano neste computador serão interrompidos pelo reinício.",
+            "linuxPermissionHint": "Instalações geridas em Linux podem pedir a palavra-passe do sistema no dispositivo de destino.",
+            "windowsPermissionHint": "Instalações numa pasta protegida podem pedir permissão do sistema no dispositivo de destino.",
+            "action": "Atualizar agora"
+          },
+          "toast": {
+            "started": "A atualizar «{{name}}» para {{version}}",
+            "relaunching": "«{{name}}» está a reiniciar para instalar {{version}}",
+            "versionChanged": "A versão disponível em «{{name}}» mudou. Reabra o cartão para rever.",
+            "noUpdate": "Não existe nenhuma atualização instalável disponível em «{{name}}».",
+            "busy": "«{{name}}» já está a executar uma atualização. Tente novamente dentro de momentos.",
+            "failed": "Não foi possível atualizar o Cindy em «{{name}}»."
+          }
+        },
+        "tabs": {
+          "aria": "Vista da topologia",
+          "devices": "Ligações de dispositivos",
+          "providers": "Fornecedores remotos"
+        },
+        "providers": {
+          "empty": "Nenhuma tarefa está em execução num fornecedor remoto neste momento. Quando uma tarefa correr noutro computador ou fornecedor partilhado, a rota e o relay aparecem aqui.",
+          "noMatch": "Nenhuma tarefa, máquina ou relay corresponde ao filtro.",
+          "searchPlaceholder": "Pesquisar tarefas, máquinas ou relays…",
+          "clearFilter": "Limpar filtro",
+          "expand": "Expandir",
+          "collapse": "Recolher",
+          "groupTitle": "Grupo de fornecedores {{provider}}",
+          "groupCount": "{{count}} no total",
+          "groupIdleSummary": "{{count}} outros membros: {{online}} online · {{offline}} offline",
+          "filter": {
+            "aria": "Filtrar por estado da tarefa",
+            "all": "Todas as tarefas ({{count}})",
+            "running": "Em execução ({{count}})"
+          },
+          "columns": {
+            "tasks": "As minhas tarefas",
+            "path": "Rota",
+            "machines": "Máquinas fornecedoras remotas"
+          },
+          "usage": {
+            "remoteModel": "Modelo remoto",
+            "remoteTask": "Tarefa remota"
+          },
+          "bundle": {
+            "mixed": "{{running}} em execução · {{ready}} prontas",
+            "runningOnly": "{{running}} em execução",
+            "readyOnly": "{{ready}} prontas",
+            "countBadge": "{{count}} total",
+            "popoverTitle": "Tarefas em {{name}} ({{count}})"
+          },
+          "badge": {
+            "own": "O meu computador",
+            "groupMember": "Grupo",
+            "share": "Fornecedor partilhado",
+            "shareShort": "Partilhado",
+            "shareGroup": "Grupo partilhado · {{count}}",
+            "shareGroupShort": "Grupo · {{count}}"
+          },
+          "relayRole": {
+            "officialShort": "Oficial",
+            "selfHostedShort": "Próprio",
+            "sharerRelayShort": "Relay partilhado",
+            "officialFull": "Relay oficial da Cindy",
+            "selfHostedFull": "Relay próprio",
+            "sharerRelayFull": "Relay próprio de quem partilhou"
+          },
+          "status": {
+            "ready": "Online",
+            "busy": "Ocupado",
+            "paused": "Em pausa",
+            "idle": "Inativo",
+            "standby": "Em espera"
+          },
+          "machineLine": {
+            "live": "{{flow}} · {{count}} tarefas",
+            "ready": "Pronto · {{count}} tarefas"
+          },
+          "popover": {
+            "models": "Modelos ativos",
+            "tasksCount": "Tarefas associadas ({{count}})",
+            "clickToOpenHint": "Clique para abrir",
+            "relayHost": "Anfitrião do relay",
+            "relayRegion": "Região",
+            "relayHop": "Local até relay",
+            "relayLoad": "Por este relay",
+            "relayLoadValue": "{{machines}} máquinas · {{tasks}} tarefas"
+          },
+          "idleStrip": {
+            "summary": "{{count}} outros fornecedores remotos online estão inativos",
+            "show": "Mostrar inativos",
+            "hide": "Ocultar inativos"
+          },
+          "stats": {
+            "empty": "Sem tarefas em execução em fornecedores remotos",
+            "tasks": "{{total}} tarefas",
+            "tasksWithRunning": "{{total}} tarefas ({{running}} em execução)",
+            "machines": "{{active}} máquinas fornecedoras",
+            "machinesWithTotal": "{{active}} ativas / {{total}} fornecedoras",
+            "relays": "{{count}} relays"
+          },
+          "legend": {
+            "live": "Tracejado azul: a trocar mensagens",
+            "ready": "Linha verde: ligação Agent-Net pronta",
+            "busy": "Ponto laranja: tarefa em execução / ocupado",
+            "error": "Pontilhado vermelho: sem resposta ou em pausa"
           }
         }
       }
@@ -7477,7 +7610,8 @@
       "localNetwork": {
         "label": "Rede local",
         "deniedHint": "Sem esta permissão, os computadores e telemóveis na mesma rede não conseguem ligar-se diretamente a este computador. Passam pelo relay, que é mais lento.",
-        "settingsHint": "Ative o Cindy em Definições do Sistema › Privacidade e segurança › Rede local. A alteração aplica-se assim que voltar."
+        "promptedHint": "Clique em Permitir no aviso do macOS. Se não surgir nenhum aviso, abra as Definições do Sistema para ativar manualmente.",
+        "settingsHint": "Em Privacidade e segurança, abra Rede local e ative o Cindy. Se não constar na lista, clique em + para adicionar esta app; aplica-se assim que voltar."
       }
     },
     "imBot": {
@@ -7948,6 +8082,10 @@
         "toggle-sidebar": {
           "label": "Alternar barra lateral",
           "description": "Recolher ou expandir a barra lateral da lista de sessões"
+        },
+        "copy-session-link": {
+          "label": "Copiar ligação da sessão",
+          "description": "Copiar a ligação da sessão aberta"
         },
         "session-history-back": {
           "label": "Tarefa anterior",
@@ -9671,6 +9809,7 @@
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Apenas MCP remoto http / sse. As novas sessões do Agent podem utilizá-lo após guardar; as sessões do Agent em curso não são afetadas.",
+        "embeddedGuide": "O teu assistente abriu este formulário para configurar o MCP para a tarefa atual. Segue as instruções do fornecedor do serviço para verificar os dados já preenchidos, completar o que falta e guardar a configuração.",
         "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu amigo adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
       },
       "fields": {
@@ -9882,7 +10021,7 @@
       "allow": "Permitir",
       "deny": "Recusar",
       "questionTitle": "É necessária a sua intervenção",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "planTitle": "Revisão do plano",
       "approve": "Aprovar",
       "requestChanges": "Pedir alterações",
@@ -12089,6 +12228,8 @@
         "loadEarlierFailed": "Não foi possível carregar as mensagens anteriores. Tente novamente.",
         "emptyTitle": "Ainda não há mensagens neste grupo",
         "emptyDescription": "Diga algo para começar e os seus amigos participarão. Mencione um amigo com @ para que só ele responda.",
+        "emptyDescriptionWithAssistant": "Mencione @Cindy ou use o menu de convite no canto superior direito para convidar pessoas ou adicionar amigos.",
+        "emptyDescriptionInvite": "Use o menu de convite no canto superior direito para convidar pessoas ou adicionar amigos.",
         "roundEnded": "Os amigos terminaram",
         "stepTag": "Passo {{count}}",
         "sending": "A enviar",
@@ -12429,7 +12570,7 @@
         "loginRequired": "Inicie sessão na sua conta e tente novamente.",
         "requestFailed": "O serviço de conversa está indisponível. Tente novamente dentro de momentos.",
         "copyFailed": "Não foi possível copiar. Selecione a ligação e copie-a manualmente.",
-        "createDescription": "Escolha amigos ou crie primeiro o grupo e convide pessoas para aderirem.",
+        "createDescription": "Depois de criar o grupo, pode convidar pessoas e adicionar amigos.",
         "settings": {
           "name": "Nome do grupo",
           "topic": "Tema",
@@ -12467,7 +12608,7 @@
           "soleOwnerHint": "É o único membro restante. Arquive este grupo para manter o histórico e o restaurar mais tarde.",
           "archive": "Arquivar grupo",
           "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções dos amigos. O histórico é mantido. Pesquise o grupo para consultar o histórico ou desarquivá-lo.",
-          "confirm": "Confirmar",
+          "confirm": "Continuar",
           "lastOwner": "Transfira a propriedade para outro membro antes de sair ou remover o proprietário atual.",
           "conflict": "Alguém atualizou este grupo. Atualize e tente novamente.",
           "unarchive": "Desarquivar grupo",
@@ -13340,7 +13481,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmar",
+      "confirm": "Continuar",
       "cancel": "Cancelar",
       "dontShowAgain": "Não voltar a mostrar"
     },
@@ -13736,6 +13877,7 @@
           "overloadRetryingNoCount": "O serviço do modelo está ocupado. A tentar novamente de forma automática…",
           "overloadFailed": "⚠️ O serviço do modelo está ocupado — o serviço a montante não tem capacidade neste momento. Reenvie esta mensagem aqui para tentar novamente ou mude para outro modelo no Cindy. (Clicar em «Tentar novamente» na aplicação de computador também continua a tarefa, mas o resultado não volta a esta mensagem.)"
         },
+        "openAiReconnect": "Volte a ligar o ChatGPT no Cindy em Definições → Fornecedores → OpenAI e envie uma mensagem aqui.",
         "audioInputUnavailable": "Esta ligação ao modelo não permite processar áudio diretamente. Peça à Cindy que transcreva o áudio antes de continuar.",
         "toolLoop": {
           "generic": "O modelo chamou ferramentas repetidamente demasiadas vezes, pelo que o Cindy parou este turno para evitar um ciclo infinito. Envie uma nova mensagem para continuar.",
@@ -14904,27 +15046,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar sempre",
+            "label": "Permissões predefinidas",
             "description": "A sua confirmação é pedida quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
           },
           "default": {
-            "label": "Predefinido",
+            "label": "Permissões predefinidas",
             "description": "O agente trabalha da forma predefinida; confirma os pedidos de permissão."
           },
           "acceptEdits": {
-            "label": "Aceitar edições",
+            "label": "Aceitar edições automaticamente",
             "description": "O agente edita ficheiros diretamente; confirma os restantes pedidos de permissão."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisão automática",
             "description": "O agente decide o que precisa de confirmação; confirma os pedidos que fizer."
           },
           "plan": {
-            "label": "Apenas planear",
+            "label": "Modo de planeamento",
             "description": "O agente apenas analisa e planeia; não edita ficheiros."
           },
           "bypassPermissions": {
-            "label": "Permitir tudo",
+            "label": "Acesso total",
             "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
@@ -15564,7 +15706,7 @@
       "back": "Voltar",
       "skip": "Ignorar",
       "next": "Seguinte",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Escreva outra coisa…",
@@ -15750,6 +15892,8 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "piRetryHistoryTooLarge": "A mensagem não foi enviada. Ao ler o histórico para tentar novamente, o Pi encontrou uma trama que excedia o limite local de 16 MiB. Pode continuar numa nova tarefa.",
+      "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para a enviar. Pode tentar novamente ou continuar numa nova tarefa.",
+      "upstreamStatusError": "O serviço a montante devolveu {{status}}, pelo que a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "A tua mensagem não foi enviada. Seleciona «Tentar novamente» para a enviar sem alterações. Se enviares uma nova mensagem, esta substitui a anterior.",
@@ -16017,6 +16161,10 @@
       "diffUnchangedLines_other": "{{count}} linhas sem alterações",
       "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "A preparar pré-visualização do diff…"
+    },
+    "filePreview": {
+      "changed": "Ficheiro alterado",
+      "refreshHint": "Clique para atualizar"
     },
     "textLightbox": {
       "unreadable": "Não é possível ler este ficheiro",
@@ -16299,7 +16447,7 @@
         "groupSwitch": "Continuação automática noutro computador"
       },
       "autoResumeSeparator": {
-        "label": "Ligação interrompida — retomada automaticamente"
+        "label": "Resposta vazia — retoma automática"
       },
       "autoResumePending": {
         "label": "A restabelecer ligação",
@@ -16593,7 +16741,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
       "REMOTE_AGENT_UNAVAILABLE": "Não foi possível comunicar com o computador que executa o Agent. Consulte os detalhes do erro.",
-      "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Verifique a tarefa antes de tentar novamente.",
+      "REMOTE_AGENT_TIMEOUT": "O computador que executa o Agent ainda não respondeu. Verifique o progresso da tarefa. Se ainda estiver em curso ou já tiver terminado, não precisa de tentar novamente.",
       "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, pelo que as chamadas foram suspensas temporariamente. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando voltar a ligar-se.",
@@ -16887,6 +17035,8 @@
       "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "O serviço de contas do Codex está temporariamente indisponível.",
+      "rechecking": "O serviço de contas do Codex está temporariamente indisponível. Nova tentativa às {{resetAt}}.",
       "poolModelLimited": "Foi atingido o limite de utilização da subscrição para este modelo. Pode mudar de modelo.",
       "poolRetryUntil": "Tente novamente após {{resetAt}}.",
       "poolOtherSignedOut": "Outra conta de subscrição tem a sessão terminada. Inicie sessão no computador que executa a tarefa e tente novamente.",
@@ -18682,6 +18832,7 @@
         "intervalChip": "Após a conclusão · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Cron personalizado",
         "intervalMinutes": "Minutos (a cada N minutos)",
         "interval": "De hora a hora (a cada N horas)",
         "daily": "Diariamente (todos os dias)",
@@ -19385,6 +19536,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Nas definições do amigo, escolhe «{{restart}}» para reconstruir o contexto de trabalho e manter o histórico de mensagens. Para discutir algo em separado, escolhe «{{startTopic}}» nas ações de uma mensagem.",
     "viewSkillDetails": "Ver detalhes da Skill",
     "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente.",
     "pluginSkillSetup": {
@@ -22915,6 +23067,16 @@
     "refresh": "Atualizar quota"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Outras formas de adicionar contas",
+      "connect": "Conectar um login existente…",
+      "found": "{{count}} disponíveis",
+      "title": "Logins em {{device}}",
+      "note": "O Cindy e a CLI usarão a mesma configuração de conta.",
+      "attach": "Conectar",
+      "choose": "Escolher outra pasta…",
+      "unverified": "Não foi possível verificar esta assinatura."
+    },
     "pluginSignIn": {
       "method": "Método de início de sessão",
       "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a guarda nem a envia para outros computadores.",

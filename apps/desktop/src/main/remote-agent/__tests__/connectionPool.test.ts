@@ -1911,18 +1911,31 @@ describe('remote connection pool with a real host', () => {
     await sleep(5);
     // 连回的 open 在路上时关掉任务。
     let openGate: (() => void) | null = null;
+    const cleanupGate: { release?: () => void } = {};
+    let openDelivered = false;
     intercept = (request) => {
+      if (request.op === 'close' && openDelivered) return new Promise(resolve => {
+        cleanupGate.release = () => resolve(host.handle(CONTROLLER, request).then(value => value ?? null));
+      });
       if (request.op !== 'open' || openGate) return undefined;
       return new Promise((resolve) => {
-        openGate = () => resolve(host.handle(CONTROLLER, request).then((value) => value ?? null));
+        openGate = () => { openDelivered = true; resolve(host.handle(CONTROLLER, request).then((value) => value ?? null)); };
       });
     };
     const sending = a.send({ type: 'user', content: 'late' });
     await vi.waitFor(() => expect(openGate).not.toBeNull());
-    const closing = a.close({ reason: 'navigation' });
+    let sendSettled = false;
+    const result = sending.then(() => { sendSettled = true; return 'sent'; }, () => { sendSettled = true; return 'rejected'; });
+    await a.close({ reason: 'navigation' });
     openGate!();
-    await closing;
-    await expect(sending).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(cleanupGate.release).toBeTypeOf('function'));
+      // One event-loop boundary drains promise handlers without a timing threshold.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(host.limitUsage().total).toBe(1);
+      expect(sendSettled).toBe(false);
+    } finally { cleanupGate.release?.(); }
+    await expect(result).resolves.toBe('rejected');
     // b 为 a 让了位；a 连回途中被关掉，对方不能留下 a 的进程。
     await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
     expect(pool.size).toBe(1);

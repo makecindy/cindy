@@ -85,6 +85,12 @@ export type AgentAppUpdateNotifyOutcome = 'written' | 'task-missing';
 export interface AgentAppUpdateDeps {
   appVersion(): string;
   platform: NodeJS.Platform;
+  /**
+   * Whether this installation can apply an update without anyone at the
+   * computer. False for Linux system `.deb` installs, which need a pkexec
+   * password: the idle switch has no effect there and installing asks for it.
+   */
+  supportsUnattendedInstall(): boolean;
   pid: number;
   now(): number;
   check(): Promise<AgentAppUpdateCheck>;
@@ -228,7 +234,9 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       ...(others === 0 && !background ? [text('update.agentInstall.noOtherTasks')] : []),
       text('update.agentInstall.thisTask'),
       text('update.agentInstall.remote'),
-      ...(deps.platform === 'linux' ? [text('update.agentInstall.linuxAuth')] : []),
+      ...(deps.platform === 'linux' && !deps.supportsUnattendedInstall()
+        ? [text('update.agentInstall.linuxAuth')]
+        : []),
     ];
     return {
       kind: 'permission',
@@ -391,6 +399,7 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       // Suggest the switch at most once per task, and only when it would matter.
       const hint =
         !autoUpdateEnabled &&
+        deps.supportsUnattendedInstall() &&
         UPDATABLE_STATUSES.has(result.status) &&
         !hintedSessions.has(caller.sessionId);
       if (hint) {
@@ -471,6 +480,15 @@ export function createAgentAppUpdateService(deps: AgentAppUpdateDeps) {
       if (authority !== 'owner') return ownerTurnRequired();
       if (deps.readAutoUpdate() === enabled)
         return { status: 'unchanged', autoUpdateEnabled: enabled };
+      // Turning the switch off stays allowed so an earlier setting can be cleared.
+      if (enabled && !deps.supportsUnattendedInstall()) {
+        return {
+          status: 'unsupported',
+          autoUpdateEnabled: deps.readAutoUpdate(),
+          message:
+            '这台电脑的 Cindy 用系统 .deb 安装，更新需要输入系统密码，不能在空闲时自动安装；改用 Linux 用户目录安装后才可开启。未做任何更改。',
+        };
+      }
       if (autoUpdateConfirming) {
         return {
           status: 'confirmation_pending',

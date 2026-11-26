@@ -443,13 +443,18 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsListRemoval: record.supportsListRemoval === true,
     supportsNotificationSettings: record.supportsNotificationSettings === true,
     ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'
-      ? { notificationMode: record.notificationMode } : {}),
+      ? { notificationMode: record.notificationMode,
+        ...(typeof record.notificationModeInherited === 'boolean' ? { notificationModeInherited: record.notificationModeInherited } : {}) } : {}),
     ...(Number.isSafeInteger(record.revision) && Number(record.revision) > 0 ? { revision: Number(record.revision) } : {}),
     // 群介绍 shows on the phone; this path only renames (the computer ignores the rest).
     ...(text(record.topic, 250) ? { topic: text(record.topic, 250)! } : {}),
     ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    ...(record.supportsGroupAssistant === true && typeof record.assistantEnabled === 'boolean' ? {
+      supportsGroupAssistant: true, assistantEnabled: record.assistantEnabled,
+      supportsAssistantManagement: record.supportsAssistantManagement === true,
+    } : {}),
     supportsOwnBotRemoval: record.supportsOwnBotRemoval === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
     ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),

@@ -13,11 +13,12 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
-import { Check, Trash2 } from 'lucide-react';
+import { ArrowUpCircle, Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
@@ -32,6 +33,17 @@ import {
   type RemoteSwitchStep,
   type RemoteSwitchTarget,
 } from './agentNetRemoteSwitch';
+import {
+  canProbePeerUpdate,
+  isNonDevAppVersion,
+  peerUpdateStore,
+  probePeerUpdate,
+  SELF_UPDATE_TARGET_ID,
+  syncPeerUpdateVersion,
+  type PeerUpdateConfirmTarget,
+  type PeerUpdateEntry,
+} from './peerAppUpdate';
+import { AutoRouteInfoButton } from './AutoRouteInfoButton';
 import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
@@ -136,11 +148,13 @@ function RouteOptionRow({
 function Heading({
   name,
   sub,
+  subAccessory,
   platform,
   isMobile,
 }: {
   name: string;
   sub: string;
+  subAccessory?: ReactNode;
   platform: string | null;
   isMobile: boolean;
 }) {
@@ -164,12 +178,99 @@ function Heading({
           {name}
         </span>
         {sub ? (
-          <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
-            {sub}
-          </span>
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
+              {sub}
+            </span>
+            {subAccessory}
+          </div>
         ) : null}
       </div>
     </div>
+  );
+}
+
+const selectPeerUpdates = () => peerUpdateStore.getSnapshot().entries;
+
+function VersionUpdateAction({
+  targetId,
+  isSelf,
+  deviceName,
+  observedVersion,
+  busyFallback,
+  platformFallback,
+  enabled,
+  onUpdate,
+}: {
+  targetId: string;
+  isSelf: boolean;
+  deviceName: string;
+  observedVersion: string | null | undefined;
+  busyFallback: boolean;
+  platformFallback: string | null;
+  enabled: boolean;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
+}) {
+  const { t } = useTranslation();
+  const updateEntries = useSyncExternalStore(peerUpdateStore.subscribe, selectPeerUpdates);
+
+  useEffect(() => {
+    syncPeerUpdateVersion(targetId, observedVersion);
+  }, [targetId, observedVersion]);
+
+  useEffect(() => {
+    if (enabled && onUpdate) {
+      void probePeerUpdate(targetId, { observedVersion });
+    }
+  }, [enabled, onUpdate, targetId, observedVersion]);
+
+  if (!enabled || !onUpdate) return null;
+  const entry: PeerUpdateEntry | undefined = updateEntries.get(targetId);
+  if (!entry) return null;
+
+  if (entry.kind === 'updating') {
+    const tipText = t(
+      entry.phase === 'relaunching'
+        ? 'settings.remoteControl.v2.peerUpdate.relaunching'
+        : 'settings.remoteControl.v2.peerUpdate.downloading',
+      { version: entry.targetVersion },
+    );
+    return (
+      <Tip text={tipText} side="top">
+        <span
+          className="inline-flex size-4 shrink-0 items-center justify-center text-[var(--status-info)]"
+          aria-label={tipText}
+        >
+          <Spinner size={12} aria-hidden />
+        </span>
+      </Tip>
+    );
+  }
+
+  if (entry.kind !== 'available') return null;
+
+  const tipText = t('settings.remoteControl.v2.peerUpdate.availableTip', { version: entry.targetVersion });
+  return (
+    <Tip text={tipText} side="top">
+      <button
+        type="button"
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--status-info)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        aria-label={tipText}
+        onClick={() =>
+          onUpdate({
+            targetId,
+            isSelf,
+            deviceName,
+            currentVersion: entry.currentVersion,
+            targetVersion: entry.targetVersion,
+            busy: entry.busy || busyFallback,
+            platform: entry.platform ?? platformFallback ?? undefined,
+          })
+        }
+      >
+        <ArrowUpCircle size={13} aria-hidden />
+      </button>
+    </Tip>
   );
 }
 
@@ -315,6 +416,7 @@ export function DeviceNodePopover({
   switchEntry = null,
   onSwitch,
   onPathPreferenceChange,
+  onUpdate,
 }: {
   node: TopologyNode;
   relayName: string;
@@ -323,6 +425,7 @@ export function DeviceNodePopover({
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
   onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }) {
   const { t } = useTranslation();
   const [optimisticPref, setOptimisticPref] = useState<{ id: string; value: DeviceLinkPeerPathPreference; seq: number } | null>(null);
@@ -373,9 +476,28 @@ export function DeviceNodePopover({
   const canDelete = node.status === 'offline' && !running && !!onDelete;
   const canRemoteDesktop =
     node.status !== 'offline' && isCindyApp(node.app) && !node.isMobile && node.remoteControlEnabled && node.controlEnabled && !running;
+  const displayName = deviceLabel(node, t);
+  const canUpdate = canProbePeerUpdate(node) && !running;
   return (
     <div className="flex flex-col gap-3">
-      <Heading name={deviceLabel(node, t)} sub={sub} platform={node.platform} isMobile={node.isMobile} />
+      <Heading
+        name={displayName}
+        sub={sub}
+        subAccessory={
+          <VersionUpdateAction
+            targetId={node.id}
+            isSelf={false}
+            deviceName={displayName}
+            observedVersion={node.appVersion}
+            busyFallback={node.busy}
+            platformFallback={node.platform}
+            enabled={canUpdate}
+            onUpdate={onUpdate}
+          />
+        }
+        platform={node.platform}
+        isMobile={node.isMobile}
+      />
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
@@ -415,8 +537,9 @@ export function DeviceNodePopover({
       {showRoutePanel ? (
         <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-11 font-medium text-[var(--text-tertiary)]">
-              {t('settings.remoteControl.v2.popover.routePreference')}
+            <span className="inline-flex items-center gap-1 text-11 font-medium text-[var(--text-tertiary)]">
+              <span>{t('settings.remoteControl.v2.popover.routePreference')}</span>
+              {onPathPreferenceChange ? <AutoRouteInfoButton /> : null}
             </span>
             <span className="text-11 text-[var(--text-tertiary)]">
               {t('settings.remoteControl.v2.popover.rttNote')}
@@ -440,8 +563,7 @@ export function DeviceNodePopover({
             <SegmentedControl<DeviceLinkPeerPathPreference>
               value={selectedPref}
               aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-              height={28}
-              optionHeight={24}
+              density="sm"
               fullWidth
               options={[
                 { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
@@ -499,6 +621,7 @@ export function HubNodePopover({
   linkStatus,
   issue,
   standby,
+  onUpdate,
 }: {
   model: TopologyModel;
   linkStatus: DeviceLinkLinkStatus;
@@ -506,6 +629,7 @@ export function HubNodePopover({
   issue: string | null;
   /** 本机另一个 Cindy 实例占着远程连接 */
   standby: boolean;
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }) {
   const { t } = useTranslation();
   // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
@@ -518,11 +642,29 @@ export function HubNodePopover({
     online ? relayTransportLabel(model.relay, t) : null,
     online && model.relay.rttMs !== null ? formatRtt(model.relay.rttMs, t) : null,
   ].filter(Boolean).join(' · ');
+  const selfName = model.self?.name || t('settings.devices.thisDevice');
+  const selfVersion = model.self?.appVersion?.trim() || null;
+  const selfSub = [
+    platformLabel(model.self?.platform ?? null),
+    selfVersion ? `${appLabel('cindy', t)} ${selfVersion}` : null,
+  ].filter(Boolean).join(' · ');
   return (
     <div className="flex flex-col gap-3">
       <Heading
-        name={model.self?.name || t('settings.devices.thisDevice')}
-        sub={platformLabel(model.self?.platform ?? null)}
+        name={selfName}
+        sub={selfSub}
+        subAccessory={
+          <VersionUpdateAction
+            targetId={SELF_UPDATE_TARGET_ID}
+            isSelf
+            deviceName={selfName}
+            observedVersion={selfVersion}
+            busyFallback={false}
+            platformFallback={model.self?.platform ?? null}
+            enabled={isNonDevAppVersion(selfVersion)}
+            onUpdate={onUpdate}
+          />
+        }
         platform={model.self?.platform ?? null}
         isMobile={false}
       />
