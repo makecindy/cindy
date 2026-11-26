@@ -5877,6 +5877,30 @@ describe('providers hidden from the picker stay reachable', () => {
     } finally { hiddenModelIds.delete('quiet-model'); }
   });
 
+  // #13137, unit: expanding individually hidden models must bound interactive rows
+  // and include offscreen long names when measuring the picker.
+  it('windows a large hidden section and sizes for its widest model', async () => {
+    const provider = source('quiet', 'Quiet', 'Listed Model');
+    const wideName = 'Long hidden model name '.repeat(5).trim();
+    const models = Array.from({ length: 100 }, (_, index) => ({
+      ...provider.models.codex[0]!, id: `quiet-${index}`, name: index === 99 ? wideName : `Hidden model ${index}`,
+    }));
+    for (const model of models) hiddenModelIds.add(model.id);
+    onTestFinished(() => { for (const model of models) hiddenModelIds.delete(model.id); });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'listbox' ? 400 : 40;
+    });
+    onTestFinished(() => height.mockRestore());
+    providersRef.providers = [{ ...provider, models: { codex: [...provider.models.codex, ...models] } }] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'quiet', modelId: 'quiet-model', modelMemory: memory });
+    await waitFor(() => expect(document.querySelector('[data-hidden-models-toggle]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-hidden-models-toggle]')!);
+    const list = within(screen.getByRole('listbox'));
+    await waitFor(() => expect(list.getByText('Hidden model 0')).toBeTruthy());
+    expect(list.getAllByRole('option').length).toBeLessThan(30);
+    expect(document.querySelector('[data-width-sizer]')?.textContent).toContain(wideName);
+  });
+
   it('opens the fold by itself when the task is already using a hidden provider', () => {
     providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
     renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });

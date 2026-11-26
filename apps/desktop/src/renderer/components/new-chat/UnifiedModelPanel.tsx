@@ -1300,7 +1300,7 @@ function UnifiedModelPanelContent({
   const hasRows = sections.some((section) => section.rows.length > 0);
   // Search must not switch renderers, and growing a live list must not replace
   // a focused row or an open flyout's anchor. Keep the window once it is active.
-  const hasLargeCatalog = entries.length + favorites.length + recentModels.length >= VIRTUAL_MODEL_LIST_MIN_ROWS;
+  const hasLargeCatalog = resolvableEntries.length + favorites.length + recentModels.length >= VIRTUAL_MODEL_LIST_MIN_ROWS;
   const [windowed, setWindowed] = useState(hasLargeCatalog);
   const waitingForWindow = hasLargeCatalog && !windowed && !flyAnchor;
   useLayoutEffect(() => {
@@ -1642,7 +1642,7 @@ function UnifiedModelPanelContent({
     () =>
       widthSizerActive
         ? buildUnifiedListSections({
-            entries,
+            entries: resolvableEntries,
             favorites,
             recentModels,
             ...(resolveDeviceFavorite ? { resolveForeignFavorite: resolveDeviceFavorite } : {}),
@@ -1653,7 +1653,7 @@ function UnifiedModelPanelContent({
             ...(listHiddenProviderIds?.size ? { listHiddenProviderIds } : {}),
           })
         : [],
-    [widthSizerActive, entries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
+    [widthSizerActive, resolvableEntries, favorites, recentModels, resolveDeviceFavorite, effectiveEngineOf, providerOrder, listHiddenProviderIds],
   );
   const widthSizerRef = useRef<HTMLDivElement>(null);
   const [widthMeasure, setWidthMeasure] = useState<ReturnType<typeof createWidthMeasure> | null>(null);
