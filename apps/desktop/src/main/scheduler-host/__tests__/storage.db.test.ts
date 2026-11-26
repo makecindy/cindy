@@ -7,15 +7,17 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  * 因此由 test-workspaces 的 db tier 运行，不放进 fast unit tier。
  */
 
-import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { Scheduler, RUN_HEARTBEAT_INTERVAL_MS, type Schedule, type ScheduleRun } from '@cindy/maker-scheduler';
 import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as schema from '../../localDb/schema';
+import { buildDbWorkerBundle, createMigratedSmokeDb } from '../../localDb/__tests__/dbWorkerTestUtils';
+import { WorkerThreadTransport } from '../../localDb/client/WorkerThreadTransport';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
@@ -305,6 +307,101 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[], 
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
+
+// #12161, DB tier: a caller timeout used to release a retry while the old
+// worker write could still execute. Five delayed writes and one healthy retry
+// distinguish caller settlement from the lifetime of the database work.
+it('bounds timed-out replans and restores a claimed interval through the worker', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scheduler-replan-'));
+  const dbPath = join(dir, 'scheduler.db');
+  let transport: WorkerThreadTransport | undefined;
+  let scheduler: Scheduler | undefined;
+  try {
+    await buildDbWorkerBundle(join(dir, 'bundle'));
+    createMigratedSmokeDb(dbPath);
+    const h = createStorageHarness(undefined, dbPath);
+    let now = 1_700_000_000_000;
+    try {
+      await h.storage.insert(baseSchedule({ intervalMs: 60_000, nextFireAt: now + 60_000 }));
+    } finally { h.close(); }
+    transport = new WorkerThreadTransport({
+      dbPath, drizzleDir: dir, rpcTimeoutMs: 500,
+      workerScriptPath: join(__dirname, 'fixtures/gated-replan-worker.cjs'),
+      betterSqliteModulePath: require.resolve('better-sqlite3'),
+    });
+    const db = createDrizzleProxy(transport);
+    const storage = new DrizzleScheduleStorage(() => db);
+    const arrivals = Array.from({ length: 6 }, () => Promise.withResolvers<void>());
+    const entered: number[] = [];
+    const finished: number[] = [];
+    const timedOut: number[] = [];
+    const cancelled = new Set<number>();
+    const lateReplies: { id: number; ok?: boolean }[] = [];
+    let peak = 0;
+    transport.on('log', ({ scope, payload }) => {
+      const e = payload as { event: string; id: number; ok?: boolean; cancelledBeforeStart?: boolean };
+      if (scope === 'replan-test' && e.event === 'entered') {
+        arrivals[entered.length]?.resolve();
+        entered.push(e.id);
+        peak = Math.max(peak, entered.length - cancelled.size - finished.length);
+      }
+      if (scope === 'db-rpc' && e.event === 'rpc.lateReply' && timedOut.includes(e.id)) {
+        lateReplies.push({ id: e.id, ok: e.ok });
+      }
+      if (scope === 'replan-test' && e.event === 'finished') finished.push(e.id);
+      if (scope === 'db-rpc' && e.event === 'rpc.timeout' && entered.includes(e.id)) {
+        timedOut.push(e.id);
+        if (e.cancelledBeforeStart) cancelled.add(e.id);
+      }
+    });
+    const retryErrors: string[] = [];
+    const fire = vi.fn(() => new Promise<never>(() => {}));
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    scheduler = new Scheduler({
+      storage, runner: { fire }, clock: { now: () => now },
+      logger: { warn(message, meta) {
+        if (message.includes('replan after stalled run failed')) retryErrors.push((meta as { error: string }).error);
+      } },
+      tickIntervalMs: 3_600_000, runStallMs: 1, runStallAbortGraceMs: 1, suspendGapMs: 0,
+    });
+    await scheduler.start();
+    now = (await storage.get('sch-1'))!.nextFireAt!;
+    void scheduler.tick();
+    await vi.waitFor(() => expect(fire).toHaveBeenCalledOnce());
+    expect((await storage.get('sch-1'))?.nextFireAt).toBeUndefined();
+    await transport.send('armReplans');
+    for (let beat = 0; beat < 2; beat++) {
+      now += RUN_HEARTBEAT_INTERVAL_MS;
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await storage.listActive(); // Let the heartbeat write return before advancing the RPC clock.
+    }
+    let retry: Promise<void> | undefined;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await arrivals[attempt - 1].promise;
+      await vi.advanceTimersByTimeAsync(500);
+      await retry;
+      expect(timedOut).toEqual(entered.slice(0, attempt));
+      expect(timedOut).toHaveLength(attempt);
+      expect(retryErrors[attempt - 1]).toContain(`RPC timeout: op="rawAll" id=${timedOut[attempt - 1]} `);
+      expect((await storage.listActive())[0].nextFireAt).toBeUndefined();
+      now += 30_000;
+      retry = scheduler.tick();
+    }
+    await retry;
+    expect(entered).toHaveLength(6);
+    await vi.waitFor(() => expect(finished).toEqual([entered[5]]));
+    expect(peak).toBeLessThanOrEqual(5);
+    expect((await storage.get('sch-1'))?.nextFireAt).toBe(now + 60_000);
+    await transport.send('releaseReplans');
+    expect(lateReplies).toEqual(timedOut.map(id => ({ id, ok: false })));
+    expect((await storage.get('sch-1'))?.nextFireAt).toBe(now + 60_000);
+  } finally {
+    await scheduler?.stop();
+    vi.useRealTimers();
+    await transport?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // DB-tier regression for app-exit recovery: claim the original run exactly once,
 // and respect user takeover/stop and the current task owner. The old storage had no

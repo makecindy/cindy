@@ -22,6 +22,8 @@ import {
   createDbTransportError,
   DB_TRANSPORT_NOT_SENT,
   DB_TRANSPORT_OUTCOME_UNKNOWN,
+  DB_RPC_CANCELLED,
+  startDbRequest,
   type DbTransport,
   type DbTransportTerminationInfo,
   type LogEvent,
@@ -31,9 +33,10 @@ import {
   type WorkerMessage,
 } from './DbTransport.js';
 import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
-import { isBackgroundDbRpc } from './rpcAdmission.js';
+import { isBackgroundDbRpc, isRetryableDbWrite } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const startDbRequest = ${startDbRequest.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
 let corruptionError = null;
@@ -2576,6 +2579,7 @@ parentPort.on('message', async (req) => {
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
+    startDbRequest(req.startState);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
@@ -2718,6 +2722,7 @@ export class WorkerThreadTransport implements DbTransport {
     }
     const id = WorkerThreadTransport.nextId++;
     const req: RpcRequest = { id, op, args };
+    if (isRetryableDbWrite()) req.startState = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
@@ -2875,7 +2880,7 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private dispatch(item: QueuedRpc): void {
-    const { id, op } = item.req;
+    const { id, op, startState } = item.req;
     if (item.queueTimeout) clearTimeout(item.queueTimeout);
     const onTimeout = (): void => {
       const pending = this.pending.get(id);
@@ -2893,6 +2898,8 @@ export class WorkerThreadTransport implements DbTransport {
         pending.timeout = setTimeout(onTimeout, this.rpcTimeoutMs);
         return;
       }
+      const cancelledBeforeStart = startState !== undefined &&
+        Atomics.exchange(startState, 0, 1) === 0;
       this.pending.delete(id);
       const { enqueuedAt, dispatchedAt } = pending;
       const timedOutAt = performance.timeOrigin + performance.now();
@@ -2906,10 +2913,11 @@ export class WorkerThreadTransport implements DbTransport {
       this.emitRpcDebug('rpc.timeout', id, dispatch, timedOutAt, {
         dispatchedMs: elapsedMs(dispatchedAt, timedOutAt),
         workerTiming: 'unknown',
+        ...(cancelledBeforeStart ? { cancelledBeforeStart } : {}),
       });
       pending.reject(
         createDbTransportError(
-          DB_TRANSPORT_OUTCOME_UNKNOWN,
+          cancelledBeforeStart ? DB_RPC_CANCELLED : DB_TRANSPORT_OUTCOME_UNKNOWN,
           `db worker RPC timeout: op="${op}" id=${id} exceeded ${this.rpcTimeoutMs / 1000}s` +
             ` wallElapsedMs=${verdict.wallElapsedMs}`,
         ),

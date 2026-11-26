@@ -3,6 +3,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import type Database from 'better-sqlite3';
 
 import { isSqliteCorruption, createCorruptDbUnavailableError } from '../client/sqliteCorruption.js';
+import { startDbRequest } from '../client/DbTransport.js';
 import type { RpcRequest, RpcResponse, WorkerEvent } from '../client/DbTransport.js';
 import { dispatch, serializeWorkerError } from './dispatcher.js';
 import { readLocalWorktreeReferences } from './worktreeReferences.js';
@@ -34,6 +35,7 @@ activeWorkerPort.on('message', async (req: RpcRequest) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
+    startDbRequest(req.startState);
     const result = await dispatchRequest(req);
     activeWorkerPort.postMessage({ id: req.id, ok: true, result, timing: timing() } satisfies RpcResponse);
   } catch (err) {
