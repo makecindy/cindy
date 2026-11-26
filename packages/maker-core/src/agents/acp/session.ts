@@ -8,11 +8,17 @@
  * Maker / Desktop is a separate step; this module has no host dependencies.
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
-import type { AgentSessionHandle } from '../base-agent.js';
+import {
+  TurnPermissionPolicyUnsupportedError,
+  type AgentSessionHandle,
+  type SendOptions,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
@@ -32,6 +38,7 @@ import { defusePluginEngineSlashMentions, isLeadingSlashCommand } from './briefi
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
+  ACP_PERMISSION_GATE_SCOPE,
   ACP_PROTOCOL_VERSION,
   ACP_STEERING_METHOD,
   JSONRPC_METHOD_NOT_FOUND,
@@ -55,6 +62,7 @@ import {
   type AcpPermissionOption,
   type AcpPermissionOutcome,
   type AcpRecord,
+  type AcpToolCallFields,
 } from './protocol.js';
 import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './translator.js';
 
@@ -352,10 +360,49 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
   }
 }
 
+/**
+ * Host restrictions on one prompt, enforced through the agent's permission gate
+ * (protocol.ts ACP_PERMISSION_GATE_SCOPE): the agent asks before every tool call.
+ */
+interface TurnGate {
+  policy: TurnPermissionPolicy | null;
+  /** Host text-only turn: every tool call is refused, Full access included. */
+  toolsDisabled: boolean;
+}
+
+interface QueuedPrompt {
+  blocks: AcpContentBlock[];
+  gate: TurnGate | null;
+}
+
 interface ActiveTurn {
   token: number;
+  permissionTurnId: string | null;
   settled: boolean;
   cancelTimer: ReturnType<typeof setTimeout> | null;
+  gate: TurnGate | null;
+}
+
+/** Tool names Cindy's channel rules know, for the ACP v1 tool kinds that have one. */
+const ACP_KIND_POLICY_NAMES: Readonly<Record<string, string>> = {
+  read: 'Read',
+  edit: 'Edit',
+  delete: 'Delete',
+  move: 'Move',
+  search: 'Grep',
+  execute: 'Bash',
+  fetch: 'WebFetch',
+};
+
+function mergeGates(running: TurnGate, incoming: TurnGate): TurnGate {
+  const prior = running.policy;
+  const next = incoming.policy;
+  // A steered message can add restrictions to the running turn, never remove the current ones.
+  const policy = prior && next && prior !== next
+    ? { ...next, forceConfirmToolCall: (name: string, input: unknown) =>
+        prior.forceConfirmToolCall(name, input) || next.forceConfirmToolCall(name, input) }
+    : next ?? prior;
+  return { policy, toolsDisabled: running.toolsDisabled || incoming.toolsDisabled };
 }
 
 interface AcpSessionInit {
@@ -413,7 +460,7 @@ export class AcpSession {
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
-  private readonly pendingPrompts: AcpContentBlock[][] = [];
+  private readonly pendingPrompts: QueuedPrompt[] = [];
   /** Sent once, ahead of the first prompt of a new session. */
   private pendingBriefing: string | null;
   /** Slash-command names advertised by Skills or `available_commands_update`. */
@@ -429,6 +476,10 @@ export class AcpSession {
   /** Advertised `_session/steering`, and has not answered it with method-not-found. */
   private steeringOffered: boolean;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
+  /** The Cindy mode the task asked for, reported when a turn policy is refused. */
+  private selectedPermissionMode: PermissionMode = 'ask';
+  /** The most recent finished turn can still own permission requests while the session is idle. */
+  private backgroundPermission: Pick<ActiveTurn, 'permissionTurnId' | 'gate'> | null = null;
   private resolver: InteractionResolver | null = null;
   private turn: ActiveTurn | null = null;
   private turnSeq = 0;
@@ -534,6 +585,12 @@ export class AcpSession {
     return this.hasBackgroundWork();
   }
 
+  /** The next send reopens this session with `session/resume` or `session/load`; without either a resume fails. */
+  canResumeAfterClose(): boolean {
+    const { loadSession, sessionCapabilities } = this.initializeResult.agentCapabilities;
+    return sessionCapabilities.resume || loadSession;
+  }
+
   private hasBackgroundWork(): boolean {
     if (this.ended || this.turn) return false;
     if (this.translator.openToolCount() > 0) return true;
@@ -544,9 +601,34 @@ export class AcpSession {
     this.resolver = resolver;
   }
 
+  /**
+   * AgentSessionHandle: refuses a host turn policy this agent cannot enforce before the turn is
+   * accepted, like the built-in engines. Text-only turns on an agent without the permission gate
+   * run as before.
+   */
+  validateSendOptions(opts: SendOptions): void {
+    this.turnGate(opts);
+  }
+
+  private turnGate(opts: SendOptions | undefined): TurnGate | null {
+    const policy = opts?.turnPermissionPolicy ?? null;
+    const toolsDisabled = opts?.toolsDisabled === true;
+    if (!policy && !toolsDisabled) return null;
+    if (!this.initializeResult.permissionGate) {
+      if (policy) throw new TurnPermissionPolicyUnsupportedError('acp', this.selectedPermissionMode);
+      return null;
+    }
+    // Full access approves every request, so it cannot carry a policy's confirmations.
+    if (policy && this.permissionMode === 'bypassPermissions') {
+      throw new TurnPermissionPolicyUnsupportedError('acp', 'bypassPermissions');
+    }
+    return { policy, toolsDisabled };
+  }
+
   /** Starts a turn, or queues it behind the running one (ACP allows one prompt per session). */
-  async send(message: UserMessage): Promise<void> {
+  async send(message: UserMessage, opts?: SendOptions): Promise<void> {
     if (this.ended || this.closing) throw new Error('ACP session is closed');
+    const gate = this.turnGate(opts);
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;
     const accepted = this.sendChain.then(async () => {
@@ -560,7 +642,7 @@ export class AcpSession {
         prompt.unshift({ type: 'text', text: defusePluginEngineSlashMentions(this.pendingBriefing, this.commandNames) });
         this.pendingBriefing = null;
       }
-      this.pendingPrompts.push(prompt);
+      this.pendingPrompts.push({ blocks: prompt, gate });
       this.pump();
     });
     this.sendChain = accepted.catch(() => {});
@@ -575,19 +657,24 @@ export class AcpSession {
    * ended, so the host sends it as the next turn), "delivery uncertain" (sent, no
    * answer; the agent may have it, so it must not be sent again), or the agent's error.
    */
-  async steer(message: UserMessage): Promise<void> {
+  async steer(message: UserMessage, opts?: SendOptions): Promise<void> {
     if (!this.steeringOffered) {
-      await this.send(message);
+      await this.send(message, opts);
       return;
     }
+    const gate = this.turnGate(opts);
     const turn = this.turn;
     if (this.ended || this.closing) throw new Error('ACP session is closed');
     if (!turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    // The agent was not told to ask before each call of an ungated turn: the message waits for its own turn.
+    if (gate && !turn.gate) throw new Error(NO_ACTIVE_TURN_TO_STEER);
     const prompt = await this.toPrompt(message);
     if (prompt.length === 0) throw new Error('Cannot send an empty message');
     if (this.ended || this.closing || this.connection.closed) throw new Error('ACP session is closed');
     // Attachments are read asynchronously: the turn may have ended or been stopped meanwhile.
     if (this.turn !== turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    // Before the agent can act on the message; a steer that is not taken leaves the turn stricter, never looser.
+    if (gate && turn.gate) turn.gate = mergeGates(turn.gate, gate);
     let result: AcpRecord;
     try {
       result = await this.connection.request(ACP_STEERING_METHOD, {
@@ -631,6 +718,8 @@ export class AcpSession {
     this.pendingPrompts.length = 0;
     const turn = this.turn;
     if (!turn) {
+      this.backgroundPermission = null;
+      this.cancelPermissions();
       // Agents that keep working after a prompt (DSH documents it) stop that work on cancel;
       // others ignore a cancel with no prompt in flight.
       if (this.hasBackgroundWork() && !this.connection.closed) this.connection.notify('session/cancel', { sessionId: this.id });
@@ -690,10 +779,13 @@ export class AcpSession {
     await this.applyAgentMode(mode);
   }
 
-  /** Switches the agent's own mode when it offers one standing for this Cindy mode. */
+  /** Switches the agent's own mode when it offers one standing for this Cindy mode (`ask` <-> `default`). */
   private async applyAgentMode(mode: PermissionMode): Promise<void> {
     const option = findModeOption(this.configOptions);
-    const mapped = mapModeValues(option).find((entry) => entry.mode === mode);
+    const mappedModes = mapModeValues(option);
+    const mapped = mappedModes.find((entry) => entry.mode === mode)
+      ?? (mode === 'ask' ? mappedModes.find((entry) => entry.mode === 'default') : undefined)
+      ?? (mode === 'default' ? mappedModes.find((entry) => entry.mode === 'ask') : undefined);
     if (!option || !mapped || option.currentValue === mapped.value) return;
     await this.setConfigValue(option.id, mapped.value);
   }
@@ -789,18 +881,32 @@ export class AcpSession {
 
   private pump(): void {
     if (this.turn || this.ended || this.closing) return;
-    const prompt = this.pendingPrompts.shift();
-    if (!prompt) return;
+    const next = this.pendingPrompts.shift();
+    if (!next) return;
     // Output produced between turns (autonomous agent work) is closed off as background.
     this.emit(this.translator.flushPending());
     this.clearBackgroundSegmentClose();
     this.clearOpenToolCap();
-    const turn: ActiveTurn = { token: ++this.turnSeq, settled: false, cancelTimer: null };
+    const turn: ActiveTurn = {
+      token: ++this.turnSeq,
+      permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
+      settled: false,
+      cancelTimer: null,
+      gate: next.gate,
+    };
     this.turn = turn;
+    this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const usageModel = this.model;
-    this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
+    const params: AcpRecord = { sessionId: this.id, prompt: next.blocks };
+    if (turn.permissionTurnId) {
+      params._meta = { permissionGate: {
+        turnId: turn.permissionTurnId,
+        ...(next.gate ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
+      } };
+    }
+    this.connection.request('session/prompt', params, { timeoutMs: null }).then(
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
         const usage = normalizeTurnUsage(result);
@@ -817,6 +923,9 @@ export class AcpSession {
     if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
     this.cancelPermissions();
     this.turn = null;
+    this.backgroundPermission = turn.cancelTimer || 'error' in outcome || outcome.stopReason === 'cancelled'
+      ? null
+      : { permissionTurnId: turn.permissionTurnId, gate: turn.gate };
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
     for (const event of this.translator.finish(outcome)) this.queue.push(event);
     this.pump();
@@ -890,6 +999,7 @@ export class AcpSession {
   }
 
   private applyPermissionMode(mode: PermissionMode): void {
+    this.selectedPermissionMode = mode;
     // Modes Cindy cannot enforce for ACP fall back to asking, never to auto-approval.
     this.permissionMode = mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
     if (!ACP_SUPPORTED_PERMISSION_MODES.has(mode)
@@ -901,12 +1011,46 @@ export class AcpSession {
   private async decidePermission(params: AcpRecord, signal: AbortSignal): Promise<AcpPermissionOutcome> {
     if (signal.aborted || this.closing || this.turn?.cancelTimer) return { outcome: 'cancelled' };
     const options = normalizePermissionOptions(params.options);
-    const toolCall = normalizeToolCallFields(params.toolCall) ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` };
-    this.emit(this.translator.noteToolCall(toolCall));
-    // Only the agent can define the lifetime and scope of a persistent grant.
-    const allowOnce = firstOfKind(options, ['allow_once']);
     const reject = firstOfKind(options, ['reject_once']);
-    if (this.permissionMode === 'bypassPermissions') return selected(allowOnce ?? reject);
+    const permission = this.turn ?? this.backgroundPermission;
+    const requestGate = asRecord(asRecord(params._meta).permissionGate);
+    if (this.initializeResult.permissionGate
+      && (!permission?.permissionTurnId || requestGate.turnId !== permission.permissionTurnId)) {
+      return selected(reject);
+    }
+    const gate = permission?.gate;
+    if (gate?.toolsDisabled) return selected(reject);
+    const allowOnce = firstOfKind(options, ['allow_once']);
+    const fields = normalizeToolCallFields(params.toolCall);
+    if (gate?.policy && !fields) return selected(reject);
+    const { events, toolCall } = this.translator.noteToolCall(fields ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` });
+    this.emit(events);
+    if (this.permissionMode === 'bypassPermissions') {
+      return selected(allowOnce ?? reject);
+    }
+    const input = toolCall.rawInput;
+    const hasInputRecord = input !== null && typeof input === 'object' && !Array.isArray(input);
+    const requestInput = hasInputRecord ? input as AcpRecord : input === undefined ? {} : { value: input };
+    const policyToolName = toolCall.kind && Object.hasOwn(ACP_KIND_POLICY_NAMES, toolCall.kind)
+      ? ACP_KIND_POLICY_NAMES[toolCall.kind]
+      : undefined;
+    const toolName = (gate?.policy ? policyToolName : undefined) ?? acpToolDisplayName(toolCall);
+    // The channel must be able to classify the operation and its input before a routine call can run unasked.
+    // A shell approval without a command would also leave the channel's destructive-command check blind.
+    if (gate?.policy && toolCall.kind === 'execute'
+      && (typeof requestInput.command !== 'string' || requestInput.command.trim() === '')) {
+      return selected(reject);
+    }
+    // An IM policy can defer authorization to the normal approval chain, including the
+    // owner's review of guest writes. Only explicitly read-only kinds can skip that chain.
+    const canRunRoutine = gate?.policy?.origin.kind !== 'im'
+      || toolCall.kind === 'read' || toolCall.kind === 'search';
+    if (gate?.policy && canRunRoutine && policyToolName && hasInputRecord && requestGate.routine === true
+      && !this.policyForcesConfirmation(gate.policy, policyToolName, requestInput)
+      && (!toolCall.name || toolCall.name === policyToolName
+        || !this.policyForcesConfirmation(gate.policy, toolCall.name, requestInput))) {
+      return selected(allowOnce ?? reject);
+    }
     const resolver = this.resolver;
     if (!resolver) return selected(reject);
 
@@ -914,19 +1058,19 @@ export class AcpSession {
     const forwardAbort = (): void => controller.abort();
     signal.addEventListener('abort', forwardAbort, { once: true });
     this.permissionControllers.add(controller);
-    const input = toolCall.rawInput;
     const request: InteractionRequest = {
       kind: 'permission',
       requestId: `acp-permission-${++this.permissionSeq}`,
       toolUseId: toolCall.toolCallId,
-      toolName: acpToolDisplayName(toolCall),
-      input: input !== null && typeof input === 'object' && !Array.isArray(input)
-        ? input as Record<string, unknown>
-        : input === undefined ? {} : { value: input },
+      // A gated turn's confirmation goes through the channel's checks, which know tools by these names.
+      toolName,
+      input: requestInput,
       ...(toolCall.title ? { title: toolCall.title } : {}),
       displayName: acpToolDisplayName(toolCall),
       metadata: {
         ...(toolCall.kind ? { acpToolKind: toolCall.kind } : {}),
+        ...(policyToolName ? { acpPolicyToolName: policyToolName } : {}),
+        ...(toolCall.name ? { acpReportedToolName: toolCall.name } : {}),
         ...(toolCall.locations?.length ? { acpLocations: toolCall.locations } : {}),
         acpOptions: options.map((option) => ({ name: option.name, kind: option.kind })),
       },
@@ -944,6 +1088,19 @@ export class AcpSession {
     } finally {
       signal.removeEventListener('abort', forwardAbort);
       this.permissionControllers.delete(controller);
+    }
+  }
+
+  private policyForcesConfirmation(policy: TurnPermissionPolicy, toolName: string, input: Record<string, unknown>): boolean {
+    try {
+      return policy.forceConfirmToolCall(toolName, input) === true;
+    } catch (error) {
+      // A failing safety rule cannot become an approval.
+      this.logger?.error('acp: turn permission policy failed; asking for confirmation', {
+        toolName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return true;
     }
   }
 

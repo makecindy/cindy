@@ -333,6 +333,7 @@ export interface AgentInputSendOpts {
      * 落库 agentMeta.autoResume:renderer 据此隐藏气泡,充值判据据此排除自动消息。
      */
     autoResume?: boolean;
+    automaticReplaySourceClientId?: string;
     autoResumeInfo?: AutoResumeInfo;
     recoveryCheckpoint?: RecoveryCheckpoint;
     /**
@@ -1720,6 +1721,16 @@ export class AgentInputCoordinator {
   getQueueInspection(sessionId: string): SessionQueueInspectionEntry[] {
     const state = this.getState(sessionId);
     return this.projectQueueInspection(state);
+  }
+
+  /** The original input is still queued because its working directory was unavailable before dispatch. */
+  getWorkdirBlockedQueueHead(sessionId: string): string | undefined {
+    const state = this.states.get(sessionId);
+    if (state?.recovery?.kind !== 'queue-head' || !state.error?.startsWith('WORKDIR_MISSING: ')) return;
+    const head = state.pendingQueue[0];
+    if (head?.clientId === state.recovery.clientId && !this.isDispatchBoundaryBusy(sessionId, state)) {
+      return head.clientId;
+    }
   }
 
   /** Read the canonical pause bit without creating state or restoring a snapshot. */
@@ -5608,7 +5619,12 @@ export class AgentInputCoordinator {
    * is already dispatched and we can prove the vendor turn ended successfully:
    * the Session object is missing; the live Session is idle while the desktop
    * tracker is still latched and no error terminal is known; or the current
-   * generation has already observed a product `done`. A present Session with an
+   * generation has already observed a product `done`. A done recorded on
+   * another generation is the same successful ending when the tracker is
+   * still latched: the turn finished with no assistant body and no error,
+   * and the ownership guard never delivered that done. Releasing the
+   * tracker without reclaiming the leftover leaves dispatch-boundary-busy
+   * after the UI and runtime already show idle. A present Session with an
    * idle tracker and no terminal proof may still be in the Pi gap after
    * handle.send (reservation released, agent_start not yet observed). Known
    * error terminals never take this path. Pre-dispatch owners and unavailable
@@ -5736,7 +5752,12 @@ export class AgentInputCoordinator {
         this.observedMatchesBoundActiveTurn(active, observed)
       );
     }
-    if (observed.kind === 'done') return this.observedMatchesBoundActiveTurn(active, observed);
+    if (observed.kind === 'done' && this.observedMatchesBoundActiveTurn(active, observed)) {
+      return true;
+    }
+    // Non-matching done and kind=none share the latch rule. Tracker already
+    // idle stays fail-closed so a later generation, or the post-send gap,
+    // cannot be settled as this leftover's success.
     return this.deps.isTurnRunning(sessionId) === true;
   }
 
@@ -6286,6 +6307,8 @@ export class AgentInputCoordinator {
           // 自动续跑标记必须一路透到落库:renderer 靠 agentMeta.autoResume 隐藏气泡,
           // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
           ...(head.autoResume ? { autoResume: true } : {}),
+          ...(head.autoResume && head.retrySourceClientId && head.originalSyntheticTrigger !== 'continue'
+            ? { automaticReplaySourceClientId: head.retrySourceClientId } : {}),
           ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
           ...(head.recoveryCheckpoint ? { recoveryCheckpoint: head.recoveryCheckpoint } : {}),
           ...(head.origin ? { origin: head.origin } : {}),

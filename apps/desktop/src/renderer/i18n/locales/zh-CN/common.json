@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "端点不存在（404），请检查基础 URL",
     "CONTEXT_TOO_LONG": "上下文超过模型长度限制",
     "WIRE_INCOMPATIBLE": "端点与该协议不完全兼容（存在无法识别的请求字段）",
+    "INVALID_PROBE_RESPONSE": "模型服务返回了空响应或无效响应",
+    "PROBE_NO_OUTPUT": "连接测试未能确认模型生成了内容",
+    "PROBE_REFUSED": "模型服务拒绝或拦截了测试请求",
     "UPSTREAM_ERROR": "上游服务错误（5xx），请稍后重试",
     "UPSTREAM_UNREACHABLE": "无法连接到端点，请检查网络与基础 URL",
     "TIMEOUT": "连接超时，请检查网络与基础 URL",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "登录手机号",
+        "rowHint": "用于登录和接收验证码",
+        "change": "更换手机号",
+        "verifyTitle": "验证当前手机号",
+        "introDescription": "为保护账号安全，更换前需要先验证当前绑定的手机号。",
+        "newTitle": "输入新手机号",
+        "newDescription": "更换后请使用新手机号登录，原手机号将不能再登录此账号。",
+        "inputLabel": "新手机号",
+        "placeholder": "请输入手机号",
+        "success": "手机号已更换为 {{target}}"
+      },
+      "email": {
+        "rowTitle": "登录邮箱",
+        "rowHint": "用于登录和接收验证码",
+        "change": "更换邮箱",
+        "verifyTitle": "验证当前邮箱",
+        "introDescription": "为保护账号安全，更换前需要先验证当前绑定的邮箱。",
+        "newTitle": "输入新邮箱",
+        "newDescription": "更换后请使用新邮箱登录，原邮箱将不能再登录此账号。",
+        "inputLabel": "新邮箱",
+        "placeholder": "请输入邮箱",
+        "success": "邮箱已更换为 {{target}}"
+      },
+      "codeSent": "验证码已发送至 {{target}}",
+      "codeLabel": "验证码",
+      "codePlaceholder": "6 位验证码",
+      "sendCode": "发送验证码",
+      "next": "下一步",
+      "confirm": "确认更换",
+      "cancel": "取消",
+      "resend": "重新发送验证码",
+      "resendIn": "{{seconds}} 秒后可重新发送",
+      "errors": {
+        "INVALID_CODE": "验证码错误或已过期",
+        "CODE_ATTEMPTS_EXCEEDED": "验证码错误次数过多，请重新获取",
+        "CONTACT_TAKEN": "该手机号或邮箱已绑定其他账号",
+        "CONTACT_UNCHANGED": "与当前绑定的手机号或邮箱相同",
+        "CONTACT_CHANGE_TICKET_INVALID": "验证已过期，请重新验证当前手机号或邮箱",
+        "AUTH_FLOW_SUPERSEDED": "登录状态已变化，请重新开始",
+        "CONTACT_CHANGE_UNAVAILABLE": "当前账号不支持在这里更换登录方式",
+        "CONTACT_CHANGE_BUSY": "上一步仍在处理中",
+        "RATE_LIMITED": "操作过于频繁，请稍后再试。",
+        "RATE_LIMITED_UNTIL": "操作过于频繁，请在 {{time}}（本机时间）之后重试。",
+        "INVALID_PARAMS": "格式不正确，请检查后重试",
+        "EMAIL_DOMAIN_BLOCKED": "该邮箱暂不支持使用，请换一个",
+        "EMAIL_PATTERN_BLOCKED": "该邮箱暂不支持使用，请换一个",
+        "ACCOUNT_DELETION_PENDING": "账号正在等待注销，无法更换",
+        "NETWORK_ERROR": "网络连接失败，请检查网络后重试",
+        "REQUEST_TIMEOUT": "请求超时，请重试",
+        "fallback": "操作失败，请稍后重试"
+      }
+    },
     "help": {
       "title": "帮助",
       "description": "了解如何用 {{appName}} 完成工作",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "体检",
         "reconcileFailed": "体检失败",
         "reconcileHealthy": "账实一致，没有发现异常。",
-        "reconcileIssues": "发现异常：无账文件 {{orphans}} 个（{{orphanSize}}）、缺失文件 {{missing}} 个、无法识别的条目 {{stray}} 个。详细清单见应用日志。"
+        "reconcileIssues": "发现异常：无账文件 {{orphans}} 个（{{orphanSize}}）、缺失文件 {{missing}} 个、无法识别的条目 {{stray}} 个。详细清单见应用日志。",
+        "buddyWorkspaceDirectoryTitle": "伙伴工作区",
+        "buddyWorkspaceDirectoryDescription": "新建伙伴的工作区默认存放于此目录。已有伙伴保持原位，可在各自的高级配置中单独迁移。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 会在此目录下为当前账号创建独立子目录存放新建伙伴的工作区，并在原路径保留目录链接。",
+        "buddyWorkspaceDirectoryChoose": "更改目录",
+        "buddyWorkspaceDirectoryFailed": "未能更新伙伴工作区目录。"
       },
       "piKernel": {
         "manage": "管理 Pi 版本",
@@ -4583,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商",
+        "icon": "连接图标",
+        "appearance": "名称与图标",
+        "ownImage": "选择自己的图片",
+        "imageError": "请选择 10 MB 以内的 PNG、JPG 或 WebP 图片。",
+        "connectionIcon": {
+          "default": "默认",
+          "personal": "个人",
+          "work": "工作"
+        },
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
@@ -5793,7 +5864,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
-      "extensionDialogConfirm": "确认",
+      "extensionDialogConfirm": "继续",
       "cancel": "取消",
       "resources": {
         "extension": "扩展代码",
@@ -6641,6 +6712,20 @@
         "ssh": "SSH 远程主机",
         "hook": "Cindy IM 机器人"
       },
+      "cloudComputer": {
+        "title": "云主机",
+        "hint": {
+          "addCloud": "开通一台装好 Cindy 的云主机，开好后会自动出现在设备列表里。",
+          "preparingCloud": "云主机正在准备，好了会自动出现在设备列表里。",
+          "manageCloud": "开关机、续费、重装和删除在网页上操作。"
+        },
+        "actions": {
+          "addCloud": "添加云主机",
+          "preparingCloud": "查看进度",
+          "manageCloud": "管理云主机"
+        },
+        "openFailed": "云主机页面打开失败，请检查系统默认浏览器设置"
+      },
       "hook": {
         "description": "把 Slack、Telegram、飞书 / Lark 等渠道接入同一个 Cindy：消息都会派发到这台设备，共用这里的项目清单和任务；每个项目的模型和权限所有渠道共用一份，账号绑定按渠道分开保存。",
         "slackDescription": "绑定 Slack workspace，在 Slack 里 @Cindy 派发任务。",
@@ -7160,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，点击更新",
+          "downloading": "正在下载 {{version}}…",
+          "relaunching": "正在重启更新到 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新这台电脑上的 Cindy？",
+            "description": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后该设备会重启 Cindy，远程连接会短暂断开。",
+            "selfDescription": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后这台电脑上的 Cindy 会重启。",
+            "busyWarning": "该设备当前有运行中的任务或后台工作，重启会将其打断。",
+            "selfBusyWarning": "这台电脑当前有运行中的任务或后台工作，重启会将其打断。",
+            "linuxPermissionHint": "Linux 受管安装可能需要在目标设备上输入系统密码。",
+            "windowsPermissionHint": "若安装在受保护目录，可能需要在目标设备上确认系统权限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已开始将「{{name}}」更新到 {{version}}",
+            "relaunching": "「{{name}}」正在重启更新到 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已变化，请重新打开卡片确认",
+            "noUpdate": "「{{name}}」当前没有可安装的新版本",
+            "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
+            "failed": "未能更新「{{name}}」上的 Cindy"
           }
         }
       }
@@ -8155,6 +8264,11 @@
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
+        "allPlugins": "全部插件",
+        "searchResults": "搜索结果",
+        "marketSort": {
+          "label": "排序"
+        },
         "todayRecommendations": "今日推荐",
         "marketSection": "插件市场",
         "browseMarket": "浏览插件市场",
@@ -8635,6 +8749,7 @@
         "libraryPersist": "可使用持久作品库(大量文件与数据库)",
         "libraryPersistDetail": "它会获得一个由 Cindy 管理的独立存储区，用来保存你的作品数据(如画布、图片、数据库)，不受普通插件数据配额限制。文件与数据库操作全部由主机代执行，插件只能使用库内相对路径，无法触碰你的其它文件。它还可以让 Cindy 在系统文件夹中显示库内文件，或弹出系统另存为窗口由你选择拷贝位置；取消则不会拷出任何文件。它还可以把 PNG 位图写入系统剪贴板；没有确认框，会覆盖当前剪贴板内容。卸载插件不会删除这些数据；删除必须在 Cindy 设置中单独确认。",
         "networkHost": "访问网络地址 {{host}}",
+        "networkHosts": "访问网络地址",
         "networkSecret": "需要你提供凭证「{{name}}」",
         "networkSecretGhostInputDetail": "凭证由这个插件自己的设置界面收集，录入时会经过插件页面；随后一次性交给主机加密保管，存入后插件无法读回，主机只在请求它声明的域名时注入。",
         "networkSecretIdentity": "将使用你的登录邮箱作为凭证「{{name}}」",
@@ -8841,6 +8956,8 @@
         "dangerTitle": "卸载插件",
         "infoContents": "包含",
         "infoVersion": "版本",
+        "infoPackageSize": "包大小",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "更新版本",
         "updateDesc": "选择新的 .cindy 文件原位替换；启用状态与面板位置保持不变。",
         "errandPrefs": {
@@ -8863,11 +8980,25 @@
           "restoreModel": "恢复默认模型"
         },
         "toolsTitle": "工具",
+        "toolCount_other": "{{count}} 个",
         "permissionsTitle": "权限",
         "infoDescription": "描述",
         "customSlotAsleep": "插件已停用，启用后这里将显示它的设置界面。",
         "descriptionExpand": "展开",
         "descriptionCollapse": "收起",
+        "recentUpdates": "近期更新",
+        "olderUpdates": "更早的更新",
+        "collapseOlderUpdates": "收起更早的更新",
+        "includesHighRisk": "含高风险",
+        "heroDownloads": "累计下载",
+        "heroUsage": "累计使用",
+        "heroWeeklyUsage": "近 7 天使用",
+        "heroWeeklyUsageExplanation": "当前共享范围内各版本近 7 天的工具调用次数。",
+        "heroInstalledVersion": "已装版本",
+        "heroListedVersion": "已上架版本",
+        "heroLatestUpdate": "最近更新",
+        "morePlugins": "更多插件",
+        "morePluginsHint": "随机选取，不代表 Cindy 任何倾向",
         "readmeTitle": "介绍",
         "useAction": "使用",
         "chatAction": "对话",
@@ -8906,6 +9037,7 @@
         "portReclaimMessage": "「{{name}}」需要使用端口 {{port}}，是否结束以下程序？",
         "portReclaimDetail": "结束程序可能中断其工作或丢失未保存的数据。取消后可自行关闭占用程序。",
         "configurationTitle": "配置",
+        "recordTitle": "插件资料",
         "sidebarEntryTitle": "导航入口",
         "showInSidebar": "显示在左侧导航",
         "fileOpenerTitle": "用这个插件打开文件",
@@ -8916,6 +9048,7 @@
         "viewAllTools": "查看全部",
         "collapseTools": "收起工具",
         "viewAllPermissions": "查看全部",
+        "remainingPermissions": "查看其余 {{count}} 项",
         "permissionsDialogDescription": "该插件申请的全部 {{count}} 项权限",
         "closeDialog": "关闭弹窗",
         "resetPlacement": "恢复默认位置"
@@ -9234,6 +9367,7 @@
         "anonymousUnavailable": "作者设置暂不可用",
         "anonymousUpdateFailed": "无法确认匿名设置是否已保存，请刷新后重试。",
         "myPlugins": "发布插件",
+        "backToPublish": "返回发布插件",
         "publish": "提交审核",
         "submitUpdate": "提交新版本审核",
         "publishHint": "仅限有权发布的插件，审核通过后在社区上架。",
@@ -9273,6 +9407,7 @@
         "publishedContentUnavailable": "暂时无法读取当前上架版本的介绍和更新说明。",
         "currentSubmission": "当前提审",
         "localState": {
+          "installed": "本机 {{version}}",
           "missing": "本机未安装",
           "unavailable": "暂时无法读取本地版本"
         },
@@ -9285,7 +9420,7 @@
         "publishing": "发布管理",
         "latestSubmission": "最近提交",
         "noSubmission": "尚无提交",
-        "marketVersion": "已上架 · {{version}}",
+        "marketVersion": "已上架 {{version}}",
         "market": {
           "not_listed": "尚未上架",
           "disabled": "已下架",
@@ -9295,7 +9430,7 @@
         "review": {
           "pending": "待审核",
           "approved": "审核通过",
-          "rejected": "已退回",
+          "rejected": "已驳回",
           "published": "已上架",
           "superseded": "已被后续提交替代",
           "legacy_unverified": "历史修订无法核实",
@@ -9303,9 +9438,12 @@
           "cancelled": "已取消"
         },
         "reason": "处理原因",
+        "rejectionReason": "驳回原因",
+        "rejectionReasonLine": "<reasonLabel>驳回原因：</reasonLabel><reasonText />",
         "submittedContent": "已提交内容",
         "snapshotUnavailable": "原提交内容未留存或已无法核实。",
         "history": "发布记录",
+        "marketChanges": "上架变更",
         "loadMore": "加载更多",
         "loadMoreHistory": "加载更多历史",
         "releaseId": "版本记录 ID",
@@ -9320,7 +9458,7 @@
           "submitted": "已提交",
           "metadata_updated": "展示信息已更新",
           "approved": "审核通过",
-          "rejected": "已退回",
+          "rejected": "已驳回",
           "enabled": "已上架",
           "disabled": "已下架",
           "archived": "已归档",
@@ -9402,6 +9540,8 @@
         "notApproved": "尚未通过",
         "timeUnavailable": "未记录",
         "releaseNotes": "更新说明",
+        "expandReleaseNotes": "展开全部",
+        "noReleaseNotes": "没有填写更新说明",
         "versionUpdates": "版本与更新",
         "versionManagement": "版本管理",
         "versionContent": "版本内容",
@@ -9418,7 +9558,6 @@
         "cancelled": "已取消",
         "cancelReviewCompleted": "已取消本次提审。当前上架版本不受影响。",
         "cancelReviewAlreadyFinal": "审核已经完成，本次未取消。下方显示实际审核结果。",
-        "viewPendingVersion": "查看正在审核的版本",
         "submitFailed": "提交失败",
         "viewDetails": "查看详情"
       },
@@ -9657,7 +9796,7 @@
       "allow": "允许",
       "deny": "拒绝",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "发送答复",
       "planTitle": "计划待审核",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -9983,6 +10122,18 @@
       "title": "自动更新失败",
       "description": "更新程序无法启动，可能被系统安全策略拦截。请手动下载最新版安装包完成更新。",
       "confirm": "前往下载"
+    },
+    "workspaceMigration": {
+      "title": "正在迁移伙伴工作区",
+      "progressLabel": "伙伴工作区迁移进度",
+      "safetyHint": "正在复制并校验文件，切换前不会改动原数据，请勿强行关闭 Cindy。",
+      "phase": {
+        "preparing": "正在准备迁移",
+        "copying": "正在复制文件",
+        "verifying": "正在校验文件",
+        "switching": "正在切换路径",
+        "cleaning": "正在清理备份"
+      }
     }
   },
   "welcome": {
@@ -11314,6 +11465,69 @@
           "routines": "需要看一下的例行任务",
           "upgrade": "升级时没能自动带过来的"
         }
+      },
+      "workspaceLocation": {
+        "title": "工作区位置",
+        "description": "可将此伙伴的工作区迁移到本机其他磁盘以释放系统盘空间。Cindy 会在原路径保留目录链接，已有任务、自动化与脚本可继续正常工作。",
+        "movedDescription": "原路径仍可用于现有任务和脚本。",
+        "chooseDialogTitle": "选择伙伴工作区迁移的目标位置",
+        "fullPath": "完整路径",
+        "targetPathLabel": "目标目录",
+        "currentPathLabel": "当前目录",
+        "defaultPathLabel": "目标目录（默认位置）",
+        "logicalPathLabel": "原逻辑链接路径",
+        "copyPath": "复制路径",
+        "pathCopied": "已复制路径",
+        "pathCopyFailed": "复制路径失败",
+        "openTarget": "打开目录",
+        "moveAction": "迁移工作区",
+        "moveBackAction": "搬回默认位置",
+        "chooseAnother": "另选目录",
+        "restartNow": "立即重启",
+        "restartAndMove": "重启并迁移",
+        "scheduleNextRestart": "下次重启时迁移",
+        "cancel": "取消",
+        "dismissFailed": "关闭记录",
+        "scheduledToast": "已登记迁移，将在下次重启 Cindy 时执行",
+        "cancelledToast": "已取消工作区迁移",
+        "previewTitle": "准备迁移工作区",
+        "previewSummary": "文件大小：{{size}}",
+        "previewNotice": "重启前，请关闭正在使用此工作区的应用或脚本。",
+        "previewClaudeSkillsNotice": "如果工作区没有自己的 Git 仓库，Claude Code 搬迁后可能发现新位置上层目录的技能。如不希望引入这些技能，请选择上层未配置 Claude Code 技能的位置。",
+        "pendingHint": "请先关闭占用该目录的外部程序，再重启 Cindy 执行迁移。",
+        "unavailableTitle": "已迁移的工作区不可用",
+        "unavailableDescription": "Cindy 无法访问 {{target}}。请重新连接对应磁盘或恢复目录；Cindy 不会自动新建空目录覆盖它。",
+        "errorTitle": "无法迁移工作区",
+        "failedTitle": "上次工作区迁移失败",
+        "interruptedTitle": "工作区迁移待恢复",
+        "backupRemainingHint": "原目录备份仍保留以供核对：{{backup}}",
+        "personalPreviewHint": "请退出共享数据的个人测试版，改用主版本 Cindy 登记或执行工作区迁移。",
+        "status": {
+          "default": "默认位置",
+          "pending": "等待重启",
+          "moved": "已迁移",
+          "failed": "迁移失败",
+          "interrupted": "待恢复",
+          "unavailable": "目标不可用"
+        },
+        "warnings": {
+          "waitingExclusive": "正在等待独占启动。请关闭共享此账号数据的其他 Cindy 实例，再重启以执行迁移。",
+          "receiptUpdateFailed": "工作区当前可用，但迁移记录更新失败，将在下次重启时自动修复。"
+        },
+        "errors": {
+          "insufficientSpace": "目标磁盘可用空间不足，无法容纳当前工作区。",
+          "overlapsCindyData": "请选择 Cindy 数据目录和当前工作区之外的目录。",
+          "localDiskRequired": "请选择本机磁盘目录，不支持网络共享路径。",
+          "unsupportedFileOrHardLink": "工作区包含硬链接或特殊文件，暂不支持直接安全迁移。",
+          "alreadyRedirected": "Cindy 无法识别这个工作区的目录链接。请保留现有链接和文件。",
+          "botHomeRedirected": "该伙伴主目录已被手动重定向，无法自动迁移其工作区。",
+          "targetExists": "目标目录已存在，请另选位置。",
+          "workspaceChanged": "校验期间工作区内容发生变化，请关闭外部占用程序后重试。",
+          "backupRetained": "迁移已完成，但原备份校验存在差异，已保留备份以免丢失数据。",
+          "backupCleanupIncomplete": "迁移已完成，但临时备份未能清空，将在下次重启时自动重试。",
+          "cutoverInterrupted": "上次切换中断，Cindy 已恢复原工作区。请另选空目录重新迁移。",
+          "generic": "无法完成工作区迁移操作，请重试。"
+        }
       }
     },
     "profile": {
@@ -12151,7 +12365,7 @@
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
           "archive": "归档群",
           "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
-          "confirm": "确认",
+          "confirm": "继续",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
           "unarchive": "取消归档",
@@ -12258,7 +12472,8 @@
         "dissolved": "群聊已解散，仍可查看有权访问的历史消息。",
         "failed": "操作未完成，请重试。",
         "lastOwner": "请先转让群主或解散群聊，再退出。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今天加入",
@@ -13006,7 +13221,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "确认",
+      "confirm": "继续",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -13458,6 +13673,7 @@
         },
         "slash": {
           "detachFailed": "❌ 结束接管失败：{{error}}",
+          "pluginEngineModelsUnavailable": "这个任务的插件引擎当前不可用，暂时无法列出模型。",
           "companionManaged": "🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。"
         },
         "turn": {
@@ -14546,27 +14762,27 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "默认权限",
             "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
           },
           "default": {
-            "label": "默认",
+            "label": "默认权限",
             "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
           },
           "acceptEdits": {
-            "label": "自动接受编辑",
+            "label": "允许编辑",
             "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
           },
           "auto": {
-            "label": "自动",
+            "label": "自动审批",
             "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
           },
           "plan": {
-            "label": "只规划",
+            "label": "计划模式",
             "description": "Agent 只分析和制定计划，不修改文件。"
           },
           "bypassPermissions": {
-            "label": "全部允许",
+            "label": "完全访问",
             "description": "Agent 请求的权限一律自动允许。"
           }
         }
@@ -15229,7 +15445,7 @@
       "back": "返回",
       "skip": "跳过",
       "next": "下一题",
-      "submit": "提交",
+      "submit": "发送答复",
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
@@ -15399,6 +15615,8 @@
       "codexHelperUnavailable": "此任务已启用 cindy_helper，但目前不可用，任务结果可能无法回传。",
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
+      "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
+      "messageNotSent": "本次消息未发送。",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
       "retryTitle": "重新发送最后一条消息",
@@ -15657,6 +15875,10 @@
       "diffUnchangedLines_one": "{{count}} 行未变",
       "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
+    },
+    "filePreview": {
+      "changed": "文件已变更",
+      "refreshHint": "点击刷新"
     },
     "textLightbox": {
       "unreadable": "无法读取该文件",
@@ -22409,6 +22631,19 @@
     "rendered": "查看文档",
     "wrap": "自动换行",
     "lineNumbers": "行号"
+  },
+  "openAiAccountGroup": {
+    "strategy": "账号组策略",
+    "leastHint": "优先分给运行任务最少的连接",
+    "quotaHint": "能读取订阅用量时，会先按用量筛选连接，再按组策略分配。",
+    "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
+    "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
+    "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
+    "noTestModel": "当前连接没有可用于测试的模型。请确认 OpenAI 项目可调用哪些模型，再刷新或更新此连接的模型列表。",
+    "billingPaused": "余额不足或达到计费上限，已暂停组内分配。",
+    "title": "账号组",
+    "testPassed": "测试成功",
+    "refresh": "刷新配额"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

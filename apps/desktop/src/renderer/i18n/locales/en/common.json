@@ -1429,6 +1429,9 @@
     "ENDPOINT_NOT_FOUND": "Endpoint not found (404). Check the base URL",
     "CONTEXT_TOO_LONG": "Context exceeds the model's length limit",
     "WIRE_INCOMPATIBLE": "Endpoint is not fully compatible with this protocol (unrecognized request fields)",
+    "INVALID_PROBE_RESPONSE": "The model service returned an empty or invalid response",
+    "PROBE_NO_OUTPUT": "The connection test could not confirm that the model generated output",
+    "PROBE_REFUSED": "The model service refused or blocked the test prompt",
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
@@ -2723,6 +2726,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "Sign-in phone number",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change phone number",
+        "verifyTitle": "Verify current phone number",
+        "introDescription": "To keep your account secure, verify your current phone number before changing it.",
+        "newTitle": "Enter new phone number",
+        "newDescription": "After the change, sign in with the new number. The old number will no longer sign in to this account.",
+        "inputLabel": "New phone number",
+        "placeholder": "Enter your phone number",
+        "success": "Phone number changed to {{target}}"
+      },
+      "email": {
+        "rowTitle": "Sign-in email",
+        "rowHint": "Used to sign in and receive verification codes",
+        "change": "Change email",
+        "verifyTitle": "Verify current email",
+        "introDescription": "To keep your account secure, verify your current email before changing it.",
+        "newTitle": "Enter new email",
+        "newDescription": "After the change, sign in with the new email. The old email will no longer sign in to this account.",
+        "inputLabel": "New email address",
+        "placeholder": "Enter your email address",
+        "success": "Email changed to {{target}}"
+      },
+      "codeSent": "A verification code was sent to {{target}}",
+      "codeLabel": "Verification code",
+      "codePlaceholder": "6-digit code",
+      "sendCode": "Send code",
+      "next": "Next",
+      "confirm": "Confirm change",
+      "cancel": "Cancel",
+      "resend": "Resend code",
+      "resendIn": "Resend in {{seconds}}s",
+      "errors": {
+        "INVALID_CODE": "The verification code is incorrect or expired.",
+        "CODE_ATTEMPTS_EXCEEDED": "Too many incorrect attempts. Request a new code.",
+        "CONTACT_TAKEN": "This phone number or email is already linked to another account.",
+        "CONTACT_UNCHANGED": "This is the same as your current phone number or email.",
+        "CONTACT_CHANGE_TICKET_INVALID": "Verification expired. Verify your current phone number or email again.",
+        "AUTH_FLOW_SUPERSEDED": "Your sign-in changed. Start again.",
+        "CONTACT_CHANGE_UNAVAILABLE": "This account can't change its sign-in method here.",
+        "CONTACT_CHANGE_BUSY": "The previous step is still in progress.",
+        "RATE_LIMITED": "Too many attempts. Wait a moment and try again.",
+        "RATE_LIMITED_UNTIL": "Too many attempts. Try again after {{time}} (local time).",
+        "INVALID_PARAMS": "The format is invalid. Check it and try again.",
+        "EMAIL_DOMAIN_BLOCKED": "This email can't be used. Try another one.",
+        "EMAIL_PATTERN_BLOCKED": "This email can't be used. Try another one.",
+        "ACCOUNT_DELETION_PENDING": "This account is scheduled for deletion and can't be changed.",
+        "NETWORK_ERROR": "Network connection failed. Check your network and try again.",
+        "REQUEST_TIMEOUT": "The request timed out. Try again.",
+        "fallback": "Something went wrong. Try again later."
+      }
+    },
     "help": {
       "title": "Help",
       "description": "Learn how to get work done with {{appName}}.",
@@ -3006,7 +3063,12 @@
         "reconcileButton": "Check",
         "reconcileFailed": "Check failed",
         "reconcileHealthy": "Ledger and disk match. No issues found.",
-        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list."
+        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list.",
+        "buddyWorkspaceDirectoryTitle": "Buddy workspace",
+        "buddyWorkspaceDirectoryDescription": "Where new buddies create their workspaces. Existing buddies stay where they are and can be moved individually in their Advanced configuration.",
+        "buddyWorkspaceDirectoryDetails": "Cindy creates an account-specific subfolder here for new buddies' workspaces while keeping their canonical paths linked.",
+        "buddyWorkspaceDirectoryChoose": "Change directory",
+        "buddyWorkspaceDirectoryFailed": "Could not update the buddy workspace folder."
       },
       "piKernel": {
         "manage": "Manage Pi version",
@@ -3411,7 +3473,7 @@
           "passages": {
             "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
             "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
-            "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+            "p3": "Make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
           },
           "errors": {
             "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
@@ -4626,6 +4688,15 @@
       "menu": {
         "disableProvider": "Disable This Provider",
         "enableProvider": "Enable This Provider",
+        "icon": "Connection icon",
+        "appearance": "Name and icon",
+        "ownImage": "Choose image",
+        "imageError": "Choose a PNG, JPG or WebP image under 10 MB.",
+        "connectionIcon": {
+          "default": "Default",
+          "personal": "Personal",
+          "work": "Work"
+        },
         "hideProvider": "Hide from Model Picker",
         "showProvider": "Show in Model Picker"
       },
@@ -4652,7 +4723,7 @@
         "keyPlaceholder": "Paste API key",
         "toast": {
           "saved": "API key for {{name}} saved",
-          "saveFailed": "Failed to save API key for {{name}}. Please try again.",
+          "saveFailed": "Failed to save API key for {{name}}. Try again.",
           "disconnected": "Disconnected {{name}}",
           "disconnectFailed": "Failed to disconnect {{name}}"
         },
@@ -5836,7 +5907,7 @@
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
-      "extensionDialogConfirm": "Confirm",
+      "extensionDialogConfirm": "Continue",
       "cancel": "Cancel",
       "resources": {
         "extension": "Extension code",
@@ -6684,6 +6755,20 @@
         "ssh": "SSH remote hosts",
         "hook": "Cindy IM bots"
       },
+      "cloudComputer": {
+        "title": "Cloud computer",
+        "hint": {
+          "addCloud": "Set up a cloud computer with Cindy installed. Once ready, it appears in your device list.",
+          "preparingCloud": "Your cloud computer is being prepared. It appears in your device list when ready.",
+          "manageCloud": "Start, stop, renew, reinstall and delete it on the web."
+        },
+        "actions": {
+          "addCloud": "Add cloud computer",
+          "preparingCloud": "View progress",
+          "manageCloud": "Manage cloud computer"
+        },
+        "openFailed": "Could not open the cloud computer page. Check your default browser settings."
+      },
       "hook": {
         "description": "Connect Slack, Telegram, Feishu / Lark and other channels to the same Cindy. Messages are dispatched to this device and share its project list and session runner; every project’s model and permissions are shared by all channels, while each channel keeps its own account link.",
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
@@ -7203,6 +7288,30 @@
           "disableBlocked": {
             "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
             "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Version {{version}} available — click to update",
+          "downloading": "Downloading {{version}}…",
+          "relaunching": "Restarting to install {{version}}…",
+          "confirm": {
+            "title": "Update Cindy on “{{name}}”?",
+            "selfTitle": "Update Cindy on this computer?",
+            "description": "Cindy will update from {{from}} to {{to}} and restart on that device. Remote connections will drop briefly.",
+            "selfDescription": "Cindy will update from {{from}} to {{to}} and restart on this computer.",
+            "busyWarning": "Running tasks or background work on that device will be interrupted by the restart.",
+            "selfBusyWarning": "Running tasks or background work on this computer will be interrupted by the restart.",
+            "linuxPermissionHint": "Managed Linux installations may prompt for a system password on the target computer.",
+            "windowsPermissionHint": "Installations in a protected folder may prompt for system permission on the target computer.",
+            "action": "Update now"
+          },
+          "toast": {
+            "started": "Updating “{{name}}” to {{version}}",
+            "relaunching": "“{{name}}” is restarting to install {{version}}",
+            "versionChanged": "The available version on “{{name}}” changed. Reopen the card to review.",
+            "noUpdate": "No installable update is available on “{{name}}”.",
+            "busy": "“{{name}}” is already running an update. Try again shortly.",
+            "failed": "Could not update Cindy on “{{name}}”."
           }
         }
       }
@@ -8198,6 +8307,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "allPlugins": "All plugins",
+        "searchResults": "Search results",
+        "marketSort": {
+          "label": "Sort"
+        },
         "todayRecommendations": "Today's picks",
         "marketSection": "Plugin marketplace",
         "browseMarket": "Browse plugin marketplace",
@@ -8678,6 +8792,7 @@
         "libraryPersist": "Can use a durable library (large files and databases)",
         "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. It can also ask Cindy to show a library file in Finder or Explorer, or open the system Save As dialog so you choose where a copy goes; cancelling Save As copies nothing. It can also write a PNG bitmap to the system clipboard with no confirmation dialog; this overwrites the current clipboard. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
         "networkHost": "Accesses the network target {{host}}",
+        "networkHosts": "Network targets",
         "networkSecret": "Needs a credential from you: “{{name}}”",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
         "networkSecretIdentity": "Will use your login email as the credential “{{name}}”",
@@ -8884,6 +8999,8 @@
         "dangerTitle": "Uninstall plugin",
         "infoContents": "Contains",
         "infoVersion": "Version",
+        "infoPackageSize": "Package size",
+        "infoPackageSizeWithVersion": "{{size}} ({{version}})",
         "updateTitle": "Update version",
         "updateDesc": "Pick a new .cindy file to replace the installed version in place; enabled state and panel position are preserved.",
         "errandPrefs": {
@@ -8906,11 +9023,26 @@
           "restoreModel": "Reset model"
         },
         "toolsTitle": "Tools",
+        "toolCount_one": "{{count}} tool",
+        "toolCount_other": "{{count}} tools",
         "permissionsTitle": "Permissions",
         "infoDescription": "Description",
         "customSlotAsleep": "This plugin is disabled. Enable it to see its settings UI here.",
         "descriptionExpand": "Show more",
         "descriptionCollapse": "Show less",
+        "recentUpdates": "Recent updates",
+        "olderUpdates": "Earlier updates",
+        "collapseOlderUpdates": "Hide earlier updates",
+        "includesHighRisk": "High risk",
+        "heroDownloads": "Total downloads",
+        "heroUsage": "Total uses",
+        "heroWeeklyUsage": "Uses in the last 7 days",
+        "heroWeeklyUsageExplanation": "Tool calls in the past 7 days across all releases in the authorized audience.",
+        "heroInstalledVersion": "Installed version",
+        "heroListedVersion": "Published version",
+        "heroLatestUpdate": "Last updated",
+        "morePlugins": "More plugins",
+        "morePluginsHint": "Selected at random. This does not reflect any preference on Cindy’s part.",
         "readmeTitle": "About",
         "useAction": "Use Plugin",
         "chatAction": "Chat",
@@ -8949,6 +9081,7 @@
         "portReclaimMessage": "“{{name}}” needs port {{port}}. End the following program?",
         "portReclaimDetail": "Ending it may interrupt its work or lose unsaved data. You can cancel and close the program yourself.",
         "configurationTitle": "Configuration",
+        "recordTitle": "Plugin information",
         "sidebarEntryTitle": "Navigation Entry",
         "showInSidebar": "Show in Left Navigation",
         "fileOpenerTitle": "Open Files with This Plugin",
@@ -8959,6 +9092,7 @@
         "viewAllTools": "See All",
         "collapseTools": "Collapse Tools",
         "viewAllPermissions": "See All",
+        "remainingPermissions": "Show {{count}} more",
         "permissionsDialogDescription": "All {{count}} permissions requested by this Plugin",
         "closeDialog": "Close Dialog",
         "resetPlacement": "Reset to default position"
@@ -9277,6 +9411,7 @@
         "anonymousUnavailable": "Author settings unavailable",
         "anonymousUpdateFailed": "Could not confirm the anonymity setting was saved. Refresh before trying again.",
         "myPlugins": "Publish Plugin",
+        "backToPublish": "Back to Publish Plugin",
         "publish": "Submit for Review",
         "submitUpdate": "Submit New Version for Review",
         "publishHint": "Publish only plugins you have permission to publish. Human approval is required for community listing.",
@@ -9316,6 +9451,7 @@
         "publishedContentUnavailable": "The current published version’s description and release notes are temporarily unavailable.",
         "currentSubmission": "Current submission",
         "localState": {
+          "installed": "Local {{version}}",
           "missing": "Not installed on this computer",
           "unavailable": "Local version temporarily unavailable"
         },
@@ -9328,7 +9464,7 @@
         "publishing": "Publishing",
         "latestSubmission": "Latest Submission",
         "noSubmission": "No submissions yet",
-        "marketVersion": "Published · {{version}}",
+        "marketVersion": "Published {{version}}",
         "market": {
           "not_listed": "Not Listed",
           "disabled": "Unlisted",
@@ -9338,7 +9474,7 @@
         "review": {
           "pending": "Pending Review",
           "approved": "Approved",
-          "rejected": "Returned",
+          "rejected": "Rejected",
           "published": "Published",
           "superseded": "Replaced by a Later Submission",
           "legacy_unverified": "Historical revision unavailable",
@@ -9346,9 +9482,12 @@
           "cancelled": "Cancelled"
         },
         "reason": "Reason",
+        "rejectionReason": "Rejection reason",
+        "rejectionReasonLine": "<reasonLabel>Rejection reason:</reasonLabel> <reasonText />",
         "submittedContent": "Submitted Content",
         "snapshotUnavailable": "The original content was not retained or can no longer be verified.",
         "history": "Publishing History",
+        "marketChanges": "Listing changes",
         "loadMore": "Load More",
         "loadMoreHistory": "Load More History",
         "releaseId": "Release ID",
@@ -9363,7 +9502,7 @@
           "submitted": "Submitted",
           "metadata_updated": "Display Information Updated",
           "approved": "Approved",
-          "rejected": "Returned",
+          "rejected": "Rejected",
           "enabled": "Published",
           "disabled": "Unlisted",
           "archived": "Archived",
@@ -9445,6 +9584,8 @@
         "notApproved": "Not approved yet",
         "timeUnavailable": "Not recorded",
         "releaseNotes": "Release notes",
+        "expandReleaseNotes": "Show all",
+        "noReleaseNotes": "No release notes provided.",
         "versionUpdates": "Versions & Updates",
         "versionManagement": "Manage Versions",
         "versionContent": "Version content",
@@ -9461,7 +9602,6 @@
         "cancelled": "Cancelled",
         "cancelReviewCompleted": "Review cancelled. The currently listed version is unchanged.",
         "cancelReviewAlreadyFinal": "Review already finished, so it was not cancelled. The actual result is shown below.",
-        "viewPendingVersion": "View version under review",
         "submitFailed": "Submission failed",
         "viewDetails": "View details"
       },
@@ -9700,7 +9840,7 @@
       "allow": "Allow",
       "deny": "Deny",
       "questionTitle": "Your input needed",
-      "submit": "Submit",
+      "submit": "Send answer",
       "planTitle": "Plan review",
       "approve": "Approve",
       "requestChanges": "Request changes",
@@ -9905,7 +10045,7 @@
       "successBody": "You’re signed in. You can close this page now.",
       "closeCountdown": "Closing in {{count}}s",
       "errorTitle": "Sign-in not completed",
-      "errorBody": "Please return to {{appName}} and sign in again.",
+      "errorBody": "Return to {{appName}} and sign in again.",
       "returnButton": "Return to {{appName}}"
     },
     "regionPill": {
@@ -9952,7 +10092,7 @@
     },
     "rateLimit": {
       "retryAt": "Try again after {{time}} (local time).",
-      "unknownWait": "The server did not provide a waiting time. Please wait before trying again.",
+      "unknownWait": "The server did not provide a waiting time. Wait before trying again.",
       "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
@@ -9966,9 +10106,9 @@
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
-    "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, please quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
+    "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
     "confirm": "Continue",
-    "migrating": "Migrating data, please wait…",
+    "migrating": "Migrating data…",
     "failedTitle": "Migration incomplete",
     "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
   },
@@ -10014,18 +10154,30 @@
     },
     "manifestFailed": {
       "title": "Network connection failed",
-      "description": "Could not check for updates. Please check your network and retry.",
+      "description": "Could not check for updates. Check your network and retry.",
       "confirm": "Retry"
     },
     "downloadFailed": {
       "title": "Update download failed",
-      "description": "The app update did not complete. Please check your network and retry.",
+      "description": "The app update did not complete. Check your network and retry.",
       "confirm": "Retry"
     },
     "spawnFailed": {
       "title": "Auto-update failed",
-      "description": "The updater could not be launched, possibly blocked by system security policy. Please download the latest installer manually.",
+      "description": "The updater could not be launched, possibly blocked by system security policy. Download the latest installer manually.",
       "confirm": "Go to download"
+    },
+    "workspaceMigration": {
+      "title": "Moving buddy workspace",
+      "progressLabel": "Buddy workspace migration progress",
+      "safetyHint": "Copying and verifying files before switching. Keep Cindy open until it finishes.",
+      "phase": {
+        "preparing": "Preparing workspace",
+        "copying": "Copying files",
+        "verifying": "Verifying files",
+        "switching": "Switching location",
+        "cleaning": "Cleaning up backup"
+      }
     }
   },
   "welcome": {
@@ -11359,6 +11511,69 @@
           "routines": "Routines to check",
           "upgrade": "Not carried over automatically"
         }
+      },
+      "workspaceLocation": {
+        "title": "Workspace location",
+        "description": "Move this buddy's workspace to another local disk to free system-drive space. Cindy keeps the original path linked so existing tasks, automations, and scripts keep working.",
+        "movedDescription": "Existing tasks and scripts still use the original path.",
+        "chooseDialogTitle": "Choose destination folder for buddy workspace",
+        "fullPath": "Full path",
+        "targetPathLabel": "Target folder",
+        "currentPathLabel": "Current folder",
+        "defaultPathLabel": "Target folder (default)",
+        "logicalPathLabel": "Original linked path",
+        "copyPath": "Copy path",
+        "pathCopied": "Path copied",
+        "pathCopyFailed": "Could not copy path",
+        "openTarget": "Open folder",
+        "moveAction": "Move workspace",
+        "moveBackAction": "Back to default",
+        "chooseAnother": "Choose another folder",
+        "restartNow": "Restart now",
+        "restartAndMove": "Restart and move",
+        "scheduleNextRestart": "Move on next restart",
+        "cancel": "Cancel",
+        "dismissFailed": "Dismiss",
+        "scheduledToast": "Workspace move scheduled for the next restart",
+        "cancelledToast": "Workspace move cancelled",
+        "previewTitle": "Ready to move workspace",
+        "previewSummary": "File size: {{size}}",
+        "previewNotice": "Close any apps or scripts using this workspace before restarting.",
+        "previewClaudeSkillsNotice": "If the workspace has no Git repository of its own, Claude Code may discover skills in parent folders at the new location. To avoid this, choose a location with no Claude Code skills in its parent folders.",
+        "pendingHint": "Close external programs using this workspace, then restart Cindy to start the move.",
+        "unavailableTitle": "Moved workspace is unavailable",
+        "unavailableDescription": "Cindy could not reach {{target}}. Reconnect the drive or restore the folder; Cindy will not create an empty folder over it.",
+        "errorTitle": "Workspace could not be moved",
+        "failedTitle": "Previous workspace move failed",
+        "interruptedTitle": "Workspace move needs recovery",
+        "backupRemainingHint": "Original backup kept for review at: {{backup}}",
+        "personalPreviewHint": "Close personal preview instances and start the primary Cindy build to schedule or run workspace moves.",
+        "status": {
+          "default": "Default",
+          "pending": "Pending restart",
+          "moved": "Moved",
+          "failed": "Failed",
+          "interrupted": "Recovery needed",
+          "unavailable": "Unavailable"
+        },
+        "warnings": {
+          "waitingExclusive": "Waiting for an exclusive startup. Close other Cindy instances sharing this profile, then restart Cindy to run the move.",
+          "receiptUpdateFailed": "The workspace is usable, but updating the migration record failed and will be retried on the next restart."
+        },
+        "errors": {
+          "insufficientSpace": "The target drive does not have enough free space for this workspace.",
+          "overlapsCindyData": "Choose a folder outside Cindy's own data directory and outside the current workspace.",
+          "localDiskRequired": "Choose a local disk folder rather than a network share.",
+          "unsupportedFileOrHardLink": "This workspace contains hard links or special files that cannot be moved safely right now.",
+          "alreadyRedirected": "Cindy does not recognize the link at this workspace location. Keep the link and its files as they are.",
+          "botHomeRedirected": "This buddy's home folder is manually redirected, so Cindy cannot move its workspace automatically.",
+          "targetExists": "The destination folder already exists. Choose a different location.",
+          "workspaceChanged": "Files in the workspace changed during verification. Close external programs using it and try again.",
+          "backupRetained": "The move succeeded, but the backup differed and was kept so nothing is lost.",
+          "backupCleanupIncomplete": "The move succeeded, but cleaning up the temporary backup did not finish; Cindy will retry on the next restart.",
+          "cutoverInterrupted": "The previous switch was interrupted and Cindy restored the original workspace. Choose a new empty folder to retry.",
+          "generic": "Could not complete the workspace move request. Try again."
+        }
       }
     },
     "profile": {
@@ -12196,7 +12411,7 @@
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
           "archive": "Archive Group",
           "archiveHint": "Archiving disables this group for all members, stopping new messages and buddy runs. History is kept. Search for the group to view its history or unarchive it.",
-          "confirm": "Confirm",
+          "confirm": "Continue",
           "lastOwner": "Transfer ownership to another member before leaving or removing the current owner.",
           "conflict": "Someone updated this group. Refresh and try again.",
           "unarchive": "Unarchive group",
@@ -12303,7 +12518,8 @@
         "dissolved": "This group has been dissolved. You can still read the available history.",
         "failed": "Could not complete this action. Try again.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving."
-      }
+      },
+      "externalBadge": "External"
     },
     "joined": {
       "today": "Joined today",
@@ -13052,7 +13268,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirm",
+      "confirm": "Continue",
       "cancel": "Cancel",
       "dontShowAgain": "Don’t show again"
     },
@@ -13511,6 +13727,7 @@
         },
         "slash": {
           "detachFailed": "❌ Couldn't end the takeover: {{error}}",
+          "pluginEngineModelsUnavailable": "This task's plugin engine isn't available right now, so its models can't be listed.",
           "companionManaged": "🧭 This connection is handed over to a buddy, so the model, permissions and working directory follow the buddy's settings. Change them in the buddy settings in Cindy."
         },
         "turn": {
@@ -14600,27 +14817,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Ask each time",
+            "label": "Default permissions",
             "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
           },
           "default": {
-            "label": "Default",
+            "label": "Default permissions",
             "description": "Works the agent’s default way; you confirm its permission requests."
           },
           "acceptEdits": {
-            "label": "Accept edits",
+            "label": "Auto accept edits",
             "description": "The agent edits files directly; you confirm its other permission requests."
           },
           "auto": {
-            "label": "Auto",
+            "label": "Auto-review",
             "description": "The agent decides what needs confirmation; you confirm the requests it makes."
           },
           "plan": {
-            "label": "Plan only",
+            "label": "Plan mode",
             "description": "The agent only analyzes and plans; it does not edit files."
           },
           "bypassPermissions": {
-            "label": "Allow all",
+            "label": "Full access",
             "description": "Every permission the Agent asks for is granted automatically."
           }
         }
@@ -15290,7 +15507,7 @@
       "back": "Back",
       "skip": "Skip",
       "next": "Next",
-      "submit": "Submit",
+      "submit": "Send answer",
       "sendAndContinue": "Send and continue",
       "close": "Close",
       "customAnswer": "Type something else…",
@@ -15464,6 +15681,8 @@
       "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
+      "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
+      "messageNotSent": "Your message was not sent.",
       "replyFailed": "Could not complete the reply",
       "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
@@ -15530,8 +15749,8 @@
       "networkHideRaw": "Hide Details",
       "diagnose": "Diagnose",
       "diagnoseTitle": "Diagnose this error in a new session",
-      "diagnosePrompt": "Please diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
-      "diagnosePromptWithoutSession": "Please diagnose this error: find the cause and tell me how to fix it.\n\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
+      "diagnosePrompt": "Diagnose this error: find the cause and tell me how to fix it.\n\nSession: {{sessionUrl}}\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
+      "diagnosePromptWithoutSession": "Diagnose this error: find the cause and tell me how to fix it.\n\nError: {{message}}\nDetails:\n{{details}}\n\nIf you find it's a problem with Cindy itself, let me know so I can choose whether to file an issue with the Cindy team.",
       "gatewayProxyTokenInvalid": "Cindy AI credentials are no longer valid. Click Retry. If it happens again, sign out and sign back in.",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI credentials are no longer valid. If it happens again, sign out and sign back in.",
       "modelAccessDenied": "The upstream account cannot access this model. Select another model or check its access with the provider",
@@ -15723,6 +15942,10 @@
       "diffUnchangedLines_other": "{{count}} unchanged lines",
       "diffPreviewLoading": "Preparing diff preview…"
     },
+    "filePreview": {
+      "changed": "File changed",
+      "refreshHint": "Click to refresh"
+    },
     "textLightbox": {
       "unreadable": "Unable to read this file",
       "openSystemFailed": "Cannot open in system",
@@ -15730,7 +15953,7 @@
       "cannotRead": "Unable to read file",
       "loading": "Loading file…",
       "oversizeTitle": "File too large to preview",
-      "oversizeBody": "This file is {{size}}, exceeding the {{limit}}MB preview limit. Please open it with the system default application.",
+      "oversizeBody": "This file is {{size}}, exceeding the {{limit}}MB preview limit. Open it with the system default application.",
       "openInSystem": "Open in system",
       "closeHint": "or click the backdrop to close"
     },
@@ -16275,7 +16498,7 @@
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
-      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
+      "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
       "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
       "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "Auto approve blocked this tool call because your instructions changed or are not yet synchronized.",
@@ -19341,7 +19564,7 @@
     "marketErrors": {
       "forbidden": "No permission to operate on this Skill",
       "notFound": "This Skill no longer exists. Go back to the list and refresh",
-      "managementApiUnavailable": "Hub management API is not ready. Please try again later",
+      "managementApiUnavailable": "Hub management API is not ready. Try again later.",
       "invalidVisibility": "This organization does not support that visibility. Choose Public",
       "default": "The action couldn’t be completed."
     },
@@ -21936,7 +22159,7 @@
   "richAnswer": {
     "invalidImageReference": "This image reference is invalid.",
     "requestImageAgain": "Ask to show image again",
-    "requestImageAgainMessage": "Please show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
+    "requestImageAgainMessage": "Show this existing image again ({{name}}, reference: {{source}}). Check the original tool result or file and use its real address. Do not generate a new image; ask me first if you cannot identify the image.",
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
@@ -22497,6 +22720,19 @@
     "rendered": "View document",
     "wrap": "Wrap lines",
     "lineNumbers": "Line numbers"
+  },
+  "openAiAccountGroup": {
+    "strategy": "Account group strategy",
+    "leastHint": "Prefer the connection running the fewest tasks",
+    "quotaHint": "When subscription usage is available, Cindy uses it to choose eligible connections before applying the group strategy.",
+    "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
+    "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
+    "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
+    "noTestModel": "No configured model is available for testing. Check which models your OpenAI project can use, then refresh or update this connection’s model list.",
+    "billingPaused": "Group assignment paused due to insufficient balance or a billing limit.",
+    "title": "Account group",
+    "testPassed": "Test passed",
+    "refresh": "Refresh quota"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {

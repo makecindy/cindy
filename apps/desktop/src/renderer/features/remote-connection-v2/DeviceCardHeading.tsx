@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { PlatformGlyph } from './PlatformGlyph';
 import './remote-connection-v2.css';
@@ -5,11 +6,13 @@ import './remote-connection-v2.css';
 export function DeviceCardHeading({
   name,
   sub,
+  subAccessory,
   platform,
   isMobile,
 }: {
   name: string;
   sub: string;
+  subAccessory?: ReactNode;
   platform: string | null;
   isMobile: boolean;
 }) {
@@ -33,9 +36,12 @@ export function DeviceCardHeading({
           {name}
         </span>
         {sub ? (
-          <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
-            {sub}
-          </span>
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            <span className="break-words text-12 leading-[1.35] text-[var(--text-secondary)]" title={sub}>
+              {sub}
+            </span>
+            {subAccessory}
+          </div>
         ) : null}
       </div>
     </div>

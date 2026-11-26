@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SERVER_RETRY_MAX_WAIT_MS, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -12570,6 +12570,65 @@ it.each(['socket close', 'factory refusal'])('stops automatic reconnect after de
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();
   h.client.stop();
+});
+
+// #13041：分享传输建连收到 429 时，连接工厂抛出带 retryAt 的错误(AgentNetSharingError 解析的
+// Retry-After)。修复前 client 只按 1 秒起的普通退避重试，期限内照样反复请求被限流的接口。
+// 最小失败输入：工厂第一次抛 { retryAt: now + 60s },期限内触发网络变化、唤醒与 stop/start;
+// 或收到期限后系统时间回拨一小时(2026-11-26 review:期限前的入口曾在期限那一刻齐步建连，
+// 回拨曾把等待拉长到时间追上旧期限)。
+// 不变量：期限前任何入口都不调用工厂，期限刚到也先等本档抖动；没有期限时保持原退避；异常的
+// 超长期限按上限封顶；系统时间回拨不把等待拉长到收到时的期限之外。
+// tier：unit，假计时器(vitest 默认含 performance,单调钟随之推进),无真实等待。
+it.each([
+  { label: 'no server deadline', retryAfterMs: null, earliestMs: 0, rollbackMs: 0 },
+  { label: 'Retry-After 60s', retryAfterMs: 60_000, earliestMs: 60_000, rollbackMs: 0 },
+  { label: 'Retry-After beyond the cap', retryAfterMs: 2 * 60 * 60_000, earliestMs: SERVER_RETRY_MAX_WAIT_MS, rollbackMs: 0 },
+  { label: 'Retry-After 60s, clock rolled back 1h', retryAfterMs: 60_000, earliestMs: 60_000, rollbackMs: 60 * 60_000 },
+])('does not call the socket factory before a server retry deadline ($label)', async ({ retryAfterMs, earliestMs, rollbackMs }) => {
+  vi.useFakeTimers();
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+  let attempts = 0;
+  const h = makeHarness({
+    // 假 socket 不回 pong；心跳拉长到用例之外，只看建连节奏。
+    timing: { reconnectBaseMs: 1_000, reconnectMaxMs: 30_000, pingIntervalMs: 60 * 60_000 },
+    beforeSocket: () => {
+      attempts++;
+      if (attempts > 1) return;
+      throw Object.assign(new Error('TOO_MANY_REQUESTS'), {
+        status: 429,
+        retryAt: retryAfterMs === null ? undefined : Date.now() + retryAfterMs,
+      });
+    },
+  });
+  try {
+    h.client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(1);
+    if (rollbackMs > 0) vi.setSystemTime(Date.now() - rollbackMs);
+    if (earliestMs > 0) {
+      await vi.advanceTimersByTimeAsync(earliestMs - 1_000);
+      h.client.connectNow('foreground', { overrideCongestionCooldown: true });
+      h.client.restartConnection('system-resume');
+      h.client.stop();
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(attempts).toBe(1);
+      expect(h.client.getStatus()).toBe('connecting');
+      // 期限刚过：推迟后的重连仍追加本档抖动(首档 ≥0.7 秒),不在期限那一刻建连。
+      await vi.advanceTimersByTimeAsync(600);
+      expect(attempts).toBe(1);
+    }
+    // 期限(或无期限时的首档退避)过后正常建连上线。
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(attempts).toBe(2);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+  } finally {
+    h.client.stop();
+    random.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 /**

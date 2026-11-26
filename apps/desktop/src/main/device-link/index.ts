@@ -27,6 +27,7 @@ import { tryPeerInvoke, stopFilePeers, stopFilePeerStreams, setFilePeerStreamTra
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName, localDeviceNameCandidates } from './deviceName';
+import { buildDeviceInfo } from './deviceInfoCore';
 import {
   createDeviceIdentityConflictMonitor,
   type DeviceIdentityConflict,
@@ -68,7 +69,6 @@ import {
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
-  type DeviceInfo,
   type DeviceView,
   type HelloPayload,
   type PresenceSnapshot,
@@ -914,29 +914,9 @@ function reconnectAfterAccessTokenRefresh(): void {
   }
 }
 
-function buildDeviceInfo(): DeviceInfo {
-  const info: DeviceInfo = {};
-  const cpuLabel = normalizeDeviceInfoText(os.cpus()[0]?.model);
-  if (cpuLabel) info.cpuLabel = cpuLabel;
-
-  const memoryGb = Math.round(os.totalmem() / 1024 ** 3);
-  if (Number.isFinite(memoryGb) && memoryGb > 0) info.memoryGb = memoryGb;
-
-  const osVersion = normalizeDeviceInfoText(systemVersion());
-  if (osVersion) info.osVersion = osVersion;
-
-  return info;
-}
-
 function systemVersion(): string {
   const electronProcess = process as NodeJS.Process & { getSystemVersion?: () => string };
   return electronProcess.getSystemVersion?.() || os.release();
-}
-
-function normalizeDeviceInfoText(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  return trimmed.length > 128 ? trimmed.slice(0, 128) : trimmed;
 }
 
 function wsUrl(): string {
@@ -1043,7 +1023,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     app: 'cindy',
     appVersion: app.getVersion(),
     remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled,
-    deviceInfo: buildDeviceInfo(),
+    deviceInfo: buildDeviceInfo(systemVersion()),
     busy,
   });
   const connectionOptions: Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'> = {

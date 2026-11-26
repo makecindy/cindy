@@ -53,6 +53,7 @@ export function projectScheduleSidebarIndex(
       nextFireAt: run.nextFireAt,
       workingDir: run.workingDir,
       projectConfigId: run.projectConfigId,
+      ...(run.canSwitchPluginEngine && { canSwitchPluginEngine: true }),
       unreadRunIds,
       unreadFailedRunIds,
       latestUnreadFailedRunId,

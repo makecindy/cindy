@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -18,6 +17,13 @@ import {
   readWorkerProjectContext,
 } from '../orcaWorkerProject';
 import { createOrcaWorkerProjectHandlers } from '../orcaWorkerProjectHandlers';
+
+// CI #12846: unit probes must not start unbounded synchronous Git processes.
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFile: vi.fn(() => { throw new Error('Unexpected native process in Worker project unit test'); }),
+  execFileSync: vi.fn(() => { throw new Error('Unexpected native process in Worker project unit test'); }),
+}));
 
 vi.mock('../../maker-host/codex-credential-switch', () => ({
   isCredentialModeSwitchBusyError: () => false,
@@ -40,56 +46,36 @@ vi.mock('../../worktree/WorktreeManager', () => ({
   getForSession: vi.fn(),
   awaitBackgroundCheckout: vi.fn(),
 }));
-// Keep the production probe and Git output real; isolate unrelated process/runtime services.
+// Explicit Git output keeps the production parser and filesystem checks real.
+// The real HEAD state matrix lives in orcaWorkerProject.git-integration.test.ts.
 vi.mock('../../worktree/gitExec', () => ({
-  gitExec: vi.fn(async (args: string[], cwd: string) => ({
-    stdout: execFileSync('git', args, { cwd, encoding: 'utf8' }),
-    stderr: '',
-  })),
+  gitExec: vi.fn(async () => { throw new Error('Unconfigured Git output in unit fixture'); }),
 }));
 
 const directory = mkdtempSync(path.join(os.tmpdir(), 'cindy-worker-head-'));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
-// N07/N09: existing inheritance tests inject probes and miss actual Git HEAD states.
-// Integration tier: an empty repo, its first commit, then detached HEAD are the smallest
-// inputs proving availability and that the selected revision remains the full commit ID.
+// N07/N09, CI #12846: exercise probeWorkerProject's public result, not a copy of
+// its parser. Unit tier: minimal porcelain-v2 output for each HEAD state; real
+// Git transitions have a separate lifecycle so they cannot outlive a unit case
+// and consume the filesystem-alias test's spy (the observed Windows failure).
 describe('Worker project HEAD probe', () => {
-  it('distinguishes an unborn HEAD, a branch and a detached commit while retaining dirty status', async () => {
-    const git = (...args: string[]) =>
-      execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
-    git('init', '--initial-branch=main');
-    writeFileSync(path.join(directory, 'file.txt'), 'worker\n');
-    expect(await probeWorkerProject(directory)).toMatchObject({
-      exists: true,
-      headState: 'unborn',
-      branch: null,
-      dirty: true,
+  const sha = 'a'.repeat(40);
+  beforeAll(() => mkdirSync(path.join(directory, '.git')));
+  it.each([
+    { oid: '(initial)', head: 'main', extra: '? file.txt\n', headState: 'unborn', branch: null, dirty: true },
+    { oid: sha, head: 'main', extra: '', headState: 'branch', branch: 'main', dirty: false },
+    { oid: sha, head: '(detached)', extra: '', headState: 'detached', branch: sha, dirty: false },
+  ])('reports $headState and dirty=$dirty', async ({ oid, head, extra, ...expected }) => {
+    vi.mocked(gitExec).mockResolvedValueOnce({
+      stdout: [directory, path.join(directory, '.git'), path.join(directory, '.git')].join('\n') + '\n',
+      stderr: '',
+    }).mockResolvedValueOnce({
+      stdout: `worktree ${directory}\0\0`, stderr: '',
+    }).mockResolvedValueOnce({
+      stdout: `# branch.oid ${oid}\n# branch.head ${head}\n${extra}`, stderr: '',
     });
-    git('add', 'file.txt');
-    git(
-      '-c',
-      'user.name=Fixture',
-      '-c',
-      'user.email=fixture@example.invalid',
-      '-c',
-      'commit.gpgsign=false',
-      'commit',
-      '-m',
-      'fixture',
-    );
-    expect(await probeWorkerProject(directory)).toMatchObject({
-      headState: 'branch',
-      branch: 'main',
-      dirty: false,
-    });
-    const sha = git('rev-parse', 'HEAD');
-    git('checkout', '--detach', '--quiet', sha);
-    expect(await probeWorkerProject(directory)).toMatchObject({
-      headState: 'detached',
-      branch: sha,
-      dirty: false,
-    });
+    expect(await probeWorkerProject(directory)).toMatchObject({ exists: true, ...expected });
   });
 });
 
@@ -441,7 +427,7 @@ describe('Worker project filesystem aliases', () => {
 });
 
 // Review P1: a subproject Worker must start beside its own rules, after checkout.
-// Unit orchestration with real filesystem/Git probe: a deferred checkout is the
+// Unit orchestration with real filesystem and controlled Git output: a deferred checkout is the
 // smallest input exposing the race; root selections must keep asynchronous startup.
 // A source-branch symlink outside the checkout must not redirect the validated cwd.
 describe('Worker worktree subproject directory', () => {
@@ -454,22 +440,22 @@ describe('Worker worktree subproject directory', () => {
     mkdirSync(path.join(repo, '..web'));
     writeFileSync(path.join(repo, '..web', 'AGENTS.md'), 'Dot-prefixed subproject rules');
     symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
-    git('init', '--initial-branch=main');
-    git('add', '.');
-    git(
-      '-c',
-      'user.name=Fixture',
-      '-c',
-      'user.email=fixture@example.invalid',
-      '-c',
-      'commit.gpgsign=false',
-      'commit',
-      '-m',
-      'fixture',
-    );
+    mkdirSync(path.join(repo, '.git'));
+    vi.mocked(gitExec).mockImplementation(async (args) => {
+      if (args[0] === 'rev-parse') return {
+        stdout: [repo, path.join(repo, '.git'), path.join(repo, '.git')].join('\n') + '\n', stderr: '',
+      };
+      if (args[0] === 'worktree') return { stdout: `worktree ${repo}\0\0`, stderr: '' };
+      if (args[0] === 'status') return {
+        stdout: `# branch.oid ${'a'.repeat(40)}\n# branch.head main\n`, stderr: '',
+      };
+      throw new Error(`Unexpected Git command: ${args[0]}`);
+    });
   });
-  afterAll(() => rmSync(fixture, { recursive: true, force: true }));
+  afterAll(() => {
+    vi.mocked(gitExec).mockReset();
+    rmSync(fixture, { recursive: true, force: true });
+  });
 
   it.each(['subproject', 'dot-prefixed', 'root', 'missing', 'external-symlink'] as const)(
     'keeps the correct startup directory for %s',
@@ -514,8 +500,7 @@ describe('Worker worktree subproject directory', () => {
           expect(awaitBackgroundCheckout).not.toHaveBeenCalled();
           return;
         }
-        // Windows CI can spend >1s in the real Git probe. Await the actual
-        // boundary (or an early result/failure), not vi.waitFor's 1s deadline.
+        // Await the actual checkout boundary (or an early result/failure).
         await Promise.race([checkoutStarted, result]);
         expect(awaitBackgroundCheckout).toHaveBeenCalledWith(sessionId);
         expect(settled).toBe(false);
