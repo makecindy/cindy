@@ -44,6 +44,8 @@ export type AcpElicitationField =
       questionText: string;
       required: boolean;
       options: AcpElicitationChoice[];
+      minItems?: number;
+      maxItems?: number;
       writeInKey?: string;
     }
   | {
@@ -197,10 +199,13 @@ export function parseAcpElicitationForm(params: AcpRecord): AcpElicitationForm |
   );
   const message = asNonEmptyString(params.message)?.trim();
 
-  // First pass: detect companion `*_other` write-in fields paired with choice fields.
+  // First pass: detect companion `*_other` write-in fields paired with optional choice fields.
+  // Never fold a required choice field with an optional `*_other`: custom-only text would omit
+  // the required choice key and violate the schema.
   const writeInOwners = new Map<string, string>(); // selectKey -> writeInKey
   const absorbedWriteIns = new Set<string>();
   for (const key of keys) {
+    if (required.has(key)) continue;
     const prop = asRecord(properties[key]);
     const isChoiceCandidate =
       (prop.type === 'string' && ('oneOf' in prop || 'anyOf' in prop || 'enum' in prop))
@@ -249,12 +254,21 @@ export function parseAcpElicitationForm(params: AcpRecord): AcpElicitationForm |
       const items = asRecord(prop.items);
       const choices = extractChoices(items);
       if (!choices) return null;
+      const minItems = prop.minItems !== undefined ? nonNegativeInt(prop.minItems) : undefined;
+      const maxItems = prop.maxItems !== undefined ? nonNegativeInt(prop.maxItems) : undefined;
+      if ((prop.minItems !== undefined && minItems === undefined) || (prop.maxItems !== undefined && maxItems === undefined)) {
+        return null;
+      }
+      if (minItems !== undefined && maxItems !== undefined && minItems > maxItems) return null;
+      if (minItems !== undefined && minItems > choices.length) return null;
       fields.push({
         kind: 'multi',
         id,
         questionText: question,
         required: isRequired,
         options: choices,
+        ...(minItems !== undefined ? { minItems } : {}),
+        ...(maxItems !== undefined ? { maxItems } : {}),
         ...(writeInKey ? { writeInKey } : {}),
       });
       // Do not attach `answerConstraints.choices` on multiSelect: Cindy validates
@@ -402,7 +416,7 @@ export function encodeAcpElicitationResponse(
         const matched = matchChoice(field.options, trimmed);
         if (matched) {
           content[field.id] = matched.value;
-        } else if (field.writeInKey) {
+        } else if (field.writeInKey && !field.required) {
           content[field.writeInKey] = trimmed;
         } else {
           return { action: 'decline' };
@@ -421,10 +435,16 @@ export function encodeAcpElicitationResponse(
             custom.push(part);
           }
         }
-        if (selected.length > 0) content[field.id] = selected;
         if (custom.length > 0) {
           if (field.writeInKey) content[field.writeInKey] = custom.join('\n');
-          else if (selected.length === 0) return { action: 'decline' };
+          else return { action: 'decline' };
+        }
+        if (selected.length > 0) {
+          if (field.minItems !== undefined && selected.length < field.minItems) return { action: 'decline' };
+          if (field.maxItems !== undefined && selected.length > field.maxItems) return { action: 'decline' };
+          content[field.id] = selected;
+        } else if (field.required) {
+          return { action: 'decline' };
         }
         if (selected.length === 0 && custom.length === 0 && field.required) {
           return { action: 'decline' };

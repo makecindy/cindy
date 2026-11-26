@@ -775,7 +775,20 @@ export class AcpSession {
     if (!this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    this.extraDirs = [...new Set(dirs.map((dir) => dir.trim()).filter(Boolean))];
+    const normalized = [...new Set(dirs.map((dir) => dir.trim()).filter(Boolean))];
+    const unchanged = normalized.length === this.extraDirs.length
+      && normalized.every((dir, index) => dir === this.extraDirs[index]);
+    if (unchanged) return;
+    // ACP carries `additionalDirectories` only on session/new, session/resume, and session/load.
+    // Refuse live directory changes when the engine cannot resume its session on reload.
+    if (!this.canResumeAfterClose()) {
+      throw new NotSupportedError('extraDirs', {
+        supported: false,
+        reason: 'sdk-missing',
+        message: 'Cannot update additional directories on a live plugin engine session that does not support resume or load.',
+      });
+    }
+    this.extraDirs = normalized;
   }
 
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {

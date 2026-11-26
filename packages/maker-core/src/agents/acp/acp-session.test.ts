@@ -1889,7 +1889,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     ];
     let currentMode = 'default';
     const agent = createFakeAgent({
-      agentCapabilities: { sessionCapabilities: { additionalDirectories: {} } },
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
       configOptions,
       handlers: {
         'session/set_config_option': (params) => {
@@ -1914,6 +1914,15 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     expect(session.getPlanMode()).toBe(false);
 
     await session.setExtraDirs(['/extra/c']);
+
+    // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
+    const nonResumable = createFakeAgent({
+      agentCapabilities: { loadSession: false, sessionCapabilities: { additionalDirectories: {} } },
+    });
+    const { session: unresumableSession } = await open(nonResumable, { extraDirs: ['/extra/a'] });
+    await expect(unresumableSession.setExtraDirs(['/extra/a'])).resolves.toBeUndefined();
+    await expect(unresumableSession.setExtraDirs(['/extra/b'])).rejects.toThrow();
+    await unresumableSession.close();
 
     // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
     await expect(session.getContextUsage()).rejects.toThrow();
@@ -1990,6 +1999,112 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
 
     await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
     expect(vendorOptions).toEqual({});
+    await session.close();
+  });
+
+  it('enforces elicitation schema invariants: required choices, multi-select custom text, and minItems/maxItems', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+
+    // 1. Required choice paired with optional *_other is NOT folded so the required choice can never go missing.
+    session.setInteractionResolver(async (request) => {
+      if (request.kind !== 'ask_user_question') throw new Error('unexpected');
+      expect(request.questions).toHaveLength(2);
+      expect(request.questions[0]?.id).toBe('q1');
+      expect(request.questions[1]?.id).toBe('q1_other');
+      // Attempting custom-only answer for required q1 declines instead of omitting q1.
+      return { kind: 'ask_user_question', answers: { q1: 'not-a-choice', q1_other: 'extra note' } };
+    });
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick one',
+      requestedSchema: {
+        type: 'object',
+        required: ['q1'],
+        properties: {
+          q1: { type: 'string', title: 'Choice', oneOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 2. Multi-select without a companion write-in key rejects mixed listed + custom text instead of dropping custom text.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'unlisted custom text']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick tags',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 3. Multi-select enforces maxItems / minItems bounds.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta', 'Gamma']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'accept', content: { tags: ['a', 'b'] } });
+
+    // 4. Impossible minItems > maxItems schema is rejected with -32602.
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Invalid bounds',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', minItems: 3, maxItems: 1, items: { enum: ['a', 'b'] } },
+        },
+      },
+    })).error).toMatchObject({ code: -32602 });
+
     await session.close();
   });
 });
