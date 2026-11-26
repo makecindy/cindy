@@ -2127,6 +2127,7 @@ import {
   keepRecentSessionCcDebugSync,
   createLogger,
   getLogDir,
+  maskPath,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -4048,7 +4049,9 @@ const linuxTray = createLinuxTrayController<Menu>({
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
+    // 未打包 checkout / 用户自选安装目录时 iconPath 带用户目录结构;该错误会经
+    // `linux-tray`(精确放行)进入上传,按 logger.ts 对 resourcesPath 的约定先遮蔽。
+    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${maskPath(iconPath)}`);
     // Keep the source resolution: Linux panels choose their own icon size/scale.
     return new Tray(icon);
   },
@@ -4071,7 +4074,8 @@ function ensureWindowsTray(): boolean {
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
+    // 同 linuxTray 的 createTray:`windows-tray` 也是放行 scope,路径同样要先遮蔽。
+    if (icon.isEmpty()) throw new Error(`tray icon is empty: ${maskPath(iconPath)}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
     const quotaTray = tray;
@@ -4873,7 +4877,8 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // Hyprland has no native minimize surface, so it uses the Linux tray.
+    // The keep-running action follows each platform: tray on Windows, minimize on
+    // Linux X11, hide-to-tray on Linux Wayland (compositors ignore minimize).
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
