@@ -632,6 +632,7 @@ export async function handleMedia(
     guide_source?: 'auto' | 'official';
     model_id?: string;
     invocation_id?: string;
+    invocationId?: string;
     source_invocation_id?: string;
     body?: Record<string, unknown>;
   },
@@ -698,19 +699,19 @@ export async function handleMedia(
         capability: input.capability,
       });
     } else if (input.action === "request") {
-      if (!input.invocation_id || !input.body) {
-        return textResult(
-          {
-            ok: false,
-            errorCode: "INVALID_INPUT",
-            message: "request 必须提供 invocation_id 和 body。",
-          },
-          true,
-        );
+      if (input.invocation_id !== undefined && input.invocationId !== undefined && input.invocation_id !== input.invocationId) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "invocation_id 与 invocationId 必须一致。" }, true);
+      }
+      const invocationId = input.invocation_id ?? input.invocationId;
+      if (!invocationId?.trim()) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "request 必须提供 invocation_id。" }, true);
+      }
+      if (!input.body) {
+        return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "request 必须提供 body 对象。" }, true);
       }
       result = await deps.callMedia({
         action: "request",
-        invocationId: input.invocation_id,
+        invocationId,
         body: input.body,
       });
     } else {
@@ -1559,6 +1560,7 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("request / poll 时必填；必须来自 prepare 返回"),
+      invocationId: z.string().max(128).optional().describe("request 兼容的 invocation_id 别名；两者同时提供时必须一致"),
       source_invocation_id: z.string().max(128).optional().describe("prepare 时可传原付费调用的 invocation_id，以新 Guide 复用原回执；返回后直接 request/poll，不重新生成"),
       body: z
         .record(z.string(), z.unknown())

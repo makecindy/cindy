@@ -1060,16 +1060,29 @@ describe('AcpSession agent modes', () => {
     .map((message) => (message.params as AcpRecord).value);
 
   it('offers the agent modes Cindy can name, then Full access, and switches the agent mode', async () => {
-    const agent = createFakeAgent({ configOptions });
+    let currentMode = 'default';
+    const agent = createFakeAgent({
+      configOptions,
+      handlers: {
+        'session/set_config_option': ({ configId, value }) => {
+          if (configId === 'mode' && typeof value === 'string') currentMode = value;
+          return {
+            configOptions: configOptions.map((opt) => (opt.id === 'mode' ? { ...opt, currentValue: currentMode } : opt)),
+          };
+        },
+      },
+    });
     const { session } = await open(agent);
     expect(session.capabilities.permissionModes.map((mode) => [mode.id, mode.displayName])).toEqual([
       ['default', 'Default'], ['acceptEdits', 'Accept edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Full access'],
     ]);
     await session.setPermissionMode('acceptEdits');
     await session.setPermissionMode('plan');
+    // Cindy's canonical 'ask' maps to an agent's 'default' mode when the agent publishes 'default'.
+    await session.setPermissionMode('ask');
     // Full access is Cindy's own answer to permission requests; the agent keeps its mode.
     await session.setPermissionMode('bypassPermissions');
-    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan']);
+    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan', 'default']);
   });
 
   it('applies the stored mode when the task starts and still asks you about permission requests', async () => {

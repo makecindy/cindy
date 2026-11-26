@@ -25,7 +25,7 @@ const MAPPABLE_EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high',
 export const ACP_PERMISSION_MODES: readonly PermissionModeDescriptor[] = [
   {
     id: 'ask',
-    displayName: 'Ask each time',
+    displayName: 'Default permissions',
     description: 'Every permission request from the agent is shown to you for a decision.',
   },
   {

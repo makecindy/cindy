@@ -1359,6 +1359,7 @@ describe('local plugin engine worktree submission', () => {
       '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
     );
     expect(result.clearDraft).toHaveBeenCalledOnce();
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.environment.navigate).toHaveBeenCalledWith(`/cc-agent/${created.id}`, expect.any(Object));
   });
 
@@ -1373,6 +1374,7 @@ describe('local plugin engine worktree submission', () => {
     expect(result.errors).toEqual([expect.objectContaining({ message: 'fixture checkout failed' })]);
     expect(result.sendMessage).not.toHaveBeenCalled();
     expect(result.clearDraft).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
     expect(result.environment.attachmentState.clearFiles).not.toHaveBeenCalled();
     expect(result.environment.navigate).not.toHaveBeenCalled();
   });
@@ -1386,6 +1388,10 @@ describe('local plugin engine worktree submission', () => {
     expect(result.clearDraft).not.toHaveBeenCalled();
   });
 
+  // 2026-11-26 回归：本机使用插件引擎（acp）新建任务时漏调 rememberCreatedWorkspace()，
+  // 导致曾经在另一台电脑建过任务后，此后本机新建任务默认设备一直回到旧远程设备。
+  // 生产入口：NewMakerDraftRoute 真实 handleSend -> sendWithPluginEngine 本机分支（项目 / 对话 / worktree）。
+  // 最小失败输入：本机草稿选中 activePluginEngine 并成功发送，rememberCreatedWorkspace 未被调用；tier：unit。
   it.each([
     ['/fixture/repo', { enabled: false, sourceBranch: 'remembered' }],
     ['/fixture/linked', { enabled: true, sourceBranch: 'remembered', confirmedIneligible: true }],
@@ -1394,6 +1400,7 @@ describe('local plugin engine worktree submission', () => {
     const [[created]] = result.ipcCreate.mock.calls;
     expect(created).toMatchObject({ workingDir, agentKind: 'acp' });
     expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       workingDir, [], [], expect.any(Object),
@@ -1408,6 +1415,7 @@ describe('local plugin engine worktree submission', () => {
     const [[created]] = result.ipcCreate.mock.calls;
     expect(created).toMatchObject({ workspaceKind: 'dialogue', agentKind: 'acp' });
     expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       '/isolated/dialogue', [], [], expect.any(Object),
@@ -1450,6 +1458,7 @@ describe('local plugin engine worktree submission', () => {
       created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
       '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
     );
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
     expect(result.toastError).not.toHaveBeenCalled();
   });
 });

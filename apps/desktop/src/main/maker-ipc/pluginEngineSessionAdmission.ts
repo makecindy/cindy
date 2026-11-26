@@ -11,6 +11,7 @@
  * tasks never reach this function.
  */
 import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
 import {
@@ -144,7 +145,10 @@ export function admitPluginEngineSwitchTarget(
   const saved = engine.modelEfforts?.[model];
   const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort
     : saved && offered.includes(saved) ? saved : '';
-  const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id
-    ?? engine.defaultPermissionMode;
+  const permissionMode = resolvePermissionModeForOptions(
+    target.permissionMode,
+    engine.permissionModes.map((mode) => mode.id),
+    engine.defaultPermissionMode,
+  ) as PluginEnginePermissionModeId;
   return { model, effort, permissionMode, engineName: engine.name };
 }
