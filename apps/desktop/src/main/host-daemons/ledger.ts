@@ -188,7 +188,8 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
     try {
       await rename(temp, path);
     } catch (error) {
-      // Windows 不能 rename 覆盖已存在的目标文件。
+      // 目标正被别的进程占用时，Windows 的 rename 会失败（EPERM / EEXIST）。不重试等待，
+      // 退回先删后改名；这两步之间不原子，再失败就按保存失败报错。
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'EPERM' && code !== 'EEXIST') {
         await rm(temp, { force: true });
