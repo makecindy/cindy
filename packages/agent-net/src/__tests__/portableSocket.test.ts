@@ -1072,3 +1072,65 @@ it('dials remembered UDP candidates before the relay finishes, suppresses false 
     socket.close();
   }
 });
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetSocket.openWithBindings` 经中转 1006 意外断开重连后通知 `transport.networkChanged()`，
+ *   并在 `onLocalPortChanged(newPort, reason)` 回调时同步更新 `discovery.updatePort`、`transport.dial.udp.port` 与 `onUdpRebound`。
+ * - Bug／规则依据：macOS 透明代理启停常触发中转 WS 1006 意外断线；此前重连后未触发 `networkChanged()`，且 UDP 换端口后
+ *   局域网/Bonjour 发现仍广播旧端口。
+ * - 现有覆盖缺口：已有测试未覆盖无显式 `networkChanged()` 时 1006 重连后的回调，也未覆盖 `onLocalPortChanged` → `discovery.updatePort`。
+ * - 最小失败输入：1) 首条中转连接以无原因 1006 断开并重连；2) 传输层回调 `onLocalPortChanged(54321, 'udp-blackhole')`。
+ * - tier：unit，内存中转与发现替身，假计时器。
+ */
+it('notifies transport on unexpected 1006 relay reconnect and syncs discovery port after UDP rebind', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Relay 1006 and rebind', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), {
+    kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {},
+  });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const networkChanged = vi.fn();
+  const updatePort = vi.fn();
+  const onUdpRebound = vi.fn();
+  let emitPortChanged: TransportOptions['onLocalPortChanged'];
+  const dial = { udp: { address: '0.0.0.0', port: 41000 } };
+  vi.useFakeTimers();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    onUdpRebound,
+    bindings: {
+      verifyCertificate,
+      createTransport: async (opts) => {
+        emitPortChanged = opts.onLocalPortChanged;
+        return { id: 'local', dial, networkChanged, close: async () => undefined, connect: async () => { throw new Error('unused'); } };
+      },
+      createDiscovery: () => ({ start() {}, updatePort, close() {} }),
+    },
+  });
+  try {
+    // Unexpected 1006 without local reason triggers networkChanged once relay reconnects.
+    first.emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(networkChanged).toHaveBeenCalledTimes(1);
+
+    // Local-reason close (e.g. INVALID_CONTROL) does not spuriously trigger networkChanged.
+    second.emit('close', 1006, 'INVALID_CONTROL');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(networkChanged).toHaveBeenCalledTimes(1);
+
+    // UDP port change updates dial, discovery beacons, and rebound callback.
+    emitPortChanged!(54321, 'udp-blackhole');
+    expect(dial.udp.port).toBe(54321);
+    expect(updatePort).toHaveBeenCalledWith(54321);
+    expect(onUdpRebound).toHaveBeenCalledWith('udp-blackhole');
+  } finally {
+    vi.useRealTimers();
+    socket.close();
+  }
+});

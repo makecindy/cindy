@@ -33872,7 +33872,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         },
       } as never);
       handlers.itemStarted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
-        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build' },
+        item: { type: 'commandExecution', id: 'cmd-pending', command: 'build', status: 'inProgress' },
       } as never);
       reconnect('turn-1', 1, 502);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -33880,11 +33880,12 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
       await vi.advanceTimersByTimeAsync(60_001);
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        reason: 'codex_reconnect_stalled', errorStatus: 503, pendingToolCount: 1, isTerminal: true,
-        message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        reconnectAttempt: 3, reconnectMaxAttempts: 5, pendingToolCount: 1,
+        message: expect.stringContaining('Last reconnect attempt: 3/5. Pending tool calls at interruption: 1.'), idleMs: 120_000,
       }) }));
       expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
-        message: expect.stringContaining('unconfirmed tool results'),
+        message: expect.stringMatching(/unconfirmed tool results.*\(HTTP 503\)/),
       }) }));
       expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
       const priorEnd = seen.length;
@@ -33896,7 +33897,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
       expect(terminal).toBeDefined();
       expect(terminal!.data).not.toHaveProperty('errorStatus');
-      expect(terminal!.data).not.toHaveProperty('pendingToolCount');
+      expect(terminal!.data).toMatchObject({ reconnectAttempt: 1, reconnectMaxAttempts: 5, pendingToolCount: 0 });
       expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
       await handle.close();
     } finally { vi.useRealTimers(); }

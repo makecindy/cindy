@@ -5938,11 +5938,11 @@ async function resumeHarness(t, overrides = {}) {
   // As Maker stamps every event of a turn with the attempt token its send carried (maker-core
   // session.ts; the resume's send carries it): the guard clears a resume's pending attempt on its
   // first stamped event, so an unstamped fixture would never resume twice.
-  const interrupt = async () => {
+  const interrupt = async (failure = INTERRUPTION) => {
     const token = session.sendOptions.at(-1)?.turnAttemptToken;
     const stamp = typeof token === 'number' ? { turnAttemptToken: token } : {};
     session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
-    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
+    session.emit({ type: 'error', data: { ...failure }, ...stamp });
     await settle();
   };
   // Until the engine has received `count` messages: a message reaches it only after its send's
@@ -5976,7 +5976,7 @@ test('auto-resume exit 1: the resumed turn answers the input and ends its stream
 test('auto-resume exit 2: interruptions until the budget is spent end the stream on the last error, written once', async t => {
   const r = await resumeHarness(t);
   for (let sent = 2; sent < 20; sent += 1) {
-    await r.interrupt();
+    await r.interrupt({ reason: 'codex_reconnect_stalled', message: 'Model reconnect timed out.', isTerminal: true });
     if (r.response.writableEnded) break;
     await r.backoff(sent);
   }
@@ -5985,7 +5985,9 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
   assert.ok(r.session.sent.length > 2, `resumed ${r.session.sent.length - 1} time(s)`);
   const last = r.streamed().filter(e => e.type === 'error').at(-1);
   assert.equal(last.autoResumePending, undefined);
+  assert.equal(last.data.reconnectHandoff, 'exhausted');
   assert.equal(r.errorRows().length, 1);
+  assert.equal(r.errorRows()[0].content.reconnectHandoff, 'exhausted');
   t.mock.timers.reset();
   await r.h.queue.dispose();
 });

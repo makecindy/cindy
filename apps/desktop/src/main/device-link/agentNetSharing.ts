@@ -31,6 +31,7 @@ import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
 import { agentNetMediaBinding, agentNetSharingSubject } from '@cindy/agent-net-protocol';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { bindLinkedProviderShares, ensureLinkedProviderShares, linkedProviderShareSessionSocket, stopLinkedProviderShares } from './agentNetLinkedShares.js';
 
 type Kind = AgentNetSharingInvitation['kind'];
 export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'invitation'> {
@@ -90,7 +91,11 @@ function sessionRoute(peer: string): import('@cindy/agent-net').AgentNetAppSocke
   if (!task && !provider) return null;
   const key = task ? keyOf('shared-task', task.sharedTaskId) : keyOf('provider-share', provider!.shareId);
   const via = binding ? binding.via.get(key) : retiredVia?.via.get(key);
-  if (via === undefined) return 'primary';
+  if (via === undefined) {
+    // A Device Link share this guest moved to Agent-Net (agentNetLinkedShares.ts): its own connection, or Device Link until it is up.
+    const linked = provider && binding ? linkedProviderShareSessionSocket(peer) : undefined;
+    return linked === undefined ? 'primary' : linked;
+  }
   if (via === 'blocked') return null;
   return via === 'primary' ? 'primary' : binding!.session.sockets.get(via.connection)?.socket ?? null;
 }
@@ -820,21 +825,28 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
 }
 export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: ScopedConnectionOptions): () => void {
   const selection = agentNetSelectionKey();
-  if (binding?.client === client && binding.session.key === activeOwnerScopeKey() && binding.selection === selection) return binding.stop;
+  if (binding?.client === client && binding.session.key === activeOwnerScopeKey() && binding.selection === selection) {
+    // The primary connection just came up (prepareAgentNetSharingPrimary): moved shares can connect now.
+    ensureLinkedProviderShares();
+    return binding.stop;
+  }
   binding?.stop();
   const state = owner();
   const unprefer = client.preferPrimaryScopedConnection(isAgentNetActive);
   // The routed client keeps a released resource retired until it is registered again; so do its sessions.
   const via = new Map<string, 'primary' | 'blocked' | { connection: string }>(
     retiredVia?.client === client ? [...retiredVia.via.keys()].map(key => [key, 'blocked' as const]) : []);
+  let unbindLinked = () => undefined as void;
   const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), via, stop() {
     if (binding !== target) return;
-    binding = null; unprefer(); for (const off of target.pins.values()) off();
+    binding = null; unprefer(); unbindLinked(); for (const off of target.pins.values()) off();
     retiredVia = { client, via: new Map([...target.via.keys()].map(key => [key, 'blocked' as const])) };
     retire(state); if (session === state) session = null;
   } };
   binding = target;
   for (const route of state.vault.routes) installRoute(state, route);
+  // Device Link shares moved to Agent-Net follow the same switch, account and relay selection (agentNetLinkedShares.ts).
+  unbindLinked = bindLinkedProviderShares(client, options);
   return target.stop;
 }
 function safeRelayHost(server: string): string | null {
@@ -861,9 +873,12 @@ function fresherAgo(a: number | null, b: number | null): number | null {
 /**
  * 纯内存只读投影：汇总本机 Agent-Net 上已登记或已建链的跨账号供应商分享路由。
  * 不读盘、不拨号、不发探测帧，供「远程连接 → 远程供应商」拓扑零开销读取。
+ * 只在主连接走 Agent-Net 时调用；`carriedByPrimary(peer)` 回答该 peer 是否由主连接承载——
+ * 没登记 Agent-Net 分享路由、又不在主连接上的，落在 Device Link 兼容连接上（2026-11-26 用户要求写出实际协议）。
  */
 export function agentNetProviderShareRoutes(
   peerLinks: readonly DeviceLinkPeerLinkView[],
+  carriedByPrimary: (peer: string) => boolean,
 ): DeviceLinkProviderShareRouteView[] {
   if (isAppSessionBoundaryPending()) return [];
   const linkByShare = new Map<string, DeviceLinkPeerLinkView>();
@@ -942,6 +957,8 @@ export function agentNetProviderShareRoutes(
       out.set(shareId, {
         shareId,
         path,
+        // 已登记的分享路由要么在 Agent-Net 主连接上，要么是专用的 Agent-Net 分享连接。
+        protocol: 'agent-net',
         rttMs,
         sentAgoMs: link?.sentAgoMs ?? null,
         receivedAgoMs: link?.receivedAgoMs ?? null,
@@ -956,10 +973,27 @@ export function agentNetProviderShareRoutes(
 
   for (const [shareId, link] of linkByShare.entries()) {
     if (out.has(shareId)) continue;
+    if (!carriedByPrimary(link.deviceId)) {
+      // Device Link 兼容连接（旧版分享 / 旧跨账号连接）只经官方中转的 WebSocket；它的中转往返这里拿不到，不借用 Agent-Net 主中转的值。
+      out.set(shareId, {
+        shareId,
+        path: link.open ? link.path : null,
+        protocol: 'device-link',
+        rttMs: link.open ? link.rttMs : null,
+        sentAgoMs: link.sentAgoMs,
+        receivedAgoMs: link.receivedAgoMs,
+        relayKind: 'official',
+        relayHost: null,
+        relayTransport: 'websocket',
+        relayRttMs: null,
+      });
+      continue;
+    }
     const snap = agentNetPeerSnapshot(link.deviceId);
     out.set(shareId, {
       shareId,
       path: snap?.path ?? (link.open ? link.path : null),
+      protocol: 'agent-net',
       rttMs: snap?.rttMs ?? (link.open ? link.rttMs : null),
       sentAgoMs: link.sentAgoMs,
       receivedAgoMs: link.receivedAgoMs,
@@ -975,6 +1009,7 @@ export function agentNetProviderShareRoutes(
 
 export function stopAgentNetSharing(): void {
   binding?.stop();
+  stopLinkedProviderShares();
   if (session) retire(session);
   session = null;
 }

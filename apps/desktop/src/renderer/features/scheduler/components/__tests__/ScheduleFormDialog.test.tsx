@@ -66,6 +66,9 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: state.remoteCatalogStatus === 'unsupported',
     error: state.remoteCatalogStatus === 'ready' ? null : 'catalog unavailable' }),
 }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
+}));
 vi.mock('@/hooks/useFeishuBot', () => ({ useFeishuBot: () => ({ status: 'disconnected' }) }));
 vi.mock('@/hooks/useWecomGroupNotificationSettings', () => ({ useWecomGroupNotificationSettings: () => ({}) }));
 vi.mock('@/hooks/useProjectPickerOptions', () => ({ useProjectPickerOptions: () => [] }));

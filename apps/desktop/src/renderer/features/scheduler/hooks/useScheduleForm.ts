@@ -440,12 +440,13 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
+    const deviceId = selection.deviceId?.trim() || '';
     setForm((f) => ({
       ...f,
       modelGroup: undefined,
       pluginEngine: selection,
-      agentDeviceId: '',
-      modelAgentDeviceId: undefined,
+      agentDeviceId: deviceId,
+      modelAgentDeviceId: deviceId,
       fastMode: false,
     }));
   }, []);
@@ -486,7 +487,6 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         case 'thread':
           return {
             ...f,
-            pluginEngine: null,
             useWorktree: false,
             targetSessionId: f.targetSessionId.trim() ? f.targetSessionId : PENDING_SESSION_ID,
           };
@@ -501,8 +501,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const snapshot = captureBinding(f);
       if (snapshot) lastBindingRef.current = snapshot;
       const next = applyRunMode(f, mode, lastBindingRef.current);
-      // 插件引擎只用于每次新建任务的自动任务。
-      return mode === 'fresh' ? next : { ...next, pluginEngine: null };
+      // 持续会话(scheduler 任务)暂不支持插件引擎；新建与绑定普通任务支持。
+      return mode === 'fresh' || mode === 'bound' ? next : { ...next, pluginEngine: null };
     });
   }, []);
 

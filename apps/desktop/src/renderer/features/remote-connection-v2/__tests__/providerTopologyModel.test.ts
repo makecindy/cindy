@@ -360,4 +360,110 @@ describe('buildProviderTopology', () => {
       expect(groupBlock.providerId).toBe('codex');
     }
   });
+
+  // 2026-11-26 用户要求：远程供应商也要写出数据到底走 Agent-Net 还是 Device Link。
+  // 原来一律当 Agent-Net、直连都写 UDP，走 Device Link 的电脑（直连实为 WebRTC）会被写错。
+  // 最小失败输入：控制链路加密 / 未加密的直连与中转、只有 Agent-Net 路径、两种协议的跨账号分享。
+  it('writes the protocol that actually carries each provider and the matching transport', () => {
+    const ids = ['dev-an', 'dev-dl', 'dev-dl-relay', 'dev-an-route', 'share:sh-an', 'share:sh-dl'];
+    const sessions = ids.map((agentDeviceId, i) => makeSession({ id: `t${i}`, agentDeviceId }));
+    const model = buildProviderTopology({
+      sessions,
+      runningSessionIds: new Set(ids.map((_, i) => `t${i}`)),
+      devices: ['dev-an', 'dev-dl', 'dev-dl-relay', 'dev-an-route'].map((deviceId) => makeDevice({ deviceId })),
+      peerLinks: makePeerLinks({
+        relayTransport: 'websocket',
+        links: [
+          { deviceId: 'dev-an', encrypted: true, open: true, path: 'direct', rttMs: 4, sentAgoMs: null, receivedAgoMs: null },
+          { deviceId: 'dev-dl', encrypted: false, open: true, path: 'direct', rttMs: 6, sentAgoMs: null, receivedAgoMs: null },
+          { deviceId: 'dev-dl-relay', encrypted: false, open: true, path: 'relay', rttMs: 40, sentAgoMs: null, receivedAgoMs: null },
+        ],
+        agentNetRoutes: [{ deviceId: 'dev-an-route', path: 'relay', rttMs: 30, directRttMs: null, relayRttMs: 30, pathPreference: 'auto' }],
+        providerShareRoutes: [
+          { shareId: 'sh-an', path: 'relay', protocol: 'agent-net', rttMs: 20, sentAgoMs: null, receivedAgoMs: null,
+            relayKind: 'official', relayHost: null, relayTransport: 'udp', relayRttMs: 10 },
+          { shareId: 'sh-dl', path: 'relay', protocol: 'device-link', rttMs: 50, sentAgoMs: null, receivedAgoMs: null,
+            relayKind: 'official', relayHost: null, relayTransport: 'websocket', relayRttMs: null },
+        ],
+      }),
+      localGroups: {},
+      receivedShares: [makeShare({ shareId: 'sh-an' }), makeShare({ shareId: 'sh-dl' })],
+      shareDisplayNames: new Map(),
+      primaryRelayName: 'Cindy 中转',
+      primarySelfHosted: false,
+      officialRelayLabel: 'Cindy 中转',
+      unresponsiveIds: new Set(),
+      scope: 'all',
+      query: '',
+    });
+
+    const byId = new Map(model.machines.map((m) => [m.agentDeviceId, [m.protocol, m.transport]]));
+    expect(Object.fromEntries(byId)).toEqual({
+      'dev-an': ['agent-net', 'udp'],
+      'dev-dl': ['device-link', 'webrtc'],
+      'dev-dl-relay': ['device-link', 'websocket'],
+      'dev-an-route': ['agent-net', 'websocket'],
+      'share:sh-an': ['agent-net', 'udp'],
+      'share:sh-dl': ['device-link', 'websocket'],
+    });
+
+    // 同一台中转上混用两种协议时，中转站下面不写，由各条分支各写各的。
+    const mixed = layoutProviderTopology(model, 900, new Set());
+    expect(mixed.relays).toHaveLength(1);
+    expect(mixed.relays[0]).toMatchObject({ protocol: null, mixedProtocols: true });
+  });
+
+  // 2026-11-26 用户要求：经中转时协议写在中转站下面一次即可——中转只转发，前后两段一定是同一种协议。
+  // 最小失败输入：一台只承载 Agent-Net 机器的中转，修复前中转站上没有协议。
+  it('puts a single protocol on the relay when every machine through it uses the same one', () => {
+    const model = buildProviderTopology({
+      sessions: [makeSession({ id: 't1', agentDeviceId: 'dev-a' }), makeSession({ id: 't2', agentDeviceId: 'dev-b' })],
+      runningSessionIds: new Set(['t1', 't2']),
+      devices: [makeDevice({ deviceId: 'dev-a' }), makeDevice({ deviceId: 'dev-b' })],
+      peerLinks: makePeerLinks({
+        agentNetRoutes: [
+          { deviceId: 'dev-a', path: 'relay', rttMs: 30, directRttMs: null, relayRttMs: 30, pathPreference: 'auto' },
+          { deviceId: 'dev-b', path: 'relay', rttMs: 40, directRttMs: null, relayRttMs: 40, pathPreference: 'auto' },
+        ],
+      }),
+      localGroups: {},
+      receivedShares: [],
+      shareDisplayNames: new Map(),
+      primaryRelayName: 'Cindy 中转',
+      primarySelfHosted: false,
+      officialRelayLabel: 'Cindy 中转',
+      unresponsiveIds: new Set(),
+      scope: 'all',
+      query: '',
+    });
+    const layout = layoutProviderTopology(model, 900, new Set());
+    expect(layout.relays).toHaveLength(1);
+    expect(layout.relays[0]).toMatchObject({ protocol: 'agent-net', mixedProtocols: false });
+    // 中转站下面那一行要放得进画布。
+    expect(layout.h).toBeGreaterThanOrEqual(layout.relays[0].top + layout.relays[0].h + 20);
+  });
+
+  // 修复前带 deviceLinkDeviceId 的任务会以「远程任务」挂到那台电脑下面。最小失败输入：一个本机借用远程模型的任务、
+  it('counts only tasks of this computer that borrow another computer’s model', () => {
+    const model = buildProviderTopology({
+      sessions: [
+        makeSession({ id: 'mine', agentDeviceId: 'dev-mini' }),
+        makeSession({ id: 'remote-local', deviceLinkDeviceId: 'dev-remote' }),
+        makeSession({ id: 'remote-borrowing', deviceLinkDeviceId: 'dev-remote', agentDeviceId: 'dev-mini' }),
+      ],
+      runningSessionIds: new Set(['mine', 'remote-local', 'remote-borrowing']),
+      devices: [makeDevice({ deviceId: 'dev-mini' }), makeDevice({ deviceId: 'dev-remote' })],
+      peerLinks: makePeerLinks(),
+      localGroups: {},
+      receivedShares: [],
+      shareDisplayNames: new Map(),
+      primaryRelayName: 'Cindy 中转',
+      primarySelfHosted: false,
+      officialRelayLabel: 'Cindy 中转',
+      unresponsiveIds: new Set(),
+      scope: 'all',
+      query: '',
+    });
+    expect(model.machines.map((m) => [m.agentDeviceId, m.allTasks.map((t) => t.id)])).toEqual([['dev-mini', ['mine']]]);
+  });
 });

@@ -110,6 +110,22 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({ codexErrorInfo: 'serverOverloaded' })).toBe(true);
   });
 
+  it('结构化 reason=upstream-overload 命中时不依赖文案，大写展示态 reason 不触发重试判定', () => {
+    expect(
+      classifyTurnOverload({
+        message: 'The upstream declined this request.',
+        reason: 'upstream-overload',
+      }),
+    ).toBe(true);
+    // telegram-bot-parity.md: 大写 UPSTREAM_OVERLOADED 仅作展示文案映射，不触发自动重试。
+    expect(
+      classifyTurnOverload({
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
+      }),
+    ).toBe(false);
+  });
+
   it('非过载的结构化 tag 不误判成过载', () => {
     // usageLimitExceeded 要走限额通道等账号周期重置，不能被拽进一分钟短窗口。
     expect(classifyTurnOverload({ message: 'boom', codexErrorInfo: 'usageLimitExceeded' })).toBe(false);

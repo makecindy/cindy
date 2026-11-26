@@ -1782,6 +1782,7 @@ describe('BotGroupChatView', () => {
   });
 
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'darwin' });
     renderView();
     expect(await screen.findByText('周六 8:10 有票')).toBeTruthy();
     // The user's own message is a right-aligned bubble rendered as Markdown.
@@ -1795,6 +1796,27 @@ describe('BotGroupChatView', () => {
     expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:2');
     expect(header.querySelector('button[title]')?.getAttribute('title')).toBe('咪咪bots.groupChat.memberSeparator小满');
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.open' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
+  });
+
+  // Unit regression for the Windows feedback: the existing header test covers the macOS
+  // tooltip. Any nonempty roster reproduces the native title; 175 members match the report.
+  it('keeps the Windows group title clickable without exposing the roster as a native tooltip', async () => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'win32' });
+    const [member] = detail().members;
+    const members = Array.from({ length: 175 }, (_, index) => ({
+      ...member!,
+      botId: `bot-${index}`,
+      name: `Member ${index + 1}`,
+    }));
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members, messages: [] }) });
+    renderView();
+
+    const header = screen.getByTestId('content-header');
+    const title = await within(header).findByRole('button', { name: /周末出游/ });
+    expect(title.getAttribute('title')).toBeNull();
+    expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:175');
+    fireEvent.click(title);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
   });
 
