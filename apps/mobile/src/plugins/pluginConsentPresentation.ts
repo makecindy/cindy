@@ -67,6 +67,16 @@ export const CONSENT_FADE_HEIGHT = 24;
 export function consentSummaryFadeAllowed(plan: ConsentSheetPlan): boolean {
   return plan.mode === "regular" && plan.clipped && plan.summaryLines - CONSENT_FADE_HEIGHT >= plan.guaranteed;
 }
+/**
+ * The real-layout check of the regular layout (Android reshoot 2026-11-26), both sheets: the list, as laid out, shows the
+ * whole identity block (where it installs, where it comes from) without scrolling, above the fade over its lower edge
+ * while it scrolls (`top`: the list's own top padding). Not measured yet (a height of 0) counts as not shown.
+ */
+export function consentIdentityShown(list: { identity: number; visible: number; content: number; top?: number }): boolean {
+  if (list.identity <= 0 || list.visible <= 0) return false;
+  const scrolls = list.content > list.visible + 1;
+  return (list.top ?? 0) + list.identity + (scrolls ? CONSENT_FADE_HEIGHT : 0) <= list.visible;
+}
 export function planConsentSheet(sheet: ConsentSheetMeasures): ConsentSheetPlan {
   if (sheet.lines.length === 0) return { mode: "regular", summaryLines: 0, clipped: false, guaranteed: 0 };
   const available = Math.max(0, Math.floor(sheet.available));

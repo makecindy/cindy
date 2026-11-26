@@ -18,7 +18,7 @@ import {
 } from "./usePluginConsent";
 import { useEffect, useRef, useState } from "react";
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
@@ -35,8 +35,11 @@ export function PluginManagementConfirmation(
   // (dispatcher J-1, K-2): neither takes room, so neither can change the plan.
   const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
   const [lineHeights, setLineHeights] = useState<number[]>([]);
+  // The newest layout, as it arrives (read when Allow is pressed; the state above can be a render behind).
+  const laidOut = useRef({ identity: 0, visible: 0, content: 0 });
   const measure = (key: keyof typeof measured) => (event: { nativeEvent: { layout: { height: number } } }) => {
     const height = Math.ceil(event.nativeEvent.layout.height);
+    if (key === "identity") laidOut.current.identity = height;
     setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
   };
   const measureLine = (index: number) => (event: { nativeEvent: { layout: { height: number } } }) => {
@@ -67,11 +70,15 @@ export function PluginManagementConfirmation(
   const compact = plan.mode === "compact" || reviewed || cramped;
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const list = useScrollOverflow(), summary = useScrollOverflow();
+  const shown = consentIdentityShown({ identity: measured.identity, visible: list.area.visible, content: list.area.content });
   useEffect(() => {
     if (!fitKey || compact || measured.identity <= 0 || list.area.visible <= 0) return;
-    // A fade over the list's lower edge dims what lies under it: the block has to end above it.
-    if (measured.identity + (list.overflow ? FADE_HEIGHT : 0) > list.area.visible) setCrampedFor(fitKey);
-  }, [fitKey, compact, measured.identity, list.area.visible, list.overflow]);
+    if (!shown) setCrampedFor(fitKey);
+  }, [fitKey, compact, measured.identity, list.area.visible, shown]);
+  // Allow in the regular layout answers only when the newest layout shows the whole identity block (dispatcher
+  // 2026-11-26: the frame before the check lands must not let it through). Pressed before that, or when it does not show,
+  // the sheet goes compact (review first) instead of answering; nothing is drawn differently before then.
+  const allowNow = () => compact || consentIdentityShown(laidOut.current);
   const listRef = useRef<ScrollViewInstance>(null);
   // Back to the list's top after "Review", and for each new consent (another requestId), so a second consent does not
   // open where the previous one was scrolled to (iOS: its new view id does the same).
@@ -100,7 +107,9 @@ export function PluginManagementConfirmation(
         <View style={styles.listArea}>
           <ScrollView ref={listRef} contentContainerStyle={[styles.content, list.thumbGutter]} testID="plugins.management.list" showsVerticalScrollIndicator={false}
             accessibilityHint={t("plugins.management.scrollHint")}
-            onLayout={list.onLayout} onContentSizeChange={list.onContentSizeChange} onScroll={list.onScroll}
+            onLayout={(event) => { laidOut.current.visible = Math.ceil(event.nativeEvent.layout.height); list.onLayout(event); }}
+            onContentSizeChange={(width, height) => { laidOut.current.content = Math.ceil(height); list.onContentSizeChange(width, height); }}
+            onScroll={list.onScroll}
             scrollEventThrottle={64}>
             {/* The identity block: where it goes and where it comes from first, in primary text; the first thing shown
                 in either layout. The explanations follow in secondary text. */}
@@ -191,7 +200,14 @@ export function PluginManagementConfirmation(
                 !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
                 || (accept && info?.allowBlocked === true)
               }
-              onPress={() => accept && needsReview ? setReviewedFor(consent!.requestId) : answer(accept)}
+              // Screen readers hear it unavailable until the check shows the identity block (no visual change).
+              accessibilityState={{ disabled: !props.active || props.state.busy || !!props.state.answerHeld || !props.state.online
+                || (accept && (info?.allowBlocked === true || (!compact && !shown))) }}
+              onPress={() => {
+                if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
+                if (accept && !allowNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+                answer(accept);
+              }}
               style={[styles.button, stacked && styles.stackedButton, accept && styles.primary, accept && info?.allowBlocked && styles.unavailable]}
             >
               <Text style={[styles.label, styles.buttonLabel, accept && styles.primaryText]}>

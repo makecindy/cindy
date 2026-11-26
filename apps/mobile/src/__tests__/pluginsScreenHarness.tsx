@@ -132,6 +132,15 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const view = ({ children, testID }: any) =>
     React.createElement("div", { "data-testid": testID }, children);
+  // The confirmation sheet's list and identity block report one layout when they mount, as on a device: a list tall
+  // enough for the whole identity block (its Allow answers only after that check; pluginNativeViews covers the rest).
+  const LAID_OUT: Record<string, number> = { "plugins.management.list": 2000, "plugins.management.identity": 100 };
+  const laidOutView = (p: any) => {
+    React.useEffect(() => {
+      if (p.testID in LAID_OUT) p.onLayout?.({ nativeEvent: { layout: { height: LAID_OUT[p.testID] } } });
+    }, []);
+    return view(p);
+  };
   return {
     AppState: { currentState: "active", addEventListener: (_event: string, listener: (state: string) => void) => {
       fixture.appStateListeners.add(listener); return { remove: () => fixture.appStateListeners.delete(listener) };
@@ -147,8 +156,8 @@ vi.mock("react-native", async () => {
       return React.createElement("button", { onClick: p.onPress, disabled: p.disabled, "data-testid": p.testID, "aria-pressed": selected }, p.children);
     },
     RefreshControl: view,
-    ScrollView: view,
-    View: view,
+    ScrollView: laidOutView,
+    View: laidOutView,
     Platform: {
       get OS() {
         return fixture.platform;

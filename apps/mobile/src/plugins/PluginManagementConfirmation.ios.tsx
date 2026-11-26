@@ -23,10 +23,10 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentSummaryFadeAllowed, planConsentSheet,
+import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentSummaryFadeAllowed, planConsentSheet,
   pluginConsentPresentation } from "./pluginConsentPresentation";
 export function PluginManagementConfirmation(
   props: PluginManagementConfirmationProps,
@@ -48,8 +48,11 @@ export function PluginManagementConfirmation(
   // measured content height, capped by the plan.
   const [measured, setMeasured] = useState({ identity: 0, heading: 0, actions: 0 });
   const [lineHeights, setLineHeights] = useState<number[]>([]);
+  // The newest layout, as it arrives (read when Allow is pressed; the state above can be a render behind).
+  const laidOut = useRef({ identity: 0, visible: 0, content: 0 });
   const measure = (key: keyof typeof measured) => (size: { height: number }) => {
     const height = Math.ceil(size.height);
+    if (key === "identity" && height > 0) laidOut.current.identity = height;
     if (height > 0) setMeasured((current) => current[key] === height ? current : { ...current, [key]: height });
   };
   const measureLine = (index: number) => (size: { height: number }) => {
@@ -64,11 +67,12 @@ export function PluginManagementConfirmation(
     setMore((current) => current[key] === next ? current : { ...current, [key]: next });
   };
   // The list's visible height and whether it scrolls, from its own geometry (the real-layout check below).
-  const [listArea, setListArea] = useState({ visible: 0, overflow: false });
+  const [listArea, setListArea] = useState({ visible: 0, content: 0 });
   const listGeometry = useScrollGeometryChange((geometry: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
     watchMore("list")(geometry);
-    const visible = Math.floor(geometry.containerHeight), overflow = geometry.contentHeight > geometry.containerHeight + 1;
-    setListArea((current) => current.visible === visible && current.overflow === overflow ? current : { visible, overflow });
+    const visible = Math.floor(geometry.containerHeight), content = Math.ceil(geometry.contentHeight);
+    laidOut.current.visible = visible; laidOut.current.content = content;
+    setListArea((current) => current.visible === visible && current.content === content ? current : { visible, content });
   });
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
@@ -97,11 +101,17 @@ export function PluginManagementConfirmation(
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
+  // The list's top padding comes before the identity block.
+  const shown = consentIdentityShown({ identity: measured.identity, visible: listArea.visible, content: listArea.content, top: spacing.sm });
   useEffect(() => {
     if (!fitKey || compact || measured.identity <= 0 || listArea.visible <= 0) return;
-    // The list's top padding comes first; a fade over its lower edge dims what lies under it.
-    if (spacing.sm + measured.identity + (listArea.overflow ? CONSENT_FADE_HEIGHT : 0) > listArea.visible) setCrampedFor(fitKey);
-  }, [fitKey, compact, measured.identity, listArea.visible, listArea.overflow]);
+    if (!shown) setCrampedFor(fitKey);
+  }, [fitKey, compact, measured.identity, listArea.visible, shown]);
+  // Allow in the regular layout answers only when the newest layout shows the whole identity block (dispatcher
+  // 2026-11-26: the frame before the check lands must not let it through). Pressed before that, or when it does not show,
+  // the sheet goes compact (review first) instead of answering. Nothing is drawn differently before then: SwiftUI's
+  // disabled state would dim the button for that frame.
+  const allowNow = () => compact || consentIdentityShown({ ...laidOut.current, top: spacing.sm });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   const [summaryHeight, setSummaryHeight] = useState(0);
   // Large text on a narrow screen: the buttons stack so each label shows in full; wide enough (landscape, iPad) they stay
@@ -123,7 +133,11 @@ export function PluginManagementConfirmation(
     <Button
       key={String(accept)}
       testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
-      onPress={() => accept && needsReview ? setReviewedFor(consent!.requestId) : answer(accept)}
+      onPress={() => {
+        if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
+        if (accept && !allowNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+        answer(accept);
+      }}
       modifiers={[
         buttonStyle(accept ? "borderedProminent" : "bordered"),
         ...(accept ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),

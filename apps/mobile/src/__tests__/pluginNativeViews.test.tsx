@@ -1134,7 +1134,14 @@ it("shows full consent facts in a separate sheet and rejects stale owner or requ
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(true);
   // The custom market name is interpolated into the source line (pluginManagement.test.ts checks the text).
   for (const fact of ["Plugin · v2", "plugin-id", "plugins.notice.consentSource.customMarket", "Full local access risk", "Removed host access", "plugins.management.permissions.nodeRuntimeDetail", "plugins.management.oauthChanged"]) expect(container.textContent).toContain(fact);
+  // Laid out with the whole identity block showing, so only the inactive guard can stop the press below.
+  act(() => bridge.props.get("plugins.management.identity").modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ width: 390, height: 100 }));
+  act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
+    .scrollGeometry({ contentOffsetY: 0, containerHeight: 2000, contentHeight: 400 }));
   const allow = bridge.props.get("plugins.management.allow").onPress;
+  act(() => allow());
+  expect(controller.answer, "control: active and laid out, Allow answers").toHaveBeenCalledWith(true);
+  controller.answer.mockClear();
   state.online = false;
   rerender({ ...props, active: false });
   expect(bridge.props.get("plugins.managementConfirmation").visible).toBe(false);
@@ -1857,6 +1864,41 @@ describe("pinned high-risk permission", () => {
       act(() => list.scrollGeometry({ contentOffsetY: 0, containerHeight: visible, contentHeight: 1200 }));
       expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
         .toEqual({ review: button === "review", allow: button === "allow" });
+    });
+  /* 测试价值（调度 2026-11-26：实测到达前的那一帧）
+   * - 生产入口与可观察结果：两端真实确认面板组件；观察按下「允许」是否作答、之后的主按钮、Android 读屏的禁用状态。
+   * - 依据：常规档在列表实测之前先排出来；那一帧里「允许」不能放行没确认看得见来源的确认。实测没到时按下即转为先查看。
+   * - 最小失败输入：常规档、未实测时按「允许」；改前直接作答。对照：实测放得下身份块后按「允许」作答。tier: unit。
+   */
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: Allow pressed before the list is measured does not answer; the sheet asks to review first", (_platform, Sheet) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      const { container } = mount(Sheet, p);
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect(shown("plugins.management.allow"), "nothing is drawn differently before the check").toBe(true);
+      if (Sheet === AndroidManagementConfirmation)
+        expect(bridge.props.get("plugins.management.allow").accessibilityState, "screen readers hear it unavailable").toMatchObject({ disabled: true });
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(p.controller.answer).not.toHaveBeenCalled();
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: once the list is measured and shows the whole identity block, Allow answers", (platform, Sheet) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      mount(Sheet, p);
+      if (platform === "Android") {
+        act(() => bridge.props.get("plugins.management.identity").onLayout({ nativeEvent: { layout: { height: 100 } } }));
+        act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 2000 } } }));
+        expect(bridge.props.get("plugins.management.allow").accessibilityState).toMatchObject({ disabled: false });
+      } else {
+        geometry("plugins.management.identity", 100);
+        act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
+          .scrollGeometry({ contentOffsetY: 0, containerHeight: 2000, contentHeight: 400 }));
+      }
+      act(() => bridge.props.get("plugins.management.allow").onPress());
+      expect(p.controller.answer).toHaveBeenCalledWith(true);
     });
   it("Android puts everything in one scroll area above fixed buttons when they do not fit (maintainer's numbers)", () => {
     bridge.fontScale = 2;
