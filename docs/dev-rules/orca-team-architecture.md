@@ -828,10 +828,13 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    - **上限只约束新建**：`workerHardLimit` / `workerSoftLimit` 只在 `orcaWorkerCreationService` 的创建闸里判定
      （`register.ts` 只是把设置投影给界面）。桌面直发、steer、手机远程、运行设备 agent、`send_to_worker` 派发、
      唤醒与预热都不查上限——既有 Worker 的交互不受满载影响，也就不该被静默排队或丢弃。
-   - **顺序是 用户直发 > Lead 派发 > 系统动作**：三者共用同一把 per-session 发送锁与同一个 durable 队列
-     （不变量 3a），队列 FIFO 保证用户已入队的消息不会被后到系统动作插队；预热 / 唤醒
-     （`orcaWorkerResumeScheduler`）在发送已持锁或排队时直接让路。跳过一次预热只少一次加速，
-     那次发送自己会 lazy resume，不丢东西。
+   - **预热只让路，不抢占**：用户直发、Lead 派发、系统动作共用同一把 per-session 发送锁与同一个
+     durable 队列（不变量 3a），彼此按队列 FIFO 串行，实现不给任何一方抢占权。预热 / 唤醒
+     （`orcaWorkerResumeScheduler`）只是加速，因此**在该会话已有发送处理中或等锁时跳过本次预热**
+     （`hasActiveSend`）；跳过一次预热只少一次加速，那次发送自己会 lazy resume，不丢东西。
+     注意反过来不成立：预热已经拿到锁、正在冷启动时，后到的发送**排在它后面等它启动完**，不会插队。
+     这是有意的——中途抢占会丢掉一个正在构建的 runtime，发送还得从头 bootstrap 一次，只是把等待
+     搬到别处并多一次失败面；因此不变量表述为「跳过尚未开始的预热」，而不是「发送优先于预热」。
    - **满载要给出路**：单条 `create_worker` 与批量 `create_workers` 撞硬上限时，payload 的 `user_report`
      说明上限、已占用、剩余与「既有 Worker 不受影响」，`suggestions` 给出提高上限 / 复用 Worker /
      归档释放三件事（两处共用 `hardLimitSuggestions`），协同提示词要求逐字转告，不要只报错误码。
