@@ -51,7 +51,7 @@ function IssueLevelIcon({ level }: { level: ReviewIssue['level'] }) {
   return (
     <span
       aria-hidden
-      className="mt-[5px] inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--settings-theme-icon)]"
+      className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--settings-theme-icon)]"
     />
   );
 }

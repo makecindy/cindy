@@ -110,6 +110,8 @@
 
 PR 卡片的「已合并」状态文字（`PluginCardActions.statusMergedText`）使用 `prMerged`，与合并图标及桌面端同义（根规范 §2 PR Status Colors）；仅限 PR 合并状态，不扩展为普通蓝色文字。检查通过仍使用 `statusDone`。
 
+群聊「外部 / External」徽标（`BotGroupExternalBadge.label`，2026-11-25 用户确认）仅面向企业视角在外部群与外部成员上出现，复用 `groupMentionText` 前景与 14% 淡底、`radius.micro` 圆角与 `micro` 11/16 medium；C 端个人账号永不显示。同组织部门小标保持中性 `surfaceChip` + `textSecondary`。
+
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
 复古键帽的主、副印字使用 `retroKeyboardMaterials` 中与机身配套的 `ink` 和 `secondaryInk`，范围仅限实体键面，见下文「复古键盘的实体按压」。

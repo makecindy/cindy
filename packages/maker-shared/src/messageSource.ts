@@ -106,6 +106,30 @@ function readGroupSpeaker(origin: unknown, field: 'groupThread' | 'groupRequest'
   return { groupId, speakerId, ...(groupName ? { groupName } : {}), ...(speakerName ? { speakerName } : {}) };
 }
 
+/**
+ * A task's word back that a plugin follows (`origin.pluginReply`, plugin-agent-tasks.md「后续轮次」):
+ * the sending task was opened while this task answered a message the plugin relayed, so the plugin
+ * delivers this turn's answer where that message came from. Host-stamped; never a permission.
+ */
+export interface MessageSourcePluginReply {
+  pluginId: string;
+  name?: string;
+  /** Where the opening request came from, as the plugin relayed it. */
+  relay?: MessageSourcePluginRelay;
+}
+
+export function readMessageSourcePluginReply(origin: unknown): MessageSourcePluginReply | undefined {
+  const raw = asRecord(asRecord(origin)?.pluginReply);
+  const pluginId = raw && readString(raw, 'pluginId');
+  if (!pluginId || isAppSourcePluginId(pluginId)) return undefined;
+  const name = sanitizeSourceName(raw?.name);
+  const relay = readMessageSourcePluginRelay(raw?.relay);
+  return { pluginId, ...(name ? { name } : {}), ...(relay ? { relay } : {}) };
+}
+
+/** The whole answer that tells a plugin following a turn to deliver nothing (as in group chats). */
+export const PLUGIN_REPLY_NO_REPLY = 'NO_REPLY';
+
 export type MessageSourceSender =
   | {
       kind: 'session';
@@ -116,6 +140,7 @@ export type MessageSourceSender =
       group?: MessageSourceGroup;
       groupThread?: MessageSourceGroupThread;
       groupRequest?: MessageSourceGroupRequest;
+      pluginReply?: MessageSourcePluginReply;
     }
   | { kind: 'plugin'; pluginId: string; name?: string; relay?: MessageSourcePluginRelay }
   | { kind: 'shared-member'; memberId: string; name?: string };
@@ -338,11 +363,13 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
     const group = readMessageSourceGroup(record);
     const groupThread = readMessageSourceGroupThread(origin);
     const groupRequest = readMessageSourceGroupRequest(origin);
+    const pluginReply = readMessageSourcePluginReply(origin);
     return {
       kind: 'session',
       ...(group ? { group } : {}),
       ...(groupThread ? { groupThread } : {}),
       ...(groupRequest ? { groupRequest } : {}),
+      ...(pluginReply ? { pluginReply } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(title ? { title } : {}),
       ...(botId ? { botId, ...(botName ? { botName } : {}) } : {}),
@@ -476,19 +503,49 @@ function describePluginRelay(relay: MessageSourcePluginRelay | undefined): strin
   return `转发自 ${platform} ${chat}，发言人${speaker}${owner}`;
 }
 
-/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
-export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
+/**
+ * `[消息来源]` 说明；本机用户亲手输入返回 null。
+ * `speaksForUser`：宿主已核实这条任务来信代表用户（由调用方在后面接上核实说明），此时只陈述发送方。
+ */
+export function buildMessageSourceNote(
+  sender: MessageSourceSender | undefined,
+  opts: { speaksForUser?: boolean } = {},
+): string | null {
   if (!sender) return null;
   // Only the requester's own computer runs a request to the group's Cindy: it is the owner's own
   // request, like an owner message to their bot in an IM channel (bot-group-chat.md「群里的 Cindy」).
   if (sender.kind === 'session' && sender.groupRequest) {
     return `[消息来源] 本条${describeMessageSourceSender(sender)}，发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。`;
   }
+  const followUp = sender.kind === 'session' && sender.pluginReply ? describePluginReply(sender.pluginReply) : '';
+  // A verified hand-off (including the owner's words in a task-card thread) opens with its sender only;
+  // the caller appends what the host verified. Saying "not the user's input" first reads as a contradiction.
+  if (sender.kind === 'session' && opts.speaksForUser) return `[消息来源] 本条${describeMessageSourceSender(sender)}。${followUp}`;
   // 转发的 IM 消息可能就是主人在别处说的话，所以只说它不是在 Cindy 里直接输入的。
   const relayed = sender.kind === 'plugin' && !isAppSourcePluginId(sender.pluginId) && describePluginRelay(sender.relay);
   const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人'
     : relayed ? '不是用户在 Cindy 里直接输入' : '不是用户本人输入';
-  return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。`;
+  return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。${followUp}`;
+}
+
+/**
+ * The follow-up a plugin delivers (`origin.pluginReply`): which request opened the sending task, and that
+ * this turn's answer goes back there. Like the reply hint, the way to send nothing is spelled out: without
+ * it the model cannot keep a progress note out of that chat.
+ */
+function describePluginReply(reply: MessageSourcePluginReply): string {
+  const plugin = `插件${formatSourceRef(reply.name, 'plugin_id', reply.pluginId)}`;
+  const relay = reply.relay;
+  const platform = relay && promptSafeSourceName(relay.platform);
+  const group = relay?.chatType === 'group';
+  let request = `${plugin} 转来的消息`;
+  if (relay && platform) {
+    const chatName = promptSafeSourceName(relay.chatName);
+    const chat = relay.chatType === 'direct' ? '私聊' : chatName ? `群「${chatName}」` : '群聊';
+    request = `${plugin} 从 ${platform} ${chat}转来的${formatSourceRef(relay.sender.name, 'user_id', relay.sender.id)} 的消息`;
+  }
+  const audience = group ? '，群里的人都能看到' : '';
+  return `这个任务是你回答${request}时开的；这一轮最后的回答会由该插件发回那里${audience}。不需要让那边知道时，整条回答只写 ${PLUGIN_REPLY_NO_REPLY}。`;
 }
 
 /** Keep the reply route beside the live source note, never in handoff summaries. */

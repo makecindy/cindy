@@ -28,6 +28,65 @@ export const JSONRPC_INTERNAL_ERROR = -32603;
  */
 export const ACP_STEERING_METHOD = '_session/steering';
 
+/**
+ * Cindy extension, the per-turn permission gate (docs/dev-rules/protocol-compatibility/plugin-harnesses.md
+ * 每轮权限闸). An agent that can send `session/request_permission` for every tool call of a turn before
+ * running it advertises top-level `_meta.permissionGate.supported: true` in the `initialize` result.
+ * Cindy then marks turns that carry a host permission policy (IM group, guest and personal WeChat turns)
+ * or allow no tools with `_meta.permissionGate.scope: 'all-tool-calls'` on `session/prompt`, and the agent
+ * asks before each tool call it makes for that prompt, including work it continues after answering.
+ * Every prompt on a supporting agent carries a permissionGate.turnId, even without a scope. The
+ * agent echoes that ID from the originating prompt on every permission request. The host rejects
+ * requests whose turn no longer owns the permission surface.
+ * Without the advertisement policy turns are refused, exactly like a built-in engine that cannot enforce
+ * the policy; other turns are unaffected.
+ */
+export const ACP_PERMISSION_GATE_SCOPE = 'all-tool-calls';
+
+/**
+ * Cindy extension (docs/dev-rules/protocol-compatibility/plugin-harnesses.md 引擎账号): an entry may
+ * classify a JSON-RPC error of `session/new|load|resume|prompt` as
+ * `error.data._meta.cindy = { kind, resetsAt?, model? }` so Cindy can cool the account and move the
+ * task to another one. Unknown kinds are ordinary errors.
+ */
+export type AcpCindyErrorKind = 'usage-limit' | 'auth-required' | 'overloaded';
+export interface AcpCindyError {
+  kind: AcpCindyErrorKind;
+  /** Unix epoch milliseconds at which the usage limit resets. */
+  resetsAt?: number;
+  model?: string;
+}
+
+export function readAcpCindyError(data: unknown): AcpCindyError | null {
+  const meta = asRecord(asRecord(asRecord(data)._meta).cindy);
+  const kind = meta.kind;
+  if (kind !== 'usage-limit' && kind !== 'auth-required' && kind !== 'overloaded') return null;
+  const resetsAt = meta.resetsAt;
+  const model = meta.model;
+  return {
+    kind,
+    ...(kind === 'usage-limit' && typeof resetsAt === 'number' && Number.isSafeInteger(resetsAt) && resetsAt > 0
+      ? { resetsAt } : {}),
+    ...(typeof model === 'string' && model.length > 0 && model.length <= 256 ? { model } : {}),
+  };
+}
+
+/**
+ * Turn-error fields Cindy's failure policy already understands (usage limit with its reset time,
+ * overloaded service) for a classified agent error. A failed sign-in is carried by the turn's
+ * `acp-auth-required` reason instead, so it never enters the built-in engines' login retries.
+ */
+export function acpCindyErrorSignals(error: AcpCindyError): Record<string, unknown> {
+  switch (error.kind) {
+    case 'usage-limit':
+      return { usageLimit: true, ...(error.resetsAt !== undefined ? { usageResetAt: error.resetsAt } : {}) };
+    case 'overloaded':
+      return { errorStatus: 529 };
+    case 'auth-required':
+      return {};
+  }
+}
+
 export type AcpRecord = Record<string, unknown>;
 
 export type AcpContentBlock =
@@ -59,6 +118,8 @@ export interface AcpInitializeResult {
   agentInfo?: { name: string; title?: string; version: string };
   /** The agent takes ACP_STEERING_METHOD (top-level `_meta.steering.supported`). */
   steering: boolean;
+  /** The agent honors ACP_PERMISSION_GATE_SCOPE turns (top-level `_meta.permissionGate.supported`). */
+  permissionGate: boolean;
 }
 
 export interface AcpConfigSelectOption {
@@ -80,6 +141,18 @@ export interface AcpConfigOption {
 }
 
 export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
+
+/**
+ * Tokens one prompt turn used, from the `usage` of the `session/prompt` result. Field names follow
+ * the per-turn `done.data.usage` other engines emit, so usage ledgers and plugins read it without
+ * an ACP branch. `inputTokens` excludes cached tokens.
+ */
+export interface AcpTurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
@@ -170,6 +243,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
       ? { agentInfo: { name, version, ...(asNonEmptyString(agentInfo.title) ? { title: agentInfo.title as string } : {}) } }
       : {}),
     steering: asRecord(asRecord(result._meta).steering).supported === true,
+    permissionGate: asRecord(asRecord(result._meta).permissionGate).supported === true,
   };
 }
 
@@ -258,10 +332,52 @@ export function normalizePermissionOptions(raw: unknown): AcpPermissionOption[] 
   });
 }
 
+/** Extracts slash-command names from `available_commands_update.availableCommands`. */
+export function normalizeAvailableCommandNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const names: string[] = [];
+  for (const entry of raw) {
+    const name = asNonEmptyString(asRecord(entry).name)?.trim().replace(/^\/+/, '');
+    if (name) names.push(name);
+  }
+  return names;
+}
+
 const STOP_REASONS: ReadonlySet<string> = new Set(['end_turn', 'max_tokens', 'max_turn_requests', 'refusal', 'cancelled']);
 
 /** Unknown stop reasons are treated as a normal end of turn rather than an error. */
 export function normalizeStopReason(raw: unknown): AcpStopReason {
   const stopReason = asRecord(raw).stopReason;
   return typeof stopReason === 'string' && STOP_REASONS.has(stopReason) ? stopReason as AcpStopReason : 'end_turn';
+}
+
+function tokenCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * `usage` of a `session/prompt` result (ACP `PromptResponse.usage`, unstable): the tokens of this
+ * turn only, not a session total. Absent or malformed usage is `undefined`, never zero, so a turn
+ * without a report is not recorded as free.
+ *
+ * Agents disagree on whether `inputTokens` already contains the cached tokens. `totalTokens`
+ * settles it: Antigravity reports input + output + cached = total (input excludes the cache),
+ * while an agent passing through OpenAI-style counts reports input + output = total. Counting the
+ * cache twice would inflate usage, so the second form is converted to the first.
+ */
+export function normalizeTurnUsage(raw: unknown): AcpTurnUsage | undefined {
+  const usage = asRecord(asRecord(raw).usage);
+  const input = tokenCount(usage.inputTokens);
+  const outputTokens = tokenCount(usage.outputTokens);
+  if (input === null || outputTokens === null) return undefined;
+  const cacheReadTokens = tokenCount(usage.cachedReadTokens) ?? 0;
+  const cacheCreationTokens = tokenCount(usage.cachedWriteTokens) ?? 0;
+  const cached = cacheReadTokens + cacheCreationTokens;
+  const inputIncludesCache = cached > 0 && tokenCount(usage.totalTokens) === input + outputTokens;
+  return {
+    inputTokens: inputIncludesCache ? Math.max(0, input - cached) : input,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  };
 }

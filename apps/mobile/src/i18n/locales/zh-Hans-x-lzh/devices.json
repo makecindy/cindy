@@ -21,6 +21,9 @@
   "usageUpdateDesktopTitle": "更新电脑之 Cindy，即可观之",
   "usageUpdateDesktopCopy": "电脑之 Cindy 版本稍旧，耗用未能传至手机；更新之后，自当显现。",
   "management": {
+    "addCloud": "增云机",
+    "preparingCloud": "云机备置中",
+    "manageCloud": "理云机",
     "title": "器物总管",
     "openDevice": "察 {{name}} 之详情",
     "details": "器物详情",
@@ -29,7 +32,7 @@
     "notFound": "此器已不在君之名籍中。",
     "deleteDevice": "删此器",
     "deleteTitle": "删「{{name}}」乎？",
-    "deleteMessage": "将此器自名籍中移除，并断其远程连接。器上之差事与卷皆存；重新登门后可再加入。",
+    "deleteMessage": "将此器自名籍中移除，并断其远程连接。器上之差事与卷皆存；于彼器点「重新加入」即可复归。",
     "deleteFailed": "删器未成。",
     "deleteOnline": "服务器今尚不能移除在线之器，请待服务升级后再试。",
     "deleteRejectedWhileOffline": "删器未成：服务器仍记其在线，与此处所示离线之状不符",
@@ -390,6 +393,7 @@
       "showDeviceTasks": "观差事",
       "openDevice": "启",
       "renameDevice": "易名",
+      "groupDevice": "机",
       "groupProject": "案",
       "sortBy": {
         "priority": "缓急",
@@ -431,11 +435,15 @@
       "showCollapsedTeammateAvatars": "收时示头像",
       "displayHeading": "示",
       "view": {
+        "card": "卡",
         "text": "文",
         "list": "列"
       },
       "taskInfoHeading": "差事信息",
       "taskInfo": {
+        "teammate": "同伴像",
+        "project": "案徽与名",
+        "harness": "Harness 图标",
         "time": "时",
         "pr": "PR 状",
         "tokens": "Token",
@@ -949,6 +957,8 @@
     "timeout": "「{{device}}」尚未备妥。请确认彼机上之 Cindy 已启且已连网，再试一次。",
     "conflict": "{{name}} 已移至「{{device}}」续行矣。",
     "switchFailed": "主力之机暂不能更换，请稍后再试。",
+    "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+    "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
     "unknownDevice": "另一机",
     "runsOn": "行于「{{device}}」",
     "homeTitle": "主力之机",

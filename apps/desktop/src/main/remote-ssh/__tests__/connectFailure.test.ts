@@ -16,6 +16,12 @@ import {
 import { classifyConnectFailure } from '../connect-failure.js';
 
 describe('classifyConnectFailure', () => {
+  // #8403: trusted-only handshake failure must survive IPC without treating
+  // server-supplied message text as a locally verified trust decision.
+  it('preserves a local unknown-host code, not a matching server message', () => {
+    expect(classifyConnectFailure(Object.assign(new Error('[SSH_HOST_UNVERIFIED]'), { code: 'SSH_HOST_UNVERIFIED' })).code).toBe('SSH_HOST_UNVERIFIED');
+    expect(classifyConnectFailure(new Error('[SSH_HOST_UNVERIFIED]')).code).toBe('SSH_CONNECT_FAILED');
+  });
   it('keeps host verification separate from login and ignores forged server text', () => {
     const error = Object.assign(new Error('SSH host key changed'), { code: 'SSH_HOST_KEY_MISMATCH' });
     expect(classifyConnectFailure(error).code).toBe('SSH_HOST_KEY_MISMATCH');

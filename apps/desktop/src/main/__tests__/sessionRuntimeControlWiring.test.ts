@@ -1,11 +1,28 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type { Session } from '@cindy/maker-core';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { createEffortChangeCoordinator, enqueueEffortChange } from '../../renderer/components/new-chat/effortChangeQueue';
 import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { withFastModePolicy } from '../../../../../packages/maker-core/src/agents/shared/fast-mode-policy';
 import { commitRuntimeAxisAfterPersistence } from '../maker-ipc/runtimeSelectionAxes';
+import { createDbClientForHandle } from '../localDb/client/createDbClientForHandle';
+import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
+import * as schema from '../localDb/schema';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../maker-ipc/agent-input-coordinator';
+import {
+  createContextOverflowRollover, isContextOverflowErrorData, isOversizedHistoryErrorData,
+  isUnsupportedRequestOptionErrorData,
+} from '../maker-ipc/contextOverflowRollover';
+import {
+  claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleContextRecoveryTerminal,
+  type ContextRecoveryTerminalPorts,
+} from '../maker-ipc/contextRecoveryTerminal';
+import { isTerminalTurnErrorEvent } from '../maker-ipc/sessionTurnActivityTracker';
 import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
 
 const mainRoot = resolve(__dirname, '..');
@@ -203,6 +220,7 @@ describe.each([
       remoteResponse: response, persistSessionFields: persist, agentSwitchPending: pending,
       readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'next-provider', agentDeviceId: null } }),
       getSessionProvider: () => 'next-provider',
+      getPendingCredentialSwitchHolder: () => null,
       createSubscriptionFastPolicy: () => ({ isAllowed: () => true }),
       // These archived fixtures have no saved automation model scope.
       updateSavedScheduledAxis: vi.fn(async () => false),
@@ -245,7 +263,10 @@ describe.each([
     };
     h.pending.set('archived-task', intent);
     await h.run();
-    expect(h.pending.get('archived-task')).toEqual({ ...intent, [field]: value });
+    expect(h.pending.get('archived-task')).toEqual({
+      ...intent, [field]: value,
+      ...(kind === 'same-agent' ? { credentialSelectionAxes: { effort: true, fastMode: true } } : {}),
+    });
     if (kind !== 'same-agent') expect(h.changed).toHaveBeenCalledWith('archived-task',
       expect.objectContaining({ model: 'next-model', [field]: value }));
     expect(h.row).toMatchObject({ status: 'archived', effort: 'low', fastMode: false });
@@ -773,7 +794,6 @@ describe('session runtime control wiring', () => {
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
-    // The service's assembly moved verbatim to pendingCredentialSwitchAssembly.ts.
     const persistRoute = handlerBody(
       pendingCredentialSwitchAssemblySource,
       'persistRoute: async (sessionId, route) => {',
@@ -781,7 +801,7 @@ describe('session runtime control wiring', () => {
     );
     const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
     const persist = persistRoute.indexOf(
-      'await pendingDb.drizzle.update(sessions).set(patch)',
+      'const result = ports.settlementPermit ? update.run() : await update.run();',
       resolveAxes,
     );
     const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
@@ -791,7 +811,7 @@ describe('session runtime control wiring', () => {
     );
     const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
 
-    expect(persistRoute).toContain('const [desiredRow] = await pendingDb');
+    expect(persistRoute).toContain('const desiredRow = await readCredentialTaskSettings(pendingDb, sessionId);');
     expect(persistRoute).toContain('assertPendingOwner();');
     expect(persistRoute).toContain('const restoringPreviousRoute =');
     expect(persistRoute).toContain('let finalEffort = restoringPreviousRoute && route.effort');
@@ -1629,7 +1649,7 @@ describe('session runtime control wiring', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
     expect(setModel.replace(/\s+/g, ' ')).toContain(
-      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
+      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!ownerWindowRebuild && !internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
     );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
@@ -1658,6 +1678,24 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('internalOptions.previousPiRoute.providerId');
     expect(setModel).toContain('setSessionProvider(sessionId, internalOptions.previousPiRoute.providerId)');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true');
+  });
+
+  it('names the failing check when the remote owner window gate refuses a selection', () => {
+    const setModel = setModelSource();
+    const gate = setModel.indexOf('describeModelWindowGateFailure({');
+    const refusal = setModel.indexOf('model window gate refused the runtime selection');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(setModel.indexOf('await applyRuntimeSetModelChange({'));
+    expect(refusal).toBeGreaterThan(gate);
+    // Guard-tier wiring contract: the gate lives in a closure too large to invoke in isolation.
+    // If the refusal stops going through describeModelWindowGateFailure, remote owners are back to
+    // an unactionable "could not be verified" with nothing in the log. Fixed prefixes: existing
+    // copy and log matching depend on them.
+    expect(setModel).toContain("'Pi final context window could not be verified'");
+    expect(setModel).toContain("'target context window or current usage could not be verified'");
+    expect(setModel).toContain('(${windowGateFailure.category}: ${windowGateFailure.detail}); runtime selection was not changed`');
+    expect(setModel).not.toMatch(/could not be verified; runtime selection was not changed'/);
   });
 
   it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
@@ -1871,7 +1909,7 @@ describe('scheduled session bootstrap wiring', () => {
 // persistence-before-projection before these closures become host ports.
 // Minimal failures: changed owner across an await, or a card write failing
 // after context.rebuild committed. Ordinary factory tests replace these deps.
-async function recoveryAssembly(bindings: Record<string, unknown>) {
+async function recoveryAssembly<Result = Record<string, (...args: unknown[]) => unknown>>(bindings: Record<string, unknown>) {
   let rowReader: ts.VariableStatement | undefined;
   let assembly: ts.ExpressionStatement | undefined;
   let hintReader: ts.FunctionDeclaration | undefined;
@@ -1901,7 +1939,7 @@ async function recoveryAssembly(bindings: Record<string, unknown>) {
       bindings[name] = imported[spec.propertyName?.text ?? name];
     }
   }
-  return new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as Record<string, (...args: unknown[]) => unknown>;
+  return new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as Result;
 }
 
 function recoveryFixture() {
@@ -1926,6 +1964,11 @@ function recoveryFixture() {
     log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
     isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
     needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    // These ordering tests do not select an account. Keep the projection ports
+    // injected so source extraction cannot cold-load the subscription runtime
+    // inside a timed test; account handoff is exercised by runtime.test.ts.
+    dbToMakerEngineKind: (x: unknown) => x,
+    applySessionRuntimeOverrideForStart: vi.fn(), readProviderGroupBinding: vi.fn(),
     readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
     classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
     DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,
@@ -1940,6 +1983,7 @@ function recoveryFixture() {
     broadcastSessionPatched: vi.fn(() => { order.push('project'); }),
     createDbMessage: vi.fn(async () => { order.push('card'); throw new Error('card unavailable'); }),
     createId: () => 'id', agentHandoffPending: { set: vi.fn(), readGeneration: () => 1 },
+    enqueueDurableWrite: vi.fn(), broadcastMessageRow: vi.fn(),
     agentInputCoordinatorHolder: coordinator, wireNoteMemory: { reset: vi.fn(() => { order.push('reset'); }) },
     readPiNativeCompatOverride: vi.fn(), recordPiNativeCompatOverride: vi.fn(),
     buildCreateOptsWithStderr: (x: unknown) => x,
@@ -1995,6 +2039,126 @@ describe('local-application visible task host', () => {
 });
 
 describe('Desktop recovery assembly ordering and fences', () => {
+  // L343 / guard: run the register.ts binding and the real claim/settlement and
+  // queue. Adapter-only coverage cannot distinguish a removed Session binding
+  // from the same instance advancing after a terminal has been attributed.
+  it.each(['current', 'instance removed', 'generation advanced'] as const)(
+    'hands off a claimed oversized terminal without attributing a stale turn (%s)',
+    async (mode) => {
+      const h = recoveryFixture();
+      const sessionId = 'oversized-register-binding';
+      const sqlite = new Database(':memory:');
+      const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite, { schema }) });
+      const errorData = { message: 'prompt is too long', reason: 'context-overflow', isTerminal: true };
+      let generation = 3;
+      let running = false;
+      const binding = { id: sessionId, instanceId: 'fixture-instance', getTurnGeneration: () => generation };
+      let live: typeof binding | undefined = binding;
+      const readBinding = vi.fn(() => live);
+      const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (_id, _message, _opts, sendOpts) => {
+        sendOpts.onVendorTurnReserved?.(generation);
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        running = true;
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      });
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: send, steerToAgent: vi.fn(), abortSession: vi.fn(),
+        isTurnRunning: () => running, getTurnGeneration: () => generation,
+        getTurnSessionIdentity: () => binding, hasPendingInteraction: () => false,
+        getAgentKind: () => 'claude-code', getSdkSessionId: async () => undefined,
+        createUserMessage: vi.fn(), touchUserSend: vi.fn(async () => {}), emitProjection: vi.fn(),
+      });
+      function queue(clientId: string, text: string) {
+        const item: AgentInputQueuedMessage = {
+          clientId, text, persistedContent: text, model: 'fixture', effort: 'medium',
+          permissionMode: 'default', workingDir: '/fixture',
+          chatMessage: { clientId, role: 'user', content: text, isStreaming: false, createdAt: '2026-01-01T00:00:00Z' },
+          createOpts: { agentKind: 'claude-code', workingDir: '/fixture', model: 'fixture', effort: 'medium',
+            permissionMode: 'default', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+        };
+        coordinator.enqueue(sessionId, item);
+      }
+      sqlite.exec(`
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, cleared_at INTEGER);
+        CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT,
+          tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER);
+        INSERT INTO sessions VALUES ('${sessionId}', 'active', NULL);
+        INSERT INTO messages VALUES ('original-row', '${sessionId}', 'original', 'user', '"first"',
+          NULL, '{}', NULL, NULL, 100);`);
+      const writes: Promise<unknown>[] = [];
+      const clearError = vi.spyOn(coordinator, 'clearError');
+      Object.assign(h.bindings, {
+        agentInputCoordinatorHolder: coordinator, createContextOverflowRollover,
+        sessionBindings: { getSession: readBinding },
+        enqueueDurableWrite: (_label: string, write: (scope: null) => Promise<unknown>) => {
+          const pending = Promise.resolve().then(() => write(null));
+          writes.push(pending);
+          return pending;
+        },
+        withSendToSessionLock: (_id: string, work: () => Promise<boolean>) => work(),
+      });
+      setCurrentDbClient(client, 'fixture-owner');
+      try {
+        const rollover = await recoveryAssembly<ReturnType<typeof createContextOverflowRollover>>(h.bindings);
+        const tryRecover = vi.spyOn(rollover, 'tryRecover');
+        queue('original', 'first');
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        queue('next', 'second');
+        expect(coordinator.hasPendingQueuedWork(sessionId)).toBe(true);
+        const event = { type: 'error' as const, data: errorData,
+          sessionInstanceId: binding.instanceId, sessionTurnGeneration: generation };
+        const activeInputId = coordinator.getActiveInputClientId(sessionId, generation);
+        expect(activeInputId).toBe('original');
+        running = false;
+        coordinator.onTurnEvent(sessionId, 'error', errorData.message, errorData, event);
+        expect(coordinator.getProjection(sessionId).recovery?.kind).toBe('active-turn');
+        const ports: ContextRecoveryTerminalPorts = {
+          getRollover: () => rollover, getSuppressedBroadcasts: () => new Map(),
+          isTerminalTurnErrorEvent, isContextOverflowErrorData, isOversizedHistoryErrorData,
+          isUnsupportedRequestOptionErrorData, reserveTurnErrorPersistId: vi.fn(),
+          releaseReservedTurnErrorPersistId: vi.fn(), onTurnErrorEvent: vi.fn(),
+          broadcastToAllWindows: vi.fn(), handleAgentIslandEventAfterBroadcast: vi.fn(),
+          eventChannel: () => 'maker:event', log: { warn: vi.fn() },
+        };
+        const input = {
+          session: binding as unknown as Session, event, attributedEvent: event, broadcastEvent: event,
+          isPlannedUpgradeClose: false, isRemoteAuthRetry: false, isGatewayProxyTokenRecovery: false,
+          autoResumeSuppressesPersist: false, inputClientId: activeInputId ?? undefined,
+          persistId: undefined, eventAgentMeta: null,
+        };
+        const claim = claimContextRecoveryTerminal(ports, input);
+        expect(claim).toBe('claimed');
+        // Model liveness changing before settlement of the already attributed
+        // terminal. The vendor and binding registry are fixture ports.
+        expect(deferContextRecoveryTerminal(ports, input, claim, () => {
+          if (mode === 'instance removed') live = undefined;
+          if (mode === 'generation advanced') generation += 1;
+        })).toBe(true);
+        expect(settleContextRecoveryTerminal(ports, input, claim, vi.fn())).toBe(true);
+        expect(tryRecover).toHaveBeenCalledExactlyOnceWith(sessionId, errorData,
+          { instanceId: binding.instanceId, generation: 3, inputClientId: 'original' });
+        expect(await tryRecover.mock.results[0].value).toBe(true);
+        expect(readBinding).toHaveBeenCalledExactlyOnceWith(sessionId);
+        expect(readBinding).toHaveBeenCalledBefore(clearError);
+        expect(coordinator.getProjection(sessionId).recovery).toBeNull();
+        expect(h.bindings.drainPersistQueue).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+        expect(send.mock.calls.map(([, message]) => typeof message === 'string' ? message : message.content))
+          .toEqual(['first', 'second']);
+        await Promise.all(writes);
+        expect(sqlite.prepare("SELECT json_extract(agent_meta, '$.inputNotice') AS notice FROM messages").get())
+          .toEqual({ notice: mode === 'current' ? 'oversized-input-skipped' : null });
+        expect(h.bindings.broadcastMessageRow).toHaveBeenCalledTimes(mode === 'current' ? 1 : 0);
+        expect(ports.onTurnErrorEvent).not.toHaveBeenCalled();
+      } finally {
+        running = false;
+        coordinator.onTurnEvent(sessionId, 'done');
+        clearCurrentDbClient(client);
+        sqlite.close();
+      }
+    },
+  );
+
   it('projects a send_to_session route only from the live session that will receive the message', async () => {
     const h = recoveryFixture(); const deps = await recoveryAssembly(h.bindings);
     const hint = { agentKind: 'claude-code', supportsRemote: true };

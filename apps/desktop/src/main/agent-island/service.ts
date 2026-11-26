@@ -3,6 +3,8 @@ import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDia
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
+import { TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { projectHostTaskActivity } from '../device-link/taskActivity.js';
 import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
@@ -89,6 +91,8 @@ import {
 } from '../../shared/agentIsland.js';
 import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
+import { isKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
+import { shouldNotifyAgentIslandForSession } from './notificationPolicy.js';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
 import { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } from './liveActivity.js';
@@ -118,6 +122,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
+  buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
@@ -642,6 +647,10 @@ export class AgentIslandService {
       }
       this.setCompanionChats(chats);
       return { ok: true };
+    });
+    ipcMain.handle(TASK_ACTIVITY_SNAPSHOT, event => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      return this.getForegroundTaskActivity();
     });
     ipcMain.handle('agent-island:completion-action', (event, sessionId: unknown, action: unknown, token: unknown) => {
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
@@ -1556,8 +1565,8 @@ export class AgentIslandService {
   }
 
   /**
-   * 「消息免打扰」发生变化:只影响展示面(岛面 / 菜单栏 / 提示音)。重发一次即可 ——
-   * 抑制集合在 publish() 里从同步索引重新对齐。静音任务的 Agent 事件仍照常进状态机,
+   * 通知策略发生变化(消息免打扰 / 标记为 Worker):只影响展示面(岛面 / 菜单栏 / 提示音)。
+   * 重发一次即可 —— 抑制集合在 publish() 里从同步索引重新对齐。Agent 事件仍照常进状态机,
    * 侧栏卡片的实时活动、等待交互态与远端活动镜像不受影响。
    */
   handleNotificationMuteChanged(): void {
@@ -1579,8 +1588,7 @@ export class AgentIslandService {
 
   /**
    * @param options.reason
-   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
-   *   清除),条目硬删。
+   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除),条目硬删。
    *   `'process-closed'` = 只是 agent 进程收了(典型:临时会话调度 run 终态后的
    *   closeSession),仍在展示的完成 / 错误卡片必须留着走完 dwell,否则刚弹出的卡片会
    *   当场消失。见 `closeAgentIslandSessionPreservingUnread`。
@@ -1789,10 +1797,10 @@ export class AgentIslandService {
 
   /**
    * 按需重放当前会话活动快照。`emit` 由调用方(bootstrap)注入定向 sink 时,
-   * 快照只投给刚完成 sessions 订阅的那一台控制端;不传则沿默认广播通道扇出。
+   * 快照只投给刚完成列表或共享任务订阅的控制端;不传则沿默认广播通道扇出。
    */
-  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void): void {
-    this.sessionActivityRelay.replay(this.buildSessionActivityPayload(), emit);
+  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void, sessionId?: string): void {
+    this.sessionActivityRelay.replay(this.notificationActivity(this.buildSessionActivityPayload()), emit, sessionId);
   }
 
   /**
@@ -2111,8 +2119,26 @@ export class AgentIslandService {
     return count;
   }
 
+  private foregroundSummaryKey = '';
+  private foregroundRevision = 0;
+
+  getForegroundTaskActivity() {
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
+    const key = JSON.stringify(summary);
+    if (key !== this.foregroundSummaryKey) {
+      this.foregroundSummaryKey = key;
+      this.foregroundRevision++;
+    }
+    return { ...summary, revision: this.foregroundRevision };
+  }
+
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
+  }
+
+  /** This computer's share of the island counts; the phone island adds these per computer. */
+  getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -2234,7 +2260,7 @@ export class AgentIslandService {
 
   private emitSessionActivityToRenderer(): void {
     const payload = this.buildSessionActivityPayload();
-    this.sessionActivityRelay.publish(payload);
+    this.sessionActivityRelay.publish(this.notificationActivity(payload));
     this.emitSessionActivityTransitions(payload, Date.now());
     this.notifySessionActivityConsumer(this.buildProcessLocalActivityPayload(payload));
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
@@ -2257,8 +2283,14 @@ export class AgentIslandService {
     }
   }
 
+  /** Keep old controllers' notification stream unchanged; diagnostic reads retain all activity. */
+  private notificationActivity(activity: readonly AgentIslandSessionActivity[]): AgentIslandSessionActivity[] {
+    return activity.filter(item =>
+      shouldNotifyAgentIslandForSession(AGENT_ISLAND_DISPLAY_CONFIG, isKnownOrcaWorkerSession(item.sessionId)));
+  }
+
   /**
-   * 把「消息免打扰」从同步索引对齐到展示面抑制集合。放在每次 publish 的开头：账号
+   * 把消息免打扰与 Worker 通知策略对齐到展示面抑制集合。放在每次 publish 的开头：账号
    * 切换、索引重载、直接改库都能自愈，不靠某一条写库路径记得来登记。
    */
   private syncDisplaySuppression(): void {
@@ -2268,7 +2300,10 @@ export class AgentIslandService {
       setAgentIslandSessionDisplaySuppressed(
         this.state,
         sessionId,
-        session.sourceDeviceId === null && isSessionNotificationsMutedSync(sessionId),
+        session.sourceDeviceId === null && (
+          isSessionNotificationsMutedSync(sessionId)
+          || !shouldNotifyAgentIslandForSession(AGENT_ISLAND_DISPLAY_CONFIG, isKnownOrcaWorkerSession(sessionId))
+        ),
       );
     }
   }

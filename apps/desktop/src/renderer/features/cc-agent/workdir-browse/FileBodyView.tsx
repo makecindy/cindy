@@ -1089,6 +1089,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             {content.truncated && (
               // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
               // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
+              // 30px 跟随编辑器主题（DESIGN.md §5 登记），改其一须两边同改。
               <div className="flex-none px-[30px] py-3">
                 <div
                   className={cn(
@@ -1185,7 +1186,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                   );
                 }}
                 className={cn(
-                  'flex h-7 w-full items-center rounded-md px-2.5 text-left',
+                  'flex h-7 w-full items-center rounded-lg px-2.5 text-left',
                   'text-13 leading-none text-[var(--msg-assistant-text)]',
                   'hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none',
                 )}
@@ -1207,7 +1208,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                   void writeToDisk();
                 }}
                 className={cn(
-                  'flex h-7 w-full items-center rounded-md px-2.5 text-left',
+                  'flex h-7 w-full items-center rounded-lg px-2.5 text-left',
                   'text-13 leading-none text-[var(--msg-assistant-text)]',
                   'hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none',
                   'disabled:pointer-events-none disabled:opacity-45',

@@ -116,8 +116,12 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 - `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
   必须显式传 `--region=cn`，读取 `config/endpoint.json`。
   remote 开发启动忽略环境里的 `XDT_ENDPOINT_MANIFEST_FILE`，始终按所选区域重设
-  端点文件，避免继承宿主的其它区域或自定义服务器。`--endpoints-cdn` 仍走所选区域的
+  默认端点文件，避免继承宿主的其它区域或自定义服务器。`--endpoints-cdn` 仍走所选区域的
   线上 CDN；本地服务调试（local）仍保留本地端点文件配置。
+- `--endpoints-file=<路径>`：remote 联调显式使用仓库外的完整端点清单，逐次启动传入，
+  不修改仓内公共清单，也不隐式沿用上一次的覆盖。路径可含空格（由 shell 引号包住）；
+  清单中应写明 `region`，主进程保持区域与 HTTPS 校验。不能与 `--endpoints-cdn`
+  或 local 模式同用；普通发行包不接受这个开发参数。
 - `--shared`：显式选择共享 userData（旧默认行为）：dev 与正式版共用当前区域的正式
   profile，数据库、登录态、会话完全共享。仅当用户明确要求「共享登录 / 复用现有数据」
   时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
@@ -335,6 +339,8 @@ userData 路径的摘要，使同一沙箱跨重启保持身份、不同沙箱�
 不是把 helper 改成 `.app` bundle，也不据此声称完成第三方菜单栏工具的所有身份兼容。
 
 ## Computer Use 的窗口与桌面目标
+
+macOS 的录屏、控制其他 App、麦克风、文件访问等申请入口和发行包验证场景见 [Mac 客户端的系统权限](macos-system-permissions.md)。
 
 普通控件继续使用 `get_window_state` 和窗口内元素／坐标。macOS 菜单栏、状态栏图标不属于
 设置窗口：不能删除 `window_id` 或关闭驱动的窗口归属检查来让窗口 token 越界操作。

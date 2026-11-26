@@ -135,6 +135,11 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 - 功能型模型的开关写停用轴。升级前被旧显示开关关掉的功能型模型继续显示为关，打开时把旧记录
   一并拨回，不做批量迁移。
 - 其他电脑上的供应商同样两项，按 `remote:[设备, 供应商]` 记在本机，只影响这台电脑。
+- 由插件提供的供应商（插件引擎，2026-11-22）同样两项，并可逐模型关闭、改这台电脑上的显示名，存在单独的
+  `plugin-engine-prefs.json`，不写进上表的 `model-disable-prefs.json`：层级为按账号的本机 override，默认是插件声明的
+  名称、显示、启用、全部模型开启，未改过的用户始终跟随插件声明；恢复默认即删除对应字段。停用是准入（新任务、换引擎、
+  自动化、Worker、其他电脑与受邀者都不能用），隐藏只让它不进模型选择器；模型选择器暂时没有它的「已隐藏」展开区。
+  字段与兼容约定见[插件引擎协议记录](protocol-compatibility/plugin-harnesses.md)。
 - 已有的停用记录升级后保持停用，不自动改成隐藏。停用条带上的「改为隐藏」一步完成两项修改。
 - 设置页左栏把已隐藏和已停用的供应商各收进一个分组，排在列表末尾，标题带数量，默认折叠且每次打开
   设置页都从折叠开始。常规列表因此只剩模型选择器里会出现的来源。正在看的供应商被隐藏或停用后保持
@@ -251,15 +256,20 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
 
-### Pi 自定义 Chat 线路的 `store` 能力
+### Pi 自定义 Chat 线路的存储与长缓存能力
 
-当指定连接和型号已确认因 `store` 字段被上游拒绝（#11023），可在执行端当前 owner 的
+当指定连接和型号因 `store`（#11023）或 `prompt_cache_retention`（#12771）被上游拒绝时，
+可在执行端当前 owner 的
 `model-catalog-overrides.json` 中合并以下稀疏覆盖；保留该文件的其它内容，不编辑临时
 `models.json`。键使用活动目录的连接 ID（URL 编码）与原始模型 ID，不使用显示名称。
 
 ```json
-{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false}}}}}
+{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false,"supportsLongCacheRetention":false}}}}}
 ```
+
+如果上游拒绝 `prompt_cache_retention`，将 `perAgent.pi.supportsLongCacheRetention`
+设为 `false` 即可让 Pi 的 Chat 请求省略该字段。它只接受 `false`；删除后恢复 Pi 原生判断。
+两个覆盖独立，只设置上游需要的字段。
 
 `supportsStore` 只接受布尔值，且只允许写在 `perAgent.pi`；`base`、其它引擎及字符串值
 均会使该条覆盖隔离。只在自定义供应商的 Pi `openai-completions` 启动投影中生效：

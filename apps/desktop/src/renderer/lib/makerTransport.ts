@@ -46,7 +46,7 @@ type FullMaker = typeof window.electronAPI.maker;
 
 export type RemoteCredentialSwitchOutcome =
   | { kind: 'applied'; sessionId: string }
-  | { kind: 'failed'; sessionId: string; reason: 'apply-failed' | 'rollback-failed' };
+  | { kind: 'failed'; sessionId: string; reason: 'apply-failed' | 'rollback-failed'; previousSettingsRetained?: boolean };
 
 /** A deferred model choice settles on its owning device after the invoke has returned. */
 export function subscribeRemoteCredentialSwitchOutcome(
@@ -66,7 +66,10 @@ export function subscribeRemoteCredentialSwitchOutcome(
       callback({ kind: 'applied', sessionId });
     } else if (push.channel === 'maker:session-credential-switch-failed' &&
       (value.reason === 'apply-failed' || value.reason === 'rollback-failed')) {
-      callback({ kind: 'failed', sessionId, reason: value.reason });
+      callback({
+        kind: 'failed', sessionId, reason: value.reason,
+        ...(value.reason === 'apply-failed' && value.previousSettingsRetained === true ? { previousSettingsRetained: true } : {}),
+      });
     }
   });
 }
@@ -493,6 +496,11 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   // to the wrong maker instance.
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
+  return getSessionOnDevice(sessionId, deviceId);
+}
+
+/** Read a navigation hint without changing the transport of any other caller. */
+export function getSessionOnDevice(sessionId: string, deviceId: string): Promise<Session> {
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
 }
 
@@ -738,6 +746,7 @@ export function estimatedSessionValueFor(sessionId: string, options?: { includeB
   entries: Array<{
     clientId: string;
     money?: import('../../shared/regionalMoney').RegionalMoney;
+    additionalEstimates?: import('../../shared/regionalMoney').RegionalMoney[];
     costUsd?: number;
     turnUsageDetails?: unknown;
   }>;

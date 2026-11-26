@@ -65,6 +65,9 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
+  addCompatibleRegionalMoney,
+  mixedEstimateAmounts,
+  asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   usdMoney,
@@ -105,7 +108,7 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'agentDeviceId' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
 export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
@@ -254,7 +257,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? { ...legacyUsdMoney(row.totalCostUsd), approximate: !!row.totalCostUsdIsApproximate } : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -292,6 +295,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     sdkSessionId: row.sdkSessionId,
     totalTokenUsage: row.totalTokenUsage,
     totalCostUsd: legacyUsdProjection,
+    ...(row.totalCostUsdIsApproximate && { totalCostUsdIsApproximate: true }),
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
@@ -522,6 +526,7 @@ export function sessionPatchToRow(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string | null;
@@ -552,8 +557,11 @@ export function sessionPatchToRow(
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   // Move controls explicitly set workspaceKind; an execution-only cwd update
   // (e.g. attaching a worktree) must preserve the chosen project.
-  if (patch.workspaceKind === 'dialogue'
-    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
+  if (patch.projectDir !== undefined) {
+    out.projectDir = normalizeWorkingDirForStorage(patch.projectDir);
+  } else if (patch.workspaceKind === 'dialogue' || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) {
+    out.projectDir = null;
+  }
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
     ? ('' as SessionInsert['effort'])
@@ -588,6 +596,37 @@ export function sessionPatchToRow(
   return out;
 }
 
+/**
+ * 序列化 messages.agent_meta：省略事件准备阶段每轮附带的默认 false 标记
+ * （`botPrivateReply: false`、`botTaskCoordination: false`），空对象收敛为 NULL。
+ * 实时事件流仍保留显式 false 供渲染层与提醒覆盖上一轮状态；持久层所有查询与历史
+ * 加载对缺省与 false 语义一致，不省略 `samplingAttemptPending: false` 或
+ * `turnCompleted: false` 这类显式终态覆盖字段。
+ */
+export function serializePersistedAgentMeta(
+  agentMeta: AgentMeta | Record<string, unknown> | null | undefined,
+): string | null {
+  if (agentMeta === undefined || agentMeta === null) return null;
+  if (typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return safeStringify(agentMeta);
+  }
+  const source = agentMeta as Record<string, unknown>;
+  if (source.botPrivateReply !== false && source.botTaskCoordination !== false) {
+    const serialized = safeStringify(source);
+    return serialized === '{}' ? null : serialized;
+  }
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if ((key === 'botPrivateReply' || key === 'botTaskCoordination') && value === false) {
+      continue;
+    }
+    compact[key] = value;
+  }
+  const serialized = safeStringify(compact);
+  return serialized === '{}' ? null : serialized;
+}
+
 /** Message create 入口字段映射。content / agentMeta 序列化为 JSON 字符串。 */
 export function messageCreateToRow(
   id: string,
@@ -610,10 +649,7 @@ export function messageCreateToRow(
     role: body.role as MessageInsert['role'],
     content: safeStringify(body.content),
     toolUseId: body.toolUseId ?? null,
-    agentMeta:
-      body.agentMeta === undefined || body.agentMeta === null
-        ? null
-        : safeStringify(body.agentMeta),
+    agentMeta: serializePersistedAgentMeta(body.agentMeta),
     agentKind: body.agentKind ?? null,
     createdAt: body.createdAt ?? now,
   };
@@ -830,6 +866,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
+    modelGroup: row.modelGroup ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     inheritedProjectDir: row.inheritedProjectDir ?? undefined,
@@ -894,6 +931,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
+    modelGroup: s.modelGroup ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
     inheritedProjectDir: s.inheritedProjectDir ?? null,
@@ -957,6 +995,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
+  if (hasKey(patch, 'modelGroup')) out.modelGroup = patch.modelGroup ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
   if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
@@ -1056,12 +1095,16 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
           estimateReasons: ['subscription-value'],
         })
       : undefined;
-  const estimatedValueMoney =
-    legacyEstimate && currentEstimate
-      ? legacyEstimate.currency === currentEstimate.currency
-        ? addRegionalMoney([legacyEstimate, currentEstimate])
-        : currentEstimate
-      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
+  const estimateAmounts = [
+    ...(currentEstimate ? [currentEstimate] : []),
+    ...(legacyEstimate ? [legacyEstimate] : []),
+    ...(row.otherEstimatedValueAmount > 0 && row.costCurrency ? [{
+      ...asValueEstimateMoney(legacyUsdMoney(row.otherEstimatedValueAmount)),
+      currency: row.costCurrency === 'USD' ? 'CNY' as const : 'USD' as const,
+    }] : []),
+  ];
+  const estimatedValueMoney = addCompatibleRegionalMoney(estimateAmounts, currentEstimate?.currency)
+    ?? zeroUsageMoney('value-estimate');
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -1074,6 +1117,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
     estimatedValueMoney,
+    ...mixedEstimateAmounts(estimateAmounts),
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
@@ -1104,6 +1148,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
     triggerSource: r.triggerSource ?? null,
+    mrObservation: r.mrObservation ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

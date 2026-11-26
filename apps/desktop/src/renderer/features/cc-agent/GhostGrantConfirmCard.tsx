@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { PendingGhostGrantConfirm } from '@/lib/makerChatStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface GhostGrantConfirmCardProps {
   pending: PendingGhostGrantConfirm;
@@ -113,7 +114,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
             {t(descriptionKey)}
           </p>
         </div>
-        <span className="shrink-0 rounded-[6px] border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
+        <span className="shrink-0 rounded-full border border-[var(--chat-input-border)] px-2 py-1 text-12 font-medium text-[var(--status-bar-meta)]">
           {t('ghostGrant.confirm.count', { count: pending.items.length })}
         </span>
       </div>
@@ -131,10 +132,10 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
               <img
                 src={item.previewDataUrl}
                 alt={item.name}
-                className="size-12 shrink-0 rounded-[6px] border border-[var(--chat-input-border)] object-cover"
+                className="size-12 shrink-0 rounded-lg border border-[var(--chat-input-border)] object-cover"
               />
             ) : (
-              <span className="flex size-12 shrink-0 items-center justify-center rounded-[6px] border border-[var(--chat-input-border)] text-[var(--status-bar-meta)]">
+              <span className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-[var(--chat-input-border)] text-[var(--status-bar-meta)]">
                 {item.isDirectory ? <Folder className="size-5" /> : <FileTypeTile name={item.name} mimeType={item.mimeType} />}
               </span>
             )}
@@ -159,12 +160,10 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
       </div>
 
       {pending.lane === 'attachments' ? (
-        <label className="mt-[13px] flex cursor-pointer items-center gap-2 text-12 text-[var(--status-bar-meta)]">
-          <input
-            type="checkbox"
+        <label className="mt-3 flex cursor-pointer items-center gap-2 text-12 text-[var(--status-bar-meta)]">
+          <Checkbox
             checked={allowDirs}
             onChange={(e) => setAllowDirs(e.target.checked)}
-            className="size-3.5 accent-[var(--accent-cta-bg)]"
           />
           <span>{t('ghostGrant.confirm.allowDirs')}</span>
         </label>

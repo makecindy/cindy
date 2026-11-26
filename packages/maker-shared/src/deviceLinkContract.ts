@@ -105,7 +105,7 @@ export interface MobileUsageWidgetSnapshot {
     days: string[];
     daily: MobileUsageWidgetDay[];
     /** Models with the most tokens in the window, in color order; absent from older desktops. */
-    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' }[];
+    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' | 'auxiliary' | 'acp' }[];
   };
   /** Localized labels and templates from the desktop's menu bar strings. */
   strings: Record<string, string>;

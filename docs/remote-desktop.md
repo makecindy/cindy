@@ -72,6 +72,11 @@ older sections below differ, this section wins.
   `startLinuxAwayCover()` driving the compositor cover from its idle time. Windows reads
   "follow system" from `powercfg` (`parseWindowsDisplayOffMs`); Hyprland uses 10 minutes.
 
+## Cloud instance defaults
+
+A managed cloud instance enables conversation control and remote desktop when it creates a new
+profile; later starts keep whatever the owner chose. Ordinary desktops keep their opt-in defaults.
+
 ## Idle protection
 
 > 2026-11-14: hosts advertising `hostIdle` replace the per-viewer minutes below with
@@ -659,11 +664,17 @@ reconnect behavior after control or input failure.
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
-capturing Cindy process and accessibility in the actual input helper. It opens
+capturing Cindy process and both accessibility and event-posting access in the actual input helper. It opens
 an in-app guide if either permission is missing or unconfirmed. The guide reuses
 Computer Use's interactive permission rows and fixed System Settings targets;
 it never treats CuaDriver's permissions as remote desktop permissions. The
 settings page and guide recheck automatically, including when focus returns.
+On an explicit grant, the guide opens the corresponding settings pane if the
+native request still needs approval. A second local action can open the pane in
+a separate Settings window when a sheet blocks the existing one. Finder can reveal the running copy of Cindy
+when more than one is installed. On macOS 27.3 the system can ask which apps
+Cindy may control. The local bundle path stays on the host. See the
+[Mac permission guide](dev-rules/macos-system-permissions.md).
 Closing the guide cancels any pending follow-up that would open System Settings.
 
 The phone shows separate permission states and can request this Cindy guide on
@@ -799,6 +810,20 @@ and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
 the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+## Managed X11 desktop (cloud instance)
+
+Clipboard synchronization uses Electron's X11 CLIPBOARD and PRIMARY selections under the usual
+lease, limits and version checks, on an unchanged local display only. Paste sends Shift+Insert,
+because terminals treat Ctrl+V as literal input. Lock-on-exit is not offered: Xvfb has no locker.
+
+Pointer, keys and committed text go through the authenticated X11/XTest helper
+(`linux-input-guard.py`, system `libxdo.so.3`), never through CDP or the clipboard. Text is sent
+in chunks of at most 32 code points. Main rechecks lease and display between chunks, and the
+helper checks the active window, PID and focus before each character; a focus change stops
+delivery without retrying or redirecting it. Modifiers, Caps Lock and any keycode borrowed for
+Unicode are restored, and held input is released on stop. Wayland, macOS and Windows do not use
+this path.
 
 ## Wayland capture lifetime
 

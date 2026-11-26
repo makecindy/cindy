@@ -1,5 +1,6 @@
+import {initializeCloudHostAccess,readCloudGuest,cloudGuestAuthorization,cloudGuestSaved,markCloudGuestSaved} from '@cindy/auth-client/linux-cloud';
 import { readHostProcessStatus } from './control.mjs';
-import { getOrCreateHostDeviceId } from './auth/device-identity.mjs';
+import { getOrCreateHostDeviceId, readSessionDeviceId } from './auth/device-identity.mjs';
 /**
  * `cindy-host login` — complete the existing Cindy browser login from the host.
  *
@@ -12,7 +13,7 @@ import path from 'node:path';
 
 
 
-import { CindyAuthClient } from '@cindy/auth-client';
+import { AuthApiError, CindyAuthClient, discoverSsoOrgRealm, parseAuthSessionRecord } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
@@ -80,9 +81,13 @@ function openInSystemBrowser(url) {
 }
 
 export function parseLoginArgs(argv) {
-  const regionArg = argv.find((arg) => arg.startsWith('--region='))?.split('=')[1];
+  const regionArg = argv.find((arg) => arg === '--region' || arg.startsWith('--region='));
+  const region = regionArg?.slice('--region='.length);
+  if (region !== undefined && region !== 'cn' && region !== 'global') {
+    throw new Error('Use --region=cn or --region=global.');
+  }
   const methodArg = argv.find((arg) => arg.startsWith('--method='))?.split('=')[1];
-  return { region: regionArg ?? resolveHostRegion(), method: methodArg };
+  return { region, method: methodArg };
 }
 
 /**
@@ -92,9 +97,13 @@ export function parseLoginArgs(argv) {
 export async function runLoginCommand(argv, io = {}) {
   const out = io.stdout ?? ((line) => console.log(line));
   const err = io.stderr ?? ((line) => console.error(line));
-  const { region, method } = parseLoginArgs(argv);
+  const { region: explicitRegion, method } = parseLoginArgs(argv);
+  const orgArg = argv.find(arg => arg.startsWith('--org='));
+  const organization = orgArg?.slice('--org='.length).trim();
+  if (orgArg && (!organization || argv.includes('--cloud-guest'))) {
+    throw new Error('Use --org=<organization> with an interactive login.');
+  }
 
-  const endpoints = readAuthEndpoints(region);
   const userDataDir = resolveHostDataDir();
   const deps = io.deps ?? {};
   const running = await (deps.readStatus ?? readHostProcessStatus)(userDataDir);
@@ -110,19 +119,78 @@ export async function runLoginCommand(argv, io = {}) {
   });
 
   const deviceId = getOrCreateHostDeviceId(userDataDir);
-  const clientOptions = {
-    baseUrl: endpoints.authApiBaseUrl,
-    region,
-    deviceId,
-    clientType: 'desktop',
-    fetch: (input, init) => hostAuthFetch(input, init),
+  const createRealm = (region) => {
+    const endpoints = readAuthEndpoints(region);
+    const options = {
+      baseUrl: endpoints.authApiBaseUrl,
+      region,
+      deviceId,
+      clientType: 'desktop',
+      fetch: (input, init) => hostAuthFetch(input, init),
+    };
+    return { endpoints, client: deps.createAuthClient ? deps.createAuthClient(options) : new CindyAuthClient(options) };
   };
-  // Tests replace the transport only (their fake auth servers listen on plain loopback HTTP).
-  const client = deps.createAuthClient ? deps.createAuthClient(clientOptions) : new CindyAuthClient(clientOptions);
+  let region = explicitRegion ?? resolveHostRegion();
+  let realm;
+  let organizationDiscovery;
+  if (organization && explicitRegion === undefined) {
+    const cn = createRealm('cn');
+    const global = createRealm('global');
+    const regionFlags = '--region=cn or --region=global';
+    const selected = await discoverSsoOrgRealm(
+      organization, { cn: cn.client, global: global.client }, { allowPartialSuccess: true },
+    ).catch(error => {
+      if (error instanceof AuthApiError && error.code === 'ORG_REALM_AMBIGUOUS') {
+        throw new AuthApiError(error.code, error.statusCode, `${error.message}. Rerun with ${regionFlags}.`);
+      }
+      throw error;
+    });
+    if (selected.unconfirmedRegion) {
+      err(`Warning: Could not confirm the ${selected.unconfirmedRegion} auth region. Using ${selected.region}. `
+        + `If this is not the correct region, rerun with ${regionFlags}.`);
+    }
+    region = selected.region;
+    realm = region === 'cn' ? cn : global;
+    organizationDiscovery = selected.discovery;
+  } else {
+    realm = createRealm(region);
+  }
+  const { endpoints, client } = realm;
 
   const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
-  out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
+
+  const guestStore = {
+    read: key => store.read(key),
+    write: (key, value) => store.write(key, value),
+    remove: key => store.remove(key),
+    withLock: task => withCrossProcessLock(path.join(userDataDir, AUTH_ACCOUNT_VAULT_LOCK_FILE),
+      { label: 'cloud-guest-pkce', waitMs: 5_000 }, async (lock) => {
+        if (!lock.held) throw new Error('Saved account credentials are busy; retry cindy-host login');
+        return task();
+      }),
+  };
+  let cloudGuest;
+  if (argv.includes('--cloud-guest')) {
+    const guest = await readCloudGuest();
+    if (!guest) throw new Error('Missing provisioned guest configuration');
+    const session = store.read(AUTH_SESSION_KEY);
+    if (session) {
+      if (parseAuthSessionRecord(session)?.realm !== region || readSessionDeviceId(session) !== deviceId ||
+        !isGhostSkillProjectionBoundaryStableForOwner(guest.membershipId))
+        throw new Error('Guest profile has a different account or device. Run cindy-host login to sign in.');
+      // Recover a crash between committing the session and recording first boot.
+      await markCloudGuestSaved(guest, guestStore);
+      return;
+    }
+    if (await cloudGuestSaved(guest))
+      throw new Error('Cloud guest enrollment has already been used. Run cindy-host login to sign in to this profile.');
+    cloudGuest = { guest, grant: await cloudGuestAuthorization(guest, deviceId, endpoints.authApiBaseUrl, guestStore, hostAuthFetch) };
+  }
+  if (!cloudGuest) out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
   const result = await runHostLogin({
+    cloudGuest,
+    organization,
+    organizationDiscovery,
     client,
     deviceId,
     store,
@@ -131,6 +199,7 @@ export async function runLoginCommand(argv, io = {}) {
     warn: err,
     admitAccount,
     persistSession: async (record, membership) => {
+      if (cloudGuest) await initializeCloudHostAccess(userDataDir);
       // The browser step can take minutes: check the desktop and serve again right before committing.
       await assertNoDesktopOnProfile(deps.scanDesktops ?? createDesktopScanner(userDataDir));
       const now = await (deps.readStatus ?? readHostProcessStatus)(userDataDir);
@@ -176,6 +245,7 @@ export async function runLoginCommand(argv, io = {}) {
       if (registration !== 'registered') err('This computer could not register with remote connections now; start Cindy Host and try signing in again if it stays unavailable.');
     },
   });
+  if (cloudGuest) await markCloudGuestSaved(cloudGuest.guest, guestStore);
   out(`Signed in (${result.realm}). Cindy host will reuse this login on restart.`);
   // serve keeps its current session until it restarts (it does not adopt a new one while running).
   if (running.running === true) {

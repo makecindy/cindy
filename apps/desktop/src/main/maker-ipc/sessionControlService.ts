@@ -622,6 +622,8 @@ export function sessionQueueOriginForDispatcher(params: {
   dispatcherBot?: { id: string; name: string } | null;
   message: string;
   explicitOrigin?: AgentInputQueuedMessage['origin'];
+  /** Host-stamped: a plugin follows this word back (plugin task follow-up); only with a dispatcher task. */
+  pluginReply?: Extract<NonNullable<AgentInputQueuedMessage['origin']>, { kind: 'session' }>['pluginReply'];
 }): AgentInputQueuedMessage['origin'] | undefined {
   if (params.explicitOrigin) return params.explicitOrigin;
   if (!params.dispatcherSessionId) return undefined;
@@ -634,5 +636,6 @@ export function sessionQueueOriginForDispatcher(params: {
     ...(params.dispatcherBot
       ? { senderBotId: params.dispatcherBot.id, senderBotName: params.dispatcherBot.name }
       : {}),
+    ...(params.pluginReply ? { pluginReply: params.pluginReply } : {}),
   };
 }

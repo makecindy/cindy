@@ -1040,20 +1040,19 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
 
   const requestPermission = useCallback(async (kind: VoiceInputPermissionKind) => {
     try {
-      if (kind === 'microphone') {
-        if (permissions.microphone.ok) {
-          await window.electronAPI.voiceInput.openMicrophoneSettings();
-        } else {
-          const result = await requestRendererMicrophonePermission();
-          if (!result.ok) {
-            await window.electronAPI.voiceInput.openMicrophoneSettings();
-          }
+      if (kind === 'microphone' && !permissions.microphone.ok) {
+        const result = await requestRendererMicrophonePermission();
+        if (result.ok) return;
+        if (result.status === 'device-unavailable') {
+          toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+          return;
         }
-      } else if (kind === 'inputMonitoring') {
-        await window.electronAPI.voiceInput.openInputMonitoringSettings();
-      } else {
-        await window.electronAPI.voiceInput.openAccessibilitySettings();
       }
+      const voice = window.electronAPI.voiceInput;
+      const opened = kind === 'microphone' ? await voice.openMicrophoneSettings()
+        : kind === 'inputMonitoring' ? await voice.openInputMonitoringSettings()
+        : await voice.openAccessibilitySettings();
+      if (!opened.ok) toast.error(t('settings.voiceInput.permissions.openFailed'));
     } catch {
       toast.error(t('settings.voiceInput.permissions.openFailed'));
     } finally {

@@ -13,7 +13,7 @@ import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { DeviceLinkClient, SERVER_CAPABILITY_NOTIFY } from '@cindy/device-link';
 import { AgentNetSocket } from '../portableSocket.js';
 import { SessionLanes } from '../session/lanes.js';
-import type { PeerChannel, RosterEntry, TransportOptions } from '../types.js';
+import { AGENT_NET_SESSION_V2, type PeerChannel, type RosterEntry, type TransportOptions } from '../types.js';
 
 // A simultaneous dial can replace an admitted channel while its first link-open
 // is still in flight. Exercise real frame admission, routing and reply handling;
@@ -196,7 +196,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
   const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
   const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
-    send() {}, presence() {}, onDatagram() {}, close() {} });
+    probeRelay: vi.fn(), send() {}, presence() {}, onDatagram() {}, close() {} });
   const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
@@ -213,6 +213,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
     await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
+    expect(uplink.probeRelay).toHaveBeenCalledTimes(failure === 'channel close' ? 0 : 1);
     if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
     if (failure === 'fresh directory') uplink.emit('directory');
@@ -705,6 +706,69 @@ it('keeps presence on the session with a new peer and still sends the frame to a
   } finally { vi.useRealTimers(); socket.close(); }
 });
 
+/** 测试价值（会话 v2 的协商）
+ * - 生产入口与可观察结果：PortableSocket 给每个对端宣告的会话能力，和大结果怎么发。本机通道能读独立的流（`sessionBodies`）时宣告
+ *   agent-net-session-v2；对端也宣告了，大结果走自己的流（`openBody`），通道上只有占位；对端是不认这种流的老版本，或者本机这条
+ *   通道不能读，大结果照 v1 整条写在通道上。
+ * - Bug／规则依据：docs/dev-rules/protocol-compatibility/agent-net-session.md「会话 v2」：老节点收到不认识的流类型会断开整条连接，
+ *   所以只有两端都宣告了才开流。
+ * - 现有覆盖缺口：会话层的单元测试直接给 `openBody`；真实核心的集成测试两端都是新版，不覆盖和老版本混连。
+ * - 最小失败输入：一个宣告了 v2 的新对端、一个只宣告 presence-v1 的老对端、一条本机不能读流的通道（对端宣告了 v2）；
+ *   三个对端各要一个 100 KB 的结果。
+ * - tier：unit，真实路由、证书与会话分帧，内存传输。 */
+it('opens body streams only to a peer that declared session v2, on a channel that reads them', async () => {
+  const local = generateIdentity('a-local'), fresh = generateIdentity('b-new'), older = generateIdentity('c-old'), plain = generateIdentity('d-plain');
+  const { root, bootstrap } = createPrivateNetwork('Session v2 negotiation', local);
+  const view = (identity: typeof local): DeviceView => ({ name: identity.deviceId, online: true, remoteControlEnabled: true, capabilities: [],
+    certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }) });
+  const peers = [fresh, older, plain];
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: peers.map(view), delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const declared: Record<string, readonly string[]> = {}, laneBytes: Record<string, number> = {}, opened: Record<string, number> = {};
+  const toLocal: Record<string, (lane: 'control' | 'normal' | 'background', bytes: Uint8Array) => void> = {};
+  const channels = new Map<string, PeerChannel>();
+  for (const identity of peers) {
+    const id = identity.deviceId;
+    laneBytes[id] = 0; opened[id] = 0;
+    channels.set(id, {
+      remoteId: Buffer.from(identity.transportKey, 'base64url').toString('hex'), send() {}, onData() {}, onClose() {}, close() {}, path: () => 'relay',
+      ...(identity === plain ? {} : { sessionBodies: true }),
+      declareSessions(features = []) { declared[id] = features; },
+      onSessionCapable(handler) { handler(); },
+      sessionFeatures: () => (identity === older ? ['presence-v1'] : ['presence-v1', AGENT_NET_SESSION_V2]),
+      sessionWire: () => ({ bufferedAmount: 0, write: (_lane, bytes) => { laneBytes[id] += bytes.length; },
+        onData: (handler) => { toLocal[id] = handler; },
+        openBody: () => { opened[id]++; return { write() {}, finish() {}, abandon() {} }; } }),
+    });
+  }
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local,
+      connect: async () => uplink },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async (entry: RosterEntry) => channels.get((entry.dial as { relayId: string }).relayId)! }) },
+  });
+  try {
+    socket.useSessions({ laneFor: () => 'normal', handlers: (key) => ({
+      onRequest: (request) => { socket.session(key)!.respond(request.id, { ok: true, result: 'r'.repeat(100_000) }); },
+    }) });
+    socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+    for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+    expect(declared).toEqual({ 'b-new': ['presence-v1', AGENT_NET_SESSION_V2], 'c-old': ['presence-v1', AGENT_NET_SESSION_V2], 'd-plain': ['presence-v1'] });
+    for (const identity of peers) {
+      const remote = new SessionLanes({ write: (lane, bytes) => toLocal[identity.deviceId](lane, bytes), deliver() {}, onError(error) { throw error; } });
+      const before = laneBytes[identity.deviceId];
+      remote.send('normal', 'request', { t: 'invoke', id: 'list-' + identity.deviceId, channel: 'test:list', args: [] });
+      await Promise.resolve();
+      laneBytes[identity.deviceId] -= before;
+    }
+    expect(opened).toEqual({ 'b-new': 1, 'c-old': 0, 'd-plain': 0 });
+    expect(laneBytes['b-new']).toBeLessThan(1024);
+    expect(laneBytes['c-old']).toBeGreaterThan(100_000);
+    expect(laneBytes['d-plain']).toBeGreaterThan(100_000);
+  } finally { socket.close(); }
+});
+
 /** 测试价值
  * - 生产入口与可观察结果：PortableSocket 的中转重连与 networkChanged（手机换网事件、Desktop 网络监听经 worker 都走这里）。
  *   中转断着、正在等退避时网络变了，马上重连，不等退避；连上后再通知一次传输层，断网期间发出的包立刻重发。
@@ -754,6 +818,107 @@ it('reconnects the relay at once when the network changes during its backoff', a
     expect(networkChanged).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(connect).toHaveBeenCalledTimes(5);
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetSocket` 的中转重连。① 中转连接一连上就断（本机拒收它发来的一帧、中转马上关掉）时，重连间隔
+ *   照常翻倍（0.5、1、2 秒……），撑过 10 秒的连接断了才从 0.5 秒重来；② `restartRelay`（Desktop Main 的兜底）把还当作中转连接的
+ *   死连接关掉并重连，正在进行却一直没结果的连接尝试也不再挡着。对端连接不受影响。
+ * - Bug 依据：2026-11-25 一台 Mac 的中转连接被本机关掉后这一层没收到关闭、再没重连，4.5 小时后重启才恢复。修好以后同样的情况会
+ *   重连；原来每次连上都把间隔重置成 0.5 秒，若中转每次连上都发来同样一帧，就会每半秒连一次。
+ * - 现有覆盖缺口：「reconnects the relay at once …」只覆盖连接尝试失败时的退避，没有连上又马上断的；此前没有从外部让中转重连的入口。
+ * - 最小失败输入：三条连上即断的连接，再一条撑过 10 秒的；一条从不报关闭的连接与一次永不返回的连接尝试。
+ * - tier：unit，真实路由与证书，内存中转，假计时器。 */
+it('backs off a relay connection that keeps ending as it opens, and restarts a relay connection on request', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Relay restart', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close: vi.fn() });
+  const uplinks = Array.from({ length: 6 }, makeUplink);
+  const connect = vi.fn();
+  for (const uplink of uplinks) connect.mockResolvedValueOnce(uplink);
+  connect.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue(makeUplink());
+  vi.useFakeTimers();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  try {
+    // Ended as soon as each opened: 0.5 s, then 1 s, then 2 s.
+    for (const [index, delay] of [500, 1000, 2000].entries()) {
+      uplinks[index].emit('close', 1006, 'INVALID_CONTROL');
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(connect).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(connect).toHaveBeenCalledTimes(index + 2);
+    }
+    // One that lasted starts over at 0.5 s.
+    await vi.advanceTimersByTimeAsync(10_000);
+    uplinks[3].emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(5);
+    expect(socket.relayConnected()).toBe(true);
+    // A relay connection whose close never arrives: the socket still counts it until told to restart.
+    await vi.advanceTimersByTimeAsync(10_000);
+    socket.restartRelay();
+    expect(uplinks[4].close).toHaveBeenCalledOnce();
+    expect(socket.relayConnected()).toBe(false);
+    // After the current backoff (1 s here, doubled when the 0.5 s reconnect was scheduled), as any other reconnect.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(connect).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connect).toHaveBeenCalledTimes(6);
+    // An attempt that never settles no longer holds the next one back.
+    await vi.advanceTimersByTimeAsync(10_000);
+    uplinks[5].emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(connect).toHaveBeenCalledTimes(7);
+    socket.restartRelay();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(8);
+    expect(socket.relayConnected()).toBe(true);
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 生产入口：AgentNetSocket 收到中转 4409。仅使用 Agent-Net 时外层 socket 不关闭，
+ * 宿主仍须收到事件；仅在确认身份冲突后延长中转重连，换网不提前重连。
+ * 最小输入：同一设备身份接管前后各一次。tier：unit，内存中转、假时钟。 */
+it('reports relay replacement and backs off only after the host confirms the identity conflict', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Duplicate identity', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const onRelayReplaced = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject, onRelayReplaced,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  const closed = vi.fn();
+  socket.on('close', closed);
+  vi.useFakeTimers();
+  try {
+    first.emit('close', 4409);
+    expect(onRelayReplaced).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    socket.setDuplicateIdentityCooldown(true);
+    second.emit('close', 4409);
+    socket.networkChanged();
+    expect(onRelayReplaced).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_501);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(closed).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); socket.close(); }
 });
 

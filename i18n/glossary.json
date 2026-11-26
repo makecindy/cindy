@@ -525,10 +525,11 @@
           "오토메이션"
         ]
       },
-      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
+      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）通讯录和 iMessage 的授权提示引用了 macOS 系统设置面板名，日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
       "exempt": [
         "desktop:settings.contacts.import.permissionDenied",
-        "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
+        "desktop:settings.contacts.ipcError.PERMISSION_DENIED",
+        "desktop:bots.channels.add.imessage.automationDenied"
       ]
     },
     {
@@ -897,6 +898,15 @@
         "ko": "개인 버전"
       },
       "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
+    },
+    {
+      "id": "cloud-cindy",
+      "status": "proposed",
+      "en": "Cloud Cindy",
+      "translations": {
+        "zh-CN": "云端 Cindy"
+      },
+      "note": "指账号下运行在云上的那台 Cindy（领取、休眠、唤醒、更新，在「远程连接 → 我的设备」里管理）。它和「云端伙伴」「云端对话」不是一回事：后两者指伙伴的跨设备身份和对话存储。界面上不再用「云实例」「云端实例」。中文与 Cindy 之间留一个空格，后面紧跟汉字时也加空格，例如「云端 Cindy 上」。其他语言的译法待定。"
     },
     {
       "id": "collaboration",
@@ -2265,7 +2275,7 @@
         "ko": "모델 그룹"
       },
       "checkCase": false,
-      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
+      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为用到它的任务选来源（新任务、进行中的任务、定时任务等能挑模型的地方，见 model-groups.md §6.3）。"
     },
     {
       "id": "model-id",
@@ -4089,7 +4099,19 @@
         "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
-      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "forbidden": {
+        "en": ["teammate", "teammates", "Teammate", "Teammates"],
+        "ja": ["チームメイト", "パートナー"],
+        "ko": ["동료", "파트너"],
+        "es": ["compañero", "compañera", "compañeros", "compañeras", "Compañero", "Compañera", "Compañeros", "Compañeras", "amigo de equipo", "amigos de equipo", "Amigo de equipo", "Amigos de equipo"],
+        "fr": ["coéquipier", "coéquipière", "coéquipiers", "coéquipières", "Coéquipier", "Coéquipière", "Coéquipiers", "Coéquipières"],
+        "de": ["Teammitglied", "Teammitglieds", "Teammitglieder", "Teammitgliedern"],
+        "pt-PT": ["colega", "colegas", "Colega", "Colegas"],
+        "pt-BR": ["colega", "colegas", "Colega", "Colegas"],
+        "zh-Hant-x-lzh": ["同僚"],
+        "zh-Hans-x-lzh": ["同僚"]
+      },
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。豁免理由（同形异义，逐组）：① desktop:sharedTask. 与 mobile/sharedTask 四键——邀请对象是用自己的 Cindy 账号加入的真人协作者（docs/product-rules/shared-task-mode.md）；② desktop:imBot.conflictDialog. 与 desktop:logic.toasts.feishuBotConflict——共用同一个 App ID 的真人同事；③ desktop:issueTracker.——仓库/组织里的真人成员；④ desktop:settings.agentIsland.skins.boli/muffin.description——桌宠角色的修辞用法。",
       "alsoAllowed": {
         "fr": [
           {
@@ -4131,7 +4153,20 @@
             "when": "按语法使用复数形式。"
           }
         ]
-      }
+      },
+      "exempt": [
+        "desktop:imBot.conflictDialog.",
+        "desktop:logic.toasts.feishuBotConflict",
+        "desktop:settings.agentIsland.skins.boli.description",
+        "desktop:settings.agentIsland.skins.muffin.description",
+        "desktop:settings.agentIsland.skins.chaku.description",
+        "desktop:issueTracker.",
+        "desktop:sharedTask.",
+        "mobile/sharedTask:invitationCopied",
+        "mobile/sharedTask:inviteBoxHint",
+        "mobile/sharedTask:joinedEmptyHint",
+        "mobile/sharedTask:startIntro"
+      ]
     },
     {
       "id": "teammate-core-skill",

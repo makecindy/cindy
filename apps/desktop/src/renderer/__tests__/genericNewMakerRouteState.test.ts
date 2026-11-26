@@ -31,6 +31,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import { applyPluginEngineDraftRoute } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
@@ -225,5 +226,30 @@ describe('without a previous creation, new task inherits the current task comput
     const state = makeGenericNewMakerRouteState('/cc-agent/task-a');
     expect(consumeNewMakerDialogueTargetRequest(state)).toEqual({ workspacePrompt: 'generic' });
     expect(readNewMakerDialogueTargetRequest(state)).not.toBeNull();
+  });
+
+  // Regression (#12247 review): after preselecting a local plugin engine from the quota panel,
+  // the immediately following generic new-task navigation must land on this computer instead of
+  // restoring a previous remote/SSH workspace.
+  it('routes to the local computer once after preselecting a local plugin engine', () => {
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      remoteHostId: null,
+      workingDir: '/remote/project',
+    });
+    expect(applyPluginEngineDraftRoute({ providerId: 'acp-plugin:dsh:dsh', modelId: 'default' })).toBe(true);
+    const first = makeGenericNewMakerRouteState('/cc-agent/task-a');
+    expect(first.restoreLastCreatedWorkspace).toBeUndefined();
+    expect(readNewMakerDialogueTargetRequest(first)).toMatchObject({
+      deviceId: null,
+      deviceName: null,
+      preserveWorkspaceIfSameDevice: true,
+    });
+    // One-shot: subsequent ordinary generic navigation still recalls the remembered workspace.
+    expect(makeGenericNewMakerRouteState('/cc-agent/task-a')).toEqual({
+      workspacePrompt: 'generic',
+      restoreLastCreatedWorkspace: true,
+    });
   });
 });

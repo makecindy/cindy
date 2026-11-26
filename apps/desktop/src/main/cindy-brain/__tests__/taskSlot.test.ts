@@ -141,6 +141,14 @@ describe('plugin task pipe', () => {
     expect(handler).toHaveBeenCalledOnce();
     // Only tasks.send accepts relay.
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'T', relay })).toBe(false);
+    // plugin-agent-tasks.md「后续轮次」(2026-11-25): the follow-up opt-in is advertised and only `true`
+    // passes the pipe (an old Host rejects the key, so plugins must check the capability first).
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
+      .toMatchObject({ ok: true, data: { followUps: true } });
+    expect(validPluginTaskRequest({ ...send, relay, followUps: true })).toBe(true);
+    for (const followUps of [false, 'true', 1, {}])
+      expect(validPluginTaskRequest({ ...send, followUps })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'create', requestKey: 'new', title: 'T', followUps: true })).toBe(false);
   });
   it('bounds the complete JSON plan without truncating scope or breaking representative 200-item batches', () => {
     const item = {label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'测'.repeat(2600)};
