@@ -34,12 +34,12 @@ function memberMentionLabels(member: BotGroupMemberView) {
   return [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name];
 }
 
-type MentionRange = { start: number; end: number };
+export type MentionRange = { start: number; end: number };
 const overlaps = (a: MentionRange, b: MentionRange) => a.start < b.end && b.start < a.end;
 
 /** Each saved recipient must occur somewhere. Highlight only a unique occurrence
  * with no competing possible range. Broadcasts also occupy their known spans. */
-function confirmedMobileMentionRanges(text: string, context: BotGroupMentionContext): MentionRange[] {
+export function confirmedMobileMentionRanges(text: string, context: BotGroupMentionContext): MentionRange[] {
   const { members, mentions, allLabels, allBotsLabels } = context;
   const rangesFor = (labels: readonly string[]) => [...new Set(labels.map(label => label.trim()))]
     .flatMap(label => botGroupMentionRanges(text, label));
@@ -53,9 +53,9 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
     const member = members.find(candidate => candidate.botId === id);
     return member ? rangesFor(memberMentionLabels(member)).filter(range => !fixedBroadcasts.some(broadcast => overlaps(range, broadcast))) : [];
   });
-  // A missing target position means the current roster cannot account for the
-  // saved recipients. In that case there is no basis to infer personal ranges.
-  const candidates = groups.every(ranges => ranges.length) ? groups.flat() : [];
+  // Replies and shares can have implicit recipients. A missing range for one
+  // recipient doesn't remove another recipient's independently matched range.
+  const candidates = groups.flat();
   // An isolated occurrence of an unambiguous typed name would address that
   // member even without a pick. Check all labels, including unaddressed names,
   // so a longer match cannot explain away this occurrence.
@@ -75,13 +75,12 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
     .sort((a, b) => a.start - b.start);
 }
 
-export function splitMobileBotGroupMentionSegments(text: string, labels: readonly string[], context?: BotGroupMentionContext,
-  source = text): BotGroupTextSegment[] {
+export function splitMobileBotGroupMentionSegments(text: string, labels: readonly string[], context?: BotGroupMentionContext): BotGroupTextSegment[] {
   if (!context?.mentions.botIds.length) return splitBotGroupMentionSegments(text, labels);
-  // A Markdown projection without source offsets may turn ordinary text
-  // into a spelling that exists elsewhere in the original message.
-  if (text !== source) return [{ text, mention: false }];
-  const ranges = confirmedMobileMentionRanges(text, context);
+  return splitConfirmedMentionRanges(text, confirmedMobileMentionRanges(text, context));
+}
+
+export function splitConfirmedMentionRanges(text: string, ranges: readonly MentionRange[]): BotGroupTextSegment[] {
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
   for (const { start: from, end: to } of ranges) {
