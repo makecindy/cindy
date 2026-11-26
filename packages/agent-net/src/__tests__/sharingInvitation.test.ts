@@ -20,6 +20,12 @@ import { AgentNetSharingTransport } from '../sharingTransport.js';
 
 const receipt: AgentNetSharingInvitation = { v: 2, kind: 'shared-task', invitation: 'A'.repeat(43), networkId: 'private:unit-network',
   rootPublicKey: toBase64Url(new Uint8Array(32).fill(17)), resourceId: 'unit-resource', hostDeviceId: 'unit-host', region: 'global' };
+/** Identity-card shape the account service issues (JWT with iat/exp); the client never verifies its signature. */
+const unitCard = (iat: number, exp: number) => ['e30', toBase64Url(utf8(JSON.stringify({ iat, exp }))), 'unit-signature'].join('.');
+const issuedCard = (skewMs = 0, lifetimeSec = 300) => {
+  const iat = Math.floor((Date.now() + skewMs) / 1000);
+  return { card: unitCard(iat, iat + lifetimeSec), expiresAt: new Date((iat + lifetimeSec) * 1000).toISOString() };
+};
 // Unit: a same-account relay may return public endpoints, but cannot forge
 // another device's origin signature or substitute its root. The previous URL
 // parser tests do not cover origin recovery. Real keys, memory HTTP port.
@@ -53,7 +59,7 @@ it('waits for a fresh host signature instead of accepting the expiring lease aga
   const signer = { identity: guest, sign: async (text: string) => signature(guest.signingPrivateKey, text), random: async () => toBase64Url(new Uint8Array(18).fill(5)) };
   let calls = 0;
   const client = new AgentNetSharingClient({ base: 'https://relay.example.test', networkId: bootstrap.networkId, rootPublicKey: bootstrap.rootPublicKey,
-    signer, assertCurrent() {}, hash: bytes => bytes, getIdentityCard: async () => ({ card: 'unit-card', expiresAt: new Date(Date.now() + 300_000).toISOString() }),
+    signer, assertCurrent() {}, hash: bytes => bytes, getIdentityCard: async () => issuedCard(),
     fetch: async () => Response.json({ id: old.id, status: 'ready', networkId: bootstrap.networkId, rootPublicKey: bootstrap.rootPublicKey,
       certificate: bootstrap.ownerCertificate, delegation: ++calls === 1 ? old : fresh }) });
   const lease = new AgentNetSharingTransport({ client, applicant: signer, assertCurrent() {}, verifyCertificate, verifyDelegation,
@@ -63,8 +69,14 @@ it('waits for a fresh host signature instead of accepting the expiring lease aga
 });
 
 // Unit, #13041: the existing fresh-lease test never receives a 429. Exercise
-// the production acquire entry with a rate-limited POST or status poll.
-it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 from %s', async limitedStep => {
+// the production acquire entry shared by reconnect and renewal, using a 429
+// on the initial POST or on the status poll after an existing lease ages out.
+it.each([
+  { limitedStep: 'post', retryAfter: '90', stop: true },
+  { limitedStep: 'status', retryAfter: new Date(90_000).toUTCString(), stop: false },
+  { limitedStep: 'post', retryAfter: 'invalid', stop: false },
+  { limitedStep: 'post', retryAfter: undefined, stop: false },
+])('handles a 429 from $limitedStep with Retry-After $retryAfter', async ({ limitedStep, retryAfter, stop }) => {
   vi.useFakeTimers();
   const { identity: host, bootstrap } = createPrivateNetwork('Rate limited lease');
   const guest = generateIdentity('guest');
@@ -74,17 +86,24 @@ it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 f
   const delegation = createDelegation(host, bootstrap.ownerCertificate, { ...scope, guest, scope: membership });
   const signer = { identity: guest, sign: async (value: string) => signature(guest.signingPrivateKey, value),
     random: async () => toBase64Url(new Uint8Array(18).fill(5)) };
+  const old = createDelegation(host, bootstrap.ownerCertificate, { ...scope, guest, scope: membership, lifetimeMs: 61_000 });
   const reply = { id: delegation.id, networkId: scope.networkId, rootPublicKey: scope.rootPublicKey,
     certificate: bootstrap.ownerCertificate };
+  const renew = limitedStep === 'status';
+  const honorsDeadline = retryAfter !== undefined && retryAfter !== 'invalid';
   const now = Date.now();
-  const initialPollDelay = limitedStep === 'status' ? 250 : 0;
-  const deadline = now + initialPollDelay + 90_000;
-  const headers: Record<string, string> = limitedStep === 'post' ? { 'Retry-After': '90' }
-    : { Date: new Date(0).toUTCString(), 'Retry-After': new Date(90_000).toUTCString() };
+  const initialPollDelay = renew ? 250 : 0;
+  const deadline = now + (renew ? 1000 : 0) + initialPollDelay + 90_000;
+  const headers = new Headers();
+  if (retryAfter !== undefined) headers.set('Retry-After', retryAfter);
+  if (renew) headers.set('Date', new Date(0).toUTCString());
   let current = true;
   const fetch = vi.fn(async (url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     if (String(init?.body).includes('"resourceId":"independent"')) {
       return Response.json({ error: { code: 'PERMISSION_DENIED' } }, { status: 403 });
+    }
+    if (renew && Date.now() === now) {
+      return Response.json({ ...reply, id: old.id, status: 'ready', delegation: old });
     }
     if (Date.now() >= deadline) {
       return Response.json({ ...reply, status: 'ready', delegation });
@@ -96,15 +115,26 @@ it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 f
   });
   const client = new AgentNetSharingClient({ base: 'https://relay.example.test', networkId: scope.networkId,
     rootPublicKey: scope.rootPublicKey, signer, assertCurrent() {}, hash: bytes => bytes, fetch,
-    getIdentityCard: async () => ({ card: 'unit-card', expiresAt: new Date(Date.now() + 300_000).toISOString() }) });
+    getIdentityCard: async () => issuedCard() });
   const options = { client, applicant: signer, scope, verifyCertificate, verifyDelegation,
     assertCurrent() { if (!current) throw new Error('AGENT_NET_OWNER_CHANGED'); } };
   const lease = new AgentNetSharingTransport(options);
-  const initialCalls = limitedStep === 'status' ? 2 : 1;
+  const initialCalls = renew ? 3 : 1;
   try {
-    const first = expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt: deadline });
+    if (renew) {
+      await expect(lease.acquire()).resolves.toEqual(old);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    const first = expect(lease.acquire()).rejects.toMatchObject({
+      status: 429, retryAt: honorsDeadline ? deadline : undefined,
+    });
     await vi.advanceTimersByTimeAsync(initialPollDelay);
     await first;
+    if (!honorsDeadline) {
+      await expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt: undefined });
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+      return;
+    }
     await vi.advanceTimersByTimeAsync(89_999);
     const blocked = lease.acquire().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(0);
@@ -116,6 +146,13 @@ it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 f
     current = false;
     expect(() => lease.acquire()).toThrow('AGENT_NET_OWNER_CHANGED');
     current = true;
+    if (stop) {
+      lease.close();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(() => lease.acquire()).toThrow('AGENT_NET_SHARING_CLOSED');
+      expect(fetch).toHaveBeenCalledTimes(initialCalls + 1);
+      return;
+    }
     await vi.advanceTimersByTimeAsync(1);
     await expect(lease.acquire()).resolves.toEqual(delegation);
     await expect(lease.acquire()).resolves.toEqual(delegation);
@@ -125,6 +162,44 @@ it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 f
   } finally {
     lease.close(); client.close(); vi.useRealTimers();
   }
+});
+
+// Unit: 2026-11-26 a Windows device whose clock ran 15s slow rejected every
+// identity card locally (INVALID_AGENT_NET_IDENTITY_CARD): the issuer's absolute
+// expiry looked like 315s away. Share links and the roster export failed before
+// any request, and each retry fetched a new card until the account service
+// rate-limited it. Other tests issue cards on the test's own clock, so they
+// never cross the skew. Minimal input: issuer clock 15s ahead of this device.
+it('uses the card lifetime, not this clock, to accept, reuse and refresh identity cards', async () => {
+  vi.useFakeTimers();
+  const { identity, bootstrap } = createPrivateNetwork('Card fixture');
+  const signer = { identity, sign: async (text: string) => signature(identity.signingPrivateKey, text), random: async () => toBase64Url(new Uint8Array(18).fill(5)) };
+  const make = (card: () => { card: string; expiresAt: string }) => {
+    const sent: string[] = [], cards = vi.fn(async () => card());
+    const api = new AgentNetSharingClient({ base: 'https://relay.example.test', networkId: bootstrap.networkId, rootPublicKey: bootstrap.rootPublicKey,
+      signer, assertCurrent() {}, hash: bytes => bytes, getIdentityCard: cards,
+      fetch: async (_url, init) => {
+        const header = new Headers(init?.headers).get('authorization')!;
+        sent.push(JSON.parse(Buffer.from(header.slice('AgentNetIdentity '.length), 'base64url').toString()).card);
+        return Response.json({ ok: true });
+      } });
+    return { api, sent, cards, list: () => api.request('/api/device-link/shared-tasks', { method: 'GET' }) };
+  };
+  const skewed = make(() => issuedCard(15_000));
+  try {
+    await skewed.list(); await skewed.list();
+    expect(skewed.cards).toHaveBeenCalledTimes(1); expect(skewed.sent).toHaveLength(2);
+    expect(skewed.sent[1]).toBe(skewed.sent[0]);
+    // A card is renewed 30s before its own five minutes elapse here, whatever the issuer's clock says.
+    vi.advanceTimersByTime(269_000); await skewed.list(); expect(skewed.cards).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2_000); await skewed.list(); expect(skewed.cards).toHaveBeenCalledTimes(2);
+    // The relay rejects cards longer than five minutes and anything that is not a card; neither leaves this device.
+    for (const card of [() => issuedCard(0, 301), () => ({ card: 'opaque-token', expiresAt: new Date(Date.now() + 300_000).toISOString() })]) {
+      const rejected = make(card);
+      await expect(rejected.list()).rejects.toThrow('INVALID_AGENT_NET_IDENTITY_CARD'); expect(rejected.sent).toEqual([]);
+      rejected.api.close();
+    }
+  } finally { skewed.api.close(); vi.useRealTimers(); }
 });
 it.each(['shared-task', 'provider-share'] as const)('round-trips a %s web invitation and existing Cindy native handoff with the same pinned scope', kind => {
   const value = { ...receipt, kind }, server = 'https://relay.example.test';

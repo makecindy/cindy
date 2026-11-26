@@ -1,3 +1,5 @@
+import { chatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
+
 /** Live chat notifications. Server reads/mute state win over delayed or replayed socket events. */
 export interface ChatMessageNotification {
   groupId: string;
@@ -17,7 +19,7 @@ export interface ChatNotificationMessage {
 }
 
 export interface ChatAttentionSnapshot<M extends ChatNotificationMessage> {
-  room: { name: string; kind?: string; archived?: boolean; dissolved_at?: string | null };
+  room: { name: string; default_notification_scope?: 'all' | 'mentions'; kind?: string; archived?: boolean; dissolved_at?: string | null };
   messages: M[];
   reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }>;
 }
@@ -78,7 +80,7 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
       if (!current() || !snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at) return;
       const main = snapshot.reads.find(read => read.thread_key === 'main');
       if (main?.muted) return;
-      const mentionsOnly = snapshot.room.kind !== 'direct' && main?.notification_scope === 'mentions';
+      const mentionsOnly = snapshot.room.kind !== 'direct' && chatGroupNotificationMode(snapshot.room, main) === 'mentions';
       for (const id of ids) {
         if (handled.has(id)) continue;
         const message = snapshot.messages.find(message => message.id === id) ?? await deps.message?.(groupId, id);
