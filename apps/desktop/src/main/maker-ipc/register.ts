@@ -6655,10 +6655,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(session.onEvent(emitWiredSessionEvent));
   registration.disposers.push(session.onRuntimeRecovery(emitWiredSessionEvent));
-  let lastSteerSupported = session.capabilities.sameTurnSteer.supported;
+  let lastSteerSupported = session.capabilities?.sameTurnSteer?.supported;
   registration.disposers.push(
     session.onCapabilitiesChange((capabilities) => {
-      const nextSteerSupported = capabilities.sameTurnSteer.supported;
+      const nextSteerSupported = capabilities?.sameTurnSteer?.supported;
       if (nextSteerSupported === lastSteerSupported) return;
       lastSteerSupported = nextSteerSupported;
       if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
