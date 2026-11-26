@@ -331,9 +331,11 @@ export class PrStatusService {
         return { ok: false, ...base, reason: gitlab ? 'glab-not-logged-in' : 'gh-not-logged-in' };
       }
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
+      const code = (err as { code?: unknown })?.code;
       log.warn('fetch pr status failed', {
         key: `${q.owner}/${q.repo}#${q.prNumber}`,
         status: typeof status === 'number' ? status : undefined,
+        ...(typeof code === 'string' ? { code } : {}),
       });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }

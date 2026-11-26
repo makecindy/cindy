@@ -355,11 +355,9 @@ export function useSessionListActions(options?: {
     });
   }, [invoke, preferredRpcDeviceId, t]);
 
-  // Inbox Done. With an active automation bound it only marks the round read and the task
-  // returns to Working: archiving would recycle the worktree that the next round rebuilds
-  // (2026-11-18 user decision). Otherwise it archives in one tap, without the automation reminder.
+  // Done settles this round without archiving a pinned task or recycling an automation's worktree.
   const completeSession = useCallback((session: RemoteSession) => {
-    if (hasActiveAutomationRef.current?.(session)) {
+    if (session.pinnedAt || hasActiveAutomationRef.current?.(session)) {
       swipeRegistry.closeOpenRow();
       markSessionRead(session);
       return;

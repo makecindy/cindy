@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "원격 미디어 가져오기 재시도",
     "retryFetch": "가져오기 재시도",
     "openMedia": "미디어 열기",
+    "playAudio": "오디오 재생",
     "readCurrentRemoteFile": "현재 원격 파일 읽기",
     "retryFilePreview": "파일 미리보기 재시도",
     "readCurrentFile": "현재 파일 읽기",
@@ -298,7 +299,7 @@
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
     "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "autoResume": {
-      "separator": "연결이 중단되어 자동으로 재개되었습니다",
+      "separator": "응답이 비어 있어 자동으로 재개했습니다",
       "succeeded": "다시 연결되었습니다",
       "failed": "다시 연결하지 못했습니다",
       "neutral": "다시 연결",
@@ -463,6 +464,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "10초 뒤로",
+    "audioForwardTen": "10초 앞으로",
+    "audioMute": "음소거",
+    "audioUnmute": "음소거 해제",
+    "audioSpeed": "재생 속도",
+    "audioOutput": "오디오 출력",
+    "fetchAudio": "컴퓨터에서 가져오기",
+    "pauseAudio": "오디오 일시 정지",
+    "audioProgress": "재생 위치",
     "more": "추가 작업",
     "retry": "다시 시도",
     "image": "이미지",

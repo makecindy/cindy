@@ -11,3 +11,10 @@ export class AccountServiceUnreachableError extends Error {
 export function isAccountServiceUnreachable(error: unknown): error is AccountServiceUnreachableError {
   return error instanceof AccountServiceUnreachableError;
 }
+
+/** Admission failed before a local Codex engine was started. */
+export class CodexAccountReadDeferred extends Error {
+  constructor(readonly retryAt: number) {
+    super('[CODEX_ACCOUNT_SERVICE_UNREACHABLE] The Codex account service is temporarily unreachable');
+  }
+}

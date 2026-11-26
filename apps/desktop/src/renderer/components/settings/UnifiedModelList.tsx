@@ -1,4 +1,6 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
 /**
@@ -48,6 +50,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import {
   litWholeMarks,
@@ -1048,22 +1051,21 @@ export function UnifiedModelList({
    */
   const rowAdvancedButton = (row: UnionModelRow) => (
     <Tip text={t('settings.providers.models.advanced.open')}>
-      <button
+      <Button
         data-settings-search-action="Open advanced settings for this model"
         type="button"
+        variant="secondary"
+        tone="quiet"
+        size="xs"
         aria-label={t('settings.providers.models.advanced.openAria', {
           name: localizedModelName(row.name, t),
         })}
         onClick={() => openAdvanced(row)}
-        className={cn(
-          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
-          'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
-          advancedOpen && advancedRow?.id === row.id && 'opacity-100',
-        )}
+        className="w-6 px-0"
         style={{ color: 'var(--text-tertiary)' }}
       >
         <SlidersHorizontal size={14} />
-      </button>
+      </Button>
     </Tip>
   );
 
@@ -1102,7 +1104,7 @@ export function UnifiedModelList({
     const brand = modelBrand(rep);
     const explicitIcon = resolveModelIconKind(rep.icon);
     const logoKind =
-      explicitIcon === 'claude'
+      isProviderConnectionIcon(provider.logoKind) ? provider.logoKind : explicitIcon === 'claude'
         ? 'anthropic'
         : explicitIcon === 'codex'
           ? 'openai'
@@ -1138,7 +1140,9 @@ export function UnifiedModelList({
           className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--text-secondary)]"
           aria-hidden="true"
         >
-          {logoKind ? (
+          {isProviderConnectionImage(provider.customIcon) ? (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>{null}</CustomProviderIcon>
+          ) : logoKind ? (
             <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={logoKind} size={19} />
           ) : brand ? (
             <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>
@@ -1203,13 +1207,9 @@ export function UnifiedModelList({
           </span>
         )}
         {paymentRequired && (
-          <span
-            data-payment-required-badge
-            className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-          >
-            <Lock size={11} />
+          <Badge data-payment-required-badge icon={<Lock size={11} />}>
             {t('settings.providers.models.paymentRequired')}
-          </span>
+          </Badge>
         )}
         {/* 上下文窗口已移进高级设置抽屉的「规格」段:它是「查一次就够」
             的属性,常驻列表只会让每行更碎,而真正要决策的是「这个模型贵不贵、
@@ -1374,8 +1374,7 @@ export function UnifiedModelList({
                   aria-label={t('settings.providers.models.kindFilter.aria')}
                   value={kindFilter}
                   onValueChange={setKindFilter}
-                  height={28}
-                  optionHeight={24}
+                  density="sm"
                   optionClassName="px-2.5"
                   options={(
                     ['all', ...presentCategories] as Array<ModelCategory | 'chat' | 'all'>
@@ -1394,23 +1393,14 @@ export function UnifiedModelList({
               {showSearch && (
                 /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让 chip 组被 overflow-hidden 裁掉(PR #1102 review)。 */
-                <div className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3">
-                  <Search
-                    size={14}
-                    className="shrink-0"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    data-settings-search-action="Search the provider model list"
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={t('settings.providers.models.search')}
-                    aria-label={t('settings.providers.models.search')}
-                    className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-                    style={{ color: 'var(--settings-section-title)' }}
-                  />
-                </div>
+                <SearchInput
+                  className="min-w-0 basis-[200px]"
+                  data-settings-search-action="Search the provider model list"
+                  value={query}
+                  onChange={setQuery}
+                  placeholder={t('settings.providers.models.search')}
+                  aria-label={t('settings.providers.models.search')}
+                />
               )}
             </div>
           )}
@@ -1606,13 +1596,9 @@ export function UnifiedModelList({
                           </span>
                           <span className="min-w-0 flex-1" />
                           {paymentRequired && (
-                            <span
-                              data-payment-required-badge
-                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-                            >
-                              <Lock size={11} />
+                            <Badge data-payment-required-badge icon={<Lock size={11} />}>
                               {t('settings.providers.models.paymentRequired')}
-                            </span>
+                            </Badge>
                           )}
                           {!paymentRequired && (
                             <Button

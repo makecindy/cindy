@@ -10,6 +10,7 @@ import { setMainLocale } from '../../../i18n.desktop';
 
 import {
   isQuotaExhaustionFailure,
+  openAiSubscriptionReconnectNotice,
   overloadFailureNotice,
   overloadRetryNotice,
   quotaFailureNoticePrefix,
@@ -490,4 +491,12 @@ it.each(['telegram', 'wechat'])('explains review quota to %s and strips the fall
     metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } };
   expect(autoReviewUnavailablePromptLine(request)).toBe(text);
   expect(permissionPromptDescription(request)).toBe('Source');
+});
+
+it('keeps unrelated providers, status codes and generic 401s out of subscription recovery', () => {
+  const data = { errorStatus: 401, message: 'unauthorized_unknown' };
+  expect(openAiSubscriptionReconnectNotice(data, 'openai')).toContain('ChatGPT');
+  expect(openAiSubscriptionReconnectNotice(data, 'custom-openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, errorStatus: 403 }, 'openai')).toBeNull();
+  expect(openAiSubscriptionReconnectNotice({ ...data, message: 'invalid API key' }, 'openai')).toBeNull();
 });

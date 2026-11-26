@@ -484,6 +484,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      drainHistories: () => executor.drainHistories(),
       isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
@@ -592,6 +593,7 @@ export function createInputQueue(deps) {
             refuseWhileHeld();
             if (state.admission !== admission) throw new Error('input cancelled before acceptance');
           }
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           let accepted = false;
           try {
             state.lastUserActionAt = Date.now();
@@ -601,6 +603,7 @@ export function createInputQueue(deps) {
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+            commitAutoTitle?.();
             if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
@@ -667,6 +670,7 @@ export function createInputQueue(deps) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
           let accepted = false;
@@ -675,6 +679,7 @@ export function createInputQueue(deps) {
             if (accepted) {
               await flushed(id);
               await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+              commitAutoTitle?.();
             }
             return accepted;
           } finally {
