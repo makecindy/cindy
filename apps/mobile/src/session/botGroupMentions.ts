@@ -34,12 +34,12 @@ function memberMentionLabels(member: BotGroupMemberView) {
   return [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name];
 }
 
-export type MentionRange = { start: number; end: number };
+type MentionRange = { start: number; end: number };
 const overlaps = (a: MentionRange, b: MentionRange) => a.start < b.end && b.start < a.end;
 
 /** Each saved recipient must occur somewhere. Highlight only a unique occurrence
  * with no competing possible range. Broadcasts also occupy their known spans. */
-export function confirmedMobileMentionRanges(text: string, context: BotGroupMentionContext): MentionRange[] {
+function confirmedMobileMentionRanges(text: string, context: BotGroupMentionContext): MentionRange[] {
   const { members, mentions, allLabels, allBotsLabels } = context;
   const rangesFor = (labels: readonly string[]) => [...new Set(labels.map(label => label.trim()))]
     .flatMap(label => botGroupMentionRanges(text, label));
@@ -59,9 +59,9 @@ export function confirmedMobileMentionRanges(text: string, context: BotGroupMent
   // An isolated occurrence of an unambiguous typed name would address that
   // member even without a pick. Check all labels, including unaddressed names,
   // so a longer match cannot explain away this occurrence.
-  const roster = chatGroupMentionRoster(members);
+  const roster = groups.some(ranges => ranges.length > 1) ? chatGroupMentionRoster(members) : [];
   const typedLabels = roster.flatMap(member => [member.name, member.nickname || member.displayName || member.name]);
-  const possibleRanges = rangesFor([...context.labels, ...typedLabels, ...allLabels, ...allBotsLabels]);
+  const possibleRanges = roster.length ? rangesFor([...context.labels, ...typedLabels, ...allLabels, ...allBotsLabels]) : [];
   const personal = groups.flatMap((ranges, index) => ranges.length === 1 ? ranges : ranges.filter(range => {
     if (possibleRanges.some(other => (other.start !== range.start || other.end !== range.end) && overlaps(other, range))) return false;
     const spelling = text.slice(range.start, range.end);
@@ -80,7 +80,7 @@ export function splitMobileBotGroupMentionSegments(text: string, labels: readonl
   return splitConfirmedMentionRanges(text, confirmedMobileMentionRanges(text, context));
 }
 
-export function splitConfirmedMentionRanges(text: string, ranges: readonly MentionRange[]): BotGroupTextSegment[] {
+function splitConfirmedMentionRanges(text: string, ranges: readonly MentionRange[]): BotGroupTextSegment[] {
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
   for (const { start: from, end: to } of ranges) {

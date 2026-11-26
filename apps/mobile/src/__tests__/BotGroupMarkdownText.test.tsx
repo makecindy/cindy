@@ -508,17 +508,23 @@ it.each([
   ['two paragraphs', '@Ann 你好\n\n第二段', ['ann'], ['@Ann']],
   ['code block', '@Ann 帮我看下：\n\n~~~js\nx()\n~~~', ['ann'], ['@Ann']],
   ['inline bold', '@Ann 请看 **这里**', ['ann'], ['@Ann']],
+  ['inline code', '@Ann 请看 `foo()` 这里', ['ann'], ['@Ann']],
+  ['link label', '@Ann 看 [文档](https://example.com)', ['ann'], ['@Ann']],
+  ['bare URL', '@Ann 看这个 https://example.com/a_b', ['ann'], ['@Ann']],
+  ['quote', '> @Ann 引用里点名', ['ann'], ['@Ann']],
+  ['ordered list', '1. @Ann 做甲\n2. @Ann 做乙', ['ann'], ['@Ann', '@Ann']],
+  ['mixed bot reply', '## 分工\n- @Ann 看 `tool()` 和 [指南](https://example.com)\n\n~~~js\nx()\n~~~\n\n- @Ann 第二项', ['ann'], ['@Ann', '@Ann'], 'bot'],
   ['list', '- @Ann 做甲\n- 第二项', ['ann'], ['@Ann']],
   ['soft line break', '@Ann\n帮我看下', ['ann'], ['@Ann']],
   ['recipients in different paragraphs', '@Ann 段一\n\n@Bob 段二', ['ann', 'bob'], ['@Ann', '@Bob']],
   ['overlap in second paragraph', '第一段\n\n@Team @Ann @Team @Ann', ['ann', 'team'], []],
-  ['nonmatching Markdown spelling in another block', '@A**nn**\n\n@Ann', ['ann'], ['@Ann']],
-] as const)('keeps only source-backed Markdown mention links for %s', async (_case, content, botIds, expected) => {
+  ['visible Markdown spelling', '@A**nn**\n\n@Ann', ['ann'], ['@A', 'nn', '@Ann']],
+] as const)('matches unambiguous recipient links in visible Markdown for %s', async (_case, content, botIds, expected, authorKind: 'user' | 'bot' = 'user') => {
   const members = [
     { botId: 'ann', name: 'Ann' }, { botId: 'bob', name: 'Bob' }, { botId: 'team', name: 'Team @Ann' },
   ].map(member => ({ ...member, avatar: '', avatarColor: '', status: 'active' as const }));
   await act(async () => root.render(createElement(BotGroupMarkdownText, {
-    content, authorKind: 'user',
+    content, authorKind,
     mentionContext: { members, mentions: { all: false, botIds: [...botIds] }, allLabels: [], allBotsLabels: [],
       labels: members.map(member => member.name), serverBacked: true, onPress: vi.fn() },
   })));
