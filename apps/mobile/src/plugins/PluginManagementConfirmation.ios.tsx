@@ -54,8 +54,12 @@ export function PluginManagementConfirmation(
   const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
   const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
-  const measure = (key: "identity" | "heading" | "actions" | "visible" | "content") => (size: { height: number }) => {
-    if (size.height > 0) layout.report(key, size.height);
+  const measure = (key: "identity" | "heading" | "actions" | "visible" | "content") => (frame: { y: number; height: number }) => {
+    if (frame.height <= 0) return;
+    layout.report(key, frame.height);
+    // Where the identity block and the list end on screen (global frames): the real-layout check compares them.
+    if (key === "identity") layout.reportEnd("identityBottom", frame.y + frame.height);
+    if (key === "visible") layout.reportEnd("listBottom", frame.y + frame.height);
   };
   const measureLine = (index: number) => (size: { height: number }) => {
     if (size.height > 0) layout.reportLine(index, size.height);
@@ -97,16 +101,17 @@ export function PluginManagementConfirmation(
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
   const compact = plan.mode === "compact" || reviewed || cramped;
-  const measuredAll = consentSheetMeasured(sizes, lineCount);
+  const measuredAll = consentSheetMeasured(sizes, lineCount, true);
   useEffect(() => {
-    // The list's top padding comes before the identity block.
-    if (fitKey && !compact && measuredAll && !consentIdentityShown({ ...sizes, top: spacing.sm })) setCrampedFor(fitKey);
+    // Where the identity block ends against where the list ends, both as laid out (the list's content can start below a
+    // top inset, as in landscape: reshoot m2b).
+    if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes, true)) setCrampedFor(fitKey);
   }, [fitKey, compact, measuredAll, sizes]);
   // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
   // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
   // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
   // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
-  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, top: spacing.sm });
+  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });

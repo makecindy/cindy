@@ -13,7 +13,7 @@ import { PluginTaskPickerView } from "@/plugins/PluginTaskPickerView.ios";
 import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginTaskPickerView";
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
-import { planConsentSheet } from "@/plugins/pluginConsentPresentation";
+import { CONSENT_FADE_HEIGHT, planConsentSheet } from "@/plugins/pluginConsentPresentation";
 import { declaredPluginConsent, pluginConsentAllowance } from "@/plugins/pluginConsentAllowance";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
 import { PluginManagementConfirmation as AndroidManagementConfirmation } from "@/plugins/PluginManagementConfirmation";
@@ -28,6 +28,7 @@ const bridge = vi.hoisted(() => ({
   keyboardVisible: false,
   fontScale: 1,
   width: 390,
+  height: 844,
   mode: "light" as "light" | "dark",
   /** `scrollTo` calls on a ScrollView, by its testID. */
   scrolledTo: [] as Array<[string | undefined, unknown]>,
@@ -190,7 +191,7 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   PlatformColor: (name: string) => name,
   Keyboard: { addListener: () => ({ remove() {} }) },
-  useWindowDimensions: () => ({ width: bridge.width, height: 844, fontScale: bridge.fontScale }),
+  useWindowDimensions: () => ({ width: bridge.width, height: bridge.height, fontScale: bridge.fontScale }),
   Image: () => null,
   View: (p: any) => {
     if (p.testID) bridge.props.set(p.testID, p);
@@ -335,6 +336,8 @@ afterEach(() => {
   bridge.scrolledTo = [];
   bridge.scrollMounts.clear();
   bridge.mode = "light";
+  bridge.width = 390;
+  bridge.height = 844;
   bridge.ownerCurrent = true;
   bridge.keyboardVisible = false;
   bridge.fontScale = 1;
@@ -356,8 +359,8 @@ function mount(component: any, props: any) {
  * sheets): the identity block, the list's visible and content heights as given, every other measured view `other` high.
  */
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
-const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x844@${bridge.fontScale}`;
-function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number }) {
+const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
+function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; identityTop?: number }) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
   const calls: Array<() => void> = [];
@@ -367,15 +370,17 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     const p = node.props;
     const height = p.testID === "plugins.management.identity" ? heights.identity
       : p.testID === "plugins.management.list" ? heights.visible : root ? heights.content : other;
+    const y = p.testID === "plugins.management.identity" ? heights.identityTop ?? 0 : 0;
     if (typeof p.onLayout === "function") calls.push(() => p.onLayout({ nativeEvent: { layout: { height } } }));
     if (p.testID === "plugins.management.list" && typeof p.onContentSizeChange === "function") calls.push(() => p.onContentSizeChange(390, heights.content));
     for (const modifier of Array.isArray(p.modifiers) ? p.modifiers : [])
-      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ width: 390, height }));
+      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y, width: 390, height }));
     walk(p.children);
   };
   if (sheet.nativeContentModifiers) {
     // iOS: the list's own frame, its content root, then the footer.
-    for (const modifier of sheet.nativeContentModifiers) if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ width: 390, height: heights.visible }));
+    for (const modifier of sheet.nativeContentModifiers)
+      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y: heights.listTop ?? 0, width: 390, height: heights.visible }));
     walk(sheet.children, true);
     walk(sheet.footer);
   } else walk(sheet.children);
@@ -1964,6 +1969,45 @@ describe("pinned high-risk permission", () => {
       layOutSheet({ identity: 100, visible: 2000, content: 400 });
       expect(pressAllow(fourth)).toBe(true);
     });
+  /* 测试价值（iOS m2b 复拍 2026-11-26，1d1eae1a6d：官方来源转横屏后是常规档，「来自 Cindy 插件市场」被渐隐遮住，仍能直接允许）
+   * - 生产入口与可观察结果：两端真实确认面板组件；按一个布局模型报出各视图的尺寸与（iOS）全局位置，观察是否为常规档。
+   * - 依据：不变量「常规档 ⇒ 身份块（每条身份行）的下缘都在列表渐隐起点之上」。横屏时列表内容上方有一段内边距（截图里
+   *   标题与插件名之间的空白），内容不从列表顶端开始；只按高度相加判定会算成放得下。
+   * - 最小失败输入：iOS 横屏（内边距 52）、字号 1、官方来源一行身份；改前常规档且身份下缘落在渐隐里。tier: unit。
+   */
+  {
+    const windows = { portrait: { width: 375, height: 667, inset: 0 }, landscape: { width: 667, height: 375, inset: 52 }, short: { width: 375, height: 480, inset: 0 } } as const;
+    const lineCounts = { official: 3, custom: 5 } as const;
+    const variants = { "one line each": 0, "a wrapped line": 1, "initiated by an Agent": 1 } as const;
+    const cells: Array<[string, string, keyof typeof windows, number, keyof typeof lineCounts, keyof typeof variants]> = [];
+    for (const platform of ["iOS", "Android"])
+      for (const window of Object.keys(windows) as Array<keyof typeof windows>)
+        for (const fontScale of [1, 1.6, 2.4])
+          for (const source of Object.keys(lineCounts) as Array<keyof typeof lineCounts>)
+            for (const variant of Object.keys(variants) as Array<keyof typeof variants>)
+              cells.push([platform, `${platform} ${window} ×${fontScale} ${source}, ${variant}`, window, fontScale, source, variant]);
+    it.each(cells)("%s invariant: %s: regular only when the whole identity block ends above the list's fade", (platform, _name, windowName, fontScale, source, variant) => {
+      const window = windows[windowName];
+      bridge.width = window.width; bridge.height = window.height; bridge.fontScale = fontScale;
+      const p = props(allFive);
+      const { container } = mount(platform === "iOS" ? PluginManagementConfirmation : AndroidManagementConfirmation, p);
+      // The layout model: lines of 20 pt at text size 1, 12 pt apart; a header above the list, buttons and the pinned
+      // summary below it; on iOS in landscape the list's content starts below a top inset.
+      const lineHeight = Math.ceil(20 * fontScale);
+      const lines = lineCounts[source] + variants[variant];
+      const identity = lines * lineHeight + (lines - 1) * 12;
+      const listTop = 60 + Math.ceil(10 * fontScale);
+      const visible = Math.max(40, window.height - listTop - 44 - 3 * lineHeight - 40);
+      const inset = platform === "iOS" ? window.inset : 0;
+      const identityTop = listTop + inset + 8;
+      layOutSheet({ identity, visible, content: 1200, other: lineHeight, listTop, identityTop });
+      const regular = container.querySelector('[data-testid="plugins.management.allow"]') !== null;
+      const identityBottom = platform === "iOS" ? identityTop + identity : identity;
+      const fadeTop = (platform === "iOS" ? listTop : 0) + visible - CONSENT_FADE_HEIGHT;
+      if (regular) expect(identityBottom, `regular, so the identity block ends above the fade (inset ${inset})`).toBeLessThanOrEqual(fadeTop);
+      else expect(container.querySelector('[data-testid="plugins.management.review"]'), "compact: review first").not.toBeNull();
+    });
+  }
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
    * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
    *   iOS 观察两个滚动区的视图标识。
