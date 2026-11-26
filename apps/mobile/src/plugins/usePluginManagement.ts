@@ -12,9 +12,9 @@ import {
   type PluginManagementController,
   type PluginManagementState,
 } from "./pluginManagementController";
-import { pluginOperationOpens } from "./pluginOperationOpens";
+import { pluginMarketFactsComplete, pluginOperationOpens } from "./pluginOperationOpens";
 import { pluginSlotOwnerKey, samePluginSlotHolder, setPluginPendingCheckSource, type PluginSlotEntry, type PluginSlotHolder } from "./pluginManagementSlot";
-import { marketItemMatchesPlugin, type ManagedMarketDetail } from "./pluginManagementTypes";
+import type { ManagedMarketDetail } from "./pluginManagementTypes";
 
 /**
  * Every controller of this account, shown or kept (maintainer reviews 15:37, 17:43, 18:45). A controller whose view
@@ -42,6 +42,8 @@ interface ManagementEntry {
   review?: () => void;
   /** The pending check this entry last had (its final result is told once, see `conclude`). */
   lastCheck?: ReturnType<PluginManagementController["pendingCheck"]>;
+  /** The operation whose final result this entry already told the list (told once). */
+  concluded?: string;
   /** The installed read this entry's view uses (the market's light read, or the full snapshot): the readback uses it too. */
   snapshotRead?: "installed";
   /** Views of the list of pending checks showing this entry's consent ("View and decide"): it counts as shown then. */
@@ -76,14 +78,18 @@ export interface PluginCheckConclusion {
   readback: "pending" | "verified" | "gone" | "unconfirmed" | "legacy" | "failed" | "none";
   /** The instance found by that read (never the instance the operation started from: an uninstall has none). */
   instanceKey?: string;
-  /** Its own view was showing it and handled the result already (only the list of checks still tells it). */
+  /** Its own view was attached when it ended (that view reads its lists again itself). */
   shown?: boolean;
   /**
-   * The success still needs its read of the computer (maintainer review 03:52): its read failed, or it is being read
-   * again after a failure. Listed with the unfinished operations (the notice at the top, the list of checks) until the
-   * read settles it.
+   * The person has been shown how it settled (`tellPluginConclusion`): by the view that started it, by the page opening
+   * the instance, or by the list of checks. A success that opens something stays listed (the notice at the top, the list
+   * of checks) until then, whatever its read says: still out, failed, or settled with nobody there to show it.
    */
-  awaitingRead?: boolean;
+  told?: boolean;
+}
+/** A success that opens something, not yet shown to the person: listed at the top of the page and in the list of checks. */
+export function pluginConclusionListed(conclusion: PluginCheckConclusion): boolean {
+  return !conclusion.told && conclusion.readback !== "none" && (conclusion.result === "succeeded" || conclusion.result === "installed");
 }
 const CONCLUSIONS_KEPT = 20;
 let conclusions: Array<PluginCheckConclusion & { ownerKey: string; seq: number }> = [];
@@ -166,68 +172,98 @@ setPluginPendingCheckSource({
 function conclude(entry: { ownerKey: string }, conclusion: PluginCheckConclusion) {
   conclusions = [...conclusions.filter((item) => item.operationId !== conclusion.operationId),
     { ...conclusion, ownerKey: entry.ownerKey, seq: ++conclusionSeq }].slice(-CONCLUSIONS_KEPT);
+  // A read lives no longer than its conclusion.
+  for (const operationId of [...readbacks.keys()]) if (!conclusions.some((item) => item.operationId === operationId)) readbacks.delete(operationId);
   notifyChecks();
 }
 type Finished = NonNullable<ManagementEntry["lastCheck"]>;
 /**
- * Closing a successful check (dispatcher L-3): the list reads the target computer's installed plugins itself, for this
- * account and computer, independent of the controller (which goes once its operation is over), and offers "Open" only
- * for the instance that read found: the market plugin an install or update put there, or the instance an approval was
- * for. Read again on request after a failed read; dropped when the account changed.
+ * The one read that closes a success (dispatcher L-3; maintainer review 03:52): for this account and computer, by its
+ * own operation id, independent of the controller (which goes once its operation is over) and of any view. Every place
+ * that opens an instance after an operation shows this read's conclusion: the market row that started an install, the
+ * installed detail after an update or a page approval, the notice at the top and the list of checks. No second read
+ * decides beside it, so two places cannot say different things about one operation.
+ * - Every read of it is issued after the result. Read again before an earlier read came back: only the newest read
+ *   issued settles it (an earlier reply landing last is older).
+ * - "Open" only for the instance that one response proves (`pluginOperationOpens`, controller rule ④). A response that
+ *   says its market part is incomplete and has no record of the plugin settles nothing: the same as a failed read.
+ * - A failed read leaves it listed, to be read again: by "Read again", and by itself once each time its computer becomes
+ *   reachable again for the page (`setPluginReadbackAvailable`), including when that happened while the read was out.
+ *   Never on a timer.
+ * Only reads; dropped when the account changed, when the person was shown how it settled, or on "Stop tracking".
  */
 interface Readback { owner: ReturnType<typeof getMobileAuthOwner>; ownerKey: string; invoke: PluginManagementInvoke; snapshotRead?: "installed"; check: Finished; reads: number }
 const readbacks = new Map<string, Readback>();
-async function readBack(operationId: string) {
+/** Per computer: whether the page can reach it now, and how many times it became reachable. */
+const reachable = new Map<string, { up: boolean; edges: number }>();
+async function readBack(operationId: string): Promise<void> {
   const job = readbacks.get(operationId);
   const before = conclusions.find((item) => item.operationId === operationId);
   if (!job || !before) return;
-  // Every read of it is issued after the result; when it is read again before an earlier read came back, only the
-  // newest read issued settles it (an earlier reply landing last is older).
   const read = ++job.reads;
+  const edges = reachable.get(job.check.who.deviceId)?.edges ?? 0;
   const current = () => isMobileAuthOwnerCurrent(job.owner) && readbacks.get(operationId) === job && job.reads === read;
-  conclude(job, { ...before, readback: "pending", instanceKey: undefined, awaitingRead: before.readback === "failed" || before.awaitingRead });
+  const latest = () => conclusions.find((item) => item.operationId === operationId) ?? before;
+  conclude(job, { ...before, readback: "pending", instanceKey: undefined });
+  let opens: ReturnType<typeof pluginOperationOpens> | undefined;
   try {
     const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId: job.check.who.deviceId, isCurrent: current })
       .snapshot(job.snapshotRead);
     if (!current()) return;
     // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
-    const opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items });
-    const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey, awaitingRead: false }
-      : { ...latest, readback: opens.reason, instanceKey: undefined, awaitingRead: false });
-    readbacks.delete(operationId);
+    opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items,
+      marketComplete: pluginMarketFactsComplete(snapshot.market) });
   } catch {
     if (!current()) return;
-    const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, { ...latest, readback: "failed", instanceKey: undefined, awaitingRead: true });
   }
+  if (opens?.open) { conclude(job, { ...latest(), readback: "verified", instanceKey: opens.instanceKey }); return; }
+  if (opens && opens.reason !== "unread") { conclude(job, { ...latest(), readback: opens.reason, instanceKey: undefined }); return; }
+  // Not read. Its computer became reachable again while this read was out: that edge's one read is this one, now.
+  const now = reachable.get(job.check.who.deviceId);
+  if (!opens && now?.up && now.edges !== edges) { void readBack(operationId); return; }
+  conclude(job, { ...latest(), readback: "failed", instanceKey: undefined });
+}
+function startReadback(entry: ManagementEntry, check: Finished) {
+  readbacks.set(check.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check, reads: 0 });
+  void readBack(check.operationId);
 }
 /**
- * A market install whose result arrived but whose read of the computer failed (its view ends it and lets the market start
- * another install; maintainer review 03:52): the success goes to the list of checks with a read of its own, by its own
- * operation id, so no later operation of the same controller can change it. Listed until that read settles it; read
- * again on "Read again" or when its computer comes back (the page). Nothing is written.
+ * Whether the page can reach a computer now (it is online, and the page is focused and in the foreground). Each time one
+ * becomes reachable, the successes on it whose read failed are read again, once.
  */
-export function handOverUnreadSuccess(controller: PluginManagementController) {
-  const entry = [...entries].find((candidate) => candidate.controller === controller && !candidate.dead);
-  const finished = controller.finishedOperation();
-  if (!entry || !finished || controller.getState().outcome !== "succeeded") return;
-  if (finished.entry !== "market-install" && finished.entry !== "update" && finished.entry !== "page-approval") return;
-  // Already listed (its pending check ended here and the list started its own read): its view did not handle it after
-  // all; it waits for that read like one handed over.
-  const listed = conclusions.find((item) => item.operationId === finished.operationId);
-  if (listed && readbacks.has(finished.operationId)) {
-    conclude(entry, { ...listed, shown: false, awaitingRead: listed.readback === "failed" || listed.readback === "pending" || listed.awaitingRead });
-    return;
+export function setPluginReadbackAvailable(deviceId: string, up: boolean) {
+  const before = reachable.get(deviceId);
+  if (before?.up === up) return;
+  // The first word about a computer is not a change of it (reads issued before it count from the same zero).
+  reachable.set(deviceId, { up, edges: before ? before.edges + (up ? 1 : 0) : 0 });
+  if (!up) return;
+  for (const [operationId, job] of [...readbacks]) {
+    if (job.check.who.deviceId !== deviceId || !isMobileAuthOwnerCurrent(job.owner)) continue;
+    if (conclusions.find((item) => item.operationId === operationId)?.readback === "failed") void readBack(operationId);
   }
-  const check = { ...finished, waiting: false } as Finished;
-  conclude(entry, { operationId: finished.operationId, entry: finished.entry, who: finished.who, result: "succeeded",
-    errorCode: null, shown: false, readback: "failed", awaitingRead: true });
-  readbacks.set(finished.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke,
-    snapshotRead: entry.snapshotRead, check, reads: 0 });
 }
-/** Read the target computer again for a success whose read failed ("Read again" in the list of checks). */
-export function retryPluginCheckReadback(operationId: string) { void readBack(operationId); }
+/** The page went away: nothing is reachable for it until it is back (coming back reads the failed ones again). */
+export function clearPluginReadbackAvailability() { reachable.clear(); }
+/** Read the target computer again for a success ("Read again", and before "Open": the newest read decides). */
+export function retryPluginCheckReadback(operationId: string): Promise<PluginCheckConclusion | undefined> {
+  return readBack(operationId).then(() => conclusions.find((item) => item.operationId === operationId));
+}
+/**
+ * The person was shown how a success settled (or stops following one that could not be read): it leaves the notice at
+ * the top and the list of checks, and its read is dropped. Nothing is sent to the computer.
+ */
+export function tellPluginConclusion(operationId: string) {
+  const conclusion = conclusions.find((item) => item.operationId === operationId);
+  readbacks.delete(operationId);
+  if (!conclusion || conclusion.told) return;
+  conclusions = conclusions.map((item) => item.operationId === operationId
+    ? { ...item, told: true, ...(item.readback === "pending" ? { readback: "failed" as const } : {}) } : item);
+  notifyChecks();
+}
+/** Read live (an effect earlier in the same commit may have told it). */
+export function pluginConclusionTold(operationId: string): boolean {
+  return conclusions.find((item) => item.operationId === operationId)?.told === true;
+}
 /**
  * What settles a pending check once the computer no longer has its receipt (NOT_FOUND), per entry (dispatcher O-1; the
  * per-entry table in docs/dev-rules/plugin-mobile-implementation.md, "待核实记录的状态表"). Typed over every entry, so a
@@ -247,13 +283,13 @@ export const AFTER_RECEIPT_GONE: Record<PluginSlotEntry, AfterReceiptGone> = {
 /**
  * A market install or update whose receipt is gone (NOT_FOUND) settles from the facts the controller read right after it
  * (`missingReceiptFacts`), never from an earlier snapshot, wherever it is shown:
- * - No same-id instance in those facts: "could not confirm; not on this computer now".
- * - A same-id instance is only a lead (a local package can share id and namespace): only the Host's own evidence makes it
+ * - No instance of the plugin in those facts: "could not confirm; not on this computer now".
+ * - An instance of it is only a lead (a local package can share id and namespace): only the Host's own evidence makes it
  *   this attempt's result (contract V2.10 ①), and only as that one response gives it (controller rule ④): the market
  *   record in the same installed snapshot as the instance (`market.items` beside `ghosts`, which the Host checks against
- *   each other in that response). No other request's attribution is combined with these instances; the record missing
- *   from that response (the computer could not read its catalog then) leaves it unconfirmed ("mismatch"). The original
- *   operation is never sent again.
+ *   each other in that response). No other request's attribution is combined with these instances. The record missing
+ *   from a complete response leaves it unconfirmed ("mismatch"); missing from a response that says its market part is
+ *   incomplete, it settles nothing yet (still a pending check). The original operation is never sent again.
  * Valid only while these facts are still the ones read by the newest installed read issued (the controller derives it
  * when asked); a new lookup clears them.
  */
@@ -269,18 +305,20 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
     // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
+    // Proven by the facts read after NOT_FOUND; "Open" reads the computer once more through the same read as any success.
+    if (result === "installed" && instanceKey)
+      readbacks.set(check.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check, reads: 0 });
   };
-  // A lead only: the market plugin (an install), or the instance the update started from; `pluginOperationOpens` decides.
-  const lead = facts.ghosts.find((ghost) => marketItemMatchesPlugin(item, ghost)
-    && (check.entry !== "update" || ghost.instanceKey === check.who.instanceKey));
-  if (!lead) { settle("notInstalled"); return; }
   // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
   // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
-  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items });
+  const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market: facts.market.items,
+    marketComplete: pluginMarketFactsComplete(facts.market) });
   if (opens.open) { settle("installed", opens.instanceKey); return; }
-  const recorded = facts.market.items.some((record) => record.pluginId === item.pluginId);
-  // An instance is there but this response names no record of it: nothing proves or disproves it here (②).
-  settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" && recorded ? "notInstalled" : "mismatch");
+  // An instance is there, but this response says its market part is incomplete and names no record of the plugin (the
+  // computer just restarted and cannot reach its catalog or a custom market yet): nothing proves or disproves it. It
+  // stays a pending check; "Check result" looks the operation up and reads the facts again.
+  if (opens.reason === "unread") return;
+  settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" ? "notInstalled" : "mismatch");
 }
 /** After each change of an entry's controller: the list at the top, a market install's facts, a final result. */
 function watch(entry: ManagementEntry) {
@@ -292,19 +330,21 @@ function watch(entry: ManagementEntry) {
   // A pending check that ended with a final result: told once (the list of checks says how it ended; when no view showed
   // it, also a market row note and the lists read again). A success is closed by the list's own read of the computer
   // (`readBack`), started here, before the controller goes; an uninstall has nothing to open.
-  const last = entry.lastCheck;
+  const kept = entry.lastCheck;
   if (check) entry.lastCheck = check;
-  else if (last && state.operationId === last.operationId && ["succeeded", "failed", "cancelled"].includes(state.outcome)) {
-    entry.lastCheck = undefined;
+  else entry.lastCheck = undefined;
+  // One whose first word here was already its result (never seen under way) ends the same way; each operation once.
+  const finished = check ? null : entry.controller.finishedOperation();
+  const last = kept && state.operationId === kept.operationId ? kept : finished ? { ...finished, waiting: false } : undefined;
+  if (!check && last && state.operationId === last.operationId && entry.concluded !== last.operationId
+    && ["succeeded", "failed", "cancelled"].includes(state.outcome)) {
+    entry.concluded = last.operationId;
     const succeeded = state.outcome === "succeeded", opens = succeeded && last.entry !== "uninstall" && last.entry !== "enable" && last.entry !== "task-settings";
     conclude(entry, { operationId: last.operationId, entry: last.entry, who: last.who,
       result: state.outcome as "succeeded" | "failed" | "cancelled", errorCode: state.errorCode, shown: !!entry.listener,
       readback: opens ? "pending" : "none" });
-    if (opens) {
-      readbacks.set(last.operationId, { owner: entry.owner, ownerKey: entry.ownerKey, invoke: entry.invoke, snapshotRead: entry.snapshotRead, check: last, reads: 0 });
-      void readBack(last.operationId);
-    }
-  } else if (!check) entry.lastCheck = undefined;
+    if (opens) startReadback(entry, last);
+  }
   notifyChecks();
 }
 function letGo(scope: string, entry: ManagementEntry) {
@@ -349,7 +389,7 @@ export const __retainedForTests = {
   /** The signed-in account's pending checks and conclusions, as the page lists them. */
   checks: () => pendingChecksOf(pluginSlotOwnerKey(getMobileAuthOwner())),
   conclusions: () => conclusions.filter((item) => item.ownerKey === pluginSlotOwnerKey(getMobileAuthOwner())),
-  clear: () => { for (const [scope, entry] of [...retained]) letGo(scope, entry); conclusions = []; readbacks.clear(); notifyChecks(); },
+  clear: () => { for (const [scope, entry] of [...retained]) letGo(scope, entry); conclusions = []; readbacks.clear(); reachable.clear(); notifyChecks(); },
 };
 
 /**
@@ -378,6 +418,16 @@ export function usePluginPendingChecks(isOnline?: (deviceId: string) => boolean,
       }
     }
   }, [drivenKey, ownerKey]);
+  // The successes whose read is still open follow the same reachability (their computer online, this page focused and in
+  // the foreground): each time one becomes reachable its failed reads are read again, once. Told every render (a no-op
+  // while nothing changed); the page going away makes nothing reachable.
+  const all = useSyncExternalStore(subscribe, () => conclusions, () => conclusions);
+  useEffect(() => {
+    if (!isOnline) return;
+    const devices = new Set(all.filter((item) => item.ownerKey === ownerKey && pluginConclusionListed(item)).map((item) => item.who.deviceId));
+    for (const deviceId of devices) setPluginReadbackAvailable(deviceId, active && foreground && isOnline(deviceId));
+  });
+  useEffect(() => isOnline ? () => clearPluginReadbackAvailability() : undefined, [!!isOnline]);
   return checks;
 }
 

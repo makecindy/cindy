@@ -491,6 +491,7 @@
     "titleEnded": "插件操作的结果",
     "many": "{{count}} 项插件操作还没结束",
     "waitingOne": "「{{name}}」在「{{device}}」上的结果待核实",
+    "settledOne": "「{{name}}」在「{{device}}」上的操作有结果了",
     "kind": {
       "marketInstall": "安装",
       "update": "更新",

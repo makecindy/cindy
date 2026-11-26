@@ -8,7 +8,7 @@ import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollO
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
-import { retryPluginCheckReadback, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
+import { retryPluginCheckReadback, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
 export interface PluginOperationLine {
@@ -17,10 +17,10 @@ export interface PluginOperationLine {
   who: PluginSlotHolder;
   check?: PluginPendingCheck;
   /**
-   * A success still waiting for its read of the computer (`key` is its operation id; maintainer review 03:52): shown
-   * as it ended so far ("could not read" with "Read again", reading, or the result once read).
+   * A success the person has not been shown yet (`key` is its operation id; maintainer review 03:52), with where its
+   * read of the computer is: shown as it ended so far ("could not read" with "Read again", reading, or the result).
    */
-  awaitingRead?: boolean;
+  concluded?: PluginCheckConclusion["readback"];
 }
 const KIND: Record<PluginSlotEntry, string> = {
   "market-install": "marketInstall", update: "update", uninstall: "uninstall", "page-approval": "pageApproval",
@@ -36,7 +36,7 @@ const KIND: Record<PluginSlotEntry, string> = {
  * the computer no longer has and that nothing on the computer can prove (`unprovable`: an uninstall, a page approval)
  * shows what the computer has now and offers only "Stop tracking": checking again could not settle it.
  */
-export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenInstalled, onShowInstalled }: {
+export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenChecked, onShowInstalled }: {
   visible: boolean;
   lines: PluginOperationLine[];
   conclusions: PluginCheckConclusion[];
@@ -46,7 +46,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   /** "View and decide": opens the consent once its operation holds the computer's slot; false when it cannot. */
   onDecide(operationId: string): boolean;
   onClose(): void;
-  onOpenInstalled(who: PluginSlotHolder, instanceKey: string): void;
+  /** "Open plugin": the page reads the computer once more and opens only what that read proves. */
+  onOpenChecked(operationId: string): void;
   /** "Go to Installed": closes the list and shows the installed segment of the record's computer (V2.10 ③). */
   onShowInstalled(who: PluginSlotHolder): void;
 }) {
@@ -56,11 +57,16 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   const seen = useRef(new Map<string, PluginOperationLine>());
   // A consent that could not be opened (another operation holds the computer's slot), per operation.
   const [blocked, setBlocked] = useState<string[]>([]);
+  // Successes drawn here as settled: the person has seen how they ended once the list closes (they leave the notice).
+  const settledSeen = useRef(new Set<string>());
   if (!visible) seen.current.clear();
-  useEffect(() => { if (!visible) setBlocked([]); }, [visible]);
+  useEffect(() => {
+    if (!visible) { setBlocked([]); return; }
+    return () => { for (const operationId of settledSeen.current) tellPluginConclusion(operationId); settledSeen.current.clear(); };
+  }, [visible]);
   for (const line of lines) seen.current.set(line.key, line);
   const shown = [...seen.current.values()];
-  const live = new Set(lines.filter((line) => !line.awaitingRead).map((line) => line.key));
+  const live = new Set(lines.filter((line) => !line.concluded).map((line) => line.key));
   const status = (line: PluginOperationLine) => {
     const check = line.check;
     if (!check) return t("plugins.checks.status.preparing");
@@ -80,7 +86,7 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
    * it, or failed to read ("Read again"); an uninstall has nothing to open.
    */
   const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; openUnavailable?: boolean; showInstalled?: boolean } => {
-    const operationId = line.check?.operationId ?? (line.awaitingRead ? line.key : undefined);
+    const operationId = line.check?.operationId ?? (line.concluded ? line.key : undefined);
     const conclusion = operationId ? conclusions.find((item) => item.operationId === operationId) : undefined;
     if (!conclusion) return { text: t(line.check ? "plugins.checks.result.untracked" : "plugins.checks.result.ended") };
     if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
@@ -89,9 +95,12 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
     if (conclusion.result !== "succeeded" && conclusion.result !== "installed") return { text: t("plugins.checks.result." + conclusion.result) };
     if (conclusion.entry === "uninstall") return { text: t("plugins.checks.result.uninstalled") };
     const done = t("plugins.checks.result." + conclusion.result);
+    // "Stop tracking" on one that could not be read.
+    if (conclusion.told && conclusion.readback === "failed") return { text: t("plugins.checks.result.untracked") };
+    if (conclusion.readback !== "pending" && conclusion.readback !== "failed" && conclusion.readback !== "none") settledSeen.current.add(conclusion.operationId);
     switch (conclusion.readback) {
       case "verified":
-        return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.instanceKey }
+        return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.operationId }
           : { text: done, openUnavailable: true };
       case "pending": return { text: t("plugins.checks.result.readingBack") };
       // The success stands as a past result; the computer's facts now do not name this operation's instance.
@@ -162,19 +171,35 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                 ) : over?.open || over?.readAgain ? (
                   <View style={styles.actions}>
                     {over.open ? (
-                      <Pressable testID="plugins.checks.open" accessibilityRole="button"
-                        onPress={() => onOpenInstalled(line.who, over.open!)} style={[styles.button, styles.primary]}>
+                      <Pressable testID="plugins.checks.open" accessibilityRole="button" disabled={!online}
+                        accessibilityState={{ disabled: !online }}
+                        onPress={() => onOpenChecked(over.open!)} style={[styles.button, styles.primary, !online && styles.unavailable]}>
                         <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.open")}</Text>
                       </Pressable>
                     ) : (
-                      <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
-                        accessibilityState={{ disabled: !online }}
-                        onPress={() => retryPluginCheckReadback(over.readAgain!)} style={[styles.button, !online && styles.unavailable]}>
-                        <Text style={styles.label}>{t("plugins.checks.readAgain")}</Text>
-                      </Pressable>
+                      <>
+                        <Pressable testID="plugins.checks.readAgain" accessibilityRole="button" disabled={!online}
+                          accessibilityState={{ disabled: !online }}
+                          onPress={() => { void retryPluginCheckReadback(over.readAgain!); }} style={[styles.button, styles.primary, !online && styles.unavailable]}>
+                          <Text style={[styles.label, styles.primaryText]}>{t("plugins.checks.readAgain")}</Text>
+                        </Pressable>
+                        {/* One that cannot be read (its computer is away for good) can always be let go: nothing is sent. */}
+                        <Pressable testID="plugins.checks.stop" accessibilityRole="button"
+                          onPress={() => tellPluginConclusion(over.readAgain!)} style={styles.button}>
+                          <Text style={styles.label}>{t("plugins.checks.stop")}</Text>
+                        </Pressable>
+                      </>
                     )}
                   </View>
-                ) : over?.openUnavailable ? (
+                ) : null}
+                {!check && (over?.open || over?.readAgain) && !online ? (
+                  // Why the button is unavailable: the computer left this account's list, or is not connected now.
+                  <Text testID="plugins.checks.unreachable" style={styles.hint}>{canOpen(line.who.deviceId)
+                    ? t("plugins.checks.status.offline", { device: line.who.deviceName })
+                    : t("plugins.checks.openUnavailable", { device: line.who.deviceName })}</Text>
+                ) : null}
+                {!check && over?.readAgain ? <Text style={styles.hint}>{t("plugins.checks.stopHint")}</Text> : null}
+                {check || over?.showInstalled || over?.open || over?.readAgain ? null : over?.openUnavailable ? (
                   <Text testID="plugins.checks.openUnavailable" style={styles.hint}>{t("plugins.checks.openUnavailable", { device: line.who.deviceName })}</Text>
                 ) : null}
               </View>

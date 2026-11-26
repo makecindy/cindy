@@ -493,6 +493,7 @@
     "titleEnded": "Résultats des opérations de plugins",
     "many": "{{count}} opérations de plugins ne sont pas terminées",
     "waitingOne": "Le résultat pour « {{name}} » sur « {{device}} » doit être vérifié",
+    "settledOne": "L’opération pour « {{name}} » sur « {{device}} » a un résultat",
     "kind": {
       "marketInstall": "Installer",
       "update": "Mettre à jour",

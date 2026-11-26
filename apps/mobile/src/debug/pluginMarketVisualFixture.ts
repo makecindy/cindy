@@ -47,9 +47,9 @@ export function rescriptVisualCheckOperation(operationId: string, behavior: Visu
 const PENDING_CHECK_SCENARIOS: PluginMarketVisualScenario[] = ["lateConsent", "lateResult", "unreadResult"];
 let failInstalledRead = false, failInstalledReadOnCommit = false;
 /**
- * `readbackFailed` (maintainer review 03:52): the installed reads right after an install commits fail (the row's own read,
- * the controller's refresh and the list's read of it), so the row ends "done, but could not read" and the success waits
- * in the list of checks; the next read ("Read again", or the computer coming back) succeeds.
+ * `readbackFailed` (maintainer review 03:52): the installed reads right after an install commits fail (the success's own
+ * read and the page's refresh), so the row ends "done, but could not read" and the success stays listed at the top and in
+ * the list of checks; the next read ("Read again", or the computer coming back) succeeds.
  */
 let failReadsAfterCommit = 0;
 /** A second online mock computer for the twoComputers scenario (same demo market, shared process state). */
@@ -401,7 +401,7 @@ function receipt(operationId: string) {
     return { operationId, phase: "running" };
   installed.set(instanceKey(demo.ghostId), { demo, enabled: entry?.enabled ?? true, version: RELEASE, operationId });
   if (scenario === "unreadResult" || failInstalledReadOnCommit) { failInstalledRead = true; failInstalledReadOnCommit = false; }
-  if (scenario === "readbackFailed") failReadsAfterCommit = 3;
+  if (scenario === "readbackFailed") failReadsAfterCommit = 2;
   if (script?.behavior === "readingBack") holdInstalledReads = true;
   // Changed on the computer since: an older package of the same plugin replaced it.
   if (script?.behavior === "changed") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: "0.9.0" });

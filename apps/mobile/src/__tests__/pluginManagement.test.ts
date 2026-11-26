@@ -11,7 +11,7 @@ import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
 import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
-import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { pluginMarketFactsComplete, pluginOperationOpens } from '@/plugins/pluginOperationOpens';
 import { CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
@@ -2462,11 +2462,43 @@ describe('whether a finished operation opens an instance', () => {
   it.each([
     ['the same name in another namespace', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }],
       [{ ...detail, namespace: 'team', installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const }], 'unconfirmed'],
-    ['no records read with the facts', [updated], [], 'gone'],
+    // An instance is there but the response names no installed record of it (pre-push review 2026-11-26; the Host
+    // sends this shape when it could not read its catalog, or for a plugin whose market was removed): never "not on the
+    // computer now". A complete response leaves it unattributed (②); one that says its market part is incomplete settles
+    // nothing (read again). With no instance of the plugin there at all it is gone, whatever the market part says.
+    ['no record of it, an instance there', [updated], [], 'unconfirmed'],
+    ['a record saying not installed, an instance there', [updated], [{ ...detail, installState: 'not-installed' as const }], 'unconfirmed'],
+    ['no record of it, no instance', [], [], 'gone'],
     // A package of the same id from elsewhere is there: not this attempt's instance, and not "gone" (V2.10: unconfirmed).
     ['a conflict', [updated], [{ ...detail, installState: 'conflict' as const }], 'unconfirmed'],
   ] as const)('install: %s', (_name, ghosts, market, reason) => {
     expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
+  });
+  it('install: a response that says its market part is incomplete settles nothing unless it names the plugin', () => {
+    const incomplete = { marketComplete: false };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [], ...incomplete })).toEqual({ open: false, reason: 'unread' });
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [], market: [], ...incomplete })).toEqual({ open: false, reason: 'gone' });
+    // What it does name still decides.
+    const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    expect(pluginOperationOpens(finished('market-install'), { ghosts: [updated], market: [own], ...incomplete })).toEqual({ open: true, instanceKey: updated.instanceKey });
+    expect(pluginMarketFactsComplete({ unavailableReason: null, unavailableCustomSourceNames: [] })).toBe(true);
+    for (const market of [{ unavailableReason: 'fetch failed', unavailableCustomSourceNames: [] }, { unavailableReason: null, unavailableCustomSourceNames: ['Acme'] },
+      { unavailableReason: null, unavailableCustomSourceNames: [], organizationAccessError: 'FORBIDDEN' }]) expect(pluginMarketFactsComplete(market)).toBe(false);
+  });
+  // The Host shape asserted by apps/desktop plugin-market service.test.ts ("isolated-root"): a server summary carries no
+  // `namespace` before the install; once installed the same item is projected with `namespace: null` beside the
+  // `_root__<id>` instance. The attempt recorded the item read before the install, so the instance is found by the
+  // record of the same response (it failed before: "not on the computer now" for a proven install). Tier: unit (pure).
+  it('install: the item read before the install has no namespace; the record beside the instance has the root one', () => {
+    const { namespace: _omitted, ...before } = detail;
+    const root = { ...updated, instanceKey: '_root__demo', namespace: null };
+    const own = { ...detail, namespace: null, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    const operation = { ...finished('market-install'), detail: before };
+    expect(pluginOperationOpens(operation, { ghosts: [root], market: [own] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    // Still not an org instance of the same id, and never without the computer's evidence.
+    expect(pluginOperationOpens(operation, { ghosts: [{ ...root, instanceKey: 'team__demo', namespace: 'team' }], market: [own] })).toEqual({ open: false, reason: 'gone' });
+    expect(pluginOperationOpens(operation, { ghosts: [root], market: [{ ...own, installedOperationId: undefined, installedOperationAttribution: 'unattributed' as const }] }))
+      .toEqual({ open: false, reason: 'unconfirmed' });
   });
   // Contract V2.10 case 7b (Host 0b93a48c25): a remote update of the old simulator migrates it to a new plugin id; after a
   // Host restart (receipt gone) the device that ran it reads 'self' with its id, another device 'unattributed'. On the

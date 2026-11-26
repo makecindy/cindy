@@ -1,4 +1,4 @@
-import { PLUGIN_NOT_OPENED_TEXT, pluginOperationOpens, type PluginOperationNotOpened } from "./pluginOperationOpens";
+import { PLUGIN_NOT_OPENED_TEXT, type PluginOperationNotOpened } from "./pluginOperationOpens";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -14,7 +14,7 @@ import {
   PLUGIN_MARKET_QUERY_MAX, pluginMarketErrorKey, pluginMarketMatchesFilter, pluginMarketOrganizationErrorKey,
   pluginMarketRequest, pluginMarketSourceUnverified, type PluginMarketCounts, type PluginMarketFilter, type PluginMarketPage,
 } from "./pluginMarketCatalog";
-import { handOverUnreadSuccess, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
+import { tellPluginConclusion, usePluginCheckConclusions, usePluginManagement, usePluginPendingChecks } from "./usePluginManagement";
 import { pluginManagementSlotFor, pluginOperationHold, usePluginManagementSlot, type PluginSlotToken } from "./pluginManagementSlot";
 
 /** Same freshness window as the computer's market browser; pull-to-refresh always re-reads. */
@@ -91,7 +91,7 @@ export interface UsePluginMarketOptions {
    * why not (`notOpened`: a `pluginOperationOpens` reason, or `unread` when the computer could not be read).
    */
   onInstalled(target: RemoteResourceHostTarget, instanceKey: string | undefined, item: ManagedMarketItem,
-    notOpened?: PluginOperationNotOpened | "unread"): void;
+    notOpened?: PluginOperationNotOpened): void;
 }
 
 function useDebounced(value: string, delay: number) {
@@ -485,6 +485,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   // Pending checks (maintainer review 18:45): an install this phone wrote whose result waits to be checked keeps its
   // row on this computer ("Check result" looks up the original operation), whatever this view does meanwhile.
   const checks = usePluginPendingChecks();
+  const conclusions = usePluginCheckConclusions();
+  /** Operations this mount's own row follows to their end (the row shows their conclusion itself). */
+  const rowOperations = useRef(new Set<string>());
   const checkFor = (pluginId: string) => checks.find((check) => check.entry === "market-install"
     && check.who.deviceId === deviceId && check.who.pluginId === pluginId);
   // A kept attempt that had started was handed over to its controller already.
@@ -549,7 +552,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     });
     return () => { off(); if (timer) clearTimeout(timer); };
   }, [onRemoteResourceChanged, invalidateComputer]);
-  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined, notOpened?: PluginOperationNotOpened | "unread") => {
+  const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined, notOpened?: PluginOperationNotOpened) => {
     if (installRef.current?.id !== attempt.id) return;
     finish(attempt);
     // The page is gone: nothing to open, and no read is sent for it.
@@ -630,32 +633,38 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       setInstall(next);
     } else if (state.outcome === "failed") finish(attempt, pluginMarketErrorKey(state.errorCode));
     else if (state.outcome === "cancelled") finish(attempt);
-    else if (state.outcome === "succeeded" && !state.busy) {
-      // Only while the controller's own post-commit read is out is there nothing to decide on yet. Once it landed, the one
-      // decision (pluginOperationOpens, contract V2.10) settles it at once: open the proven instance, or end with why not
-      // (② not attributable, ③ an older computer, no instance); a failed read ends it as "could not read".
-      if (state.finalReadback === "pending") return;
-      // Not read (offline, or every read after the result failed): the row ends, so another install may start, and the
-      // success goes to the list of checks with a read of its own (read again when the computer is back).
-      if (state.finalReadback === "failed") { handOverUnreadSuccess(controller); complete(attempt, undefined, "unread"); return; }
-      if (state.errorCode) { complete(attempt, undefined, "unread"); return; }
-      const opens = state.operationId && state.snapshot ? pluginOperationOpens(
-        { operationId: state.operationId, entry: "market-install", who: {}, detail: attempt.detail ?? attempt.item },
-        { ghosts: state.snapshot.ghosts, market: state.snapshot.market.items }) : null;
-      complete(attempt, opens?.open ? opens.instanceKey : undefined, opens && !opens.open ? opens.reason : "unread");
+    else if (state.outcome === "succeeded" && state.operationId) {
+      // The success is closed by the list's one read of the computer (usePluginManagement `readBack`), the same read
+      // the notice at the top and the list of checks show: this row only shows its conclusion, so they cannot differ.
+      // While that read is out there is nothing to decide on. Settled: open the proven instance, or end with why not
+      // (② not attributable, ③ an older computer, no instance), and the person has been told. Not read: the row ends as
+      // "could not read", so another install may start; the success stays listed at the top until a read settles it.
+      rowOperations.current.add(state.operationId);
+      const conclusion = conclusions.find((item) => item.operationId === state.operationId);
+      if (!conclusion || conclusion.readback === "pending") return;
+      if (conclusion.readback === "failed" || conclusion.readback === "none") { complete(attempt, undefined, "unread"); return; }
+      tellPluginConclusion(conclusion.operationId);
+      if (conclusion.readback === "verified") complete(attempt, conclusion.instanceKey);
+      else complete(attempt, undefined, conclusion.readback);
     }
-  }, [install, management.state, management.controller, finish, complete]);
+  }, [install, management.state, management.controller, finish, complete, conclusions]);
   // Pending checks of this market's installs that ended without this view (usePluginManagement): the row's note, and
   // the computer's lists read again after an install. Each is applied once per mount.
-  const conclusions = usePluginCheckConclusions();
   const applied = useRef(new Set<string>());
   useEffect(() => {
     for (const conclusion of conclusions) {
-      // Applied once it is settled; a success still waiting for its read (handed over) is applied when that read ends,
-      // so the row says what the list of checks says (maintainer review 03:52).
+      if (conclusion.entry !== "market-install" || !conclusion.who.pluginId || rowOperations.current.has(conclusion.operationId)) continue;
+      const succeededNow = conclusion.result === "succeeded" || conclusion.result === "installed";
+      // An install that is done is no longer offered, whatever its read says (its row must not show "Install" while
+      // the list of checks says it is done): the computer's lists are read again as soon as it is known.
+      if (succeededNow && !applied.current.has(conclusion.operationId + ":done")) {
+        applied.current.add(conclusion.operationId + ":done");
+        invalidateComputer(conclusion.who.deviceId, conclusion.who.pluginId);
+      }
+      // The row's note once it is settled, so the row says what the list of checks says (maintainer review 03:52). Not
+      // for one its own view ended with (that view said it then), nor one the person has been shown since.
       const key = conclusion.operationId + ":" + conclusion.readback;
-      if (conclusion.entry !== "market-install" || conclusion.shown || applied.current.has(key) || !conclusion.who.pluginId
-        || conclusion.readback === "pending" || conclusion.readback === "failed") continue;
+      if (conclusion.shown || conclusion.told || applied.current.has(key) || conclusion.readback === "pending" || conclusion.readback === "failed") continue;
       applied.current.add(key);
       const { deviceId: on, pluginId } = conclusion.who;
       // A success whose read does not prove it says what the list of checks says ("done, but …"), never "not confirmed".
@@ -667,7 +676,6 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         : conclusion.result === "legacy" ? "plugins.market.unconfirmedLegacy"
           : conclusion.result === "failed" ? pluginMarketErrorKey(conclusion.errorCode) : undefined;
       if (note) setRowErrors((current) => ({ ...current, [errorKey(on, pluginId)]: note }));
-      else if (conclusion.result === "succeeded" || conclusion.result === "installed") invalidateComputer(on, pluginId);
     }
   }, [conclusions, invalidateComputer]);
   const rowState = (item: ManagedMarketItem): PluginMarketRowState => {

@@ -491,6 +491,7 @@
     "titleEnded": "Ergebnisse der Plugin-Vorgänge",
     "many": "{{count}} Plugin-Vorgänge sind nicht abgeschlossen",
     "waitingOne": "Das Ergebnis für „{{name}}“ auf „{{device}}“ muss geprüft werden",
+    "settledOne": "Der Vorgang für „{{name}}“ auf „{{device}}“ hat ein Ergebnis",
     "kind": {
       "marketInstall": "Installieren",
       "update": "Aktualisieren",

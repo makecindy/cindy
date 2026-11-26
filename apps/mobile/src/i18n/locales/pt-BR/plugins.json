@@ -493,6 +493,7 @@
     "titleEnded": "Resultados das operações de plugins",
     "many": "{{count}} operações de plugins não foram concluídas",
     "waitingOne": "É preciso verificar o resultado de “{{name}}” em “{{device}}”",
+    "settledOne": "A operação de “{{name}}” em “{{device}}” tem um resultado",
     "kind": {
       "marketInstall": "Instalar",
       "update": "Atualizar",

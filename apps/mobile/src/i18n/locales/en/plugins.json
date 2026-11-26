@@ -491,6 +491,7 @@
     "titleEnded": "Plugin operation results",
     "many": "{{count}} plugin operations aren’t finished",
     "waitingOne": "The result for “{{name}}” on “{{device}}” needs checking",
+    "settledOne": "The operation for “{{name}}” on “{{device}}” has a result",
     "kind": {
       "marketInstall": "Install",
       "update": "Update",

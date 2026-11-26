@@ -491,6 +491,7 @@
     "titleEnded": "プラグイン操作の結果",
     "many": "{{count}} 件のプラグイン操作が終わっていません",
     "waitingOne": "「{{device}}」の「{{name}}」の結果を確認してください",
+    "settledOne": "「{{device}}」の「{{name}}」の操作の結果が出ました",
     "kind": {
       "marketInstall": "インストール",
       "update": "アップデート",

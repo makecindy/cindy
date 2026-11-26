@@ -491,6 +491,7 @@
     "titleEnded": "플러그인 작업 결과",
     "many": "플러그인 작업 {{count}}개가 끝나지 않았습니다",
     "waitingOne": "“{{device}}”의 “{{name}}” 결과를 확인해야 합니다",
+    "settledOne": "“{{device}}”의 “{{name}}” 작업 결과가 나왔습니다",
     "kind": {
       "marketInstall": "설치",
       "update": "업데이트",

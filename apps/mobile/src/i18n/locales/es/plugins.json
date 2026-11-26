@@ -493,6 +493,7 @@
     "titleEnded": "Resultados de las operaciones de complementos",
     "many": "{{count}} operaciones de complementos no han terminado",
     "waitingOne": "Hay que comprobar el resultado de «{{name}}» en «{{device}}»",
+    "settledOne": "La operación de «{{name}}» en «{{device}}» tiene un resultado",
     "kind": {
       "marketInstall": "Instalar",
       "update": "Actualizar",
