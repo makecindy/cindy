@@ -2788,7 +2788,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * Only the settlement request is judged here: a later `plans`/`snapshot` read that fails must not
    * be mistaken for a refused reply and turn a published answer into a failure.
    *
-   * Before that, a server without teammate mentions (a replica not yet updated during a deploy, or
+   * An automatic quote is optional. Try without it before interpreting INVALID_INPUT as a
+   * mentions refusal, so a rejected quote does not interrupt a teammate hand-off.
+   *
+   * A server without teammate mentions (a replica not yet updated during a deploy, or
    * a rollback) refuses the unknown `mentions` field at validation, where nothing is stored: the
    * same operation is sent once more without it, so the reply is posted and wakes nobody. Once the
    * server accepts a body without `mentions`, replies stop naming teammates until `/me` is read again.
@@ -2797,6 +2800,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const payload = pending.payload!;
     const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
     let refusal = await attempt();
+    if (contentRefusal(action, refusal) && pending.autoQuote && Array.isArray(payload.content)
+      && payload.content.includes(pending.autoQuote)) {
+      reportRefusal(run, action, refusal, payload.content, 1);
+      payload.content = payload.content.filter(block => block !== pending.autoQuote);
+      refusal = await attempt();
+    }
     if (action === 'complete' && 'mentions' in payload && invalidInput(refusal)) {
       deps.log?.warn('Group reply mentions refused', { groupId: run.execution.conversation_id,
         ...chatErrorDiagnostic(refusal), ...refusalDetails(refusal) });
@@ -2807,12 +2816,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!refusal) return;
     if (!contentRefusal(action, refusal)) throw refusal;
     reportRefusal(run, action, refusal, payload.content, 1);
-    if (pending.autoQuote && Array.isArray(payload.content) && payload.content.includes(pending.autoQuote)) {
-      payload.content = payload.content.filter(block => block !== pending.autoQuote);
-      refusal = await attempt();
-      if (!refusal) return;
-      if (!contentRefusal(action, refusal)) throw refusal;
-    }
     if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
     const retried = await attempt();
     if (!retried) return;

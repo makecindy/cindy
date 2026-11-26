@@ -126,7 +126,7 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
   }
   if (path.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', name: 'Product room', response_mode: 'all', speaking_mode: 'auto',
     created_at: '2026-10-13T00:00:00Z', updated_at: '2026-10-13T00:00:00Z', revision: 1, archived: false },
-  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name }))], messages: [], cursor: '1' } };
+  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name, state: 'joined' }))], messages: [], cursor: '1' } };
   if (path === `/conversations/${roomId}/messages` && method === 'POST') { directPosts++; return { body: { id: uuid(++ids) } }; }
   if (path === `/conversations/${roomId}/messages`) return { body: list(url.searchParams) };
   const single = path.match(/\/messages\/([^/]+)$/)?.[1];
@@ -505,6 +505,7 @@ describe('Chat Server Thread context reaches the Agent input', () => {
 
   // #13022 / unit: exercise the completed reply, including an interleaved message and a
   // deleted target. Composer and context coverage alone cannot detect a missing outbound card.
+  // A refused quote also must not strip a real teammate mention from the published reply.
   it.each(['mention', 'quote', 'personal reply', 'deleted', 'refused'] as const)('publishes one authorized reply target (%s)', async kind => {
     const personal = kind === 'personal reply';
     const original = post('previous answer', { by: personal ? 'owner' : 0 });
@@ -525,16 +526,28 @@ describe('Chat Server Thread context reaches the Agent input', () => {
         }
         return handle(route, method, body, actor);
       });
-    } else trigger(request);
+    } else {
+      trigger(request);
+      if (kind === 'refused') fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { groupTeammateMentions: 1 } } };
+        if (body?.action === 'complete' && body.content.some((block: FakeMessage['content'][number]) => block.namespace === 'cindy.quote')) {
+          return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+        }
+        return handle(route, method, body, actor);
+      });
+    }
     post('unrelated');
     await vi.advanceTimersByTimeAsync(2000);
     if (kind === 'deleted') original.deleted = true;
-    if (kind === 'refused') fixture.handle.mockImplementation((route, method, body, actor) =>
-      body?.action === 'complete' && body.content.some((block: FakeMessage['content'][number]) => block.namespace === 'cindy.quote')
-        ? { status: 400, body: { error: { code: 'INVALID_INPUT' } } } : handle(route, method, body, actor));
-    await settle('nova', 'answer');
+    const answer = kind === 'refused' ? '@Pico answer' : 'answer';
+    await settle('nova', answer);
+    if (kind === 'refused') {
+      expect(completed[0].body.mentions).toEqual([bots[1].id]);
+      const attempts = fixture.handle.mock.calls.flatMap(([, , body]) => body?.action === 'complete' ? [body] : []);
+      expect(attempts.map(body => body.operationId)).toEqual([completed[0].body.operationId, completed[0].body.operationId]);
+    }
     const blocks = completed[0].body.content as FakeMessage['content'];
-    expect(blocks.filter(b => b.type === 'text')).toEqual([{ type: 'text', text: 'answer' }]);
+    expect(blocks.filter(b => b.type === 'text')).toEqual([{ type: 'text', text: answer }]);
     const quotes = blocks.filter(b => b.namespace === 'cindy.quote');
     if (kind === 'deleted' || kind === 'refused') expect(quotes).toEqual([]);
     else {
