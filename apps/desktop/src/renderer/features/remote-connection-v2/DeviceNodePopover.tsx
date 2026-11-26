@@ -253,7 +253,7 @@ function VersionUpdateAction({
     <Tip text={tipText} side="top">
       <button
         type="button"
-        className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--status-info)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--status-info)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         aria-label={tipText}
         onClick={() =>
           onUpdate({
