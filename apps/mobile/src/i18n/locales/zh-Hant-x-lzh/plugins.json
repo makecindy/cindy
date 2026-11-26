@@ -473,7 +473,7 @@
     "resultUnknownDetail": "此番納器成否，尚未確認。",
     "unconfirmedNotInstalled": "此番納器之果未能確認；今此機未有此法器。",
     "alreadyInstalled": "此機已納此法器。",
-    "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，請就機核之。",
+    "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，或其市已不列之。請於彼機核之，或於「已納」中觀之。",
     "unconfirmedLegacy": "未能確此番所裝之果：彼機之 Cindy 版舊，不能驗之。請於彼機核之，或於「已納」中觀之。",
     "sourceUnverified": "此機未示此自訂之坊之庫，不能自手機納之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦納之。",
     "sourceUnverifiedShort": "缺庫之訊，不能自手機納之",

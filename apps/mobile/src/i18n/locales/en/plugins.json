@@ -473,7 +473,7 @@
     "resultUnknownDetail": "It’s not confirmed yet whether this installation finished.",
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
     "alreadyInstalled": "This computer already has this plugin installed.",
-    "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
+    "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source, or its market no longer lists it. Check on the computer, or look in Installed.",
     "unconfirmedLegacy": "Couldn’t confirm the result of this install: the computer’s Cindy version is too old to confirm it. Check on the computer, or look in Installed.",
     "sourceUnverified": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, install on the computer.",
     "sourceUnverifiedShort": "Repository info missing, so it can’t be installed from your phone",

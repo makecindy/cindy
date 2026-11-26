@@ -473,7 +473,7 @@
     "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde.",
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
-    "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
+    "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle, oder sein Markt führt es nicht mehr. Prüfe es am Computer oder unter „Installiert“.",
     "unconfirmedLegacy": "Das Ergebnis dieser Installation ließ sich nicht bestätigen: Die Cindy-Version auf dem Computer ist zu alt dafür. Prüfe es am Computer oder unter „Installiert“.",
     "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
     "sourceUnverifiedShort": "Kein Repository angegeben – am Computer installieren",

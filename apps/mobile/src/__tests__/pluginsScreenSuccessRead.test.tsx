@@ -341,12 +341,13 @@ describe("market read fences and lost-receipt facts", () => {
         expect({ sheet: byId("plugins.checks"), segment: fixture.props.get("segment").value, banner: banner() }).toEqual({ sheet: null, segment: "installed", banner: "" });
       });
       it.each([
-        // The computer could not read its catalog then (it says so), or its market data has not caught up with the
-        // install that just committed (it says nothing): either way the response has the instance and no record of it.
-        ["says its market is unavailable", "fetch failed"],
-        ["says nothing about it", null],
-      ] as const)("the instance is there but the response has no installed record of it and %s: nothing is concluded (never \"not on the computer now\"), and it can be read again", async (_name, unavailableReason) => {
-        const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], unavailableReason } }) };
+        // The response says its market part is incomplete (contract V2.10: one of three markers): the instance is there
+        // and its record is not, which settles nothing.
+        ["says its server catalog is unavailable", { unavailableReason: "fetch failed" }],
+        ["says a custom source could not be read", { unavailableCustomSourceNames: ["Team"] }],
+        ["says its organization catalog had an access error", { organizationAccessError: "forbidden" }],
+      ] as const)("the instance is there but the response has no installed record of it and %s: nothing is concluded (never \"not on the computer now\"), and it can be read again", async (_name, marker) => {
+        const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], ...marker } }) };
         const requests = wire(world);
         await installAndAllow();
         expect({ prompts: prompts(), opened: openedIds(), told: told(), banner: banner() })
@@ -358,6 +359,20 @@ describe("market read fences and lost-receipt facts", () => {
         await click("plugins.checks.readAgain");
         await click("plugins.checks.open");
         expect({ opened: openedDemo(), writes: writes(requests) }).toEqual({ opened: true, writes: ONCE });
+      });
+      // Maintainer review 14:25 #2: a complete response (no marker) without the plugin's item means the computer lists no
+      // such market item now (withdrawn, not visible, its market removed). Before: "could not read" for ever, only
+      // "Stop tracking" ended it. Now ② (contract V2.10): done, cannot be confirmed as this install, no Open, nothing to
+      // read again. Minimal failing input on 34a262c919: this test.
+      it("the instance is there and a complete response has no item of it: done, cannot be confirmed as this install (②), no Open and nothing to read again", async () => {
+        const world: World = { ...fresh(), reply: (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [] } }) };
+        const requests = wire(world);
+        await installAndAllow();
+        expect({ prompts: prompts(), opened: openedIds(), told: told() }).toEqual({ prompts: [], opened: [], told: [{ readback: "unconfirmed", told: false }] });
+        await click("plugins.slotHolder.show");
+        expect({ text: sheet().includes("plugins.checks.result.unconfirmed"), readAgain: byId("plugins.checks.readAgain"), open: byId("plugins.checks.open") })
+          .toEqual({ text: true, readAgain: null, open: null });
+        expect(writes(requests)).toEqual(ONCE);
       });
       it("the market item read before the install has no namespace (the computer fills it in once installed): the instance is proven", async () => {
         const { namespace: _omitted, ...summary } = demo;
@@ -713,6 +728,40 @@ describe("market read fences and lost-receipt facts", () => {
         await click("plugins.checks.verify");
         await settle(20);
         expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "installed", readback: "verified", instanceKey: "_root__demo" })]);
+        expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+      });
+      // Maintainer review 14:25 #2: receipt gone, the instance is there, and a complete response (no marker) has no
+      // item of it (its market was removed). Before: "could not read its install record" for ever, "Check result" came
+      // back to it each time. Now it settles as not confirmed (②), and only the original operation was looked up.
+      it("receipt gone and a complete response has no item of the plugin: settled as not confirmed, only the original operation looked up, begin once", async () => {
+        const requests = marketWire((request) => {
+          const began = requests.some((entry) => entry.actionId === "management:begin");
+          switch (request.actionId) {
+            case "management:snapshot":
+              if (request.input?.read === "capabilities") return { catalogPaging: true };
+              if (request.input?.read === "catalog") return marketPage([demo]);
+              if (!began) return managementSnapshot(false);
+              return { ...managementSnapshot(true), market: { ...managementSnapshot(false).market, items: [] } };
+            case "management:market-detail": return { ...demo, installState: "not-installed", manifest: manifestOf("demo", "Demo") };
+            case "management:begin": throw timeout();
+            case "management:operation": throw hostError("NOT_FOUND");
+            default: throw new Error("unexpected " + request.actionId);
+          }
+        });
+        fixture.platform = "android";
+        fixture.realConfirmation = true;
+        await act(async () => root.render(createElement(PluginsScreen)));
+        await act(async () => fixture.props.get("segment").onChange("market"));
+        await settle(14);
+        await click(`plugins.market.install.${demo.pluginId}`);
+        await settle(20);
+        const lookups = () => requests.filter((request) => request.actionId === "management:operation");
+        if (!lookups().length) await click(`plugins.market.install.${demo.pluginId}`);   // the row's "Check result"
+        await settle(20);
+        expect(__retainedForTests.conclusions()).toEqual([expect.objectContaining({ result: "mismatch", readback: "none" })]);
+        expect(__retainedForTests.checks()).toEqual([]);
+        const begun = requests.find((request) => request.actionId === "management:begin")!.input?.operationId;
+        expect({ begun: typeof begun, looked: [...new Set(lookups().map((request) => request.input?.operationId))] }).toEqual({ begun: "string", looked: [begun] });
         expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
       });
       // Third pre-push round (2026-11-26), on the second version of this change (d5ee5bc707): the page still moved by
@@ -1115,7 +1164,7 @@ describe("market read fences and lost-receipt facts", () => {
         await installAndAllow();
         fixture.focused = false; await rerender();
         // The success's own read (the first installed read written) is answered without the plugin's record.
-        world.reply = (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [] } });
+        world.reply = (snapshot) => ({ ...snapshot, market: { ...snapshot.market, items: [], unavailableReason: "fetch failed" } });
         hold.release("answer");
         await settle(30);
         expect(told()).toEqual([{ readback: "pending", told: false }]);
@@ -1382,7 +1431,7 @@ describe("market read fences and lost-receipt facts", () => {
         const hold = holds();
         const world: World = { ...fresh(), hold: (label: string) => label === "begin:demo" ? hold.wait(label) : undefined,
           operation: () => { throw new Error("[NOT_FOUND] no such operation"); },
-          reply: (snapshot: any) => ({ ...snapshot, market: { ...snapshot.market, items: [] } }) };
+          reply: (snapshot: any) => ({ ...snapshot, market: { ...snapshot.market, items: [], unavailableReason: "fetch failed" } }) };
         wire(world);
         await installFromMarketRow();
         world.installed.set("demo", "someone-else");

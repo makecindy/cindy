@@ -49,6 +49,11 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   ghosts: readonly ManagedPlugin[];
   /** The market records read with those facts (the same snapshot's items); absent when not read. */
   market?: readonly MarketRecord[] | MarketRecord | null;
+  /**
+   * Whether that response says its market part is incomplete (`pluginMarketIncomplete`). Unknown counts as incomplete:
+   * an instance without its record then settles nothing.
+   */
+  incomplete?: boolean;
 }): PluginOperationOpens {
   if (operation.entry === "page-approval") {
     const instance = facts.ghosts.find((ghost) => ghost.instanceKey === operation.who.instanceKey);
@@ -67,14 +72,16 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
     // A conflict: a package of the same id from elsewhere is there (not this attempt's instance, but not "gone" either).
     if (record?.installState === "conflict") return { open: false, reason: "unconfirmed" };
     // No installed record of it. "Gone" only when no instance of the plugin is there either. One that is there with a
-    // record saying "not installed" cannot be attributed (②); with no record at all the response says nothing about
-    // it (its market part is incomplete or behind): it settles nothing and has to be read again.
+    // record saying "not installed" cannot be attributed (②). With no record at all: when the response says its market
+    // part is incomplete (a catalog, organization or custom source it could not read), it settles nothing and has to be
+    // read again; when it says nothing is missing, the computer lists no such market item now (withdrawn, not visible,
+    // its market removed): ② as well (contract V2.10 "items not available"; maintainer review 14:25 #2).
     // (An instance of the same id in another known namespace is another plugin. An item read before the install may
     // carry no namespace: that is the root one, as the computer fills it in once installed.)
     const there = (ghost: ManagedPlugin) => ghost.manifest.id === item.ghostId
       && (ghost.namespace === undefined || ghost.namespace === (item.namespace ?? null));
     if (!facts.ghosts.some((ghost) => there(ghost) && started(ghost))) return { open: false, reason: "gone" };
-    return { open: false, reason: record ? "unconfirmed" : "unread" };
+    return { open: false, reason: record || facts.incomplete === false ? "unconfirmed" : "unread" };
   }
   if (evidence !== "confirmed") return { open: false, reason: evidence };
   const identity = record && record.namespace !== undefined ? record : item;
@@ -84,4 +91,13 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
       && ghost.namespace !== undefined && ghost.namespace === (identity.namespace ?? null) && started(ghost))
     ?? facts.ghosts.find((ghost) => marketItemMatchesPlugin(identity, ghost) && started(ghost));
   return instance ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "gone" };
+}
+
+/**
+ * Whether a management snapshot says its market part is incomplete (contract V2.10): the server catalog could not be
+ * read (`unavailableReason`, also while switching accounts or not configured), the organization catalog had an access
+ * error, or a custom source could not be discovered. Without any of them, an item that is absent is absent now.
+ */
+export function pluginMarketIncomplete(market: { unavailableReason: string | null; unavailableCustomSourceNames: readonly string[]; organizationAccessError?: string | null }): boolean {
+  return market.unavailableReason !== null || market.unavailableCustomSourceNames.length > 0 || !!market.organizationAccessError;
 }

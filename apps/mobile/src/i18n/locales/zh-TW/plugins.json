@@ -473,7 +473,7 @@
     "resultUnknownDetail": "尚未確認這次安裝是否完成。",
     "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
     "alreadyInstalled": "這台電腦已經安裝了這個插件。",
-    "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。",
+    "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，或它所在的市場已不再列出它。請在電腦上核對，或在「已安裝」裡查看。",
     "unconfirmedLegacy": "沒能確認這次安裝的結果：電腦端的 Cindy 版本較舊，無法核實。請在電腦上核對，或在「已安裝」裡查看。",
     "sourceUnverified": "這台電腦沒有提供這個自訂市場的儲存庫資訊，無法從手機安裝。請先在那台電腦上更新 Cindy 並重新整理這個市場；若仍不行，請直接在電腦上安裝。",
     "sourceUnverifiedShort": "缺少儲存庫資訊，無法從手機安裝",

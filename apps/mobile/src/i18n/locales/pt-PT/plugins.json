@@ -475,7 +475,7 @@
     "resultUnknownDetail": "Ainda não foi confirmado se esta instalação foi concluída.",
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador de momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
-    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem. Verifique no computador.",
+    "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem, ou o mercado dele já não o lista. Verifique no computador ou em Instalados.",
     "unconfirmedLegacy": "Não foi possível confirmar o resultado desta instalação: a versão do Cindy no computador é demasiado antiga para isso. Verifique no computador ou em Instalados.",
     "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
     "sourceUnverifiedShort": "Falta o repositório; não é possível instalar a partir do telemóvel",
