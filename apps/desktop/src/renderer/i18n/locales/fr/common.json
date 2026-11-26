@@ -18252,6 +18252,13 @@
         "active": "{{count}} filtres",
         "reset": "Réinitialiser",
         "allProjects": "Tous les projets"
+      },
+      "match": {
+        "label": "Mots-clés",
+        "any": "Un des mots-clés",
+        "all": "Tous les mots-clés",
+        "help": "Choisissez tous les mots-clés et séparez-les par des espaces pour les exiger dans un même message. “Expression exacte” recherche du texte consécutif. Les titres sont comparés séparément.",
+        "partial": "Les résultats peuvent être incomplets. Précisez les mots-clés ou limitez la recherche à un projet."
       }
     }
   },

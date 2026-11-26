@@ -18083,6 +18083,13 @@
         "active": "{{count}} Filter",
         "reset": "Zurücksetzen",
         "allProjects": "Alle Projekte"
+      },
+      "match": {
+        "label": "Suchbegriffe",
+        "any": "Beliebiger Suchbegriff",
+        "all": "Alle Suchbegriffe",
+        "help": "Wähle alle Schlüsselwörter und trenne sie durch Leerzeichen, damit sie in derselben Nachricht vorkommen müssen. “Exakte Phrase” sucht zusammenhängenden Text. Titel werden separat geprüft.",
+        "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
       }
     }
   },
