@@ -137,7 +137,9 @@ export function subscribeVoiceInputSettings(
   // off-to-on transition is user intent; subscribing with an already-enabled
   // snapshot (or receiving history/language updates) must not renew the window.
   let fastActivationEnabled = getVoiceInputSettings().fastActivationEnabled;
-  return window.electronAPI.voiceInput.onDataChanged((snapshot: VoiceInputDataSnapshot) => {
+  const subscribe = window.electronAPI?.voiceInput?.onDataChanged;
+  if (!subscribe) return () => {};
+  return subscribe((snapshot: VoiceInputDataSnapshot) => {
     if (!fastActivationEnabled && snapshot.settings.fastActivationEnabled) noteVoiceInputUse();
     fastActivationEnabled = snapshot.settings.fastActivationEnabled;
     callback(snapshot.settings);
@@ -182,8 +184,12 @@ export async function syncVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
   options?: { suspend?: true },
 ): Promise<{ ok: boolean; error?: string; errorCode?: VoiceInputGlobalErrorCode }> {
+  const setGlobalShortcut = window.electronAPI?.voiceInput?.setGlobalShortcut;
+  if (!setGlobalShortcut) {
+    return { ok: false, error: 'Voice input bridge unavailable' };
+  }
   try {
-    const result = await window.electronAPI.voiceInput.setGlobalShortcut(shortcut, options);
+    const result = await setGlobalShortcut(shortcut, options);
     if (!result.ok) {
       log.warn('global voice input shortcut sync failed:', result.error);
     }

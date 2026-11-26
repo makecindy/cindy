@@ -37,6 +37,9 @@ import {
   type BrowserCommentStyleChange,
 } from '../../../../../shared/browserComment';
 import type { BrowserCommentEditorDraft } from './browserCommentEditorDraft';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 interface BrowserCommentPopoverProps {
   /** 锚点(slot 内坐标,px)。 */
@@ -121,9 +124,21 @@ export function BrowserCommentPopover({
   const { t } = useTranslation();
   // 展开 / 收起只影响本次挂载的布局；真正的文本与样式草稿由 Host 控制器持有。
   const [showStyles, setShowStyles] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
   const { text, styleEdits, textEdit } = editorDraft;
+  const editorDraftRef = useRef(editorDraft);
+  editorDraftRef.current = editorDraft;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const submittingVoiceRef = useRef(false);
+
+  const voice = useFieldVoiceInput({
+    draftKey: 'browser-comment',
+    inputRef: textareaRef,
+    value: text,
+    onChange: (next) => onEditorDraftChange({ ...editorDraftRef.current, text: next }),
+    disabled: submitting,
+  });
   // 初始按锚点下方摆;useLayoutEffect 量完实际尺寸后 clamp,一次到位。
   const [pos, setPos] = useState<{ left: number; top: number }>({
     left: anchor.x,
@@ -247,18 +262,32 @@ export function BrowserCommentPopover({
   }, [editorDraft, onEditorDraftChange, onResetDesign]);
 
   const changes = buildChanges();
-  const canSubmit = (text.trim().length > 0 || changes.length > 0) && !submitting;
+  const busy = submitting || stoppingVoice;
+  const canSubmit = (voice.displayText.trim().length > 0 || changes.length > 0) && !busy;
 
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    onSubmit(text, changes.length > 0 ? changes : undefined);
+  const handleSubmit = async () => {
+    if (!canSubmit || submittingVoiceRef.current) return;
+    let finalText = text;
+    if (voice.isBusy) {
+      submittingVoiceRef.current = true;
+      setStoppingVoice(true);
+      try {
+        finalText = await voice.stop();
+      } finally {
+        submittingVoiceRef.current = false;
+        setStoppingVoice(false);
+      }
+      if (!finalText.trim() && changes.length === 0) return;
+    }
+    onSubmit(finalText, changes.length > 0 ? changes : undefined);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      handleSubmit();
+      void handleSubmit();
     } else if (e.key === 'Escape' && !e.nativeEvent.isComposing) {
+      if (voice.isBusy) return;
       // isComposing 守卫与 Enter 分支同款:CJK 输入法里 Esc 是"取消当前候选词",
       // 不加守卫会连气泡一起关掉,丢已输入文本与 marker(Greptile P1)。
       e.preventDefault();
@@ -305,21 +334,32 @@ export function BrowserCommentPopover({
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
     >
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => onEditorDraftChange({ ...editorDraft, text: e.target.value })}
-        onKeyDown={handleKeyDown}
-        rows={3}
-        disabled={submitting}
-        placeholder={t('rightSidebar.browser.commentPlaceholder')}
+      <div
         className={cn(
-          'w-full resize-none rounded-lg border border-[var(--border-default)] bg-transparent',
-          'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
-          'placeholder:text-[var(--text-placeholder)] outline-none',
-          'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+          'flex flex-col rounded-lg border border-[var(--border-default)] bg-transparent',
+          'focus-within:border-[var(--focus-ring)] focus-within:ring-1 focus-within:ring-[var(--focus-ring-soft)]',
         )}
-      />
+      >
+        <textarea
+          ref={textareaRef}
+          value={voice.displayText}
+          readOnly={voice.isBusy}
+          onChange={(e) => onEditorDraftChange({ ...editorDraft, text: e.target.value })}
+          onKeyDown={handleKeyDown}
+          rows={2}
+          disabled={submitting}
+          placeholder={t('rightSidebar.browser.commentPlaceholder')}
+          className={cn(
+            'w-full resize-none bg-transparent',
+            'px-2 pt-1.5 pb-1 text-12 leading-[1.5] text-[var(--text-primary)]',
+            'placeholder:text-[var(--text-placeholder)] outline-none',
+          )}
+        />
+        <div className="flex items-center justify-end px-1.5 pb-1.5 pt-0.5">
+          <VoiceInputButton {...voice.buttonProps} testId="browser-comment-voice" tipSide="top" />
+        </div>
+      </div>
+      <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
 
       {/* 样式编辑区(Codex styling feedback):仅元素点选且基线可用时提供。 */}
       {designBaseline && showStyles && (
@@ -414,7 +454,7 @@ export function BrowserCommentPopover({
             tone="quiet"
             type="button"
             onClick={onCancel}
-            disabled={submitting}
+            disabled={busy}
           >
             {t('rightSidebar.browser.commentCancel')}
           </Button>
@@ -422,9 +462,9 @@ export function BrowserCommentPopover({
             variant="cta"
             size="xs"
             compact
-            loading={submitting}
+            loading={busy}
             type="button"
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit()}
             disabled={!canSubmit}
           >
             {t('rightSidebar.browser.commentSubmit')}

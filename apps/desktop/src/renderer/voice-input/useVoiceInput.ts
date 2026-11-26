@@ -1374,6 +1374,7 @@ export function useVoiceInput(
     const currentState = stateRef.current;
     if (
       disabled ||
+      !window.electronAPI?.voiceInput?.start ||
       (!editorRef.current && !optionsRef.current?.textTarget) ||
       stopInFlightRef.current ||
       currentState === 'listening' ||
@@ -1982,5 +1983,6 @@ export function useVoiceInput(
 }
 
 function supportsSystemAudioMute(): boolean {
-  return window.electronAPI.platform === 'darwin' || window.electronAPI.platform === 'win32';
+  const platform = window.electronAPI?.platform;
+  return platform === 'darwin' || platform === 'win32';
 }
