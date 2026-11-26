@@ -252,6 +252,7 @@ function readQuoteText(selection: Selection, range: Range): string {
 
 export function SelectionQuoteButton({
   sessionId,
+  draftKey = sessionId,
   containerRef,
   sourcePath,
   getQuoteText,
@@ -260,6 +261,7 @@ export function SelectionQuoteButton({
 }: {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   sessionId: string;
+  draftKey?: string;
   /**
    * 引用来源文件(workdir 相对路径)。文件浏览器宿主传入;聊天消息流不传。
    * 带来源的引用发送时携带 `— source:` 行,模型可 Read 上下文 / 精准编辑。
@@ -274,7 +276,7 @@ export function SelectionQuoteButton({
    * 模式下多个聊天流(lead + workers)同时挂载,各有一个本组件实例;若用
    * 全局 querySelector 找第一个容器,选区会被错误实例认领,引用就加进了
    * 别的会话的输入框。绑定自己的容器后,选区落在哪个流,只有那个流的
-   * 按钮出现,append 的 sessionId 必然正确。
+   * 按钮出现,引用才会写入正确的草稿。
    */
   containerRef: React.RefObject<HTMLElement | null>;
 }) {
@@ -298,12 +300,12 @@ export function SelectionQuoteButton({
         : selectionAnchor.text;
     const metadata = getQuoteMetadata?.() ?? null;
     appendQuoteToDraft(
-      sessionId,
+      draftKey,
       sourcePath ? { text, sourcePath, ...(metadata ?? {}) } : { text },
     );
     window.getSelection()?.removeAllRanges();
     setAnchor(null);
-  }, [getQuoteMetadata, sessionId, sourcePath]);
+  }, [draftKey, getQuoteMetadata, sourcePath]);
 
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps

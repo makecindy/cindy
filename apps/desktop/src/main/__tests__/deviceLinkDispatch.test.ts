@@ -1470,6 +1470,57 @@ describe('被控端控制链路生命周期', () => {
     ]));
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：wireInboundDispatch -> handleInvoke('local-db:sessions:list')。
+  //   等价默认参数与携带 tagCatalog:1 的请求共享同一次本地 DB 单飞并各自按请求者的 tagCatalog 格式回包，不同 includePinned 保持独立查询。
+  // - Bug／规则依据：64 帧可靠窗口积压事故；engineering-conventions.md §8 客户端读取性能与参数语义隔离。
+  // - 现有覆盖缺口：旧测试仅覆盖完全相同 JSON 参数串的单飞，未覆盖默认参数规范化及 tagCatalog 异构回包。
+  // - 最小失败输入：[null,null,{tagCatalog:1}]、[20,'all',{includePinned:false}] 与 [20,'all',{includePinned:true}] 并发到达。
+  // - tier：unit（内存 fake client，<20ms）。
+  it('sessions:list 等价默认参数与 tagCatalog 共享被控端单飞，不同过滤参数保持隔离', async () => {
+    remoteControlEnabled = true;
+    const resolvers: Array<(value: unknown[]) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'eq-1',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'eq-2',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: false }] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'distinct-pinned',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: true }] },
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.([{ id: 'unpinned' }]);
+    resolvers[1]?.([{ id: 'pinned' }]);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(3));
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'eq-1',
+        payload: { ok: true, result: { format: 'session-tag-catalog-v1', sessions: [{ id: 'unpinned' }], tags: [] } },
+      }),
+      expect.objectContaining({ requestId: 'eq-2', payload: { ok: true, result: [{ id: 'unpinned' }] } }),
+      expect.objectContaining({ requestId: 'distinct-pinned', payload: { ok: true, result: [{ id: 'pinned' }] } }),
+    ]));
+  });
+
   it('sessions:get 写后回读不并入已有查询', async () => {
     remoteControlEnabled = true;
     const resolvers: Array<(value: unknown) => void> = [];

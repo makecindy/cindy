@@ -29,7 +29,13 @@ import {
 } from './session.js';
 import type { AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import {
+  defusePluginEngineSlashMentions,
+  defusePluginEngineWireEnvelope,
+  formatPluginEngineSkillList,
+  renderPluginEngineCapabilityBriefing,
+} from './briefing.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, TurnPermissionPolicyUnsupportedError, type SendOptions } from '../base-agent.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
@@ -281,6 +287,17 @@ describe('openAcpSession handshake', () => {
     await expect(open(agent, { resumeSessionId: 'old-1' })).rejects.toBeInstanceOf(AcpResumeUnavailableError);
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
+  });
+
+  // Idle runtime reclamation closes only runtimes the next send can reopen; an agent with neither
+  // method would fail that resume (above), so it must answer false and keep its runtime.
+  it.each([
+    { name: 'neither method', caps: {}, reopenable: false },
+    { name: 'session/load', caps: { loadSession: true }, reopenable: true },
+    { name: 'session/resume', caps: { sessionCapabilities: { resume: {} } }, reopenable: true },
+  ])('reports whether a closed session can be reopened with $name', async ({ caps, reopenable }) => {
+    const { session } = await open(createFakeAgent({ agentCapabilities: caps }));
+    expect(session.canResumeAfterClose()).toBe(reopenable);
   });
 });
 
@@ -643,6 +660,19 @@ describe('AcpSession permissions', () => {
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Write' }, options: PERMISSION_OPTIONS });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+
+  // Security review on #12820: IM group turns carry a per-turn policy that requires the owner's
+  // confirmation. A plugin's agent can act without asking Cindy, so the turn must be refused before
+  // any prompt reaches the agent, in every mode. Minimal input: send with turnPermissionPolicy.
+  it.each(['ask', 'bypassPermissions'] as const)('refuses a turn that carries a per-turn permission policy (%s)', async (mode) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const policy = { evaluate: () => ({ kind: 'confirm' }) } as unknown as NonNullable<SendOptions['turnPermissionPolicy']>;
+    expect(() => session.validateSendOptions({ turnPermissionPolicy: policy })).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'go' }, { turnPermissionPolicy: policy }))
+      .rejects.toMatchObject({ code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp' });
+    expect(agent.prompts).toHaveLength(0);
   });
 
   it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
@@ -1478,6 +1508,126 @@ describe('AcpAgent (the acp engine)', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'text', data: expect.objectContaining({ text: 'Hello from the chosen model.' }) }));
     await handle.setModel?.('default');
     expect(handle.model).toBe('first');
+    await handle.close();
+  });
+
+  // Regression (Antigravity agy 1.5.16, 2026-11-25): `agy acp` scans the entire `session/prompt`
+  // text for standalone `/command` tokens and appends `/learn` (plus `<LEARN>` instructions) when
+  // Cindy's Turn-1 Skill list, plugin roster, handoff replay or wire notes mention `/learn` or `/pr`.
+  it('defuses slash-command mentions in host briefings and handoffs without touching paths, URLs or user text', async () => {
+    const rawLearnPath = '/opt/cindy/shared-system-skills/learn/SKILL.md';
+    const skills = [
+      {
+        name: 'learn',
+        description: 'Capture reusable lessons when the user directly invokes /learn or /skill:learn in Pi. See https://cindy.app/learn and cost/spend.',
+        path: rawLearnPath,
+      },
+      {
+        name: 'cindy-plugin-github:pr',
+        description: 'Use when the user invokes /pr or /mr, checks @expo/ui on iOS/Android, or reads /tmp/build.log and /learn.md.',
+        path: '/work/skills/pr/SKILL.md',
+      },
+      {
+        name: 'custom-deploy',
+        description: 'Run /custom-deploy after PUT /harnesses in ~/learn or ./plan.',
+        path: '/work/skills/custom-deploy/SKILL.md',
+      },
+    ];
+    const rendered = renderPluginEngineCapabilityBriefing(
+      {
+        pluginRoster: '<ghost-roster>\n{"id":"cindy-github","recall":"发 PR 时输入 /pr 或调用/learn时触发"}\n</ghost-roster>',
+        skills,
+      },
+      ['cindy'],
+    );
+    expect(rendered).toContain('directly invokes learn or skill:learn in Pi.');
+    expect(rendered).toContain('invokes pr or mr,');
+    expect(rendered).toContain('Run custom-deploy after PUT /harnesses in ~/learn or ./plan.');
+    expect(rendered).toContain('发 PR 时输入 pr 或调用learn时触发');
+    // Paths, closing XML tags, URLs, scoped packages, ratios and dotted filenames stay intact.
+    expect(rendered).toContain(JSON.stringify(rawLearnPath));
+    expect(rendered).toContain('</cindy-skills>');
+    expect(rendered).toContain('</ghost-roster>');
+    expect(rendered).toContain('https://cindy.app/learn');
+    expect(rendered).toContain('cost/spend');
+    expect(rendered).toContain('@expo/ui');
+    expect(rendered).toContain('iOS/Android');
+    expect(rendered).toContain('/tmp/build.log');
+    expect(rendered).toContain('/learn.md');
+    expect(defusePluginEngineSlashMentions('No slash here')).toBe('No slash here');
+    expect(formatPluginEngineSkillList(skills)).toContain('invokes learn or skill:learn');
+
+    // Host wire envelope defuses notes/handoffs while preserving the user's own `/learn` or `/plan`.
+    expect(defusePluginEngineWireEnvelope(
+      '[客户端说明] 之前提到 `/learn` 与 /compact。\n\n请帮我执行 /learn 总结这轮改动',
+      '请帮我执行 /learn 总结这轮改动',
+    )).toBe('[客户端说明] 之前提到 `learn` 与 compact。\n\n请帮我执行 /learn 总结这轮改动');
+    const userBlock = { type: 'text', text: '/plan 重构认证模块' };
+    expect(defusePluginEngineWireEnvelope(
+      { type: 'user', content: [{ type: 'text', text: '[引用说明] 上条提到 /learn。' }, userBlock] },
+      { type: 'user', content: [userBlock] },
+    )).toEqual({
+      type: 'user',
+      content: [{ type: 'text', text: '[引用说明] 上条提到 learn。' }, userBlock],
+    });
+    expect(defusePluginEngineWireEnvelope(
+      '[引用说明] 上条提到 /release-check。\n\n请继续处理',
+      '请继续处理',
+      ['release-check'],
+    )).toBe('[引用说明] 上条提到 release-check。\n\n请继续处理');
+
+    // Live ACP session: available_commands_update custom commands are defused in pendingBriefing and
+    // handoff prefixes, while a leading user `/plan` keeps index 0 and defers pendingBriefing to Turn 2.
+    const agent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true } },
+      handlers: {
+        'session/new': () => {
+          queueMicrotask(() => {
+            agent.update({
+              sessionUpdate: 'available_commands_update',
+              availableCommands: [{ name: 'release-check', description: 'Run release check' }],
+            });
+          });
+          return { sessionId: 'sess-1', configOptions: [] };
+        },
+      },
+    });
+    const handle = await briefingEngine(
+      agent,
+      vi.fn(() => '<ghost-roster>{"id":"cindy-github","recall":"Run /release-check or /learn"}</ghost-roster>'),
+      vi.fn(async () => skills),
+    ).startSession({
+      workingDir: '/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      pluginEngineBriefing: 'Worker note: do not run /compact or /release-check.',
+    });
+    await vi.waitFor(() => expect(agent.methods()).toContain('session/new'));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Turn 1 starts with a native slash command: stays at prompt[0], briefing waits for Turn 2.
+    await handle.send({ type: 'user', content: '/plan check auth flow' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/plan check auth flow' }]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    // Turn 2 starts with a file path `/tmp/build.log` (not a slash command). User text is preserved
+    // byte-for-byte, including pasted handoff markers and slash commands.
+    const handoffAndUser = [
+      '[Session handoff · internal context]',
+      'Earlier note mentioned /learn and /release-check.',
+      "== End of handoff note; the user's new message follows ==",
+      '',
+      '/tmp/build.log 里为什么报 /learn 相关错误？',
+    ].join('\n');
+    await handle.send({ type: 'user', content: handoffAndUser });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    const [briefingBlock, secondMessage] = agent.prompts[1]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(briefingBlock!.text).toContain('Run release-check or learn');
+    expect(briefingBlock!.text).toContain('do not run compact or release-check.');
+    expect(secondMessage!.text).toContain('Earlier note mentioned /learn and /release-check.');
+    expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();
   });
 });

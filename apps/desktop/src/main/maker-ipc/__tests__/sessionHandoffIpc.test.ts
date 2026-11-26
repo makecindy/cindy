@@ -150,7 +150,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       .toMatchObject({ ok: false, errorCode: failure === 'write' ? 'DELIVERY_UNKNOWN' : 'INVALID_ARGS' });
     expect(insert).toHaveBeenCalledTimes(failure === 'write' ? 1 : 0);
     expect(deps.discardWorktree).toHaveBeenCalledTimes(failure === 'authorization' ? 1 : 0);
-    if (failure === 'authorization') expect(deps.discardWorktree).toHaveBeenCalledWith(id);
+    if (failure === 'authorization') expect(deps.discardWorktree).toHaveBeenCalledWith(id, '/destination/worktree', expect.any(Function));
     expect(rows.size).toBe(0);
   });
 

@@ -48,6 +48,7 @@ const GRADIENT_REGISTRY: Record<string, { count: number; reason: string }> = {
   'features/cc-agent/CCAgentSessionView.tsx': { count: 1, reason: '输入框上方的边缘渐隐' },
   'features/cc-agent/CCAgentSidebarUpper.tsx': { count: 2, reason: '侧栏列表的边缘渐隐遮罩' },
   'features/cc-agent/RolePillDropdown.tsx': { count: 2, reason: '横向滚动两端的边缘渐隐' },
+  'features/plugin/plugin-detail-layout.css': { count: 1, reason: '插件图文介绍预览的边缘渐隐遮罩（§2）' },
   'features/right-sidebar/TabBar.tsx': { count: 1, reason: '标签栏横向滚动的边缘渐隐遮罩' },
   'features/right-sidebar/plugins/review/DiffViewer/ImageDiffPreview.tsx': { count: 4, reason: '透明底棋盘格，不是视觉渐变' },
   'styles/quota-tray.css': { count: 4, reason: 'Windows 托盘额度卡片：与 macOS 菜单栏面板相同的液柱玻璃槽，以及代替系统模糊材质的卡片背景（§2；2026-11-18 负责人裁决保留，PR #11277）' },

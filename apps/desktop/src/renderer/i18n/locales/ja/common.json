@@ -1416,6 +1416,9 @@
     "ENDPOINT_NOT_FOUND": "エンドポイントが見つかりません（404）。ベース URL を確認してください",
     "CONTEXT_TOO_LONG": "コンテキストがモデルの上限を超えています",
     "WIRE_INCOMPATIBLE": "エンドポイントがこのプロトコルと完全には互換していません（認識できないリクエストフィールドがあります）",
+    "INVALID_PROBE_RESPONSE": "モデルサービスから空または無効な応答が返されました",
+    "PROBE_NO_OUTPUT": "接続テストでモデルの出力を確認できませんでした",
+    "PROBE_REFUSED": "モデルサービスがテストリクエストを拒否または遮断しました",
     "UPSTREAM_ERROR": "上流サーバーエラー（5xx）です。しばらくしてから再試行してください",
     "UPSTREAM_UNREACHABLE": "エンドポイントに接続できません。ネットワークとベース URL を確認してください",
     "TIMEOUT": "接続がタイムアウトしました。ネットワークとベース URL を確認してください",
@@ -2693,6 +2696,60 @@
         }
       }
     },
+    "contactChange": {
+      "phone": {
+        "rowTitle": "ログイン用の電話番号",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "電話番号を変更",
+        "verifyTitle": "現在の電話番号を確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録している電話番号を確認してください。",
+        "newTitle": "新しい電話番号を入力",
+        "newDescription": "変更後は新しい電話番号でログインしてください。以前の電話番号ではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しい電話番号",
+        "placeholder": "電話番号を入力",
+        "success": "電話番号を {{target}} に変更しました"
+      },
+      "email": {
+        "rowTitle": "ログイン用のメールアドレス",
+        "rowHint": "ログインと認証コードの受信に使用します",
+        "change": "メールアドレスを変更",
+        "verifyTitle": "現在のメールアドレスを確認",
+        "introDescription": "アカウントを保護するため、変更する前に現在登録しているメールアドレスを確認してください。",
+        "newTitle": "新しいメールアドレスを入力",
+        "newDescription": "変更後は新しいメールアドレスでログインしてください。以前のメールアドレスではこのアカウントにログインできなくなります。",
+        "inputLabel": "新しいメールアドレス",
+        "placeholder": "メールアドレスを入力",
+        "success": "メールアドレスを {{target}} に変更しました"
+      },
+      "codeSent": "{{target}} に認証コードを送信しました",
+      "codeLabel": "認証コード",
+      "codePlaceholder": "6 桁のコード",
+      "sendCode": "コードを送信",
+      "next": "次へ",
+      "confirm": "変更を確定",
+      "cancel": "キャンセル",
+      "resend": "コードを再送信",
+      "resendIn": "{{seconds}} 秒後に再送信できます",
+      "errors": {
+        "INVALID_CODE": "認証コードが間違っているか期限切れです。",
+        "CODE_ATTEMPTS_EXCEEDED": "入力ミスが多すぎます。新しいコードを取得してください。",
+        "CONTACT_TAKEN": "この電話番号またはメールアドレスは別のアカウントに登録されています。",
+        "CONTACT_UNCHANGED": "現在登録している電話番号またはメールアドレスと同じです。",
+        "CONTACT_CHANGE_TICKET_INVALID": "確認の有効期限が切れました。現在の電話番号またはメールアドレスをもう一度確認してください。",
+        "AUTH_FLOW_SUPERSEDED": "ログイン状態が変わりました。最初からやり直してください。",
+        "CONTACT_CHANGE_UNAVAILABLE": "このアカウントではここでログイン方法を変更できません。",
+        "CONTACT_CHANGE_BUSY": "前の手順をまだ処理しています。",
+        "RATE_LIMITED": "操作が多すぎます。しばらく待ってから再試行してください。",
+        "RATE_LIMITED_UNTIL": "操作が多すぎます。{{time}}（現地時間）以降に再試行してください。",
+        "INVALID_PARAMS": "形式が正しくありません。確認して再試行してください。",
+        "EMAIL_DOMAIN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "EMAIL_PATTERN_BLOCKED": "このメールアドレスは使用できません。別のアドレスをお試しください。",
+        "ACCOUNT_DELETION_PENDING": "このアカウントは削除待ちのため変更できません。",
+        "NETWORK_ERROR": "ネットワークに接続できません。接続を確認して再試行してください。",
+        "REQUEST_TIMEOUT": "リクエストがタイムアウトしました。再試行してください。",
+        "fallback": "問題が発生しました。しばらくしてから再試行してください。"
+      }
+    },
     "help": {
       "title": "ヘルプ",
       "description": "{{appName}} で作業を進める方法をご案内します。",
@@ -2976,7 +3033,12 @@
         "reconcileButton": "診断",
         "reconcileFailed": "診断に失敗しました",
         "reconcileHealthy": "台帳とディスクは一致しています。異常はありません。",
-        "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。"
+        "reconcileIssues": "異常を検出: 台帳にないファイル {{orphans}} 件({{orphanSize}})、欠損ファイル {{missing}} 件、認識できない項目 {{stray}} 件。詳細はアプリログをご覧ください。",
+        "buddyWorkspaceDirectoryTitle": "仲間のワークスペース",
+        "buddyWorkspaceDirectoryDescription": "新しく作成する仲間のワークスペースの保存先です。既存の仲間は現在の場所に留まり、詳細設定から個別に移動できます。",
+        "buddyWorkspaceDirectoryDetails": "新しい仲間のワークスペース用にアカウント別のサブフォルダーを作成し、元のパスにはリンクを保持します。",
+        "buddyWorkspaceDirectoryChoose": "フォルダーを変更",
+        "buddyWorkspaceDirectoryFailed": "仲間のワークスペースフォルダーを更新できませんでした。"
       },
       "piKernel": {
         "manage": "Pi のバージョンを管理",
@@ -6641,6 +6703,20 @@
         "ssh": "SSH リモートホスト",
         "hook": "Cindy IM ボット"
       },
+      "cloudComputer": {
+        "title": "クラウドマシン",
+        "hint": {
+          "addCloud": "Cindy をインストール済みのクラウドマシンを用意します。準備ができるとデバイス一覧に表示されます。",
+          "preparingCloud": "クラウドマシンを準備しています。準備ができるとデバイス一覧に表示されます。",
+          "manageCloud": "起動・停止、更新、再インストール、削除は Web で行います。"
+        },
+        "actions": {
+          "addCloud": "クラウドマシンを追加",
+          "preparingCloud": "進捗を見る",
+          "manageCloud": "クラウドマシンを管理"
+        },
+        "openFailed": "クラウドマシンのページを開けませんでした。既定のブラウザの設定を確認してください。"
+      },
       "hook": {
         "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。各プロジェクトのモデルと権限は全チャンネル共通で、アカウント連携だけがチャンネルごとに分かれます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
@@ -6823,6 +6899,7 @@
           "guide": {
             "usageLabel": "使い方",
             "usageBody": "X で @askmycindy をメンションしてポストすると、タスクがこの端末に届いてここで実行され、結果が返信として戻ります。",
+            "usageBodyOnDevice": "X で @askmycindy をメンションしてポストすると、タスクが {{device}} に届いてそこで実行され、結果が返信として戻ります。",
             "riskLabel": "返信は公開されます",
             "riskPublicBody": "返信は誰でも見られる公開ポストです。公開の質問や問題解決向けで、プライバシーに関わる私的な用件には不向きです。",
             "riskWorkdirBody": "X のタスクはすべて X 連携設定で指定した既定のプロジェクトで実行されます。Agent はその中のファイルを読み書きでき、結論は公開で返信されます —— 既定のプロジェクトが非公開リポジトリを指している場合、ファイルの内容も公開される可能性があります。",
@@ -8154,6 +8231,11 @@
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
+        "allPlugins": "すべてのプラグイン",
+        "searchResults": "検索結果",
+        "marketSort": {
+          "label": "並べ替え"
+        },
         "todayRecommendations": "今日のおすすめ",
         "marketSection": "プラグインマーケット",
         "browseMarket": "プラグインマーケットを見る",
@@ -8634,6 +8716,7 @@
         "libraryPersist": "永続ライブラリを使用可能(大量のファイルとデータベース)",
         "libraryPersistDetail": "Cindy が管理する独立した保存領域を取得し、作品データ(キャンバス、画像、データベースなど)を保存します。通常のプラグインデータのクォータ制限を受けません。ファイルとデータベースの操作はすべてホストが代行実行し、プラグインはライブラリ内の相対パスのみを使用して、他のファイルに触れることはできません。ライブラリ内のファイルをシステムのフォルダで表示したり、システムの名前を付けて保存ダイアログを開いてコピー先を選ばせることもできます。キャンセルすれば何もコピーされません。確認ダイアログなしで PNG ビットマップをシステムクリップボードに書き込むこともでき、その場合は現在のクリップボード内容が上書きされます。プラグインをアンインストールしてもこのデータは削除されず、削除には Cindy 設定での個別確認が必要です。",
         "networkHost": "ネットワーク接続先 {{host}} にアクセス",
+        "networkHosts": "ネットワーク接続先",
         "networkSecret": "認証情報「{{name}}」の入力が必要",
         "networkSecretGhostInputDetail": "この認証情報はプラグイン自身の設定画面で入力を受け付けるため、入力時にはプラグインのページを経由します。その後ホストへ一度だけ渡されて暗号化保存され、保存後はプラグインから読み出せません。注入は宣言されたドメインへのリクエスト時のみホストが行います。",
         "networkSecretIdentity": "ログインメールアドレスを認証情報「{{name}}」として使用します",
@@ -8841,6 +8924,8 @@
         "dangerTitle": "プラグインをアンインストール",
         "infoContents": "内容",
         "infoVersion": "バージョン",
+        "infoPackageSize": "パッケージサイズ",
+        "infoPackageSizeWithVersion": "{{size}}（{{version}}）",
         "updateTitle": "バージョン更新",
         "updateDesc": "新しい .cindy ファイルを選んでその場で置き換えます。有効状態とパネル位置は保持されます。",
         "errandPrefs": {
@@ -8863,11 +8948,25 @@
           "restoreModel": "モデルをリセット"
         },
         "toolsTitle": "Tools",
+        "toolCount_other": "{{count}}件",
         "permissionsTitle": "権限",
         "infoDescription": "説明",
         "customSlotAsleep": "このプラグインは無効です。有効化すると、ここに設定画面が表示されます。",
         "descriptionExpand": "もっと見る",
         "descriptionCollapse": "折りたたむ",
+        "recentUpdates": "最近の更新",
+        "olderUpdates": "以前の更新",
+        "collapseOlderUpdates": "以前の更新を閉じる",
+        "includesHighRisk": "高リスクあり",
+        "heroDownloads": "累計ダウンロード",
+        "heroUsage": "累計利用回数",
+        "heroWeeklyUsage": "過去7日間の利用",
+        "heroWeeklyUsageExplanation": "現在の共有範囲における、全バージョンの過去7日間のツール呼び出し回数です。",
+        "heroInstalledVersion": "インストール済みバージョン",
+        "heroListedVersion": "公開中のバージョン",
+        "heroLatestUpdate": "最終更新",
+        "morePlugins": "ほかのプラグイン",
+        "morePluginsHint": "無作為に選ばれており、Cindy の意向を示すものではありません。",
         "readmeTitle": "紹介",
         "useAction": "プラグインを使用",
         "chatAction": "会話",
@@ -8906,6 +9005,7 @@
         "portReclaimMessage": "「{{name}}」にはポート {{port}} が必要です。次のプログラムを終了しますか？",
         "portReclaimDetail": "作業が中断され、未保存のデータが失われる場合があります。キャンセルして自分で終了することもできます。",
         "configurationTitle": "設定",
+        "recordTitle": "プラグイン情報",
         "sidebarEntryTitle": "ナビゲーション項目",
         "showInSidebar": "左側ナビゲーションに表示",
         "fileOpenerTitle": "このプラグインでファイルを開く",
@@ -8916,6 +9016,7 @@
         "viewAllTools": "さらに表示",
         "collapseTools": "Tool を折りたたむ",
         "viewAllPermissions": "さらに表示",
+        "remainingPermissions": "残り {{count}} 件を表示",
         "permissionsDialogDescription": "このプラグインが要求する全 {{count}} 項目の権限",
         "closeDialog": "ダイアログを閉じる",
         "resetPlacement": "既定の位置に戻す"
@@ -9234,6 +9335,7 @@
         "anonymousUnavailable": "作者設定を取得できません",
         "anonymousUpdateFailed": "匿名設定が保存されたか確認できません。更新してから再試行してください。",
         "myPlugins": "プラグインを公開",
+        "backToPublish": "プラグインの公開に戻る",
         "publish": "審査に提出",
         "submitUpdate": "新しいバージョンを審査に提出",
         "publishHint": "公開する権限のあるプラグインのみ対象です。審査の承認後にコミュニティで公開されます。",
@@ -9273,6 +9375,7 @@
         "publishedContentUnavailable": "現在の公開版の説明と更新内容を読み込めません。",
         "currentSubmission": "現在の提出",
         "localState": {
+          "installed": "ローカル版 {{version}}",
           "missing": "このコンピューターには未インストール",
           "unavailable": "ローカル版を読み込めません"
         },
@@ -9285,7 +9388,7 @@
         "publishing": "公開管理",
         "latestSubmission": "最新の提出",
         "noSubmission": "まだ提出されていません",
-        "marketVersion": "公開中 · {{version}}",
+        "marketVersion": "公開中 {{version}}",
         "market": {
           "not_listed": "未公開",
           "disabled": "公開停止中",
@@ -9295,7 +9398,7 @@
         "review": {
           "pending": "審査待ち",
           "approved": "承認済み",
-          "rejected": "差し戻し",
+          "rejected": "却下",
           "published": "公開中",
           "superseded": "後の提出に置き換え済み",
           "legacy_unverified": "過去の改訂を確認できません",
@@ -9303,9 +9406,12 @@
           "cancelled": "取り消し済み"
         },
         "reason": "理由",
+        "rejectionReason": "却下理由",
+        "rejectionReasonLine": "<reasonLabel>却下理由:</reasonLabel> <reasonText />",
         "submittedContent": "提出した内容",
         "snapshotUnavailable": "元の提出内容が保存されていないか、確認できなくなっています。",
         "history": "公開履歴",
+        "marketChanges": "公開状態の変更",
         "loadMore": "さらに表示",
         "loadMoreHistory": "履歴をさらに表示",
         "releaseId": "リリース ID",
@@ -9320,7 +9426,7 @@
           "submitted": "提出済み",
           "metadata_updated": "表示情報を更新済み",
           "approved": "承認済み",
-          "rejected": "差し戻し",
+          "rejected": "却下",
           "enabled": "公開を開始",
           "disabled": "公開を停止",
           "archived": "アーカイブ済み",
@@ -9402,6 +9508,8 @@
         "notApproved": "未承認",
         "timeUnavailable": "記録なし",
         "releaseNotes": "更新内容",
+        "expandReleaseNotes": "すべて展開",
+        "noReleaseNotes": "更新内容は記載されていません。",
         "versionUpdates": "バージョンと更新",
         "versionManagement": "バージョン管理",
         "versionContent": "バージョンの内容",
@@ -9418,7 +9526,6 @@
         "cancelled": "取り消し済み",
         "cancelReviewCompleted": "審査を取り消しました。公開中のバージョンに影響はありません。",
         "cancelReviewAlreadyFinal": "審査は完了しているため取り消されませんでした。実際の結果を下に表示します。",
-        "viewPendingVersion": "審査中のバージョンを表示",
         "submitFailed": "提出に失敗",
         "viewDetails": "詳細を見る"
       },
@@ -9983,6 +10090,18 @@
       "title": "自動更新に失敗しました",
       "description": "アップデーターを起動できませんでした。システムのセキュリティポリシーによりブロックされた可能性があります。最新のインストーラーを手動でダウンロードしてください。",
       "confirm": "ダウンロードへ"
+    },
+    "workspaceMigration": {
+      "title": "仲間のワークスペースを移動中",
+      "progressLabel": "仲間ワークスペース移動の進捗",
+      "safetyHint": "切り替え前にファイルをコピー・検証しています。完了まで Cindy を閉じないでください。",
+      "phase": {
+        "preparing": "移動を準備中",
+        "copying": "ファイルをコピー中",
+        "verifying": "ファイルを検証中",
+        "switching": "場所を切り替え中",
+        "cleaning": "バックアップを整理中"
+      }
     }
   },
   "welcome": {
@@ -11314,6 +11433,69 @@
           "routines": "確認が必要な定期タスク",
           "upgrade": "自動では引き継げなかったもの"
         }
+      },
+      "workspaceLocation": {
+        "title": "ワークスペースの場所",
+        "description": "この仲間のワークスペースを別のローカルディスクへ移動し、システムドライブの空き容量を確保できます。元のパスにはリンクが残るため、既存のタスク・自動化・スクリプトはそのまま動作します。",
+        "movedDescription": "既存のタスクやスクリプトは引き続き元のパスを使用します。",
+        "chooseDialogTitle": "ワークスペースの移動先フォルダーを選択",
+        "fullPath": "フルパス",
+        "targetPathLabel": "移動先フォルダー",
+        "currentPathLabel": "現在のフォルダー",
+        "defaultPathLabel": "移動先（既定の場所）",
+        "logicalPathLabel": "元のリンクパス",
+        "copyPath": "パスをコピー",
+        "pathCopied": "パスをコピーしました",
+        "pathCopyFailed": "パスをコピーできませんでした",
+        "openTarget": "フォルダーを開く",
+        "moveAction": "ワークスペースを移動",
+        "moveBackAction": "既定の場所に戻す",
+        "chooseAnother": "別のフォルダーを選択",
+        "restartNow": "今すぐ再起動",
+        "restartAndMove": "再起動して移動",
+        "scheduleNextRestart": "次回起動時に移動",
+        "cancel": "キャンセル",
+        "dismissFailed": "閉じる",
+        "scheduledToast": "次回の Cindy 再起動時に移動を実行するよう予約しました",
+        "cancelledToast": "ワークスペースの移動をキャンセルしました",
+        "previewTitle": "ワークスペースの移動準備完了",
+        "previewSummary": "ファイルサイズ：{{size}}",
+        "previewNotice": "再起動前に、このワークスペースを使用中のアプリやスクリプトを終了してください。",
+        "previewClaudeSkillsNotice": "ワークスペースに独自の Git リポジトリがない場合、移動後に Claude Code が移動先の上位フォルダーにあるスキルを検出することがあります。これを避けるには、上位フォルダーに Claude Code のスキルがない場所を選んでください。",
+        "pendingHint": "このフォルダーを使用中の外部アプリを閉じてから Cindy を再起動してください。",
+        "unavailableTitle": "移動後のワークスペースにアクセスできません",
+        "unavailableDescription": "{{target}} に到達できませんでした。ドライブを再接続するかフォルダーを復元してください。空のフォルダーで上書きされることはありません。",
+        "errorTitle": "ワークスペースを移動できませんでした",
+        "failedTitle": "前回のワークスペース移動に失敗しました",
+        "interruptedTitle": "ワークスペース移動の復旧が必要です",
+        "backupRemainingHint": "確認用に元のバックアップを保持しています: {{backup}}",
+        "personalPreviewHint": "このプロファイルを共有する個人プレビュー版を閉じ、通常の Cindy から移動を予約・実行してください。",
+        "status": {
+          "default": "デフォルト",
+          "pending": "再起動待ち",
+          "moved": "移動済み",
+          "failed": "失敗",
+          "interrupted": "要復旧",
+          "unavailable": "利用不可"
+        },
+        "warnings": {
+          "waitingExclusive": "排他起動を待機中です。同じデータを共有する他の Cindy インスタンスを閉じて再起動してください。",
+          "receiptUpdateFailed": "ワークスペースは利用可能ですが、移動記録の更新に失敗しました。次回の再起動時に再試行します。"
+        },
+        "errors": {
+          "insufficientSpace": "移動先ドライブの空き容量が不足しています。",
+          "overlapsCindyData": "Cindy のデータフォルダーおよび現在のワークスペース外のフォルダーを選択してください。",
+          "localDiskRequired": "ネットワーク共有ではなくローカルディスク上のフォルダーを選択してください。",
+          "unsupportedFileOrHardLink": "ハードリンクまたは特殊ファイルが含まれているため、現在安全に移動できません。",
+          "alreadyRedirected": "Cindy はこのワークスペースのフォルダーリンクを認識できません。リンクとファイルはそのままにしてください。",
+          "botHomeRedirected": "この仲間のホームフォルダーは手動でリダイレクトされているため、自動移動できません。",
+          "targetExists": "移動先フォルダーがすでに存在します。別の場所を選択してください。",
+          "workspaceChanged": "検証中にファイルが変更されました。外部アプリを閉じてやり直してください。",
+          "backupRetained": "移動は完了しましたが、バックアップに差分があったため保護のため残しました。",
+          "backupCleanupIncomplete": "移動は完了しましたが、一時バックアップの削除が未完了です。次回起動時に再試行します。",
+          "cutoverInterrupted": "前回の切り替えが中断され、元のワークスペースを復元しました。新しい空フォルダーを選んでやり直してください。",
+          "generic": "ワークスペースの移動を完了できませんでした。もう一度お試しください。"
+        }
       }
     },
     "profile": {
@@ -12258,7 +12440,8 @@
         "dissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
         "failed": "操作を完了できませんでした。もう一度お試しください。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
-      }
+      },
+      "externalBadge": "外部"
     },
     "joined": {
       "today": "今日加入",
@@ -12532,6 +12715,12 @@
       "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなく仲間一覧に表示されます",
       "arrivalPermissions": "{{name}} はこのパソコンの既定の権限で動作します。",
       "arrivalModel": "{{name}} の保存済みモデルはこのパソコンでは使えないため、このパソコンの既定モデルを使います。",
+      "arrivalModelSetup": "{{name}} はこのパソコンに移りましたが、使えるモデルがまだありません。モデルプロバイダーを接続するか、この仲間の「設定 → モデル」でモデルを選んでください。",
+      "arrivalPartialContent": "{{name}} はこのパソコンで動作するようになりましたが、一部の同期データは復元できませんでした。クラウド上の元データはそのまま残っています。",
+      "missingProfileTitle": "初期プロフィールで {{name}} を続けますか？",
+      "missingProfileDescription": "元のメインコンピューターから {{name}} のプロフィールがまだアップロードされていません。元のパソコンを再インストールした場合や復旧できない場合は、初期プロフィールでこのパソコンから続けられます。クラウドに同期済みの会話や内容はそのまま残ります。",
+      "missingProfileConfirm": "初期プロフィールで続ける",
+      "missingProfileFailed": "{{name}} のプロフィールはまだクラウドにアップロードされていません",
       "busyTitle": "{{name}} はまだ返信中です",
       "busyDescription": "この返信が終わってから「{{device}}」に移すか、返信を止めてすぐに移せます。",
       "busyWait": "終わってから移す",
@@ -13452,6 +13641,7 @@
         },
         "slash": {
           "detachFailed": "❌ 引き継ぎを終了できませんでした: {{error}}",
+          "pluginEngineModelsUnavailable": "このタスクのプラグインエンジンは現在利用できないため、モデルを一覧表示できません。",
           "companionManaged": "🧭 この接続は仲間に任されているため、モデル・権限・作業ディレクトリは仲間の設定に従います。Cindy の仲間の設定で変更してください。"
         },
         "turn": {
@@ -15393,6 +15583,8 @@
       "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+      "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "messageNotSent": "メッセージは送信されませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
       "retryTitle": "最後のメッセージを再送信",
@@ -22420,6 +22612,19 @@
     "rendered": "文書を表示",
     "wrap": "行の折り返し",
     "lineNumbers": "行番号"
+  },
+  "openAiAccountGroup": {
+    "strategy": "アカウントグループの割り当て",
+    "leastHint": "実行中のタスクが最も少ない接続を優先",
+    "quotaHint": "サブスクリプションの使用量を取得できる場合は、使用量で接続を絞ってからグループの方針を適用します。",
+    "removeDescription": "この接続にはグループの新しいタスクが割り当てられなくなります。実行中のタスクはこの接続に残ります。",
+    "mergeDescription": "{{target}} で新しく作成したタスクは両方のプロバイダーを利用できます。ログイン、キー、既存のタスクは元のままです。連携する前に Cindy が {{apiKey}} の API キーをテストします。",
+    "modelUnavailable": "この接続ではテスト用に選んだモデルを使用できません。再テストすると別の候補を試せます。",
+    "noTestModel": "テストに使える設定済みモデルがありません。OpenAI プロジェクトで使用できるモデルを確認し、この接続のモデル一覧を再取得または更新してください。",
+    "billingPaused": "残高不足または請求上限のため、グループの割り当てを停止中。",
+    "title": "アカウントグループ",
+    "testPassed": "テスト成功",
+    "refresh": "利用枠を更新"
   },
   "subscriptionAccounts": {
     "pluginSignIn": {
