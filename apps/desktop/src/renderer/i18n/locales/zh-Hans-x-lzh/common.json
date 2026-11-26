@@ -9585,6 +9585,7 @@
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 会话即可调用，方行之 Agent 会话不受影响。",
+        "embeddedGuide": "助手为此差事启 MCP 设定表。依供方所示，核已填之项，补其阙，乃存之。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同伴自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {

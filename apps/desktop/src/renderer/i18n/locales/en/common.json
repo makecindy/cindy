@@ -9629,6 +9629,7 @@
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
         "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
+        "embeddedGuide": "Your assistant opened this form to set up MCP for the current task. Follow the service provider’s instructions to check any prefilled details, fill in what’s missing, and save the configuration.",
         "teammateDesc": "Remote http / sse MCP only. After saving, your buddy adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {

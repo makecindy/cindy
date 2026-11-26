@@ -9585,6 +9585,7 @@
         "createTitle": "新增 MCP 伺服器",
         "editTitle": "編輯 MCP 伺服器",
         "desc": "僅支援遠端 http / sse 型 MCP。儲存後新建或重啟的 Agent 會話即可呼叫，正在執行的 Agent 會話不受影響。",
+        "embeddedGuide": "助手為目前的任務開啟了 MCP 設定表單。請依照服務供應商的說明核對已填資訊，補齊缺少的欄位，再儲存設定。",
         "teammateDesc": "僅支援遠端 http / sse 型 MCP。儲存後夥伴會把它加入自己的工具，在本對話的下一則訊息起即可使用，無需新建任務。"
       },
       "fields": {
