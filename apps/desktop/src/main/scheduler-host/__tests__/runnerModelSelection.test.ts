@@ -97,7 +97,13 @@ import { MakerScheduleRunner } from '../runner.desktop';
 import { resolveTeammateScheduleModel } from '../teammateScheduleModel';
 import { __testing as projectAutomation } from '../project-automation-loader';
 import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
-import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  resolveScheduledModelSelection,
+} from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import { Scheduler, type ScheduleStorage } from '@cindy/maker-scheduler';
 
@@ -498,6 +504,170 @@ describe('MakerScheduleRunner model selection', () => {
         admitPluginEngine: () => { throw new Error('DeepSeek Harness 当前不可用。'); },
       });
       await expect(harness.runner.validateModelSelection(pluginSchedule())).rejects.toThrow('当前不可用');
+      await expect(harness.runner.validateModelSelection({ ...pluginSchedule(), targetSessionId: 'bound-task' }))
+        .rejects.toThrow('当前不可用');
+    });
+
+    // 2026-11-26 (方案 B): bound ordinary desktop tasks can temporarily switch between plugin
+    // engines and built-in harnesses via scheduledModelScope + applyScheduledModelSelection and
+    // restore the original engine before the next user message. Minimal failing inputs: an ACP
+    // task rejecting a built-in PR follow-up model, or a restore failing to switch back to ACP.
+    it('temporarily switches a bound plugin-engine task to a built-in model and restores ACP afterwards', async () => {
+      const h = createSessionHarness();
+      type RouteState = Parameters<typeof applyScheduledModelSelection>[0] & { agentDeviceId: string | null };
+      let current: RouteState = {
+        agentKind: 'acp',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'high',
+        fastMode: false,
+        agentDeviceId: null,
+      };
+      const meta: {
+        agentKind: Session['agentKind'];
+        model: string;
+        effort?: string;
+        workDir: string;
+      } = {
+        agentKind: 'acp',
+        model: 'deepseek-v4',
+        effort: 'high',
+        workDir: '/work',
+      };
+      let baseline: string | null = null;
+      const switchHarness = vi.fn(async (route: Parameters<typeof applyScheduledModelSelection>[0]) => {
+        current = {
+          agentKind: route.agentKind,
+          providerId: route.providerId,
+          model: route.model,
+          effort: route.effort,
+          fastMode: route.fastMode,
+          agentDeviceId: route.agentDeviceId ?? null,
+        };
+        meta.agentKind = route.agentKind;
+        meta.model = route.model;
+        meta.effort = route.effort ?? undefined;
+        Object.assign(h.session, { agentKind: route.agentKind, model: route.model });
+        return { engineReady: true };
+      });
+      const applyModel = vi.fn(async (route: Parameters<typeof applyScheduledModelSelection>[0]) => {
+        current = { ...current, model: route.model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode };
+        meta.model = route.model;
+        meta.effort = route.effort ?? undefined;
+        await h.session.setModel(route.model);
+      });
+      const resolveSelection = createScheduledModelSelectionResolver({
+        readRemoteProviders: async () => [],
+        readSshCodexProviders: async () => [],
+        resolveLocalSelection: async (route) => route,
+        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', agentDeviceId: null, fastMode: false }),
+      });
+      const applyProfile = (route: Parameters<typeof applyScheduledModelSelection>[0]) =>
+        applyScheduledModelSelection(route, {
+          getTarget: async () => ({ ...current, status: 'active', source: 'desktop' }),
+          isBusy: () => false,
+          resolveSelection,
+          switchHarness,
+          applyModel,
+        });
+      const scope = createScheduledModelScope({
+        createId: () => 'acp-owner-scope',
+        read: async () => ({ baseline, profile: current }),
+        write: async (_id, saved, _rev, _expected, restored) => {
+          baseline = saved ? JSON.stringify(saved) : null;
+          if (!saved && restored) {
+            current = {
+              agentKind: restored.agentKind,
+              providerId: restored.providerId,
+              model: restored.model,
+              effort: restored.effort,
+              fastMode: restored.fastMode,
+              agentDeviceId: restored.agentDeviceId ?? null,
+            };
+          }
+        },
+        isBusy: () => false,
+        apply: async (_id, profile) => applyProfile(profile),
+      });
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        source: 'desktop',
+        agentKind: current.agentKind,
+        providerId: current.providerId,
+        userSendAt: null,
+        agentDeviceId: null,
+        remoteHostId: null,
+      }));
+      const harness = createRunnerHarness(h, meta, {
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          if (!selection) return () => {};
+          await scope.begin(h.session.id);
+          const resolved = await applyProfile(selection);
+          return { release: () => {}, selection: resolved };
+        },
+      });
+      const schedule = baseSchedule({
+        targetSessionId: h.session.id,
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'medium',
+        fastMode: false,
+      });
+      const opts = await fireToCompletion(harness, h, schedule);
+      expect(opts).toMatchObject({ agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai' });
+      expect(switchHarness).toHaveBeenCalledTimes(1);
+      expect(applyModel).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(baseline!)).toMatchObject({
+        agentKind: 'acp',
+        providerId: ENGINE,
+        model: 'deepseek-v4',
+        effort: 'high',
+        fastMode: false,
+      });
+      // Next ordinary user send restores the task back to its ACP plugin engine without calling built-in applyModel.
+      await scope.restore(h.session.id);
+      expect(baseline).toBeNull();
+      expect(current).toMatchObject({ agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', effort: 'high', fastMode: false });
+      expect(switchHarness).toHaveBeenCalledTimes(2);
+      expect(applyModel).toHaveBeenCalledTimes(1);
+    });
+
+    it('switches same-plugin-engine models in place and rejects unsupported plugin-engine bound targets', async () => {
+      const switchHarness = vi.fn(async () => ({ engineReady: true }));
+      const applyModel = vi.fn(async () => undefined);
+      const resolveSelection = createScheduledModelSelectionResolver({
+        readRemoteProviders: async () => [],
+        readSshCodexProviders: async () => [],
+        resolveLocalSelection: async (route) => route,
+        resolvePluginEngineSelection: async (route) => ({ ...route, agentKind: 'acp', agentDeviceId: null, fastMode: false }),
+      });
+      await applyScheduledModelSelection({
+        agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v5', effort: 'low', fastMode: false, agentDeviceId: null,
+      }, {
+        getTarget: async () => ({ agentKind: 'acp', providerId: ENGINE, status: 'active', source: 'desktop', agentDeviceId: null }),
+        isBusy: () => false,
+        resolveSelection,
+        switchHarness,
+        applyModel,
+      });
+      expect(switchHarness).not.toHaveBeenCalled();
+      expect(applyModel).toHaveBeenCalledOnce();
+
+      const cases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
+        [{ agentKind: 'acp', status: 'active', source: 'bot' }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'bot' }, 'acp', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-1' }, 'acp', null],
+        [{ agentKind: 'acp', status: 'active', source: 'desktop', orcaRole: 'worker' }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop', orcaRole: 'lead' }, 'acp', null],
+        [{ agentKind: 'codex', status: 'active', source: 'im' }, 'acp', null],
+        [{ agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: 'other-mac' }, 'codex', null],
+        [{ agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', 'other-mac'],
+      ];
+      for (const [target, nextKind, nextDevice] of cases) {
+        expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).toThrow();
+      }
     });
   });
 

@@ -1154,6 +1154,60 @@ describe('plugin engine selection', () => {
     expect(fields.agentKind).not.toBe('acp');
   });
 
+  it('saves and reopens a bound plugin-engine override while keeping follow-task acp bindings as follow', () => {
+    const input = buildScheduleInput(makeForm({
+      targetSessionId: 'task-1',
+      boundAgent: { sessionId: 'task-1', agentKind: 'codex' },
+      agentKind: 'codex',
+      model: '',
+      providerId: '',
+      fastMode: true,
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+    }));
+    expect(input).toMatchObject({
+      targetSessionId: 'task-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      useWorktree: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: undefined,
+    });
+    const reopened = scheduleEngineFormFields({
+      ...input,
+      id: 's-bound',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopened).toMatchObject({
+      boundAgent: { sessionId: 'task-1', agentKind: 'claude-code' },
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+      model: '',
+      providerId: '',
+      modelAgentKind: undefined,
+    });
+    const followAcp = scheduleEngineFormFields({
+      ...input,
+      id: 's-follow-acp',
+      agentKind: 'acp',
+      modelAgentKind: undefined,
+      model: undefined,
+      providerId: undefined,
+      effort: undefined,
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(followAcp.pluginEngine).toBeNull();
+    expect(followAcp.boundAgent).toEqual({ sessionId: 'task-1', agentKind: 'claude-code' });
+  });
+
   it('keeps built-in automations unchanged', () => {
     const input = buildScheduleInput(makeForm({ agentKind: 'codex', model: 'gpt-5.5', pluginEngine: null }));
     expect(input.agentKind).toBe('codex');

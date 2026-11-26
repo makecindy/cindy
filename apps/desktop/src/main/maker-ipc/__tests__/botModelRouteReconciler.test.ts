@@ -525,6 +525,7 @@ function automationHarness() {
     read: async () => ({ profile: h.state.current, baseline }),
     write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
     apply: async (_id, profile) => {
+      if (profile.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
       const { agentKind, model, providerId, effort, fastMode } = profile;
       h.state.current = { agentKind, model, providerId, effort, fastMode };
     },

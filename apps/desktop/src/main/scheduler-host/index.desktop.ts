@@ -118,7 +118,10 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       onModelDispatched: recordDispatchedModel,
       applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
       resolveModelSelection: (selection, location) => {
-        const route = { ...selection, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
+        if (selection.agentKind === 'acp') {
+          throw new Error('Plugin engines are not resolved through the built-in catalog');
+        }
+        const route = { ...selection, agentKind: selection.agentKind, agentDeviceId: selection.agentDeviceId === undefined ? location?.agentDeviceId : selection.agentDeviceId };
         return resolveScheduledModelSelectionLive(route, async (agentDeviceId) => [
           (await readRemoteProviderRoute({ ...route, agentDeviceId })).provider,
         ]);

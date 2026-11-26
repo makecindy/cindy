@@ -75,6 +75,7 @@ import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
 import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -312,9 +313,9 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只给每次新建任务、在本机运行的 Agent 自动任务：绑定 / 持续会话、
-  // 脚本、伙伴例行任务与项目自动化(随代码提交给所有成员，插件只装在这台电脑上)都不提供。
-  const pluginEnginesAllowed = runMode === 'fresh' && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机每次新建任务与绑定本机普通任务临时切换；
+  // 持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
+  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
   const pluginEngineUnavailable = !!pluginEngineChoice && !resolveActivePluginEngine(pluginEngineList, pluginEngineChoice);
@@ -1095,7 +1096,9 @@ export function ScheduleFormDialog({
                                       null,
                                       boundSessionReference?.agentKind === 'cc'
                                         ? 'claude-code'
-                                        : boundSessionReference?.agentKind,
+                                        : isPluginEngineKind(boundSessionReference?.agentKind)
+                                          ? undefined
+                                          : boundSessionReference?.agentKind,
                                     )
                                   }
                                   agentKind={form.agentKind}
@@ -1121,7 +1124,7 @@ export function ScheduleFormDialog({
                               </div>
                             </div>
                           </div>
-                          {isBound && form.model.trim() !== '' && (
+                          {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
                             </p>

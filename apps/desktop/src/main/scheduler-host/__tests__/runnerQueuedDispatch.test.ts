@@ -1237,9 +1237,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(h.session.setModel).not.toHaveBeenCalled();
   });
 
-  // Same entry: a model chosen for the automation cannot run on the task's plugin engine. It must
-  // fail visibly before anything is queued, never switch the task or run on a built-in engine.
-  it('refuses a linked plugin-engine task when the automation chose a model', async () => {
+  // Same entry: a legacy model-only choice (without modelAgentKind) cannot guess a harness on a
+  // plugin-engine task and still fails visibly before anything is queued.
+  it('refuses a linked plugin-engine task when the automation has a legacy model-only override', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentKind: 'acp', userSendAt: null, providerId: null });
@@ -1250,6 +1250,64 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     });
     expect(queue.enqueueCalls).toHaveLength(0);
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+  });
+
+  // 2026-11-26 (方案 B): a bound automation with explicit modelAgentKind='acp' temporarily switches
+  // an ordinary desktop task to the local plugin engine and dispatches via the bound ACP queue path.
+  // Minimal failing input: a built-in desktop task with modelAgentKind='acp' rejected or dispatched
+  // through the built-in path instead of the plugin-engine queue. Unit tier.
+  it('switches a bound built-in desktop task to a local plugin engine and dispatches via queue', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    let currentKind: 'codex' | 'acp' = 'codex';
+    let currentProviderId: string | null = 'openai';
+    let currentModel = 'gpt-5.4';
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'desktop',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      userSendAt: null,
+      agentDeviceId: null,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(() => ({ model: 'gemini-4', effort: 'high' }));
+    const { runner } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+        expect(selection).toMatchObject({
+          agentKind: 'acp',
+          providerId: 'acp-plugin:agy:agy',
+          model: 'gemini-4',
+          effort: 'high',
+          fastMode: false,
+          agentDeviceId: null,
+        });
+        currentKind = 'acp';
+        currentProviderId = 'acp-plugin:agy:agy';
+        currentModel = 'gemini-4';
+        Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4' });
+        return { release: () => {}, selection: selection! };
+      },
+    });
+    const ctx = createFireContext();
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: 'acp-plugin:agy:agy',
+      model: 'gemini-4',
+      effort: 'high',
+      fastMode: false,
+    }), ctx);
+    const outcome = fire.then(result => ({ result }), error => ({ error }));
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await outcome).toMatchObject({ result: { sessionId: SESSION_ID } });
+    expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+    expect(currentModel).toBe('gemini-4');
   });
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {

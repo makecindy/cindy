@@ -69,8 +69,9 @@ export function createUpdateSavedScheduledAxis(ports: {
   readUsableAgentDeviceProviders: ReadUsableAgentDeviceProviders;
   updateScheduledPreference: ReturnType<typeof createUpdateScheduledPreference>;
   getDesktopProviderService: ProviderListing;
+  admitPluginEngineTarget?: (target: { providerId: string | null | undefined; model: string; effort?: unknown }) => { effort: string };
 }) {
-  const { readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService } = ports;
+  const { readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService, admitPluginEngineTarget } = ports;
   const updateSavedScheduledAxis = async (
     sessionId: string,
     patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] },
@@ -80,6 +81,27 @@ export function createUpdateSavedScheduledAxis(ports: {
       .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     const baseline = parseScheduledModelBaseline(row?.baseline);
     if (!baseline) return false;
+    if (baseline.agentKind === 'acp') {
+      if (patch.fastMode !== undefined && patch.fastMode !== false) {
+        throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+      }
+      if (patch.effort !== undefined) {
+        if (!admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        const admitted = admitPluginEngineTarget({
+          providerId: baseline.providerId,
+          model: baseline.model,
+          effort: patch.effort,
+        });
+        assertCurrent();
+        await updateScheduledPreference(sessionId, { effort: (admitted.effort || null) as ScheduledModelSelection['effort'] });
+        return true;
+      }
+      assertCurrent();
+      await updateScheduledPreference(sessionId, { fastMode: false });
+      return true;
+    }
     const providers = baseline.agentDeviceId
       ? await readUsableAgentDeviceProviders(baseline.agentDeviceId, baseline.agentKind, baseline.model, baseline.providerId)
       : await getDesktopProviderService().listProviders({

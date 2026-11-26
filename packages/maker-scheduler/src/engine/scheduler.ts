@@ -187,25 +187,30 @@ function validateScheduleExecutionShape(
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
-  // 哪个引擎，不绑定已有任务、不换电脑、不走脚本执行；worktree 与内置引擎相同。旧端只改了其中一半(例如把
-  // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上运行：支持每次新建任务(含 worktree)
+  // 或绑定本机普通桌面任务临时切换执行；不支持持续会话(scheduler 任务)、换电脑、脚本执行。
+  // 独立任务只改了其中一半(例如旧端把 agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
-    if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
-      throw new Error('A plugin engine schedule must choose the plugin engine as its model');
-    }
-    if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
-      || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
-      throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
-    }
-    if ((schedule.executionMode ?? 'agent') !== 'agent') {
-      throw new Error('Script schedules cannot use a plugin engine');
-    }
-    if (schedule.targetSessionId || schedule.persistentSession) {
-      throw new Error('A plugin engine schedule starts a new task each run');
-    }
-    if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
-      throw new Error('Plugin engines run on the automation host only');
+    const boundOrdinaryTask = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
+    const boundFollowsOwnTask = boundOrdinaryTask && !schedule.modelAgentKind && !schedule.model?.trim();
+    const boundBuiltinOverride = boundOrdinaryTask && schedule.modelAgentKind != null && schedule.modelAgentKind !== 'acp';
+    if (!boundFollowsOwnTask && !boundBuiltinOverride) {
+      if (schedule.modelAgentKind !== 'acp' || (!boundOrdinaryTask && schedule.agentKind !== 'acp')) {
+        throw new Error('A plugin engine schedule must choose the plugin engine as its model');
+      }
+      if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+        || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
+        throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if ((schedule.executionMode ?? 'agent') !== 'agent') {
+        throw new Error('Script schedules cannot use a plugin engine');
+      }
+      if (schedule.persistentSession) {
+        throw new Error('A plugin engine schedule cannot use a persistent session');
+      }
+      if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
+        throw new Error('Plugin engines run on the automation host only');
+      }
     }
   }
   if (schedule.agentDeviceId !== undefined) {
@@ -280,7 +285,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey' | 'model' | 'providerId' | 'effort' | 'source' | 'persistentSession'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理

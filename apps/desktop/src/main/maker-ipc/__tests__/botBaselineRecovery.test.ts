@@ -301,13 +301,14 @@ describe('SSH baseline restoration through production profile application', () =
     const resolveScheduledExecutionSelection = registeredFunction('resolveScheduledExecutionSelection', {
       getSessionRowSnapshotStrict: async () => ({ providerId: 'openai', agentKind: 'codex',
         remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }),
+      dbToMakerEngineKind: (kind: string) => kind,
     });
     const apply = registeredFunction('applyScheduledProfile', {
       resolveScheduledExecutionSelection,
       applyScheduledModelSelection, createScheduledModelSelectionResolver, resolveScheduledModelSelection,
       readSshCodexModelList, listSshCodexProviders: ssh,
       agentSwitchDeps: { getSessionRow: async () => ({ agentKind: 'codex', status: 'active', remoteHostId: 'ssh-builder', agentDeviceId: 'stale-device' }) },
-      dbToMakerAgentKind: (kind: string) => kind,
+      dbToMakerEngineKind: (kind: string) => kind,
       isSessionInTurn: () => false, maker: { getSession: () => undefined },
       readUsableAgentDeviceProviders: vi.fn(() => { throw new Error('must not query another computer'); }),
       assertModelRouteUsable: local, resolveScheduledModelSelectionLive: local,

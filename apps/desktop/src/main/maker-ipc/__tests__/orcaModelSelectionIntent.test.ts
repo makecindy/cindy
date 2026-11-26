@@ -155,6 +155,24 @@ describe('owner settings during an automatic turn', () => {
     expect(assertCurrent).toHaveBeenCalledOnce();
     expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', patch);
   });
+
+  it('updates effort and refuses Fast against a saved plugin-engine baseline', async () => {
+    const baseline = { scopeId: 'run', agentKind: 'acp', model: 'gemini-4', providerId: 'acp-plugin:agy:agy',
+      effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const assertCurrent = vi.fn();
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+      admitPluginEngineTarget: (target: { effort?: unknown }) => ({ effort: target.effort === 'high' ? 'high' : '' }),
+    });
+    expect(await update('s1', { effort: 'high' }, assertCurrent)).toBe(true);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', { effort: 'high' });
+    await expect(update('s1', { fastMode: true }, assertCurrent)).rejects.toThrow(/Fast is unavailable for plugin engines/);
+  });
 });
 
 // Unit: stale UI axes must be admitted against the pending execution route,
@@ -269,7 +287,7 @@ describe('complete selection commit boundaries', () => {
     let row = { ...saved };
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
-      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      getSessionRowSnapshotStrict: async () => row, dbToMakerEngineKind: (kind: string) => kind,
       isProviderShareAgentDeviceId: () => false, readMergedProviderAccount: () => 'account-a',
       resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }), accountProviderId: () => target,
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
@@ -322,7 +340,7 @@ describe('complete selection commit boundaries', () => {
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
         getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai-sub-target' }),
-        dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
+        dbToMakerEngineKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
         readMergedProviderAccount: () => (mode === 'local-restored' ? undefined : 'account-a'),
         resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }),
         accountProviderId: () => mode === 'local-wrong-target' ? 'different-target' : 'openai-sub-target',

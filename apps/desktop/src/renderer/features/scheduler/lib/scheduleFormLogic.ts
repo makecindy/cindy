@@ -623,11 +623,13 @@ export function parseScriptTimeoutMs(sec: string): number | undefined {
 export function scheduleEngineFormFields(
   s: Schedule,
 ): Pick<ScheduleFormState, 'agentKind' | 'modelAgentKind' | 'boundAgent' | 'model' | 'providerId' | 'pluginEngine'> {
-  if (s.agentKind === 'acp' || s.modelAgentKind === 'acp') {
+  if (s.modelAgentKind === 'acp' || (!s.targetSessionId && s.agentKind === 'acp')) {
     return {
       agentKind: 'claude-code',
       modelAgentKind: undefined,
-      boundAgent: undefined,
+      boundAgent: s.targetSessionId
+        ? { sessionId: s.targetSessionId, agentKind: s.agentKind === 'acp' ? 'claude-code' : s.agentKind }
+        : undefined,
       model: '',
       providerId: '',
       pluginEngine: {
@@ -637,10 +639,11 @@ export function scheduleEngineFormFields(
       },
     };
   }
+  const normalizedAgentKind = s.agentKind === 'acp' ? 'claude-code' : s.agentKind;
   return {
-    agentKind: s.modelAgentKind ?? s.agentKind,
+    agentKind: s.modelAgentKind ?? normalizedAgentKind,
     modelAgentKind: s.modelAgentKind,
-    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
+    boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: normalizedAgentKind } : undefined,
     model: s.model ?? '',
     providerId: s.providerId ?? '',
     pluginEngine: null,
@@ -784,6 +787,19 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
 
   if (isHeartbeat) {
     base.useWorktree = false;
+    if (form.pluginEngine && !form.persistentSession) {
+      return {
+        ...base,
+        agentKind: 'acp',
+        modelAgentKind: 'acp',
+        model: form.pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        providerId: form.pluginEngine.providerId,
+        effort: form.pluginEngine.effort,
+        fastMode: false,
+        agentDeviceId: undefined,
+        modelAgentDeviceId: undefined,
+      };
+    }
     // Keep the key when following so an update clears a previously saved Fast override.
     base.fastMode = form.modelAgentKind ? form.fastMode : undefined;
     base.model = form.model.trim() || undefined;
