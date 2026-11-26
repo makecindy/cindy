@@ -161,6 +161,8 @@ enum PanelDesign {
 }
 
 struct MBView: Decodable, Equatable {
+  let liquidGlass: Bool?
+  let liquidGlassClarity: Double?
   let presentation: MBPanelDesign?
   let locale: String
   let taskMoneySymbol: String?
@@ -284,6 +286,7 @@ enum Palette {
   /// Text on an `ink` pill.
   static var onInk: Color { shared("onInk", dynamic(hex(0xFFFFFF), hex(0x0E0E0D))) }
   /// Warm tint and glows laid over the popover material.
+  static var panelBase: Color { shared("panelBase", dynamic(hex(0xD6D4D1), hex(0x262523))) }
   static var panelTint: Color { shared("panelTint", dynamic(hex(0xF8F7F3, 0.5), hex(0x1A1918, 0.54))) }
   static var panelGlow: Color { shared("panelGlow", dynamic(hex(0xEA6B17, 0.09), hex(0xEA6B17, 0.12))) }
   static var panelGlow2: Color { shared("panelGlow2", dynamic(NSColor(white: 1, alpha: 0.55), hex(0xFFF4E4, 0.04))) }
@@ -1216,7 +1219,7 @@ struct PanelRoot: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-    .background { PanelBackdrop() }
+    .background { PanelBackdrop(glass: store.view?.liquidGlass != false, clarity: store.view?.liquidGlassClarity ?? 50) }
     .overlay(
       RoundedRectangle(cornerRadius: PanelBackgroundView.radius, style: .circular)
         .strokeBorder(Palette.edge, lineWidth: 0.5)
@@ -1266,11 +1269,20 @@ struct PanelRoot: View {
 
 /// Warm tint over the popover material with a faint Heart Orange glow in the top-left corner.
 struct PanelBackdrop: View {
+  let glass: Bool
+  let clarity: Double
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
   var body: some View {
     ZStack {
-      Palette.panelTint
-      RadialGradient(colors: [Palette.panelGlow, .clear], center: .topLeading, startRadius: 0, endRadius: 240)
-      RadialGradient(colors: [Palette.panelGlow2, .clear], center: UnitPoint(x: 1, y: 0.18), startRadius: 0, endRadius: 220)
+      if glass && !reduceTransparency {
+        Palette.panelTint.opacity(1 - 0.6 * max(0, (clarity - 50) / 100))
+        Palette.panelBase.opacity(1.4 * max(0, (50 - clarity) / 100))
+        RadialGradient(colors: [Palette.panelGlow, .clear], center: .topLeading, startRadius: 0, endRadius: 240)
+        RadialGradient(colors: [Palette.panelGlow2, .clear], center: UnitPoint(x: 1, y: 0.18), startRadius: 0, endRadius: 220)
+      } else {
+        Palette.panelBase
+      }
     }
     .allowsHitTesting(false)
   }

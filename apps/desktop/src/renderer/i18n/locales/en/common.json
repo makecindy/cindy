@@ -5693,6 +5693,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "Clarity",
+        "clarityHint": "A higher value lets more of the background show through.",
+        "section": "Interface material",
+        "label": "Liquid Glass",
+        "hint": "Use a glass finish on the sidebar, composer, menus and pop-ups.",
+        "saveFailed": "Couldn’t save the Liquid Glass setting."
+      },
       "title": "Personalization",
       "subtitle": "Custom Prompts",
       "description": "Give your assistants extra instructions and context.",

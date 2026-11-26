@@ -19,7 +19,7 @@ import { getDefaultVoiceInputSettings } from '../../../../shared/voiceInputData'
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({ t: (key: string) => ({
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string) => ({
     'settings.voiceInput.serviceSource.customAsr.websocketUrl.label': 'WebSocket URL',
     'settings.voiceInput.refinement.instructions.label': 'Refinement instructions',
     'settings.voiceInput.speakerFilter.hint': 'Recognize only your voice',

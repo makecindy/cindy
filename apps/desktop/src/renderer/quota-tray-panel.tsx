@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { ArrowLeft, ArrowUpRight, ChevronRight, Monitor, RefreshCw, Settings } from 'lucide-react';
 import wordmarkLight from '../../native/menubar/wordmark-light.png';
 import wordmarkDark from '../../native/menubar/wordmark-dark.png';
+import { DEFAULT_LIQUID_GLASS_CLARITY } from '../shared/appearanceSettings';
 import type { MenubarView } from '../shared/menubarQuota';
 import { QUOTA_PANEL_DESIGN } from '../shared/quotaPanelDesign';
 import type { QuotaTrayBridge } from '../shared/quotaTray';
@@ -144,7 +145,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
   </>;
   const body = (which: string) => which === 'manage' ? <Manage view={view}/> : which === 'usage' ? <Usage view={view}/> :
     which.startsWith('detail:') ? <Detail view={view} id={which.slice(7)}/> : mainPage;
-  return <div className="panel" data-visible={!hidden} style={style}>
+  return <div className="panel" data-liquid-glass={view.liquidGlass} data-visible={!hidden} style={{ ...style, '--quota-glass-clarity': (view.liquidGlassClarity ?? DEFAULT_LIQUID_GLASS_CLARITY) / 100 } as CSSProperties}>
     <header ref={header}>
       {currentPage === 'main' ? <><picture><source media="(prefers-color-scheme: dark)" srcSet={wordmarkDark}/><img className="wordmark" src={wordmarkLight} alt="Cindy"/></picture>
         <small>{relative(view, view.updatedAtMs, now, true)}</small>

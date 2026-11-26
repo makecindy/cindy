@@ -204,6 +204,9 @@ export interface MenubarStrings {
 }
 
 export interface MenubarView {
+  /** Local desktop preference, projected only by the quota panel presenter. */
+  liquidGlass?: boolean;
+  liquidGlassClarity?: number;
   /** Optional for old helper fixtures; current presenters receive the shared design. */
   presentation?: import('./quotaPanelDesign.js').QuotaPanelDesign;
   /** BCP 47 locale for dates and numbers. */

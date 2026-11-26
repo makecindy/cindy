@@ -416,24 +416,24 @@ describe('shared dropdown menu glide highlight', () => {
     );
   });
 
-  it('draws shared panels on --cmd-palette-bg, opaque and unblurred on Windows', () => {
+  it('draws shared panels on --cmd-palette-bg, opaque and unblurred on Windows before opting into Liquid Glass', () => {
     render(<Menu />);
     expect(menu().className).toContain('bg-[var(--cmd-palette-bg)]');
     expect(menu().className).not.toContain('bg-popover');
     const glass = globals.indexOf(
-      '.bg-\\[var\\(--cmd-palette-bg\\)\\] {\n  background: var(--surface-translucent-overlay);',
+      '.bg-\\[var\\(--cmd-palette-bg\\)\\] {\n  background-color: var(--surface-translucent-overlay);',
     );
     const win = globals.indexOf(
-      "[data-platform='win32'][data-theme='cindy-dark'] .bg-\\[var\\(--cmd-palette-bg\\)\\] {",
+      ":where([data-platform='win32'])[data-theme='cindy-dark'] .bg-\\[var\\(--cmd-palette-bg\\)\\] {",
     );
     expect(glass).toBeGreaterThan(0);
-    // The Windows exception comes after (and is more specific than) the glass rule.
+    // The Windows exception comes after the theme rule and leaves the opt-in override available.
     expect(win).toBeGreaterThan(glass);
     expect(globals.slice(win, win + 200)).toMatch(
-      /background: var\(--cmd-palette-bg\);\s*backdrop-filter: none;\s*-webkit-backdrop-filter: none;/,
+      /background-color: var\(--cmd-palette-bg\);\s*backdrop-filter: none;\s*-webkit-backdrop-filter: none;/,
     );
     expect(globals).toContain(
-      "[data-platform='win32'][data-theme='cindy-light'] .bg-\\[var\\(--cmd-palette-bg\\)\\],",
+      ":where([data-platform='win32'])[data-theme='cindy-light'] .bg-\\[var\\(--cmd-palette-bg\\)\\],",
     );
   });
 

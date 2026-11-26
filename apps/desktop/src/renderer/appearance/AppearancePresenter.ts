@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { getWallpaperVisibility, normalizeAppearanceSettings, type AppearanceSettings } from '@/../shared/appearanceSettings';
+import { DEFAULT_LIQUID_GLASS_CLARITY, getWallpaperVisibility, isLiquidGlassEnabled, normalizeAppearanceSettings, supportsLiquidGlass, type AppearanceSettings } from '@/../shared/appearanceSettings';
 import type { PluginAppearanceColor } from '@cindy/plugin-protocol/appearance';
 import { themeService } from '../themes/theme-service';
 import type { Theme } from '../themes/types';
@@ -276,6 +276,14 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
   const clearStyle = () => { observer?.disconnect(); observer = undefined; style?.remove(); style = null; };
   const apply = (raw: AppearanceSettings): Promise<'applied' | 'saved' | 'failed'> => {
     const settings = normalizeAppearanceSettings(raw);
+    const platform = window.electronAPI?.platform;
+    if (supportsLiquidGlass(platform)) {
+      const root = document.documentElement;
+      root.dataset.liquidGlass = isLiquidGlassEnabled(platform, settings.liquidGlass) ? 'on' : 'off';
+      const clarity = settings.liquidGlassClarity ?? DEFAULT_LIQUID_GLASS_CLARITY;
+      root.dataset.liquidGlassClarity = String(clarity);
+      root.style.setProperty('--glass-clarity-saved', String(clarity / 100));
+    }
     if (settings.motion === 0) document.documentElement.dataset.cindyReducedMotion = 'true';
     else delete document.documentElement.dataset.cindyReducedMotion;
     const extended = settings.bodyFont || settings.reading || settings.contentStyle || settings.themeColors ||
@@ -317,6 +325,9 @@ export function installAppearancePresenter(applyFonts: (settings: AppearanceSett
     for (const { face } of faces.values()) document.fonts.delete(face);
     faces.clear(); pending.clear();
     delete document.documentElement.dataset.cindyReducedMotion;
+    delete document.documentElement.dataset.liquidGlass;
+    delete document.documentElement.dataset.liquidGlassClarity;
+    document.documentElement.style.removeProperty('--glass-clarity-saved');
   };
   return releasePresenter();
 }

@@ -5650,6 +5650,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "透明度",
+        "clarityHint": "値を上げるほど、ガラス越しに背景が見えやすくなります。",
+        "section": "画面の質感",
+        "label": "Liquid Glass",
+        "hint": "サイドバー、入力欄、メニュー、ポップアップをガラス調にします。",
+        "saveFailed": "Liquid Glass の設定を保存できませんでした。"
+      },
       "title": "パーソナライズ",
       "subtitle": "カスタムプロンプト",
       "description": "アシスタントに追加の指示やコンテキストを与えます。",

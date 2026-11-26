@@ -1,4 +1,5 @@
 import { generalSettings } from './GeneralSettings.settings-search';
+import { InterfaceMaterialSection } from './InterfaceMaterialSection';
 import { billingSettings } from './BillingSettings.settings-search';
 import { usageHistorySettings } from './usage/UsageHistorySection.settings-search';
 import { appearanceSettings } from './AppearanceSection.settings-search';
@@ -665,6 +666,7 @@ function SettingsViewContent() {
                   <section id={personalizationSettings.linkOpen.targetId} aria-label={t(personalizationSettings.linkOpen.titleKey)}>
                     <LinkOpenSection />
                   </section>
+                  <InterfaceMaterialSection />
                   {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
                       (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
                       形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}

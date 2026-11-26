@@ -12,6 +12,8 @@ import type { DownloadProgress } from './downloadProgress';
  */
 
 export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
+  liquidGlass?: boolean;
+  liquidGlassClarity?: number;
   density?: number;
   motion?: number;
   terminalFontResource?: AppearanceFontResource;
@@ -37,6 +39,21 @@ export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
 /** macOS Dock icon choices; the list and artwork are shared with Mobile. */
 export { APP_ICONS, isAppIcon, type AppIcon };
 
+export function supportsLiquidGlass(platform: string | undefined): boolean {
+  return platform === 'darwin' || platform === 'win32';
+}
+
+export function isLiquidGlassEnabled(platform: string | undefined, override?: boolean): boolean {
+  return supportsLiquidGlass(platform) && (override ?? platform === 'darwin');
+}
+
+export const DEFAULT_LIQUID_GLASS_CLARITY = 50;
+
+export function clampLiquidGlassClarity(value: number): number {
+  return clampInteger(value, APPEARANCE_LIMITS.liquidGlassClarity.min,
+    APPEARANCE_LIMITS.liquidGlassClarity.max, DEFAULT_LIQUID_GLASS_CLARITY);
+}
+
 export type WallpaperMotion = 'static' | 'dynamic';
 
 export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
@@ -56,6 +73,8 @@ export interface WallpaperDownloadProgress {
 export interface AppearanceSettings extends PluginAppearanceSettingsFields {
   /** Read-only projection from the Host override owner, never a writable field. */
   customizedKeys?: readonly string[];
+  liquidGlass?: boolean;
+  liquidGlassClarity?: number;
   density: number;
   motion: number;
   terminalFontResource?: AppearanceFontResource;
@@ -109,6 +128,7 @@ export const APPEARANCE_LIMITS = {
   wallpaperOverlay: { min: 0, max: 1, step: 0.05 },
   wallpaperVisibility: { min: 0, max: 1, step: 0.01 },
   wallpaperBlur: { min: 0, max: 20, step: 1 },
+  liquidGlassClarity: { min: 0, max: 100, step: 1 },
 } as const;
 
 /** Current picker order; saved selections also accept the hidden compatibility IDs below. */
@@ -314,6 +334,10 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
         ? clampAppearanceWallpaperOverlay(value.wallpaperOverlay)
         : DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
     wallpaperMotion: value.wallpaperMotion === 'dynamic' ? 'dynamic' : 'static',
+    ...(typeof value.liquidGlass === 'boolean' ? { liquidGlass: value.liquidGlass } : {}),
+    ...(typeof value.liquidGlassClarity === 'number' && Number.isFinite(value.liquidGlassClarity)
+      ? { liquidGlassClarity: clampLiquidGlassClarity(value.liquidGlassClarity) }
+      : {}),
     appIcon: isAppIcon(value.appIcon) ? value.appIcon : DEFAULT_APPEARANCE_SETTINGS.appIcon,
     ...(typeof value.wallpaperBlur === 'number' && Number.isFinite(value.wallpaperBlur)
       ? { wallpaperBlur: clampAppearanceWallpaperBlur(value.wallpaperBlur) }

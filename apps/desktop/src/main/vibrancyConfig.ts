@@ -28,6 +28,7 @@ export interface VibrancyConfig {
 export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
   wallpaperCovered?: boolean;
+  liquidGlass?: boolean;
   desktopBlur?: number | null;
 }
 
@@ -161,7 +162,7 @@ export function resolveVibrancyConfig(
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
       backgroundColor: '#00000000',
       ...(platform === 'darwin' ? { desktopBlurRadius: options.desktopBlur } : {}),
-      ...(platform === 'darwin' && familyId === 'cindy'
+      ...(platform === 'darwin' && familyId === 'cindy' && options.liquidGlass !== false
         ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
       ...(platform === 'win32' ? {
         backgroundMaterial: options.desktopBlur && supportsWindowsSystemBackdrop(options)
@@ -169,7 +170,7 @@ export function resolveVibrancyConfig(
       } : {}),
     };
   }
-  const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
+  const isCindy = familyId === 'cindy' && !options?.wallpaperCovered && options?.liquidGlass !== false;
   const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
   if (platform === 'darwin') {
     // 材质 A/B 旋钮(dev 调参用):XDT_VIBRANCY_MATERIAL=sidebar|hud|under-window|fullscreen-ui|

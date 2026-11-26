@@ -5693,6 +5693,14 @@
       }
     },
     "personalization": {
+      "liquidGlass": {
+        "clarity": "Transparenz",
+        "clarityHint": "Je höher der Wert, desto deutlicher ist der Hintergrund durch das Glas zu sehen.",
+        "section": "Oberflächenmaterial",
+        "label": "Liquid Glass",
+        "hint": "Verleiht Seitenleiste, Nachrichtenfeld, Menüs und Pop-ups eine Glasoptik.",
+        "saveFailed": "Die Liquid-Glass-Einstellung konnte nicht gespeichert werden."
+      },
       "title": "Personalisierung",
       "subtitle": "Eigene Prompts",
       "description": "Deinen Assistenten zusätzliche Anweisungen und Kontext geben.",

@@ -5,6 +5,9 @@ import {
   APPEARANCE_LIMITS,
   WALLPAPER_IDS,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
+  isLiquidGlassEnabled,
+  DEFAULT_LIQUID_GLASS_CLARITY,
+  clampLiquidGlassClarity,
   clampAppearanceWallpaperOverlay,
   clampAppearanceWallpaperVisibility,
   clampAppearanceWallpaperBlur,
@@ -206,6 +209,14 @@ export function installWindowZoomRestoration(win: BrowserWindow): void {
   });
 }
 
+export function getPersistedGlassMaterial() {
+  const settings = readAppearanceSettings();
+  return {
+    liquidGlass: isLiquidGlassEnabled(process.platform, settings.liquidGlass),
+    clarity: settings.liquidGlassClarity ?? DEFAULT_LIQUID_GLASS_CLARITY,
+  };
+}
+
 export function getPersistedWindowZoom(): number {
   return readAppearanceSettings().windowZoom;
 }
@@ -264,6 +275,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperBlur',
     'wallpaperMotion',
     'appIcon',
+    'liquidGlass',
+    'liquidGlassClarity',
     'density',
     'motion',
   ]);
@@ -364,6 +377,14 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             clampAppearanceWallpaperBlur,
             APPEARANCE_LIMITS.wallpaperBlur,
           );
+  }
+  if ('liquidGlass' in raw) {
+    if (typeof raw.liquidGlass !== 'boolean') throwIpcError('INVALID_PARAMS', 'liquidGlass must be a boolean');
+    patch.liquidGlass = raw.liquidGlass;
+  }
+  if ('liquidGlassClarity' in raw) {
+    patch.liquidGlassClarity = parseNumber(raw.liquidGlassClarity, 'liquidGlassClarity',
+      clampLiquidGlassClarity, APPEARANCE_LIMITS.liquidGlassClarity);
   }
   if ('appIcon' in raw) {
     if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
