@@ -931,6 +931,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  showBuddyNewHint?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -1316,6 +1317,7 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  showBuddyNewHint = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
@@ -10636,6 +10638,7 @@ export function ChatInput({
               query={trigger.query}
               commands={paletteCommands}
               additionalCommands={pluginSlashCommands}
+              showBuddyNewHint={showBuddyNewHint && trigger.sigil === '/' && trigger.query === 'new'}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}

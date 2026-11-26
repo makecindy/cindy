@@ -11,6 +11,7 @@ import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
 import { useRemoteBots } from './useRemoteBots';
+import { Badge } from '@/components/ui/badge';
 
 export interface TeammateSearchMatch {
   key: string;
@@ -119,9 +120,9 @@ export function TeammateSearchResults({
               {match.archived ? (
                 <span className="shrink-0 text-10 leading-none text-[var(--text-tertiary)]">{t('bots.archived')}</span>
               ) : null}
-              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
+              <Badge size="xs">
                 {match.kind === 'group' ? t('bots.groupChat.sidebar.title') : t('bots.title')}
-              </span>
+              </Badge>
             </span>
             {match.detail ? (
               <span className="mt-1 block truncate text-11 leading-none text-[var(--text-tertiary)]">{match.detail}</span>

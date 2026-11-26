@@ -616,6 +616,23 @@ export interface BotGroupRoundView {
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 
+export function chatGroupNotificationMode(
+  room: { default_notification_scope?: 'all' | 'mentions' },
+  read?: { muted?: boolean; notification_scope?: 'all' | 'mentions' | null },
+): ChatGroupNotificationMode {
+  return read?.muted ? 'none' : read?.notification_scope ?? room.default_notification_scope ?? 'all';
+}
+
+export function chatGroupNotificationPreference(
+  room: Parameters<typeof chatGroupNotificationMode>[0],
+  read: Parameters<typeof chatGroupNotificationMode>[1],
+): { notificationMode: ChatGroupNotificationMode; notificationModeInherited: boolean } {
+  return {
+    notificationMode: chatGroupNotificationMode(room, read),
+    notificationModeInherited: !read?.muted && read?.notification_scope == null,
+  };
+}
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
@@ -642,6 +659,8 @@ export interface BotGroupSummary {
   supportsMemberAvatar?: boolean;
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
+  /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
+  notificationModeInherited?: boolean;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -928,6 +947,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'set-assistant'
   | 'notifications'
   | 'mask'
   | 'mask-mentions'
@@ -973,6 +993,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   supportsMemberRemoval?: boolean;
   /** Revision-checked settings and additive `add-member` ({ botId }) on server groups. */
   supportsSettingsManagement?: boolean;
+  /** The host can route set-assistant through desktop group management. */
+  supportsAssistantManagement?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';

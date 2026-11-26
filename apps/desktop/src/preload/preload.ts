@@ -3254,6 +3254,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-get'),
   setAutoUpdateSettings: (settings: {
     autoRelaunchOnIdle: boolean;
@@ -3261,11 +3262,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-set', settings),
   resetAutoUpdateSettings: (): Promise<{
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
   // beta 测试渠道(设备级)开关
   getUpdateChannelSettings: (): Promise<{
@@ -5335,7 +5338,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // macOS「本地网络」权限：只读本机状态与请求授权，不进入 device-link 远程白名单。
   localNetwork: {
     status: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.STATUS, options),
-    request: () => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST),
+    request: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST, options),
     onChanged: (callback) => fanOutLocalNetworkChanged((data) => callback(data as LocalNetworkState)),
   } satisfies LocalNetworkApi,
   // 自建中转服务:本机中转与加入别的中转(只接受本机应用窗口)。
@@ -5366,6 +5369,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
   subscriptionAccounts: {
     onChanged: fanOutSubscriptionAccountsChanged,
+    existingLogins: (request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult> =>
+      ipcRenderer.invoke('maker:subscription-accounts', request),
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
       ipcRenderer.invoke('maker:subscription-accounts', command),
     // 已建立任务实际在用的账号(只读，用量显示用)。
@@ -7159,7 +7164,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     setProviderPresentation: (input: {
       providerId?: string;
-      action: 'rename' | 'remove' | 'restore';
+      action: 'rename' | 'remove' | 'restore' | 'appearance';
+      icon?: import('@cindy/model-providers/branding').ConnectionArtwork | null;
       name?: string;
       dataOwnerId: string | null;
       ownerGeneration: number;

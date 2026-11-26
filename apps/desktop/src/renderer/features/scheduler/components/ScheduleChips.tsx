@@ -1,6 +1,8 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { FormField } from '@/components/ui/form-field';
+import { Input } from '@/components/ui/input';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -277,7 +279,8 @@ type EditableScheduleMenuMode =
   | 'daily'
   | 'weekdays'
   | 'weekly'
-  | 'monthly';
+  | 'monthly'
+  | 'custom';
 type ScheduleMenuMode = EditableScheduleMenuMode | 'exactInterval';
 
 // Note: these mode strings mirror codex i18n keys (settings.automations.scheduleMode.*),
@@ -290,6 +293,7 @@ const SCHEDULE_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'weekdays',
   'weekly',
   'monthly',
+  'custom',
 ];
 
 const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
@@ -325,13 +329,13 @@ export function ScheduleChip({
   const displayCronExpr = timingPresentation.kind === 'intervalExact'
     ? cronExpr
     : timingPresentation.displayCronExpr;
-  const [config, setConfig] = useState<CodexScheduleConfig>(() => normalizeScheduleConfig(cronToConfig(displayCronExpr)));
+  const [config, setConfig] = useState<CodexScheduleConfig>(() => scheduleConfigFromCron(displayCronExpr));
 
   useEffect(() => {
     setConfig((prev) => {
-      const next = normalizeScheduleConfig(cronToConfig(displayCronExpr));
-      if (configToCron(prev) === displayCronExpr) return prev;
-      return next;
+      const previousCron = prev.mode === 'custom' ? prev.customCron : configToCron(prev);
+      if (previousCron === displayCronExpr) return prev;
+      return scheduleConfigFromCron(displayCronExpr);
     });
   }, [displayCronExpr]);
 
@@ -354,7 +358,7 @@ export function ScheduleChip({
 
   const update = (patch: Partial<CodexScheduleConfig>) => {
     const next = normalizeScheduleConfig({ ...config, ...patch });
-    const nextCronExpr = configToCron(next);
+    const nextCronExpr = next.mode === 'custom' ? next.customCron : configToCron(next);
     setConfig(next);
     onChangeSchedule({
       cronExpr: nextCronExpr,
@@ -376,6 +380,10 @@ export function ScheduleChip({
   };
 
   const setMode = (mode: EditableScheduleMenuMode) => {
+    if (mode === 'custom') {
+      setConfig({ ...config, mode, customCron: cronExpr });
+      return;
+    }
     // Re-selecting the visible mode is not an instruction to replace a legacy value.
     // An exact interval has its own activeMode and can still enter a supported preset.
     if (mode === 'intervalMinutes' && mode === activeMode) return;
@@ -504,6 +512,21 @@ function ScheduleConfigPanel({
   return (
     <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
+        {mode === 'custom' && (
+          <FormField label={t('scheduler.chips.scheduleMenu.custom')}>
+            {(control) => (
+              <Input
+                {...control}
+                mono
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder="0 9,18 * * *"
+                value={panelConfig.customCron}
+                onChange={(customCron) => onUpdate({ mode: 'custom', customCron })}
+              />
+            )}
+          </FormField>
+        )}
         {mode === 'intervalMinutes' && (
           <>
             <div className="flex min-h-[34px] w-full items-center gap-1.5">
@@ -1008,10 +1031,16 @@ function normalizeScheduleConfig(config: CodexScheduleConfig): CodexScheduleConf
   return config;
 }
 
+function scheduleConfigFromCron(cronExpr: string): CodexScheduleConfig {
+  const config = normalizeScheduleConfig(cronToConfig(cronExpr));
+  if (!cronExpr.trim()) return { ...DEFAULT_CONFIG };
+  return config.mode === 'custom' ? { ...config, customCron: cronExpr } : config;
+}
+
 function toMenuMode(config: CodexScheduleConfig): EditableScheduleMenuMode {
   if (config.mode === 'hourly' || config.mode === 'interval') return 'interval';
   if (config.mode === 'minute' || config.mode === 'intervalMinutes') return 'intervalMinutes';
-  if (config.mode === 'daily' || config.mode === 'weekdays' || config.mode === 'weekly' || config.mode === 'monthly') return config.mode;
+  if (config.mode === 'custom' || config.mode === 'daily' || config.mode === 'weekdays' || config.mode === 'weekly' || config.mode === 'monthly') return config.mode;
   return 'daily';
 }
 

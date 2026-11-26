@@ -289,7 +289,7 @@ export interface SessionTurnLeaseTrackerDeps {
  */
 export class SessionTurnLeaseTracker {
   private readonly activeTurnIds = new Map<string, string>();
-  private readonly uncertainInsertTurnIds = new Map<string, string>();
+  private readonly uncertainWriteTurnIds = new Map<string, string>();
   private readonly writes = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: SessionTurnLeaseTrackerDeps) {}
@@ -347,25 +347,26 @@ export class SessionTurnLeaseTracker {
     return this.enqueue(sessionId, async () => {
       try {
         const dbClient = this.deps.getDbClient();
+        const rememberUnknownWrite = (error: unknown): never => {
+          if (isDbTransportOutcomeUnknown(error)) this.uncertainWriteTurnIds.set(sessionId, turnId);
+          throw error;
+        };
         const replace = (previousTurnId: string) => replaceSessionTurnLease(dbClient, {
           sessionId,
           previousTurnId,
           nextTurnId: turnId,
           owner: this.deps.owner,
           createdAt: this.deps.now(),
-        });
+        }).catch(rememberUnknownWrite);
         const acquire = () => tryAcquireSessionTurnLease(dbClient, {
           sessionId,
           turnId,
           owner: this.deps.owner,
           createdAt: this.deps.now(),
-        }).catch((error: unknown) => {
-          if (isDbTransportOutcomeUnknown(error)) this.uncertainInsertTurnIds.set(sessionId, turnId);
-          throw error;
-        });
+        }).catch(rememberUnknownWrite);
 
         if ((previousTurnId && await replace(previousTurnId)) || await acquire()) {
-          this.uncertainInsertTurnIds.delete(sessionId);
+          this.uncertainWriteTurnIds.delete(sessionId);
           return;
         }
         const rows = await readPersistedSessionTurnLeases(dbClient, sessionId);
@@ -374,22 +375,22 @@ export class SessionTurnLeaseTracker {
         );
         if (!ownRow) throw new LeaseReplacementError('own-row-missing');
         // Session rolls back the generation when lease acquisition fails before dispatch.
-        // A retry can re-use its exact lease if the earlier insert lost its reply.
+        // A retry can re-use its exact lease if the earlier insert or replacement lost its reply.
         if (
           previousTurnId === undefined &&
-          this.uncertainInsertTurnIds.get(sessionId) === turnId &&
+          this.uncertainWriteTurnIds.get(sessionId) === turnId &&
           this.activeTurnIds.get(sessionId) === turnId &&
           ownRow.lease?.turnId === turnId &&
           ownRow.lease.owner.instanceId === this.deps.owner.instanceId &&
           await replace(turnId)
         ) {
-          this.uncertainInsertTurnIds.delete(sessionId);
+          this.uncertainWriteTurnIds.delete(sessionId);
           return;
         }
         const recovery = await this.clearRecoverableLease(dbClient, ownRow);
         if (recovery !== 'cleared') throw new LeaseReplacementError(recovery);
         if (!(await acquire())) throw new Error('turn lease changed while it was being replaced');
-        this.uncertainInsertTurnIds.delete(sessionId);
+        this.uncertainWriteTurnIds.delete(sessionId);
       } catch (error) {
         if (this.activeTurnIds.get(sessionId) === turnId) {
           this.activeTurnIds.delete(sessionId);

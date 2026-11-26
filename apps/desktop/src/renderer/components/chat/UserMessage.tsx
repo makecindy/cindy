@@ -5,6 +5,7 @@ import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
 import type { ChatReplyQuote } from '../../../shared/chatReplyQuote';
 import { BotDmThreadPreview } from '@/features/bots/BotDmThreadPreview';
 import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
+import { Badge } from '@/components/ui/badge';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -1563,15 +1564,11 @@ export function UserMessage({
             />
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
-              <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
-                style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-              >
-                <Target size={11} strokeWidth={2} aria-hidden className="shrink-0" />
+              <Badge className="max-w-full" icon={<Target size={11} strokeWidth={2} />}>
                 <span className="min-w-0 truncate">
                   {goalBadge.updated ? t('goal.objectiveBadgeUpdated') : t('goal.objectiveBadge')}
                 </span>
-              </span>
+              </Badge>
             )}
             {/* 伙伴私聊：图片与文件随正文进同一个气泡（编辑态照常在上方）。 */}
             {!attachmentsInBubble && imageAttachmentNodes}

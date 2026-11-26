@@ -80,12 +80,13 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
+  conversationKind?: 'direct';
   allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -158,7 +159,7 @@ export function BotGroupComposer({
   const mediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
-  const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
