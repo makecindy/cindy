@@ -345,7 +345,7 @@ describe('Codex launch requires its local route', () => {
       baseUrl: official ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
       wireProtocol: 'openai-responses',
       models: [{ id: modelId, name: modelId, supportsFastMode: true }],
-    } } });
+    } } }, { getDiscoveredModelMetadata: () => ({ supportsUltrafastMode: official }) });
     const prepare = createCodexSpawnConfig({
       ...f.ports,
       getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [selectedProvider] }),
@@ -369,7 +369,7 @@ describe('Codex launch requires its local route', () => {
     if (review && !official) {
       expect(prepareCodexCustomContextCatalog).not.toHaveBeenCalled();
     } else {
-      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected }));
+      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected, declareUltrafastMode: expected }));
       if (review) {
         const [options] = vi.mocked(prepareCodexCustomContextCatalog).mock.lastCall!;
         expect(options.contextWindow).toBeUndefined();

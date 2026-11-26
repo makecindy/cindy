@@ -4,7 +4,15 @@ import {
   accountDeletionAvailabilitySchema,
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
+  accountIdentitiesSchema,
   accountMembershipSchema,
+  contactChangeCodeSentSchema,
+  contactChangeConfirmedSchema,
+  contactChangeTicketSchema,
+  type AccountContact,
+  type ContactChangeCodeSent,
+  type ContactChangeTarget,
+  type ContactChangeTicket,
   accountTokenPairSchema,
   authRegionSchema,
   desktopAuthorizationPollSchema,
@@ -184,6 +192,12 @@ function serverErrorCode(data: unknown): string | undefined {
 }
 
 /** Platform-neutral REST client. It never persists or logs credentials. */
+function contactChangeTargetBody(
+  target: ContactChangeTarget,
+): { phone: string } | { email: string } {
+  return target.type === "phone" ? { phone: target.phone } : { email: target.email };
+}
+
 export class CindyAuthClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -532,6 +546,74 @@ export class CindyAuthClient {
       accountDeletionStatusSchema,
       { receiptToken },
     );
+  }
+
+  /** Passport 已验证的联系方式(打码);需要 account token。 */
+  async getAccountContacts(accountToken: string): Promise<AccountContact[]> {
+    const response = await this.request(
+      "/api/me/identities",
+      accountIdentitiesSchema,
+      undefined,
+      { token: accountToken },
+    );
+    return response.contacts;
+  }
+
+  /** 换绑第 1 步:向要被替换的当前联系方式发码。 */
+  requestCurrentContactChangeCode(
+    accountToken: string,
+    contactId: string,
+  ): Promise<ContactChangeCodeSent> {
+    return this.request(
+      "/api/me/contact/change/current/request-code",
+      contactChangeCodeSentSchema,
+      { contactId, locale: this.options.locale },
+      { token: accountToken },
+    );
+  }
+
+  /** 换绑第 2 步:验当前联系方式,换取一次性 changeTicket。 */
+  verifyCurrentContactChange(
+    accountToken: string,
+    contactId: string,
+    code: string,
+  ): Promise<ContactChangeTicket> {
+    return this.request(
+      "/api/me/contact/change/current/verify",
+      contactChangeTicketSchema,
+      { contactId, code },
+      { token: accountToken },
+    );
+  }
+
+  /** 换绑第 3 步:凭 changeTicket 向新联系方式发码。 */
+  async requestNewContactChangeCode(
+    accountToken: string,
+    changeTicket: string,
+    target: ContactChangeTarget,
+  ): Promise<void> {
+    await this.request(
+      "/api/me/contact/change/request-code",
+      z.object({ status: z.literal("sent") }),
+      { changeTicket, ...contactChangeTargetBody(target), locale: this.options.locale },
+      { token: accountToken },
+    );
+  }
+
+  /** 换绑第 4 步:验新联系方式并完成替换。 */
+  async confirmContactChange(
+    accountToken: string,
+    changeTicket: string,
+    target: ContactChangeTarget,
+    code: string,
+  ): Promise<AccountContact> {
+    const response = await this.request(
+      "/api/me/contact/change/confirm",
+      contactChangeConfirmedSchema,
+      { changeTicket, ...contactChangeTargetBody(target), code },
+      { token: accountToken },
+    );
+    return response.contact;
   }
 
   async logout(accessToken: string): Promise<void> {

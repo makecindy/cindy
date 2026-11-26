@@ -1,3 +1,4 @@
+import { isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
@@ -25,7 +26,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
@@ -159,7 +160,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         return accounts;
       }
     }
-    const kind = providerWeeklyQuotaSource(provider);
+    const kind = providerUsageReaderSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
@@ -215,7 +216,11 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     },
   };
 
-  const tasks = await collectTasks(deps, localUsage, today, safe);
+  const antigravityProviders = new Set(pluginEngines.filter(isAntigravityEngine).map(engine => engine.providerId));
+  const tasks = (await collectTasks(deps, localUsage, today, safe)).map(task =>
+    task.harness === 'acp' && task.providerId && antigravityProviders.has(task.providerId)
+      ? { ...task, logoSvg: ANTIGRAVITY_LOGO }
+      : task);
   const consuming = consumingSourceIds(tasks, providers, pluginEngines);
   const collectedAt = deps.now?.() ?? deps.nowMs;
   for (const source of sources) {
@@ -955,7 +960,8 @@ export function pluginEngineSource(
     id: engine.providerId,
     providerId: engine.providerId,
     family: 'plugin',
-    logoSvg: engine.ghostId === 'agy-acp' ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
+    logoSvg: isAntigravityEngine(engine)
+      ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
     plan: null,

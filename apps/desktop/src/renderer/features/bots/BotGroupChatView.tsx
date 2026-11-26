@@ -101,6 +101,7 @@ import {
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
 import { BotGroupDateDivider, BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import {
   botGroupHandoffStepNumbers,
   botGroupMemberDisplayName,
@@ -885,7 +886,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         >
           <BotGroupAvatarStack members={shown} />
           <span className="flex min-w-0 flex-col">
-            <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
+              {!direct && headerGroup.external === true ? <BotGroupExternalBadge /> : null}
+            </span>
             {headerStatus
               ? <BotGroupHeaderStatusText text={headerStatus} className="text-11 leading-4" />
               : <span data-testid="bot-group-header-summary" className="min-w-0 truncate text-11 leading-4 tabular-nums text-[var(--text-tertiary)]">{summary}</span>}
@@ -909,7 +913,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.
@@ -1502,8 +1506,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const authorName = isPlanCard
               ? (organizer ? botGroupMemberDisplayName(organizer) : plan?.organizerName ?? '')
               : (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
-            const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
-              ? botGroupOwnedBotNames(member, members).join(separator) : '';
+            const isOtherHuman = !isPlanCard && message.authorKind === 'user' && message.isSelf === false;
+            const owned = isOtherHuman ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
             const quotable = canQuote && isBotGroupMessageQuotable(message);
             return (
@@ -1516,6 +1520,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
+                  department={isOtherHuman ? member?.department ?? undefined : undefined}
+                  departmentPath={isOtherHuman ? member?.departmentPath ?? undefined : undefined}
+                  external={isOtherHuman && member?.external === true ? true : undefined}
                   stepNumber={stepNumbers.get(message.id)}
                   members={members}
                   mentionLabels={mentionLabels}
