@@ -201,6 +201,22 @@ describe('provider-group quota routing', () => {
     expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
   });
 
+  // 2026-11-26 review(MagicLizi P1)：探测在途时同一模型又失败、记了新的冷却，旧探测随后回「能接」。正式派发不会据此解除
+  // 新冷却；预判也不能把这份过期证据当真(否则外层选到正式派发会拒绝的电脑组)。顺序：旧冷却 → 发起探测 → 新冷却 → 旧回执。
+  it('ignores a late pool confirmation in a preview once a newer cooling was recorded during the probe', async () => {
+    let finish!: (available: boolean) => void;
+    const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    const preview = h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, preview: true });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    h.router.markCooling('anthropic', 'local', NOW + 300_000, OPUS);
+    finish(true);
+    expect(await preview).toMatchObject({ kind: 'unavailable' });
+    // 预判不写冷却，新的那一版原样保留(正式派发会按它重新探测)。
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 300_000);
+  });
+
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
   // Previous cooldown tests had no asynchronous pool confirmation in pick().
   it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {

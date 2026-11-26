@@ -222,16 +222,17 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const previewSchedules = new Map<string, { at: number; summary: SubscriptionPoolScheduling }>();
 
   /**
-   * 账号池里另有账号能接这个模型时解除这台的模型级冷却。返回这次是否确认能接。preview 时只确认、不写冷却：
-   * 写入留给正式派发(它复用同一次读取时把 apply 打开，晚到的确认也照写)。
+   * 账号池里另有账号能接这个模型时解除这台的模型级冷却。确认能接时返回这次探测针对的那一版冷却记录(之后又记了
+   * 新的冷却，这份证据就不再算数)，否则 null。preview 时只确认、不写冷却：写入留给正式派发(它复用同一次读取时
+   * 把 apply 打开，晚到的确认也照写)。
    */
   async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean,
-    ownComputer: boolean, preview = false): Promise<boolean> {
-    if (!deps.readPoolModelAvailability || member.kind === 'share') return false;
+    ownComputer: boolean, preview = false): Promise<Record<string, number> | null> {
+    if (!deps.readPoolModelAvailability || member.kind === 'share') return null;
     const key = coolKey(providerId, member.key);
     const remembered = cooling.get(key);
     const scope = coolingScope(model);
-    if (!scope || !remembered || !(remembered[scope] > deps.now())) return false;
+    if (!scope || !remembered || !(remembered[scope] > deps.now())) return null;
     const clear = () => {
       // A newer failure or an expired/removed scope must not be undone.
       if (cooling.get(key) === remembered && remembered[scope] > deps.now()) {
@@ -259,7 +260,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     } else if (!preview) read.apply = true;
     // Keep one request in flight, but never reuse its evidence for a later failure.
-    if (read.cooling !== remembered) return false;
+    if (read.cooling !== remembered) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const available = await Promise.race([read.result, new Promise<null>((resolve) => {
@@ -267,7 +268,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       })]);
       // 复用了预判发起、已经读完的那次：正式派发在这里补写。
       if (available === true && !preview) clear();
-      return available === true;
+      // 回执到时冷却已换成新的一版(期间又失败了一次)：这份证据作废。
+      return available === true && cooling.get(key) === remembered ? remembered : null;
     } finally {
       clearTimeout(timer);
     }
@@ -350,10 +352,10 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
 
   /** 能接这个模型的任务：提供模型、不在冷却、配额没用完，且目录预算尚未到期。 */
   function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'capability'>,
-    recovered?: ReadonlySet<string>) {
+    recovered?: (memberKey: string) => boolean) {
     return (r: ResolvedProviderGroupMember) =>
       (r.providerContinuity === undefined || r.providerContinuity.remainingMs > 0)
-      && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model, recovered?.has(r.member.key)) === null
+      && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model, recovered?.(r.member.key)) === null
       && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
   }
 
@@ -381,10 +383,15 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       if (config.localAccountIds?.length) return { kind: 'unavailable', resolved: [] };
       // Continuity snapshots keep new-task discovery available, but cannot
       // justify moving an existing task just to balance cached quota/load.
-      // 只预判时：账号池确认另有账号能接、冷却本会被正式派发解除的那几台(不写回冷却)。
-      const recovered = new Set<string>();
-      const cooledUntil = (memberKey: string) => coolingUntil(input.providerId, memberKey, input.model, recovered.has(memberKey));
-      const offers = usableFor(input, recovered);
+      // 只预判时：账号池确认另有账号能接、冷却本会被正式派发解除的那几台(不写回冷却)，记下证据对应的那一版冷却；
+      // 用证据时冷却仍是那一版才算数，之后又记了新的冷却就照新的来。
+      const recovered = new Map<string, Record<string, number>>();
+      const recoveredNow = (memberKey: string) => {
+        const evidence = recovered.get(memberKey);
+        return evidence !== undefined && cooling.get(coolKey(input.providerId, memberKey)) === evidence;
+      };
+      const cooledUntil = (memberKey: string) => coolingUntil(input.providerId, memberKey, input.model, recoveredNow(memberKey));
+      const offers = usableFor(input, recoveredNow);
       const usable = (r: ResolvedProviderGroupMember) => offers(r)
         && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
@@ -406,8 +413,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         && offersModel(r, input) && !paused(r) && !input.exclude?.has(r.member.key))
         .map(async (r) => {
           const options = poolReadOptions(input, r.member);
-          if (await recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer, input.preview === true)
-            && input.preview) recovered.add(r.member.key);
+          const evidence = await recoverPoolCooling(input.providerId, r.member, input.model, options.remote, options.ownComputer, input.preview === true);
+          if (evidence && input.preview) recovered.set(r.member.key, evidence);
         }));
       const schedules = new Map<string, SubscriptionPoolScheduling>();
       if (deps.readPoolScheduling && !input.quotaRebalance) await Promise.all(resolved
