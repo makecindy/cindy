@@ -570,8 +570,12 @@ describe('independent V2 relay', () => {
     const delegation = await f.client.acceptDelegationRequest(directory.delegationRequests[0], () => undefined);
     const signed = new AgentNetClient(f.relay.url, guests.get('0')!, f.certificate, f.rootPublicKey, delegation);
     await expect(signed.directory()).resolves.toBeDefined();
-    for (let n = 1; n <= 64; n++) expect((await ask(n)).status).toBe(200);
-    expect(await ask(65)).toMatchObject({ status: 429, body: { error: { code: 'TOO_MANY_REQUESTS' } } });
+    for (let n = 1; n < 64; n++) expect((await ask(n)).status).toBe(200);
+    // Two new guests racing for the last place: the write rechecks it, so exactly one gets in.
+    const raced = await Promise.all([ask(64), ask(65)]);
+    expect(raced.map(response => response.status).sort()).toEqual([200, 429]);
+    expect(raced.find(response => response.status === 429)?.body).toMatchObject({ error: { code: 'TOO_MANY_REQUESTS' } });
+    expect((await ask(66)).status).toBe(429);
     // A guest already waiting may still renew; removing the link withdraws the signed lease at once.
     expect((await ask(3)).status).toBe(200);
     expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });

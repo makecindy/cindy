@@ -580,11 +580,12 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const sharingHost: SharingHost = {
     storage: store.sharingStorage(), now,
     requests: () => store.delegationRequests(),
-    async saveRequest(request) {
+    async saveRequest(request, admit) {
       await store.transaction(state => {
         const current = own(state.networks, request.networkId) ?? fail(401, 'NETWORK_UNKNOWN');
         const requests = (state.delegationRequests ?? []).filter(r => r.expiresAt > now()
           && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId));
+        if (admit && !admit(requests)) return fail(429, 'TOO_MANY_REQUESTS');
         if (requests.filter(r => r.networkId === request.networkId).length >= 4096) return fail(429, 'DELEGATION_REQUEST_LIMIT');
         if (requests.some(r => r.networkId === request.networkId && r.hostDeviceId === request.hostDeviceId
           && r.guestTransportKey === request.guestTransportKey)) return fail(409, 'RESOURCE_TRANSPORT_KEY_REUSED');
