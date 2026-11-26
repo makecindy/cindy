@@ -107,7 +107,7 @@ import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
 import { SnapshotDispatchIntentDeadlineError } from '../utils/operationBudget.js';
 
 
-import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
 import {
   sanitizeSendOutcomeError,
   toDesktopSessionDispatchOutcome,
@@ -583,6 +583,9 @@ export interface SchedulerRunnerRuntime {
   releaseWorktree: typeof import('../worktree').WorktreePool.releaseWorktree;
   isManagedScheduledTarget: typeof import('./restore-target.desktop').isManagedScheduledTarget;
   restoreScheduledTarget: typeof import('./restore-target.desktop').restoreScheduledTarget;
+  resolveRecoveredWorkingDir?: (sessionId: string, workingDir: string) => string;
+  peekWorkingDirectoryRecoveryNote?: (sessionId: string, workingDir: string) => string | null;
+  consumeWorkingDirectoryRecoveryNote?: (sessionId: string, note: string) => void;
 }
 
 export class MakerScheduleRunner implements ScheduleRunner {
@@ -1242,10 +1245,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
+      const effectiveHookCwd =
+        schedule.targetSessionId && hookCwd
+          ? (this.runtime.resolveRecoveredWorkingDir?.(schedule.targetSessionId, hookCwd) ?? hookCwd)
+          : hookCwd;
       const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
-        cwd: hookCwd,
+        cwd: effectiveHookCwd,
         // pause/delete 的 abortInflightAndWait 只等几秒:信号透传进执行器,abort
         // 即树杀脚本进程立即返回,不让长 hook 拖住暂停/删除、也不在其后继续建会话。
         signal: ctx.signal,
@@ -1255,7 +1262,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
-          workingDir: hookCwd,
+          workingDir: effectiveHookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
@@ -1665,6 +1672,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // allocating a dialogue directory or creating an ephemeral worktree.
     throwIfFireAborted(ctx.signal, 'workspace allocation');
     let workingDir = isHeartbeat ? heartbeatWorkingDir : schedule.workingDir;
+    if (isHeartbeat && workingDir) {
+      workingDir = this.runtime.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    }
     // 未指定目录且不要 worktree → 回退 dialogue 语义(分配 app 管理的工作区)。
     // MCP/对话路径创建的任务经常不带 workingDir,而引擎 create() 默认
     // workspaceKind='project',此前这里会每轮抛 "workingDir is required" 永久
@@ -2574,10 +2584,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入要自己接——切换后首条消息若是定时任务触发,新引擎同样需要交接
       // 上下文,否则零上下文裸跑(2026-07-20 审计)。落库仍是 prompt 原文。
+      const workdirRecoveryNote =
+        isHeartbeat && workingDir
+          ? (this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir) ?? null)
+          : null;
       const pendingHandoff = await this.runtime.agentHandoffPending.peek(session.id);
-      const outgoingMessage = pendingHandoff
-        ? prependHandoffToUserMessage({ type: 'user', content: promptToSend }, pendingHandoff)
+      const withRecoveryNote = workdirRecoveryNote
+        ? prependNoteToWireUserMessage({ type: 'user', content: promptToSend }, workdirRecoveryNote)
         : { type: 'user' as const, content: promptToSend };
+      const outgoingMessage = pendingHandoff
+        ? prependHandoffToUserMessage(withRecoveryNote, pendingHandoff)
+        : withRecoveryNote;
       // session.abort() is best-effort when no turn has started yet.  The
       // explicit guard prevents a cancellation racing the setup above from
       // dispatching a new agent turn.
@@ -2772,6 +2789,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       });
       if (pendingHandoff && sendResult.accepted) {
         this.runtime.agentHandoffPending.consume(session.id);
+      }
+      if (workdirRecoveryNote && sendResult.accepted) {
+        this.runtime.consumeWorkingDirectoryRecoveryNote?.(session.id, workdirRecoveryNote);
       }
       // Session.send may report a cancelled-before-dispatch outcome instead of
       // throwing.  Once the fire is aborted, preserve the abort path so the
