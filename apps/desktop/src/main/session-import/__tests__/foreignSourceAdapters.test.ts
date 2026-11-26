@@ -139,6 +139,32 @@ describe('foreign source adapters', () => {
     } finally { discovery.mockRestore(); }
   });
 
+  it('Codex caps an overlong thread title at the device task title limit', async () => {
+    // #9403：Codex 自己的标题可能是整条首条消息。设备灯位按 512 字符收任务标题，
+    // 超长会让整份任务列表被主进程拒收，所以导入时就要截到同一上限。
+    const codexHome = path.join(home, 'codex-long-title');
+    await mkdir(codexHome, { recursive: true });
+    const db = new Database(path.join(codexHome, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, thread_source TEXT, source TEXT, title TEXT, rollout_path TEXT, updated_at INTEGER)');
+    const threadId = '019dcd5a-6e54-7960-95e0-000000000099';
+    const rollout = `.codex/sessions/rollout-2026-11-12T10-00-00-${threadId}.jsonl`;
+    const file = await put(rollout, [
+      { type: 'session_meta', payload: { id: threadId, cwd: project(), source: 'vscode' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Question' }] } },
+    ]);
+    db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?,?)').run(
+      threadId, project(), null, 'vscode', 'a'.repeat(600), file, 1000,
+    );
+    db.close();
+    const discovery = vi.spyOn(codexSessions, 'discoverExternalCodexHomesSync').mockReturnValue([codexHome]);
+    try {
+      const listed = await codexAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const found = listed.sessions.find((s) => s.sourceSessionId === threadId);
+      expect(found?.title).toHaveLength(512);
+      expect(found?.title).toBe('a'.repeat(512));
+    } finally { discovery.mockRestore(); }
+  });
+
   it('Gemini CLI folds overwrites, patches and rewinds and maps the project folder', async () => {
     await put('.gemini/projects.json', JSON.stringify({ projects: { [project()]: 'my-app' } }));
     await put('.gemini/tmp/my-app/chats/session-2026-10-30T10-00-abcd1234.jsonl', [
