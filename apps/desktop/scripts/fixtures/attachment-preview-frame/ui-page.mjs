@@ -63,6 +63,9 @@ export default {
     await page.getByRole('button', { name: await ui.t('attachmentPreview.more') }).click();
     assert.equal(await page.getByRole('menuitem', { name: await ui.t('ccAgent.workdirBrowse.systemPreview') }).count(), 1);
     await page.getByRole('menuitem', { name: await ui.t('chat.lightbox.openInExplorer') }).click();
+    // The menu replaced the button that reported a failed reveal.
+    const revealError = await ui.t('ccAgent.common.openFolderFailed');
+    await page.getByText(revealError, { exact: true }).waitFor({ state: 'visible', timeout: 3000 });
     // 点遮罩关闭预览。
     await page.mouse.click(viewport.width / 2, viewport.height - 12);
     await page.waitForFunction(() => !document.querySelector('[data-preview-scrim]'));

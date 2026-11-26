@@ -12,6 +12,7 @@ import {
   canOpenSystemPreview,
   openSystemPreview,
   OpenInSystemActions,
+  revealFileInFolder,
 } from '@/features/cc-agent/workdir-browse/OpenInSystemActions';
 import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
@@ -237,7 +238,7 @@ export function FileLightbox({
               <DropdownMenuItem
                 disabled={!local || downloadOnly}
                 onClick={() => {
-                  if (local) void window.electronAPI.showItemInFolder({ filePath: local });
+                  if (local) void revealFileInFolder(local, t);
                 }}
               >
                 {t('chat.lightbox.openInExplorer')}

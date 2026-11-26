@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 import { Eye, ExternalLink, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -22,6 +23,20 @@ export function canOpenSystemPreview() {
 
 export async function openSystemPreview(absPath: string, errorMessage: string) {
   if (!(await window.electronAPI.openSystemPreview(absPath).catch(() => false))) toast.error(errorMessage);
+}
+
+// 在访达 / 资源管理器里选中这个文件。
+export async function revealFileInFolder(absPath: string, t: TFunction) {
+  try {
+    const result = await window.electronAPI.showItemInFolder({ filePath: absPath });
+    if (!result.success) toast.error(result.error || t('ccAgent.common.openFolderFailed'));
+  } catch (err) {
+    toast.error(
+      t('ccAgent.common.openFolderFailedWith', {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
 }
 
 export function OpenInSystemActions({
@@ -45,20 +60,6 @@ export function OpenInSystemActions({
     }
   };
 
-  // 在访达 / 资源管理器里选中这个文件,而不是只打开所在目录。
-  const onRevealFile = async () => {
-    try {
-      const r = await window.electronAPI.showItemInFolder({ filePath: absPath });
-      if (!r.success) toast.error(r.error || t('ccAgent.common.openFolderFailed'));
-    } catch (err) {
-      toast.error(
-        t('ccAgent.common.openFolderFailedWith', {
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-    }
-  };
-
   return (
     <div className={cn('flex flex-wrap items-center justify-center gap-2', className)}>
       {!primaryOnly && systemPreview && canOpenSystemPreview() && (
@@ -72,7 +73,7 @@ export function OpenInSystemActions({
         {t('ccAgent.workdirBrowse.unrenderable.openInSystem')}
       </Button>
       {!primaryOnly && (
-        <Button variant="secondary" size="md" compact type="button" onClick={onRevealFile}>
+        <Button variant="secondary" size="md" compact type="button" onClick={() => void revealFileInFolder(absPath, t)}>
           <FolderOpen size={14} />
           {t('ccAgent.workdirBrowse.unrenderable.revealFolder')}
         </Button>

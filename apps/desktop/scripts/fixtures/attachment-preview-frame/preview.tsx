@@ -3,6 +3,7 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { FileLightbox } from '../../../src/renderer/components/chat/FileLightbox';
 import { TextLightbox } from '../../../src/renderer/components/chat/TextLightbox';
 import { ImageLightbox } from '../../../src/renderer/components/chat/ImageLightbox';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 
 const SHEET = '/fixture/2026-11-03-发票核对清单.xlsx';
 const SHEET_CACHE = '/fixture/cache-473d6dd49fb70e80510e-internal-name.xlsx';
@@ -61,6 +62,7 @@ function Fixture({ kind }: { kind: 'sheet' | 'markdown' | 'image' }) {
   return (
     <>
       <Conversation />
+      <ToastContainer />
       {open && kind === 'sheet' && <FileLightbox filePath={SHEET_CACHE} fileName={SHEET.split('/').pop()} onClose={() => setOpen(false)} />}
       {open && kind === 'markdown' && (
         <TextLightbox filePath={MARKDOWN} onClose={() => setOpen(false)} />
@@ -88,7 +90,7 @@ mountPage({
       onEvent: subscription('file-browser'),
     },
     readTextFilePreview: async () => ({ success: true, data: markdown, size: markdown.length }),
-    showItemInFolder: async () => ({ success: true }),
+    showItemInFolder: async () => ({ success: false }),
     openPath: async () => '',
   }),
   render: (ctx) => (
