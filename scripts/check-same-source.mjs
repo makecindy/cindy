@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 同源多译检查：同一句「中文源 + 英文源」在不同模块译成不同说法。
  *
@@ -25,7 +25,7 @@ const SOURCE = 'zh-CN';
 const REFERENCE = 'en';
 const DESKTOP = path.join(repoRoot, 'apps/desktop/src/renderer/i18n/locales');
 const MOBILE = path.join(repoRoot, 'apps/mobile/src/i18n/locales');
-const MOBILE_NS = ['groupChat', 'interaction', 'plugins', 'session', 'settings', 'models', 'devices', 'mcpApps', 'chat', 'composer', 'home', 'files', 'shared'];
+const MOBILE_NS = ['mcpApps', 'plugins', 'taskTags', 'apiErrors', 'remoteDesktop', 'chat', 'composer', 'deviceLink', 'devices', 'files', 'giftCard', 'groupChat', 'home', 'interaction', 'message', 'models', 'providerShare', 'relay', 'session', 'sharedTask', 'settings', 'shared', 'startup', 'update'];
 const STRICT = process.argv.includes('--strict');
 
 function readJson(file) {
