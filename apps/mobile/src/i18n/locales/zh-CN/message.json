@@ -250,6 +250,7 @@
     "edit": "编辑",
     "steer": "插话",
     "steerQueued": "暂未送达，消息仍保留在队列中。",
+    "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
     "moveUp": "提前一位",
     "moveDown": "延后一位",
     "cancelSend": "取消发送",
