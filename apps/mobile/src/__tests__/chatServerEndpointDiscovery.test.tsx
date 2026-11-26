@@ -89,6 +89,63 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+// Unit regression from native acceptance: the HTTP adapter read a running topic execution,
+// but the real chat hook projected it away before whole-group settings could confirm its stop.
+it('keeps another topic execution in the real group hook for group-wide settings', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts.global })));
+  const startup = await import('@/config/clientEndpointStartup');
+  await startup.runStartupEndpointResolve();
+  const rootId = '00000000-0000-4000-8000-000000000003';
+  const sourceId = '00000000-0000-4000-8000-000000000004';
+  const botId = '00000000-0000-4000-8000-000000000005';
+  const executionId = '00000000-0000-4000-8000-000000000006';
+  const request = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    options.assertCurrent();
+    if (path.endsWith('/snapshot')) return { room, cursor: '2', members: [], messages: [
+      { id: sourceId, seq: '2', authorId: self, author: { kind: 'human', name: 'Me' },
+        createdAt: '2026-10-09', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: 'Request' }] },
+    ] };
+    if (path.endsWith('/executions')) return [{ id: executionId, bot_id: botId, requester_id: self,
+      source_message_id: sourceId, epoch: 1, status: 'running' }];
+    return request(path, options);
+  });
+  hooks = await import('@/chat/useChatServer'); await render();
+  expect(group.state.kind).toBe('ready');
+  expect(group.state.group.round.speakers).toMatchObject([{ botId, executionId, threadRootId: rootId }]);
+});
+
+// A refreshed list is authoritative for external status even while the snapshot is unavailable.
+it('updates cached external badges in both directions after snapshot failure', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => texts.global })));
+  await (await import('@/config/clientEndpointStartup')).runStartupEndpointResolve();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let external = false;
+  let failSnapshot = false;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    if (path.startsWith('/v1/conversations?')) return [{ ...room, external }];
+    if (path.endsWith('/snapshot') && failSnapshot) throw new Error('Snapshot timed out');
+    return original(path, options);
+  });
+  hooks = await import('@/chat/useChatServer');
+  await render();
+  const { peekCachedChatRoster, cacheChatRoster } = await import('@/device-link/remoteResourceCache');
+  const row = roster.items[0];
+  await cacheChatRoster(api.userId, api.realm, [{ ...row, item: { ...row.item,
+    display: { ...row.item.display, preview: 'Cached preview' } } }], new Set([roomId]));
+  failSnapshot = true;
+  for (const next of [true, false]) {
+    external = next;
+    await act(async () => { await roster.refresh(); });
+    expect(roster.error).toBe('CHAT_LIST_FAILED');
+    const cached = peekCachedChatRoster(api.userId, api.realm)!.items[0]!;
+    for (const row of [roster.items[0], cached]) {
+      expect(row.item.display.badges?.[0]?.tone).toBe(next ? 'external' : undefined);
+      expect(row.item.display.preview).toBe('Cached preview');
+    }
+  }
+});
+
 it.each(['cn', 'global'] as const)('release %s discovery feeds HTTP, WS and the phone owner identity', async region => {
   vi.stubEnv('EXPO_PUBLIC_CINDY_AUTH_REGION', region);
   vi.stubEnv('EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL', bases[region]);

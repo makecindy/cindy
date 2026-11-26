@@ -135,6 +135,17 @@ export function activityMsFromIso(value: string | undefined): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function homePrioritySignals(item: RemoteSessionListItem): { waiting: boolean; unread: boolean } {
+  const liveAttention = item.liveActivity?.attention === true;
+  const livePhase = item.liveActivity?.phase;
+  const isError = liveAttention && livePhase === 'error';
+  const isAwaiting = item.pendingInteractionCount > 0
+    || (liveAttention && livePhase === 'needs-interaction');
+  const isUnread = (item.scheduleInfo?.unreadCount ?? 0) > 0
+    || (liveAttention && livePhase === 'completed');
+  return { waiting: isError || isAwaiting, unread: isUnread };
+}
+
 export function collectHomePriorityContext(
   items: readonly RemoteSessionListItem[],
   runningSessionIds: ReadonlySet<string>,
@@ -143,20 +154,22 @@ export function collectHomePriorityContext(
   const unreadSessionIds = new Set<string>();
   const waitingSessionIds = new Set<string>();
   for (const item of items) {
+    // 自动化组以代表运行出现在列表里:组内任一运行等待 / 未读,代表就带上该信号(旧伙伴例行
+    // 任务没有调度器的未读汇总,不展开成员会丢档)。代表自身的信号仍在下面照常收集。
+    for (const member of item.automationGroup?.items ?? []) {
+      if (member === item) continue;
+      const signals = homePrioritySignals(member);
+      if (signals.waiting) waitingSessionIds.add(item.session.id);
+      if (signals.unread) unreadSessionIds.add(item.session.id);
+    }
     // 各信号独立收集,不从互斥的 resolveMobileSessionRightStatus 反推:定时任务同时
     // 「完成未读」又「下一轮运行中」时,右侧展示状态会先返回 running 把 unread 吞掉,导致
     // 排序丢失上一轮完成未读。这里对齐桌面(attentionSessionIds / runningSessionIds
     // 各自独立集合),让同一会话可同时进 unread 与 running,由共享尺子裁决:
     // 当前轮 running 压过旧 done 未读,但纯完成未读仍排在纯 running 前面。
-    const liveAttention = item.liveActivity?.attention === true;
-    const livePhase = item.liveActivity?.phase;
-    const isError = liveAttention && livePhase === 'error';
-    const isAwaiting = item.pendingInteractionCount > 0
-      || (liveAttention && livePhase === 'needs-interaction');
-    const isUnread = (item.scheduleInfo?.unreadCount ?? 0) > 0
-      || (liveAttention && livePhase === 'completed');
-    if (isError || isAwaiting) waitingSessionIds.add(item.session.id);
-    if (isUnread) unreadSessionIds.add(item.session.id);
+    const signals = homePrioritySignals(item);
+    if (signals.waiting) waitingSessionIds.add(item.session.id);
+    if (signals.unread) unreadSessionIds.add(item.session.id);
   }
   return {
     heldPriorityRanks: hold.heldPriorityRanks,
@@ -165,6 +178,19 @@ export function collectHomePriorityContext(
     unreadSessionIds,
     waitingSessionIds,
   };
+}
+
+/** Inbox rows represent individual runs, never the group's aggregate signals. */
+export function collectInboxHomePriorityContext(
+  items: readonly RemoteSessionListItem[],
+  runningSessionIds: ReadonlySet<string>,
+  hold: ViewedPriorityHoldState,
+): HomeListPriorityContext {
+  return collectHomePriorityContext(
+    items.flatMap(item => item.automationGroup?.items ?? [item]),
+    runningSessionIds,
+    hold,
+  );
 }
 
 export const __testing = {

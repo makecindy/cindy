@@ -1,3 +1,5 @@
+import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redaction';
+
 /**
  * Usage-limit detection shared by the renderer banner and the main-process
  * usage-limit auto-resume.
@@ -7,6 +9,8 @@
  * codexErrorInfo / human-readable message. Keep this deliberately conservative
  * because a reset time here schedules an automatic continuation.
  */
+
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
@@ -314,6 +318,7 @@ function parseTextResetAt(
  */
 const BILLING_DEPLETION_PATTERN =
   /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
+const GROK_BILLING_DEPLETION_PATTERN = /\byou have run out of credits or need a Grok subscription\b/i;
 
 /**
  * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
@@ -322,8 +327,18 @@ const BILLING_DEPLETION_PATTERN =
 export function isBillingDepletionError(data: unknown): boolean {
   const root = asRecord(data);
   if (!root) return false;
+  const text = collectText(collectRecords(root));
+  const status = finiteNumber(root.errorStatus ?? root.status) ?? undefined;
+  const fields = asRecord(root.error);
+  const code = readProviderAccountLimitCode(status, fields ? JSON.stringify({ error: {
+    code: typeof fields.code === 'string' ? fields.code : undefined,
+    type: typeof fields.type === 'string' ? fields.type : undefined,
+  } }) : typeof root.message === 'string' ? root.message : text);
+  if (code) return code !== 'rate_limit_exceeded';
   if (root.sdkError === 'billing_error') return true;
-  return BILLING_DEPLETION_PATTERN.test(collectText(collectRecords(root)));
+  if ((status === undefined || status === 403 || status === 429) && GROK_BILLING_DEPLETION_PATTERN.test(text)) return true;
+  if (status !== undefined && status !== 429) return false;
+  return BILLING_DEPLETION_PATTERN.test(text);
 }
 
 export function extractUsageLimitRecoveryHint(
@@ -340,7 +355,18 @@ export function extractUsageLimitRecoveryHint(
   const codexErrorInfo = typeof root.codexErrorInfo === 'string' ? root.codexErrorInfo : '';
   const status = finiteNumber(root.errorStatus ?? root.status);
 
+  const hasSafetyRefusal =
+    isProviderSafetyRefusalError(text, root.reason) ||
+    records.some((record) =>
+      Object.values(record).some(
+        (value) => typeof value === 'string' && isProviderSafetyRefusalError(value, root.reason),
+      ),
+    );
   if (
+    codexErrorInfo === 'cyberPolicy' ||
+    codexErrorInfo === 'misalignmentPolicyViolation' ||
+    sdkError === 'content_filter' ||
+    hasSafetyRefusal ||
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
@@ -353,6 +379,7 @@ export function extractUsageLimitRecoveryHint(
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
+    codexErrorInfo === 'rateLimitExceeded' ||
     isAccountUsageLimit ||
     root.usageLimit === true ||
     status === 429 ||

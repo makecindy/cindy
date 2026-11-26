@@ -2,7 +2,7 @@
 
 新宿主还可在 `mcpApps.host.settings[]` 登记普通字段，让它出现在 Cindy 统一设置与 Agent 的
 app-settings 中；数据仍使用下文同一份 `/kv`。复杂配置可使用 `settings.section` MCP App 页面。
-这两项尚未发布，版本核验与完整声明见[插件界面扩展](plugin-host-ui.md#统一插件设置)。
+版本核验与完整声明见[插件界面扩展](plugin-host-ui.md#统一插件设置)。
 旧 settingsHtml 与未登记的 KV 不变，不要求存量插件更新。
 
 需要用户配置**凭证之外**的自定义参数(开关、选项、默认风格、服务地址选择等)时,

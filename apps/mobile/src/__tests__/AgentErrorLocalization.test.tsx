@@ -44,6 +44,36 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10161, unit: an older history row with a bare deadline does not establish
+// whether the message was sent. Keep its generic summary on a cold task.
+it('keeps a legacy snapshot deadline in cold history generic', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const message = 'Snapshot operation deadline exceeded';
+  const [historical] = normalizeRemoteMessages([row(message)]);
+  expect(historical.body).toBe(i18n.t('session.tail.replyFailed'));
+  expect(historical.rawError).toBe(message);
+});
+
+// #10854, unit: live and persisted mobile errors share the known-reason copy;
+// the host cause stays available to diagnosis instead of becoming a false claim.
+it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
+  await i18n.changeLanguage('en');
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const reason = 'silent-stop-exhausted';
+  const errorRow = { ...row(message), content: JSON.stringify({ message, reason, silentStopFailureCause: 'dispatch-not-accepted' }) };
+  const state = resolveSessionTailBanner({ messages: [errorRow], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  const diagnose = vi.fn();
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message, errorReason: reason } as InputProjection} onRetryError={vi.fn()} onContinueAfterError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} onDiagnose={diagnose} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />));
+  expect(host.textContent).toContain('An empty response was detected. Automatic continuation is paused.');
+  expect(host.textContent).not.toContain('dispatch-not-accepted');
+  await act(async () => clickText(i18n.t('session.tail.showErrorDetails')));
+  expect(host.textContent).toContain('silentStopFailureCause=dispatch-not-accepted');
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agentError.diagnose"]')!.click());
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason }));
+});
+
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
   await i18n.changeLanguage('en');
@@ -122,6 +152,23 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
+  // An account usage limit showed only "reply failed" on the phone, so the cause was hidden
+  // behind the details toggle. Entries: history projection and the live queue section.
+  // Minimal inputs: explicit limit text; an armed wait whose upstream text is not recognizable.
+  it('names an account usage limit instead of a generic reply failure', async () => {
+    await i18n.changeLanguage(locale);
+    const summary = i18n.t('session.tail.usageLimitReached');
+    expect(summary).not.toBe(i18n.t('session.tail.replyFailed'));
+    const [history] = normalizeRemoteMessages([row("You've hit your session limit · resets 1:20am (Asia/Shanghai)")]);
+    expect(history.body).toBe(summary);
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: 'rate_limit', errorRetryText: 'original', usageLimitWait: { resumeAt: Date.now() + 3_600_000 } } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(summary);
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
+    expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
+  });
+
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {
     await i18n.changeLanguage(locale);
     const [lite, unknown] = normalizeRemoteMessages([row(raw), { ...row('Provider exploded; api_key=private-test-value'), id: 'unknown', clientId: 'unknown' }]);
@@ -138,6 +185,40 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // #7356 follow-up, component: the runtime cause must reach live, tail and
+  // history summaries in the active locale, without exposing reviewer text.
+  it.each([
+    ['User instructions changed; retry against the latest authorization.', 'INSTRUCTIONS_CHANGED'],
+    ['Plugin or task Auto authorization is no longer active.', 'AUTHORIZATION_INACTIVE'],
+    ['Command review needs concrete command text.', 'MISSING_EVIDENCE'],
+    ['Reviewer text api_key=private-test-value', null],
+  ])('preserves the fixed MCP cause across error surfaces: %s', async (cause, suffix) => {
+    await i18n.changeLanguage(locale);
+    const error = `[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call. No user rejection was received. ${cause}`;
+    const key = `session.remoteError.MCP_APPROVAL_AUTO_BLOCKED${suffix ? `_${suffix}` : ''}`;
+    const localized = i18n.getResource(locale, 'common', key);
+    expect(localized).toBeTypeOf('string');
+    expect(unclassifiedAgentErrorI18nKey(error)).toBe(key);
+    const [historical] = normalizeRemoteMessages([row(error)]);
+    expect(historical.body).toBe(localized);
+    expect(historical.errorSummaryKey).toBe(key);
+    expect(historical.rawError).toBe(error);
+    const state = resolveSessionTailBanner({ messages: [row(error)], session: null,
+      projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+      continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set() });
+    const retry = vi.fn();
+    for (const surface of ['live', 'tail']) {
+      await act(async () => root.render(surface === 'live'
+        ? <InlineQueueSection projection={{ error, errorRetryText: 'original' } as InputProjection}
+            onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+        : <SessionTailBanner state={state!} onContinue={retry} onDismiss={vi.fn()} />));
+      expect(host.textContent).toContain(localized);
+      expect(host.textContent).not.toContain('private-test-value');
+      expect(host.textContent).not.toContain('No user rejection was received.');
+    }
+    expect(retry).not.toHaveBeenCalled();
+  });
   // #10187, unit: existing code-only cases missed the guest resume refusal.
   // Exercise the real history, tail and live queue surfaces; no queue mutation.
   it('explains guest resume rejection without offering the same failed send', async () => {
@@ -229,7 +310,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SNAPSHOT_DISPATCH_INTENT_TIMEOUT'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -327,6 +408,57 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(i18n.t(wechatKey));
     expect(host.textContent).not.toContain(i18n.t(genericKey));
   });
+
+  // #10301, unit in every locale: 电脑端 Codex 已登录,但 Windows 普通权限下建不出指向
+  // 那份凭证的共享链接,宿主把稳定 reason 包在 LAZY_CREATE_FAILED 里送到手机端。文案要说清
+  // 卡点与能执行的动作 —— 未分类摘要只会叫人重新登录,而重登解决不了链接权限。
+  it('explains an unreachable shared Codex login instead of an unclassified failure', async () => {
+    await i18n.changeLanguage(locale);
+    const error =
+      'LAZY_CREATE_FAILED: codex not authenticated: codex_shared_auth_link_unavailable';
+    const key = 'deviceLink.agentAuth.sharedLinkUnavailable';
+    const reason = 'codex_shared_auth_link_unavailable';
+    expect(i18n.exists(key)).toBe(true);
+    const localized = i18n.t(key, { agent: 'Codex', reason });
+    expect(localized).not.toBe(i18n.t('deviceLink.agentAuth.default', { agent: 'Codex', reason }));
+    expect(localized).not.toContain(reason);
+    const [historical] = normalizeRemoteMessages([row(error)]);
+    expect(historical.body).toBe(localized);
+    expect(historical.rawError).toBe(error);
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error, errorRetryText: 'original' } as InputProjection}
+      onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+    expect(host.textContent).not.toContain(reason);
+    // 电脑上把链接权限修好就能重试：这条不是「登录失效」，历史错误提示条必须留着「重试」
+    // 按钮，用户修好权限后才有地方再试一次（#10301 review P2）。
+    const state = resolveSessionTailBanner({
+      messages: [row(error)], session: null, projection: { error: null, credentialSwitchWait: null },
+      isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set(),
+    });
+    expect(state?.kind === 'error-tail' && state.retryable).toBe(true);
+    expect(state?.kind === 'error-tail' && state.text).toBe(localized);
+    await act(async () => root.render(<SessionTailBanner
+      state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+    expect(host.textContent).toContain(localized);
+    expect(host.querySelector('[data-testid="session.tailBanner.continue"]')).not.toBeNull();
+  });
+});
+
+// Unit: model switching on mobile can leave a failed send at the queue head.
+// Exercise the visible banner, including its retry time and optional sign-in hint.
+it('explains a mixed subscription pool failure in the mobile queue', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const until = Date.now() + 3_600_000;
+  const error = `LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=${until}\notherAccountSignedOut=true`;
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain('当前模型的订阅额度已达上限');
+  expect(host.textContent).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(until));
+  expect(host.textContent).toContain('另有订阅账号已登出');
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
 });
 
 // Unit regression: both live and historical mobile errors share this presenter.
@@ -335,7 +467,7 @@ it('localizes bound-account exhaustion and old ambiguous startup errors', async 
   const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
   const text = localizeUnclassifiedAgentError(error);
   expect(text).toContain('用量已达上限');
-  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('不会自动换号');
   expect(text).not.toContain('需要重新登录');
   expect(text).not.toContain('resetAtMs=');
   const [normalized] = normalizeRemoteMessages([row(error)]);
@@ -368,4 +500,19 @@ it.each(['live', 'tail'] as const)('explains rejected shared history on mobile %
   expect(host.querySelector('[data-testid="queue.inline.retryButton"]')).toBeNull();
   expect([...host.querySelectorAll('button')].some(button => button.textContent === i18n.t('session.tail.retry'))).toBe(false);
   expect(retry).not.toHaveBeenCalled();
+});
+
+// #8706 unit: mobile live and persisted history must both choose the quota translation.
+it.each(['live', 'tail'] as const)('renders quota guidance in the mobile %s surface', async surface => {
+  await i18n.changeLanguage('zh-CN');
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_PROVIDER_BODY';
+  const state = resolveSessionTailBanner({ messages: [row(message)], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false,
+    sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message } as InputProjection} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
+  expect(host.textContent).not.toMatch(/PRIVATE_PROVIDER_BODY|完全访问/);
+  expect(normalizeRemoteMessages([row(message)])[0].body).toBe(i18n.t('session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA'));
 });

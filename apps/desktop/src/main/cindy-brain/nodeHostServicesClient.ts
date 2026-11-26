@@ -1,4 +1,5 @@
 import type { NodeRequestScopes } from './nodeRequestScope.js';
+import { GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS, GHOST_FETCH_TIMEOUT_MAX_MS, GHOST_NODE_NETWORK_REQUEST_MAX_CHARS } from '../../shared/ghost.js';
 
 /** Bootstrap-private upload channel. No secret travels through stdout. */
 export class NodeHostServicesClient {
@@ -21,14 +22,24 @@ export class NodeHostServicesClient {
   hostCall(server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
     return this.request('host-tool-request', { server, tool, args });
   }
-  private request(type: string, payload: Record<string, unknown>, bound?: { rpcId: string; assertCurrent(): void }): Promise<unknown> {
+  network(request: Record<string, unknown>): Promise<unknown> {
+    try {
+      if (JSON.stringify(request).length > GHOST_NODE_NETWORK_REQUEST_MAX_CHARS) throw new Error();
+    } catch { return Promise.reject(new Error('NETWORK_INVALID_REQUEST')); }
+    // The Host applies each fetch's real deadline, including media/upload IO.
+    // This transport fallback must allow that maximum plus the existing 60s
+    // bridge budget for preparation/cleanup and delivery of its final receipt.
+    return this.request('network-request', { request }, undefined,
+      request.op === 'fetch' ? GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS + GHOST_FETCH_TIMEOUT_MAX_MS : undefined);
+  }
+  private request(type: string, payload: Record<string, unknown>, bound?: { rpcId: string; assertCurrent(): void }, networkTimeoutMs = 60000): Promise<unknown> {
     bound?.assertCurrent();
     if (this.pending.size >= 8) return Promise.reject(new Error('NODE_HOST_BUSY'));
     const reqId = 'host' + this.nextId++;
     return new Promise((resolve, reject) => {
       // A Host tool may await the owner's native confirmation, like the UI path.
       // The existing RPC-bound authenticated-fetch timeout remains unchanged.
-      const timer = bound ? setTimeout(() => this.reply({ reqId, ok: false }), 120000) : undefined;
+      const timer = bound || type === 'network-request' ? setTimeout(() => this.reply({ reqId, ok: false }), bound ? 120000 : networkTimeoutMs) : undefined;
       timer?.unref?.();
       this.pending.set(reqId, { ...bound, assertCurrent: () => bound?.assertCurrent(), resolve, reject, timer });
       try {

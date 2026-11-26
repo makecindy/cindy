@@ -14,7 +14,7 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
@@ -25,8 +25,10 @@ import { useTransientModelPickerPreferences } from '@/components/new-chat/modelP
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
+import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -44,6 +46,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.meta.context': `上下文 ${options?.value}`,
+        'settings.providers.models.advanced.codexContextUnknown': '未读取到 CLI 配置',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -59,7 +62,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.railAll': '全部',
         'newChat.modelSelector.unified.railRecent': '最近',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
-        'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
+        'newChat.modelSelector.unified.crossEngineWarning': '下一条消息将切换引擎并接续对话，较早的部分可能会压缩',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
         'newChat.modelSelector.category.gpt': 'OpenAI',
         'effortLevels.low': '低',
@@ -221,6 +224,7 @@ vi.mock('@/hooks/useProviders', () => ({
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   getCachedDeviceProviders: () => ({ providers: remoteProvidersRef.providers }),
+  getDeviceProvidersGeneration: () => 0,
   subscribeDeviceProviders: () => () => {},
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
@@ -231,8 +235,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: false,
   }),
 }));
+// Every model is shown unless a case names it here (the picker-visibility switch turned off).
+const hiddenModelIds = vi.hoisted(() => new Set<string>());
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, _providerId: string, model: { id: string }) => !hiddenModelIds.has(model.id),
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({
@@ -337,6 +343,22 @@ function renderPanel(
   );
 }
 
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
+
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
   const list = screen.getByRole('listbox');
@@ -372,6 +394,213 @@ beforeEach(() => {
   resetRecentModels();
 });
 
+// #10434, unit: the real unified picker previously dropped thinkingToggle and
+// had no live callback. Catalog-only tests missed this user-visible dead end.
+// Minimal input: one official Pi MiMo row, empty efforts, current thinking=true.
+describe('MiMo thinking switch in the actual unified picker', () => {
+  const oldProviders = providersRef.providers;
+  beforeEach(() => {
+    providersRef.providers = [{ ...buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: {
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  });
+  afterEach(() => { providersRef.providers = oldProviders; });
+
+  it('switches live thinking off/on and leaves rejected writes and model memory unchanged', async () => {
+    const setThinking = vi.fn();
+    const write = vi.fn(async (_enabled: boolean) => {});
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(true);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+        thinkingEnabled={enabled} onThinkingChange={async value => { await write(value); setEnabled(value); }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(within(flyout).queryByRole('slider')).toBeNull();
+    for (const expected of ['false', 'true']) {
+      await act(async () => fireEvent.click(toggle));
+      expect(toggle.getAttribute('aria-checked')).toBe(expected);
+    }
+    write.mockRejectedValueOnce(new Error('fixture write failed'));
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(setThinking).not.toHaveBeenCalled();
+  });
+
+  it('edits only the non-selected model preference, without changing the active model', async () => {
+    let remembered: boolean | undefined;
+    const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+    const clearThinking = vi.fn(() => { remembered = undefined; });
+    const onThinkingChange = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'other-model',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking, clearThinking } });
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', false);
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(within(flyout).getByText('恢复推荐')));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
+  // PR #10445 review: existing switch tests did not exercise reset. Unit tier;
+  // minimal input is a live Pi MiMo row with thinking=false. Observe the real
+  // picker state and saved preference across rejected, failed and successful writes.
+  it.each(['draft', 'session'] as const)('restores live thinking only after an accepted %s write', async kind => {
+    let remembered: boolean | undefined = false;
+    const clearThinking = vi.fn(() => { remembered = undefined; });
+    const clearFast = vi.fn();
+    const write = vi.fn(async (_enabled: boolean): Promise<boolean> => true);
+    const configure = vi.fn(() => true);
+    const resetFast = vi.fn(() => true);
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(false);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        {...(kind === 'session' ? { sessionEngineFilter: {
+          currentAgent: 'pi' as const, runtimeAgent: 'pi' as const, onCrossEngineSelect: vi.fn(),
+        } } : { onUnifiedSelect: configure })}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()} onFastModeChange={resetFast}
+        thinkingEnabled={enabled} onThinkingChange={async value => {
+          if (!await write(value)) return false;
+          setEnabled(value); remembered = value; return true;
+        }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), clearFast,
+          getThinking: () => remembered, setThinking: vi.fn(), clearThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    const reset = () => within(flyout).getByText('恢复推荐');
+    for (const failure of ['rejected', 'false'] as const) {
+      if (failure === 'rejected') write.mockRejectedValueOnce(new Error('fixture rejected'));
+      else write.mockResolvedValueOnce(false);
+      await act(async () => fireEvent.click(reset()));
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(remembered).toBe(false);
+      expect(clearThinking).not.toHaveBeenCalled();
+      expect(clearFast).not.toHaveBeenCalled();
+    }
+    // A later default-config write fails after thinking was restored: roll the
+    // switch back and keep its saved override, rather than leaving half a reset.
+    (kind === 'draft' ? configure : resetFast).mockReturnValueOnce(false);
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(remembered).toBe(false);
+    expect(clearThinking).not.toHaveBeenCalled();
+    expect(clearFast).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+  });
+
+  // PR #10445 cross-engine reset regression (model-selector-unified §1.4, unit).
+  // Existing cases only reset Pi to Pi. Minimal missing input: a Codex override
+  // with thinking=false saved in the recommended Pi slot. Exercise the real
+  // picker and observe both the saved preference and the resulting default UI.
+  it.each(['draft', 'unselected', 'legacy-mirror'] as const)(
+    'clears recommended-engine thinking after a cross-engine reset (%s)', async kind => {
+      const route = { baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat' as const,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }] };
+      const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: route, codex: route } },
+        { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      const piModel = { ...provider.models.pi![0], recommendedAgent: 'pi' as const };
+      providersRef.providers = [{ ...provider, connected: true,
+        models: { pi: [piModel], codex: [{ ...piModel, thinkingToggle: false }] } }];
+      setModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro', 'codex');
+      let remembered: boolean | undefined = false;
+      const clearThinking = vi.fn((_agent, _provider, _model) => { remembered = undefined; });
+      const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+      const configure = vi.fn(() => true);
+      const onThinkingChange = vi.fn();
+      function Picker() {
+        const [engine, setEngine] = React.useState<'codex' | 'pi'>('codex');
+        const [, refreshMemory] = React.useReducer(value => value + 1, 0);
+        return <ModelSelectorContent remoteAgent={undefined} vendorKey={engine} unifiedAgents={['pi', 'codex']}
+          modelId={kind === 'draft' ? 'mimo-v2.6-pro' : 'other-model'} currentProviderId="mimo-fixture" effort="high"
+          onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+          thinkingEnabled={remembered ?? true} onThinkingChange={onThinkingChange}
+          onUnifiedSelect={() => { if (!configure()) return false; setEngine('pi'); return true; }}
+          modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+            setEffort: vi.fn(), setFast: vi.fn(), getThinking: agent => agent === 'pi' ? remembered : undefined,
+            setThinking: (agent, provider, model, enabled) => {
+              setThinking(agent, provider, model, enabled); refreshMemory();
+            }, ...(kind === 'legacy-mirror' ? {} : { clearThinking: (agent, provider, model) => {
+              clearThinking(agent, provider, model); refreshMemory();
+            } }) }} />;
+      }
+      render(<Picker />);
+      const flyout = await openRowFlyout('MiMo V2.6 Pro');
+      const reset = await within(flyout).findByText('恢复推荐');
+      expect(rowFor('MiMo V2.6 Pro').querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Codex');
+      if (kind === 'draft') {
+        configure.mockReturnValueOnce(false);
+        await act(async () => fireEvent.click(reset));
+        expect(remembered).toBe(false);
+        expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBe('codex');
+        expect(clearThinking).not.toHaveBeenCalled();
+      }
+      await act(async () => fireEvent.click(reset));
+      expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBeUndefined();
+      if (kind === 'legacy-mirror') {
+        expect(remembered).toBe(true);
+        expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', true);
+      } else {
+        expect(remembered).toBeUndefined();
+        expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+      }
+      const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+      expect(onThinkingChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
+    const copy = { providerId: 'mimo-fixture', modelId: 'mimo-v2.6-pro', agent: 'pi' as const };
+    const uid = kind === 'favorite' ? addModelFavorite(copy) : recordRecentModel(copy, 1000);
+    const onThinkingChange = vi.fn();
+    const setThinking = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'mimo-v2.6-pro',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking } });
+    if (kind === 'recent') await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const row = document.querySelector(kind === 'favorite'
+      ? `[data-unified-anchor="fav::${uid}"]` : '[data-unified-anchor^="recent::"]') as HTMLElement;
+    if (kind === 'recent') {
+      // Recent snapshots already have no edit affordance; keep that boundary.
+      expect(within(row).queryByRole('button', { name: '自定义' })).toBeNull();
+    } else {
+      const flyout = await openFlyoutForRow(row);
+      await within(flyout).findByText('Pi');
+      expect(within(flyout).queryByRole('switch', { name: 'newChat.modelSelector.thinking' })).toBeNull();
+    }
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(setThinking).not.toHaveBeenCalled();
+  });
+});
+
 // model-groups.md §6: users without modes should not see an unused rail entry.
 // Existing coverage only supplies a populated config. Minimal input: empty routes;
 // tier: unit, real ModelSelectorContent. Also cover removing the last mode while open.
@@ -390,6 +619,42 @@ it('shows the model-groups rail only while modes exist', async () => {
   view.rerender(<ModelSelectorContent {...props} modelGroups={picker} />);
   expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
   expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
+});
+
+// model-groups.md §6.3: another computer's own modes sit in that computer's rail segment and are chosen
+// on that computer. Existing cases only cover this computer's modes. Minimal input: no local modes, one
+// remote computer with one mode; tier: unit, real ModelSelectorContent. Failure: the cell is missing, the
+// pick loses the computer (so the local mode with the same id would run), or the remote modes are never read.
+it('lists another computer\'s modes in its own cell and picks them for that computer', async () => {
+  const onSelect = vi.fn();
+  const readDevices = vi.fn();
+  const modelGroups = {
+    config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
+    devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order' as const, candidates: [] }] } }],
+  };
+  const remoteAgent = { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null };
+  // 那台一个允许被远程调用的来源都没有：它不在「其他电脑」那一段，模式也不列(选了也跑不起来)。
+  const closed = renderPanel({ remoteAgent, modelGroups });
+  expect(readDevices).toHaveBeenCalled();
+  expect(document.querySelector('[data-rail-item="model-groups:desk-2"]')).toBeNull();
+  closed.unmount();
+  remoteProvidersRef.providers = providersRef.providers.map((provider) => ({ ...provider as object, remoteInvocationEnabled: true }));
+  onTestFinished(() => { remoteProvidersRef.providers = []; });
+  renderPanel({ remoteAgent, modelGroups });
+  // 本机没有模式：本机「模型组」一格不出现；那台电脑的一格照常出现。
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  const cell = document.querySelector('[data-rail-item="model-groups:desk-2"]');
+  expect(cell).not.toBeNull();
+  await act(async () => fireEvent.click(cell!));
+  // 另一台电脑的模式不带收藏 ☆，也没有管理入口(那台的模式在那台上改)。
+  expect(document.querySelector('[data-model-group-favorite="mode"]')).toBeNull();
+  expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+  // Typing in search switches to the all view (PR #11866 review r4650525981): that computer's matching
+  // mode stays listed under its own title instead of disappearing.
+  await act(async () => fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Studio mode' } }));
+  expect(screen.getByText('modelGroups.picker.deviceTitle')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByText('Studio mode')));
+  expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'mode', deviceId: 'desk-2' });
 });
 
 // #10207 / #10235 merge regression: local loading must not label a populated
@@ -871,10 +1136,13 @@ describe('统一模型选择器面板', () => {
 // #9501 review P2: the real selector/flyout read the controller's same-key window.
 // Existing rendering tests had no context-limit IPC response. Unit: remote 1M +
 // local 123K, including native Codex readback, source reset and controlled catalogs.
+// #11716/#4477 unit: the remote Codex preview must use native 700K, not this
+// catalog's 600K; a shared source without the owner-only read remains unknown.
 describe('模型浮层上下文按目录来源隔离', () => {
   const localProviders = providersRef.providers;
   const getModelContextLimit = vi.fn();
   beforeEach(() => {
+    setDataOwnerGeneration('test-owner');
     getModelContextLimit.mockReset().mockResolvedValue({
       limit: 123_000, isCustomized: true,
       codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
@@ -884,6 +1152,20 @@ describe('模型浮层上下文按目录来源隔离', () => {
     vi.stubGlobal('electronAPI', {
       ...window.electronAPI,
       maker: { ...window.electronAPI?.maker, getModelContextLimit },
+      deviceLink: {
+        onRemotePush: () => () => {},
+        onStatusChanged: () => () => {},
+        invoke: vi.fn(async (deviceId: string, channel: string) => {
+          if (deviceId !== 'other' || channel !== 'maker:model-context-limit:get') {
+            throw new Error('CHANNEL_NOT_ALLOWED');
+          }
+          return { limit: null, isCustomized: false, codexContext: {
+            contextWindow: 700_000, usableContextWindow: 665_000,
+            autoCompactTokenLimit: 630_000, modelMaxContextWindow: null,
+            source: 'config', fallbackModel: false,
+          } };
+        }),
+      },
     });
     remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
       ...provider, remoteInvocationEnabled: true,
@@ -896,6 +1178,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
     }));
   });
   afterEach(() => {
+    cleanup();
+    setDataOwnerGeneration(null);
     remoteProvidersRef.providers = [];
     vi.unstubAllGlobals();
   });
@@ -908,7 +1192,7 @@ describe('模型浮层上下文按目录来源隔离', () => {
       devices: [{ deviceId: 'share:context', name: 'Shared' }], selectedDeviceId: 'share:context',
     } } },
     { name: '被控电脑', props: { deviceId: 'other' } },
-  ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+  ])('$name 的窗口与引擎切换不读取控制端配置', async ({ props }) => {
     // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
     if (props.remoteAgent?.selectedDeviceId === 'other') {
       providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
@@ -923,7 +1207,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
       )!));
     }
     const codex = await openRowFlyout('GPT-5.6');
-    expect(within(codex).getByText(/上下文 600K/)).toBeTruthy();
+    expect(await within(codex).findByText(props.remoteAgent?.selectedDeviceId === 'share:context'
+      ? /未读取到 CLI 配置/ : /上下文 700K/)).toBeTruthy();
     await act(async () => fireEvent.click(codex.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
     expect(within(codex).getByText(/上下文 800K/)).toBeTruthy();
     expect(getModelContextLimit).not.toHaveBeenCalled();
@@ -1365,7 +1650,7 @@ describe('统一面板 · 会话内形态', () => {
     });
     expect(
       screen.getByRole('listbox').querySelector('[data-cross-engine-warning]')?.textContent,
-    ).toContain('切换引擎会重建上下文');
+    ).toContain('下一条消息将切换引擎并接续对话');
   });
 
   it('选中跨引擎行走 onCrossEngineSelect,不走普通 onSelect', async () => {
@@ -4691,6 +4976,176 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
+  // PR #11683 reviews (model-groups.md §6.2), unit, real editor + picker in a controlled form like the settings
+  // pages: picking a group records it at once (an immediate Create keeps it); the preview only swaps in the group's
+  // source while the entry still holds that group. Minimal inputs: resolve late after re-picking the same plain model.
+  it('records a model group at once, fills in its source from the preview, and drops a late preview after a plain pick', async () => {
+    type Route = { harness: 'codex'; providerId: string; model: string; effort: string; fastMode: boolean; modelGroup?: string };
+    const route: Route = { harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const previews: Array<(value: unknown) => void> = [];
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'Late group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(() => new Promise((resolve) => { previews.push(resolve); })),
+    } });
+    // The client caches the config per account: leave it empty for the following tests.
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const routed = { outcome: 'routed', groupName: 'Late group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
+      modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] };
+    const saved: Route[][] = [];
+    let setChain!: (next: Route[]) => void;
+    function Form() {
+      const [chain, setState] = React.useState<Route[]>([route]);
+      setChain = setState;
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next as Route[]); setState(next as Route[]); }} />;
+    }
+    const view = render(<Form />);
+    const chooseGroup = async () => {
+      fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+      const rail = await waitFor(() => {
+        const item = document.querySelector('[data-rail-item="model-groups"]');
+        if (!item) throw new Error('model groups rail not shown');
+        return item;
+      });
+      await act(async () => fireEvent.click(rail));
+      await act(async () => fireEvent.click(screen.getByText('Late group')));
+    };
+
+    await chooseGroup();
+    // Recorded before the preview returns: submitting now keeps the group, with the previous model as its fallback.
+    expect(saved.at(-1)).toEqual([{ ...route, modelGroup: 'grp' }]);
+    await act(async () => previews.shift()!(routed));
+    // The group's effort comes with its source; the previous model's 'high' is not kept (review r4640307228).
+    expect(saved.at(-1)).toEqual([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]);
+
+    await act(async () => setChain([route]));
+    await chooseGroup();
+    const count = saved.length;
+    // The same plain model is picked again before the preview returns: the final chain equals the original one.
+    await act(async () => setChain([route]));
+    await act(async () => previews.shift()!(routed));
+    expect(saved.length).toBe(count);
+  });
+
+  // PR #11683 review r4640307222, unit, real editor + picker: the "choose a model first" page starts with no entry
+  // and drops changes without a model, so recording the group alone is lost; the preview must create the entry.
+  // Minimal input: an empty chain and a routed preview.
+  it('creates the first entry from the group preview when the chain is empty', async () => {
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [{ id: 'grp', name: 'First group', strategy: 'order',
+        candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'routed', groupName: 'First group', route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low' },
+        modelName: 'GPT-5.6', sourceName: 'OpenAI', why: 'order', quota: null, trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<Array<{ model: string }>>([]);
+      return <BotModelChainEditor value={chain as never} onChange={(next) => {
+        if (!next[0]?.model) return; // like BotsHomeView's model-selection page
+        saved.push(next); setState(next);
+      }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('First group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([expect.objectContaining({
+      harness: 'codex', providerId: 'openai', model: 'gpt-5.6', effort: 'low', modelGroup: 'grp' })]));
+  });
+
+  // model-groups.md §6.2, user 2026-11-20「漏了补全客户端」, unit, real editor + picker: editing a companion on
+  // another computer offers that computer's groups (from its settings form). Choosing one only records it — that
+  // computer fills the source on save — and there is no manage entry for this computer's settings.
+  it('offers the host computer\'s groups for a remote companion and records a choice without a local preview', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const resolve = vi.fn();
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const,
+      candidates: [{ agentKind: 'pi' as const, providerId: 'xd', model: 'a' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([{ ...route, modelGroup: 'host-grp' }]);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  // PR #11683 review r4641455507, unit, real editor + picker: a backup added on another computer starts without a
+  // model and is only submitted once it has one; choosing a group there must still reach the form (the host replaces
+  // the placeholder source on save). Minimal input: Add backup, then pick a host group.
+  it('submits a backup model group added for a remote companion', async () => {
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve: vi.fn() } });
+    const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const, effort: 'low',
+      candidates: [{ agentKind: 'codex' as const, providerId: 'host-openai', model: 'gpt-6', off: true },
+        { agentKind: 'codex' as const, providerId: 'host-xd', model: 'gpt-5.6' }] }] };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
+    const add = screen.getAllByRole('button').find((button) => /添加备用模型|Add fallback|bots\.modelChain\.add/.test(button.textContent ?? ''))!;
+    await act(async () => fireEvent.click(add));
+    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
+    fireEvent.click(pickers[pickers.length - 1]!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(screen.getByText('Host group')));
+    expect(change).toHaveBeenLastCalledWith([route, expect.objectContaining({
+      harness: 'codex', providerId: 'host-xd', model: 'gpt-5.6', effort: 'low', modelGroup: 'host-grp' })]);
+  });
+
+  // PR #11683 review r4641455511, unit, real editor + picker: switching an entry from one group to another whose
+  // preview finds nothing keeps the group it had, instead of leaving a plain model. Minimal input: G1 entry, G2 unavailable.
+  it('keeps the previous group when another group has nothing usable', async () => {
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'gpt-5.6', effort: 'low', fastMode: false, modelGroup: 'g1' };
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: {
+      get: vi.fn(async () => ({ routes: [
+        { id: 'g1', name: 'Day group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.6' }] },
+        { id: 'g2', name: 'Empty group', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'gone', model: 'x' }] }] })),
+      resolve: vi.fn(async () => ({ outcome: 'none', groupName: 'Empty group', trace: [] })),
+    } });
+    onTestFinished(async () => {
+      vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: async () => ({ routes: [] }) } });
+      await act(async () => { await refreshModelGroups(); });
+    });
+    const saved: unknown[][] = [];
+    function Form() {
+      const [chain, setState] = React.useState<typeof route[]>([route]);
+      return <BotModelChainEditor value={chain} onChange={(next) => { saved.push(next); setState(next as typeof route[]); }} />;
+    }
+    const view = render(<Form />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    const rail = await waitFor(() => {
+      const item = document.querySelector('[data-rail-item="model-groups"]');
+      if (!item) throw new Error('model groups rail not shown');
+      return item;
+    });
+    await act(async () => fireEvent.click(rail));
+    await act(async () => fireEvent.click(await screen.findByText('Empty group')));
+    await waitFor(() => expect(saved.at(-1)).toEqual([route]));
+  });
+
   // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
   // snapshot must show loading, then update the open picker without rewriting the
   // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector
@@ -5355,4 +5810,90 @@ it('shows one account-pool overview and opens reset details without changing the
   expect(screen.getByRole('tooltip').textContent).toContain('soon@example.test');
   expect(onModelChange).not.toHaveBeenCalled();
   expect(command.mock.calls.every(([value])=>['preview','read'].includes((value as any).action))).toBe(true);
+});
+
+// Bug: a one-account source repeated its account under the title that already names it
+// ("OpenAI · a@x" then "a@x · Remaining 14%"). Review #11003: a generated name truncated to
+// 50 characters holds only part of a long account, so the full account line must stay.
+it.each([
+  { identity: 'only@example.test', truncated: false },
+  { identity: 'a-very-long-subscription-account-name@example.test', truncated: true },
+])('shows the full single account exactly once in the source rail tooltip: $identity', async ({ identity, truncated }) => {
+  const originalProviders = providersRef.providers;
+  if (truncated) providersRef.providers = (originalProviders as ProviderView[]).map(provider => provider.id === 'anthropic'
+    ? { ...provider, name: `Anthropic · ${identity}`.slice(0, 50) } : provider);
+  try {
+    const command = vi.fn(async ({providerId}: {providerId:string}) => ({
+      providerId,configured:providerId==='anthropic',accounts:providerId==='anthropic' ? [
+        {id:'a',identity,paused:false,status:'ready',running:0,limit:4,
+          usage:{claude:{sevenDay:{utilization:86,resetsAt:Date.now()/1000+3*3600}}}},
+      ] : [],
+    }));
+    Object.assign(window.electronAPI.subscriptionAccounts,{command});
+    renderPanel();
+    await act(async()=>{});
+    fireEvent.focus(document.querySelector('[data-rail-item="provider:anthropic"]')!);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).toContain('14%');
+    expect(tooltip.textContent!.split(identity)).toHaveLength(2);
+  } finally {
+    providersRef.providers = originalProviders;
+  }
+});
+
+// Rule (model-selector-unified.md「已隐藏区」): hiding a provider only folds it out of the regular
+// list; it must stay reachable. The gap: every existing case builds the list from visible
+// providers, so a regression that drops hidden providers from the panel's data (the obvious way
+// to implement hiding) leaves the user unable to pick them and loses their favorites. Minimal
+// failing input: one listed provider plus one with `hidden: true`. Tier: component (real
+// ModelSelectorContent + UnifiedModelPanel, catalog from the providers mock).
+describe('providers hidden from the picker stay reachable', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const source = (id: string, name: string, model: string, extra: Record<string, unknown> = {}) => ({
+    id, name, source: 'user', agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+    connected: true, models: { codex: [{ id: `${id}-model`, name: model, contextWindow: 200_000,
+      efforts: ['high'], defaultEffort: 'high' }] }, ...extra });
+  const memory = { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn() };
+
+  it('folds them under one disclosure that expands, and a click selects the hidden model', async () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', onProviderChange: change, modelMemory: memory });
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByText('Listed Model')).toBeTruthy();
+    expect(list.queryByText('Hidden Model')).toBeNull();
+    // The rail offers no entry for it either: hiding is about the picker's regular surface.
+    expect(document.querySelector('[data-rail-item="provider:tucked"]')).toBeNull();
+    const toggle = document.querySelector('[data-hidden-models-toggle]') as HTMLElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
+    expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  // PR #11565 review: a model whose own picker switch is off lives only in the hidden fold. Its
+  // star worked there, but favorites resolved against the regular list, so the saved favorite
+  // never appeared. Minimal input: one listed model, one switched off, starred from the fold.
+  it('a model starred inside the hidden fold shows up under favorites', async () => {
+    hiddenModelIds.add('quiet-model');
+    try {
+      providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('quiet', 'Quiet', 'Switched Off Model')] as never;
+      renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', modelMemory: memory });
+      await act(async () => { fireEvent.click(document.querySelector('[data-hidden-models-toggle]') as HTMLElement); });
+      await act(async () => {
+        fireEvent.click(within(rowFor('Switched Off Model')).getByRole('button', { name: '存为收藏' }));
+      });
+      const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
+      expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
+    } finally { hiddenModelIds.delete('quiet-model'); }
+  });
+
+  it('opens the fold by itself when the task is already using a hidden provider', () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });
+    expect(within(screen.getByRole('listbox')).getByText('Hidden Model')).toBeTruthy();
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+  });
 });

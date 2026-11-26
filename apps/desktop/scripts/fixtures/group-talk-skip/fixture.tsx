@@ -8,9 +8,9 @@ const names = ['PR 管理', 'Engineering Delivery Teammate', 'Search Ads Review'
 const initial: BotGroupPlanView = {
   id: 'queue', kind: 'talk', status: ctx.case === 'stopped' ? 'stopped' : ctx.case === 'waiting' ? 'waiting' : 'running',
   supportsPendingSkip: ctx.case !== 'legacy',
-  organizerBotId: 'bot-0', organizerName: names[0], currentStep: 1, canManage: ctx.case !== 'viewer',
+  organizerBotId: 'bot-0', organizerName: names[0], currentStep: 1, canStop: true, canManage: ctx.case !== 'viewer',
   workDir: null, branch: null, createdAt: 1, updatedAt: 1,
-  steps: names.map((botName, position) => ({ position, botId: `bot-${position}`, botName, task: '',
+  steps: names.map((botName, position) => ({ position, canStop: ctx.case !== 'legacy' && ctx.case !== 'viewer', botId: `bot-${position}`, botName, task: '',
     status: position === 0 ? 'done' : position === 1 ? ctx.case === 'waiting' ? 'done' : 'running' : 'pending',
     // #9909: a finished turn that published no message answered NO_REPLY and reads as skipped.
     ...(position === 0 && ctx.case === 'no-reply' ? { resultMessageId: null } : {}),

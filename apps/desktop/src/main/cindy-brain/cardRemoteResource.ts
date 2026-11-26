@@ -1,4 +1,5 @@
-import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
+import { cardPrSlotKey as prSlotKey, cardPrLinkKey as githubPrKey } from '@cindy/maker-shared';
+import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed, isGhostCardModelSelection, type GhostCardModelSelection } from '../../shared/ghost.js';
 import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
@@ -15,6 +16,12 @@ import { parseMailAttachmentUpload, type MailAttachmentUpload } from './mailAtta
 
 const COLLECTION = 'plugin-results';
 const KIND = 'card';
+/**
+ * Desktop controllers that declare this primitive receive the stored, already sanitized card
+ * markup in the actions block (`data.card`), so a remote task shows the same card a local one
+ * does. The controller sanitizes it again before display. Mail cards keep their own projection.
+ */
+export const PLUGIN_CARD_HTML_PRIMITIVE = 'plugin-card-html';
 
 export function findGhostForRemotePluginIdentity<T extends { manifest: { id: string }; namespace?: string | null }>(
   ghosts: readonly T[], id: string,
@@ -127,12 +134,6 @@ function cardLines(fragment: string): string[] {
   return cardText(fragment, true).split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
-/** `owner/repo#N` → prStatusKey form (owner/repo lowercased); null when malformed. */
-function prSlotKey(value: string): string | null {
-  const m = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/.exec(value);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
-}
-
 /**
  * Parts marked `data-ghost-pr-open-only="owner/repo#N"` only hold while that PR is open (following,
  * its buttons, "open"). Once the task's title-bar status says it was merged or closed, they leave the
@@ -237,11 +238,6 @@ export interface RemotePluginCardAction {
   prState?: PrStatusKind;
 }
 
-/** owner/repo#N key for a GitHub pull request page, matching `data-ghost-pr-status`. */
-function githubPrKey(url: string): string | undefined {
-  const m = /^https:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(url);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
-}
 /** Input is already sanitizer-owned HTML. Only declared inert controls are projected. */
 export function projectGhostCardActions(
   html: string,
@@ -275,7 +271,7 @@ export function projectGhostCardActions(
 }
 interface CardInteractions {
   externalLinks(ghostId: string): boolean;
-  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string, formValues?: Record<string, string>, formChange?: boolean, upload?: MailAttachmentUpload): Promise<boolean>;
+  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string, formValues?: Record<string, string>, formChange?: boolean, upload?: MailAttachmentUpload, modelSelection?: GhostCardModelSelection): Promise<boolean>;
 }
 function mailUploadAction(html: string): RemotePluginCardAction | undefined {
   const mail = readMailCard(html);
@@ -354,9 +350,13 @@ export function createGhostCardRemoteProvider(deps: {
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
         return status?.ok ? { ...next, prState: status.status } : next;
       }));
+      // The same markup the task's own window renders; title-bar PR states are applied by the controller.
+      const markup = request.client.primitives.includes(PLUGIN_CARD_HTML_PRIMITIVE) && !mail && !legacyMail
+        ? { html: card.html, height: card.height, externalLinks } : undefined;
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
         data: { pluginId: card.ghostId, revision, mail, legacyMail, ...(supersededBy && !mail ? { supersededBy } : {}), mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
+          ...(markup ? { card: markup } : {}),
           items,
           ...(rich?.live ? { live: rich.live } : {}),
           ...(prStatus?.length ? { prStatus } : {}),
@@ -374,6 +374,11 @@ export function createGhostCardRemoteProvider(deps: {
       const upload = parseMailAttachmentUpload(request.input?.mailAttachment);
       if (attaching ? !upload : request.input?.mailAttachment !== undefined)
         throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid mail attachment');
+      // A choice from the card's model menu, relative to this computer. The dispatcher accepts it only
+      // for a button that declares the menu and only when this computer can run that model.
+      const modelSelection = request.input?.modelSelection;
+      if (modelSelection !== undefined && (change || attaching || !isGhostCardModelSelection(modelSelection)))
+        throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid model selection');
       const action = change && readGhostCardFormChange(card.html) === request.actionId
         ? { id: request.actionId, submit: true, disabled: false, prompt: undefined }
         : change ? undefined : attaching ? uploadAction : projectGhostCardActions(card.html, false).find(item => item.id === request.actionId && !item.url);
@@ -386,7 +391,9 @@ export function createGhostCardRemoteProvider(deps: {
         || (action.prompt !== undefined && (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 2000))
         || (action.prompt === undefined && input.prompt !== undefined) || !valid())
         throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card action is no longer available');
-      const extra: [boolean?, MailAttachmentUpload?] = upload ? [false, upload] : change ? [true] : [];
+      // A model choice never comes with an autosave or an upload (rejected above).
+      const extra: [boolean?, MailAttachmentUpload?, GhostCardModelSelection?] = upload ? [false, upload] : change ? [true]
+        : modelSelection !== undefined ? [undefined, undefined, modelSelection as GhostCardModelSelection] : [];
       const delivered = await deps.interactions.dispatch(callId, action.id, input.prompt as string | undefined, input.pageId, card.ghostId, context.controllerDeviceId, values ?? undefined, ...extra);
       if (!valid() || !delivered) throw new RemoteResourceRegistryError('INTERNAL', 'Card action could not be delivered');
       return { effects: [] };

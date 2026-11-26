@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import JSZip from 'jszip';
+import { GhostSavedCredentialManager } from '../ghostSavedCredentials.js';
+import { GhostConnectionManager } from '../ghostConnections.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -33,7 +35,8 @@ import { installedGhostPhysicalRelId, installedGhostStoragePart, pluginInstallSt
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
-import { projectPluginPublishingSource } from '../pluginPublishingSource';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from '../pluginPublishingSource';
+import * as pluginInstanceRegistry from '../pluginInstanceRegistry';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
 import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
@@ -112,6 +115,56 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     tools: [{ name: 'do_thing', description: '做点事' }],
   };
 }
+
+// Unit: plaintext admission belongs to Host install/update, not the dependency-
+// free manifest parser. An invalid update must preserve the old approved install.
+// #10130 / 4559022319: the real installer must also reject exact cloud metadata
+// literals, including TLS declarations and existing embedded-IP forms.
+it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitlab.internal:8080',
+  'http://169.254.169.254', 'https://100.100.100.200', 'wss://[fd00:ec2::254]',
+  'https://169.254.169.254', 'https://[::ffff:6464:64c8]', 'https://[64:ff9b::6464:64c8]',
+  // #10130 / 4581724529: installation and update must reject this exact
+  // additional metadata literal without disabling ordinary link-local URLs.
+  'http://169.254.0.23', 'https://169.254.0.23', 'http://[::ffff:a9fe:17]'])
+  ('rejects unsafe origin %s at inspect, install and update before replacing old approval', async origin => {
+    const id = 'network-policy';
+    const safe = { ...goodManifest(id), slots: ['tool', 'network'], network: { hosts: ['api.example.com'] } };
+    const installed = await manager.install(await makeCindy('old.cindy', safe), { namespace: null });
+    if (!('ghost' in installed)) throw new Error('safe install fixture failed');
+    const approvalToken = ghostInstallApprovalToken(installed.ghost.approval);
+    const file = await makeCindy('unsafe.cindy', { ...safe, version: '2.0.0', network: { hosts: [origin] } });
+    const denied = { rejection: { code: 'file-invalid', reason: expect.stringContaining('NETWORK_INSECURE_ORIGIN') } };
+    expect(await manager.inspect(file)).toMatchObject(denied);
+    expect(await manager.install(file, { namespace: null })).toMatchObject(denied);
+    expect(await manager.update(file, { namespace: null, expectedInstalledApproval: approvalToken })).toMatchObject(denied);
+    const unchanged = manager.list().find(ghost => ghost.manifest.id === id)!;
+    expect(unchanged.enabled).toBe(true);
+    expect(unchanged.manifest.version).toBe('1.0.0');
+    expect(ghostInstallApprovalToken(unchanged.approval)).toBe(approvalToken);
+  });
+
+it.each(['http://10.0.0.5:8080', 'http://127.0.0.1:8080', 'ws://localhost:8080',
+  'http://169.254.1.1', 'http://100.100.100.201', 'http://[fd00:ec2::255]'])
+  ('accepts declared plaintext local origin %s through the actual Host installer', async origin => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], network: { hosts: [origin] } };
+    expect(await manager.install(await makeCindy('local.cindy', manifest), { namespace: null }))
+      .toMatchObject({ ghost: { enabled: true, manifest: { network: { hosts: [origin] } } } });
+  });
+
+// Approval is also reachable for immutable bundled sources without ZIP parse.
+it('rejects plaintext origin when minting a trusted bundled approval', async () => {
+  const raw = { ...goodManifest(), slots: ['tool', 'network'], network: { hosts: ['http://public.example:8080'] } };
+  const validated = validateGhostManifest(raw);
+  if (!validated.ok) throw new Error(validated.reason);
+  trustedBundledIds.add(validated.manifest.id);
+  const sourceDir = path.join(workDir, 'bundled-seeds', validated.manifest.id);
+  await fs.promises.mkdir(sourceDir, { recursive: true });
+  await fs.promises.writeFile(path.join(sourceDir, 'ghost.json'), JSON.stringify(raw));
+  await fs.promises.writeFile(path.join(sourceDir, 'main.js'), '// immutable bundled fixture');
+  await expect(manager.approveTrustedBundledInstall(validated.manifest, true, { sourceDir }))
+    .rejects.toMatchObject({ code: 'NETWORK_INSECURE_ORIGIN' });
+  expect(manager.list()).toEqual([]);
+});
 
 // Unit integration: the index must follow real install/enable/uninstall mutations
 // without another full-list broadcast; gateway-only fixtures cannot cover this.
@@ -950,7 +1003,7 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', 'broken.json'))).toBe(false);
   });
 
-  it('随包种子 id 跳过迁移(交给 provisioning 的逐字节对账补批准)', async () => {
+  it('同名种子不阻止旧批准迁移，也不把旧目录摘要当作种子来源', async () => {
     const seededManager = new GhostManager({
       getRootDir: () => rootDir,
       getLocale: () => hostLocale,
@@ -959,9 +1012,10 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     });
     await writeLegacyInstall('hello', goodManifest());
     const outcome = await seededManager.migrateLegacyApprovalsOnce();
-    expect(outcome).toEqual({ migrated: [], skipped: ['hello'], failed: [], retryPending: [] });
-    // 没有替它写 receipt:provisioning 才是随包插件的批准入口。
-    expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', 'hello.json'))).toBe(false);
+    expect(outcome).toEqual({ migrated: ['hello'], skipped: [], failed: [], retryPending: [] });
+    expect(seededManager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(seededManager.readApprovedInstallReceipt('hello')).not.toHaveProperty('namespace');
+    expect(seededManager.approvedInstallEvidence('hello')?.packageSha256).toBeNull();
   });
 
   it('瞬时状态根 IO 不封门:台账停在 in-progress,下次启动自动续跑治愈', async () => {
@@ -1665,7 +1719,9 @@ describe('GhostManager · review 第 6 轮回归(P0/P1 修复钉住)', () => {
     expect(outcome.migrated).toEqual(['hello']);
   });
 
-  it('P0-2:恢复旁路只补给定 id,台账门对其余目录照常生效', async () => {
+  it.each([false, true])('P0-2:恢复旁路只补给定 id（同名种子=%s）,台账门对其余目录照常生效', async bundled => {
+    if (bundled) manager = new GhostManager({ getRootDir: () => rootDir,
+      isTrustedBundledId: id => id === 'recovered' });
     // 台账已落(首轮迁移空跑一个插件)。
     await writeLegacyInstall('first', goodManifest('first'));
     await manager.migrateLegacyApprovalsOnce();
@@ -3883,6 +3939,116 @@ describe('GhostManager · install', () => {
 });
 
 describe('GhostManager · uninstall', () => {
+  // Recovery has no outer UI lease. The real Desktop factory must pin the
+  // owner across the source-lock await before acquiring any consumer lock.
+  it('pins the production cleanup owner while draining and releasing the source lock', async () => {
+    let cleanup!: NonNullable<GhostManagerOptions['onUninstallSourceState']>;
+    let held = false, sourceHeld = false;
+    let started!: () => void, finish!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const owner = {};
+    const release = vi.fn(() => { held = false; });
+    const revoke = vi.fn(async () => { expect(held).toBe(true); expect(sourceHeld).toBe(false); });
+    productionManager({
+      GhostManager: class {
+        constructor(options: GhostManagerOptions) { cleanup = options.onUninstallSourceState!; }
+        list() { return []; }
+      },
+      brainRootDir: () => rootDir, activeOwnerScopeKey: () => 'owner', broadcastGhostsChanged: vi.fn(),
+      getResolvedMainLocale: () => 'en', loadGhostTrustRegistry: () => ({}), isTrustedBundledSource: () => false,
+      log: { warn: vi.fn() }, getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
+      captureGhostMutationOwner: () => owner,
+      beginGhostMutation: (expected: unknown) => { expect(expected).toBe(owner); held = true; return release; },
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, run: () => void) => {
+        sourceHeld = true; started();
+        try { await gate; return run(); } finally { sourceHeld = false; }
+      },
+      relocateGhostAccountReuseReferences: revoke,
+    }).getGhostManager();
+    const pending = cleanup('source');
+    try { await entered; expect(held).toBe(true); }
+    finally { finish(); await pending.catch(() => {}); }
+    await pending;
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('source', null);
+    expect(release).toHaveBeenCalledOnce();
+    expect(held).toBe(false);
+  });
+
+  // #10130 / 4560691468, unit: successful cleanup missed consumer lock/vault
+  // failure after package deletion. Real uninstall/install + recovery journal
+  // must prevent a replacement installation from inheriting the old reference.
+  it.each([
+    { failure: 'lock', recovery: 'retry' }, { failure: 'vault', recovery: 'retry' },
+    { failure: 'lock', recovery: 'restart' }, { failure: 'vault', recovery: 'restart' },
+  ])('retains uninstall isolation on $failure failure until $recovery revokes incoming credentials', async ({ failure, recovery }) => {
+    let blocked = false;
+    let cleanup!: (from: string, to: string | null) => Promise<void>;
+    const options = { getRootDir: () => rootDir,
+      onUninstallSourceState: (from: string) => cleanup(from, null) };
+    manager = new GhostManager(options);
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], settingsHtml: 'settings.html', network: {
+      hosts: ['api.example.com'], secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }],
+    } };
+    const original = await makeCindy('original.cindy', manifest);
+    const installed = await manager.install(original);
+    if (!('ghost' in installed)) throw new Error('source fixture failed');
+    const from = installedGhostStoragePart(installed.ghost), relId = installedGhostPhysicalRelId(installed.ghost);
+    const consumer = await manager.install(await makeCindy('consumer.cindy', { ...manifest, id: 'consumer' }));
+    if (!('ghost' in consumer)) throw new Error('consumer fixture failed');
+    const target = installedGhostStoragePart(consumer.ghost);
+    const data = new Map<string, string>([[`${from}\0token`, 'old-source-pat']]);
+    const vault = { read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      readStrict: (id: string, key: string) => {
+        if (blocked && failure === 'vault' && id === target) throw new Error('vault unavailable');
+        return data.get(`${id}\0${key}`) ?? null;
+      },
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null };
+    const source = (id: string) => {
+      const ghost = manager.list().find(item => installedGhostStoragePart(item) === id);
+      return ghost?.enabled && ghost.approval.state === 'approved'
+        ? { instanceKey: id, manifest: ghost.manifest, name: ghost.manifest.name } : null;
+    };
+    const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
+      connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
+      withMutationLock: async (_id, task) => {
+        if (blocked && failure === 'lock') throw new Error('consumer lock unavailable');
+        return task();
+      } });
+    ({ relocateGhostAccountReuseReferences: cleanup } = createGhostProductionCallbacks<{
+      relocateGhostAccountReuseReferences(from: string, to: string | null): Promise<void>;
+    }>({ functions: ['relocateGhostAccountReuseReferences'] })({
+      getGhostManager: () => manager, getGhostSavedCredentialManager: () => references,
+      listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
+        keys: [...data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
+      getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => () => {},
+      throwIpcError: (code: string) => { throw new Error(code); },
+    }));
+    expect(await references.reuse(target, 'token', { kind: 'secret', instanceKey: from, secretKey: 'token', accountId: 'saved' })).toEqual({ ok: true });
+    blocked = true;
+    expect(await manager.uninstall(relId)).toMatchObject({ rejection: { code: 'io' } });
+    const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    expect(fs.existsSync(installed.ghost.dir)).toBe(true);
+    expect(store.readPendingMutationSync(relId)).toMatchObject({ state: 'valid', mutation: { kind: 'uninstall' } });
+    expect(references.resolve(target, 'token')).toBeNull();
+    expect(await manager.install(original)).toHaveProperty('rejection');
+    if (recovery === 'restart') {
+      manager = new GhostManager(options);
+      await manager.retryInterruptedMutationsAfterDbReady();
+      expect(store.readPendingMutationSync(relId).state).toBe('valid');
+    }
+    blocked = false;
+    if (recovery === 'restart') await manager.retryInterruptedMutationsAfterDbReady();
+    else expect(await manager.uninstall(relId)).toEqual({ ok: true });
+    expect(store.readPendingMutationSync(relId).state).toBe('missing');
+    expect(vault.read(target, 'token-reused-credential')).toBeNull();
+    expect(await manager.install(original)).toHaveProperty('ghost');
+    vault.store(from, 'token', 'replacement-pat');
+    expect(references.resolve(target, 'token')).toBeNull();
+    expect(references.list(target, 'token').accounts).toEqual([]);
+  });
+
   it('卸下已装意识:目录消失、list 变空、onChanged 广播', async () => {
     await manager.install(await makeCindy('a.cindy', goodManifest()));
     onChanged.mockClear();
@@ -4341,19 +4507,8 @@ describe('GhostManager · list', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
-  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
-  // The custom projector test above misses the production catch branch. Run
-  // that callback through listAsync: transient IO must recover, persistent IO
-  // must reject within the retry limit instead of publishing unavailable sources.
-  // Empty scans and skipped invalid directories need no source evidence at all.
-  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
-    if (failure === 'unprojected') {
-      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
-    } else if (failure !== 'empty') {
-      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
-    }
-    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
-    manager = productionManager({
+  function listingManager(ledger: PluginMarketLedger): GhostManager {
+    return productionManager({
       // Keep production source callbacks; unrelated app services stay isolated.
       GhostManager: class extends GhostManager {
         constructor(options: GhostManagerOptions) {
@@ -4370,7 +4525,60 @@ describe('GhostManager · list', () => {
       getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
       getPluginMarketLedger: () => ledger,
       projectPluginPublishingSource,
+      projectPluginInstallationSource,
     }).getGhostManager();
+  }
+
+  // #11035, unit: the source helper alone misses the official-trust override in
+  // installed listings. Hold reconciliation at the old revision across the first
+  // frame and a background refresh; the package and market ledger still match.
+  it('shows unknown in installed plugin lists while the approval revision stays out of sync', async () => {
+    const pluginId = `c${'a'.repeat(24)}`;
+    const file = await makeCindy('market.cindy', goodManifest());
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    ledger.upsertInstallation({
+      ghostId: 'hello', pluginId, namespace: null, scope: 'public', organizationId: null,
+      releaseId: 'release', version: '1.0.0', source: 'market', installed: true,
+      sha256: crypto.createHash('sha256').update(await fs.promises.readFile(file)).digest('hex'),
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    manager = listingManager(ledger);
+    const installed = await manager.install(file, {
+      namespace: null, registrySource: 'market', pluginId, trustOverride: 'cindy-official',
+    });
+    if (!('ghost' in installed)) throw new Error('market fixture did not install');
+    expect(manager.list()).toMatchObject([{ installationSource: { kind: 'official' } }]);
+
+    const receipt = manager.readApprovedInstallReceipt(installedGhostStoragePart(installed.ghost));
+    if (!receipt) throw new Error('missing approved receipt');
+    const revision = crypto.randomUUID();
+    const receipts = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    await receipts.write({ ...receipt, revision }, { relId: installedGhostPhysicalRelId(installed.ghost) });
+    const reconcile = vi.spyOn(pluginInstanceRegistry, 'reconcileInstanceReceipt').mockImplementation(record => record);
+    try {
+      const expected = [{
+        enabled: true, approval: { state: 'approved', revision }, installationSource: { kind: 'unknown' },
+      }];
+      expect(manager.list()).toMatchObject(expected);
+      await expect(manager.listAsync()).resolves.toMatchObject(expected);
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+
+  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
+  // The custom projector test above misses the production catch branch. Run
+  // that callback through listAsync: transient IO must recover, persistent IO
+  // must reject within the retry limit instead of publishing unavailable sources.
+  // Empty scans and skipped invalid directories need no source evidence at all.
+  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    if (failure === 'unprojected') {
+      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
+    } else if (failure !== 'empty') {
+      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    }
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    manager = listingManager(ledger);
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');
     try {
@@ -6472,7 +6680,7 @@ describe('GhostManager · update(原位换版)', () => {
       sourceKey,
       store: (archiveManager as unknown as { receiptStore: GhostInstallReceiptStore }).receiptStore,
       update: (options: Pick<Parameters<GhostManager['update']>[1], 'beforePackageCommit'> = {}) => archiveManager.update(file, {
-        expectedInstalledApproval: ghostInstallApprovalToken(archiveManager.list()[0]?.approval),
+        expectedInstalledApproval: ghostInstallApprovalToken(archiveManager.list().find(ghost => ghost.manifest.id === manifest.id)?.approval),
         sourceStateArchiveId: archiveId,
         ...options,
       }),
@@ -6486,6 +6694,102 @@ describe('GhostManager · update(原位换版)', () => {
     state.delete('_root__hello');
     state.set(sourceKey, value);
   }
+
+  // #10130 / 4560156890: a source archive can acquire consumers' credential
+  // locks. Acquiring an ordinary update's lock before this queue would invert
+  // the order. Unit: real Manager updates and archive callback, no timed waits.
+  it('queues ordinary credential locks behind source archival and holds them through the entire update', async () => {
+    let entered!: () => void;
+    const inArchive = new Promise<void>(resolve => { entered = resolve; });
+    let finish!: () => void;
+    const archiveGate = new Promise<void>(resolve => { finish = resolve; });
+    let credentialHeld = false;
+    const stages: string[] = [];
+    const { update } = await prepareSourceArchiveUpdate(async () => {
+      entered(); await archiveGate;
+      expect(credentialHeld).toBe(false);
+      stages.push('archive');
+    });
+    await manager.install(await makeCindy('consumer.cindy', goodManifest('consumer')));
+    const consumer = manager.list().find(ghost => ghost.manifest.id === 'consumer')!;
+    const file = await makeCindy('consumer-update.cindy', { ...goodManifest('consumer'), version: '2.0.0' });
+    const archival = update();
+    await inArchive;
+    const ordinary = manager.update(file, {
+      expectedInstalledApproval: ghostInstallApprovalToken(consumer.approval),
+      withCredentialMutation: async run => {
+        expect(stages).toEqual(['archive']);
+        credentialHeld = true; stages.push('lock');
+        try { return await run(); }
+        finally { credentialHeld = false; stages.push('unlock'); }
+      },
+      beforePackageCommit: () => { expect(credentialHeld).toBe(true); stages.push('prepare'); },
+      onPackagePlaced: () => { expect(credentialHeld).toBe(true); stages.push('placed'); },
+    });
+    expect(credentialHeld).toBe(false);
+    finish();
+    expect(await archival).toHaveProperty('ghost');
+    expect(await ordinary).toHaveProperty('ghost');
+    expect(stages).toEqual(['archive', 'lock', 'prepare', 'placed', 'unlock']);
+    expect(credentialHeld).toBe(false);
+  });
+
+  // Real receipt failure/restart recovery must reverse incoming references too;
+  // manager-only resolution and successful archives do not exercise this journal.
+  it.each(['rollback', 'restart'] as const)('restores saved credential reuse through source archive %s', async recovery => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], settingsHtml: 'settings.html', network: { hosts: ['api.example.com'],
+      secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }] } };
+    let relocate!: (from: string, to: string) => Promise<void>;
+    let blockInverse = recovery === 'restart';
+    const { store, update, sourceKey } = await prepareSourceArchiveUpdate(async (from, to) => {
+      if (from === archiveId && blockInverse) throw new Error('inverse interrupted');
+      await relocate(from, to);
+    }, manifest);
+    const installed = await manager.install(await makeCindy('reuse-consumer.cindy', { ...manifest, id: 'consumer', name: 'Consumer' }));
+    if (!('ghost' in installed)) throw new Error('consumer install failed');
+    const targetKey = installedGhostStoragePart(installed.ghost);
+    const data = new Map<string, string>([[`${sourceKey}\0token`, 'old-source-pat']]);
+    const vault = { read: (id: string, key: string) => data.get(`${id}\0${key}`) ?? null,
+      store: (id: string, key: string, value: string) => { data.set(`${id}\0${key}`, value); return true; },
+      remove: (id: string, key: string) => { data.delete(`${id}\0${key}`); }, readTail: () => null };
+    const source = (id: string) => {
+      const ghost = manager.list().find(item => installedGhostStoragePart(item) === id);
+      return ghost?.enabled && ghost.approval.state === 'approved'
+        ? { instanceKey: id, manifest: ghost.manifest, name: ghost.manifest.name } : null;
+    };
+    const references = new GhostSavedCredentialManager({ vault, connections: new GhostConnectionManager({ vault }),
+      connectionSource: source, connectionSources: () => [], captureTarget: id => source(id) ? id : null,
+      withMutationLock: async (_id, task) => task() });
+    const noop = () => {};
+    ({ relocateGhostUserData: relocate } = createGhostProductionCallbacks<{ relocateGhostUserData(from: string, to: string): Promise<void> }>({
+      functions: ['relocateGhostUserData', 'relocateGhostAccountReuseReferences'],
+    })({ getGhostHandoffStore: () => ({ blockForRelocation: () => noop }),
+      relocateIdleGhostUserData: async (from: string, to: string) => {
+        for (const [key, value] of [...data]) if (key.startsWith(from + '\0')) {
+          data.set(to + key.slice(from.length), value); data.delete(key);
+        }
+      },
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
+      getGhostManager: () => manager, getGhostSavedCredentialManager: () => references,
+      listGhostAccountReferenceKeys: (ids: string[]) => ids.map(instanceKey => ({ instanceKey,
+        keys: [...data.keys()].filter(key => key.startsWith(instanceKey + '\0')).map(key => key.slice(instanceKey.length + 1)) })),
+      getGhostOauthAccountManager: () => ({ relocateSourceReferences: async () => {} }), beginGhostMutation: () => noop,
+    }));
+    expect(await references.reuse(targetKey, 'token', { kind: 'secret', instanceKey: sourceKey, secretKey: 'token', accountId: 'saved' })).toEqual({ ok: true });
+    const write = vi.spyOn(store, 'write').mockRejectedValueOnce(new Error('receipt interrupted'));
+    expect(await update()).toHaveProperty('rejection'); write.mockRestore();
+    if (recovery === 'restart') {
+      expect(JSON.parse(vault.read(targetKey, 'token-reused-credential')!).instanceKey).toBe(archiveId);
+      expect(references.resolve(targetKey, 'token')).toBeNull();
+      expect(store.readPendingMutationSync('_ns/_root/hello').state).toBe('valid');
+      blockInverse = false;
+      manager = sourceArchiveManager(relocate);
+      await manager.retryInterruptedMutationsAfterDbReady();
+    }
+    expect(JSON.parse(vault.read(targetKey, 'token-reused-credential')!).instanceKey).toBe(sourceKey);
+    expect(references.resolve(targetKey, 'token')?.value).toBe('old-source-pat');
+    expect(store.readPendingMutationSync('_ns/_root/hello').state).toBe('missing');
+  });
 
   it('archives source state before package side effects and leaves the replacement with empty state', async () => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true } };

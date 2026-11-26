@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Settings UI、配置文件、本地偏好存储、运行时 profile，或
 > agent／MCP／provider 相关开关之前
+> **适用路径**：`apps/desktop/src/renderer/components/settings/**`、
+> `apps/desktop/src/main/app-settings/**`、
+> `apps/desktop/src/main/**/*{settings-store,SettingsStore,settingsStore}*`、
+> `apps/mobile/src/settings/**`、`apps/mobile/app/settings/**`、`apps/mobile/app/settings.tsx`
 
 本规则适用于所有用户可配置项。Cindy 允许用户高度定制，但**默认配置承载创作者品味，
 是产品体验的一部分**——不是让每个选项都堆进设置页。产品边界见
@@ -40,6 +44,11 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 - 运行时以「系统默认值 + 用户 override」合并出有效值；持久化只记录 override 与必要的
   自定义标记，**不把完整默认配置复制进用户配置**。
 - 未自定义的用户随版本获得新默认值，已自定义的用户保留自己的选择。
+
+桌面显示语言按本机资料目录保存（`display-language.json`）。首次打开时沿用当前窗口已有的
+有效 `localStorage.language`，并在之后启动时把已保存的选择同步回该键，供旧版和迁移助理
+读取。保存异步等待落盘确认，显式选择「跟随系统」也会记住。迁移助理在写锁内确认本机
+尚未设置语言才导入。辅助窗口收到实际显示语言时只更新本窗。
 
 ### 完整主题与外观设置
 
@@ -98,11 +107,68 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 - 收藏、历史选择、引擎偏好不能当成开关。
 - 桌面、IM 与远端用同一套 override；没 override 的路线由各端按当时目录 defaultEnabled 计算。
 
+#### 隐藏与停用是两根轴（2026-11-19）
+
+供应商和单款模型各有两个互不牵连的设置，两级用同一组词：
+
+| | 在模型选择器中显示 | 停用 |
+| --- | --- | --- |
+| 管什么 | 只管给人挑的清单里列不列 | 新任务和后台功能能不能用它 |
+| 供应商 | `model-disable-prefs.json` 的 `hiddenProviders`，投影为 `ProviderView.hidden` | 同文件的 `disabledProviders`，投影为 `suspended` |
+| 对话模型 | 上文的显示开关（renderer 可见性 override） | 同文件的 `disabledModels` |
+| 功能型模型（图片、视频、语音、向量、决策、重排等） | 不提供，它们本来就不进模型选择器 | 唯一的「启用」开关 |
+
+- 隐藏不是准入。被隐藏的供应商或模型，已在用它的任务、辅助模型链、后台功能、收藏和显式点名
+  照常使用；路由、来源解析和准入守卫一律不读隐藏标记。只有带可见性过滤的清单派生
+  （`deriveModelList` 传了 `isVisible`）把隐藏的供应商当作未显示。
+- 供应商隐藏单独存一个标记，不改写名下逐模型的显示开关：取消隐藏后原样恢复，目录新增的模型
+  也不会绕过隐藏重新出现。
+- 隐藏不影响分享：写入隐藏不走「先撤销云端备用分享」那一步（那一步只属于收窄调用权限的停用），
+  服务器不可达时也能隐藏和取消隐藏。
+- 存下来的东西照常解析：收藏和最近按「常规清单 ∪ 被隐藏的模型」解析，隐藏只决定常规分组里列不列。
+  Desktop 选择器、其他电脑的目录和 Mobile 选择器同一口径。
+- 功能型模型的恢复不看聊天登录：只配了图片 API 密钥、没登录聊天订阅时图片通道照常可用，被停用的
+  功能型模型只要供应商没有被整体停用就能重新启用。对话模型仍要求聊天连接。
+- 隐藏的东西必须找得到：模型选择器在列表末尾有可展开的「已隐藏」，搜索也覆盖它，见
+  [统一模型选择器 §1.2](../product-rules/model-selector-unified.md)。
+- 「全部启用」只清停用，不动隐藏；删除供应商时两者一并清除。
+- 功能型模型的开关写停用轴。升级前被旧显示开关关掉的功能型模型继续显示为关，打开时把旧记录
+  一并拨回，不做批量迁移。
+- 其他电脑上的供应商同样两项，按 `remote:[设备, 供应商]` 记在本机，只影响这台电脑。
+- 由插件提供的供应商（插件引擎，2026-11-22）同样两项，并可逐模型关闭、改这台电脑上的显示名，存在单独的
+  `plugin-engine-prefs.json`，不写进上表的 `model-disable-prefs.json`：层级为按账号的本机 override，默认是插件声明的
+  名称、显示、启用、全部模型开启，未改过的用户始终跟随插件声明；恢复默认即删除对应字段。停用是准入（新任务、换引擎、
+  自动化、Worker、其他电脑与受邀者都不能用），隐藏只让它不进模型选择器；模型选择器暂时没有它的「已隐藏」展开区。
+  字段与兼容约定见[插件引擎协议记录](protocol-compatibility/plugin-harnesses.md)。
+- 已有的停用记录升级后保持停用，不自动改成隐藏。停用条带上的「改为隐藏」一步完成两项修改。
+- 设置页左栏把已隐藏和已停用的供应商各收进一个分组，排在列表末尾，标题带数量，默认折叠且每次打开
+  设置页都从折叠开始。常规列表因此只剩模型选择器里会出现的来源。正在看的供应商被隐藏或停用后保持
+  选中，所在分组自动展开一次；默认选中优先落在还在用的供应商上。「我分享的供应商」保持原样，不拆进
+  这两个分组。分组内的行不再重复「已隐藏／已停用」注记，仍可在组内拖动排序。
+
+实现见 `packages/model-providers/src/disableOverrides.ts`、`modelList.ts`，
+`apps/desktop/src/main/maker-host/model-disable-store.ts`，以及设置页的 `ProvidersSection.tsx`、
+`UnifiedModelList.tsx`、`OwnRemoteProviders.tsx`。回归见 `disableOverrides.test.ts`、
+`model-disable-store.test.ts`、`providerHandlers.test.ts`、`modelManagementActions.test.tsx`、
+`unifiedModelPanelRendering.test.tsx`，界面核对用 `pnpm ui:check --page model-categories --case two-axes`
+与 `--page provider-listing-consistency --case hidden-provider,hidden-provider-settings`。
+
+已知范围：「已隐藏」展开区目前只在 Desktop 的统一选择器里有。Mobile 选择器、IM `/model` 卡片与旧版
+分段列表按同一规则收起隐藏的供应商，但还没有展开入口；Mobile 上以及其他电脑上被隐藏的供应商，
+在选择器里通过收藏和当前任务保留。
+
 实现核对须区分上游原始目录与执行端活动目录：当前仍有客户端精简陈列投影，见
 [已知实现差异](model-catalog-maintenance.md#visibility)。该说明不是对本节合同的豁免；
 不得仅因代码仍在筛选就反向修改产品规则，也不能未验证便声称两者已一致。
 
 ### 辅助模型的直接调用
+
+辅助选择复用统一模型面板，但不显示 Agent 配置；仅列出已有直接调用支持的来源。
+本机 OpenAI 订阅与聊天使用同一账号池模型目录；每次轻量请求按所选供应商分配账号，
+复用现有 OAuth 读取及发送前校验，结束后释放占用，不启动 Agent、不绑定聊天上下文。
+Claude 订阅仍只供内置 Claude Code CLI 使用，不进入直接辅助调用。
+开发阶段曾保存的 `remote-cat:` 记录保留为不可用项，供用户移除或替换；文本、审核、
+语音及插件跟随辅助链时跳过该来源，绝不降级为同名本机来源。原生辅助执行及进程复用不在本次范围。
 
 辅助模型的自定义 HTTP 连接按实际文本调用能力准入，不继承聊天引擎因兼容模式产生的
 默认关闭状态。候选默认可见；连接模型配置中显式保存的 `defaultEnabled` 和用户显示
@@ -131,6 +197,21 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 回归：`compaction-settings-store.test.ts`、Codex `index.test.ts` 的 native compaction
 identity / canonical account history 场景，以及
 `provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
+
+### Codex 原生 TOML 的 UTF-8 BOM
+
+本机 Codex 配置读取（自定义上下文目录、插件桥接、上下文窗口、Browser companion 与
+历史归档定位）只容忍文件开头的**一个** UTF-8 BOM；profile TOML 使用同一解析规则。
+不 trim、不移除字符串中的 BOM，不把双 BOM 或其余损坏 TOML 当作空配置。
+各入口原有的抛错、告警或不可用语义不变。
+
+兼容只发生在解析内存副本，不为恢复启动而重写配置；插件追加仍保留原始文本（包括
+BOM、注释和用户值），并用原始快照参与现有原子写入的并发比对。
+随包原生 Codex `0.166.0` 已用隔离 home 实测接受单前导 BOM，因此启动仍读取原文件，
+不需要另存无 BOM 配置或迁移凭证。
+实现见 `maker-host/codex-config-toml.ts`；回归见 `codexCustomContextCatalog.test.ts`、
+`codexGlobalPlugins.test.ts` 与隔离 home／回环供应商的
+`codexContextSwitch.native.test.ts`（真实 `CodexAgent` 建会话、发送及冷恢复）。
 
 ## 3. 默认值演进与迁移
 
@@ -175,6 +256,55 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
 
+### Pi 自定义 Chat 线路的存储与长缓存能力
+
+当指定连接和型号因 `store`（#11023）或 `prompt_cache_retention`（#12771）被上游拒绝时，
+可在执行端当前 owner 的
+`model-catalog-overrides.json` 中合并以下稀疏覆盖；保留该文件的其它内容，不编辑临时
+`models.json`。键使用活动目录的连接 ID（URL 编码）与原始模型 ID，不使用显示名称。
+
+```json
+{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false,"supportsLongCacheRetention":false}}}}}
+```
+
+如果上游拒绝 `prompt_cache_retention`，将 `perAgent.pi.supportsLongCacheRetention`
+设为 `false` 即可让 Pi 的 Chat 请求省略该字段。它只接受 `false`；删除后恢复 Pi 原生判断。
+两个覆盖独立，只设置上游需要的字段。
+
+`supportsStore` 只接受布尔值，且只允许写在 `perAgent.pi`；`base`、其它引擎及字符串值
+均会使该条覆盖隔离。只在自定义供应商的 Pi `openai-completions` 启动投影中生效：
+`false` 让 Pi 不发送 `store`，`true` 保留 Pi 对该字段的原生发送行为（不是要求保存回复）。
+该字段与现有兼容元数据合并，显式覆盖优先；不改端点、认证、路由、工具或思考档位。
+未配置的连接和型号保持原行为，不按 TrueFoundry 名称或 Gemini ID 推断兼容性。
+
+手改文件后，先刷新模型目录，再重启该任务的 Pi 运行实例；也可等待在途请求结束后重启
+执行端 Cindy。仅重启 Pi 不会重新读取覆盖文件，仍会使用内存中的旧目录。
+恢复默认删除这一个字段，并按上述步骤重新加载；它随连接/型号 ID 保存，更改该连接的
+上游后应重新核对或删除。
+这不是服务端目录字段，不自动下发或修改用户的故障连接；旧客户端隔离不认识的条目，
+文件原文保留。无需服务端或自建中转改动，手机控制同一执行端时沿用其配置。
+实现为 `localCatalogOverrides.ts` 与 `pi-native-catalog.ts`，持久化、投影和真实 Pi 回归分别见
+`model-catalog-override-store.test.ts`、`piNativeProviders.test.ts`、`piGoogleChat.e2e.test.ts`。
+
+### Pi Chat 工具 ID 上限
+
+官方 OpenAI Chat 端点 `https://api.openai.com/v1` 在生产启动投影中默认声明 64 字符
+工具 ID 上限。仅按实际端点和 `openai-completions` API 判定，不按模型名、显示名或
+保存的预设推断；Responses 保留原生处理，未知网关不自动继承此声明。
+
+已确认受同样限制、且允许改写工具 ID 的自定义网关，可使用上述同一持久覆盖文件：
+
+```json
+{"version":1,"patches":{"connection-id:production-chat":{"perAgent":{"pi":{"maxToolCallIdLength":64}}}}}
+```
+
+仅接受 `64` 或 `null`，仅允许 `perAgent.pi`，且只对 Chat API 生效。`null` 明确关闭
+缩短，删除字段恢复端点默认。不要给依赖签名 ID 的 Gemini 线路配置 `64`。
+字段随连接和模型身份保存，刷新目录并重启 Pi 后生效；不修改临时 `models.json`，
+不自动改写用户配置。更换上游时应重新核对或删除这项覆盖。配置合并、owner 隔离和
+旧客户端未知条目的处理与上节一致。真实生产配置到 HTTP 的覆盖见
+`piGoogleChat.e2e.test.ts`，别名和未知线路保护见 `pi-agent.integration.test.ts`。
+
 ### 请求体积控制
 
 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 是 Desktop／Node Host 宿主进程的隐藏环境开关，不新增
@@ -199,6 +329,24 @@ Codex 的回退上限为 **42 MiB**，不会恢复到原来的 128 MiB，Claude 
 
 实现与回归见 `apps/desktop/src/main/maker-host/inlineImagePreprocessor.ts` 及
 `__tests__/inlineImagePreprocessor.test.ts`。
+
+### 全局快捷键
+
+`XDT_DISABLE_GLOBAL_SHORTCUTS` 是 Desktop 的隐藏进程环境开关，适用于开发版（含
+`--isolated` 沙箱）与打包版，不进入设置页或持久化配置。只有值为字符串 `1` 时才跳过
+语音输入与区域截图的全局快捷键注册，未设置或其他值均保持原有行为。修改启动环境后
+需重启进程；移除开关后重启即恢复用户已保存的快捷键，不清空或写回设置。
+经 `restart:desktop:remote` 新开 Terminal 启动时，启动器会将此变量转发给开发进程。
+
+语音输入的 Electron 全局注册、macOS 修饰键／功能键原生监听、Windows 原生监听及其
+功能键保留注册均会跳过；区域截图同样跳过全局注册。主动跳过视为成功，不报快捷键占用、
+不重试恢复或提示重启。每个进程仅记录一行 info 日志，由语音输入初始化入口统一记录。
+输入框麦克风按钮、长按输入框、renderer 内的按键处理与浮层 Escape 等临时快捷键不受影响。
+
+实现入口：`apps/desktop/src/main/voice-input/global.ts` 的 `setVoiceInputGlobalShortcut`、
+`recoverPendingNativeShortcutRegistration` 与 `registerGlobalVoiceInputIpc`，以及
+`apps/desktop/src/main/region-screenshot/index.ts` 的 `syncShortcut`。
+启动环境转发见 `scripts/restart-desktop-remote.mjs` 的 `devEnvEntries`。
 
 ## 6. 设置搜索与页面定义
 

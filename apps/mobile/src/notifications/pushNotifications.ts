@@ -43,7 +43,7 @@ interface PushRegistrationStatus {
   stage: string;
   appVariant?: string;
   apnsEnv?: string;
-  endpoints?: Array<{ service: 'device-link' | 'chat'; outcome: 'accepted' | 'unsupported' | 'failed'; status?: number }>;
+  endpoints?: Array<{ service: 'device-link' | 'chat'; outcome: 'accepted' | 'unsupported' | 'failed'; status?: number; deliveryConfigured?: boolean }>;
 }
 
 function httpErrorStatus(error: unknown): number | undefined {
@@ -254,16 +254,20 @@ async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointR
         const supported = Platform.OS === 'ios' || (await import('./nativeTaskBadge')).supportsTaskBadgePush();
         requestBody = { ...body, ...(supported ? { taskBadgeVersion: 1 } : {}) };
       }
-      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(requestBody ? { body: requestBody } : {}) });
-      outcomes.push({ service, outcome: 'accepted' });
-      return { service: target.service, registered: true };
+      const response = await apiFetch<{ deliveryConfigured?: unknown } | null>(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(requestBody ? { body: requestBody } : {}) });
+      // Older servers can accept tokens with no sending provider configured.
+      // Only an explicit capability allows Android to release the direct channel.
+      const deliveryConfigured = method === 'PUT' && typeof response?.deliveryConfigured === 'boolean'
+        ? response.deliveryConfigured : undefined;
+      outcomes.push({ service, outcome: 'accepted', ...(deliveryConfigured === undefined ? {} : { deliveryConfigured }) });
+      return { service: target.service, deliveryConfigured: deliveryConfigured === true };
     }
     catch (error) {
       // An older chat server can roll forward independently of existing task pushes.
       const status = httpErrorStatus(error);
       if (target.optional && [404, 405].includes(status ?? 0)) {
         outcomes.push({ service, outcome: 'unsupported', ...(status ? { status } : {}) });
-        return { service: target.service, registered: false };
+        return { service: target.service, deliveryConfigured: false };
       }
       outcomes.push({ service, outcome: 'failed', ...(status ? { status } : {}) });
       throw error;
@@ -271,9 +275,9 @@ async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointR
   }));
   if (registration) registration.endpoints = outcomes;
   for (const result of results) if (result.status === 'rejected') throw result.reason;
-  const registered = (service: string) => results.some(result => result.status === 'fulfilled'
-    && result.value.service === service && result.value.registered);
-  return { task: registered('task'), chat: registered('chat') };
+  const configured = (service: string) => results.some(result => result.status === 'fulfilled'
+    && result.value.service === service && result.value.deliveryConfigured);
+  return { task: configured('task'), chat: configured('chat') };
 }
 
 function pushDeleteBody(token: string | null): { token: string } | undefined {
@@ -444,7 +448,9 @@ async function syncPushRegistrationInternal(
       && isMobileAuthOwnerCurrent(eventRegistration.owner) && eventRegistration.token === opts.deviceToken.data;
     if (registered) return 'skipped';
   }
-  if (!opts.enabled) eventRegistration = null;
+  // A new registration or opt-out supersedes the previous successful state.
+  // Until it succeeds, recovery must retry even when initiated outside the bridge.
+  eventRegistration = null;
 
   if (!opts.enabled) {
     const registeredRealms = await readPushRealms(
@@ -553,7 +559,8 @@ async function syncPushRegistrationInternal(
   }
   await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
   eventRegistration = { generation: lifecycleGeneration, owner, token: body.token };
-  // The shared native service may stop only when both notification consumers have cloud delivery.
+  // Both services must explicitly report configured cloud delivery before auto
+  // mode may stop the shared native fallback. Registration alone is insufficient.
   if (Platform.OS === 'android') setAndroidPushAvailability(delivery.task && delivery.chat ? 'available' : 'unavailable');
   mobileDebugLog('info', 'network', 'push registration', { stage: 'registered', realm,
     appVariant: body.appVariant, apnsEnv: body.apnsEnv });
@@ -564,12 +571,22 @@ export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
   deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
+  /** Profile/foreground recovery can reuse a confirmed registration for this owner. */
+  skipConfirmed?: boolean;
   /** Android settings opt-in, after system permission and before token acquisition. */
   onPermissionGranted?: () => Promise<void>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   const owner = getMobileAuthOwner();
   return runPushMutation(async () => {
+    if (opts.enabled && opts.skipConfirmed) {
+      // A Settings opt-out may have run while this recovery was queued.
+      if (!await readPushEnabled()) return 'skipped';
+      if (lifecycleGeneration === pushLifecycleGeneration && isMobileAuthOwnerCurrent(owner)
+        && eventRegistration?.generation === lifecycleGeneration && isMobileAuthOwnerCurrent(eventRegistration.owner)) {
+        return 'registered';
+      }
+    }
     const scope = capturePushStateScope(getActiveMobileSessionRealm());
     const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
     // A token-listener callback that dedupes or is fenced must not replace the evidence
@@ -666,28 +683,31 @@ export function unregisterPushTokenBestEffort(
  */
 async function retryPendingUnregisterInternal(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
-  if (!isPushSupported()) return;
+): Promise<boolean> {
+  if (!isPushSupported()) return true;
   const realm = getActiveMobileSessionRealm();
   const stateScope = capturePushStateScope(realm);
   const pendingRealms = await readPushRealms(
     PUSH_PENDING_UNREGISTER_KEY,
     stateScope,
   );
-  if (!pendingRealms.has(realm)) return;
+  if (!pendingRealms.has(realm)) return true;
+  eventRegistration = null;
 
   try {
     const token = await getNativeDeviceTokenBestEffort();
     await mutatePushTokens(apiFetch, realm, 'DELETE', pushDeleteBody(token));
     await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
     await removePushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
+    return true;
   } catch {
-    // 仍失败：保留当前区域标记，下次同区登录继续补偿。
+    // 保留标记，通知调用方在同区域恢复连接时补偿。
+    return false;
   }
 }
 
 export function retryPendingUnregister(
   apiFetch: AuthedApiFetch,
-): Promise<void> {
+): Promise<boolean> {
   return runPushMutation(() => retryPendingUnregisterInternal(apiFetch));
 }

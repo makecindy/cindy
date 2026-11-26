@@ -6,6 +6,7 @@ import type { InteractionRequest, InteractionDecision, AutoReviewDecision } from
 import { messages, sessions } from '../localDb/schema.js';
 import type { CurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messageToCamel } from '../localDb/mapper.js';
+import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { createLogger } from '../logger.js';
 import { getDesktopMcpToolApprovalPolicy } from '../maker-host/mcp-tool-approval-policy.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
@@ -28,6 +29,10 @@ export interface McpAppsServicePorts {
   send: McpAppsHostDeps['sendMessage'];
   pluginFiles?: McpAppsHostDeps['pluginFiles'];
   downloadFile?: McpAppsHostDeps['downloadFile'];
+  composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
+  hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
+  sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
   disposeDocument?: McpAppsHostDeps['disposeDocument'];
 }
 
@@ -48,6 +53,10 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
   };
   const host = new McpAppsHost({
     downloadFile: ports.downloadFile,
+    composerDrag: ports.composerDrag ? async sessionId => !(await assertSession(sessionId)).session.remoteHostId : undefined,
+    composerCaller: ports.composerCaller,
+    hasComposerAttachment: ports.hasComposerAttachment,
+    sendComposerAttachment: ports.sendComposerAttachment,
     pluginFiles: ports.pluginFiles,
     owner: currentOwner,
     config: readAppServer,
@@ -68,8 +77,9 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
         config.plugin?.assertCurrent(sessionId);
       });
     },
-    readCard: async (sessionId, clientId) => {
+    readCard: async (sessionId, clientId, localComposer) => {
       const { owner, session } = await assertSession(sessionId);
+      if (localComposer && session.remoteHostId) throw new Error('MCP_APP_OWNER_ONLY');
       const [row] = await owner.client.drizzle
         .select({ content: messages.content, meta: messages.agentMeta })
         .from(messages)
@@ -125,6 +135,10 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
           .returning();
         if (currentOwner() !== owner || !updated[0]) throw new Error('MCP_APP_CARD_UNAVAILABLE');
         ports.publishMessage(owner, sessionId, messageToCamel(updated[0]));
+        await recomputePrRefsForSession(sessionId, {
+          dbClient: owner.client,
+          isCurrent: () => currentOwner() === owner,
+        });
       } else {
         // Only the pending card may be inserted. Completion cannot resurrect a deleted grant.
         if (record.result !== undefined || record.cancelled !== undefined)
@@ -247,6 +261,8 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
               ...(assessment
                 ? {
                     autoReviewUnavailable: assessment.unavailable === true,
+                    ...(assessment.unavailable === true && assessment.unavailableReason === 'quota_exhausted'
+                      ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
                     autoReviewReason: assessment.reason,
                   }
                 : {}),

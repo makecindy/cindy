@@ -1,11 +1,40 @@
+import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ProviderGroupStrategy } from './providerGroup.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
+import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
 /** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
 export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
+/** Anonymous, advisory new-assignment facts. Never a reservation or a grant. */
+export interface SubscriptionPoolScheduling {
+  version: 1;
+  /** Distinct, currently eligible accounts in the pool's quota band. */
+  accounts: number;
+  /** Load of the account the pool's own policy would select next. */
+  running: number;
+  /** Includes reservations; used to account for group picks not observed by this read yet. */
+  totalRunning: number;
+  full: boolean;
+  urgency: number | null;
+  fiveHourTight: boolean;
+}
+
+/** Unknown/old replies cannot assert extra capacity; project fields explicitly. */
+export function parseSubscriptionPoolScheduling(raw: unknown): SubscriptionPoolScheduling | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  if (value.version !== 1 || !count(value.accounts) || !count(value.running) || !count(value.totalRunning)
+    || value.running > value.totalRunning || typeof value.full !== 'boolean'
+    || typeof value.fiveHourTight !== 'boolean'
+    || !(value.urgency === null || (typeof value.urgency === 'number' && Number.isFinite(value.urgency) && value.urgency >= 0))
+    || (value.accounts > 0 && value.full)) return null;
+  return { version: 1, accounts: value.accounts, running: value.running, totalRunning: value.totalRunning,
+    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight };
+}
 /** Account-scoped target for the existing Codex reset control plane; never a model route. */
 export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
@@ -41,6 +70,7 @@ interface SubscriptionCodexUsageWindow {
 }
 /** One Codex app-server quota bucket, keyed by its limit id. */
 export interface SubscriptionCodexUsageBucket {
+  planType?: string;
   limitId: string | null;
   limitName: string | null;
   updatedAt: number | null;
@@ -50,17 +80,25 @@ export interface SubscriptionCodexUsageBucket {
 /** The account's own quota snapshot, shown with the provider's existing usage card. */
 export interface SubscriptionAccountUsage {
   claude?: ClaudeSubscriptionUsageSnapshot;
+  /** A plugin engine account's own usage, as its plugin reports it (2026-11-23). */
+  plugin?: GhostHarnessUsage;
   codex?: {
+    planType?: string;
     buckets: Record<string, SubscriptionCodexUsageBucket>;
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
 export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+  apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
   legacy?: boolean;
   identity?: string;
   plan?: string;
+  planTier?: string;
+  /** Official CLI display name; presentation only, not an entitlement. */
+  planDisplayName?: string;
+  planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
   /** Host-selected reset target. Imported accounts retain their original connection and settings. */
@@ -68,7 +106,7 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
-  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch';
+  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
@@ -90,12 +128,29 @@ export interface SubscriptionPoolView {
    * offers no shortcut for it. Older hosts omit it; absence keeps the shortcut as before.
    */
   defaultAdded?: boolean;
+  /**
+   * 2026-11-23: the provider is a plugin engine (or a provider taken out of one). Sign-in goes
+   * through the plugin's methods; older hosts never answer for plugin engines.
+   */
+  pluginEngine?: PluginEnginePoolInfo;
+}
+export interface PluginEnginePoolInfo {
+  /** `<plugin instance>:<engine id>`. */
+  engineKey: string;
+  /** Empty: the plugin only reports its original login, accounts cannot be added. */
+  methods: GhostHarnessAccountMethod[];
+  /** A provider the user took an account out into. */
+  separate?: true;
 }
 export type SubscriptionAccountCommand =
   | { action: 'read'; providerId: string; taskId?: string }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
-  | { action: 'add'; providerId: string; loginKey: string }
+  /**
+   * `methodId` / `secret` (2026-11-23): a plugin engine's sign-in method and, for a secret method,
+   * the value typed on this computer (never sent between computers, stored or logged).
+   */
+  | { action: 'add'; providerId: string; loginKey: string; methodId?: string; secret?: string }
   /** Explicit wizard intent. Older hosts reject this action instead of reusing a different account. */
   | {
       action: 'connect';
@@ -114,9 +169,10 @@ export type SubscriptionAccountCommand =
   | { action: 'merge'; providerId: string; target: string }
   /** 2026-11-13: delete a provider Cindy created; its accounts stop being used (logins stay). */
   | { action: 'remove-provider'; providerId: string }
-  | { action: 'login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
   | { action: 'remove'; providerId: string; accountId: string }
+  | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {
       action: 'configure';
       providerId: string;
@@ -155,9 +211,14 @@ export interface SubscriptionSessionAccount {
   number: number;
   identity?: string;
   plan?: string;
+  planTier?: string;
+  planDisplayName?: string;
+  planType?: string;
   paused: boolean;
   status: SubscriptionAccountView['status'];
   usage?: SubscriptionAccountUsage;
+  /** Time of the last complete account usage read, in Unix milliseconds. */
+  usageUpdatedAt?: number;
   /**
    * Only for a `model` query on a newer host: the bound account cannot take that model now
    * (remembered failure, exhausted trusted quota or signed out). Replacement admission is reported
@@ -228,11 +289,16 @@ export function parseSubscriptionSessionAccountView(
       number: account.number as number,
       ...(text(account.identity) ? { identity: text(account.identity) } : {}),
       ...(text(account.plan) ? { plan: text(account.plan) } : {}),
+      ...(text(account.planTier) ? { planTier: text(account.planTier) } : {}),
+      ...(text(account.planDisplayName) ? { planDisplayName: text(account.planDisplayName) } : {}),
+      ...(text(account.planType) ? { planType: text(account.planType) } : {}),
       paused: account.paused === true,
       status: account.status as SubscriptionAccountView['status'],
       ...(usage && typeof usage === 'object' && !Array.isArray(usage)
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
+      ...(typeof account.usageUpdatedAt === 'number' && Number.isFinite(account.usageUpdatedAt)
+        && account.usageUpdatedAt > 0 ? { usageUpdatedAt: account.usageUpdatedAt } : {}),
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
       ...((account.blocked === true || (route.routeProviderId && account.paused === true)) && typeof account.switchAvailable === 'boolean'
         ? { switchAvailable: account.switchAvailable } : {}),
@@ -271,4 +337,16 @@ export function isSubscriptionProvider(value: unknown): value is SubscriptionPro
  */
 export function isSubscriptionPoolProviderIdShape(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z0-9_-]{1,40}$/.test(value);
+}
+/**
+ * A plugin engine provider (2026-11-23): `acp-plugin:<plugin instance>:<engine id>`, or a provider
+ * taken out of it (`…~<8 lowercase letters or digits>`). The executing host resolves it.
+ */
+export function isPluginEngineProviderIdShape(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 300
+    && /^acp-plugin:[A-Za-z0-9._-]{1,200}:[a-z][a-z0-9-]{0,31}(?:~[a-z0-9]{8})?$/.test(value);
+}
+/** Any provider whose accounts the account channel manages. */
+export function isAccountProviderIdShape(value: unknown): value is string {
+  return isSubscriptionPoolProviderIdShape(value) || isPluginEngineProviderIdShape(value);
 }

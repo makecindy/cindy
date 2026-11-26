@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -37,7 +37,9 @@ import { cn } from '@/lib/utils';
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
+  modelGroupWeight,
   type ModelGroupCandidate,
   type ModelGroupResolveResult,
   type ModelGroupRoute,
@@ -48,6 +50,9 @@ import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsSubpageScroll } from './useSettingsSubpageScroll';
 
 const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -101,7 +106,35 @@ function NameRow({ value, label, hint, onCommit }: { value: string; label: strin
   );
 }
 
-export function ModelGroupsSection() {
+/** 「按权重」时每个来源的权重：失焦或回车时保存，1–1000，空着或不是数字时恢复原值；保存失败也恢复成已保存的值。 */
+function WeightInput({ value, label, onCommit }: { value: number; label: string; onCommit(next: number): Promise<boolean> }) {
+  const [draft, setDraft] = useState(String(value));
+  const commit = () => {
+    const parsed = Number(draft.trim());
+    if (!draft.trim() || !Number.isFinite(parsed)) { setDraft(String(value)); return; }
+    const next = modelGroupWeight(parsed);
+    setDraft(String(next));
+    if (next !== value) void onCommit(next).then((saved) => { if (!saved) setDraft(String(value)); });
+  };
+  return (
+    <SettingsTextInput
+      aria-label={label}
+      data-settings-search-action="Sets how many new tasks one source gets when a route picks by weight"
+      data-model-group-weight
+      value={draft}
+      size="sm"
+      inputMode="numeric"
+      maxLength={4}
+      onChange={(next) => setDraft(next.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+      className="w-[64px] shrink-0"
+      inputClassName="text-right tabular-nums"
+    />
+  );
+}
+
+export function ModelGroupsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { confirm } = useConfirmDialog();
@@ -112,6 +145,12 @@ export function ModelGroupsSection() {
   // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const [view, setView] = useState<View>({ kind: 'list' });
+  const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
+  const { entry, activation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (entry?.tab === 'model-groups') setView({ kind: 'list' });
+  }, [entry, activation]);
+  const captureScroll = useSettingsSubpageScroll(scrollRef, route ? 1 : 0, activation);
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -146,15 +185,19 @@ export function ModelGroupsSection() {
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
 
+  const openRoute = (id: string) => {
+    captureScroll();
+    setView({ kind: 'route', id });
+  };
   const addRoute = async () => {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
-    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
+    if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) openRoute(route.id);
   };
   const back = () => setView({ kind: 'list' });
+  useSettingsSubpageBack(route ? back : null);
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
-  const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
-  if (view.kind === 'route' && route) {
+  if (route) {
     const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
       const candidates = [...current.candidates];
       const [item] = candidates.splice(index, 1);
@@ -178,6 +221,7 @@ export function ModelGroupsSection() {
         description: t('modelGroups.settings.deleteRouteConfirmDescription'),
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
+        confirmVariant: 'destructive',
       })) return;
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
@@ -232,10 +276,32 @@ export function ModelGroupsSection() {
                     />
                   }
                 />
+                <SettingsRow
+                  title={t('modelGroups.settings.autoSwitch.title')}
+                  hint={t('modelGroups.settings.autoSwitch.hint')}
+                  wrap
+                  trailing={
+                    <Switch
+                      data-setting-id={modelGroupsSettings.routes.id}
+                      data-model-group-auto-switch
+                      checked={modelGroupAutoSwitchOn(route)}
+                      aria-label={t('modelGroups.settings.autoSwitch.title')}
+                      onCheckedChange={(on) => void updateRoute(route.id, (current) => {
+                        // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
+                        const { autoSwitch: _was, ...rest } = current;
+                        void _was;
+                        return on ? rest : { ...rest, autoSwitch: false };
+                      })}
+                    />
+                  }
+                />
               </SettingsCard>
             </SettingsSection>
 
-            <SettingsSection title={t('modelGroups.settings.sources')} description={t('modelGroups.settings.sourcesHint')}>
+            <SettingsSection
+              title={t('modelGroups.settings.sources')}
+              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : t('modelGroups.settings.sourcesHint')}
+            >
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
                   const names = namesOf(candidate);
@@ -249,7 +315,7 @@ export function ModelGroupsSection() {
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
                           <SettingsRowIcon>
-                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind}
+                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
                               colorClass="text-[var(--text-primary)]" withMargin={false} />
                           </SettingsRowIcon>
                         </span>
@@ -260,6 +326,24 @@ export function ModelGroupsSection() {
                       className={cn(candidate.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                       trailing={
                         <span className="flex shrink-0 items-center gap-1">
+                          {route.strategy === 'weighted' && (
+                            <span className="mr-2 flex items-center">
+                              <WeightInput
+                                key={`${modelGroupCandidateKey(candidate)}:${modelGroupWeight(candidate.weight)}`}
+                                value={modelGroupWeight(candidate.weight)}
+                                label={t('modelGroups.settings.weightAria', { name: label })}
+                                onCommit={(weight) => updateRoute(route.id, (current) => ({
+                                  ...current,
+                                  candidates: current.candidates.map((item, i) => {
+                                    if (i !== index) return item;
+                                    const { weight: _weight, ...rest } = item;
+                                    void _weight;
+                                    return weight === 1 ? rest : { ...rest, weight };
+                                  }),
+                                }))}
+                              />
+                            </span>
+                          )}
                           <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => void move(index, -1)}><ArrowUp size={15} /></RowIconButton>
                           <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.candidates.length - 1} onClick={() => void move(index, 1)}><ArrowDown size={15} /></RowIconButton>
                           <RowIconButton label={t('modelGroups.settings.remove')}
@@ -389,7 +473,7 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
+      <ModelGroupsOverview config={config} onOpenRoute={openRoute} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
@@ -414,7 +498,7 @@ export function ModelGroupsSection() {
               title={item.name}
               hint={routeSummary(item)}
               chevron
-              onClick={() => setView({ kind: 'route', id: item.id })}
+              onClick={() => openRoute(item.id)}
             />
           ))}
           {config.routes.length === 0 && (

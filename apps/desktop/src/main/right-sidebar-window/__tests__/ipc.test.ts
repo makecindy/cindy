@@ -88,7 +88,7 @@ describe('right-sidebar-window IPC', () => {
   it('preserves a named plugin resource in the original window command', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);
-    const command = { type: 'open-plugin-task', sessionId: 's1', instanceId: 'planner', resourceViewId: 'board', resourceInput: { filter: 'open' } };
+    const command = { type: 'open-plugin-task', sessionId: 's1', instanceId: 'planner', resourceViewId: 'board', resourceInput: { filter: 'open' }, resourceWorkingDir: '/repo/worktrees/selected' };
     await handler({ sender: mainWebContents }, { command, allowOpen: true });
     expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
     await expect(handler({ sender: mainWebContents }, { command: { ...command, resourceInput: [] }, allowOpen: true })).rejects.toThrow();

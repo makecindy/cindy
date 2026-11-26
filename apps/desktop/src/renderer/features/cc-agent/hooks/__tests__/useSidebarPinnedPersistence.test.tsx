@@ -2,13 +2,16 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Sortable from 'sortablejs';
 
 import {
   setDataOwnerGeneration,
   __testing as dataOwnerTesting,
 } from '@/contexts/dataOwnerGeneration';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { __testing as sidebarOwnerTesting } from '@/lib/sidebarOwnerStorage';
-import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
+import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter, useSidebarFilterGc } from '../useSidebarFilter';
+import { PINNED_SORT_BY_KEY } from '../helpers/sidebarFilterCore';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
@@ -120,7 +123,148 @@ function renderFilter() {
   return renderHook(() => useSidebarFilter(new Set(), SNAPSHOT));
 }
 
+// Regression: mode switches used to reuse one saved set of project, creator, harness and time filters.
+it('restores separate sidebar filters across mode switches, resets and remounts', () => {
+  const mode = renderHook(useTaskListMode);
+  act(() => mode.result.current.setMode('tasks'));
+  const view = renderFilter();
+  act(() => {
+    view.result.current.toggleProject('/ordinary');
+    view.result.current.toggleCreator('teammate-a');
+    view.result.current.setVendor('pi');
+    view.result.current.setLastActivity('30d');
+    view.result.current.setHideAutomations(true);
+  });
+  const ordinary = { projects: ['local:/ordinary'], creators: ['teammate-a'], vendor: 'pi', lastActivity: '30d', hideAutomations: true };
+  const unrestricted = { projects: 'all', creators: 'all', vendor: 'all', lastActivity: 'all', hideAutomations: false };
+  act(() => mode.result.current.setMode('inbox'));
+  expect(view.result.current).toMatchObject(unrestricted);
+  act(() => {
+    view.result.current.toggleProject('/triage');
+    view.result.current.setCreatorsNone();
+    view.result.current.setVendor('codex');
+    view.result.current.setLastActivity('7d');
+    view.result.current.setHideAutomations(true);
+  });
+  const inbox = { projects: ['local:/triage'], creators: 'none', vendor: 'codex', lastActivity: '7d', hideAutomations: true };
+  view.unmount();
+  const reopened = renderFilter();
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(ordinary);
+  act(() => reopened.result.current.resetContentFilters());
+  act(() => mode.result.current.setMode('inbox'));
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => reopened.result.current.resetContentFilters());
+  expect(reopened.result.current).toMatchObject(unrestricted);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(unrestricted);
+});
+
+// Production entry: sidebar GC + useSidebarFilter; stale project filters fall back
+// to all after switching modes (PR #11559 / Greptile P2). Existing mode tests only
+// restore/reset filters and never run the orchestration guard. Minimal unit input:
+// two saved filters and different complete catalogues; also wait through empty load.
+// Standalone file: 2.48s (22 tests, default TMPDIR unset; LANG=zh_CN.UTF-8).
+it.each(['tasks', 'inbox'] as const)('cleans each mode independently when starting in %s', (initialMode) => {
+  const mode = renderHook(useTaskListMode);
+  const otherMode = initialMode === 'tasks' ? 'inbox' : 'tasks';
+  act(() => mode.result.current.setMode(otherMode));
+  const seed = renderFilter();
+  act(() => seed.result.current.toggleProject('/removed'));
+  act(() => mode.result.current.setMode(initialMode));
+  act(() => seed.result.current.toggleProject('/kept'));
+  seed.unmount();
+
+  const catalogues = {
+    [initialMode]: ['local:/kept'],
+    [otherMode]: ['local:/other-only'],
+  };
+  const view = renderHook(({ ready }) => {
+    const filter = useSidebarFilter(new Set(), SNAPSHOT);
+    const { mode: currentMode } = useTaskListMode();
+    useSidebarFilterGc(currentMode, ready ? catalogues[currentMode] : [], filter.gc);
+    return filter;
+  }, { initialProps: { ready: false } });
+  expect(view.result.current.projects).toEqual(['local:/kept']);
+  view.rerender({ ready: true });
+  act(() => mode.result.current.setMode(otherMode));
+  expect(view.result.current.projects).toBe('all');
+  act(() => mode.result.current.setMode(initialMode));
+  expect(view.result.current.projects).toEqual(['local:/kept']);
+});
+
 describe('pinned sidebar persistence', () => {
+  // 用户回归：最近活动下拖拽把显示顺序写成手动顺序。现有用例只测切换偏好，
+  // 未覆盖 reorder 入口。两条手动置顶在跨窗口切换时取消拖拽，拒绝反序回调；unit。
+  it('ignores drag reorders in recency mode and keeps manual dragging available', async () => {
+    durablePinnedOrder = ['older', 'newer'];
+    pinnedOrderIsAuthoritative = true;
+    const view = renderFilter();
+    const pendingDrag = view.result.current.setManualPinnedOrder;
+    const scope = document.createElement('div');
+    scope.dataset.sortableScope = 'pinned';
+    const row = scope.appendChild(document.createElement('div'));
+    const onCancel = vi.fn(() => {
+      expect(view.result.current.pinnedSortBy).toBe('manual');
+      void pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    Sortable.dragged = row;
+    document.addEventListener('pointercancel', onCancel, { once: true });
+    try {
+      act(() => {
+        localStorage.setItem(PINNED_SORT_BY_KEY, 'recency');
+        window.dispatchEvent(new StorageEvent('storage', { key: PINNED_SORT_BY_KEY }));
+      });
+      expect(onCancel).toHaveBeenCalledOnce();
+    } finally {
+      Sortable.dragged = null;
+      document.removeEventListener('pointercancel', onCancel);
+    }
+
+    await act(async () => {
+      await pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    expect(view.result.current.pinnedSortBy).toBe('recency');
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    expect(durablePinnedOrder).toEqual(['older', 'newer']);
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+
+    act(() => view.result.current.setPinnedSortBy('manual'));
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    await act(async () => {
+      await view.result.current.setManualPinnedOrder(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    expect(view.result.current.manualPinnedOrder).toEqual(['newer', 'older']);
+    expect(durablePinnedOrder).toEqual(['newer', 'older']);
+  });
+
+  // 测试价值：置顶排序偏好可保存但不能改掉用户的拖拽顺序。现有用例只覆盖顺序写入。
+  // 最小输入：已有两条手动置顶，切到最近活动后重新挂载；并验证另一窗口切回。unit。
+  it('remembers display sorting independently of the durable manual pins', () => {
+    durablePinnedOrder = ['older', 'newer'];
+    pinnedOrderIsAuthoritative = true;
+    const view = renderFilter();
+    expect(view.result.current.pinnedSortBy).toBe('manual');
+    act(() => view.result.current.setPinnedSortBy('recency'));
+    expect(view.result.current.pinnedSortBy).toBe('recency');
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+    view.unmount();
+
+    const reopened = renderFilter();
+    expect(reopened.result.current.pinnedSortBy).toBe('recency');
+    act(() => {
+      localStorage.removeItem(PINNED_SORT_BY_KEY);
+      window.dispatchEvent(new StorageEvent('storage', { key: PINNED_SORT_BY_KEY }));
+    });
+    expect(reopened.result.current.pinnedSortBy).toBe('manual');
+    expect(reopened.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    act(() => reopened.result.current.setPinnedSortBy('recency'));
+    act(() => reopened.result.current.setPinnedSortBy('manual'));
+    expect(localStorage.getItem(PINNED_SORT_BY_KEY)).toBeNull();
+  });
+
   it('optimistically removes every legacy Windows project-pin casing variant', () => {
     (window.electronAPI as { platform: string }).platform = 'win32';
     durablePinnedOrder = [

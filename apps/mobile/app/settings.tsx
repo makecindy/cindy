@@ -1,3 +1,7 @@
+import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
+import { supportsAppWallpaper, useWallpaper, wallpaperRaisedFill } from '@/theme/wallpaper';
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
+import { SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useUpdates } from 'expo-updates';
@@ -64,6 +68,7 @@ import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHost
 import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
 import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
 import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
+import { openManualGiftCard } from '@/gift-card/giftCardIntent';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -81,6 +86,7 @@ import {
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
+import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
 import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
@@ -104,6 +110,7 @@ import {
   ChoicePickerRow,
   InfoRow,
   SettingsGroup,
+  SettingsCardFill,
   SettingsSwitchRow,
   useSettingsRowStyles,
 } from '@/session/SettingsGroupRows';
@@ -151,11 +158,16 @@ function hasRunningRemoteTasks(): boolean {
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
   const rowStyles = useSettingsRowStyles();
-  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const appIconChoice = useAppIconChoice();
+  const { colors, mode, preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const { selected: wallpaper } = useWallpaper();
+  const headerHeight = useOptionalHeaderHeight();
   const router = useRouter();
   const push = useGuardedPush();
   const auth = useAuth();
   const { t } = useTranslation();
+  const wallpaperLabel = t('settings.appearance.wallpaper.title');
+  const wallpaperName = t(`settings.appearance.wallpaper.options.${wallpaper}`);
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
   const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
@@ -595,8 +607,7 @@ export default function SettingsScreen() {
   const resumeAnalyticsReporting = useCallback(async () => {
     const status = await initMobileTapdb();
     if (!status.ok) return;
-    const userId = auth.user?.id;
-    if (userId) await setTapdbUser(userId);
+    await setTapdbUser(auth.user?.tapdbChargeAlias, auth.user?.tapdbUsageAlias);
   }, [auth.user?.id]);
 
   const toggleAnalytics = useCallback(async () => {
@@ -709,6 +720,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
+      <WallpaperBackdrop />
       <SimpleStackHeader
         scrollEdge
         backTestID="settings.backButton"
@@ -717,6 +729,7 @@ export default function SettingsScreen() {
         titleTestID="settings.title"
       />
 
+      <SettingsCardFill.Provider value={wallpaper === 'none' ? undefined : wallpaperRaisedFill(colors.surfaceElevated, mode)}>
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.scroll">
         {/* 账号头部:身份 + 连接状态一次性呈现,下面分组不再重复 */}
         <View style={styles.headerCard} testID="settings.accountHeader">
@@ -929,6 +942,17 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 礼品卡:与外部链接共用根级兑换面板,这里只负责打开。 */}
+        <SettingsGroup footer={t('giftCard.settingsFooter')} testID="settings.giftCard" title={t('giftCard.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('giftCard.action')}
+            chevron={false}
+            label={t('giftCard.action')}
+            onPress={openManualGiftCard}
+            testID="settings.giftCard.redeem"
+          />
+        </SettingsGroup>
+
         <SettingsGroup title={t('sharedTask.title')}>
           <ActionInfoRow
             accessibilityLabel={t('sharedTask.manageSharing')}
@@ -959,7 +983,15 @@ export default function SettingsScreen() {
               value={t(`settings.appearance.options.${themePreference}`)}
             />
           </NativePullDownMenu>
+          {supportsAppWallpaper(Platform.OS) && <ActionInfoRow
+            label={wallpaperLabel}
+            value={wallpaperName}
+            accessibilityLabel={`${wallpaperLabel}: ${wallpaperName}`}
+            onPress={() => push('/settings/wallpaper')}
+            testID="settings.wallpaper.open"
+          />}
           <UserBubbleSettings />
+          {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
@@ -1148,6 +1180,8 @@ export default function SettingsScreen() {
           ) : null}
         </View>
       </ScrollView>
+      </SettingsCardFill.Provider>
+      {wallpaper !== 'none' && headerHeight > 0 && <SessionHeaderNativeBlur height={headerHeight} />}
       <SheetModal
         nativePresentation
         visible={backgroundPickerOpen}

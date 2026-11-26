@@ -16,6 +16,26 @@ export type AutoReviewDecision = {
   verdict: 'allow' | 'block' | 'ask';
   reason?: string;
   /**
+   * `true` = `reason` 是 Cindy 自己的确定性文案 —— 动作文本超限、证据不足、审阅器
+   * 故障、授权范围变化。内容是固定句式，不含用户数据，可以原样进 UI / 日志 / 诊断通道。
+   *
+   * 缺省即视为**模型自由文本**：可能含参数、路径、片段等用户内容，一律不得外泄。
+   * 只有显式标成 policy 的 reason 才允许进诊断通道（见 codex 的 MCP 拦截通知）。
+   */
+  policyReason?: true;
+  /**
+   * `true` = `reason` 是**宿主自己写死的判定**（delegate 在没有调用模型时给出的固定文案），
+   * 不是模型输出。模型判定永远不带这个标记 —— 模型只贡献 `reason` 里的纯文本。
+   *
+   * 与 `policyReason` 的分工：`policyReason` 标在**最终决定**上，由 maker-core 依据来源
+   * 自行加；本字段由 delegate 声明「这条 reason 出自宿主」。maker-core 见到它就把它转成
+   * `policyReason`（可进诊断 / UI 通道），其余 delegate 结果一律当模型自由文本处理。
+   *
+   * 委托方解析模型输出时是**新建对象**（不展开模型给的 JSON），所以模型无法自己带上这个
+   * 标记；只有宿主代码路径会标它。
+   */
+  hostReason?: true;
+  /**
    * `true` = 这个 `ask` 来自**审阅器没跑起来**（delegate 缺失 / 超时 / 抛错 / 返回非法），
    * 不是模型判定动作危险。
    *
@@ -30,6 +50,8 @@ export type AutoReviewDecision = {
    * 是这次请求没法审，属于正常判定。
    */
   unavailable?: boolean;
+  /** Safe Host diagnostic; model decision parsers never accept this field. */
+  unavailableReason?: 'no_available_model' | 'quota_exhausted';
 };
 
 /**
@@ -38,6 +60,16 @@ export type AutoReviewDecision = {
  * （见 apps/desktop 的 chat.remoteError.*），不新增协议、不新增事件类型。
  */
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
+export const AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE = 'AUTO_REVIEW_NO_AVAILABLE_MODEL';
+export const AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE = 'AUTO_REVIEW_UNAVAILABLE_QUOTA';
+const AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT =
+  'An automatic review provider has exhausted its quota. Check its usage or billing, '
+  + 'or customize Auxiliary models in Settings on the computer running the Agent. '
+  + 'Actions that need review still require your confirmation.';
+const AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT =
+  'No automatic review model is available. On the computer running the Agent, '
+  + 'enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. '
+  + 'Actions that need review still require your confirmation.';
 
 /**
  * 未落地 i18n 的宿主看到的兜底英文。三条 Harness 共用这一句。少打断只能指向
@@ -62,7 +94,17 @@ const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
  */
 export function isAutoReviewUnavailableNotice(message: unknown): boolean {
   return typeof message === 'string'
-    && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
+    && (message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`)
+      || isAutoReviewNoAvailableModelNotice(message)
+      || isAutoReviewQuotaExhaustedNotice(message));
+}
+
+export function isAutoReviewQuotaExhaustedNotice(message: unknown): boolean {
+  return typeof message === 'string' && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE}]`);
+}
+
+export function isAutoReviewNoAvailableModelNotice(message: unknown): boolean {
+  return typeof message === 'string' && message.startsWith(`[${AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE}]`);
 }
 
 /**
@@ -74,13 +116,17 @@ export function isAutoReviewUnavailableNotice(message: unknown): boolean {
  */
 export function createAutoReviewUnavailableNotice(
   emit: (message: string) => void,
-): { notify(): void; reset(): void } {
+): { notify(decision?: AutoReviewDecision): void; reset(): void } {
   let sent = false;
   return {
-    notify(): void {
+    notify(decision): void {
       if (sent) return;
       sent = true;
-      emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
+      emit(decision?.unavailable === true && decision.unavailableReason === 'quota_exhausted'
+        ? `[${AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE}] ${AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT}`
+        : decision?.unavailable === true && decision.unavailableReason === 'no_available_model'
+        ? `[${AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE}] ${AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT}`
+        : `[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
     },
     reset(): void {
       sent = false;
@@ -201,11 +247,26 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
+/** A confirmation nobody answered before its time limit: a system outcome, not a user rejection. */
+export function isPermissionConfirmationTimeoutReason(reason: unknown): reason is string {
+  return isSystemPermissionDenialReason(reason)
+    && (reason === 'timeout' || (reason as string).endsWith('_timeout'));
+}
+
+/**
+ * Model-facing guidance after a confirmation timed out. Without it the model reads the denial as the
+ * owner saying no (Codex's native text is "user rejected"), or keeps re-requesting the same approval.
+ */
+export const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = 'No one confirmed it before the confirmation timed out; the user did not reject it. Do not retry the same call automatically. Use an approach that does not need confirmation, or tell the user this step needs their confirmation.';
+
 /** Denial provenance for tool results and Codex's same-turn host feedback. */
 export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
   const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
     : source === 'user' ? 'User denied this tool call via Cindy'
       : 'Cindy could not approve this tool call';
+  if (source === 'system' && isPermissionConfirmationTimeoutReason(reason?.trim())) {
+    return `${label} (${reason!.trim().slice(0, 240)}). ${PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE}`;
+  }
   const detail = reason?.trim().slice(0, 240);
   return detail ? `${label}: ${detail}` : `${label}.`;
 }
@@ -223,13 +284,15 @@ export function annotatePermissionRequestForUnavailableReview<
     description?: string;
     metadata?: Record<string, unknown>;
   },
->(req: T): T {
+>(req: T, reason?: string): T {
+  const { autoReviewUnavailableReason: _previousReason, ...metadata } = req.metadata ?? {};
   return {
     ...req,
     description: AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     metadata: {
-      ...req.metadata,
+      ...metadata,
       [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+      ...(reason === AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT ? { autoReviewUnavailableReason: 'quota_exhausted' } : {}),
     },
   };
 }
@@ -255,7 +318,7 @@ export function annotatePermissionRequestForAutoReview<
     metadata?: Record<string, unknown>;
   },
 >(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
-  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req, review.reason);
   const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
   if (!reason) return req;
   return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
@@ -290,7 +353,13 @@ export interface AutoReviewRequest {
     workingDir: string;
     authorizationRevision: string;
   };
-  /** A recognized delegation whose current authority could not be established. */
+  /**
+   * A recognized delegation whose current authority could not be established.
+   *
+   * 宿主固定文案（唯一生产者是 desktop 的 `createPluginTaskReviewResolver`，那里是
+   * 一组写死的句子），**不得**放模型或插件的自由文本：这条会带 `policyReason` 进诊断
+   * 与 UI 通道。
+   */
   authorizationError?: string;
   action: ReviewableAction;
   /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
@@ -315,19 +384,33 @@ export async function withAutoReviewContext(
 ): Promise<AutoReviewDecision> {
   try {
     const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
-    if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    if (prepared.authorizationError) {
+      // 宿主固定文案（见 authorizationError 的契约），不含用户数据：标 policyReason
+      // 才能进诊断/UI 通道。缺标会被当成模型自由文本过滤掉，用户只看到一句通用
+      // 「被拦截」，不知道是授权失效。
+      return { verdict: 'block', reason: prepared.authorizationError, policyReason: true };
+    }
     const fingerprint = JSON.stringify(prepared);
     const decision = await evaluate(prepared);
     if (delegate?.prepareRequest) {
       const current = await delegate.prepareRequest(request);
       if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
-        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+        return {
+          verdict: 'block',
+          reason: 'Delegated authorization changed; retry against the current scope.',
+          policyReason: true,
+        };
       }
     }
     // No await after the live runtime fence: Host lookup may outlive accepted input.
     return finalize(decision);
   } catch {
-    return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
+    return {
+      verdict: 'ask',
+      unavailable: true,
+      reason: 'Host could not verify the current authorization; this action needs your confirmation.',
+      policyReason: true,
+    };
   }
 }
 
@@ -537,7 +620,7 @@ export async function resolveAutoReviewDecision(
   // Beyond the complete model-review budget, retain the existing confirmation path.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
   if (oversizedEvidenceReason) {
-    return { verdict: 'ask', reason: oversizedEvidenceReason };
+    return { verdict: 'ask', reason: oversizedEvidenceReason, policyReason: true };
   }
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
@@ -550,12 +633,14 @@ export async function resolveAutoReviewDecision(
     return {
       verdict: 'block',
       reason: missingEvidenceReason,
+      policyReason: true,
     };
   }
   if (!delegate) {
     return {
       verdict: 'ask',
       reason: 'Automatic review is unavailable, so this action needs your confirmation.',
+      policyReason: true,
       unavailable: true,
     };
   }
@@ -581,14 +666,30 @@ export async function resolveAutoReviewDecision(
         || decision?.verdict === 'ask'
       )
     ) {
+      if (decision.verdict === 'ask' && decision.unavailable === true
+        && (decision.unavailableReason === 'no_available_model' || decision.unavailableReason === 'quota_exhausted')) {
+        return {
+          verdict: 'ask', unavailable: true, unavailableReason: decision.unavailableReason,
+          reason: decision.unavailableReason === 'quota_exhausted'
+            ? AUTO_REVIEW_UNAVAILABLE_QUOTA_TEXT : AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT,
+        };
+      }
       // Delegate 是运行期边界：即便当前 host 实现已做解析，未来实现也不能把
       // 非字符串或无上限 reason 原样塞进日志、UI 或下一轮模型上下文。
       const reason = typeof decision.reason === 'string'
         ? decision.reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS)
         : '';
+      // delegate 明确声明「这条 reason 出自宿主固定文案」(它没有调用模型)→ 保留为
+      // policy 原因,能进诊断 / UI 通道。其余一律是模型自由文本:可能含参数、路径、
+      // 片段,不得外泄(Codex review #7356)。
+      const hostAuthored = decision.hostReason === true;
       return {
         verdict: decision.verdict,
         ...(reason ? { reason } : {}),
+        ...(hostAuthored ? { policyReason: true } : {}),
+        // The delegate is the model boundary: anything it returns is model free
+        // text and must stay out of diagnostics (no policyReason marker), unless
+        // the delegate declared the reason host-authored.
       };
     }
   } catch {
@@ -601,6 +702,7 @@ export async function resolveAutoReviewDecision(
   return {
     verdict: 'ask',
     reason: 'Automatic review could not complete, so this action needs your confirmation.',
+    policyReason: true,
     unavailable: true,
   };
 }

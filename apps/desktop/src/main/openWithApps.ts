@@ -99,6 +99,85 @@ export function parseCommandLineExe(command: string): string | null {
 }
 
 /**
+ * Windows 命令行 → 参数数组,按 CommandLineToArgvW 的引号与反斜杠规则拆分
+ * (登记的打开命令就是给这套规则解析的)。
+ */
+export function splitWindowsCommandLine(command: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let hasToken = false;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (ch === '\\') {
+      let slashes = 0;
+      while (command[i] === '\\') {
+        slashes += 1;
+        i += 1;
+      }
+      if (command[i] === '"') {
+        current += '\\'.repeat(Math.floor(slashes / 2));
+        if (slashes % 2 === 1) current += '"';
+        else inQuotes = !inQuotes;
+      } else {
+        current += '\\'.repeat(slashes);
+        i -= 1;
+      }
+      hasToken = true;
+    } else if (ch === '"') {
+      inQuotes = !inQuotes;
+      hasToken = true;
+    } else if ((ch === ' ' || ch === '\t') && !inQuotes) {
+      if (hasToken) args.push(current);
+      current = '';
+      hasToken = false;
+    } else {
+      current += ch;
+      hasToken = true;
+    }
+  }
+  if (hasToken) args.push(current);
+  return args;
+}
+
+/** 登记命令里代表目标文件的占位符(`%1` / `%L` / `%l`)。 */
+const FILE_PLACEHOLDER = /%[1Ll]/;
+
+/**
+ * 按应用登记的打开命令,为「启动器式」命令构造参数;其余返回 null,沿用只传文件
+ * 路径的既有行为。
+ *
+ * 启动器式 = 文件占位符之前还有非开关参数,例如
+ * `"C:\x\ely-doc-start.exe" ely-doc ElyDoc "%1"`:这类程序缺了前置参数根本起不来,
+ * 只传文件路径会把路径当成第一个参数而报错。`/n "%1" /o "%u"`、`/dde` 这类只带开关
+ * 的命令保持原样(它们只传文件路径本来就能打开,改动会冒 DDE 等行为变化的风险)。
+ * 占位符之外的未知 `%x` 参数(如 `%u`)直接丢弃,不把字面占位符传给应用。
+ */
+export function registeredLaunchArgs(
+  command: string | null | undefined,
+  filePath: string,
+  env: Record<string, string | undefined> = process.env,
+): string[] | null {
+  if (!command) return null;
+  const trimmed = command.trim();
+  const exe = parseCommandLineExe(trimmed);
+  if (!exe) return null;
+  const argumentStart = exe.length + (trimmed.startsWith('"') ? 2 : 0);
+  const tokens = splitWindowsCommandLine(trimmed.slice(argumentStart))
+    .map((token) => expandWindowsEnv(token, env));
+  const at = tokens.findIndex((token) => FILE_PLACEHOLDER.test(token));
+  if (at <= 0) return null;
+  if (!tokens.slice(0, at).some((token) => !/^[-/]/.test(token))) return null;
+  const args: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (FILE_PLACEHOLDER.test(token)) args.push(token.replace(/%[1Ll]/g, () => filePath));
+    else if (!/%[^%\s]/.test(token)) args.push(token);
+  }
+  return args;
+}
+
+/**
  * Windows 控制台代码页 → WHATWG TextDecoder label。reg.exe 重定向输出用的是
  * 控制台代码页(中文系统 936/GBK)而非 UTF-8,直接按 UTF-8 解码会把中文应用名
  * 变成 U+FFFD。只映射 TextDecoder 支持的常见页;OEM 437/850 等西文页不在
@@ -164,6 +243,13 @@ export function parseRegSubkeys(stdout: string, parentKey: string): string[] {
 interface ResolvedApp {
   exePath: string;
   label: string;
+  /** 登记的打开命令原文;只有 App Paths 兜底解析出的应用没有。 */
+  command: string | null;
+}
+
+interface CachedApp {
+  exePath: string;
+  command: string | null;
 }
 
 function dedupeKey(exePath: string): string {
@@ -176,7 +262,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
   const platformPath = deps.platform === 'win32' ? path.win32 : path.posix;
   // ext → (appId → exePath)。每次 list 整体重建该 ext 的映射;open 只认最近
   // 一次枚举写入的 id。进程内存态即可——菜单打开到点击是同进程短会话。
-  const appCacheByExt = new Map<string, Map<string, string>>();
+  const appCacheByExt = new Map<string, Map<string, CachedApp>>();
 
   function assertOpenableFile(filePath: string): void {
     if (typeof filePath !== 'string' || !platformPath.isAbsolute(filePath)) {
@@ -194,7 +280,9 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
   async function resolveExeReference(exeName: string): Promise<ResolvedApp | null> {
     const appKey = `HKCR\\Applications\\${exeName}`;
     const cmdOut = await deps.regQuery(`${appKey}\\shell\\open\\command`, ['/ve']);
-    let exePath = parseCommandLineExe(parseRegValues(cmdOut)[0]?.data ?? '');
+    const registered = parseRegValues(cmdOut)[0]?.data ?? '';
+    let exePath = parseCommandLineExe(registered);
+    const command = exePath ? registered : null;
     if (!exePath) {
       const appPathsOut = await deps.regQuery(
         `HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exeName}`,
@@ -210,13 +298,14 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     // `@resource.dll,-123` 形态的本地化引用没有免原生的解法,回落 exe 名。
     const label =
       friendly && !friendly.startsWith('@') ? friendly : platformPath.basename(exePath, platformPath.extname(exePath));
-    return { exePath, label };
+    return { exePath, label, command };
   }
 
   /** ProgId 引用 → 完整路径 + 友好名。 */
   async function resolveProgIdReference(progId: string): Promise<ResolvedApp | null> {
     const cmdOut = await deps.regQuery(`HKCR\\${progId}\\shell\\open\\command`, ['/ve']);
-    const parsed = parseCommandLineExe(parseRegValues(cmdOut)[0]?.data ?? '');
+    const command = parseRegValues(cmdOut)[0]?.data ?? '';
+    const parsed = parseCommandLineExe(command);
     const exePath = parsed ? expandWindowsEnv(parsed, process.env) : null;
     if (!exePath || !deps.fileExists(exePath)) return null;
 
@@ -224,7 +313,7 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
     const friendly = parseRegValues(nameOut)[0]?.data;
     const label =
       friendly && !friendly.startsWith('@') ? friendly : platformPath.basename(exePath, platformPath.extname(exePath));
-    return { exePath, label };
+    return { exePath, label, command };
   }
 
   async function listWindowsApps(ext: string): Promise<ResolvedApp[]> {
@@ -287,14 +376,14 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
       if (!ext) return { success: true, apps: [] };
       try {
         const resolved = await listWindowsApps(ext);
-        const idMap = new Map<string, string>();
+        const idMap = new Map<string, CachedApp>();
         // 图标提取彼此独立且每个自带 4s 超时:串行会把子菜单懒加载放大到
         // MAX_APPS * 4s(最坏 48s)。并行(至多 MAX_APPS=12 并发)取,顺序仍按
         // resolved 保持稳定(PR #1835 review)。
         const apps: OpenWithApp[] = await Promise.all(
           resolved.map(async (r, i) => {
             const id = `owa-${i}-${platformPath.basename(r.exePath).toLowerCase()}`;
-            idMap.set(id, r.exePath);
+            idMap.set(id, { exePath: r.exePath, command: r.command });
             const iconDataUrl = (await deps.getAppIcon(r.exePath)) ?? undefined;
             return { id, label: r.label, ...(iconDataUrl ? { iconDataUrl } : {}) };
           }),
@@ -312,10 +401,11 @@ export function createOpenWithHandlers(deps: OpenWithDeps): OpenWithHandlers {
       const ext = platformPath.extname(filePath).toLowerCase();
       // 只认 main 侧最近一次枚举写入的映射——查不到一律拒绝,绝不把 renderer
       // 提供的任何字符串当路径执行。
-      const exePath = appCacheByExt.get(ext)?.get(appId);
-      if (!exePath) throwIpcError('NOT_FOUND', '应用引用已失效,请重新打开菜单');
-      if (!deps.fileExists(exePath)) throwIpcError('NOT_FOUND', '应用不存在');
-      deps.spawnDetached(exePath, [filePath]);
+      const app = appCacheByExt.get(ext)?.get(appId);
+      if (!app) throwIpcError('NOT_FOUND', '应用引用已失效,请重新打开菜单');
+      if (!deps.fileExists(app.exePath)) throwIpcError('NOT_FOUND', '应用不存在');
+      // 启动器式登记命令(文件前还有必填参数)按登记参数启动,其余保持只传文件路径。
+      deps.spawnDetached(app.exePath, registeredLaunchArgs(app.command, filePath) ?? [filePath]);
     },
   };
 }

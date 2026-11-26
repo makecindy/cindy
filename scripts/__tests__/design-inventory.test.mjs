@@ -59,7 +59,7 @@ test('DS-8: every desktop globals.css surface includes its generated token style
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   const consumers = surfaces.filter(surface => surface.platform === 'desktop'
     && surface.styleSources.includes('apps/desktop/src/renderer/styles/globals.css'));
-  assert.equal(consumers.length, 9);
+  assert.equal(consumers.length, 10);
   for (const surface of consumers) {
     assert.ok(surface.styleSources.includes('apps/desktop/src/renderer/styles/generated/tokens.css'), surface.id);
   }
@@ -131,6 +131,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/cc-agent/new NewMakerDraftRoute',
     '/cc-agent/orca/:sessionId OrcaWorkflowRoute',
     '/cc-agent/scheduled SchedulerPage',
+    '/cloud-settings CloudSettingsRoute',
     '/issues IssueTrackerFeatureLayout',
     '/login LoginPage',
     '/maker-experimental MakerExperimentalView',
@@ -158,11 +159,11 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
   ]);
 
   assert.deepEqual(layouts.map((row) => `${row.path} ${row.component}`), [
+    '/ CCAgentFeatureLayout',
     '/ LocalDbGate',
     '/ MainLayout',
     '/ ProtectedRoute',
     '/bots BotsFeatureLayout',
-    '/cc-agent CCAgentFeatureLayout',
     '/login GuestRoute',
     '/skillhub SkillhubFeatureLayout',
   ]);
@@ -323,7 +324,7 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
   const layoutPaths = new Set(listLayoutExclusions(routerSource).map((row) => row.path));
   assert.ok(layoutPaths.has('/'));
   assert.ok(layoutPaths.has('/login'));
-  assert.ok(layoutPaths.has('/cc-agent'));
+  assert.ok(layoutPaths.has('/bots'));
   assert.ok(layoutPaths.has('/skillhub'));
 
   const redirects = listRedirectExclusions(routerSource);
@@ -1016,6 +1017,7 @@ test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块�
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
   // 治理合同 §2.1：独立编辑／回放窗口也必须登记，避免入口扫描错位或遗漏样式。
   assert.deepEqual(Object.fromEntries(actualEntries), {
+    cloudLoginWindow: './cloud-login-entry',
     recordingPreview: './recording-preview-entry',
     remoteDesktopViewer: './remote-desktop-viewer-entry',
     resourceUsageWindow: './resource-usage-entry',
@@ -1023,6 +1025,7 @@ test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块�
     regionScreenshot: './region-screenshot-entry',
     regionScreenshotEditor: './region-screenshot-entry',
     regionScreenshotPin: './region-screenshot-pin-entry',
+    quotaTray: './quota-tray-entry',
   });
   const covered = new Map(
     catalogSurfaces().flatMap((surface) =>

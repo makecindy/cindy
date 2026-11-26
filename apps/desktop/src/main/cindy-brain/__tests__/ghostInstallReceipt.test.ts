@@ -447,21 +447,29 @@ describe('GhostInstallReceiptStore cleanup', () => {
     } });
   });
 
-  // Rule: approved control points persist across reads, keep only names this manifest still declares,
-  // and an older receipt without the field stays approved with no control point granted.
-  // Unit: real receipt write/read dropped a static capability because it is
-  // declared outside subscribe.hooks. Installation must preserve that consent.
-  it('round trips approved static prompt fragments through the installation receipt', async () => {
+  // #9803 regression, unit: real receipt write/read keeps the installed manifest
+  // and old control-point grants but neither stores nor consumes runtime grants.
+  // Minimum input: a whole approved install with a stale five-point list.
+  it('ignores runtime point grants without rewriting old receipt data', async () => {
     const base = createSetupReceipt();
     const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-tool-call', 'did-tool-result', 'will-schedule-run'] as const;
     const receipt = createGhostInstallReceipt({ ...base,
-      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
-      approvedControlPoints: ['system-prompt'],
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments,
+        subscribe: { hooks: [...hooks] } },
+      approvedControlPoints: [...hooks, 'system-prompt'],
     });
+    expect(receipt.approvedControlPoints).toEqual(['will-schedule-run']);
     await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.approvedControlPoints = [...hooks, 'system-prompt'];
+    const previousBytes = JSON.stringify(raw);
+    await fs.promises.writeFile(file, previousBytes);
     expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
-      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['will-schedule-run'], revision: receipt.revision,
     } });
+    expect(await fs.promises.readFile(file, 'utf8')).toBe(previousBytes);
   });
 
   // Unit: old persisted manifests remain enabled, without converting previously unknown data into authority.
@@ -498,6 +506,22 @@ describe('GhostInstallReceiptStore cleanup', () => {
       state: 'approved',
       receipt: { approvedControlPoints: ['will-later-point', 'will-routine-run'], revision: receipt.revision },
     });
+  });
+
+  // 测试价值：真实 receipt 写读只保留本次 manifest 仍声明、协议可运行的引擎 id；没有该字段的旧 receipt
+  // 照常是已批准安装，只是不授予引擎（plugin-security-and-authoring.md §5，最小输入为缺字段的旧 receipt；unit）。
+  it('round trips approved task engines and keeps older receipts approved without them', async () => {
+    const base = createSetupReceipt();
+    const parsed = validateGhostManifest({ schemaVersion: 3, minCindyVersion: '0.1.61', id: 'hello', name: 'Hello', version: '1.0.0',
+      entry: 'main.js', node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
+      harnesses: [{ id: 'dsh', name: 'DSH', protocol: 'acp', entry: 'engine.js' }, { id: 'later', name: 'Later', protocol: 'acp/2', entry: 'engine.js' }] });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    await store.write(createGhostInstallReceipt({ ...base, manifest: parsed.manifest, localeResources: {}, skillContentSha256: {} }));
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedHarnesses).toBeUndefined();
+    await store.write({ ...old.receipt, approvedHarnesses: ['dsh', 'later', 'undeclared'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { approvedHarnesses: ['dsh'], revision: old.receipt.revision } });
   });
 
   it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {

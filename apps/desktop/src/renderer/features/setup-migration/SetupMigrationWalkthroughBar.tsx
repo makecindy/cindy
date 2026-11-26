@@ -110,7 +110,7 @@ export function SetupMigrationWalkthroughBar() {
   const position = Math.min(walk.index + 1, walk.ids.length);
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-float-top flex justify-center px-4">
       <div
         role="status"
         aria-live="polite"

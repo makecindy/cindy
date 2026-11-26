@@ -2,10 +2,16 @@ import type { ScheduleWebhookSource } from './webhook-formats.js';
 
 export type ScheduleKind = 'cron';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
+/**
+ * The engine a schedule runs on: a built-in Harness, or 'acp' = a plugin-provided engine on the
+ * automation host (docs/plans/acp-plugin-bridge.md). A plugin engine always comes with its
+ * `providerId` (`acp-plugin:<plugin>:<harness>`) and only runs as a new task each run on the host.
+ */
+export type ScheduleAgentKind = AgentKind | 'acp';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read' | 'settings.read' | 'usage.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -108,6 +114,8 @@ export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
   'jira.comment',
   'sessions.dispatch',
   'feishu.read',
+  'settings.read',
+  'usage.read',
 ];
 
 /**
@@ -225,6 +233,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Optional structured PR check output, annotated on the executing host. */
+  prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;
@@ -286,9 +296,9 @@ export interface Schedule {
    * 兼容/显式切回 Cron 时的表达式，但 UI 回显与引擎执行都必须以 intervalMs 为准。
    */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;
@@ -306,6 +316,12 @@ export interface Schedule {
   agentDeviceId?: string;
   effort?: string;
   /**
+   * 模型组(模式)id，model-groups.json 里的路线。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)
+   * (额度与时段按新建那一刻算，model-groups.md §6.3)，这次新建的任务用选出的来源；上面的具体模型字段是
+   * 选不出来时沿用的模型(模式已删除、里面都用不了)。没设时与原来一致。
+   */
+  modelGroup?: string;
+  /**
    * Fast 模式：仅 Codex 有意义（agent capability `hasFastMode` 为 true）。
    * true → runner fire 时透传给 codex agent，落到 app-server 的 ServiceTier.Fast，
    * 输出更快。Claude agent 忽略此字段。undefined/false → 标准 tier。
@@ -313,13 +329,15 @@ export interface Schedule {
   fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
-   * - project: workingDir is a user-selected project directory.
+   * - project: workingDir selects the execution directory; membership is resolved separately.
    * - dialogue: runner allocates an app-managed dialogue cwd per fire.
    *
    * Heartbeat schedules ignore this and use the target session's existing cwd.
    */
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
@@ -350,10 +368,14 @@ export interface Schedule {
    * 前置检查脚本。undefined = 未配置，完全走原有流程（零行为变化）。
    * 详见 PreRunHookConfig。
    */
+  /** null disables earlier command-based detection; absence preserves older schedules. */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig;
   /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
   webhookTrigger?: ScheduleWebhookTrigger;
   /** 插件前置检查;undefined = 未配置。详见 PreRunPluginConfig。 */
+  /** Account-scoped assignment for schedules created by a plugin. */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig;
   notify: ScheduleNotifyConfig;
   status: ScheduleStatus;
@@ -385,9 +407,25 @@ export interface ScheduleRunTrigger {
   kind: 'watch';
   source: string;
   detail?: string;
+  /** Distinguishes a speculative overflow/reconnect check from a verified change or explicit doorbell. */
+  reason?: 'reconcile';
+}
+
+/** Safe facts returned to the originating task when its own automation ends. */
+export interface ScheduleClosureFailure {
+  firedAt: number;
+  errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+  laterRunSucceeded: boolean;
+}
+
+/** Verified MR facts at dispatch. Only a successful execution acknowledges them. */
+export interface MrRunObservation {
+  url: string;
+  signature: string;
 }
 
 export interface ScheduleRun {
+  mrObservation?: MrRunObservation;
   id: string;
   scheduleId: string;
   sessionId?: string;
@@ -395,6 +433,8 @@ export interface ScheduleRun {
   finishedAt?: number;
   status: RunStatus;
   errorMsg?: string;
+  /** Read-only history projection. The original terminal status is retained. */
+  failureRecovered?: boolean;
   /** 本次 run 产生的真实 API 账单费用。 */
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */
@@ -403,6 +443,7 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  estimatedValueAmounts?: ScheduleRunMoney[];
   /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
   totalTokens?: number;
   /**
@@ -420,7 +461,7 @@ export interface ScheduleRun {
   /** 本轮实际执行过前置检查时的结构化结果。 */
   preRunHookResult?: PreRunHookRunResult;
   /** 本轮由什么触发；缺省为定时或手动。 */
-  triggerSource?: 'webhook';
+  triggerSource?: 'webhook' | 'pr-status' | 'pr-check';
   /** 用户已读时间戳（毫秒）；NULL 表示未读。仅对终态 run 有意义。 */
   readAt?: number;
   /**
@@ -457,9 +498,9 @@ export interface CreateScheduleInput {
   manual?: boolean;
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;
@@ -472,11 +513,15 @@ export interface CreateScheduleInput {
   /** Agent 运行位置。详见 Schedule.agentDeviceId。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 模型组(模式)id。详见 Schedule.modelGroup。 */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */
@@ -493,10 +538,12 @@ export interface CreateScheduleInput {
    * device-link——无法用“带 key 的 undefined”表达清列,null 是等价通道;
    * create 时 null 与 undefined 同义,引擎归一成 undefined）。
    */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig | null;
   /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
   webhookTrigger?: ScheduleWebhookTriggerInput | null;
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
   /** null explicitly clears the deadline across JSON transports. */
@@ -537,7 +584,16 @@ export type SchedulerEvent =
    * recurring 语义重排下一次触发（不是短延重试）。消费方需像 'deferred' 一样清掉
    * ephemeral running 态；不发通知、不亮红点。sessionId 为跳过留痕会话（可为空串）。
    */
-  | { type: 'skipped'; scheduleId: string; runId: string; sessionId: string }
+  | {
+      type: 'skipped';
+      scheduleId: string;
+      runId: string;
+      sessionId: string;
+      lastFiredAt?: number;
+      lastFinishedAt?: number;
+      nextFireAt?: number;
+      preRunCheckSucceeded?: boolean;
+    }
   /**
    * Runner 在 fire() 内部拿到 sessionId 时主动上报（在 'completed' / 'failed' 之前）。
    * 让 UI 能在 run 还在 running 状态时就拿到 sessionId，"Open session" 按钮即时可用。

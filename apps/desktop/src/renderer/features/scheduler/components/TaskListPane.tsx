@@ -146,7 +146,7 @@ export function TaskListPane({
         'border-r border-[var(--cmd-palette-border)]',
       )}
     >
-      <div className="flex shrink-0 items-center justify-between px-[10px] pb-2 pt-[14px]">
+      <div className="flex shrink-0 items-center justify-between px-2.5 pb-2 pt-3.5">
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
         <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
       </div>
@@ -157,7 +157,7 @@ export function TaskListPane({
             <div key={group.workingDir} className="flex flex-col">
               <div
                 className={cn(
-                  'flex h-8 items-center gap-1.5 rounded-md px-1.5',
+                  'flex h-8 items-center gap-1.5 rounded-lg px-1.5',
                   'cursor-pointer text-xs font-medium text-[var(--msg-assistant-text)] transition-colors',
                   'hover:bg-[var(--surface-hover)]',
                 )}
@@ -188,7 +188,7 @@ export function TaskListPane({
                         e.stopPropagation();
                         onCreateProjectSchedule(group.workingDir);
                       }}
-                      className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                     >
                       <SquarePen size={14} strokeWidth={2} />
                     </button>
@@ -206,7 +206,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onOpenProjectConfig(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <ExternalLink size={12} strokeWidth={2} />
                       </button>
@@ -218,7 +218,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onReloadProject(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <RefreshCw size={12} strokeWidth={2} />
                       </button>
@@ -226,7 +226,7 @@ export function TaskListPane({
                   )}
               </div>
               {!isCollapsed && (
-                <ul className="flex flex-col gap-1 pt-1 pl-[18px]">
+                <ul className="flex flex-col gap-1 pt-1 pl-4">
                   {group.schedules.map((s) => (
                     <li key={s.id}>
                       <TaskListCell
@@ -275,7 +275,7 @@ export function TaskListPane({
         role="separator"
         aria-orientation="vertical"
         aria-label={t('scheduler.list.resizeAria')}
-        className="group/handle absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize"
+        className="group/handle absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize"
         onPointerDown={onResizeStart}
         onDoubleClick={onResizeReset}
       >

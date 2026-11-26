@@ -41,8 +41,8 @@ async function renderDialog() {
   return { onOpenChange, onCreated };
 }
 
-function checkbox(name: string): HTMLButtonElement {
-  return screen.getByRole('checkbox', { name: new RegExp(name) }) as HTMLButtonElement;
+function checkbox(name: string): HTMLInputElement {
+  return screen.getByRole('checkbox', { name: new RegExp(name) }) as HTMLInputElement;
 }
 
 beforeEach(() => {
@@ -135,7 +135,7 @@ describe('BotGroupCreateDialog', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '  周末出游 ' } });
     for (const id of ['f', 'a', 'c', 'b', 'e', 'd']) fireEvent.click(checkbox(`Bot ${id}`));
     expect(checkbox('Bot g').disabled).toBe(true);
-    expect(checkbox('Bot a').getAttribute('aria-checked')).toBe('true');
+    expect(checkbox('Bot a').checked).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));

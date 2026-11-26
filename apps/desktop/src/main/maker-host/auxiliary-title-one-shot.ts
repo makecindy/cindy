@@ -51,13 +51,21 @@ const DEFAULT_DEPS: AuxiliaryTitleRuntimeDeps = {
 
 type TitleRequest = {
   sessionId: string;
-  agentKind: AgentKind;
+  /** null = plugin-engine task: the auxiliary chain only, never another engine's one-shot. */
+  agentKind: AgentKind | null;
   prompt: string;
   signal?: AbortSignal;
 };
 
 export interface AuxiliaryTextRequest {
-  agentKind: AgentKind;
+  source?: string;
+  automaticTitle?: boolean;
+  sessionId?: string;
+  /**
+   * The owning session's built-in engine, used only for the same-agent fallback. null = a plugin-engine
+   * task (docs/plans/acp-plugin-bridge.md): its conversation never goes to a different engine.
+   */
+  agentKind: AgentKind | null;
   prompt: string;
   maxTokens: number;
   timeoutMs: number;
@@ -100,9 +108,11 @@ export async function requestAuxiliaryText(
       && currentModels === snapshot;
   };
   // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+  const sessionAgent = args.agentKind;
   const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
-    !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
+    !!sessionAgent && !(await isAgentOneShotRouteDisabled(sessionAgent, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
+    source: args.source, sessionId: args.sessionId, automaticTitle: args.automaticTitle,
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,
     // Short budgets cannot afford provider-default thinking. Messages /
@@ -121,11 +131,13 @@ export async function requestAuxiliaryText(
   // chains are explicit routing decisions and must remain fail-closed.
   const canFallbackToSessionAgent = args.sessionAgentFallback !== false
     && auxiliaryChain.source === 'auto'
-    && agentSupportsOneShot(args.agentKind)
+    && !!sessionAgent
+    && agentSupportsOneShot(sessionAgent)
     && await beforeSessionAgentDispatch();
-  if (canFallbackToSessionAgent) {
+  if (canFallbackToSessionAgent && sessionAgent) {
     try {
-      const fallbackText = await getMaker().oneShot(args.agentKind, args.prompt, {
+      const fallbackText = await getMaker().oneShot(sessionAgent, args.prompt, {
+        source: args.source, sessionId: args.sessionId,
         maxTokens: args.maxTokens,
         timeoutMs: args.timeoutMs,
         signal: args.signal,
@@ -146,8 +158,10 @@ export async function requestAuxiliaryText(
 async function generateAuxiliaryTitle(
   args: TitleRequest,
   deps: AuxiliaryTitleRuntimeDeps,
+  automaticTitle: boolean,
 ): Promise<TitleOneShotResult> {
   const result = await requestAuxiliaryText({
+    source: 'title', sessionId: args.sessionId, automaticTitle,
     agentKind: args.agentKind,
     prompt: args.prompt,
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
@@ -174,19 +188,19 @@ function normalizeAuxiliaryTitle(text: string): string | null {
 
 export async function generateTitleWithAuxiliaryModel(
   args: TitleRequest,
-  _legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps?: TitleOneShotDeps,
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<string | null> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  const result = await generateAuxiliaryTitle(args, deps);
+  const result = await generateAuxiliaryTitle(args, deps, true);
   return result.status === 'ok' ? result.title : null;
 }
 
 export async function generateTitleWithAuxiliaryModelResult(
   args: TitleRequest,
-  _legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps?: TitleOneShotDeps,
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<TitleOneShotResult> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  return generateAuxiliaryTitle(args, deps);
+  return generateAuxiliaryTitle(args, deps, false);
 }

@@ -1,3 +1,4 @@
+import type { NewSessionDraft } from './newSession';
 import { i18n } from '@/i18n';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import type { DurableOutboxRecord } from './durableOutbox';
@@ -5,7 +6,9 @@ import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachme
 import { durableOutboxUploadUri, outboxAttachmentNeedsLocalBytes, removeRetainedOutboxFiles, retainOutboxFile } from './durableOutboxFiles';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
 
-export type NewSessionDraftEdit = { firstMessage?: string; removeAttachmentId?: string };
+export type NewSessionDraftEdit = Partial<Pick<NewSessionDraft, 'firstMessage' | 'selectedSkill'>> & {
+  removeAttachmentId?: string;
+};
 
 /** User edits replace recovered content; an empty recovery is discarded permanently. */
 export async function persistNewSessionDraftEdit(record: DurableOutboxRecord, edit: NewSessionDraftEdit): Promise<DurableOutboxRecord | null> {
@@ -25,7 +28,14 @@ export async function persistNewSessionDraftEdit(record: DurableOutboxRecord, ed
     if (!firstMessage.trim() && !slots.length) return null;
     return {
       ...current,
-      creation: { ...current.creation!, draft: { ...current.creation!.draft, firstMessage } },
+      creation: {
+        ...current.creation!,
+        draft: {
+          ...current.creation!.draft,
+          firstMessage,
+          ...(edit.selectedSkill !== undefined ? { selectedSkill: edit.selectedSkill } : {}),
+        },
+      },
       uploads: uploads.map(upload => ({ ...upload, slot: slots.findIndex(({ slot }) => slot === upload.slot) })),
       item: { ...current.item, text: firstMessage,
         attachmentSlots: slots.map(({ attachment }) => attachment),

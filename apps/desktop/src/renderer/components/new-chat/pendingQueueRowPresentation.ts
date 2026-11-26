@@ -5,6 +5,7 @@ import { isOrcaAutoBridgeBatch } from '@/lib/messageAutomationOrigin';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
+import { canEditQueuedMessage } from '../../../shared/agentInputQueue';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -119,29 +120,13 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             return source.replaceRanges ? source.text : null;
           })()
         : null,
-    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger && !isAnswered,
+    canEdit: canEditQueuedMessage(entry),
     // 协同或其他任务消息可以转为插话:插话不改正文与来源,主进程在接受后结清协同回报。
     // An answer already shown on its question card has no row, so no shortcut may act on it either.
     canSteer: !isPendingEnqueue && (isOrca || isSession || !isMachineGenerated) && !isSyntheticTrigger && !isAnswered,
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };
-}
-
-/**
- * 空输入框里按 Cmd/Ctrl+Enter 时可直接插话的队列条目:仅当队列恰好一条且该行此刻
- * 能插话(与行内 ⬆️ 同一判据)时返回其 clientId。多条时无法判断用户指哪条，返回 null,
- * 仍需把焦点放到具体行上再按快捷键。
- */
-export function resolveSoleSteerableQueuedMessage(
-  queue: readonly QueuedMessage[],
-  state: { editingClientId: string | null; steeringClientIds: readonly string[] },
-): string | null {
-  if (queue.length !== 1 || state.editingClientId !== null) return null;
-  const [entry] = queue;
-  if (!entry || !getPendingQueueRowPresentation(entry).canSteer) return null;
-  if (state.steeringClientIds.includes(entry.clientId)) return null;
-  return entry.clientId;
 }
 
 /**

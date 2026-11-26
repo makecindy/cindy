@@ -450,7 +450,7 @@ export function recommendedAgentForModel(
 }
 
 /** 某 (provider, model, agent) 已解析的能力(规格 §2.2)。 */
-export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPricing' | 'currency' | 'costDiscount'> {
+export interface UnifiedAgentCapability extends Pick<CatalogModel, 'displayPricing' | 'currency' | 'costDiscount' | 'thinkingToggle'> {
   agent: AgentKind;
   /**
    * ★该引擎下真正要发出去的 model id(bridge 壳已还原)。写 draft / 建会话 / 切模型
@@ -536,6 +536,7 @@ function capabilityOf(
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),
     supportsUltrafastMode: agent === 'codex' && model.supportsUltrafastMode === true,
+    ...(agent === 'pi' && model.thinkingToggle !== undefined ? { thinkingToggle: model.thinkingToggle } : {}),
     contextWindow: model.contextWindow,
     contextWindowVerified: model.contextWindowVerified === true,
   };
@@ -605,6 +606,8 @@ export interface UnifiedModelEntriesOptions {
    * 注意:传进来的 `model` 是**该引擎下的目录条目**(wire id 形态),不是行的归一化 id。
    */
   isVisible?: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
+  /** 保留用户整家隐藏的供应商(见 deriveModelList.includeHiddenProviders);缺省 false。 */
+  includeHiddenProviders?: boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
@@ -795,6 +798,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
         ? { keepSelected: { providerId: keepModel.providerId, modelId: keepModel.modelId } }
         : {}),
       includePaymentRequired,
+      ...(opts.includeHiddenProviders ? { includeHiddenProviders: true } : {}),
     });
     for (const row of rows) {
       // Gateway prefixes identify distinct routes, not Cindy bridge wrappers.

@@ -29,6 +29,9 @@ import { imBotSettings } from './ImBotSection.settings-search';
  *   - 飞书 / Lark 卡: 同构, 绑定走应用的网页授权页, pending 时另显示一次性
  *     关联码(网页授权不可用的外部用户把它发给机器人); 服务端未宣告
  *     provider:feishu(组织还没配置飞书机器人)时给专门提示; 伙伴页不显示;
+ *   - Discord 卡(官方, 与「个人」栏的 Discord bot 无关): 同构, 关联只靠一次性
+ *     关联码 —— pending 时关联码放在动作行之前醒目显示, 用户私信给机器人或在
+ *     Discord 里执行 /bind; 「添加到 Discord」只是添加应用。伙伴页不显示;
  *   - 工作目录映射内嵌在每张渠道卡的展开区: 目录清单**设备共享**(所有渠道
  *     同一份, 刻意设计, 任一卡里增删都作用于全部渠道), 运行偏好按渠道隔离,
  *     由所在卡决定读写哪个渠道的那份(Slack 多绑定时再叠 workspace 归属
@@ -54,6 +57,7 @@ import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
+import { CompanionXAssignment } from './CompanionXAssignment';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
   HOOK_BIND_REASON_APP_CHANGED,
@@ -68,18 +72,20 @@ import {
 } from '../../../shared/hookControlIpc';
 
 /** provider-neutral 渠道卡覆盖的 provider(Slack 走 legacy 专属卡)。 */
-type NeutralCardProvider = 'telegram' | 'x' | 'feishu';
+type NeutralCardProvider = 'telegram' | 'x' | 'feishu' | 'discord';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { useImEntrancePlugins } from './ImPluginEntrances';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useSettingsTarget } from './settingsTarget';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
-type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu';
+type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
 
 /** 渠道卡状态徽章的色调档(映射到「个人」栏同款 --settings-badge-* token)。 */
 type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
@@ -112,8 +118,8 @@ function transportBadgeTone(status: SlackHookView['status']): ChannelBadgeTone {
   }
 }
 
-/** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。 */
-function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: string }) {
+/** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。云实例设置的官方卡复用。 */
+export function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: string }) {
   const color = badgeToneColor(tone);
   return (
     <span
@@ -209,8 +215,15 @@ function DefaultWorkspaceRadio({
   );
 }
 
-export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
+export function HookConnectionsSection({ companion, projectsOnly = false }: {
+  companion?: { id: string; name: string };
+  /** Only the shared 「项目与模型」 block, for IM plugins where the Cindy group is not shown. */
+  projectsOnly?: boolean;
+} = {}) {
   const { t } = useTranslation();
+  const imPlugins = useImEntrancePlugins();
+  const { api } = useSettingsTarget();
+  const hookControl = api.hookControl;
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
@@ -220,7 +233,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
    * 全收起 —— 收起行自带状态徽章与绑定摘要。打开渠道开关时自动展开对应卡,
    * 让授权进度与兜底动作(复制链接 / 安装引导)立即可见。
    */
-  const targetCard = (['slack', 'telegram', 'x', 'feishu'] as const).find(
+  const targetCard = (['slack', 'telegram', 'x', 'feishu', 'discord'] as const).find(
     (card) => entry?.targetId === 'cindy-im-' + card || entry?.fallbackTargetId === 'cindy-im-' + card,
   ) ?? null;
   const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
@@ -256,13 +269,13 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   useEffect(() => {
     const requestedAtRevision = ++viewRevisionRef.current;
-    void window.electronAPI.hookControl
+    void hookControl
       .get()
       .then((res) => {
         if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
       })
       .catch(() => {});
-    const unsubscribe = window.electronAPI.hookControl.onStatusChanged(applyPushedView);
+    const unsubscribe = hookControl.onStatusChanged(applyPushedView);
     return () => {
       viewRevisionRef.current += 1;
       unsubscribe();
@@ -303,7 +316,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const handleToggle = useCallback(
     (enabled: boolean) => {
       runSlackAuthAction(
-        () => window.electronAPI.hookControl.setEnabled(enabled),
+        () => hookControl.setEnabled(enabled),
         'settings.remoteControl.hook.toast.toggleFailed',
         enabled,
       );
@@ -332,8 +345,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     selectingWorkingBindingId.current = bindingId ?? hookRef.current?.feishu.binding?.bindingId ?? null;
     setSelectingWorkingDevice(true);
     try {
-      if (bindingId === undefined) await window.electronAPI.hookControl.providerBindSelect('feishu');
-      else await window.electronAPI.hookControl.providerBindSelect('feishu', bindingId);
+      if (bindingId === undefined) await hookControl.providerBindSelect('feishu');
+      else await hookControl.providerBindSelect('feishu', bindingId);
       if (mountedRef.current && workingSelectionSequence.current === sequence) {
         toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
       }
@@ -376,12 +389,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     (mode: 'enable' | 'add' | 'rebind' | 'communications', teamId?: string) => {
       const action =
         mode === 'communications' && teamId
-          ? () => window.electronAPI.hookControl.setSlackCommunications(teamId, true)
+          ? () => hookControl.setSlackCommunications(teamId, true)
           : mode === 'enable'
-          ? () => window.electronAPI.hookControl.setEnabled(true)
+          ? () => hookControl.setEnabled(true)
           : mode === 'rebind' && teamId
-            ? () => window.electronAPI.hookControl.rebindTeam(teamId)
-            : () => window.electronAPI.hookControl.addBinding();
+            ? () => hookControl.rebindTeam(teamId)
+            : () => hookControl.addBinding();
       runSlackAuthAction(action, 'settings.remoteControl.hook.toast.actionFailed', true);
     },
     [runSlackAuthAction],
@@ -399,7 +412,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     async (provider: NeutralCardProvider, alias: string | null) => {
       try {
         const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setProviderDefaultWorkspace(
+        const res = await hookControl.setProviderDefaultWorkspace(
           provider,
           alias,
         );
@@ -415,7 +428,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
-      runHookAction(() => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled), {
+      runHookAction(() => hookControl.setLifecycleAnnouncement(enabled), {
         localizedErrorOnly: true,
       });
     },
@@ -505,7 +518,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       } else if (decision.multiUi) {
         // multi-team: 取消只作废这次"添加 workspace"尝试, 既有绑定不受影响
         runSlackAuthAction(
-          () => window.electronAPI.hookControl.cancelPendingBind(),
+          () => hookControl.cancelPendingBind(),
           'settings.remoteControl.hook.toast.actionFailed',
         );
       } else {
@@ -569,11 +582,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
    * 所以它同时出现在侧栏里; 改名、移除在侧栏做, 这里跟着变。
    */
   const handleAddProject = async () => {
-    const res = await window.electronAPI.showOpenDirectoryDialog();
+    const res = await api.showOpenDirectoryDialog();
     if (res.canceled || !res.path) return;
     try {
       const requestedAtRevision = ++viewRevisionRef.current;
-      const added = await window.electronAPI.hookControl.addProject(res.path as string);
+      const added = await hookControl.addProject(res.path as string);
       if (viewRevisionRef.current === requestedAtRevision) applyView(added.hook);
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.addProjectFailed'));
@@ -608,7 +621,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
   const handleProviderToggle = (provider: NeutralCardProvider, enabled: boolean) => {
     if (enabled) setExpandedCard(provider);
-    runHookAction(() => window.electronAPI.hookControl.setProviderEnabled(provider, enabled));
+    runHookAction(() => hookControl.setProviderEnabled(provider, enabled));
   };
 
   const handleProviderOpen = (
@@ -617,8 +630,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     scopeId?: string,
   ) => {
     void (scopeId
-      ? window.electronAPI.hookControl.openProviderAction(provider, action, scopeId)
-      : window.electronAPI.hookControl.openProviderAction(provider, action))
+      ? hookControl.openProviderAction(provider, action, scopeId)
+      : hookControl.openProviderAction(provider, action))
       .catch((err: unknown) => {
         toast.error(
           extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
@@ -637,13 +650,13 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
-  /** 复制飞书关联码(网页授权不可用时, 用户把它发给机器人完成关联)。 */
-  const handleCopyBindCode = async (provider: NeutralCardProvider) => {
+  /** 复制关联码(飞书: 网页授权不可用时的兜底; Discord: 唯一的关联方式)。 */
+  const handleCopyBindCode = async (provider: 'feishu' | 'discord') => {
     const code = hook?.[provider].binding?.bindCode;
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code);
-      toast.success(t('settings.remoteControl.hook.feishu.bindCode.copied'));
+      toast.success(t(`settings.remoteControl.hook.${provider}.bindCode.copied`));
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     }
@@ -676,8 +689,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       setSelectingWorkingDevice(false);
     }
     runHookAction(() => selectedBindingId === undefined
-      ? window.electronAPI.hookControl.providerBindRevoke(provider)
-      : window.electronAPI.hookControl.providerBindRevoke(provider, selectedBindingId));
+      ? hookControl.providerBindRevoke(provider)
+      : hookControl.providerBindRevoke(provider, selectedBindingId));
   };
 
   /**
@@ -716,7 +729,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           current.communicationsEnabled === target.communicationsEnabled,
       );
     if (!ok || !mountedRef.current || !stillSameBinding) return;
-    runHookAction(() => window.electronAPI.hookControl.revokeTeam(target.teamId));
+    runHookAction(() => hookControl.revokeTeam(target.teamId));
   };
 
   // 数据未就绪不渲染任何内容(规则 7: 无 loading 态、不闪空状态)
@@ -923,13 +936,19 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     ? activeTeams.length > 0
     : hook.binding?.state === 'confirmed';
 
+  // 旧 main 快照尚无 discord 字段时按未开启处理(同 renderProviderCard 的兜底)。
+  const discordView = hook.discord as ProviderHookView | undefined;
   // 默认项目只对没有「先选项目」这一步的渠道有意义(Slack 在每个频道里各自选)。
   const projectsDefaultApplies =
-    hook.telegram.enabled || hook.feishu.enabled || (hook.x.enabled && !hook.x.companionBotId);
-  const projectsSectionVisible = hook.enabled || projectsDefaultApplies;
+    hook.telegram.enabled || hook.feishu.enabled || discordView?.enabled === true ||
+    (hook.x.enabled && !hook.x.companionBotId);
+  // IM 插件(声明 imEntrance)读的也是这一份: 只装了插件、没开官方机器人时也要能改。
+  const pluginsShareProjects = !companion && imPlugins.length > 0;
+  const projectsSectionVisible = hook.enabled || projectsDefaultApplies || pluginsShareProjects;
   // 默认项目所有官方机器人共用一个(main 侧读写时已对齐), 任取一处的值即可。
   const sharedDefaultWorkspace =
-    hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace;
+    hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace ??
+    discordView?.defaultWorkspace ?? null;
   const setSharedDefaultWorkspace = (alias: string | null) =>
     void setProviderDefaultWorkspace('feishu', alias);
 
@@ -1007,7 +1026,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       <section
         ref={projectsSectionRef}
         aria-labelledby="cindy-im-projects-heading"
-        className="mt-3 flex scroll-mt-4 flex-col gap-[14px]"
+        className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
       >
         <div className="flex flex-col gap-1">
           <h4
@@ -1020,7 +1039,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           </h4>
           <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+            {t(pluginsShareProjects
+              ? 'settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'
+              : 'settings.remoteControl.hook.form.workspacesCardDescription')}
           </p>
         </div>
         {projectPrefsState.hint !== null && (
@@ -1090,22 +1111,25 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
    * 子树 remount)。动作按钮完全由 binding.actions 数据驱动 —— X 的 actions
    * 里没有 add_to_group, 加群按钮自然不渲染。
    */
-  const changeXCompanion = async () => {
+  const setXCompanion = async (botId: string | null, expectedBotId: string | null) => {
+    const requestedAtRevision = ++viewRevisionRef.current;
+    const result = await hookControl.setXCompanion(botId, expectedBotId);
+    if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+  };
+  /** Settings → IM bots: releases the account from the teammate it is assigned to. */
+  const removeXCompanion = async () => {
     if (companionPending) return;
     const previous = hookRef.current?.x.companionBotId ?? null;
-    if (!companion && !previous) return;
-    const removing = !companion || previous === companion.id;
+    if (!previous) return;
     setCompanionPending(true);
     try {
       const ok = await confirm({
-        title: t(`bots.channels.officialX.${removing ? 'removeTitle' : 'bindTitle'}`, { name: companion?.name }),
-        description: t(`bots.channels.officialX.${removing ? 'removeBody' : 'bindBody'}`, { name: companion?.name }),
-        confirmText: t(`bots.channels.officialX.${removing ? 'remove' : 'bind'}`),
+        title: t('bots.channels.officialX.removeTitle', { name: undefined }),
+        description: t('bots.channels.officialX.removeBody', { name: undefined }),
+        confirmText: t('bots.channels.officialX.remove'),
       });
       if (!ok) return;
-      const requestedAtRevision = ++viewRevisionRef.current;
-      const result = await window.electronAPI.hookControl.setXCompanion(removing ? null : companion!.id, previous);
-      if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+      await setXCompanion(null, previous);
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     } finally {
@@ -1186,12 +1210,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 onClick={() => void handleCopyProviderLink('feishu')}>{t('settings.remoteControl.hook.binding.copyLink')}</Button> : null}
               {own?.actions.includes('cancel') ? <Button variant="secondary" size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
-                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
+                onClick={() => runHookAction(() => hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
             </> : <>
               {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant={accounts.length === 0 ? 'primary' : 'secondary'} size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
                 disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
+                onClick={() => runHookAction(() => hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
             </>}
 
           </div>
@@ -1201,10 +1225,45 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     </div>;
   };
 
+  /**
+   * 一次性关联码。飞书: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串码私聊
+   * 发给机器人; Discord: 关联只靠它, 私信给机器人或在 Discord 里执行 /bind。码只在 pending
+   * 时存在, 过期 / 完成后随快照消失。
+   */
+  const renderBindCode = (provider: 'feishu' | 'discord', binding: ProviderBindingView, actions: string[]) => (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
+      <span className="text-11 text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.label`)}
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
+          {binding.bindCode}
+        </span>
+        {actions.includes('copy_bind_code') ? (
+          <Button
+            data-settings-search-action="Copy the bot link code"
+            variant="secondary"
+            size="xs"
+            compact
+            type="button"
+            onClick={() => void handleCopyBindCode(provider)}
+          >
+            {t(`settings.remoteControl.hook.${provider}.bindCode.copy`)}
+          </Button>
+        ) : null}
+      </div>
+      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.hint`)}
+      </span>
+    </div>
+  );
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const setting = provider === 'telegram'
       ? imBotSettings.cindyTelegram
-      : provider === 'feishu' ? imBotSettings.cindyFeishu : imBotSettings.cindyX;
+      : provider === 'feishu'
+        ? imBotSettings.cindyFeishu
+        : provider === 'discord' ? imBotSettings.cindyDiscord : imBotSettings.cindyX;
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
@@ -1218,7 +1277,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             ? 'settings.tina.prefs.providerTelegram'
             : provider === 'feishu'
               ? 'settings.tina.prefs.providerFeishu'
-              : 'settings.tina.prefs.providerX',
+              : provider === 'discord'
+                ? 'settings.tina.prefs.providerDiscord'
+                : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
         routeSummary={companion ? null : cs.bindingLine}
@@ -1286,6 +1347,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
 
           {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
 
+          {provider === 'discord' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('discord', cs.binding, cs.actions)
+            : null}
+
           {view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
               {cs.inProgress && cs.binding?.connectUrl ? (
@@ -1320,7 +1385,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   size="xs"
                   compact
                   type="button"
-                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel(provider))}
+                  onClick={() => runHookAction(() => hookControl.providerBindCancel(provider))}
                 >
                   {t(`settings.remoteControl.hook.${provider}.cancel`)}
                 </Button>
@@ -1375,7 +1440,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   size="xs"
                   compact
                   type="button"
-                  onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart(provider))}
+                  onClick={() => runHookAction(() => hookControl.providerBindStart(provider))}
                 >
                   {t(
                     cs.state === 'none' || storeAccounts
@@ -1403,35 +1468,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>
           ) : null}
 
-          {/* 飞书关联码: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串
-              码私聊发给机器人。码只在 pending 时存在, 过期 / 完成后随快照消失。 */}
-          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode ? (
-            <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
-              <span className="text-11 text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.label')}
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
-                  {cs.binding.bindCode}
-                </span>
-                {cs.actions.includes('copy_bind_code') ? (
-                  <Button
-                    data-settings-search-action="Copy the Feishu bind code"
-                    variant="secondary"
-                    size="xs"
-                    compact
-                    type="button"
-                    onClick={() => void handleCopyBindCode(provider)}
-                  >
-                    {t('settings.remoteControl.hook.feishu.bindCode.copy')}
-                  </Button>
-                ) : null}
-              </div>
-              <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.hint')}
-              </span>
-            </div>
-          ) : null}
+          {/* 飞书关联码: 网页授权是主路径, 关联码是兜底, 放在动作行之后。 */}
+          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('feishu', cs.binding, cs.actions)
+            : null}
 
           </>}
 
@@ -1446,20 +1486,15 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             <XUsageGuide companion={!!view.companionBotId} />
             {companion ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.bound'
-                    : view.companionBotId ? 'bots.channels.officialX.boundElsewhere' : 'bots.channels.officialX.unbound', { name: companion.name })}
-                </p>
-                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>
-                  {t(view.companionBotId === companion.id ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
-                </Button>
+                <CompanionXAssignment companion={companion} companionBotId={view.companionBotId ?? null}
+                  settingId={imBotSettings.cindy.id}
+                  assign={(assign, expectedBotId) => setXCompanion(assign ? companion.id : null, expectedBotId)} />
               </div>
             ) : view.companionBotId ? (
               <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                 <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
                 <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void changeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
+                  onClick={() => void removeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
               </div>
             ) : null}
           </> : null}
@@ -1486,11 +1521,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     );
   };
 
+  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
+  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
+
   return (
     <div className="flex flex-col gap-3">
-      {!companion ? <p className="text-12 text-[var(--text-tertiary)]">
-        {t('settings.remoteControl.hook.description')}
-      </p> : null}
+      {!companion ? <HookConnectionsDescription /> : null}
 
       {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
       {!companion ? <ImChannelSettingsCard
@@ -1685,7 +1721,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         type="button"
                         onClick={() =>
                           runSlackAuthAction(
-                            () => window.electronAPI.hookControl.rebindTeam(b.teamId),
+                            () => hookControl.rebindTeam(b.teamId),
                             'settings.remoteControl.hook.toast.actionFailed',
                             true,
                           )
@@ -1704,7 +1740,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() => void handleRemoveBinding(b)}
                     aria-label={t('settings.remoteControl.hook.multi.removeAria')}
-                    className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                    className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -1715,7 +1751,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                         checked={b.communicationsEnabled === true}
                         disabled={hook.status !== 'connected' || slackAuthActionPending || hook.pendingBind?.state === 'pending'}
                         onCheckedChange={(enabled) => runSlackAuthAction(
-                          () => window.electronAPI.hookControl.setSlackCommunications(b.teamId, enabled),
+                          () => hookControl.setSlackCommunications(b.teamId, enabled),
                           'settings.remoteControl.hook.toast.actionFailed',
                           true,
                         )}
@@ -1742,7 +1778,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
-                        () => window.electronAPI.hookControl.cancelPendingBind(),
+                        () => hookControl.cancelPendingBind(),
                         'settings.remoteControl.hook.toast.actionFailed',
                       )
                     }
@@ -1786,7 +1822,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       type="button"
                       onClick={() =>
                         runSlackAuthAction(
-                          () => window.electronAPI.hookControl.cancelPendingBind(),
+                          () => hookControl.cancelPendingBind(),
                           'settings.remoteControl.hook.toast.actionFailed',
                         )
                       }
@@ -1856,7 +1892,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     type="button"
                     onClick={() =>
                       runSlackAuthAction(
-                        () => window.electronAPI.hookControl.cancelPendingBind(),
+                        () => hookControl.cancelPendingBind(),
                         'settings.remoteControl.hook.toast.actionFailed',
                       )
                     }
@@ -1874,7 +1910,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   type="button"
                   onClick={() =>
                     runSlackAuthAction(
-                      () => window.electronAPI.hookControl.addBinding(),
+                      () => hookControl.addBinding(),
                       'settings.remoteControl.hook.toast.actionFailed',
                       true,
                     )
@@ -1928,10 +1964,22 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {!companion ? renderProviderCard('telegram') : null}
       {/* 飞书 / Lark 没有伙伴专线, 伙伴页不显示(与 Telegram 相同)。 */}
       {!companion ? renderProviderCard('feishu') : null}
+      {/* 官方 Discord 同样没有伙伴专线; 端点下发前不显示(灰度开关)。 */}
+      {!companion ? renderProviderCard('discord') : null}
       {renderProviderCard('x')}
 
       {/* ── 项目与模型(所有官方机器人共用, 只此一处) ─────────────────── */}
       {projectsSectionVisible ? renderProjectsSection() : null}
     </div>
+  );
+}
+
+/** 官方渠道分组说明;云实例设置的官方分组复用。 */
+export function HookConnectionsDescription() {
+  const { t } = useTranslation();
+  return (
+    <p className="text-12 text-[var(--text-tertiary)]">
+      {t('settings.remoteControl.hook.description')}
+    </p>
   );
 }

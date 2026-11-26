@@ -18,35 +18,81 @@ pub(crate) const STREAM_HEADER_LEN: usize = 9;
 /// 分片长度字段的最高位：这个分片带流头。
 pub(crate) const HEADED_LENGTH_BIT: u16 = 0x8000;
 const FLAG_FIN: u8 = 1;
-const PRIORITIES: usize = 3;
+/// 优先级的档数：0 最急，`PRIORITY_LEVELS - 1` 最不急。
+pub const PRIORITY_LEVELS: usize = 8;
+const PRIORITIES: usize = PRIORITY_LEVELS;
 /// 同一优先级里每条流连发这么多个分片再换下一条：换流要带流头，轮得太勤开销不小。
 const ROUND_QUANTUM: u32 = 8;
-/// 高优先级连续占用这么多个分片后，让低优先级发一个，免得被彻底饿死。
+/// 高优先级连续占用这么多个分片后，让有数据的最低一档发一个，免得被彻底饿死。
 const STARVATION_LIMIT: u32 = 15;
 
-/// 流的优先级，只影响本端发送顺序。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Priority {
-    /// 聊天、远程控制这类小消息，有数据就先发。
-    Interactive,
-    #[default]
-    Normal,
-    /// 大文件这类后台传输，用剩下的带宽。
-    Background,
-}
+/// 流的优先级，只影响本端发送顺序，线上不带，两端可以各用各的档。共 [`PRIORITY_LEVELS`] 档，数小的先发；
+/// 原来的三档是其中三档（交互 1、普通 3、后台 6），只用这三档时和只有三档时逐个分片相同：调度、防饿死和缓冲预留只看先后。
+/// 0 和 1 两档按交互流对待（[`Priority::is_urgent`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Priority(u8);
 
+#[allow(non_upper_case_globals)]
 impl Priority {
+    /// 聊天、远程控制这类小消息，有数据就先发。
+    pub const Interactive: Priority = Priority(1);
+    pub const Normal: Priority = Priority(3);
+    /// 大文件这类后台传输，用剩下的带宽。
+    pub const Background: Priority = Priority(6);
+
+    /// 第 `level` 档，0 最急；超出 [`PRIORITY_LEVELS`] 时是 `None`。
+    pub const fn level(level: u8) -> Option<Priority> {
+        if (level as usize) < PRIORITY_LEVELS { Some(Priority(level)) } else { None }
+    }
+
+    /// 这一档的数，0 最急。
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+
+    /// 交互流：数据不用等发送节奏和拥塞窗口（每个往返有限额），窗口里给它留一点，和大流同时在发时连接压低排队。
+    pub const fn is_urgent(self) -> bool {
+        self.0 <= Priority::Interactive.0
+    }
+
     fn rank(self) -> usize {
-        match self {
-            Priority::Interactive => 0,
-            Priority::Normal => 1,
-            Priority::Background => 2,
-        }
+        self.0 as usize
     }
 
     pub(crate) fn is_lower_than(self, other: Priority) -> bool {
         self.rank() > other.rank()
     }
+
+    /// 最低一档，没有比它更低的流要让着它。
+    pub(crate) fn is_lowest(self) -> bool {
+        self.rank() == PRIORITIES - 1
+    }
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Priority::Normal
+    }
+}
+
+/// 一条发出的流的进展（`Connection::stream_progress`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StreamProgress {
+    /// 累计被对端确认的字节，含流头。
+    pub acked_bytes: u64,
+    /// 还在发送缓冲里的字节：写进来还没发的，加发了还没确认的。
+    pub buffered: usize,
+    /// 有字节在等时，距上一次有字节被确认（或开始等）过了多久；没有字节在等时是 0。
+    pub stalled_us: u64,
+}
+
+/// 发送方向的进展（`Connection::send_progress`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SendProgress {
+    /// 每一档还在发送缓冲里的字节，下标是 [`Priority::value`]。
+    pub queued: [usize; PRIORITY_LEVELS],
+    /// 有数据没被确认时，距上一次有数据被确认（或开始等）过了多久；都确认了是 0。
+    pub stalled_us: u64,
 }
 
 /// 收到的流发生了变化。
@@ -85,18 +131,31 @@ impl StreamHeader {
 pub(crate) struct SendStream {
     pub(crate) priority: Priority,
     pub(crate) pending: VecDeque<u8>,
-    /// 已经切成分片、还没确认的字节。
+    /// 已经切成分片、还没从发送缓冲里放掉的字节。全连接共用分片序号，被确认的分片要等前面的缺口补齐才放掉，所以这里
+    /// 含已经确认的。
     pub(crate) unacked: usize,
+    /// 其中还没被确认的字节（`stream_progress` 的停顿只看它：已经全部确认的流不因为别的流丢了包而算作卡住）。
+    pub(crate) outstanding: usize,
     pub(crate) next_seq: u64,
     /// 对端允许发到的流内序号（不含）。默认流不用它，看确认帧里的窗口。
     pub(crate) credit_end: u64,
     pub(crate) finishing: bool,
     pub(crate) fin_sent: bool,
+    /// 累计被对端确认的字节，含流头。
+    pub(crate) acked: u64,
+    /// 上一次有字节被确认的时刻；之前没有字节在等时，是字节开始等的时刻：写进来的时刻，或者空闲的流只发结束标记时
+    /// 它切出的时刻（见 `Connection::stream_progress`）。
+    pub(crate) progress_at: u64,
 }
 
 impl SendStream {
     pub(crate) fn new(priority: Priority, credit_end: u64) -> Self {
-        Self { priority, pending: VecDeque::new(), unacked: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false }
+        Self { priority, pending: VecDeque::new(), unacked: 0, outstanding: 0, next_seq: 0, credit_end, finishing: false, fin_sent: false, acked: 0, progress_at: 0 }
+    }
+
+    /// 有字节在等：写进来还没发出的，或者发出了还没被确认的。
+    pub(crate) fn waiting(&self) -> bool {
+        !self.pending.is_empty() || self.outstanding > 0
     }
 
     /// 还有东西要切成分片。
@@ -124,8 +183,10 @@ pub(crate) struct Scheduler {
     /// 每个优先级上一次发的流，和它这一轮还能连发几个。
     last: [Option<u32>; PRIORITIES],
     quantum_left: [u32; PRIORITIES],
-    /// 比最低的那个有数据的优先级高的流，已经连续发了几个分片。
-    high_run: u32,
+    /// 每一档有数据在等时，比它高的档已经连续发了几个分片。每一档各记各的：只记一个数的话，三档都有数据时
+    /// 让给中间一档也清不了零，之后每一次都让给中间档，最高档反而被饿住（2026-11-19：普通和后台各一条大流时，
+    /// 慢线路上交互消息的 p95 从 0.19 秒涨到 2.6 秒）。
+    waited: [u32; PRIORITIES],
 }
 
 impl Scheduler {
@@ -147,10 +208,9 @@ impl Scheduler {
         }
         let choice = |rank: usize| next_after_last[rank].or(candidates[rank]);
         let highest = (0..PRIORITIES).find(|&rank| candidates[rank].is_some())?;
-        if self.high_run >= STARVATION_LIMIT
-            && let Some(lower) = (highest + 1..PRIORITIES).find(|&rank| candidates[rank].is_some())
-        {
-            return choice(lower);
+        // 等满了的档里先让最低的：它让完清零，再轮到上面等满了的档。
+        if let Some(starved) = (highest + 1..PRIORITIES).rev().find(|&rank| candidates[rank].is_some() && self.waited[rank] >= STARVATION_LIMIT) {
+            return choice(starved);
         }
         choice(highest)
     }
@@ -158,14 +218,21 @@ impl Scheduler {
     /// 发了一个低优先级的重传。它和新分片一样算低优先级在前进：只认新分片的话，
     /// 重传队列排空之前计数清不了零，高优先级要一直让路。
     pub(crate) fn record_retransmission(&mut self) {
-        self.high_run = 0;
+        self.waited = [0; PRIORITIES];
     }
 
-    pub(crate) fn record(&mut self, id: u32, priority: Priority, higher_than_lowest: bool) {
+    /// 发了 `id` 的一个分片以后记账。`streams` 是切完这个分片以后的状态，用来看哪几档还有数据在等。
+    pub(crate) fn record(&mut self, id: u32, priority: Priority, streams: &BTreeMap<u32, SendStream>) {
         let rank = priority.rank();
         self.quantum_left[rank] = if self.last[rank] == Some(id) { self.quantum_left[rank].saturating_sub(1) } else { ROUND_QUANTUM - 1 };
         self.last[rank] = Some(id);
-        self.high_run = if higher_than_lowest { self.high_run + 1 } else { 0 };
+        let mut waiting = [false; PRIORITIES];
+        for stream in streams.values().filter(|stream| stream.has_data()) {
+            waiting[stream.priority.rank()] = true;
+        }
+        for (other, waited) in self.waited.iter_mut().enumerate() {
+            *waited = if other == rank || !waiting[other] { 0 } else if other > rank { waited.saturating_add(1) } else { *waited };
+        }
     }
 }
 

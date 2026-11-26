@@ -14,6 +14,11 @@ Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 
 Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
 与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+`cindy.fetch` 与 `cindy.network.open/read/send/close` 也经同一私有宿主通道提供网络代发、
+流式读取与 WebSocket；沿用本插件已批准的 `network` 目标及凭证注入，不给 Worker 凭证明文，
+不接受自报 callId 借用任务权限，详见[网络](plugin-network.md)。
+引用已连接 OAuth 账号时只允许宿主代注入，`node.secretBindings` 返回
+`HOST_INJECTION_REQUIRED`，不把原账号的令牌交给 Worker。
 其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
@@ -334,7 +339,7 @@ network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置�
 
 交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
 
-### 4.12.6 Node 短期鉴权票据上传（未发布）
+### 4.12.6 Node 短期鉴权票据上传
 
 逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
 Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
@@ -354,3 +359,6 @@ Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每
 领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
 bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
 兑换结果和密钥留在 Node，不进入页面、KV 或模型。
+
+交互页面的宿主标题、来源提示、全屏按钮声明和页签固定尺寸见 [插件界面扩展](plugin-host-ui.md#标题全屏与可用尺寸)。
+页签与全屏的页面需自行滚动，不能依赖宿主自动增高；`hostFullscreenButton: false` 只隐藏宿主按钮，不撤销页面请求全屏的能力。

@@ -4,12 +4,17 @@ export class CongestionSendBudget {
   private spent = 0;
   private turn = -1;
   private readonly byPeer = new Map<string, number>();
+  private blockedAt: number | null = null;
+
+  /** Admission denials are pressure evidence even if ACKs drain the queue later. */
+  get lastBlockedAt(): number | null { return this.blockedAt; }
 
   reset(): void {
     this.window = -1;
     this.spent = 0;
     this.turn = -1;
     this.byPeer.clear();
+    this.blockedAt = null;
   }
 
   /** Settle the synchronous send attempt: only frames actually written cost credit. */
@@ -39,15 +44,20 @@ export class CongestionSendBudget {
     const count = Math.max(1, peers.length);
     // Rotate turns when there are more peers than slots, including oversized heads.
     const offset = (Math.max(0, index) - this.turn % count + count) % count;
-    if (offset >= 8) return false;
+    if (offset >= 8) return this.block(now);
     const share = Math.max(1, Math.floor(8 / Math.min(8, count)));
     const used = this.byPeer.get(peer) ?? 0;
     // A logical message's chunks are atomic. Let an oversized head occupy one turn,
     // even if a small peer ran first. Charge its overflow to future windows and
     // rotate only when credit returns (wall-clock rotation can starve whole peers).
     if (frames > share) {
-      if (offset !== 0 || used !== 0 || this.spent >= 8) return false;
-    } else if (this.spent + frames > 8 || used + frames > share) return false;
+      if (offset !== 0 || used !== 0 || this.spent >= 8) return this.block(now);
+    } else if (this.spent + frames > 8 || used + frames > share) return this.block(now);
     return true;
+  }
+
+  private block(now: number): false {
+    this.blockedAt = now;
+    return false;
   }
 }

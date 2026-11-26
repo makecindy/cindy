@@ -1,3 +1,4 @@
+import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
@@ -12,6 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { buildSharedTaskInvitationLink, isSharedTaskPeer } from '@cindy/device-link';
 import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { setPendingGiftCardCode } from '@/features/billing/giftCardIntent';
 import { useRememberMainEntry } from './MainEntryRedirect';
 import { useTranslation } from 'react-i18next';
 
@@ -24,6 +26,7 @@ import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
+import { companionChatTarget } from '@/features/bots/companionChatTarget';
 import { getSplitSessionIds, useSplitGroup } from '@/features/cc-agent/splitGroupStore';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
@@ -37,10 +40,13 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
+import { LegalTermsUpdateGate } from '@/components/auth/LegalTermsUpdateGate';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
+import { DeviceIdentityConflictNotice } from '@/features/device-link/DeviceIdentityConflict';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
 import {
   TASK_LIVE_SCREEN_LIMIT,
@@ -145,7 +151,7 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { resolveSessionRoute, standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
@@ -332,13 +338,6 @@ export function MainLayout() {
   // 实例）会经 Outlet context 的 setRightSidebarAvailable 置 true，卸载时置 false。
   // 据此决定是否渲染右栏面板：离开聊天视图 → 面板卸载，不会卡在展开态且无入口关闭。
   const [rightSidebarAvailable, setRightSidebarAvailable] = useState(false);
-  // 经过不声明右栏的路由时保持挂载并强制折叠，避免销毁内置浏览器 guest（#6485）。
-  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
-    useRetainedRightSidebarMount({
-      available: rightSidebarAvailable,
-      loaded: rsbWindow.loaded,
-      detached: rsbDetached,
-    });
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
@@ -433,9 +432,6 @@ export function MainLayout() {
   const remoteTaskEntriesWidth = remoteDesktopDeviceId
     ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
     : 0;
-  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
-  const showWindowsRightSidebarTrigger =
-    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -485,6 +481,10 @@ export function MainLayout() {
     onOpen: openNotice,
     onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
+  // 协议更新确认挡着时,所有会自动弹出的全局弹窗(更新说明、启动恢复、飞书冲突、分享审批、
+  // 中转审批、聊天邀请、共享任务、会话导入)都先不显示:Radix 模态会抢焦点并禁用页面其余部分的
+  // 指针事件,却画在协议遮罩下面。各自的状态保留,用户同意后再弹出。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
@@ -493,13 +493,23 @@ export function MainLayout() {
     syncNotificationsEnabledToMain();
   }, []);
 
-  const isSettingsRoute = location.pathname === '/settings';
+  // Task and companion focus changes share a split tree. Remounting the
+  // outlet here would lose pending pane closes and in-progress chat input.
+  const contentFeatureKey = companionChatTarget(location.pathname, location.search)
+    ? 'cc-agent'
+    : location.pathname.split('/')[1] || 'root';
+  const isSettingsRoute = location.pathname === '/settings' || location.pathname === '/cloud-settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, mode: authMode, user: authUser } = useAuth();
+  // 礼品卡链接到达时的身份。只在确定不是个人身份（未登录 Cindy 账号，或当前是组织身份）时拦下；
+  // 账号资料还没加载出来时照常放行，由计费页自己的可见性判断兜底。用 ref 读最新值，
+  // 不让链接处理器随身份变化重建。
+  const canRedeemGiftCardRef = useRef(true);
+  canRedeemGiftCardRef.current = authMode === 'cloud' && authUser?.membershipKind !== 'org';
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -590,6 +600,7 @@ export function MainLayout() {
   useSchemaDriftWarningToast();
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
+  // 辅助模型全部不可用时提示一次（任务命名、摘要、插件任务等都依赖它）。
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
@@ -612,7 +623,9 @@ export function MainLayout() {
       const remoteSession =
         remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
           s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
-      const route = deviceId
+      const route = deviceId === 'local'
+        ? Promise.resolve(standardSessionRoute(sessionId))
+        : deviceId
         ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
           ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
         : resolveSessionRoute(sessionId, remoteSession);
@@ -712,7 +725,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -730,6 +743,7 @@ export function MainLayout() {
       navigate('/cc-agent/scheduled', {
         state: pluginScheduleNavigationState({
           kind: 'plugin-schedule-draft',
+          ...(typeof primaryHostKey === 'string' ? { primaryHostKey } : {}),
           requestId,
           ghostId,
           ghostName,
@@ -773,8 +787,9 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -805,6 +820,18 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'gift-card') {
+        // 礼品卡仅限个人用户领取，兑换入口所在的计费页也只对个人身份显示。组织身份或
+        // 未登录时不跳转（否则会落到「通用」页、什么都不发生），提示后丢弃兑换码。
+        if (!canRedeemGiftCardRef.current) {
+          toast.error(t('billing.giftCard.errors.personalRequired'));
+          return;
+        }
+        // 兑换码不进路由 URL：暂存在内存，计费页消费意图时取走。
+        setPendingGiftCardCode(payload.code);
+        navigate('/settings?tab=billing&intent=redeem-gift-card');
         return;
       }
       if (payload.type === 'installed-plugin') {
@@ -861,7 +888,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -883,6 +913,11 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+        void pullChatInvitations();
+        return;
+      }
+      // 礼品卡意图同样由 Main 保留到登录之后，和下面几类一样从暂存槽原子取出。
+      if (payload.type === 'gift-card') {
         void pullChatInvitations();
         return;
       }
@@ -1033,7 +1068,6 @@ export function MainLayout() {
     return onRequestRightSidebarVisibility((visibility, opts) => {
       const currentSessionId = rightSidebarSessionIdRef.current;
       const targetSessionId = opts.sessionId ?? currentSessionId;
-      if (!targetSessionId) return;
       const targetCollapsed = visibility === 'close';
       const windowState = getRsbWindowUiState();
       if (!windowState.loaded) return;
@@ -1043,6 +1077,7 @@ export function MainLayout() {
       // (agent tab-op 在 detached 时 dispatch 到子窗口 renderer,其内的
       // SidebarWindowLayout 也订阅了本通道;这里主要覆盖主窗内直接调用方。)
       if (detachedNow) {
+        if (!targetSessionId) return;
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open') {
           detachedHostSessionIdRef.current = detachedHostAfterOpen({
@@ -1065,7 +1100,7 @@ export function MainLayout() {
         return;
       }
       if (targetSessionId === currentSessionId) {
-        // 前台路径:走 UI + 持久化
+        // 前台路径:走 UI + 持久化；全局具名页没有任务时只更新本窗口折叠态。
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {
@@ -1074,7 +1109,7 @@ export function MainLayout() {
           writeCollapsedFor(targetSessionId, targetCollapsed);
           return targetCollapsed;
         });
-      } else {
+      } else if (targetSessionId) {
         // 后台路径:写入目标 session 存档。用户手势跨任务 open 才切主窗;
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
@@ -1106,20 +1141,11 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
-  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
-    hasRailChromeActions,
-    rightSidebarSide,
-    rightSidebarAvailable,
-    rightSidebarLoaded: rsbWindow.loaded,
-    isRightSidebarCollapsed,
-    isRightSidebarMaximized,
-    rsbDetached,
-  });
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
   // 左 / 上 / 下边页签组:按「组里有没有可见页签」注册 / 注销 pane,并保证树里有它。
-  useTabGroupPanes({
+  const globalRightViewAvailable = useTabGroupPanes({
     sessionId: rightSidebarSessionId,
     enabled: rsbWindow.loaded && !rsbDetached && !isSettingsRoute,
     // 离开聊天页(如 /plugins)时在聊天页出现过的组停放而不卸载,webview 不重载(#8081)。
@@ -1128,24 +1154,27 @@ export function MainLayout() {
     deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
     subagentsAvailable: rightSidebarSubagentsAvailable,
   });
-  useEffect(() => {
-    if (!isRightSidebarMaximized) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // 输入态让路 —— 用户在 input / contenteditable 里按 Esc 通常是取消编辑。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target?.closest?.('[contenteditable="true"]')
-      ) {
-        return;
-      }
-      setIsRightSidebarMaximized(false);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isRightSidebarMaximized]);
+  const rightSidebarPaneAvailable = rightSidebarAvailable || globalRightViewAvailable;
+  // Windows/Linux 与 macOS 使用同一在场条件，按钮占位也由它推导。
+  const showWindowsRightSidebarTrigger = rightSidebarPaneAvailable && rsbWindow.loaded;
+  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
+    hasRailChromeActions,
+    rightSidebarSide,
+    rightSidebarAvailable: rightSidebarPaneAvailable,
+    rightSidebarLoaded: rsbWindow.loaded,
+    isRightSidebarCollapsed,
+    isRightSidebarMaximized,
+    rsbDetached,
+  });
+  // 全局具名页可以从 /plugins 等非任务路由打开；其余页签仍按原规则保留并强制折叠。
+  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
+    useRetainedRightSidebarMount({
+      available: rightSidebarPaneAvailable,
+      loaded: rsbWindow.loaded,
+      detached: rsbDetached,
+    });
+  const exitRightSidebarMaximize = useCallback(() => setIsRightSidebarMaximized(false), []);
+  useRightSidebarMaximizeEscape(isRightSidebarMaximized, exitRightSidebarMaximize);
   // 折叠 RSB / session 切换 / 主路由切走聊天视图 → 自动退出 maximize。
   useEffect(() => {
     if (isRightSidebarCollapsed && isRightSidebarMaximized) {
@@ -1153,10 +1182,10 @@ export function MainLayout() {
     }
   }, [isRightSidebarCollapsed, isRightSidebarMaximized]);
   useEffect(() => {
-    if (!rightSidebarAvailable && isRightSidebarMaximized) {
+    if (!rightSidebarPaneAvailable && isRightSidebarMaximized) {
       setIsRightSidebarMaximized(false);
     }
-  }, [rightSidebarAvailable, isRightSidebarMaximized]);
+  }, [rightSidebarPaneAvailable, isRightSidebarMaximized]);
 
   // ── 侧边栏子窗口(detached)联动 ─────────────────────────────────────────
   // 1) 上下文上推:sessionId / workdir / available 变化时无条件推给 main
@@ -1449,7 +1478,6 @@ export function MainLayout() {
           openPerformanceTrace();
           break;
         case 'new-maker':
-          // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
           navigate('/cc-agent/new', {
             state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),
@@ -1919,7 +1947,7 @@ export function MainLayout() {
                     <div
                       data-testid="right-sidebar-fixed-trigger"
                       className={cn(
-                        'pointer-events-none absolute z-50 flex items-center gap-1',
+                        'pointer-events-none absolute z-float flex items-center gap-1',
                         rightSidebarSide === 'left' ? 'left-2 flex-row-reverse' : 'right-2',
                       )}
                       style={
@@ -1954,15 +1982,15 @@ export function MainLayout() {
                     </div>
                   )}
                   <VoiceCallFloatingSlot />
-                  <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
+                  <FadeSwitcher key={contentFeatureKey}>
                     <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
                 {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
-                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
-                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   >
                     <RightSidebarToggle
@@ -2019,7 +2047,7 @@ export function MainLayout() {
             <LayoutRoot
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
-              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
+              sidebarExpansionReady={rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
@@ -2060,7 +2088,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
             data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
@@ -2078,7 +2106,7 @@ export function MainLayout() {
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
-          open={noticeOpen}
+          open={noticeOpen && !legalTermsGateBlocking}
           mode={noticeMode}
           releaseNotes={releaseNotes}
           allVersions={noticeAllVersions}
@@ -2088,7 +2116,7 @@ export function MainLayout() {
       )}
       {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen) || legalTermsGateBlocking} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
@@ -2099,11 +2127,11 @@ export function MainLayout() {
       {!isSecondaryWindow() && <ChatInviteHost />}
       {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
       {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}
-      {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
+      {sharedTaskInvitation && !legalTermsGateBlocking && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
       <GlobalDropImportListener onOpenShareImport={openShareImport} />
-      {shareImportRequest && (
+      {shareImportRequest && !legalTermsGateBlocking && (
         <SessionShareImportWizard
           key={shareImportRequest.id}
           open
@@ -2117,6 +2145,10 @@ export function MainLayout() {
       <BrowserWebviewPool />
       {/* 实际存在内联提示（含伙伴 / 折叠态）时组件自行退让，其余页面保留兜底。 */}
       <ControlledBanner />
+      {/* 另一台电脑在用本机设备身份时提醒一次，带用户去「我的设备」处理。 */}
+      <DeviceIdentityConflictNotice />
+      {/* 协议更新确认:同意过旧版协议的个人账号须先确认新版才能继续使用(各窗口都挡)。 */}
+      <LegalTermsUpdateGate />
     </FeatureSidebarSlotProvider>
   );
 }

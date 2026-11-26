@@ -24,6 +24,14 @@ const LOW_QUEUE_CWND_GAIN: u64 = 1250;
 const LOW_QUEUE_STARTUP_GAIN: u64 = 1350;
 const LOW_QUEUE_CRUISE_GAIN: u64 = 970;
 const LOW_QUEUE_PROBE_GAIN: u64 = 1050;
+/// 低排队模式的加速探测连着成功（带宽涨了、没排队、没多丢）时一次比一次加得多，最多到普通模式的 1.25 倍。
+const LOW_QUEUE_PROBE_MAX_GAIN: u64 = 1250;
+/// 低排队模式的窗口另加确认一直成批到达多出来的量（[`Bbr::update_ack_aggregation`]）：每这么多轮换一个统计窗口，
+/// 取刚结束的两个窗口里较小的那个。令牌桶开头放行的那一阵只落在一个窗口里，不算（`sim/tests/streams.rs` 的「限速」一行：
+/// 取最大值时小请求 p99 75 → 227 毫秒）；改成 3 轮时「漂移」一行 p99 超限。
+const ACK_AGGREGATION_WINDOW_ROUNDS: u32 = 5;
+/// 一段确认累计到这么多字节就重新开始，很旧的一段不会一直算下去。
+const ACK_EPOCH_RESET_BYTES: u64 = 1 << 30;
 /// 探测撞到丢包，说明到顶了。之后巡航低于顶点一点，给别的流留个口子：顶着容量发的话，
 /// TCP 一抬头就丢包，退到几乎没有流量，连被挤掉的信号都留不下来。
 const HEADROOM_CRUISE_GAIN: u64 = 900;
@@ -43,6 +51,8 @@ const FAIR_K_FACTOR: u64 = 750_000_000;
 const RECENT_ROUNDS: usize = 8;
 /// 压低队列时连续这么多轮判断在排队、往返时间却没有降下来，说明不是自己排的队，以现在的值为基准。
 const QUEUE_CHECK_ROUNDS: u8 = 3;
+/// 同上的时候最近两轮的送达速率都不到实际发送速率的这个比例（千分比）：队列是自己排的，是带宽估计偏高了。
+const OWN_QUEUE_DELIVERY_PERMILLE: u64 = 800;
 
 const BW_WINDOW_ROUNDS: usize = 10;
 /// 丢得比送达还多的轮次最多连续这么多轮不老化带宽样本。突发丢包和短断网撑不了这么久；
@@ -219,6 +229,8 @@ pub(crate) struct RateSample {
     pub(crate) app_idle: bool,
     /// 这批包从发第一个到发这一个用了多久。到达速率不可能超过发送速率。
     pub(crate) send_span_us: u64,
+    /// 没测过路径时一阵数据开头快发的那一串里的包（[`Bbr::on_sent`]）。
+    pub(crate) train: bool,
 }
 
 /// 最近几轮平均送达低于这个速率（字节每秒）时，不当作路径上有限速的证据。正常传输远高于它，
@@ -242,6 +254,11 @@ pub(crate) struct Bbr {
     round_started_at: u64,
     /// 最近几轮各自的平均送达速率。
     round_rates: [u64; DELIVERY_ROUNDS],
+    /// 同上，但只记发送方一直有数据可发的轮次。应用有一阵没数据的轮次只量到应用自己的速度
+    /// （零星小消息每秒几百字节、一阵数据的尾巴），不代表路径能送多少，不能拿来判断路径上有没有限速，见 `pacing_rate`。
+    busy_round_rates: [u64; DELIVERY_ROUNDS],
+    /// 这一轮里确认过应用没数据可发时发出的包。
+    round_idle: bool,
     /// 进入巡航以后过了几轮。
     probe_bw_rounds: u32,
     /// 一共过了几轮，包括应用没数据的轮次。
@@ -279,6 +296,9 @@ pub(crate) struct Bbr {
     round_min_rtt_us: u64,
     round_rtt_samples: u32,
     last_round_min_rtt_us: u64,
+    /// 这一轮、上一轮有没有满负荷发出的包（见 [`Self::queue_floor_loaded`]）。
+    round_loaded: bool,
+    last_round_loaded: bool,
     recent_round_rtts: [u64; RECENT_ROUNDS],
     recent_round_index: usize,
     queue_check_rounds: u8,
@@ -347,11 +367,36 @@ pub(crate) struct Bbr {
     train_start: Option<(u64, u64)>,
     /// 第一个确认回来之前发了多少字节。
     first_flight_sent: u64,
+    /// 应用有数据排着的时候测过路径：之前的样本都来自零星小消息的话，带宽估计只是应用的发送速度。
+    backlog_measured: bool,
+    /// 没测过路径时来了一阵数据，开头这一串包按第一批包的方式快发、测确认间隔，这一串已经发了多少字节。
+    burst_train_sent: u64,
+    /// 那一串最后一个包的发送时间。
+    burst_train_at: u64,
+    /// 那一串的确认明显比发得慢时测到的速度，就是瓶颈的速度；0 表示没测到。
+    train_bottleneck: u64,
     /// 往返时间的平滑平均。
     rtt_avg_us: u64,
     /// 相邻两个 RTT 样本之差的平滑平均，衡量抖动。
     rtt_jitter_us: u64,
+    /// 零星消息（应用没数据排着时发的包）的往返比最低往返平均高出多少。它们排不出队，高出的只能是路径本身的抖动：
+    /// 不打乱先后的抖动（Wi-Fi 聚合、经 TCP 中转）让连续发的包往返几乎一样，相邻差值估不出抖动，零星消息估得出。
+    idle_rtt_excess_us: u64,
+    idle_rtt_samples: u32,
     last_rtt_us: u64,
+    /// 确认成批到达的程度（BBR 的 extra_acked）：一段确认里比按带宽估计该送到的多出来的字节，最近三个统计窗口各自的最大值。
+    aggregation_delivered: u64,
+    ack_epoch_at: u64,
+    ack_epoch_acked: u64,
+    extra_acked: [u64; 3],
+    extra_acked_rounds: u32,
+    extra_acked_index: usize,
+    /// 这一轮发出的字节数和最近两轮各自的发送速率：判断队列是不是自己排的（见 `check_queue_is_ours`）。
+    round_sent: u64,
+    round_send_rates: [u64; 2],
+    /// 低排队模式这一次加速探测比带宽多发的千分比，和上一次探测开始时的带宽估计。
+    low_queue_probe_step: u64,
+    low_queue_probe_bw: u64,
 }
 
 impl Bbr {
@@ -371,6 +416,8 @@ impl Bbr {
             round_start_delivered: 0,
             round_started_at: 0,
             round_rates: [0; DELIVERY_ROUNDS],
+            busy_round_rates: [0; DELIVERY_ROUNDS],
+            round_idle: false,
             probe_bw_rounds: 0,
             round_count: 0,
             round_loss_ppm: [0; 2],
@@ -401,6 +448,8 @@ impl Bbr {
             round_min_rtt_us: u64::MAX,
             round_rtt_samples: 0,
             last_round_min_rtt_us: u64::MAX,
+            round_loaded: false,
+            last_round_loaded: false,
             recent_round_rtts: [u64::MAX; RECENT_ROUNDS],
             recent_round_index: 0,
             queue_check_rounds: 0,
@@ -448,9 +497,25 @@ impl Bbr {
             last_period_rate: 0,
             train_start: None,
             first_flight_sent: 0,
+            backlog_measured: false,
+            burst_train_sent: 0,
+            burst_train_at: 0,
+            train_bottleneck: 0,
             rtt_avg_us: 0,
             rtt_jitter_us: 0,
+            idle_rtt_excess_us: 0,
+            idle_rtt_samples: 0,
             last_rtt_us: 0,
+            aggregation_delivered: 0,
+            ack_epoch_at: 0,
+            ack_epoch_acked: 0,
+            extra_acked: [0; 3],
+            extra_acked_rounds: 0,
+            extra_acked_index: 0,
+            round_sent: 0,
+            round_send_rates: [0; 2],
+            low_queue_probe_step: LOW_QUEUE_PROBE_GAIN - 1000,
+            low_queue_probe_bw: 0,
         }
     }
 
@@ -506,12 +571,26 @@ impl Bbr {
     /// 巡航周期里当前阶段的增益。发现浅队列以后，加速探测只加 10%。
     fn cycle_gain(&self) -> u64 {
         if self.cycle_index == 0 && self.low_queue {
-            LOW_QUEUE_PROBE_GAIN
+            1000 + self.low_queue_probe_step
         } else if self.cycle_index == 0 && self.gentle_probes > 0 {
             GENTLE_PROBE_GAIN
         } else {
             PROBE_CYCLE[self.cycle_index]
         }
+    }
+
+    /// 低排队模式每次只加 5%、8 轮一次，启动结束得早（抖动线路、开头那一串量低了）时要好几秒才爬回线路速度
+    /// （2026-11-16 真实网络对比：上传从每秒 4.1 MB 起，1.8 秒才到 6.5 MB）。上一次探测带宽涨到了预期的六成以上、
+    /// 没在排队、探测的包也没多丢，说明还有余量，这次加倍；有一样不满足就回到 5%。贴着容量时探测总是不成，照样只加 5%。
+    fn escalate_low_queue_probe(&mut self) {
+        let step = self.low_queue_probe_step;
+        let succeeded = self.low_queue
+            && self.low_queue_probe_bw > 0
+            && self.gentle_probes == 0
+            && !self.queue_is_building()
+            && self.btl_bw.saturating_mul(1000) >= self.low_queue_probe_bw.saturating_mul(1000 + step * 6 / 10);
+        self.low_queue_probe_step = if succeeded { (step * 2).min(LOW_QUEUE_PROBE_MAX_GAIN - 1000) } else { LOW_QUEUE_PROBE_GAIN - 1000 };
+        self.low_queue_probe_bw = self.btl_bw;
     }
 
     /// 正处在加速探测阶段。
@@ -713,6 +792,41 @@ impl Bbr {
         self.path_rate().saturating_mul(self.base_rtt()) / 1_000_000
     }
 
+    /// 记下这次确认比按带宽估计该送到的多出多少（Linux BBR 的 `bbr_update_ack_aggregation`）。
+    /// 一段确认从送达速率低于估计时开始算；不打乱先后的抖动（Wi-Fi 聚合、经 TCP 中转）让确认一阵一阵地来，
+    /// 一阵里多出来的就是路径上「在途但还没确认」的量。瓶颈排队时确认按瓶颈速度均匀地来，这个值不涨。
+    fn update_ack_aggregation(&mut self, now_us: u64, delivered: u64, round_start: bool) {
+        let acked = delivered.saturating_sub(self.aggregation_delivered);
+        self.aggregation_delivered = delivered;
+        if acked == 0 || self.btl_bw == 0 {
+            return;
+        }
+        if round_start {
+            self.extra_acked_rounds += 1;
+            if self.extra_acked_rounds >= ACK_AGGREGATION_WINDOW_ROUNDS {
+                self.extra_acked_rounds = 0;
+                self.extra_acked_index = (self.extra_acked_index + 1) % 3;
+                self.extra_acked[self.extra_acked_index] = 0;
+            }
+        }
+        let mut expected = self.btl_bw.saturating_mul(now_us.saturating_sub(self.ack_epoch_at)) / 1_000_000;
+        if self.ack_epoch_acked <= expected || self.ack_epoch_acked + acked >= ACK_EPOCH_RESET_BYTES {
+            self.ack_epoch_acked = 0;
+            self.ack_epoch_at = now_us;
+            expected = 0;
+        }
+        self.ack_epoch_acked += acked;
+        let extra = self.ack_epoch_acked.saturating_sub(expected);
+        let slot = &mut self.extra_acked[self.extra_acked_index];
+        *slot = (*slot).max(extra);
+    }
+
+    /// 确认一直成批到达多出来的量：刚结束的两个统计窗口里较小的那个，最多一个 BDP。
+    fn extra_acked(&self) -> u64 {
+        let i = self.extra_acked_index;
+        self.extra_acked[(i + 1) % 3].min(self.extra_acked[(i + 2) % 3]).min(self.bdp())
+    }
+
     /// 判断在排队时会主动降速，自己排的队这样几轮就排空了。往返时间不降，就是路径本身变慢了，继续降速只会越降越低。
     fn check_queue_is_ours(&mut self) {
         let floor = self.last_round_min_rtt_us;
@@ -726,7 +840,17 @@ impl Bbr {
         self.queue_check_rounds += 1;
         if self.queue_check_rounds >= QUEUE_CHECK_ROUNDS {
             self.queue_check_rounds = 0;
-            if floor.saturating_mul(32) >= self.queue_check_rtt.saturating_mul(31) {
+            // 连着两轮发的比送到的快得多：队列是自己排的。确认挤着到时带宽估计会被抬高，降速以后仍超过路径容量，往返当然降不下来。
+            // 这时把带宽估计降到实际送达的速率；照旧抬高基准的话窗口跟着变大，队列越排越长
+            // （2026-11-16 模拟器 4G 线路：带宽估计 6 MB/s 对线路 2.5 MB/s，基准从 85 抬到 210 毫秒，小请求 p99 0.3 → 0.7 秒）。
+            // 比的是实际发出的速率，不是发送节奏：路径本身变慢时窗口限住了发送，发多少就送到多少，基准照常跟上去。
+            let delivered = self.round_rates[0].max(self.round_rates[1]);
+            let sent = self.round_send_rates[0].min(self.round_send_rates[1]);
+            if delivered > 0 && delivered.saturating_mul(1000) < sent.saturating_mul(OWN_QUEUE_DELIVERY_PERMILLE) {
+                self.bw_samples = [0; BW_WINDOW_ROUNDS];
+                self.bw_samples[self.round % BW_WINDOW_ROUNDS] = delivered;
+                self.btl_bw = delivered;
+            } else if floor.saturating_mul(32) >= self.queue_check_rtt.saturating_mul(31) {
                 self.recent_round_rtts = [floor; RECENT_ROUNDS];
             }
         }
@@ -919,14 +1043,27 @@ impl Bbr {
         p + p / 4 + EXCESS_LOSS_PPM + 2 * standard_error
     }
 
+    /// 估计值不超过 [`MAX_RANDOM_LOSS_PPM`]：补偿本来就只补到这里，再高也不是随机丢包能解释的。
+    /// 令牌桶放行的突发把带宽估计抬高以后，一阵数据的尾巴（重传）和降速阶段的包仍按估计在发，被限速器成片挡下，
+    /// 记成随机丢包能把估计值推到 98%。不封顶的话判限速的门槛（[`Self::excess_loss_threshold`]）跟着超过 100%，
+    /// 丢得比送达的多也认不出限速，一直按估计超发：模拟器里往返 90 毫秒、64 KB 令牌的限速器上 1 MiB 在线路上发了 11 倍，
+    /// 封顶后 4 倍多（2026-11-19，对照 xdt-server：往返 10 毫秒、出口约 0.7 MB/s）。
     fn update_random_loss(&mut self) {
         let samples = self.calm_samples.max(CALM_SAMPLE_FLOOR) as u64;
-        self.random_loss_ppm = (self.calm_losses as u64 * 1_000_000 / samples) as u32;
+        self.random_loss_ppm = ((self.calm_losses as u64 * 1_000_000 / samples) as u32).min(MAX_RANDOM_LOSS_PPM);
     }
 
     /// 打开让路模式。`packet_bytes` 是一个分片的大小。
     pub(crate) fn set_fair_share(&mut self, packet_bytes: u64) {
         self.fair_packet = packet_bytes.max(FAIR_UNIT_BYTES);
+    }
+
+    /// 窗口上限改成实际能用的窗口：对端在确认里说出它的接收窗口以后，按这一端和对端里小的那个算（见 `Connection::send_window_now`）。
+    /// 窗口都是用到时按上限现算的，改小了也不会留下超出上限的状态；初始和最小窗口和建立时一样不超过上限。
+    pub(crate) fn set_max_cwnd(&mut self, max_cwnd: u64) {
+        self.max_cwnd = max_cwnd;
+        self.initial_cwnd = self.initial_cwnd.min(max_cwnd);
+        self.min_cwnd = self.min_cwnd.min(max_cwnd);
     }
 
     /// 换了路径：量到的带宽、往返、排队和限速都不再适用，从启动阶段重新量。连接定下的设置和计数保留。
@@ -1010,12 +1147,32 @@ impl Bbr {
             && self.window_is_the_limit()
             && self.clean_rounds >= SPARE_WINDOW_CLEAN_ROUNDS;
         let cap = if spare_window { self.max_cwnd.saturating_mul(WINDOW_LIMITED_CWND_CAP) / 1000 } else { self.max_cwnd };
-        (self.bdp().saturating_mul(gain) / 1000).clamp(self.min_cwnd, cap)
+        // 低排队模式的窗口只按往返留 1.25 倍。抖动线路上平常的往返比最小往返高三到五成，窗口先卡住速度，带宽估计一轮轮往下掉
+        // （2026-11-15 真实网络对比）。补上确认一直成批到达多出来的量：只有确认挤着来时才有，瓶颈排队时确认按瓶颈速度均匀地来，不涨。
+        // 已经在排队时不加：浅队列上随机抖动也会让确认挤一下，加上去小请求就排在队尾（校园一行 p99 26 → 35 毫秒）。
+        // 普通模式的窗口留了两倍，用不着；多条连接一起发时确认本来就交错着来，加上会挤爆浅队列。
+        let aggregation = if self.low_queue && !self.queue_is_building() { self.extra_acked() } else { 0 };
+        let cwnd = (self.bdp().saturating_mul(gain) / 1000 + aggregation).clamp(self.min_cwnd, cap);
+        // 只见过零星小消息时带宽估计只是应用的发送速度，按它算的窗口比新连接的初始窗口还小，开头那一串发不出去。
+        if self.in_burst_train() { cwnd.max(self.initial_cwnd.min(cap)) } else { cwnd }
+    }
+
+    /// 还没在应用有数据排着的时候测过路径。
+    fn capacity_unmeasured(&self) -> bool {
+        self.mode == Mode::Startup && !self.backlog_measured
+    }
+
+    /// 没测过路径时来了一阵数据，正在快发开头那一串。
+    fn in_burst_train(&self) -> bool {
+        self.burst_train_sent > 0 && self.burst_train_sent < self.initial_cwnd && self.capacity_unmeasured()
     }
 
     fn pacing_rate(&self) -> u64 {
         if self.btl_bw == 0 {
             return if self.first_flight_sent < self.initial_cwnd || !self.probe_sender_limited { self.initial_rate.max(FIRST_FLIGHT_RATE) } else { FIRST_FLIGHT_TRICKLE_RATE };
+        }
+        if self.in_burst_train() {
+            return self.initial_rate.max(FIRST_FLIGHT_RATE);
         }
         let gain = match self.mode {
             Mode::Startup => return self.startup_rate(),
@@ -1050,7 +1207,9 @@ impl Bbr {
         // 稀疏消息测到的只是应用发送速度，按它打折的话断网积压要等很久，这时只压到带宽估计的一半。
         // 窗口受限的长往返路径上，启动测到的速率常比窗口能送的高好几倍，那不是限速，不压；
         // 随机丢包率已经测稳的窗口受限阶段也不压，那时降速只比窗口速率低一点，再压就白白慢了。
-        let recent = self.round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
+        // 只看发送方一直有数据可发的轮次：空闲时零星小消息那几轮记进来的话，新的一阵一开始就被当成撞上了限速，
+        // 节奏压到小消息的速度，在途量只剩几个包，十轮后带宽估计也被挤掉，要爬好几秒（sim/tests/bursts.rs，2026-11-14）。
+        let recent = self.busy_round_rates.iter().sum::<u64>() / DELIVERY_ROUNDS as u64;
         let window_rate = self.max_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1);
         // 断网、换路径时有几轮几乎什么都没送到，平均只有每秒几个字节，那不是限速的证据：按它打折，节奏会被压成 0。
         let limited_elsewhere = recent >= MIN_LIMITER_EVIDENCE_RATE && recent < self.btl_bw / 2 && recent < window_rate / 2;
@@ -1069,6 +1228,11 @@ impl Bbr {
         } else {
             rate
         }
+    }
+
+    /// 建立连接时的拥塞窗口（字节）。
+    pub(crate) fn initial_window_bytes(&self) -> u64 {
+        self.initial_cwnd
     }
 
     pub(crate) fn bandwidth_estimate(&self) -> u64 {
@@ -1091,6 +1255,10 @@ impl Bbr {
     /// 启动时至少按“每个往返发完初始窗口”的速度走。低延迟链路上第一批确认很快回来，
     /// 这时送达速率还没测准，只看它的话，2 毫秒的链路要爬十几个往返。
     fn startup_rate(&self) -> u64 {
+        if self.train_found_bottleneck() {
+            let rate = self.path_rate().saturating_mul(PROBE_CYCLE[0]) / 1000;
+            return if self.rate_cap > 0 { rate.min(self.rate_cap) } else { rate };
+        }
         let gain = self.startup_gain();
         let measured = self.path_rate().saturating_mul(gain) / 1000;
         let floor = self.initial_cwnd.saturating_mul(1_000_000).saturating_mul(gain) / 1000 / self.min_rtt_us.max(1);
@@ -1105,6 +1273,13 @@ impl Bbr {
 
     fn startup_gain(&self) -> u64 {
         if self.low_queue { LOW_QUEUE_STARTUP_GAIN } else { STARTUP_GAIN }
+    }
+
+    /// 开头那一串已经量出了瓶颈速度、之后也没测到更快：启动阶段按它稍快一点发就够了。
+    /// 一阵数据往往几个往返就发完，启动阶段结束不了，按启动的倍数发的话每一阵都一下冲过队列，丢掉的要多等一个往返。
+    /// 测到比它快四分之一以上，说明那一串量低了，回到启动的倍数。
+    fn train_found_bottleneck(&self) -> bool {
+        self.train_bottleneck > 0 && self.btl_bw <= self.train_bottleneck.saturating_mul(FULL_BW_GROWTH) / 1000
     }
 
     pub(crate) fn can_send(&mut self, now_us: u64) -> bool {
@@ -1122,12 +1297,37 @@ impl Bbr {
         self.next_send_at.saturating_sub(PACING_QUANTUM_US)
     }
 
-    pub(crate) fn on_sent(&mut self, now_us: u64, bytes: u64) {
+    /// `backlog`：发完这个包应用还有多少字节没发。返回这个包是不是开头那一串里的，确认到达时用来测确认间隔。
+    pub(crate) fn on_sent(&mut self, now_us: u64, bytes: u64, backlog: u64) -> bool {
         // 统计段从第一次发送算起。连接建好后先空闲一阵（应用还没写）的话，空闲时间算进第一段，
         // 送达速率偏低，开头的丢包会被当成撞到了一个很低的限速。
         if self.btl_bw == 0 && self.first_flight_sent == 0 {
             self.period_started = now_us;
         }
+        // 只见过零星小消息时来了一阵数据：开头一串和新连接的第一批包一样快发，用确认间隔一个往返内测出路径速度。
+        // 否则要从应用的发送速度起步，每个往返涨不到三倍，往返 200 毫秒的线路上 1 MiB 要爬五六轮。
+        // 排着的数据至少够一个初始窗口才算一阵：连续写零星小消息时每个都马上发走，样本一直算“应用没数据”，
+        // 那时快发一串只会冲爆窄带线路的队列。一阵的最后一个包不算。上一串发完一个往返以后还没测出来
+        // （丢得太多），下一阵重新来一串。
+        let candidate = self.btl_bw > 0 && self.capacity_unmeasured() && backlog > 0;
+        if candidate && self.burst_train_sent > 0 && now_us.saturating_sub(self.burst_train_at) > self.min_rtt_us.max(1) {
+            self.burst_train_sent = 0;
+        }
+        let starts = self.burst_train_sent == 0 && backlog >= self.initial_cwnd;
+        let train = candidate && self.burst_train_sent < self.initial_cwnd && (starts || self.burst_train_sent > 0);
+        if train {
+            if self.burst_train_sent == 0 {
+                self.train_start = None;
+            }
+            self.burst_train_sent += bytes;
+            self.burst_train_at = now_us;
+        }
+        self.round_sent = self.round_sent.saturating_add(bytes);
+        self.on_sent_paced(now_us, bytes);
+        train
+    }
+
+    fn on_sent_paced(&mut self, now_us: u64, bytes: u64) {
         let trickle_starts = self.btl_bw == 0 && self.first_flight_sent < self.initial_cwnd && self.first_flight_sent + bytes >= self.initial_cwnd;
         if self.btl_bw == 0 {
             self.first_flight_sent += bytes;
@@ -1171,11 +1371,20 @@ impl Bbr {
             self.period_outage = true;
         }
         self.last_ack_at = now_us;
-        let delivery_rate = sample.delivery_rate.max(self.train_rate(now_us, sample, delivered));
+        let train_rate = self.train_rate(now_us, sample, delivered);
+        let delivery_rate = sample.delivery_rate.max(train_rate);
+        // 开头那一串测出了速度，或者应用有数据排着时送达了一个普通的包：之后的估计都是在满负荷下测的。
+        if (sample.train && train_rate > 0) || (!sample.train && !sample.app_limited) {
+            self.backlog_measured = true;
+        }
         self.sample_period(now_us, delivered);
         self.release_unconfirmed_cap(now_us, delivered);
         self.relax_rate_cap(now_us);
         let round_start = sample.prior_delivered >= self.next_round_delivered;
+        self.update_ack_aggregation(now_us, delivered, round_start);
+        // 结束上一轮的这个确认也算在上一轮里（它的字节计入那一轮的送达量）。
+        let round_idle = self.round_idle || sample.app_idle;
+        self.round_idle = round_idle && !round_start;
         // 一个包都没撞上窗口时，在途量可能只差一点。逐个确认判断的话，加速时断时续，在途量上不去，
         // 测到的带宽也跟着上不去。按两轮算：只有窗口末尾的包才会撞上窗口，每轮至少有一个。
         self.window_hit |= sample.app_limited && !sample.app_idle;
@@ -1204,9 +1413,15 @@ impl Bbr {
                 self.round_rates.rotate_right(1);
                 self.round_count += 1;
                 self.round_rates[0] = round_delivered.saturating_mul(1_000_000) / round_elapsed;
+                self.round_send_rates = [self.round_sent.saturating_mul(1_000_000) / round_elapsed, self.round_send_rates[0]];
+                if !round_idle {
+                    self.busy_round_rates.rotate_right(1);
+                    self.busy_round_rates[0] = self.round_rates[0];
+                }
                 self.update_fair_window(now_us, bytes_in_flight, sample.app_limited);
             }
             self.round_started_at = now_us;
+            self.round_sent = 0;
             self.next_round_delivered = delivered;
             self.round_start_delivered = delivered;
             self.round_lost = 0;
@@ -1252,17 +1467,35 @@ impl Bbr {
             }
             self.round_min_rtt_us = u64::MAX;
             self.round_rtt_samples = 0;
+            self.last_round_loaded = self.round_loaded;
+            self.round_loaded = false;
         }
         if sample.rtt_us > 0 {
+            self.round_loaded |= !sample.app_limited;
             if self.last_rtt_us > 0 {
                 self.rtt_jitter_us = (self.rtt_jitter_us * 7 + sample.rtt_us.abs_diff(self.last_rtt_us)) / 8;
+            }
+            if sample.app_idle && self.min_rtt_us > 0 {
+                // 零星消息每秒只有一两条，按八分之一平滑的话起步结束前还攒不出值：第一条直接用，之后按四分之一跟。
+                let excess = sample.rtt_us.saturating_sub(self.min_rtt_us);
+                self.idle_rtt_excess_us = if self.idle_rtt_samples == 0 { excess } else { (self.idle_rtt_excess_us * 3 + excess) / 4 };
+                self.idle_rtt_samples = self.idle_rtt_samples.saturating_add(1);
             }
             self.rtt_avg_us = if self.rtt_avg_us == 0 { sample.rtt_us } else { (self.rtt_avg_us * 7 + sample.rtt_us) / 8 };
             self.last_rtt_us = sample.rtt_us;
             self.round_min_rtt_us = self.round_min_rtt_us.min(sample.rtt_us);
             self.round_rtt_samples += 1;
         }
-        if self.mode == Mode::Startup && self.queue_is_building() {
+        // 只有零星消息的一轮排不出自己的队：往返变长是抖动或别人的流量，不能因此结束启动（[`Self::queue_floor_loaded`]）。
+        // 否则只发过零星小消息的一端带着每秒几 KB 的估计进了巡航，下一阵大数据要按每 8 轮涨四分之一慢慢爬。
+        // 抖动大到排队判断的余量盖不住时（三倍抖动超过余量上限），往返变长不足以说明是自己排的队：
+        // 不打乱先后的抖动（Wi-Fi 聚合、经 TCP 中转）让连续发的包都碰上最近最大的那次耽搁，往返整体抬高几十毫秒，
+        // 只看往返的话启动一两轮就结束，带宽估计停在线路的三成以下（sim/tests/bursts.rs）。
+        // 这时满负荷发送的还要带宽有一轮没涨够四分之一：速率翻倍还能全送到，瓶颈就还没满。
+        // 抖动小的线路照旧，浅队列上不多冲一轮；零星消息照旧，断网后的交互延迟不变。
+        let jitter = self.rtt_jitter_us.max(self.idle_rtt_excess_us);
+        let jitter_masks_queue = jitter.saturating_mul(3) > QUEUE_MARGIN_MAX_US && !sample.app_limited && self.full_bw_rounds == 0;
+        if self.mode == Mode::Startup && !jitter_masks_queue && self.queue_floor_loaded() && self.queue_is_building() {
             self.filled_pipe = true;
             // 被窗口限住时在途量最多一个窗口，排起来的队列有上限，不会越堆越长。
             // 这时整体降到三分之一去排空，只会让窗口空转一个往返。
@@ -1313,6 +1546,9 @@ impl Bbr {
                 self.probe_lost = 0;
                 self.probe_total = 0;
             }
+            if self.cycle_index == 0 {
+                self.escalate_low_queue_probe();
+            }
             self.cycle_started = now_us;
         }
         // 流量稀疏时队列本来就是空的，刚才的样本已经是干净的 RTT，不用再专门探测。
@@ -1334,7 +1570,7 @@ impl Bbr {
     /// 第一批包只有几十个，算出来很低，高延迟链路要多爬两三轮，这里一步到位。
     /// 发送速率是上限，确认挤在一起到达也不会高估。
     fn train_rate(&mut self, now_us: u64, sample: &RateSample, delivered: u64) -> u64 {
-        if sample.prior_delivered != 0 || self.mode != Mode::Startup {
+        if (sample.prior_delivered != 0 && !sample.train) || self.mode != Mode::Startup {
             return 0;
         }
         let Some((at, base)) = self.train_start else {
@@ -1345,11 +1581,29 @@ impl Bbr {
         if bytes < self.min_cwnd {
             return 0;
         }
-        (bytes.saturating_mul(1_000_000) / now_us.saturating_sub(at).max(sample.send_span_us).max(1)).min(self.initial_rate)
+        let rate = bytes.saturating_mul(1_000_000) / now_us.saturating_sub(at).max(sample.send_span_us).max(1);
+        // 一阵数据开头那一串的确认明显比发得慢：包在瓶颈前排着队，确认间隔就是瓶颈的速度，可以不封顶。
+        // 令牌桶、配额这类限速器不排队，放行的包确认间隔和发的一样快，这时照旧封顶。
+        if sample.train && rate.saturating_mul(10) < self.burst_train_rate().saturating_mul(8) {
+            self.train_bottleneck = self.train_bottleneck.max(rate);
+            return rate;
+        }
+        rate.min(self.initial_rate)
+    }
+
+    fn burst_train_rate(&self) -> u64 {
+        self.initial_rate.max(FIRST_FLIGHT_RATE)
     }
 
     fn queue_is_building(&self) -> bool {
         self.queue_above(self.queue_margin_us())
+    }
+
+    /// 判断排队用的那一轮（样本不够时是上一轮）里有满负荷发出的包。只有零星消息的一轮排不出自己的队，
+    /// 最小往返高出来只能是抖动：不打乱先后的抖动线路上，大数据刚开始那一轮样本还不够，
+    /// 拿上一轮零星消息碰上的一次耽搁判排队，起步在每秒约 9 KB 就结束（sim/tests/bursts.rs）。
+    fn queue_floor_loaded(&self) -> bool {
+        if self.round_rtt_samples >= ROUND_RTT_SAMPLES { self.round_loaded } else { self.last_round_loaded }
     }
 
     /// 一轮里最小的往返比基准高出 `margin_us`。

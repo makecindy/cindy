@@ -62,6 +62,28 @@
       "dark": "夜"
     },
     "saveFailed": "顯示模式未能存，重啟後將復前設",
+    "wallpaper": {
+      "title": "桌布",
+      "choose": "選相片或影片",
+      "replace": "易桌布",
+      "remove": "除桌布",
+      "importing": "方理…",
+      "tooLarge": "相片以 20 MB 為限，影片以 100 MB 為限。",
+      "importFailed": "此相片或影片未能匯入。",
+      "saveFailed": "桌布之設未能存妥。",
+      "static": "靜",
+      "dynamic": "動",
+      "motionLabel": "展示之式",
+      "options": {
+        "none": "無",
+        "custom": "自擇桌布",
+        "cindy-whisper": "私語",
+        "cindy-night-glance": "夜闌回眸",
+        "cindy-scarlet-stroll": "赤夜緩步",
+        "cindy-neon": "霓裳側影",
+        "cindy-prism": "稜鏡碎玉"
+      }
+    },
     "userBubble": {
       "title": "君訊氣泡之色",
       "presets": "色",
@@ -85,6 +107,16 @@
       "reset": "復預設",
       "apply": "用之",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用之標",
+      "saveFailed": "應用之標未能易，請稍後再試",
+      "options": {
+        "default": "常例",
+        "cat": "玄貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符記"
+      }
     }
   },
   "language": {
@@ -253,7 +285,7 @@
     "openUserAgreement": "啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "用以瞭解啟動與留存。上報裝置型號、系統與應用版本、裝置識別符號等資訊，登門後含名籍 ID；不含言談、卷或提示詞。",
+    "analyticsHint": "啟此項，則以匿名代號代帳號 ID，參裝置識別符，察啟用與回訪之況，以改進本品。儲值別用代號。君之言談、卷冊與提示詞皆不在所報之列。\n舊錄載原帳號 ID。能閱舊錄者，或可循同一裝置識別符，以新代號知原帳號。",
     "analyticsSaveFailed": "設定未能存，重啟後或復原值。",
     "analyticsReset": "復預設",
     "analyticsResetAction": "復"
@@ -478,7 +510,42 @@
     "discard": "放棄修改",
     "colors": {
       "default": "本色（隨主題）"
-    }
+    },
+    "directories": "專案目錄",
+    "directoriesHint": "自下輪起用於本專案諸任務；各任務既有目錄仍存。",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "目錄全徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案",
+    "repository": "儲存庫連結",
+    "repositoryHint": "支援 GitHub、GitLab，以及其他 Git 儲存庫的 HTTPS / SSH 連結。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱",
+    "createNameHint": "取個名字，就可以開始了。",
+    "createFromRepository": "從程式碼儲存庫建立",
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
   },
   "navigation": {
     "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"

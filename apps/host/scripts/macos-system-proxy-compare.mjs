@@ -1,0 +1,188 @@
+#!/usr/bin/env node
+// macOS system proxy comparison (release table row 28, 28b; .github/workflows/macos-system-proxy-compare.yml).
+//
+// THIS SCRIPT CHANGES THE MACHINE'S SYSTEM PROXY SETTINGS (networksetup, with sudo). It runs only on a
+// GitHub-hosted macOS runner, which is thrown away afterwards; it refuses to start anywhere else. Never
+// run it on a development machine or on your own computer.
+//
+// For each group of settings it sets them on every network service, then compares, URL by URL, the
+// Host's result (src/macos-system-proxy.ts, reading the live settings through /usr/sbin/scutil --proxy)
+// with Electron's session.defaultSession.resolveProxy (the repository's Electron, as the desktop asks it).
+// It saves each group's scutil output as a sample (the runner holds no real settings or credentials; the
+// authenticated group uses a fixture user and password), writes a report, and restores the settings.
+//
+// With PAC or auto-discovery the Host asks its Chromium proxy helper (28c, src/chromium-proxy.ts), started here
+// exactly as in production (no test switch), so those groups must agree too. If scutil publishes a username
+// for the selected HTTPS proxy, the Host must report it unresolved. Otherwise only routing is compared.
+// Under PAC and auto-discovery, compare all Safe Storage item identities before and after the production helper.
+//
+// usage (on the runner, from apps/host):
+//   node --import tsx --import ./src/loaders/register-raw.mjs scripts/macos-system-proxy-compare.mjs <out-dir>
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { electronProxyResults } from './macos-system-proxy-reference.mjs';
+
+import { createChromiumProxyHelper } from '../src/chromium-proxy.ts';
+import { createMacSystemProxySession, readScutilProxyOutput } from '../src/macos-system-proxy.ts';
+
+function sampleNamesHttpsProxyUser(sample) {
+  // The fixture gives HTTPS and HTTP distinct addresses. Only the top-level HTTPSUser is relevant.
+  // SCPrint indents top-level keys by two spaces. As in the Host parser, a blank value names no one.
+  const user = /^ {2}HTTPSUser :(?: ([^\r\n]*))?\r?$/m.exec(sample)?.[1];
+  return Boolean(user?.trim());
+}
+
+function compareProxyResult(group, url, host, chromium, namesHttpsProxyUser) {
+  const row = { group: group.name, url, chromium, host, ok: host === chromium };
+  if (group.expect !== 'auth' || chromium !== group.authenticatedProxy) return row;
+  if (!namesHttpsProxyUser) return { ...row, authenticationRefusal: 'skipped-precondition' };
+  const ok = host.startsWith('ERROR: the system proxy for this request requires authentication;');
+  return { ...row, ok, authenticationRefusal: ok ? 'passed' : 'failed' };
+}
+
+function formatReport(report) {
+  return ['| group | url | Chromium | Host | Result | Authentication refusal |', '|---|---|---|---|---|---|',
+    ...report.map(row => `| ${row.group} | ${row.url} | ${row.chromium} | ${row.host} | ${row.ok ? 'ok' : 'MISMATCH'} | ${row.authenticationRefusal ?? ''} |`)].join('\n');
+}
+
+if (process.platform !== 'darwin' || process.env.GITHUB_ACTIONS !== 'true'
+  || process.env.RUNNER_ENVIRONMENT !== 'github-hosted' || process.env.CINDY_SYSTEM_PROXY_COMPARE !== '1') {
+  console.error('Refusing to run: this script changes the system proxy settings and runs only in the macOS '
+    + 'system proxy comparison workflow on a GitHub-hosted runner.');
+  process.exit(2);
+}
+
+const outDir = path.resolve(process.argv[2] ?? 'system-proxy-compare');
+fs.mkdirSync(outDir, { recursive: true });
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const desktopRequire = createRequire(path.join(scriptsDir, '../../desktop/package.json'));
+const electronDir = path.dirname(desktopRequire.resolve('electron/package.json'));
+const electronBinary = path.join(electronDir, 'dist', fs.readFileSync(path.join(electronDir, 'path.txt'), 'utf8').trim());
+
+const URLS = [
+  'http://api.example.test/', 'https://api.example.test/', 'wss://api.example.test/',
+  'https://example.com/', 'http://example.com/', 'https://www.example.com/', 'https://example.com:8443/',
+  'https://exmple.com/', 'https://exaample.com/', 'https://a.example.com/',
+  'https://intranet/', 'https://intranet.corp/', 'https://printer.local/',
+  'https://localhost/', 'https://foo.localhost/', 'https://127.0.0.5/', 'https://[::1]/', 'https://[::ffff:127.0.0.1]/',
+  'https://169.254.1.1/', 'https://169.0.3.4/', 'https://169.1.0.1/', 'https://[fe80::1]/', 'https://0.0.0.0/',
+  'https://10.1.2.3/', 'https://10.9.9.9/', 'https://[fd12::1]/',
+];
+
+function networksetup(...args) {
+  execFileSync('/usr/bin/sudo', ['-n', '/usr/sbin/networksetup', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+const services = execFileSync('/usr/sbin/networksetup', ['-listallnetworkservices'], { encoding: 'utf8' })
+  .split('\n').slice(1).map(line => line.replace(/^\*/, '').trim()).filter(Boolean);
+if (services.length === 0) throw new Error('no network services');
+
+function resetSettings() {
+  for (const service of services) {
+    for (const flag of ['-setwebproxystate', '-setsecurewebproxystate', '-setsocksfirewallproxystate', '-setautoproxystate', '-setproxyautodiscovery']) {
+      networksetup(flag, service, 'off');
+    }
+    networksetup('-setproxybypassdomains', service, 'Empty');
+  }
+}
+
+const pacServer = createServer((_req, res) => {
+  res.writeHead(200, { 'content-type': 'application/x-ns-proxy-autoconfig' });
+  res.end('function FindProxyForURL(url, host) { return "PROXY 10.9.9.9:8080"; }\n');
+});
+await new Promise(resolve => pacServer.listen(0, '127.0.0.1', resolve));
+const pacUrl = `http://127.0.0.1:${pacServer.address().port}/proxy.pac`;
+
+const HTTP = ['-setwebproxy', '10.0.0.1', '3128'];
+const HTTPS = ['-setsecurewebproxy', '10.0.0.2', '3129'];
+const SOCKS = ['-setsocksfirewallproxy', '10.0.0.3', '1081'];
+const GROUPS = [
+  { name: 'pac', settings: [HTTPS, ['-setautoproxyurl', pacUrl]] },
+  { name: 'none', settings: [] },
+  { name: 'http', settings: [HTTP] },
+  { name: 'https', settings: [HTTPS] },
+  { name: 'socks', settings: [SOCKS] },
+  { name: 'http-socks', settings: [HTTP, SOCKS] },
+  { name: 'https-socks', settings: [HTTPS, SOCKS] },
+  { name: 'all', settings: [HTTP, HTTPS, SOCKS] },
+  { name: 'exceptions', settings: [HTTP, HTTPS, ['-setproxybypassdomains', '*.local', '169.254/16', 'example.com:8443',
+    '10.0.0.0/8', 'ex?mple.com', 'https://www.example.com', 'a.example.com, b.example.com', 'fd00::/8']] },
+  { name: 'subtract-implicit', settings: [HTTP, HTTPS, ['-setproxybypassdomains', '<-loopback>']] },
+  { name: 'auto-discovery', settings: [HTTPS, ['-setproxyautodiscovery', 'on']] },
+  // Only the HTTPS proxy is configured with a user. Some runners omit HTTPSUser in scutil output.
+  { name: 'authenticated', expect: 'auth', authenticatedProxy: 'PROXY 10.0.0.2:3129',
+    settings: [['-setsecurewebproxy', '10.0.0.2', '3129', 'on', 'ci-proxy-user', 'ci-proxy-pass'], HTTP] },
+];
+
+function safeStorageItems() {
+  const script = path.join(scriptsDir, 'macos-system-proxy-keychain.swift');
+  return new Set(JSON.parse(execFileSync('/usr/bin/swift', [script], { encoding: 'utf8', timeout: 60_000 })));
+}
+
+const report = [];
+let mismatches = 0;
+try {
+  for (const group of GROUPS) {
+    resetSettings();
+    for (const service of services) for (const [flag, ...args] of group.settings) networksetup(flag, service, ...args);
+    // configd publishes the new dictionary asynchronously.
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const sample = await readScutilProxyOutput();
+    fs.writeFileSync(path.join(outDir, `scutil-${group.name}.txt`), sample);
+    const namesHttpsProxyUser = group.expect === 'auth' && sampleNamesHttpsProxyUser(sample);
+    if (group.expect === 'auth' && !namesHttpsProxyUser) {
+      console.log('authenticated: scutil did not publish a nonblank HTTPSUser on this runner. '
+        + 'The refusal assertion was not run. Host and Electron routes are still compared.');
+    }
+    // A new helper per group, started the production way (default launcher and assets, no test switch).
+    const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
+    const session = createMacSystemProxySession(async () => sample, helper);
+    const needsHelper = await session.needsChromium();
+    if (group.name === 'pac' && !needsHelper) throw new Error('no PAC in the runner system settings');
+    const before = needsHelper ? safeStorageItems() : null;
+    const hostAnswers = new Map();
+    try {
+      if (needsHelper) await helper.warmUp();
+      for (const url of URLS) {
+        try { hostAnswers.set(url, await session.resolveProxy(url)); }
+        catch (error) { hostAnswers.set(url, `ERROR: ${error.message}`); }
+      }
+    } finally {
+      await helper.close();
+    }
+    if (before) {
+      const additions = [...safeStorageItems()].filter(item => !before.has(item)).length;
+      report.push({ group: group.name, url: 'new Safe Storage items', chromium: '-', host: additions, ok: additions === 0 });
+      if (additions) mismatches += 1;
+    }
+    const electron = await electronProxyResults(electronBinary, URLS);
+    for (const url of URLS) {
+      const host = hostAnswers.get(url);
+      const chromium = electron[url];
+      // Check the PAC's verdict independently: two DIRECT answers could both have missed the PAC.
+      if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
+        throw new Error(`PAC did not take effect for ${url}: Electron returned ${chromium}`);
+      }
+      const row = compareProxyResult(group, url, host, chromium, namesHttpsProxyUser);
+      if (!row.ok) mismatches += 1;
+      report.push(row);
+    }
+  }
+} finally {
+  resetSettings();
+  pacServer.close();
+}
+
+fs.writeFileSync(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+const table = formatReport(report);
+fs.writeFileSync(path.join(outDir, 'report.md'), `${table}\n`);
+if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## macOS system proxy comparison\n\n${table}\n`);
+console.log(table);
+console.log(mismatches === 0 ? 'No mismatches in the checks that ran.' : `${mismatches} result(s) differ.`);
+process.exitCode = mismatches === 0 ? 0 : 1;

@@ -1,5 +1,6 @@
 
 import fs from 'node:fs';
+import os from 'node:os';
 import nodePath from 'node:path';
 import {
   createBrowserControlRuntime,
@@ -37,6 +38,7 @@ import {
   managedConfigPatchBeforeStop,
   FOREIGN_AGENT_BROWSER_ERROR,
   isRealProfileError,
+  listInstalledChromium,
   probeOsSourceProfileReadAccess,
   readCopiedLoginsCdpPort,
   resolveSourceBrowserFromOs,
@@ -363,7 +365,11 @@ const backendController = new BrowserBackendController({
   persistKind: writeBrowserBackendKind,
   logger,
 });
-const browserBackendHealthService = new BrowserBackendHealthService(backendController, logger);
+const browserBackendHealthService = new BrowserBackendHealthService(
+  backendController,
+  logger,
+  () => listInstalledChromium({ platform: process.platform, home: os.homedir() }).length > 0,
+);
 
 /**
  * Switch the active backend. Shared by Settings and browser MCP mode changes.
@@ -390,6 +396,11 @@ async function managedPortHeldByAnotherCindy(): Promise<boolean> {
     () => null,
   );
   return commandLine !== null && !commandLine.includes(`--user-data-dir=${runtimeDir}${nodePath.sep}`);
+}
+
+/** Internal settings transaction: keep CAS persistence inside the native switch queue. */
+function commitHostBrowserBackendKind(kind: BackendKind, persist: () => Promise<void>): Promise<boolean> {
+  return backendController.setKind(kind, persist);
 }
 
 async function stopExternalRuntimeIfUsed(): Promise<void> {
@@ -738,5 +749,5 @@ function disposeBrowserRuntime(): Promise<void> {
   externalChromeBackend.beginQuiescence();
   return backendController.dispose().finally(() => externalBackend.dispose());
 }
-return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime };
+return { setBrowserSessionUploadRootResolver, setUserBrowserPageControlProvider, clearUserBrowserMarksForSession, setActiveBrowserBackendKind, setBrowserUseRealProfile, getBrowserMcpDeps, getBrowserAvailability, getActiveBrowserBackendKind, recoverActiveBrowserBackend, getBrowserBackendHealth, createBrowserSettingsHandlers, openBrowserForLogin, disposeBrowserRuntime, commitHostBrowserBackendKind };
 }

@@ -1,16 +1,22 @@
-import type { Session } from '@cindy/maker-core';
+import type { Maker, Session } from '@cindy/maker-core';
+import type { DbClient } from '../localDb/client/DbClient.js';
 
 /** Only live runtime capabilities; persistent task state is never modified here. */
 export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId' | 'agentDeviceId' | 'sdkSessionId'
   | 'getStatus' | 'getTurnGeneration' | 'isTurnRunning' | 'listBackgroundTasks'
   | 'countPendingWakeContinuations' | 'manageAsyncUserQuestions' | 'onEvent' | 'closeIfIdle' | 'close'>
-  & Partial<Pick<Session, 'hasLiveBackgroundWork'>>;
+  & Partial<Pick<Session, 'hasLiveBackgroundWork' | 'canResumeAfterClose'>>;
 /** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
 export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
+/** Plugin engines (ACP) follow the same 30-minute default; no separate setting. */
+export const DEFAULT_PLUGIN_ENGINE_IDLE_RELEASE_MINUTES = 30;
 /** Engines whose ordinary local tasks share this reclamation policy. */
-export type IdleReleaseAgentKind = 'claude-code' | 'codex';
+export type IdleReleaseAgentKind = 'claude-code' | 'codex' | 'acp';
 export interface ClaudeIdleReleaseDeps {
-  /** Defaults to Claude; Codex reuses the same gates plus its async background probe. */
+  /**
+   * Defaults to Claude; Codex and plugin engines reuse the same gates plus the async background
+   * probe. A runtime that cannot reopen its conversation (a plugin engine without resume) is kept.
+   */
   agentKind?: IdleReleaseAgentKind;
   listSessions(): IdleClaudeSession[];
   getSession(id: string): IdleClaudeSession | undefined;
@@ -26,7 +32,7 @@ export interface ClaudeIdleReleaseDeps {
 }
 
 /** Scope query runs through the DB worker; source and ownership are host facts. */
-const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex') => `SELECT id FROM sessions s
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'acp') => `SELECT id FROM sessions s
 WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
 AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
@@ -38,11 +44,34 @@ AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.st
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
 /** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
 export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+/** Same scope for plugin engine tasks; their Orca workers keep their lifecycle like any engine's. */
+export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = ordinaryTaskSql('acp');
+
+/** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
+export function createOrdinaryIdleReleaseTaskCheck(
+  getDbClient: () => Pick<DbClient, 'queryOne'>,
+  ordinaryTaskSql: string,
+): ClaudeIdleReleaseDeps['isOrdinaryTask'] {
+  return async (id, sdkSessionId) => Boolean(
+    await getDbClient().queryOne(ordinaryTaskSql, [id, sdkSessionId]),
+  );
+}
+
+/** Retires only the current runtime: idle-only, unless retrying a close that failed into error. */
+export function createIdleReleaseRuntimeClose(
+  maker: Pick<Maker, 'closeSessionIfCurrent'>,
+  withRehydrateCloseSuppressed: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>,
+): ClaudeIdleReleaseDeps['close'] {
+  return (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, async () =>
+    await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh',
+      retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed',
+  );
+}
 
 /** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
 export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   const agentKind = deps.agentKind ?? 'claude-code';
-  const label = agentKind === 'codex' ? 'Codex' : 'Claude';
+  const label = agentKind === 'codex' ? 'Codex' : agentKind === 'acp' ? 'Plugin engine' : 'Claude';
   const tracked = new Map<IdleClaudeSession, { since: number; generation: number; closeFailed: boolean; unsubscribe: () => void }>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let epoch = 0;
@@ -54,7 +83,8 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   const busy = (session: IdleClaudeSession, retryFailedClose = false) =>
     (session.getStatus() !== 'active' && !(retryFailedClose && session.getStatus() === 'error'))
     || !session.sdkSessionId || session.sdkSessionId === '<pending>' || session.isTurnRunning() || session.listBackgroundTasks().length > 0
-    || session.countPendingWakeContinuations() > 0 || deps.isHostBusy(session.id);
+    || session.countPendingWakeContinuations() > 0 || session.canResumeAfterClose?.() === false
+    || deps.isHostBusy(session.id);
   // Session.close expires these cards. Unlike synchronous questions, async
   // questions deliberately do not hold a product turn or a host interaction lock.
   const hasQuestions = (session: IdleClaudeSession) => session.getStatus() === 'active'

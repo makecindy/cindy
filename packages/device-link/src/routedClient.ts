@@ -6,8 +6,8 @@
  * 事件从两条连接汇总;官方线路下专用连接不启动,全部调用落回基类,行为不变。
  *
  * 已验证的 V2 分享按资源安装独立连接,优先于兼容线路,撤下后也不回落。
- * 各条连接的故障互不牵连:状态、连接问题与 presence 只反映主连接;host 要看承载某个 peer 的
- * 连接时用 `connectionFor` / `crossAccountConnection`。
+ * 各条连接的故障互不牵连:状态与连接问题只反映主连接;同账号 presence 取承载该设备的连接。
+ * host 要看承载某个 peer 的连接时用 `connectionFor` / `crossAccountConnection`。
  */
 import {
   DeviceLinkClient,
@@ -15,6 +15,7 @@ import {
   type DeviceLinkConnectionIssue,
   type DeviceLinkPeerRouteStateChanged,
   type DeviceLinkPeerTransportReset,
+  type DeviceLinkReplacedEvent,
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
@@ -28,6 +29,7 @@ import {
   type LinkAcceptPayload,
   type LinkClosePayload,
   type PresenceSetPayload,
+  type PresenceSnapshot,
   type PushOwnerStamp,
   type Envelope,
 } from './protocol.js';
@@ -60,6 +62,13 @@ export interface LegacyPeerConnectionOptions {
   primaryCapability?: string;
   /** The host verifies the attestation in the base client before this classifier runs. */
   prefersPrimary?(payload: unknown): boolean;
+  /**
+   * After a probe found that the peer prefers the main connection, how to re-open it there. Absent: the main connection's own
+   * link-open, as before. A host with its own channel to that peer (Agent-Net sessions) may open it there, and calls
+   * `primary` otherwise.
+   */
+  openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
+    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -99,6 +108,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     this.onStatusChange((status) => {
       if (status !== 'stopped') this.syncCrossAccount();
     });
+    // 先于任何 host 订阅登记:快照在交给 host 之前已经记下。
+    this.trackPresence(this, (cb) => super.onPresenceChanged(cb));
+    if (this.legacy) {
+      const legacy = this.legacy;
+      this.trackPresence(legacy, (cb) => legacy.onPresenceChanged(cb));
+    }
   }
 
   /** Installed only after the host verifies a resource's pinned network/root.
@@ -176,6 +191,38 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.routed(peer) ?? this;
   }
 
+  /**
+   * The compatibility connection while it runs (the newer transport is the main connection and older connections are
+   * allowed); null otherwise. For what only it reaches, such as phones that never registered on the newer transport.
+   */
+  legacyConnection(): DeviceLinkClient | null {
+    return this.legacyRunning ? this.legacy : null;
+  }
+
+  /**
+   * The compatibility connection's own connection problems (a rejected token there, for example); the main connection's go to
+   * onConnectionIssue. A host without a separate cross-account connection watches this, or a token rejected on the
+   * compatibility connection is never refreshed and the devices only it reaches stay away (2026-11-17: Node Host).
+   */
+  onLegacyConnectionIssue(cb: (issue: DeviceLinkConnectionIssue | null) => void): () => void {
+    return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
+  }
+
+  /**
+   * The cross-account and compatibility connections register the same device identity on the official relay, so another
+   * computer with that identity replaces them too. Both the signal and the host's cool-down cover every such connection.
+   */
+  override onReplaced(cb: (event: DeviceLinkReplacedEvent, onOfficialCrossAccount?: boolean) => void): () => void {
+    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced((event) => cb(event, true)), this.legacy?.onReplaced(cb)];
+    return () => { for (const off of offs) off?.(); };
+  }
+
+  override setDuplicateIdentityCooldown(active: boolean): void {
+    super.setDuplicateIdentityCooldown(active);
+    this.crossAccount?.setDuplicateIdentityCooldown(active);
+    this.legacy?.setDuplicateIdentityCooldown(active);
+  }
+
   override crossAccountConnection(): DeviceLinkClient {
     if (this.primaryScopedPreference()) return this;
     if (this.legacyRunning && this.crossAccountUsesLegacy()) return this.legacy!;
@@ -242,8 +289,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.notifyNetworkChanged(options);
   }
 
-  override restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * `keepPrimary`：主连接是 Agent-Net 时由 host 传入（手机换网）。它自己从新地址继续发、在内部重连中转
+   * （AgentNetSocket），在这里重建只会关掉所有会话再从头连；其余走 Device Link 中转的连接照旧重建。
+   */
+  override restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
     if (this.crossAccountRunning) this.crossAccount?.restartConnection(reason);
     if (this.legacyRunning) this.legacy?.restartConnection(reason);
     for (const connection of this.extraScopedConnections()) connection.restartConnection(reason);
@@ -279,6 +330,75 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     };
   }
 
+  /**
+   * 同账号设备的在线状态只取承载它的那条连接:走兼容连接的设备用兼容连接上的 presence,
+   * 主连接对它的看法(例如新协议连接重建时对尚未建立通道的设备报的离线)不作数;反之亦然。
+   * 2026-11-17:兼容连接设备的真实 presence 被丢弃,host 只能靠一次唤醒时恰好失败的目录读取
+   * 判断它在线,界面因此误报离线 40 多分钟。
+   * 共享任务 / 供应商分享等范围化 peer 维持原语义,只看主连接。兼容连接未运行时一切照旧。
+   */
+  override onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
+    // 范围化 peer:只看主连接,原样转交。
+    const offScoped = super.onPresenceChanged((snap) => { if (isScopedPeer(snap.deviceId)) cb(snap); });
+    const subscriber = { cb, delivered: new Map<string, PresenceSnapshot>() };
+    this.presenceSubscribers.add(subscriber);
+    return () => { offScoped(); this.presenceSubscribers.delete(subscriber); };
+  }
+
+  /**
+   * 每条连接各自记下同账号 peer 最近一次 presence。承载连接可能晚于 presence 才确定或之后切换
+   * (兼容连接先就绪、Agent-Net 名单晚到;入站 link-open / 出站探测改变路由),所以不在到达时
+   * 一次性决定取舍,而是每当 presence、连接状态或路由变化时,把承载连接上的最新快照交给 host;
+   * 已交过的同一份快照不重复。连接离线时它的快照作废,不会在之后被当作在线补发。
+   */
+  private readonly presenceByConnection = new Map<DeviceLinkClient, Map<string, PresenceSnapshot>>();
+  private readonly presenceSubscribers = new Set<{ cb: (snap: PresenceSnapshot) => void; delivered: Map<string, PresenceSnapshot> }>();
+
+  private trackPresence(connection: DeviceLinkClient, onPresence: (cb: (snap: PresenceSnapshot) => void) => () => void): void {
+    const cache = new Map<string, PresenceSnapshot>();
+    this.presenceByConnection.set(connection, cache);
+    onPresence((snap) => {
+      if (isScopedPeer(snap.deviceId)) return;
+      cache.set(snap.deviceId, snap);
+      this.routePresence(snap.deviceId);
+    });
+    connection.onStatusChange((status) => {
+      if (status !== 'online') {
+        const lost = connection === this ? [] : [...cache.values()];
+        cache.clear();
+        // The host clears its online view when the primary disconnects. Replay any still-valid legacy snapshots on reconnect.
+        if (connection === this) for (const subscriber of this.presenceSubscribers) subscriber.delivered.clear();
+        if (this.started) for (const snap of lost) this.routePresence(snap.deviceId, snap);
+        return;
+      }
+      for (const peer of this.presencePeers()) this.routePresence(peer);
+    });
+  }
+
+  private presencePeers(): Set<string> {
+    const peers = new Set<string>();
+    for (const cache of this.presenceByConnection.values()) for (const peer of cache.keys()) peers.add(peer);
+    return peers;
+  }
+
+  /** 把承载该 peer 的连接上的最新快照交给 host;承载连接还没有快照时不猜测。 */
+  private routePresence(peer: string, lost?: PresenceSnapshot): void {
+    const carrier = this.connectionFor(peer);
+    const current = this.presenceByConnection.get(carrier)?.get(peer);
+    const offline = lost?.online ? { ...lost, online: false, busy: false, remoteControlEnabled: false } : undefined;
+    for (const subscriber of this.presenceSubscribers) {
+      const delivered = subscriber.delivered.get(peer);
+      const snap = current ?? (delivered === lost ? offline : undefined);
+      if (!snap || delivered === snap) continue;
+      subscriber.delivered.set(peer, snap);
+      try {
+        subscriber.cb(snap);
+      } catch {
+        // 与基类一致:一个订阅方抛错不影响其它订阅方。
+      }
+    }
+  }
+
   override onFrame(cb: InboundFrameHandler): () => void {
     return this.both(super.onFrame(frame => {
       if (!frame.src || this.acceptsScopedEvent(this, frame.src)) cb(frame);
@@ -292,6 +412,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
           if (this.legacyOptions?.prefersPrimary?.(frame.payload) ?? (this.legacyOptions?.primaryCapability && caps?.includes(this.legacyOptions.primaryCapability))) {
             this.legacyPrefersPrimary.add(frame.src); this.legacyRoutes.delete(frame.src);
           } else { this.legacyPrefersPrimary.delete(frame.src); this.legacyRoutes.add(frame.src); }
+          this.routePresence(frame.src);
         }
         if (frame.kind === 'invoke' && this.legacyPrefersPrimary.has(frame.src)) {
           this.blockedLegacyFrames.add(frame);
@@ -308,7 +429,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
           }
           this.legacyReplies.add(frame.src + '\0' + frame.id);
         }
-        if (!this.legacyPrefersPrimary.has(frame.src)) this.legacyRoutes.add(frame.src);
+        if (!this.legacyPrefersPrimary.has(frame.src) && !this.legacyRoutes.has(frame.src)) {
+          this.legacyRoutes.add(frame.src);
+          this.routePresence(frame.src);
+        }
       }
       cb(frame);
     }));
@@ -332,6 +456,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   override onInboundPeerReleased(cb: (peer: string) => void): () => void {
     return this.both(super.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
       connection => connection.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
+  }
+
+  override onPeerSendProgress(cb: (peer: string) => void): () => void {
+    return this.both(super.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
+      connection => connection.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
   }
 
   override onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {
@@ -377,6 +506,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.routed(dst)?.getReliableSendQueueDepth(dst) ?? super.getReliableSendQueueDepth(dst);
   }
 
+  override hasReliableSendProgress(dst: string): boolean {
+    return this.routed(dst)?.hasReliableSendProgress(dst) ?? super.hasReliableSendProgress(dst);
+  }
+
   /** 两条连接上的链路合在一起；跨账号 peer 只在专用连接上。relay 往返不覆盖：它是主连接的。 */
   override getPeerLinkSnapshots(): DeviceLinkPeerLinkSnapshot[] {
     const own = super.getPeerLinkSnapshots().filter((s) => this.routed(s.deviceId) === null);
@@ -393,9 +526,13 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       return this.legacy.openLink(dst, payload, timeoutMs).then((accepted) => {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
           this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
-          return super.openLink(dst, payload, timeoutMs);
+          this.routePresence(dst);
+          const primary = () => super.openLink(dst, payload, timeoutMs);
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
         }
-        this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst); return accepted;
+        this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst);
+        this.routePresence(dst);
+        return accepted;
       });
     }
     return route?.openLink(dst, payload, timeoutMs) ?? super.openLink(dst, payload, timeoutMs);
@@ -411,7 +548,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    options?: Parameters<DeviceLinkClient['invoke']>[3],
   ): Promise<InvokeResultPayload> {
     return this.routed(dst)?.invoke(dst, payload, timeoutMs, options) ?? super.invoke(dst, payload, timeoutMs, options);
   }

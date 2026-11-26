@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
 import {registeredApps} from './app-registry.mjs';
-import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
+import { configFrom, discover, copyPlugin, localPluginSource, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '../personal-build.mjs');
@@ -180,18 +180,15 @@ export function syncPlugins(c, exec = run) {
     const candidates = [];
     for (const id of [...ids].sort()) {
       if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) continue;
-      const source = c.localPlugins[id] || path.join(checkout, id);
+      const source = localPluginSource(c, id, checkout);
       if (!fs.existsSync(path.join(source, 'ghost.json'))) {
         check(!c.localPlugins[id], `Local plugin ${id} has no ghost.json`);
         if (previous.includes(id)) report.retired.push({ id, action: 'retained', reason: 'No canonical manifest; review before retirement' });
         continue;
       }
-      let mainManifest;
-      let existsOnMain = false;
-      try { exec('git', ['-C', checkout, 'cat-file', '-e', `${selection.baseSha}:${id}/ghost.json`], checkout); existsOnMain = true; } catch { /* New plugin. */ }
-      if (existsOnMain) mainManifest = JSON.parse(exec('git', ['-C', checkout, 'show', `${selection.baseSha}:${id}/ghost.json`], checkout));
       const dest = path.join(temp, 'seeds', id), isActive = active.has(id);
-      const entry = copyPlugin(id, source, dest, isActive ? mainManifest : undefined);
+      const repositoryRoot = typeof c.localPlugins[id] === 'string' ? undefined : checkout;
+      const entry = copyPlugin(id, source, dest, { repositoryRoot });
       entry.kind = isActive ? (c.localPlugins[id] ? 'local' : 'pr') : 'retire';
       if (!isActive) {
         // Remove only a seed, never installed files or ledgers. Host handles store ownership.

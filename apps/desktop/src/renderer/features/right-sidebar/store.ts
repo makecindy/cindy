@@ -1064,7 +1064,7 @@ function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): voi
   patchRevisions.delete(key);
   persistedStateBaselines.delete(key);
   clearTabGroup(tabId);
-  if (kind === 'web-browser') browserWebviewPool.release(tabId);
+  if (kind === 'web-browser' || kind === 'file-browser') browserWebviewPool.release(tabId);
   unmarkPopupSpawnedTab(tabId);
   closeNativePopupForTab(tabId);
   // 被弹出到独立窗口的页签在侧边栏里被关掉(agent close / 关闭全部 / 会话删除):

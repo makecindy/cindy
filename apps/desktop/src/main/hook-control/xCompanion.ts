@@ -1,5 +1,6 @@
 import { isCompanionShadowed } from '../companion-cloud/homes';
 import { createHash } from 'node:crypto';
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current';
 import { botProfiles, sessions } from '../localDb/schema';
@@ -14,19 +15,20 @@ export async function requireXCompanion(botId: string): Promise<void> {
   if (profile?.status !== 'active' || isCompanionShadowed(botId)) throwIpcError('INVALID_PARAMS', 'Companion is unavailable');
 }
 
-export async function resolveXCompanionTarget(botId: string, externalKey: string) {
+export async function resolveXCompanionTarget(botId: string, externalKey: string, subject = '') {
   const assertAccount = captureChannelAccount();
   await requireXCompanion(botId);
   assertAccount();
   // Public threads never reuse the private canonical conversation. Hash the full
   // transport key (including its principal/thread scope), not a truncated tweet id.
   const key = createHash('sha256').update(externalKey).digest('hex');
-  const lane = await ensureBotChannelLaneSession({ botId, routeKey: `im:x:official:${key}`, title: 'X' });
+  const title = formatTaskTopicTitle(subject, 'X');
+  const lane = await ensureBotChannelLaneSession({ botId, routeKey: `im:x:official:${key}`, title });
   if (!lane.ok) throw new Error(lane.message);
   assertAccount();
   const [row] = await getDbClient().drizzle.select({ workingDir: sessions.workingDir })
     .from(sessions).where(eq(sessions.id, lane.sessionId)).limit(1);
   assertAccount();
   if (!row?.workingDir) throw new Error('Companion workspace is unavailable');
-  return { sessionId: lane.sessionId, workingDir: row.workingDir };
+  return { sessionId: lane.sessionId, workingDir: row.workingDir, ...(lane.created ? { initialTopicTitle: title } : {}) };
 }

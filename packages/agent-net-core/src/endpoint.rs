@@ -89,6 +89,8 @@ struct Slot<C: Crypto, A: PathAddress> {
     /// 路径号 → （地址，最后一次从那里收到包的时间）。
     paths: BTreeMap<u64, (A, u64)>,
     next_path: u64,
+    /// 为 true 时把中继通道（`cost() > 0`）代价降为 0、直连（`cost() == 0`）代价升为 2，优先走中继且仍保留直连作兜底。
+    prefer_relay: bool,
 }
 
 impl<C: Crypto, A: PathAddress> Slot<C, A> {
@@ -97,7 +99,25 @@ impl<C: Crypto, A: PathAddress> Slot<C, A> {
             connection.set_path_cost(0, peer.cost());
         }
         let routing_ids = connection.local_connection_ids().collect();
-        Self { connection, routing_ids, paths: BTreeMap::from([(0, (peer, now_us))]), next_path: 1 }
+        Self { connection, routing_ids, paths: BTreeMap::from([(0, (peer, now_us))]), next_path: 1, prefer_relay: false }
+    }
+
+    fn effective_cost(&self, address: A) -> u8 {
+        if self.prefer_relay {
+            if address.cost() > 0 { 0 } else { 2 }
+        } else {
+            address.cost()
+        }
+    }
+
+    fn set_prefer_relay(&mut self, prefer: bool) {
+        if self.prefer_relay == prefer {
+            return;
+        }
+        self.prefer_relay = prefer;
+        for (&path, &(address, _)) in &self.paths {
+            self.connection.set_path_cost(path, self.effective_cost(address));
+        }
     }
 
     fn knows(&self, address: A) -> bool {
@@ -125,8 +145,9 @@ impl<C: Crypto, A: PathAddress> Slot<C, A> {
         let path = self.next_path;
         self.next_path += 1;
         self.paths.insert(path, (from, now_us));
-        if from.cost() != 0 {
-            self.connection.set_path_cost(path, from.cost());
+        let cost = self.effective_cost(from);
+        if cost != 0 {
+            self.connection.set_path_cost(path, cost);
         }
         path
     }
@@ -306,6 +327,31 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         slot.connection.probe_path(now_us, path)
     }
 
+    /// 仅探测这条连接到 `address` 的可达性与往返时间（不切数据路径），见 `SecureConnection::measure_path`。
+    pub fn measure(&mut self, now_us: u64, id: u32, address: A) -> bool {
+        let Some(slot) = self.connections.get_mut(&id) else { return false };
+        let path = slot.path_of(address, now_us);
+        slot.connection.measure_path(now_us, path)
+    }
+
+    /// 动态调整这条连接是否优先走中继（`cost() > 0` 的通道）：重算已有路径代价并作用于之后的新路径。
+    pub fn set_prefer_relay(&mut self, id: u32, prefer: bool) -> bool {
+        let Some(slot) = self.connections.get_mut(&id) else { return false };
+        slot.set_prefer_relay(prefer);
+        true
+    }
+
+    /// 取走一条刚测得的路径往返：（地址，微秒）。
+    pub fn poll_probe_rtt(&mut self, id: u32) -> Option<(A, u64)> {
+        let slot = self.connections.get_mut(&id)?;
+        while let Some((path, rtt_us)) = slot.connection.poll_probe_rtt() {
+            if let Some(&(address, _)) = slot.paths.get(&path) {
+                return Some((address, rtt_us));
+            }
+        }
+        None
+    }
+
     /// 这一端换了网络（换了网卡、重新绑定了端口）：告诉每条连接，它们会马上发包让对端跟过来。
     /// 见 `SecureConnection::on_local_address_change`。
     pub fn on_local_address_change(&mut self, now_us: u64) {
@@ -320,6 +366,11 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
             return Some(0);
         }
         self.connections.values().filter_map(|slot| slot.connection.next_wake()).min()
+    }
+
+    /// 有没有连接的计时器现在不能晚一个 `granularity_us` 的周期，见 [`Connection::needs_fine_timer`](crate::Connection::needs_fine_timer)。
+    pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {
+        self.connections.values().any(|slot| slot.connection.needs_fine_timer(granularity_us))
     }
 
     /// 处理到期的计时器。

@@ -22,6 +22,7 @@ export interface OneshotPinOption {
   /** Provider['routing'](IPC 载荷;ProviderLogoMark 的厂牌图标判定用)。 */
   routing?: import('@cindy/model-providers').Provider['routing'];
   logoKind?: ProviderView['logoKind'];
+  customIcon?: ProviderView['customIcon'];
   /** Agent used by this exact route. Older snapshots may omit it. */
   agentSuffix?: string;
   /** False for a persisted route that is no longer offered or currently usable. */
@@ -43,6 +44,7 @@ export function oneshotPickerProviders(options: readonly OneshotPinOption[]): Pr
       provider = {
         id: option.providerId, name: option.group, source: 'builtin',
         logoKind: option.logoKind,
+        ...(option.customIcon ? { customIcon: option.customIcon } : {}),
         auth: { method: 'none' }, connected: true, agents: [], routing: {}, models: {},
       };
       providers.set(option.providerId, provider);
@@ -121,8 +123,9 @@ export function OneshotModelPinPicker({
       if (option.id !== value) return (await onChange(option.id)) !== false;
       return true;
     }}
-    // Exact pins include a Harness. Keep its chooser; the projected catalog has no effort/Fast controls.
-    configurationEnabled
+    // This is a one-shot API route, not an Agent configuration.
+    configurationEnabled={false}
+    fastModeConfigurable={false}
     triggerVariant="field"
     popoverSide="bottom"
     dense={dense}

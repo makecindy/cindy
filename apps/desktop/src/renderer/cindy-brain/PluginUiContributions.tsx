@@ -1,25 +1,27 @@
+import { pluginSourceTooltip } from '@cindy/maker-shared/mcp-apps';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
-import { getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost';
+import { getApprovedGhostHostUi, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { useInstalledGhosts, readInstalledGhostsSnapshot } from './useInstalledGhosts';
 import { usePluginUiControl } from './pluginUiControls';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
-import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderOpen, Puzzle } from 'lucide-react';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
-const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
-  (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input);
+const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>, workingDir?: string) =>
+  (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input, workingDir);
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 export type PluginUiEntry = { ghost: InstalledGhost; instanceId: string; contribution: GhostHostUiContribution };
@@ -164,7 +166,8 @@ export function usePluginUiWindowCandidates() {
 }
 export function usePluginUiComposerCandidates() {
   const directory = useContext(DirectoryContext);
-  return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
+  return { header: !!directory.get('composer.header')?.length,
+    toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
 }
 
 /** One window subscription, compiled only when the original installed projection changes. */
@@ -211,10 +214,10 @@ export function PluginUiMessageMenuItem({ entry, sessionId, clientId, disabled, 
   </DropdownMenuItem>;
 }
 
-export async function runPluginUiEntry(entry: PluginUiEntry, sessionId: string | null, value?: string): Promise<void> {
+export async function runPluginUiEntry(entry: PluginUiEntry, sessionId: string | null, value?: string, workingDir?: string): Promise<void> {
   const action = entry.contribution;
   if (action.view) return openPluginUiView(entry.instanceId, action.view, sessionId,
-    { ...action.arguments, ...(value === undefined ? {} : { value }) });
+    { ...action.arguments, ...(value === undefined ? {} : { value }) }, workingDir);
   if (!action.tool) return;
   const result = await window.electronAPI.maker.mcpApps(sessionId, { op: 'plugin-action',
     instanceId: entry.instanceId, id: action.id, value });
@@ -250,7 +253,68 @@ export function PluginUiSessionMenuItems({ sessionId, disabled, className }: { s
       .catch(() => toast.error(t('pluginUi.actionFailed')))} />)}</>;
 }
 
-function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' }) {
+function workdirPageKey(entry: PluginUiEntry) {
+  return JSON.stringify([entry.instanceId, ghostInstallApprovalToken(entry.ghost.approval), entry.contribution.id]);
+}
+
+function WorkdirPopoverPage({ entry, sessionId, path, close }: {
+  entry: PluginUiEntry; sessionId: string; path: string; close(): void;
+}) {
+  const { id, view, arguments: input } = entry.contribution;
+  const context = useMemo(() => ({ workingDir: path }), [path]);
+  const interest = useMemo(() => ({ instanceId: entry.instanceId, id, sessionId }), [entry.instanceId, id, sessionId]);
+  const state = usePluginUiControl(interest, entry.ghost);
+  const unavailable = !view || state?.disabled || state?.visible === false;
+  useEffect(() => { if (unavailable) close(); }, [unavailable, close]);
+  if (unavailable) return null;
+  return <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={view}
+    sessionId={sessionId} composerPlacement={JSON.stringify([id])} input={input} context={context} onUnavailable={close} /></Suspense>;
+}
+
+/** Keep the native directory action as the only click target until a plugin contributes. */
+export function PluginUiWorkdirButton({ sessionId, path, children, onOpenDirectory }: {
+  sessionId: string; path: string; children: ReactNode; onOpenDirectory(): void;
+}) {
+  const entries = useEntries('workdir.menu', { sessionId });
+  const { t } = useTranslation();
+  const [selected, setSelected] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const openLabel = t('ccAgent.layout.openWorkingDirAria');
+  const buttonClass = 'flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-opacity active:opacity-60';
+  const close = useCallback(() => setSelected(null), []);
+  const hasEntries = entries.length > 0;
+  useEffect(() => {
+    const anchor = trigger.current;
+    if (anchor) return observeSlotVisibility(anchor, visible => { if (!visible) close(); });
+  }, [hasEntries, close]);
+  const page = selected ? entries.find(entry => workdirPageKey(entry) === selected) : undefined;
+  useEffect(() => { if (selected && !page) close(); }, [selected, page, close]);
+  if (!hasEntries) return <Tip text={path} mono side="top"><button type="button" className={buttonClass}
+    onClick={onOpenDirectory} aria-label={openLabel}>{children}</button></Tip>;
+  return <Popover open={!!page} onOpenChange={open => { if (!open) close(); }}>
+    <DropdownMenu><PopoverAnchor asChild><DropdownMenuTrigger asChild>
+      <Tip text={path} mono side="top"><button ref={trigger} type="button" className={buttonClass}>
+        {children}<ChevronDown size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
+      </button></Tip>
+    </DropdownMenuTrigger></PopoverAnchor>
+    <DropdownMenuContent side="top" align="start" onCloseAutoFocus={event => { if (page) event.preventDefault(); }}>
+      <DropdownMenuItem className="gap-2" onSelect={onOpenDirectory}><FolderOpen size={14} />{openLabel}</DropdownMenuItem>
+      <DropdownMenuSeparator />
+      {entries.map(entry => <PluginUiMessageMenuItem key={workdirPageKey(entry)} className="gap-2"
+        entry={entry} sessionId={sessionId} onSelect={() => {
+          if (entry.contribution.presentation === 'popover' && entry.contribution.view) setSelected(workdirPageKey(entry));
+          else void runPluginUiEntry(entry, sessionId, undefined, path).catch(() => toast.error(t('pluginUi.actionFailed')));
+        }} />)}
+    </DropdownMenuContent></DropdownMenu>
+    {page && page.contribution.view && <PopoverContent align="start" side="top" aria-label={page.contribution.title}
+      className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2"
+      onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }}>
+      <WorkdirPopoverPage entry={page} sessionId={sessionId} path={path} close={close} />
+    </PopoverContent>}
+  </Popover>;
+}
+
+function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' | 'composer-header' }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
@@ -269,6 +333,12 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   };
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
+  const header = appearance === 'composer-header';
+  const sourceTitle = pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t);
+  const controlTitle = header ? `${title} · ${sourceTitle}` : sourceTitle;
+  const buttonClass = header ? 'max-w-48' : action.position === 'statusbar'
+    ? (action.fontSize === 14 ? 'text-14' : action.fontSize === 13 ? 'text-13' : 'text-12') : undefined;
+  const label = header ? <span className="min-w-0 truncate">{title}</span> : title;
   const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
   if (appearance === 'titlebar') {
     const view = action.view && getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === action.view);
@@ -281,35 +351,36 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
     disabled={pending || state?.disabled} onClick={() => void run()} />;
   if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
-    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={entry.ghost.manifest.name}
+    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={sourceTitle}
     className="flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover disabled:opacity-40">
     <Icon size={15} strokeWidth={1.8} className="shrink-0" /><span className="truncate">{title}</span>
   </button>;
-  if (action.kind === 'status') return <span className="text-12 text-[var(--text-secondary)]" title={entry.ghost.manifest.name}>{title}</span>;
+  if (action.kind === 'status') return <span className={header ? 'max-w-48 shrink-0 truncate text-12 text-[var(--text-secondary)]' : 'text-12 text-[var(--text-secondary)]'} title={controlTitle}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
-    disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
+    disabled={pending || state?.disabled} onValueChange={next => void run(next)} size="inline" className="max-w-48 text-12" />;
   if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
     <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
-      title={entry.ghost.manifest.name}>{title}</Button></PopoverTrigger>
-    <PopoverContent align="start" side={action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
+      className={buttonClass} title={controlTitle}>{label}</Button></PopoverTrigger>
+    <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
-      {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost} viewId={action.view}
-        sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
+      {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={action.view}
+        sessionId={sessionId} composerPlacement={JSON.stringify([action.id, clientId])} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
     </PopoverContent>
   </Popover>;
-  return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={entry.ghost.manifest.name}
-    onClick={() => void run()}>{title}</Button>;
+  return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={controlTitle}
+    className={buttonClass} onClick={() => void run()}>{label}</Button>;
 }
 
 /** No candidate means no View, effect, IPC, SQL or plugin callback. */
 export function PluginUiSlot({ position, ...target }: Target & { position: GhostHostUiPosition }) {
   const entries = useEntries(position, target);
   if (!entries.length) return null;
-  return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId} />;
+  return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId}
+    appearance={position === 'composer.header' ? 'composer-header' : undefined} />;
 }
 
 export function PluginUiSlotControls({ entries, sessionId = null, clientId, appearance }: {
-  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar';
+  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar' | 'composer-header';
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState(false);
@@ -318,8 +389,9 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
     // Observe the original message row, whose size is independent of a plugin hiding its control.
     if (element) return observeSlotVisibility(element.closest('[data-message-client-id]') ?? element.parentElement ?? element, setActive);
   }, []);
-  return <span ref={root} className={appearance === 'navigation'
+  return <span ref={root} data-plugin-composer-header={appearance === 'composer-header' ? '' : undefined} className={appearance === 'navigation'
     ? 'flex min-w-0 flex-col gap-0.5 [-webkit-app-region:no-drag]'
+    : appearance === 'composer-header' ? '-mb-2 flex h-8 w-full min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [-webkit-app-region:no-drag] [&:empty]:hidden'
     : appearance === 'titlebar' ? 'inline-flex min-w-0 max-w-[min(16rem,30vw)] flex-nowrap items-center gap-1 overflow-x-auto [-webkit-app-region:no-drag]'
       : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
@@ -333,6 +405,7 @@ export function PluginUiSidebarSections({ entries, sessionId }: { entries: reado
   </div>;
 }
 function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; sessionId: string | null }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -349,14 +422,14 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
   return <div ref={root} className="min-w-0">
     {/* Ordinary action hover frame: DESIGN §5 Step 2 pill; the chevron is an intrinsic icon. */}
     <button type="button" aria-expanded={expanded} disabled={!available || state?.disabled}
-      onClick={() => setExpanded(value => !value)} title={title}
+      onClick={() => setExpanded(value => !value)} title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}
       className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-full px-2 text-left text-12 text-[var(--text-secondary)] hover:bg-sidebar-item-hover disabled:opacity-40">
       {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
       <span className="truncate">{title}</span>
     </button>
-    <SectionCollapse collapsed={!expanded}>
-      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost}
-        viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
+    <SectionCollapse collapsed={!expanded} inert={!expanded}>
+      {visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" sizing="sidebar-section" ghost={entry.ghost}
+        viewId={view!.id} composerPlacement={JSON.stringify([entry.contribution.id])} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
     </SectionCollapse>
   </div>;
 }
@@ -365,7 +438,7 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
 export function PluginUiBody({ children, position, ...target }: Target & { children: ReactNode; position: 'message.body' | 'tool.body' }) {
   const entries = useEntries(position, target);
   if (!entries.length || !target.sessionId) return <>{children}</>;
-  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} context={target.context}>{children}</PluginUiBodyChoice>;
+  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} clientId={target.clientId} context={target.context}>{children}</PluginUiBodyChoice>;
 }
 
 /** Return the original element itself when the list has no candidate for this body. */
@@ -373,20 +446,20 @@ export function renderPluginUiBody(options: (Target & { position: 'message.body'
   return options ? <PluginUiBody {...options}>{children}</PluginUiBody> : children;
 }
 
-function PluginUiBodyChoice({ children, entries, sessionId, context }: {
-  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; context?: Target['context'];
+function PluginUiBodyChoice({ children, entries, sessionId, clientId, context }: {
+  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; clientId?: string; context?: Target['context'];
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState('original');
   const entry = entries.find(entry => `${entry.instanceId}:${entry.contribution.id}` === selected);
   return <>
     <div className="mb-1 flex min-w-0 items-center gap-1">
-      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} className="h-7 max-w-56 text-12"
+      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} size="inline" className="max-w-56 text-12"
         options={[{ value: 'original', label: t('pluginUi.original') }, ...entries.map(entry => ({
           value: `${entry.instanceId}:${entry.contribution.id}`, label: `${entry.contribution.title} · ${entry.ghost.manifest.name}`,
         }))]} onValueChange={setSelected} />
     </div>
     {entry?.contribution.view ? <Suspense fallback={children}><PluginUiView ghost={entry.ghost} viewId={entry.contribution.view}
-      sessionId={sessionId} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
+      sessionId={sessionId} composerPlacement={JSON.stringify([entry.contribution.id, clientId])} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
   </>;
 }

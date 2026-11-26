@@ -62,6 +62,28 @@
       "dark": "Dunkel"
     },
     "saveFailed": "Darstellungsmodus konnte nicht gespeichert werden. Nach einem Neustart gilt wieder die vorherige Einstellung.",
+    "wallpaper": {
+      "title": "Hintergrundbild",
+      "choose": "Foto oder Video auswählen",
+      "replace": "Hintergrundbild ersetzen",
+      "remove": "Hintergrundbild entfernen",
+      "importing": "Wird verarbeitet…",
+      "tooLarge": "Wähle ein Foto bis 20 MB oder ein Video bis 100 MB.",
+      "importFailed": "Das Foto oder Video konnte nicht importiert werden.",
+      "saveFailed": "Die Hintergrundeinstellung konnte nicht gespeichert werden.",
+      "static": "Statisch",
+      "dynamic": "Dynamisch",
+      "motionLabel": "Anzeige",
+      "options": {
+        "none": "Keine",
+        "custom": "Eigenes Hintergrundbild",
+        "cindy-whisper": "Flüstern",
+        "cindy-night-glance": "Nächtlicher Blick",
+        "cindy-scarlet-stroll": "Scharlachroter Spaziergang",
+        "cindy-neon": "Neonsilhouette",
+        "cindy-prism": "Prismensplitter"
+      }
+    },
     "userBubble": {
       "title": "Farbe meiner Nachrichtenblasen",
       "presets": "Farbe",
@@ -85,6 +107,16 @@
       "reset": "Auf Standard zurücksetzen",
       "apply": "Anwenden",
       "hex": "Farbwert"
+    },
+    "appIcon": {
+      "label": "App-Symbol",
+      "saveFailed": "Das App-Symbol konnte nicht geändert werden. Bitte versuche es erneut.",
+      "options": {
+        "default": "Standard",
+        "cat": "Schwarze Katze",
+        "wordmark": "Cindy-Wortmarke",
+        "mark": "Cindy-Symbol"
+      }
     }
   },
   "language": {
@@ -253,7 +285,7 @@
     "openUserAgreement": "Nutzungsvereinbarung öffnen",
     "appFilingNumber": "App-Registrierungsnummer",
     "analytics": "Nutzungsstatistiken",
-    "analyticsHint": "Hilft uns, App-Starts und die Nutzerbindung zu verstehen. Übermittelt Geräteinfos wie Modell, Betriebssystem und App-Version sowie eine Gerätekennung und nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts.",
+    "analyticsHint": "Wenn du diese Option aktivierst, erfassen wir App-Starts und wiederkehrende Besuche mit einem Kontopseudonym und einer Gerätekennung. Das hilft uns, das Produkt zu verbessern. Für Zahlungen verwenden wir ein eigenes Pseudonym. Deine Chats, Dateien und Prompts sind in diesen Statistiken nicht enthalten.\nÄltere Daten enthalten die ursprünglichen Konto-IDs. Wer diese Daten einsehen kann, kann ein neues Pseudonym möglicherweise über dieselbe Gerätekennung einem Konto zuordnen.",
     "analyticsSaveFailed": "Diese Einstellung konnte nicht gespeichert werden und wird nach einem Neustart möglicherweise zurückgesetzt.",
     "analyticsReset": "Auf Standard zurücksetzen",
     "analyticsResetAction": "Zurücksetzen"
@@ -478,7 +510,42 @@
     "discard": "Verwerfen",
     "colors": {
       "default": "Standard (dem Design folgen)"
-    }
+    },
+    "directories": "Projektverzeichnisse",
+    "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
+    "removeDirectory": "Verzeichnis entfernen",
+    "directoryPath": "Vollständiger Verzeichnispfad",
+    "addDirectory": "Verzeichnis hinzufügen",
+    "browseDirectory": "Verzeichnisse durchsuchen",
+    "mainDirectory": "Hauptverzeichnis",
+    "createTitle": "Neues Projekt",
+    "createAction": "Projekt erstellen",
+    "repository": "Repository-URL",
+    "repositoryHint": "Unterstützt GitHub, GitLab und andere Git-Repositories über HTTPS oder SSH.",
+    "autoDirectory": "Ohne Verzeichnisauswahl wird {{path}} verwendet. Bei Namenskonflikten wird eine Nummer ergänzt.",
+    "cloning": "Repository wird geklont…",
+    "invalidRepository": "Eine gültige GitHub-, GitLab- oder Git-Repository-URL eingeben.",
+    "createFailed": "Projekt konnte nicht erstellt werden. Schreibzugriff, Repository-URL und Git-Zugriff auf diesem Computer prüfen. Das Klon-Ziel muss leer sein.",
+    "createNamePlaceholder": "Projektname",
+    "createNameHint": "Gib deinem Projekt einen Namen, um loszulegen.",
+    "createFromRepository": "Aus einem Code-Repository erstellen",
+    "createBlank": "Zu einem leeren Projekt wechseln",
+    "source_blank": "Leeres Projekt",
+    "source_existing": "Vorhandenen Ordner öffnen",
+    "source_repository": "Code-Repository importieren",
+    "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
+    "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
+    "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
+    "source": "Projektquelle",
+    "sourceShort_blank": "Neu",
+    "sourceShort_existing": "Ordner",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Hauptordner · Automatisch",
+    "source_local": "Lokaler Ordner",
+    "sourceShort_local": "Lokaler Ordner",
+    "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
+    "chooseExistingFolder": "Vorhandenen Ordner wählen",
+    "changeMainDirectory": "Ändern"
   },
   "navigation": {
     "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."

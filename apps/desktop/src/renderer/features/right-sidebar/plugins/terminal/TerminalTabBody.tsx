@@ -28,6 +28,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { RemoteTerminalSetup } from './RemoteTerminalSetup';
 import type { TabKindHostContext } from '../../types';
 import { getOrCreateXterm, getXterm, detachXterm, getXtermExit, setXtermExit, onXtermExit, needsXtermAttach, attachXterm, restartXterm, releaseXtermConnection, type XtermEntry } from './lib/xtermPool';
+import { TERMINAL_CANVAS } from './lib/terminalCanvasColors';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -415,9 +416,10 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     }
   }, [onConnectionDisposed, onEditConnection, restarting, tabId, patchState]);
 
-  // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay
+  // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay。
+  // 底色与 xterm 主题同源,固定深色、不跟随主题(DESIGN.md §2「Terminal canvas」)。
   return (
-    <div className="relative h-full w-full bg-[#1c1c1c]">
+    <div className="relative h-full w-full" style={{ backgroundColor: TERMINAL_CANVAS.background }}>
       <div ref={slotRef} className="absolute top-2 bottom-0 left-2 right-2" />
       {isRemote && (creating || (restarting && !state.created)) && !runtimeError && (
         <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center">

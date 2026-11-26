@@ -121,7 +121,7 @@ export function buildTelegramAdapter(
         decodeTelegramLaneUserId(userId)
           ? `[TG·群] ${userId.slice(-6)}`
           : `[TG·DM] ${userId.slice(-6)}`,
-      generatedTitlePrefix: 'TG · ',
+      generatedTitlePrefix: 'Telegram · ',
       // 私聊与群 lane 的工作目录都是 app 托管目录, 不该聚成假项目组。
       workspaceKind: 'dialogue',
       ensureWorkingDir,
@@ -249,6 +249,7 @@ export function buildTelegramAdapter(
         : imChannelNoteDirectSourceFromEvent(event)),
       toolsHint: TELEGRAM_TOOLS_HINT,
     }),
+    replyMediaScopeFor: (laneUserId) => ({ im: telegramIm, laneUserId }),
     // cindy_telegram_bot 的逐轮作用域: 目标 chat 就是触发消息所在的 chat; 触发者是不是主人
     // 由 Main 校验过的 speaker / owner id 决定(不来自模型参数)。transport 就是这条连接自己。
     channelToolScopeFor: (event): TelegramToolScope => {

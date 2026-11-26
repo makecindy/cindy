@@ -1,5 +1,9 @@
-import { glabCliTokenSource } from './glabCliTokenSource';
-import { fetchGitlabMr } from './gitlabPrSummary';
+import { readGithubTokenDetailed } from './githubToken.desktop.js';
+import { glabCliTokenSource, readGitlabStatusToken } from './glabCliTokenSource';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { createPluginLogicalIdentity, pluginInstallStoragePart, pluginNewInstallRelId } from '../../shared/pluginIdentity.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
+import { fetchGitlabMrStatus } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
@@ -24,8 +28,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  */
 
 import { app, BrowserWindow, ipcMain } from 'electron';
+import type { Schedule } from '@cindy/maker-scheduler';
 import { GithubClient } from '@cindy/github-client';
-import { prStatusKey, isPrHost, sessionPrUrl } from '@cindy/maker-shared';
+import { prStatusKey, isPrHost, sessionPrUrl, parseSessionPrUrl } from '@cindy/maker-shared';
 import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
 import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
@@ -61,6 +66,7 @@ import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
 import {
+  ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
   managePrRefs,
@@ -76,9 +82,10 @@ import {
 } from './prStatusService.js';
 
 import { fetchPrSummary } from './prSummary';
-import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
+import { changesBetween, PrFollowWatch } from './prFollowWatch';
+import { getSchedulerIfInitialized, getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
+const gitlabSetupSubscriptions: Array<() => void> = [];
 const log = createLogger('git-context/ipc');
 
 export const GIT_CONTEXT_INVOKE = {
@@ -113,7 +120,7 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
 const ghCliTokenSource = getSharedGhCliTokenSource();
 
 async function readGithubToken() {
-  return ghCliTokenSource.readTokenDetailed();
+  return readGithubTokenDetailed();
 }
 
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
@@ -148,6 +155,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       mergeable: metadata.mergeable ?? null,
       merge_state: metadata.mergeable_state ?? null,
       updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
       labels: metadata.labels ?? [],
       review_requests: metadata.requested_reviewers ?? [],
     },
@@ -175,16 +183,33 @@ const prFollowWatch = new PrFollowWatch({
   // A passive instance (dev beside a release build on the same data) never starts runs by itself.
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
+  lastSuccessfulMrObservation: async id => (await getScheduleStorageIfInitialized()?.lastSuccessfulMrObservation(id)) ?? null,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (id, trigger, expectedSchedule, mrObservation) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    // PrFollowWatch owns the single pending doorbell for every watched schedule (both
+    // explicit prTrigger and legacy hook URLs), so busy deferrals must not clobber nextFireAt.
+    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: true });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function refreshSchedulePr(url: string, schedule?: Schedule): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  const ref = parseSessionPrUrl(url);
+  if (!ref) throw new Error('INVALID_PR_URL');
+  const before = prFollowWatch.observedSignature(ref);
+  const [result] = await prStatusService.getStatuses([ref],
+    { waitForFresh: true, refresh: true });
+  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+  if (schedule && ref.provider === 'gitlab' && !changesBetween(before, prFollowWatch.observedSignature(ref), ref.provider).length) {
+    await prFollowWatch.reconcileInitialMrWork(schedule, result);
+  }
+}
+
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
   return cachedGithubPrHeads(prStatusService, urls);
@@ -221,14 +246,14 @@ export async function readGithub(
 }
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
-export function registerGitContextIpc(): void {
+export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: string) => string | null }): void {
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
-    readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
-    fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
+    readGitlabToken: host => readGitlabStatusToken(host, glabCliTokenSource, activeOwnerScopeKey, deps.readGitlabPluginToken),
+    fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
     rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
     invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
     scope: githubReadScope,
@@ -237,8 +262,18 @@ export function registerGitContextIpc(): void {
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
+    onInvalidated: () => prFollowWatch.reset(),
     onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
+  const gitlabId = 'cindy-gitlab';
+  const namespacedId = pluginInstallStoragePart(pluginNewInstallRelId(createPluginLogicalIdentity(null, gitlabId)));
+  for (const id of new Set([gitlabId, namespacedId])) {
+    gitlabSetupSubscriptions.push(getGhostSetupChangeBus().subscribe(id, event => {
+      if (event.source !== 'connection' && event.source !== 'manifest') return;
+      glabCliTokenSource.invalidateNegativeCache();
+      prStatusService?.invalidate();
+    }));
+  }
   app.on('browser-window-focus', () => {
     prStatusService?.invalidateGitlabAuthFailures();
   });
@@ -373,7 +408,7 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
-
+    void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
 
@@ -381,7 +416,7 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
-
+    void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 
@@ -566,5 +601,6 @@ export async function readSessionPrsAllMerged(sessionId: string): Promise<boolea
 
 /** 应用退出时清理 watcher 订阅。 */
 export async function disposeGitContext(): Promise<void> {
+  for (const unsubscribe of gitlabSetupSubscriptions.splice(0)) unsubscribe();
   await gitContextService?.dispose();
 }

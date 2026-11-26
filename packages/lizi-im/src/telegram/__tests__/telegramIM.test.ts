@@ -304,6 +304,50 @@ describe('TelegramIM', () => {
     }
   });
 
+  // A getMe that never answers used to leave the connection in `connecting` forever
+  // (and held back every companion connection started after it). Runs through the real
+  // Bot API client with fetch stubbed (no network): a stall before the headers and a
+  // stalled body after HTTP 200 must both become a retryable network error. Only the
+  // handshake is bounded: the 50s long poll must not inherit the short timeout.
+  it.each(['headers', 'body'] as const)('times out a handshake stalled on %s and retries', async (stall) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      const method = String(url).split('/').pop()!;
+      calls.push(method);
+      const onAbort = (fn: () => void) => init.signal?.addEventListener('abort', fn, { once: true });
+      const hang = () => new Promise<Response>((_resolve, reject) => {
+        onAbort(() => reject(new DOMException('aborted', 'AbortError')));
+      });
+      if (method === 'getMe' && calls.filter((m) => m === 'getMe').length === 1) {
+        if (stall === 'headers') return hang();
+        return Promise.resolve(new Response(new ReadableStream({
+          start: (controller) => onAbort(() => controller.error(new DOMException('aborted', 'AbortError'))),
+        }), { status: 200 }));
+      }
+      if (method === 'getUpdates') return hang();
+      return Promise.resolve(Response.json({ ok: true, result: method === 'getMe' ? BOT : {} }));
+    });
+    const realIm = new TelegramIM(ctx.host, {});
+    try {
+      const starting = realIm.init();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(realIm.getStatus().kind).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(1);
+      await starting;
+      expect(realIm.getStatus()).toMatchObject({ kind: 'error', code: 'network' });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(realIm.getStatus().kind).toBe('connected');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(calls.filter((m) => m === 'getUpdates')).toHaveLength(1);
+    } finally {
+      await realIm.dispose();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -330,9 +374,60 @@ describe('TelegramIM', () => {
     const result = (await ctx.handlers.get('telegramBot:set-config')!({
       token: '999:bad-token-abcdefghijklmn',
       ownerUserId: OWNER_ID,
-    })) as { saveErrorStatus?: { kind: string } };
+    })) as { saveErrorStatus?: { kind: string }; saveTimedOut?: boolean };
     expect(result.saveErrorStatus?.kind).toBe('error');
+    expect(result.saveTimedOut).toBeUndefined();
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  // Maintainer review on #11994: a new binding whose handshake only timed out reports that
+  // separately (the UI keeps the typed values and offers "try again"), leaves nothing
+  // half-saved, and the identical payload then connects. An invalid token stays a plain failure.
+  it('set-config 握手超时: 标出超时、不留半套凭证, 同一份输入重试即连上', async () => {
+    vi.useFakeTimers();
+    const original = api.call.bind(api);
+    let stall = true;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe' && stall) {
+        stall = false;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      return original(method, params, signal);
+    }) as typeof api.call;
+    const save = ctx.handlers.get('telegramBot:set-config')!;
+    const payload = { token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID };
+    try {
+      const first = save(payload) as Promise<{ saveTimedOut?: boolean; saveErrorStatus?: { code?: string } }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await first).toMatchObject({ saveTimedOut: true, saveErrorStatus: { code: 'network' } });
+      expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(im.getStatus().kind).toBe('error');
+
+      const second = (await save(payload)) as { saveTimedOut?: boolean; saveErrorStatus?: unknown };
+      expect(second.saveTimedOut).toBeUndefined();
+      expect(second.saveErrorStatus).toBeUndefined();
+      expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+
+      // Replacing that saved binding is not a new binding: on timeout the previous one is
+      // restored and reconnected, so the result must not ask the UI to keep the draft.
+      stall = true;
+      const replacing = save({ token: '999:other-token-abcdefghijk', ownerUserId: '222' }) as Promise<{
+        saveTimedOut?: boolean;
+        ownerUserId: string | null;
+      }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const replaced = await replacing;
+      expect(replaced.saveTimedOut).toBeUndefined();
+      expect(replaced.ownerUserId).toBe(OWNER_ID);
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('set-config 连接失败且旧 secret 回滚写失败: 落下线闩锁, 重启不得用混合配置上线', async () => {
@@ -2911,6 +3006,99 @@ describe('TelegramIM', () => {
       api.pushUpdates([update]);
       await vi.waitFor(() => expect(events).toHaveLength(1));
     });
+  });
+
+  // Unit: a host that silently fails to unlink a credential must not produce a successful IPC receipt.
+  it.each([
+    ['telegram-bot-token', 'retained'],
+    ['telegram-owner-user-id', 'retained'],
+    ['telegram-bot-runtime-active', 'retained'],
+    ['telegram-updates-offset', 'retained'],
+    ['telegram-bot-offline', 'retained'],
+    ['telegram-bot-token', 'unreadable'],
+  ] as const)('reports a failed disconnect when %s is %s after removal, and can retry', async (key, failure) => {
+    await connect();
+    ctx.secrets.set(key, ctx.secrets.get(key) ?? '1');
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const readResult = ctx.host.secrets.readResult!;
+    const sentBefore = api.calls.filter(call => call.method === 'sendMessage').length;
+    let cannotConfirmRemoval = false;
+    ctx.host.secrets.remove = (name) => {
+      if (failure === 'unreadable' || name !== key) remove(name);
+      if (failure === 'unreadable' && name === key) cannotConfirmRemoval = true;
+    };
+    ctx.host.secrets.readResult = (name) => {
+      if (name === key && cannotConfirmRemoval) {
+        cannotConfirmRemoval = false;
+        return { kind: 'error' };
+      }
+      return readResult(name);
+    };
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(im.getConfigState().ownerUserId).toBe(OWNER_ID);
+    expect(api.calls.filter(call => call.method === 'sendMessage')).toHaveLength(sentBefore);
+    if (failure === 'retained') expect(ctx.secrets.has(key)).toBe(true);
+
+    ctx.host.secrets.remove = remove;
+    ctx.host.secrets.readResult = readResult;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(key)).toBe(false);
+  });
+
+  // Unit: a later unlink failure must leave the existing bot offline across restart,
+  // with credentials and cursor available for a retry only when recovery succeeds.
+  it.each([false, true])('fails disconnect safely after a partial unlink (rollback fails: %s)', async (rollbackFails) => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const ownerKey = 'telegram-owner-user-id';
+    const offsetKey = 'telegram-updates-offset';
+    const offlineKey = 'telegram-bot-offline';
+    const token = ctx.secrets.get(tokenKey);
+    const offset = JSON.stringify({ botId: String(BOT.id), offset: 50 });
+    ctx.secrets.set(offsetKey, offset);
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const write = ctx.host.secrets.write;
+    ctx.host.secrets.remove = (name) => { if (name !== offsetKey) remove(name); };
+    ctx.host.secrets.write = (name, value) =>
+      rollbackFails && name === tokenKey ? false : write(name, value);
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(ctx.secrets.get(offlineKey)).toBe('1');
+    expect(ctx.secrets.get(ownerKey)).toBe(OWNER_ID);
+    expect(ctx.secrets.get(offsetKey)).toBe(offset);
+    expect(ctx.secrets.has('telegram-group-admission-v1')).toBe(false);
+    expect(ctx.secrets.get(tokenKey)).toBe(rollbackFails ? undefined : token);
+
+    await im.dispose();
+    api.calls.length = 0;
+    await im.init();
+    expect(api.calls).toHaveLength(0);
+    if (rollbackFails) {
+      expect(im.getStatus()).toEqual({ kind: 'idle' });
+      return;
+    }
+    expect(im.getStatus()).toMatchObject({ kind: 'offline' });
+    ctx.host.secrets.remove = remove;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(api.calls.map(({ method }) => method)).toEqual(['deleteMyCommands', 'sendMessage']);
+  });
+
+  // Unit: unreadable ciphertext can still be unbound when the host can confirm physical deletion.
+  it('allows a confirmed disconnect even when the stored token cannot be read', async () => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const readResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) => name === tokenKey ? { kind: 'error' } : readResult(name);
+    ctx.host.secrets.removeConfirmed = (name) => {
+      ctx.secrets.delete(name);
+      return true;
+    };
+
+    expect(await ctx.handlers.get('telegramBot:disconnect')!()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(tokenKey)).toBe(false);
   });
 
   it('disconnect 清空凭证并回 idle', async () => {

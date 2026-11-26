@@ -8,6 +8,7 @@
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
 export * from "./protocol.js";
+export * from "./deviceNameMerge.js";
 export * from "./allowlist.js";
 export * from "./client.js";
 export * from "./routedClient.js";
@@ -18,7 +19,8 @@ export * from "./directRtcRuntime.js";
 export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
 export * from "./transport.js";
 export * from "./invokeTransfer.js";
-export { INVOKE_DELTA_CHANNELS, isInvokeDeltaChannel, type InvokeResultDelta, type InvokeResultPatch } from "./invokeDelta.js";
+export { INVOKE_DELTA_CHANNELS, InvokeDeltaBases, isInvokeDeltaChannel, type InvokeResultDelta, type InvokeResultPatch } from "./invokeDelta.js";
+export { InvokeScheduler } from "./invokeScheduler.js";
 export * from "./pushTransfer.js";
 export * from "./pushTransferDictionary.js";
 export * from "./topics.js";
@@ -38,6 +40,7 @@ export * from "./remoteClipboard.js";
 export * from "./remoteCursor.js";
 export * from "./peerRecoveryScheduler.js";
 export * from "./invokePolicy.js";
+export * from "./listingReadCoalescer.js";
 export * from "./filePeer.js";
 export * from "./peerTransferCooldown.js";
 export * from "./peerInvoke.js";

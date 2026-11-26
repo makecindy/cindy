@@ -6,9 +6,14 @@ export default {
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': './catalog-hooks.ts',
+    'src/renderer/hooks/useAgentCapabilities': {
+      partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
+        refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
+    },
     'src/renderer/hooks/useProviders': './catalog-hooks.ts',
-    'src/renderer/hooks/useDeviceProviders': './catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': {
+      partial: "export { useDeviceProviders } from './scripts/fixtures/scheduler-trigger/catalog-hooks';",
+    },
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',
@@ -16,20 +21,57 @@ export default {
     'src/renderer/lib/sessionService': 'export const resolveReferences = async () => [];',
     'src/renderer/features/scheduler/components/BoundSessionCard': 'export const BoundSessionCard = () => null;',
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
-    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
+    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = ({intervalMs}) => chip(intervalMs === 300000 ? '每 5 分钟' : '09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
+  cases: { 'single-mr': { about: 'GitLab MR 只能保存为周期检查，默认每五分钟' }, 'single-pr': { about: '选择一条 PR 并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
+    default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
     expanded: { about: '四十行提示词：卡片仍是原来的三行并滚动，展开编辑铺满弹窗，收起后回到卡片' } },
   async ready(page) {
+    const scriptLabel = await page.evaluate(() => window.__uiPage.ctx.case === 'script-settings'
+      ? window.__uiPage.t('scheduler.editor.script.capabilitiesLabel') : null);
+    if (scriptLabel) {
+      await page.getByRole('button', { name: scriptLabel, exact: true }).waitFor();
+      return;
+    }
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'single-mr') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.prTrigger.label'), exact: true }).click();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.prTrigger.url') }).fill('https://git.example.test/team/project/-/merge_requests/7');
+      const timed = page.getByRole('checkbox', { name: await ui.t('scheduler.prTrigger.timed') });
+      assert.ok(await timed.isChecked() && await timed.isDisabled());
+      await page.getByRole('button', { name: '每 5 分钟' }).scrollIntoViewIfNeeded();
+      await ui.capture('merge-request-trigger');
+      return;
+    }
+    if (ui.case === 'single-pr') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.prTrigger.label'), exact: true }).click();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.prTrigger.url') }).fill('https://github.com/example/project/pull/42');
+      await page.getByText(await ui.t('scheduler.prTrigger.timed'), { exact: true }).click();
+      await ui.capture('pull-request-trigger');
+      return;
+    }
+    if (ui.case === 'script-settings') {
+      // Script read scope: render the real selector; unit broker tests cannot
+      // prove translated labels, descriptions and popup geometry remain usable.
+      const label = await ui.t('scheduler.editor.script.capabilitiesLabel');
+      const trigger = page.getByRole('button', { name: label, exact: true });
+      assert.ok((await trigger.textContent()).includes(await ui.t('scheduler.editor.script.capabilities.settings_read')));
+      await trigger.click();
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.settings_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('settings-read');
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.usage_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('usage-read');
+      return;
+    }
     // Issue #10224: the compact field still shows the original three lines; a long
     // prompt scrolls inside it, and the expand button above it opens a large editor.
-    const prompt = await page.locator('textarea').evaluate((el) => ({
+    const promptField = page.getByRole('textbox', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+    const prompt = await promptField.evaluate((el) => ({
       height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
     }));
     console.log(`prompt field: ${JSON.stringify(prompt)}`);
@@ -46,13 +88,13 @@ export default {
       // this control by 144px in a short window. Start measuring after the user
       // has scrolled the control into view, not before Playwright's auto-scroll.
       await choice.scrollIntoViewIfNeeded();
-      await choice.evaluate((element, triggerLabel) => {
+      await choice.evaluate((element, { triggerLabel, promptElement }) => {
         const frames = []; window.__triggerFrames = frames; window.__triggerFramesDone = false;
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
             .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
-          const prompt = document.querySelector('textarea').getBoundingClientRect();
+          const prompt = promptElement.getBoundingClientRect();
           frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
         };
         sample();
@@ -63,7 +105,7 @@ export default {
             else window.__triggerFramesDone = true;
           }; tick();
         }, {once: true});
-      }, await ui.t('scheduler.editor.trigger.label'));
+      }, { triggerLabel: await ui.t('scheduler.editor.trigger.label'), promptElement: await promptField.elementHandle() });
       await choice.click();
       await page.waitForFunction(() => window.__triggerFramesDone);
       const frames = await page.evaluate(() => window.__triggerFrames);
@@ -113,7 +155,7 @@ export default {
       const collapse = await ui.t('scheduler.editor.promptDialog.collapsePrompt');
       await page.getByRole('button', { name: collapse, exact: true }).click();
       await panel.waitFor({ state: 'detached' });
-      const back = await page.locator('textarea').evaluate((el) => ({ height: el.getBoundingClientRect().height }));
+      const back = await promptField.evaluate((el) => ({ height: el.getBoundingClientRect().height }));
       assert.ok(back.height <= 60, `Collapsing did not restore the compact field: ${JSON.stringify(back)}`);
       // Focus returns to the entry button instead of restarting at the top.
       assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), expand);

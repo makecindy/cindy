@@ -44,7 +44,7 @@ const claude = (
           },
         ],
 });
-// The default account's card comes from the provider (ProvidersSection); added accounts carry their own.
+// Every account carries its own quota, including the login in the official CLI directory.
 const defaultSnapshot = claude(2, 92, 16, [3.6, 76]);
 const usage = (snapshot: ClaudeSubscriptionUsageSnapshot): SubscriptionAccountUsage => ({
   claude: snapshot,
@@ -64,9 +64,19 @@ const codex = (primary: number, secondary: number): SubscriptionAccountUsage => 
   },
 });
 
-/** Mirrors ProvidersSection: the provider card sits in the default row, the usage page in the header. */
-function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: boolean }) {
+/** A plugin engine provider with accounts (plugin engine accounts, 2026-11-23). */
+const PLUGIN_PROVIDER = 'acp-plugin:zcode-plugin:zcode';
+const pluginUsage = (fiveHour: number, weekly: number): SubscriptionAccountUsage => ({
+  plugin: { updatedAt: now, windows: [
+    { label: 'GLM · 5h', remainingPercent: fiveHour, resetsAt: now + 2.4 * 3_600_000, windowMinutes: 300 },
+    { label: 'GLM · Weekly', remainingPercent: weekly, resetsAt: now + 4 * 86_400_000, windowMinutes: 10_080 },
+  ] },
+});
+
+/** Mirrors ProvidersSection: the old provider card is only an unavailable-endpoint fallback. */
+function Section({ codexPool, signedOut, plugin }: { codexPool: boolean; signedOut: boolean; plugin: boolean }) {
   const { t } = useTranslation();
+  if (plugin) return <SubscriptionAccountsSection providerId={PLUGIN_PROVIDER} providerName="ZCode" />;
   if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
   return (
     <SubscriptionAccountsSection
@@ -98,18 +108,21 @@ void mountPage({
           id: 'default',
           identity: 'alex@example.com',
           plan: isCodex ? 'pro' : 'max',
+          ...(isCodex ? { planType: 'pro' } : { planTier: 'max_20x' }),
           directory: isCodex ? '/Users/alex/.codex' : '/Users/alex/.claude',
           status: 'ready',
           running: 2,
           limit: 10,
           weight: 1,
           paused: false,
-          ...(isCodex ? { usage: codex(18, 41) } : { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() }),
+          usage: isCodex ? codex(18, 41) : usage({ ...defaultSnapshot, planTier: 'max_20x' }),
+          ...(!isCodex ? { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() } : {}),
         },
         {
           id: 'second',
           identity: 'long.work.account@research.example.com',
           plan: isCodex ? 'plus' : 'max',
+          ...(isCodex ? { planType: 'plus' } : { planTier: 'max_5x' }),
           directory: '/Users/alex/.claude-cindy-opaque-id',
           status: 'ready',
           running: 0,
@@ -133,7 +146,33 @@ void mountPage({
         },
       ],
     };
+    if (ctx.case.startsWith('official-plan-name')) {
+      view.accounts[0] = {
+        ...view.accounts[0], plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
+        usage: usage({ ...defaultSnapshot, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' }),
+      };
+    }
     if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
+    if (ctx.case.startsWith('plugin-engine'))
+      view = {
+        providerId: PLUGIN_PROVIDER,
+        configured: true,
+        strategy: 'least',
+        pluginEngine: {
+          engineKey: 'zcode-plugin:zcode',
+          methods: [
+            { id: 'zai-key', label: 'Z.ai API Key', kind: 'secret', secretLabel: 'Z.ai Coding Plan API Key' },
+            { id: 'zai-browser', label: 'Z.ai', kind: 'browser' },
+          ],
+        },
+        accounts: [
+          { id: 'default', identity: 'me@z.ai', plan: 'GLM Coding Plan Pro', directory: '', status: 'ready',
+            running: 1, limit: 4, weight: 1, paused: false, usage: pluginUsage(62, 81) },
+          { id: 'cindy-0123456789ab-00000000-0000-4000-8000-000000000002', identity: 'BigModel API Key ····a1b2',
+            plan: 'GLM Coding Plan Lite', directory: '/Users/alex/Library/Application Support/Cindy/owners/u/plugin-engine-accounts/zcode-plugin/zcode/cindy-…',
+            status: 'limited', running: 0, limit: 2, limitSet: true, weight: 1, paused: false, usage: pluginUsage(0, 44) },
+        ],
+      };
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
@@ -228,6 +267,7 @@ void mountPage({
         <Section
           codexPool={ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
           signedOut={ctx.case === 'empty'}
+          plugin={ctx.case.startsWith('plugin-engine')}
         />
       )}
       <ToastContainer />

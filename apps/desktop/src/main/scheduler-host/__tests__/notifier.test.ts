@@ -119,6 +119,9 @@ describe('DesktopNotifier desktop status mapping', () => {
     },
   );
 
+  // 测试价值：生产入口 ScheduleNotifier.notify 需把已配置的单次 run 通知送入手机出口；
+  // Bug #10944；此前只断言手机发送发生，未验证携带独立 run 身份及 attention 豁免；
+  // 最小失败输入为 run.id=run-1 且桌面全局 toast 关闭；tier=unit；单独运行 2.60s。
   it('does not show a scheduler toast when the shared desktop gate is closed', async () => {
     const { notifier } = createNotifier({ shouldNotifyDesktop: () => false });
 
@@ -132,6 +135,8 @@ describe('DesktopNotifier desktop status mapping', () => {
       kind: 'done',
       // notify() 入口(任何 await 之前)捕获的链路代次,原样透传
       generation: 7,
+      eventId: 'schedule-run:run-1',
+      attentionExempt: true,
     });
   });
 

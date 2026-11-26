@@ -5,6 +5,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { PiKernelManager, parseOfficialPiRelease, type PiKernelManagerDeps } from '../pi-kernel-manager.js';
 import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
+import { initialDownloadProgress } from '../../../shared/downloadProgress';
 
 vi.mock('electron', () => ({ net: { fetch: vi.fn() } }));
 vi.mock('../../manifestService.js', () => ({ getBaseUrl: () => 'https://hotfix.cindy.app/cindy', getPlatformKey: () => 'darwin-arm64' }));
@@ -77,6 +78,21 @@ describe('Pi version selection', () => {
     await expect(manager.install({ source: 'official', version: '0.84.4' })).rejects.toMatchObject({ reason: 'busy' });
     release(); await first;
     expect(deps.install).toHaveBeenCalledTimes(1);
+  });
+  // Regression (2026-11-17): Settings only saw a phase word while Pi downloaded.
+  it('exposes the standard download progress on the in-flight operation', async () => {
+    const { manager, deps } = await fixture();
+    const install = deps.install;
+    let seen: unknown;
+    deps.install = async (root, release, d, platform, signal, onPhase, onDownloadProgress) => {
+      onPhase?.('download');
+      onDownloadProgress?.({ ...initialDownloadProgress('downloading', 100), loaded: 40, percent: 40 });
+      seen = (await manager.state()).operation;
+      return install(root, release, d, platform, signal, onPhase, onDownloadProgress);
+    };
+    await manager.install({ source: 'upstream', version: '0.87.1' });
+    expect(seen).toMatchObject({ phase: 'download', download: { loaded: 40, percent: 40 } });
+    expect((await manager.state()).operation).toBeNull();
   });
   it('repairs legacy equal-version directory naming, without silently downgrading a newer native version', async () => {
     const { manager, deps, legacy } = await fixture();

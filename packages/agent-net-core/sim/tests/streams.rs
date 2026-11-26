@@ -2,16 +2,20 @@
 //! - 生产入口与可观察结果：`agent_net_core::Connection` 的多路流公开接口，断言每条流读到的字节完整、有序、不串流，
 //!   一条流卡住不影响别的流，优先级、流量额度和流的生命周期符合约定，坏包不能撑大内存。
 //! - Bug／规则依据：`docs/agent-net-plan.md` 第 2 步通过标准。流头写错或额度算错时不会报错，只会把数据交给错的流，
-//!   或者让流永远卡住。
-//! - 现有覆盖缺口：`reliability.rs` 只用默认流，碰不到流头、调度、额度和流的结束。
+//!   或者让流永远卡住。2026-11-17 起另有一端窗口 8192、一端是窗口 128 的旧版的互通用例（`sim/results/2026-11-17-window-interop`）：
+//!   越过旧版窗口的分片被丢掉、旧版发送端等额度，都只会变慢、不会报错。2026-11-19 起另有发送缓冲按优先级让、三档调度的用例
+//!   （`sim/results/2026-11-19-priority-buffer`）：Desktop 驱动的配置下大流把交互流挡在发送缓冲外、三档都有数据时交互流被饿住，
+//!   都只表现为消息迟迟发不出去，不报错。
+//! - 现有覆盖缺口：`reliability.rs` 只用默认流，碰不到流头、调度、额度和流的结束；别的用例两端配置都一样。
+//!   2026-11-19 以前的用例发送缓冲固定 1 MiB、最多两档同时有数据，碰不到窗口缩小后超出上限和三档调度。
 //! - 最小失败输入：每条失败都打印种子，用 `AGENT_NET_REPLAY=<种子>` 重放；固定场景的输入写在各用例里。
 //! - tier：Rust integration，虚拟时间，无真实网络；独立通过 Cargo 运行，未接入 pnpm unit runner。
 //!   用 `--profile sim` 打开溢出检查，默认 200 个种子；`AGENT_NET_SEEDS=10000` 跑扩展矩阵。
-//! - 实测耗时：2026-11-02，本机默认 200 个种子 2.2 秒；10000 个种子空闲时约 160 秒，`sim/results/2026-11-02-streams/tests.txt` 里的 527 秒是和注入 bug 同时跑的。
+//! - 实测耗时：2026-11-19，本机默认 200 个种子 2.4 秒（2026-11-02 是 2.2 秒）；10000 个种子空闲时约 160 秒，`sim/results/2026-11-02-streams/tests.txt` 里的 527 秒是和注入 bug 同时跑的。
 //!   含 300 Mbit/s 路径的吞吐验证和恶意包压力验证，不作为 5 秒内轻量单测。
 //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
 
-use agent_net_core::{Config, Connection, DEFAULT_STREAM, PacketError, Priority, RecoveryPolicy, StreamEvent};
+use agent_net_core::{Config, Connection, DEFAULT_STREAM, PRIORITY_LEVELS, PacketError, Priority, RecoveryPolicy, StreamEvent};
 use agent_net_sim::{Link, LinkProfile, Rng, random_case};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -37,15 +41,20 @@ struct Pair {
 
 impl Pair {
     fn new(config: &Config, to_b: LinkProfile, to_a: LinkProfile, seed: u64) -> Self {
+        Self::with_configs(config, config, to_b, to_a, seed)
+    }
+
+    /// 两端配置不同：一端升级了、另一端还是旧版。
+    fn with_configs(a: &Config, b: &Config, to_b: LinkProfile, to_a: LinkProfile, seed: u64) -> Self {
         Self {
-            a: Connection::new(config.clone(), 0),
-            b: Connection::new(config.clone(), 0),
+            a: Connection::new(a.clone(), 0),
+            b: Connection::new(b.clone(), 0),
             to_b: Link::new(to_b, seed ^ 0xA5A5),
             to_a: Link::new(to_a, seed ^ 0x5A5A),
             packets: BinaryHeap::new(),
             order: 0,
             now: 0,
-            buffer: vec![0; config.max_packet_size],
+            buffer: vec![0; a.max_packet_size.max(b.max_packet_size)],
             wire_bytes: 0,
             largest_burst: 0,
         }
@@ -313,22 +322,31 @@ fn an_unread_stream_only_stalls_itself() {
 
 /// 满载传文件时交互消息的延迟（升序）和文件速度。
 fn messages_beside_a_file(link: &LinkProfile, seed: u64) -> (Vec<u64>, u64) {
+    messages_beside_files(&wide_config(), link, seed, &[Priority::Background])
+}
+
+/// 满载传几条大流（各自的优先级）时交互消息的延迟（升序）和大流的总速度。每条消息都必须一写就整条收下。
+fn messages_beside_files(config: &Config, link: &LinkProfile, seed: u64, bulk: &[Priority]) -> (Vec<u64>, u64) {
     const DURATION_US: u64 = 6_000_000;
-    let mut pair = Pair::new(&wide_config(), link.clone(), link.clone(), seed);
+    let mut pair = Pair::new(config, link.clone(), link.clone(), seed);
     let chat = pair.a.open_stream(Priority::Interactive).unwrap();
-    let file = pair.a.open_stream(Priority::Background).unwrap();
+    let files: Vec<u32> = bulk.iter().map(|&priority| pair.a.open_stream(priority).unwrap()).collect();
     let (message, chunk) = ([7u8; 200], [9u8; 4096]);
     let mut sent_at = Vec::new();
     let mut delays = Vec::new();
     let (mut chat_read, mut file_read) = (0, 0);
     while pair.now < DURATION_US {
         if pair.now >= sent_at.len() as u64 * 20_000 {
-            assert_eq!(pair.a.send_stream(pair.now, chat, &message), message.len());
+            assert_eq!(pair.a.send_stream(pair.now, chat, &message), message.len(), "消息写不进发送缓冲，at {}us", pair.now);
             sent_at.push(pair.now);
         }
-        while pair.a.send_stream(pair.now, file, &chunk) == chunk.len() {}
+        for &file in &files {
+            while pair.a.send_stream(pair.now, file, &chunk) == chunk.len() {}
+        }
         chat_read += drain(&mut pair.b, pair.now, chat);
-        file_read += drain(&mut pair.b, pair.now, file);
+        for &file in &files {
+            file_read += drain(&mut pair.b, pair.now, file);
+        }
         while (delays.len() + 1) * message.len() <= chat_read {
             delays.push(pair.now - sent_at[delays.len()]);
         }
@@ -368,6 +386,91 @@ fn interactive_messages_stay_fast_beside_a_full_file() {
     }
 }
 
+/// 普通和后台各一条大流一起写满时（会话层的普通通道传大结果、后台通道传文件），交互消息照样一写就收下，延迟和大流速度都接近
+/// 只有一条文件时。配置同 Desktop 的驱动。2026-11-19 修之前两处会坏：两条大流写满共用的发送缓冲，交互消息一个字节都写不进去；
+/// 写得进以后，三档都有数据时调度器一直让给普通档，慢线一行的 p95 从 0.19 秒涨到 2.6 秒。
+#[test]
+fn interactive_messages_stay_fast_beside_two_full_streams() {
+    let config = upgraded(Config::for_policy(RecoveryPolicy::Auto));
+    let lossy = |bits_per_second, delay_us, jitter_us, loss, queue_us| LinkProfile { bits_per_second, delay_us, jitter_us, loss, queue_us, ..LinkProfile::default() };
+    let rows = [
+        ("手机", lossy(10_000_000, 50_000, 30_000, 0.03, 150_000)),
+        ("跨境", lossy(4_000_000, 35_000, 5_000, 0.05, 200_000)),
+        ("慢线", lossy(1_000_000, 60_000, 4_000, 0.01, 300_000)),
+    ];
+    for (name, link) in rows {
+        let (mut one, mut two, mut one_rate, mut two_rate) = (Vec::new(), Vec::new(), 0, 0);
+        for seed in 1..=3 {
+            let (delays, rate) = messages_beside_files(&config, &link, seed, &[Priority::Background]);
+            one.extend(delays);
+            one_rate += rate / 3;
+            let (delays, rate) = messages_beside_files(&config, &link, seed, &[Priority::Normal, Priority::Background]);
+            two.extend(delays);
+            two_rate += rate / 3;
+        }
+        one.sort_unstable();
+        two.sort_unstable();
+        let at = |delays: &Vec<u64>, percent: usize| delays[delays.len() * percent / 100];
+        let (one_p, two_p) = ([50, 95, 99].map(|percent| at(&one, percent)), [50, 95, 99].map(|percent| at(&two, percent)));
+        let close = one_p.iter().zip(two_p).all(|(&one, two)| two <= one + one / 5 + 10_000);
+        assert!(close && two_rate >= one_rate - one_rate / 20,
+            "{name}：一条文件 p50/p95/p99 {one_p:?} {one_rate} bit/s，两条大流 {two_p:?} {two_rate} bit/s");
+    }
+}
+
+/// 三档都一直写满时每一档都在前进，最高档占大头（2026-11-19：防饿死只记一个数时，让给中间档清不了零，之后一直让给中间档；
+/// 高档的流一直写满共用发送缓冲时，最低档连一个分片都写不进去，调度器给它留的那一份没东西可发）。
+#[test]
+fn every_priority_makes_progress_when_all_are_busy() {
+    let config = wide_config();
+    let mut pair = Pair::new(&config, path(20_000_000, 10_000), path(20_000_000, 10_000), 1);
+    let streams = [Priority::Interactive, Priority::Normal, Priority::Background].map(|priority| pair.a.open_stream(priority).unwrap());
+    let chunk = [3u8; 4096];
+    let mut read = [0usize; 3];
+    while pair.now < 3_000_000 {
+        for &stream in &streams {
+            while pair.a.send_stream(pair.now, stream, &chunk) == chunk.len() {}
+        }
+        for (index, &stream) in streams.iter().enumerate() {
+            read[index] += drain(&mut pair.b, pair.now, stream);
+        }
+        pair.advance();
+    }
+    let total: usize = read.iter().sum();
+    assert!(read[1] > 0 && read[2] > 0 && read[0] * 5 >= total * 4, "交互 / 普通 / 后台：{read:?}");
+}
+
+/// 不打乱先后的抖动线路（Wi-Fi 聚合、经 TCP 中转、VPN）上交互消息和文件一起发时，低排队模式的窗口只按最小往返算，
+/// 确认晚回来，窗口先卡住速度，带宽估计一轮轮往下掉（2026-11-15 真实网络对比：会话层回传每秒 3–7 MB，线路能跑 14 MB）。
+/// 窗口要另加确认一直成批到达多出来的量，加速探测连着成功时要一次比一次加得多（VPN 一行：改之前文件 26 Mbit/s）；排起来的队连着两轮发得比送到的快很多时要认作自己的、
+/// 把带宽估计降下来，不能当成路径变慢去抬高基准，否则窗口越撑越大，消息排到队尾（抖动 30 毫秒一行：改之前 p99 1.23 秒）。
+/// 上一个用例守着另一头：令牌桶开头放行的那一阵、浅队列上的随机抖动不能拿来放大窗口。
+#[test]
+fn files_keep_their_speed_beside_messages_on_ordered_jitter() {
+    let ordered = |bits_per_second, delay_us, jitter_us, loss, queue_us| LinkProfile { bits_per_second, delay_us, jitter_us, jitter_fifo: true, loss, queue_us, ..LinkProfile::default() };
+    let rows = [
+        // 2026-11-16：改之前 p99 18 毫秒、文件 26.2 Mbit/s；窗口补上确认一直成批到达的量以后 41.6 Mbit/s，
+        // 加速探测连着成功时一次比一次加得多以后 48.7 Mbit/s，p99 都是 18 毫秒。
+        ("VPN", ordered(120_000_000, 8_500, 10_000, 0.0, 50_000), 25_000, 45_000_000),
+        // 改之前 p99 1232 毫秒、6.7 Mbit/s，之后 669 毫秒、7.4 Mbit/s。
+        ("每秒 1 MB 抖动 30 毫秒", ordered(8_000_000, 40_000, 30_000, 0.0, 262_000), 900_000, 7_000_000),
+        // 改之前 p99 110 毫秒、16.0 Mbit/s，之后 111 毫秒、16.3 Mbit/s：这里只守着不变差。
+        ("4G", ordered(20_000_000, 35_000, 20_000, 0.015, 200_000), 150_000, 15_000_000),
+    ];
+    for (name, link, p99_limit, rate_floor) in rows {
+        let (mut delays, mut rate) = (Vec::new(), 0);
+        for seed in 1..=4 {
+            let (run, run_rate) = messages_beside_a_file(&link, seed);
+            delays.extend(run);
+            rate += run_rate / 4;
+        }
+        delays.sort_unstable();
+        let p99 = delays[delays.len() * 99 / 100];
+        assert!(p99 <= p99_limit, "{name}: p99 {p99}");
+        assert!(rate >= rate_floor, "{name}: 文件只有 {rate} bit/s");
+    }
+}
+
 /// 额度跟不上时，流会被自己的窗口卡住：高带宽路径上新开的流不能比默认流慢。
 #[test]
 fn credit_keeps_up_with_fast_paths() {
@@ -387,6 +490,118 @@ fn credit_keeps_up_with_fast_paths() {
     };
     let (default_stream, opened) = (rate(false), rate(true));
     assert!(opened * 10 >= default_stream * 9, "默认流 {default_stream}，新开的流 {opened}");
+}
+
+/// 旧版：窗口和每条流的初始额度都是 `Config::default()` 的 128 个分片。
+fn legacy_config() -> Config {
+    Config::default()
+}
+
+/// 新版 Node 驱动的配置（`wasm/src/lib.rs` 的 `init`）：窗口放大到 8192 个分片，发包短一些。
+fn upgraded_config() -> Config {
+    upgraded(Config::default())
+}
+
+fn upgraded(base: Config) -> Config {
+    Config { send_window: 8192, recv_window: 8192, send_buffer_bytes: 24 << 20, send_packet_size: 1317, ..base }
+}
+
+/// a 在 `streams` 条新开的流上各发 `total` 字节给 b，b 一到就读。返回 (b 读完的时刻, a 重传的分片数)。
+fn one_way(a: &Config, b: &Config, link: &LinkProfile, streams: usize, total: usize, seed: u64) -> (u64, u64) {
+    let mut pair = Pair::with_configs(a, b, link.clone(), link.clone(), seed);
+    let ids: Vec<u32> = (0..streams).map(|_| pair.a.open_stream(Priority::Normal).unwrap()).collect();
+    let chunk = [8u8; 65_536];
+    let (mut written, mut read) = (vec![0; streams], 0);
+    while read < total * streams && pair.now < 60_000_000 {
+        for (index, &id) in ids.iter().enumerate() {
+            while written[index] < total {
+                let accepted = pair.a.send_stream(pair.now, id, &chunk[..chunk.len().min(total - written[index])]);
+                if accepted == 0 {
+                    break;
+                }
+                written[index] += accepted;
+            }
+            read += drain(&mut pair.b, pair.now, id);
+        }
+        while pair.b.poll_event().is_some() {}
+        pair.advance();
+    }
+    assert_eq!(read, total * streams, "seed {seed}: stalled at {}us", pair.now);
+    (pair.now, pair.a.stats().retransmitted_segments)
+}
+
+/// 新版发给旧版：旧版接收端只收 `rcv_next` 之后 128 个分片以内的，越过的丢掉、也不确认，只能等重传。
+/// 新版发送端要和两端都是旧版时一样守着这个窗口，互通不能比两端都是旧版差（新版发包短 6%，窗口卡住时按字节算就慢这么多）。
+/// 2026-11-17 复核发现：只有默认流按对端确认里的窗口限着，别的流的额度从自己的 8192 起算，在途分片和拥塞窗口的上限也按自己的 8192；
+/// 8 MiB、100 Mbit/s、往返 20 毫秒、1% 丢包，重传从 2 个涨到 8312 个，慢 61%。
+#[test]
+fn upgraded_senders_stay_inside_a_legacy_window() {
+    let total = 8 << 20;
+    let lossy = LinkProfile { loss: 0.01, queue_us: 50_000, ..path(100_000_000, 10_000) };
+    for seed in 1..=2 {
+        let (legacy_us, legacy_resent) = one_way(&legacy_config(), &legacy_config(), &lossy, 1, total, seed);
+        let (mixed_us, mixed_resent) = one_way(&upgraded_config(), &legacy_config(), &lossy, 1, total, seed);
+        assert!(mixed_resent <= legacy_resent * 4 + 32, "seed {seed}: 旧版两端重传 {legacy_resent} 个，新版发给旧版 {mixed_resent} 个");
+        // 拥塞控制按自己的大窗口判断（不看对端只有 128）时，校验包和启动都按错的窗口走，慢 52%。
+        assert!(mixed_us * 10 <= legacy_us * 12, "seed {seed}: 旧版两端 {legacy_us}us，新版发给旧版 {mixed_us}us");
+    }
+    // 两条流一起发、不发校验包：每条流的额度各自都在旧版的窗口里，合起来却会越过它，要按连接的序号守住。
+    // 只按流的额度和在途分片数限的话，重传是旧版两端的 4–7 倍。
+    let lean = Config::for_policy(RecoveryPolicy::Lean);
+    for seed in 1..=2 {
+        let (_, legacy_resent) = one_way(&lean, &lean, &lossy, 2, total / 2, seed);
+        let (_, mixed_resent) = one_way(&upgraded(lean.clone()), &lean, &lossy, 2, total / 2, seed);
+        assert!(mixed_resent <= legacy_resent * 2 + 32, "seed {seed}: 旧版两端重传 {legacy_resent} 个，新版发给旧版 {mixed_resent} 个");
+    }
+    // 没读的流只卡住自己：旧版接收端给每条流 128 个分片的额度，新版发送端开流时也按 128 记，不按自己的 8192。
+    // 按 8192 记的话，没读的流把旧版的未读上限（4 个窗口）占满，读着的流也收不到了。
+    let (legacy, upgraded) = (legacy_config(), upgraded_config());
+    let mut pair = Pair::with_configs(&upgraded, &legacy, path(40_000_000, 10_000), path(40_000_000, 10_000), 1);
+    let (moving, stuck) = (pair.a.open_stream(Priority::Normal).unwrap(), pair.a.open_stream(Priority::Normal).unwrap());
+    let (total, mut stuck_written, mut moving_written, mut moving_read) = (2_000_000usize, 0, 0, 0);
+    let chunk = [5u8; 4096];
+    while pair.now < 20_000_000 && moving_read < total {
+        moving_written += pair.a.send_stream(pair.now, moving, &chunk[..chunk.len().min(total - moving_written)]);
+        stuck_written += pair.a.send_stream(pair.now, stuck, &chunk[..chunk.len().min(total - stuck_written)]);
+        moving_read += drain(&mut pair.b, pair.now, moving);
+        let bound = legacy.recv_window as usize * legacy.max_packet_size;
+        assert!(pair.b.buffered_bytes() <= bound * 2, "没读的流超出了旧版给的额度：{}", pair.b.buffered_bytes());
+        pair.advance();
+    }
+    assert_eq!(moving_read, total, "读着的流被没读的流卡住，at {}us", pair.now);
+}
+
+/// 旧版发给新版：旧版发送端开流时按 128 个分片的额度记，用完就等新的额度。新版接收端收到新流就把额度放到自己的窗口，
+/// 不能等应用读走八分之一个窗口（1024 个分片）才给：那样旧版发送端要等 250 毫秒的探测，千兆局域网上 8 MiB 慢一倍多。
+#[test]
+fn legacy_senders_get_credit_from_upgraded_receivers_at_once() {
+    let lan = LinkProfile { queue_us: 5_000, ..path(1_000_000_000, 1_000) };
+    let total = 8 << 20;
+    let (legacy_us, _) = one_way(&legacy_config(), &legacy_config(), &lan, 1, total, 1);
+    let (mixed_us, _) = one_way(&legacy_config(), &upgraded_config(), &lan, 1, total, 1);
+    assert!(mixed_us * 10 <= legacy_us * 11, "旧版两端 {legacy_us}us，旧版发给新版 {mixed_us}us");
+}
+
+/// 两端都升级：开头按 128 个分片发，对端在确认里说出大窗口后放开，长往返上不再卡在 128 个分片；
+/// 新流一开就有整个窗口的额度，应用晚一点读，发送端也不停在 128 个分片上等它。
+#[test]
+fn upgraded_peers_use_their_large_windows() {
+    let far = path(50_000_000, 40_000);
+    let total = 8 << 20;
+    let (legacy_us, _) = one_way(&legacy_config(), &legacy_config(), &far, 1, total, 1);
+    let (upgraded_us, _) = one_way(&upgraded_config(), &upgraded_config(), &far, 1, total, 1);
+    assert!(upgraded_us * 2 <= legacy_us, "旧版两端 {legacy_us}us，新版两端 {upgraded_us}us");
+
+    let config = upgraded_config();
+    let mut pair = Pair::new(&config, path(100_000_000, 10_000), path(100_000_000, 10_000), 1);
+    let stream = pair.a.open_stream(Priority::Normal).unwrap();
+    let chunk = [3u8; 65_536];
+    while pair.now < 200_000 {
+        while pair.a.send_stream(pair.now, stream, &chunk) == chunk.len() {}
+        pair.advance();
+    }
+    let segment = config.send_limit();
+    assert!(pair.b.buffered_bytes() > 512 * segment, "应用还没读时只收到了 {} 字节", pair.b.buffered_bytes());
 }
 
 /// 只有交互流在发时没有谁要让路，不能压低队列：把终端输出这样的突发放在交互流上，不能因此变慢。
@@ -492,6 +707,49 @@ fn a_full_window_keeps_room_for_interactive_messages() {
     assert!(sender.poll_transmit(0, &mut buffer).is_some());
 }
 
+/// 两条大流写满所有流共用的发送缓冲时，更急的流照样写得进去（2026-11-19：普通和后台各一条大流就能把交互流挡在缓冲外，
+/// 交互消息要等大流被确认才写得进，慢线路上是好几秒）。低档和同档的流不能借高档的份额，只能写进一个分片好让它也在前进；
+/// 多占的内存有上限。
+#[test]
+fn full_bulk_streams_leave_room_for_more_urgent_ones() {
+    let config = Config::default();
+    let per_stream = config.send_buffer_bytes;
+    let big = vec![3u8; per_stream];
+    // 共用缓冲满了以后，这条流只写得进一个分片。
+    let one_segment_only = |sender: &mut Connection, stream: u32| {
+        let first = sender.send_stream(0, stream, &big);
+        first > 0 && first <= config.max_packet_size && sender.send_stream(0, stream, &[1; 100]) == 0
+    };
+    // 后台加普通写满共用缓冲：交互流还能写，另一条后台流不能。
+    let mut sender = Connection::new(config.clone(), 0);
+    let (background, normal) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Normal).unwrap());
+    let (late_background, chat) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Interactive).unwrap());
+    assert_eq!(sender.send_stream(0, background, &big), per_stream);
+    assert_eq!(sender.send_stream(0, normal, &big), per_stream);
+    assert!(one_segment_only(&mut sender, late_background), "后台流借了高档的份额");
+    assert_eq!(sender.send_stream(0, chat, &[7; 200]), 200, "交互流被大流挡在缓冲外");
+    sender.check_invariants();
+    // 两条后台流写满：普通流还能写，普通流写满它的份额以后交互流仍能写。
+    let mut sender = Connection::new(config.clone(), 0);
+    let (one, two) = (sender.open_stream(Priority::Background).unwrap(), sender.open_stream(Priority::Background).unwrap());
+    let (normal, late_normal, chat) = (sender.open_stream(Priority::Normal).unwrap(), sender.open_stream(Priority::Normal).unwrap(),
+        sender.open_stream(Priority::Interactive).unwrap());
+    assert_eq!(sender.send_stream(0, one, &big) + sender.send_stream(0, two, &big), 2 * per_stream);
+    let normal_room = sender.send_stream(0, normal, &big);
+    assert!(normal_room > config.max_packet_size, "普通流被后台流挡在缓冲外");
+    assert!(one_segment_only(&mut sender, late_normal), "同档的流多占了份额");
+    assert_eq!(sender.send_stream(0, chat, &[7; 200]), 200, "交互流被大流挡在缓冲外");
+    while sender.send_stream(0, chat, &[7; 4096]) > 0 {}
+    sender.check_invariants();
+    let bound = 3 * per_stream + 5 * config.max_packet_size;
+    assert!(sender.buffered_bytes() <= bound, "多占的超出一条流的上限：{}", sender.buffered_bytes());
+    // 只有同一档的流时不多给份额：两条写满就满，第三条只写得进一个分片。
+    let mut sender = Connection::new(config.clone(), 0);
+    let streams: Vec<u32> = (0..3).map(|_| sender.open_stream(Priority::Normal).unwrap()).collect();
+    assert_eq!(sender.send_stream(0, streams[0], &big) + sender.send_stream(0, streams[1], &big), 2 * per_stream);
+    assert!(one_segment_only(&mut sender, streams[2]));
+}
+
 /// 交互消息要排在待重传的大量数据前面：丢掉的先补，新写的也不等。成片丢包时重传队列很长，排在后面要等很久。
 #[test]
 fn interactive_messages_go_ahead_of_retransmissions() {
@@ -576,6 +834,47 @@ fn lost_credit_is_sent_again() {
         pair.advance();
     }
     assert_eq!(read, total, "at {}us dead={}", pair.now, pair.a.is_dead());
+}
+
+/// 一个确认平时只带两条流的额度；对端等额度发探测时，这一端把每条流都标成要重发。编号靠后的一条流最初那几份额度丢了以后，
+/// 回探测的确认要把它也带上，否则每次都是编号最小的两条，它一直停在初始的 128 个分片上（2026-11-22：会话 v2 的正文流是
+/// 一条连接的第 6 条流，手机轮询慢一点就停在 160 KB）。
+#[test]
+fn a_later_stream_gets_its_lost_credit_back() {
+    let config = upgraded_config();
+    let clean = path(100_000_000, 5_000);
+    let mut pair = Pair::new(&config, clean.clone(), clean.clone(), 1);
+    // 先开着的几条流（像会话的数据、控制和三条通道），各发一点、读走，最初的额度都送到了。
+    let early: Vec<u32> = (0..5).map(|_| pair.a.open_stream(Priority::Normal).unwrap()).collect();
+    for &stream in &early {
+        assert_eq!(pair.a.send_stream(pair.now, stream, &[1u8; 100]), 100);
+    }
+    while pair.now < 200_000 {
+        for &stream in &early {
+            drain(&mut pair.b, pair.now, stream);
+        }
+        pair.advance();
+    }
+    // 再开一条流发 1 MiB；开头 100 毫秒回来的确认全丢，新流最初那几份额度跟着丢了。
+    pair.to_a = Link::new(LinkProfile { loss: 1.0, ..clean.clone() }, 7);
+    let (late, lossy_until) = (pair.a.open_stream(Priority::Normal).unwrap(), pair.now + 100_000);
+    let total = 1 << 20;
+    let (mut written, mut read, mut restored) = (0, 0, false);
+    let chunk = [9u8; 4096];
+    while read < total && pair.now < 30_000_000 && !pair.a.is_dead() {
+        if !restored && pair.now >= lossy_until {
+            pair.to_a = Link::new(clean.clone(), 7);
+            restored = true;
+        }
+        if written < total {
+            written += pair.a.send_stream(pair.now, late, &chunk[..chunk.len().min(total - written)]);
+        }
+        read += drain(&mut pair.b, pair.now, late);
+        pair.advance();
+    }
+    assert_eq!(read, total, "后开的流停在 {read} 字节，at {}us", pair.now);
+    // 确认恢复后第一个探测就补上（实测恢复后 0.42 秒传完；只靠逐个确认轮着带是 1.36 秒）。
+    assert!(pair.now < lossy_until + 1_000_000, "确认恢复 {}us 后才传完", pair.now - lossy_until);
 }
 
 /// 一条流不管发多少，只在开头带一次流头。单流场景的线上开销不能因为多路流变大。
@@ -754,4 +1053,171 @@ fn crafted_stream_packet(packet_number: u32, sn: u32, stream: u32, seq: u32, fin
     packet.push(fin as u8);
     packet.extend_from_slice(payload);
     packet
+}
+
+/// 2026-11-22：八档优先级（会话层方案第 7 节第 1 项）。原来的三档是其中的 1、3、6；数小的先发，0、1 两档按交互流对待，
+/// 每一档都有数据在等时最低的一档照样有进展。只用原来三档的结果不变，由上面的用例和 `sim/results/2026-11-22-stream-levels` 的矩阵对比看守。
+#[test]
+fn every_level_sends_by_number_and_none_starves() {
+    assert_eq!(Priority::level(PRIORITY_LEVELS as u8), None);
+    assert_eq!([Priority::Interactive, Priority::Normal, Priority::Background].map(Priority::value), [1, 3, 6]);
+    assert!(Priority::level(0).unwrap().is_urgent() && Priority::Interactive.is_urgent() && !Priority::level(2).unwrap().is_urgent());
+    let mut pair = Pair::new(&wide_config(), path(2_000_000, 20_000), path(2_000_000, 20_000), 11);
+    let streams: Vec<u32> = (0..PRIORITY_LEVELS as u8).map(|level| pair.a.open_stream(Priority::level(level).unwrap()).unwrap()).collect();
+    let size = 48 * 1024;
+    for &stream in &streams {
+        assert_eq!(pair.a.send_stream(0, stream, &vec![stream as u8; size]), size);
+        assert!(pair.a.finish_stream(stream));
+    }
+    let mut received = vec![0usize; streams.len()];
+    let mut finished_at = vec![None; streams.len()];
+    while finished_at.iter().any(Option::is_none) {
+        assert!(pair.now < 30_000_000, "没在 30 秒内收完：{received:?}");
+        pair.advance();
+        for (index, &stream) in streams.iter().enumerate() {
+            received[index] += drain(&mut pair.b, pair.now, stream);
+        }
+        while let Some(event) = pair.b.poll_event() {
+            if let StreamEvent::Finished(stream) = event {
+                finished_at[streams.iter().position(|&id| id == stream).unwrap()] = Some(pair.now);
+            }
+        }
+    }
+    assert!(received.iter().all(|&bytes| bytes == size), "{received:?}");
+    let finished: Vec<u64> = finished_at.into_iter().flatten().collect();
+    assert!(finished.windows(2).all(|pair| pair[0] <= pair[1]), "数小的先收完：{finished:?}");
+    assert!(finished[0] < finished[PRIORITY_LEVELS - 1], "{finished:?}");
+}
+
+/// 2026-11-22：放弃一条流（会话层方案第 7 节第 3 项）。写进来还没发出的字节不再发，对端收到发出去的那部分和结束标记，
+/// 别的流照常；之后流不在了，再放弃返回 `None`。每一步都核对发送缓冲的账目（`Pair::pump` 里的 `check_invariants`）。
+#[test]
+fn abandoned_stream_drops_unsent_bytes_and_finishes() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 7);
+    let (big, other) = (pair.a.open_stream(Priority::Background).unwrap(), pair.a.open_stream(Priority::Normal).unwrap());
+    let written = pair.a.send_stream(0, big, &vec![7u8; 900_000]);
+    assert!(written > 500_000, "{written}");
+    let (mut big_read, mut other_read) = (0, 0);
+    while pair.now < 100_000 {
+        pair.advance();
+        big_read += drain(&mut pair.b, pair.now, big);
+    }
+    let dropped = pair.a.abandon_stream(big).expect("流还在、还没结束");
+    assert!(dropped > 0 && dropped < written, "{dropped} / {written}");
+    assert_eq!(pair.a.abandon_stream(DEFAULT_STREAM), None);
+    assert_eq!(pair.a.send_stream(pair.now, big, &[1]), 0, "放弃以后不再收字节");
+    assert_eq!(pair.a.send_stream(pair.now, other, &[3u8; 10_000]), 10_000);
+    assert!(pair.a.finish_stream(other));
+    let (mut big_finished, mut other_finished) = (false, false);
+    while !(big_finished && other_finished) {
+        assert!(pair.now < 20_000_000, "big {big_read} other {other_read}");
+        pair.advance();
+        big_read += drain(&mut pair.b, pair.now, big);
+        other_read += drain(&mut pair.b, pair.now, other);
+        while let Some(event) = pair.b.poll_event() {
+            big_finished |= event == StreamEvent::Finished(big);
+            other_finished |= event == StreamEvent::Finished(other);
+        }
+    }
+    assert_eq!(big_read, written - dropped, "收到的正好是放弃前发出去的");
+    assert_eq!(other_read, 10_000);
+    while pair.a.stream_progress(pair.now, big).is_some() {
+        assert!(pair.now < 30_000_000);
+        pair.advance();
+    }
+    assert_eq!(pair.a.abandon_stream(big), None);
+}
+
+/// 2026-11-22：进展统计（会话层方案第 7 节第 5 项）。链路断着时，有字节在等的流和整个发送方向的停顿时间跟着涨、确认字节不动；
+/// 链路通了以后确认字节增加、停顿回落；全部确认后发送方向停顿为 0，流不在了。
+#[test]
+fn progress_reports_stalls_and_acknowledged_bytes() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 5);
+    let stream = pair.a.open_stream(Priority::Normal).unwrap();
+    let start = 50_000;
+    while pair.now < start {
+        pair.advance();
+    }
+    assert_eq!(pair.a.send_stream(pair.now, stream, &[9u8; 20_000]), 20_000);
+    let written_at = pair.now;
+    let queued = pair.a.send_progress(pair.now).queued;
+    assert!(queued[Priority::Normal.value() as usize] >= 20_000 && queued.iter().sum::<usize>() == queued[Priority::Normal.value() as usize], "{queued:?}");
+    // 断网 1.5 秒：发出的包都丢掉。
+    while pair.now < written_at + 1_500_000 {
+        pair.pump();
+        pair.packets.clear();
+        pair.advance();
+    }
+    let stalled = pair.a.stream_progress(pair.now, stream).unwrap();
+    assert_eq!(stalled.acked_bytes, 0);
+    assert!(stalled.stalled_us >= 1_400_000, "{stalled:?}");
+    assert!(pair.a.send_progress(pair.now).stalled_us >= 1_400_000);
+    // 通了以后。
+    let mut moved = None;
+    while moved.is_none() {
+        assert!(pair.now < written_at + 20_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, stream);
+        moved = pair.a.stream_progress(pair.now, stream).filter(|progress| progress.acked_bytes > 0);
+    }
+    assert!(moved.unwrap().stalled_us < 500_000, "{moved:?}");
+    assert!(pair.a.finish_stream(stream));
+    while pair.a.stream_progress(pair.now, stream).is_some() {
+        assert!(pair.now < written_at + 30_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, stream);
+    }
+    assert_eq!(pair.a.send_progress(pair.now).stalled_us, 0);
+}
+
+/// 2026-11-22 审查（#12050）：停顿只算真正还没被确认的字节。一条流的头一个分片一直丢时，另一条流后发的字节全部被确认了，
+/// 但要等前面的缺口补齐才从缓冲里放掉：它的 `buffered` 还有，停顿是 0，不能被上层当成卡住。空闲很久的流（新开的、
+/// 或者早就全部确认了的）这时才结束，停顿从结束标记切出的时刻算起，不是从开流或上一次确认算起。
+#[test]
+fn progress_counts_only_unacknowledged_bytes_and_starts_at_a_late_end() {
+    let mut pair = Pair::new(&wide_config(), path(4_000_000, 20_000), path(4_000_000, 20_000), 7);
+    let first = pair.a.open_stream(Priority::Interactive).unwrap();
+    let second = pair.a.open_stream(Priority::Normal).unwrap();
+    while pair.now < 50_000 {
+        pair.advance();
+    }
+    assert_eq!(pair.a.send_stream(pair.now, first, &[0x77u8; 3_000]), 3_000);
+    assert_eq!(pair.a.send_stream(pair.now, second, &[0x77u8; 20_000]), 20_000);
+    // `first` 的头一个分片（流头里分片号 0）发几次丢几次，一秒内别的都照常到。
+    let head = [first.to_be_bytes(), 0u32.to_be_bytes()].concat();
+    let gap_until = pair.now + 1_000_000;
+    while pair.now < gap_until {
+        pair.pump();
+        let kept: Vec<_> = pair.packets.drain().filter(|Reverse((_, _, to_b, packet))| !(*to_b && packet.windows(8).any(|window| window == head))).collect();
+        pair.packets.extend(kept);
+        pair.advance();
+    }
+    let held = pair.a.stream_progress(pair.now, second).unwrap();
+    assert!(held.acked_bytes >= 20_000 && held.buffered > 0, "{held:?}");
+    assert_eq!(held.stalled_us, 0, "{held:?}");
+    assert!(pair.a.stream_progress(pair.now, first).unwrap().stalled_us >= 900_000);
+    while pair.a.stream_progress(pair.now, second).is_some_and(|progress| progress.buffered > 0) {
+        assert!(pair.now < gap_until + 10_000_000);
+        pair.advance();
+        drain(&mut pair.b, pair.now, first);
+        drain(&mut pair.b, pair.now, second);
+    }
+    // 空闲五秒以后：一条早就全部确认了的流、一条刚开的空流结束。
+    let idle_until = pair.now + 5_000_000;
+    while pair.now < idle_until {
+        pair.advance();
+    }
+    let fresh = pair.a.open_stream(Priority::Normal).unwrap();
+    assert!(pair.a.finish_stream(second) && pair.a.finish_stream(fresh));
+    for stream in [second, fresh] {
+        assert_eq!(pair.a.stream_progress(pair.now, stream).unwrap().stalled_us, 0);
+    }
+    assert_eq!(pair.a.send_progress(pair.now).stalled_us, 0);
+    pair.pump();
+    pair.now += 30_000;
+    for stream in [second, fresh] {
+        let progress = pair.a.stream_progress(pair.now, stream).unwrap();
+        assert!(progress.stalled_us <= 30_000, "{stream}: {progress:?}");
+    }
+    assert!(pair.a.send_progress(pair.now).stalled_us <= 30_000);
 }

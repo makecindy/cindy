@@ -43,8 +43,9 @@ function VoiceQuestion() {
 }
 
 const json = '{\n  "fruit": "苹果",\n  "count": 1\n}';
+const solidity = 'pragma solidity ^0.8.20;\n\n/** @notice Example contract */\ncontract Example {\n    string public message = "hello";\n\n    function check() public {\n        require(true, "safe");\n        // Keep the original source readable.\n        revert("example");\n    }\n}';
 
-function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview }: { editor: boolean; projectSearch: boolean; voice: boolean; video: boolean; askVoice: boolean; jsonPreview: boolean }) {
+function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview, solidityPreview, solidityFileBody }: { editor: boolean; projectSearch: boolean; voice: boolean; video: boolean; askVoice: boolean; jsonPreview: boolean; solidityPreview: boolean; solidityFileBody: boolean }) {
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
     if (!video) return;
@@ -61,7 +62,11 @@ function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview }:
     <>
       <main className="flex h-screen flex-col gap-4 p-6">
         <p>背景聊天中的苹果不应计入文档搜索。</p>
-        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>打开 Markdown 示例</button>
+        <button data-testid="open-preview" data-ui-page-control onClick={() => setOpen(true)}>{solidityPreview ? '打开 Solidity 示例' : '打开 Markdown 示例'}</button>
+        {solidityFileBody && <div className="min-h-0 flex-1" data-solidity-file-body>
+          <FileBodyView workdir="/fixture" relPath="Contract.sol" allowEdit={false}
+            content={{ kind: 'text', relPath: 'Contract.sol', content: solidity, size: solidity.length, mtimeMs: 0, truncated: false }} />
+        </div>}
         {voice && <VoiceComposer />}
         {askVoice && <VoiceQuestion />}
         {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
@@ -79,7 +84,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview }:
         />}
       </main>
       <FindInPageBar />
-      {open && <TextLightbox filePath={jsonPreview ? '/fixture/preview.json' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
+      {open && <TextLightbox filePath={solidityPreview ? '/fixture/Contract.sol' : jsonPreview ? '/fixture/preview.json' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -88,6 +93,12 @@ mountPage({
   route: '/',
   host: ctx => ({
     fileBrowser: {
+      // The baseline routes .sol through FileLightbox. Supply its real read
+      // contract too, so the before image shows plain text, not a missing-host error.
+      readFile: async ({ relPath }: { relPath: string }) => {
+        if (ctx.case !== 'solidity-preview' || relPath !== 'Contract.sol') throw new Error('Unexpected fixture file read');
+        return { ok: true, data: { relPath, content: solidity, size: solidity.length, mtimeMs: 0, truncated: false } };
+      },
       listDir: async () => [],
       startWatch: async () => undefined,
       stopWatch: async () => undefined,
@@ -99,6 +110,7 @@ mountPage({
       cancel: async () => undefined,
     },
     readTextFilePreview: async () => {
+      if (ctx.case === 'solidity-preview') return { success: true, data: solidity, size: solidity.length };
       if (ctx.case === 'json-preview') return { success: true, data: json, size: json.length };
       if (ctx.case === 'loading-editor') {
         await new Promise<void>(resolve => {
@@ -150,5 +162,5 @@ mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   }),
-  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} />,
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} solidityPreview={ctx.case === 'solidity-preview'} solidityFileBody={ctx.case === 'solidity-file-body'} />,
 });

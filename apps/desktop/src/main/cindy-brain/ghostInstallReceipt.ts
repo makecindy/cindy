@@ -21,8 +21,9 @@ import {
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
   declaredGhostCindyModelActions,
+  declaredGhostHarnesses,
   type GhostCindyModelsAction,
-  declaredGhostControlPoints,
+  isGhostRuntimeControlPoint,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -149,6 +150,13 @@ export interface GhostInstallReceipt {
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
   approvedCindyModelActions?: GhostCindyModelsAction[];
+  /**
+   * 用户在安装/更新确认里看到并接受过的任务执行引擎(`harnesses[].id`)。缺项 = 一个都没
+   * 批准:Host 认识该字段之前就声明了引擎的旧安装,升级后不会静默生效。可选字段,旧客户端
+   * 读到时按未知字段忽略,不判损坏。
+   */
+  approvedHarnesses?: string[];
+  approvedFileOpenerExtensions?: string[];
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1294,12 +1302,14 @@ function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approv
 
 /**
  * 只保留仍在本次批准 manifest 里声明的节点名(格式合法即可，不按当前 Host 目录过滤：
- * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。空列表省略字段。
+ * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。任务运行时五点的旧记录忽略，
+ * 不迁移或改写原文件。空列表省略字段。
  */
 function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
   if (!Array.isArray(raw)) return {};
-  const declared = new Set([...(manifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(manifest)]);
-  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
+  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string'
+    && !isGhostRuntimeControlPoint(item) && declared.has(item as never)))];
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
 }
 
@@ -1309,7 +1319,27 @@ export function approvedCindyModelActionsField(raw: unknown, manifest: GhostMani
   return approved.length ? { approvedCindyModelActions: approved } : {};
 }
 
+/**
+ * 只保留本次批准 manifest 仍声明、且本 Host 能运行(协议已知)的引擎 id;空列表省略字段。
+ * 批准只来自安装/更新确认里显示过的 `harnesses` 权限行,清单本身不能补写批准。
+ */
+export function approvedHarnessesField(raw: unknown, manifest: GhostManifest): { approvedHarnesses?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const approved = declaredGhostHarnesses(manifest).map((harness) => harness.id).filter((id) => raw.includes(id));
+  return approved.length > 0 ? { approvedHarnesses: approved } : {};
+}
+
+export function approvedFileOpenerExtensionsField(raw: unknown, manifest: GhostManifest): {
+  approvedFileOpenerExtensions?: string[];
+} {
+  if (!Array.isArray(raw)) return {};
+  const approved = manifest.fileOpener?.extensions.filter(extension => raw.includes(extension));
+  return approved?.length ? { approvedFileOpenerExtensions: approved } : {};
+}
+
 export function createGhostInstallReceipt(input: {
+  approvedHarnesses?: readonly string[];
+  approvedFileOpenerExtensions?: readonly string[];
   approvedCindyModelActions?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1363,6 +1393,8 @@ export function createGhostInstallReceipt(input: {
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
+    ...approvedHarnessesField(input.approvedHarnesses, input.manifest),
+    ...approvedFileOpenerExtensionsField(input.approvedFileOpenerExtensions, input.manifest),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1584,6 +1616,8 @@ function validateReceipt(
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
+      ...approvedHarnessesField(value.approvedHarnesses, manifestResult.manifest),
+      ...approvedFileOpenerExtensionsField(value.approvedFileOpenerExtensions, manifestResult.manifest),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),
