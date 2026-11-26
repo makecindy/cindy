@@ -105,6 +105,7 @@ bootId、双方临时 X25519 公钥、nonce、事务 ID/期限、卡片/action/r
 | 方式 | 接入点 | 完成的事实来源 |
 | --- | --- | --- |
 | 声明式 OAuth / broker | 既有 `network.secrets[].source=oauth` | 原 Host 交换/保存/复验 |
+| 声明式 OAuth 设备码 | `oauth.deviceAuthorizationUrl`,经 `authorizationV1` 的 `kind:'device'` 交控制端展示 | 原 Host 轮询 tokenUrl 并保存/复验 |
 | 设备码 | Node `bindAuthorization` 的 `kind:'device'` | 原插件/CLI 领取并验证 |
 | 浏览器确认页 | `kind:'browser'` | 原插件/CLI 轮询/确认 |
 | CLI PKCE loopback | `kind:'loopback'` | 原可信 Node 保管 verifier 并交换 |

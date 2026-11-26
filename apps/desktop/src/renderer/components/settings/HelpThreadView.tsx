@@ -324,16 +324,17 @@ function FeedbackSection(props: {
   };
 
   return (
-    <div className="mt-3 flex flex-col gap-2 rounded-md border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] p-2.5">
+    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)] p-2.5">
       <div className="flex flex-col gap-1">
         <label className="text-11 font-medium text-[var(--settings-section-sublabel)]">
           {t('settings.help.qnaFeedbackTitleLabel', { defaultValue: 'Title' })}
         </label>
         <input
+          data-settings-search-action="Types the title of a help feedback message; not a setting"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           disabled={submitting}
-          className="w-full rounded border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1 text-12 text-[var(--settings-section-title)] outline-none disabled:opacity-60"
+          className="w-full rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1 text-12 text-[var(--settings-section-title)] outline-none disabled:opacity-60"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -343,11 +344,12 @@ function FeedbackSection(props: {
           })}
         </label>
         <textarea
+          data-settings-search-action="Types the details of a help feedback message; not a setting"
           value={body}
           onChange={(e) => setBody(e.target.value)}
           disabled={submitting}
           rows={8}
-          className="w-full resize-y rounded border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1.5 font-mono text-11 leading-[1.5] text-[var(--settings-section-title)] outline-none disabled:opacity-60"
+          className="w-full resize-y rounded-lg border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-2 py-1.5 font-mono text-11 leading-[1.5] text-[var(--settings-section-title)] outline-none disabled:opacity-60"
         />
       </div>
       {errorMsg && <div className="text-11 text-[var(--error-fg)]">{errorMsg}</div>}

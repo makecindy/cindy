@@ -344,6 +344,10 @@ export default {
     }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
+      const caretColor = () => editor.evaluate((node) => getComputedStyle(node).caretColor);
+      const hiddenCaret = 'rgba(0, 0, 0, 0)';
+      const typingCaret = await caretColor();
+      assert.notEqual(typingCaret, hiddenCaret);
       const hint = page.getByTestId('composer-voice-hint');
       const hintText = async (key) => {
         await hint.waitFor();
@@ -374,10 +378,12 @@ export default {
       await page.mouse.down();
       await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
       await hintText('speakRelease');
+      assert.equal(await caretColor(), hiddenCaret, 'No text caret over the empty recording hint');
       await ui.capture('hold-empty');
       await page.mouse.up();
       await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent === 'Dictated message');
       assert.equal(await hint.count(), 0);
+      assert.equal(await caretColor(), typingCaret, 'Stopping restores the typing caret');
 
       // The gap above the toolbar is also part of the input surface.
       const editorBox = await editor.boundingBox();
@@ -414,6 +420,7 @@ export default {
       await page.waitForFunction(() => document.getSelection()?.isCollapsed);
       assert.equal(await editor.evaluate((node) => node.editor.state.selection.from), insertionPoint);
       assert.equal(await hint.count(), 0);
+      assert.equal(await caretColor(), hiddenCaret, 'No native caret inside existing text during dictation');
       await page.mouse.up();
       await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
       assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '');

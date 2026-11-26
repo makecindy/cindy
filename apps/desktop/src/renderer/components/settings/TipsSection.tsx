@@ -80,3 +80,24 @@ export function TipsSection() {
     </SettingsSection>
   );
 }
+
+/** The same section frame for the cloud settings page, which supplies its own cells. */
+export function TipsSectionView({
+  children,
+  headingStatus,
+}: {
+  children: React.ReactNode;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection
+      title={t(personalizationDetailsSettings.compatModeTitle.titleKey)}
+      description={t('settings.compatMode.description')}
+      action={headingStatus}
+    >
+      <SettingsCard>{children}</SettingsCard>
+    </SettingsSection>
+  );
+}

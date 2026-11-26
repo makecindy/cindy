@@ -139,6 +139,26 @@ it('reads remote output from its own task history and withholds it after plugin 
   await expect(run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
 });
 
+// Unit: a plugin may own two chats. A run from one cannot select or label the
+// other's history, and an ordinary read must never look like a scoped progress page.
+it('ties the progress page to the authorized run and its own task', async () => {
+  const epoch = {};
+  const read = vi.fn(async () => ({ items: [], nextCursor: null }));
+  const run = handler('readMessages', 'getRun', {
+    service: { get: async () => ({}), getRun: async () => ({
+      runId: 'r', taskId: 'chat-a', inputMessageId: 'plugin-task:r', acceptedAt: 123,
+    }) },
+    getCurrentDbClientSnapshot: () => epoch, getMessagesForHistory: read, drainPersistQueue: async () => {}, PluginTaskError,
+  });
+  await expect(run('p', { kind: 'readMessages', taskId: 'chat-b', progressForRun: 'r' }))
+    .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  expect(read).not.toHaveBeenCalled();
+  expect(await run('p', { kind: 'readMessages', taskId: 'chat-a', progressForRun: 'r' }))
+    .toEqual({ progressForRun: 'r', items: [], nextCursor: null });
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['chat-a'],
+    pluginProgressInputId: 'plugin-task:r', fromMs: 123 }));
+});
+
 // PR #10988: the old live Agent must not veto a permission supported by the
 // selected Agent. Existing adapters mocked SessionControlService's mixed validation.
 // One Codex -> Claude acceptEdits continuation; real control service, unit tier.

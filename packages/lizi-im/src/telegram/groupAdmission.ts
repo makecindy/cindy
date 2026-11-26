@@ -8,6 +8,17 @@ import {
   type TgChat,
 } from './api.js';
 
+/** Legacy hosts must explicitly read back a missing key to confirm deletion. */
+export function removeTelegramSecret(secrets: IMHost['secrets'], key: string): boolean {
+  try {
+    if (secrets.removeConfirmed) return secrets.removeConfirmed(key);
+    secrets.remove(key);
+    return secrets.readResult?.(key).kind === 'missing';
+  } catch {
+    return false;
+  }
+}
+
 export class TelegramGroupAdmissionStorageError extends Error {}
 
 type GroupDecision = {
@@ -112,12 +123,7 @@ export class TelegramGroupAdmission {
 
   clear(): boolean {
     this.groups = Object.create(null);
-    try {
-      this.secrets.remove(this.key);
-      return this.secrets.readResult?.(this.key).kind === 'missing';
-    } catch {
-      return false;
-    }
+    return removeTelegramSecret(this.secrets, this.key);
   }
 
   private call(
