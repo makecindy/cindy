@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 使用系统 .deb 安装包。Arch Linux 和 Omarchy 使用受管理的用户目录安装器，复用同一份经过校验的 .deb 内容，无需 Debian 包管理器。",
         "item1": "Ubuntu：使用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请按 docs/linux.md 中的用户目录安装指南操作。",
         "item2": "点击更新后，系统 .deb 安装需要授权；用户目录安装无需系统密码即可切换版本。其他包管理器安装的版本请通过对应包管理器更新。",
-        "item3": "Linux x64 和 arm64 支持 Beta 渠道。Linux 仅在你选择重启时应用更新，不会在空闲时自动安装。"
+        "item3": "Linux x64 和 arm64 支持 Beta 渠道。用户目录安装可在空闲时自动安装更新；已配置免密授权的系统 .deb 安装也可在空闲时自动安装更新，其他系统 .deb 安装仅在你选择重启时应用更新。"
       },
       "qnaTitle": "直接提问",
       "qnaDescription": "没找到答案？直接问你想做什么",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
       "autoUpdateDescription": "更新下载完成后，当这台电脑 10 分钟无操作且没有任务运行时，自动重启应用完成安装。",
-      "linuxUpdateDescription": "更新在你选择重启时生效。系统 .deb 安装需要系统密码，用户目录安装不需要。其他安装方式请通过对应包管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装需要系统密码，更新在你选择重启时生效；用户目录安装不需要密码，可在空闲时自动安装。其他安装方式请通过对应包管理器更新。",
       "autoUpdateEnabledToast": "已开启空闲时自动安装更新",
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
@@ -7245,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "这台电脑开启了「仅使用 Agent-Net」。请先在这台电脑关闭此选项，才能把对方切回 Device Link。",
             "agent-net-only-relay": "此连接使用仅支持 Agent-Net 的网络，无法切回 Device Link。请先改用支持 Device Link 的连接线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版本 {{version}}，点击更新",
+          "downloading": "正在下载 {{version}}…",
+          "relaunching": "正在重启更新到 {{version}}…",
+          "confirm": {
+            "title": "更新「{{name}}」上的 Cindy？",
+            "selfTitle": "更新这台电脑上的 Cindy？",
+            "description": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后该设备会重启 Cindy，远程连接会短暂断开。",
+            "selfDescription": "将把 Cindy 从 {{from}} 更新到 {{to}}。更新完成后这台电脑上的 Cindy 会重启。",
+            "busyWarning": "该设备当前有运行中的任务或后台工作，重启会将其打断。",
+            "selfBusyWarning": "这台电脑当前有运行中的任务或后台工作，重启会将其打断。",
+            "linuxPermissionHint": "Linux 受管安装可能需要在目标设备上输入系统密码。",
+            "windowsPermissionHint": "若安装在受保护目录，可能需要在目标设备上确认系统权限。",
+            "action": "立即更新"
+          },
+          "toast": {
+            "started": "已开始将「{{name}}」更新到 {{version}}",
+            "relaunching": "「{{name}}」正在重启更新到 {{version}}",
+            "versionChanged": "「{{name}}」的新版本已变化，请重新打开卡片确认",
+            "noUpdate": "「{{name}}」当前没有可安装的新版本",
+            "busy": "「{{name}}」正在执行另一次更新，请稍后再试",
+            "failed": "未能更新「{{name}}」上的 Cindy"
           }
         }
       }
@@ -15592,7 +15616,10 @@
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "piRetryHistoryTooLarge": "本次消息未发送。Pi 读取重试所需的历史记录时，有一帧数据超过本地 16 MiB 限制。你可以在新任务中继续。",
+      "piRetryHistoryUnavailable": "本次消息未发送。Pi 读取发送所需的历史记录失败。你可以重试，或在新任务中继续。",
+      "upstreamStatusError": "上游返回 {{status}}，本次回复未完成。",
       "messageNotSent": "本次消息未发送。",
+      "upstreamEmpty550": "模型服务返回 HTTP 550（无响应内容）",
       "replyFailed": "回复未完成",
       "queuedSendRecovery": "上一条消息未发送。点「重试」可原样发送。发送新消息会替换这一条。",
       "retryTitle": "重新发送最后一条消息",
@@ -18449,6 +18476,7 @@
         "intervalChip": "完成后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定义 Cron",
         "intervalMinutes": "分钟（每 N 分钟）",
         "interval": "小时（每 N 小时）",
         "daily": "每天",

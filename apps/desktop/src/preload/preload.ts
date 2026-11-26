@@ -3254,6 +3254,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-get'),
   setAutoUpdateSettings: (settings: {
     autoRelaunchOnIdle: boolean;
@@ -3261,11 +3262,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-set', settings),
   resetAutoUpdateSettings: (): Promise<{
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
   // beta 测试渠道(设备级)开关
   getUpdateChannelSettings: (): Promise<{

@@ -2778,7 +2778,7 @@
         "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
         "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
-        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
+        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. 사용자 설치는 유휴 상태일 때 업데이트를 자동으로 설치할 수 있으며, 비밀번호 없이 인증되도록 설정된 시스템 .deb 설치도 유휴 상태일 때 업데이트를 자동으로 설치할 수 있습니다. 그 밖의 시스템 .deb 설치는 재시작을 선택할 때만 업데이트가 적용됩니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "답을 찾지 못했나요? 하고 싶은 일을 질문하세요.",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
-      "linuxUpdateDescription": "재시작을 선택하면 업데이트가 적용됩니다. 시스템 .deb 설치에는 시스템 비밀번호가 필요하지만 사용자 설치에는 필요하지 않습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
+      "linuxUpdateDescription": "시스템 .deb 설치에는 시스템 비밀번호가 필요하므로 재시작을 선택할 때 업데이트가 적용됩니다. 사용자 설치는 비밀번호가 필요 없고 유휴 상태일 때 자동으로 설치할 수 있습니다. 다른 설치 방식은 패키지 관리자를 사용하세요.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -7245,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
             "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "새 버전 {{version}} 사용 가능 — 클릭하여 업데이트",
+          "downloading": "{{version}} 다운로드 중…",
+          "relaunching": "{{version}} 설치를 위해 다시 시작 중…",
+          "confirm": {
+            "title": "“{{name}}”의 Cindy를 업데이트할까요?",
+            "selfTitle": "이 컴퓨터의 Cindy를 업데이트할까요?",
+            "description": "Cindy를 {{from}}에서 {{to}}(으)로 업데이트하고 다시 시작합니다. 원격 연결이 잠시 끊깁니다.",
+            "selfDescription": "Cindy를 {{from}}에서 {{to}}(으)로 업데이트하고 이 컴퓨터에서 다시 시작합니다.",
+            "busyWarning": "해당 기기에서 실행 중인 작업이나 백그라운드 작업이 재시작으로 중단됩니다.",
+            "selfBusyWarning": "이 컴퓨터에서 실행 중인 작업이나 백그라운드 작업이 재시작으로 중단됩니다.",
+            "linuxPermissionHint": "Linux 관리 설치에서는 대상 기기에서 시스템 비밀번호 입력이 필요할 수 있습니다.",
+            "windowsPermissionHint": "보호된 폴더에 설치된 경우 대상 기기에서 시스템 권한 확인이 필요할 수 있습니다.",
+            "action": "지금 업데이트"
+          },
+          "toast": {
+            "started": "“{{name}}”을(를) {{version}}(으)로 업데이트하는 중입니다",
+            "relaunching": "“{{name}}”이(가) {{version}} 적용을 위해 다시 시작 중입니다",
+            "versionChanged": "“{{name}}”의 새 버전이 변경되었습니다. 카드를 다시 열어 확인하세요.",
+            "noUpdate": "“{{name}}”에 설치할 수 있는 업데이트가 없습니다.",
+            "busy": "“{{name}}”에서 다른 업데이트가 진행 중입니다. 잠시 후 다시 시도하세요.",
+            "failed": "“{{name}}”의 Cindy를 업데이트하지 못했습니다."
           }
         }
       }
@@ -15592,7 +15616,10 @@
       "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "piRetryHistoryTooLarge": "메시지를 보내지 못했습니다. Pi가 재시도에 필요한 기록을 읽는 동안 데이터 프레임이 로컬 한도인 16 MiB를 초과했습니다. 새 작업에서 계속할 수 있습니다.",
+      "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
+      "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
+      "upstreamEmpty550": "모델 서비스에서 빈 응답과 함께 HTTP 550을 반환했어요",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -18449,6 +18476,7 @@
         "intervalChip": "완료 후 대기 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "사용자 지정 Cron",
         "intervalMinutes": "분 (N분마다)",
         "interval": "Hourly (N시간마다)",
         "daily": "Daily (매일)",
