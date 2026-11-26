@@ -1,7 +1,7 @@
 import { lightColors } from '@/theme/tokens';
 
 export type MobileMediaPlayerKind = 'video' | 'audio';
-export type MobileMediaPlayerCommand = 'pause' | 'reset' | 'play' | 'seek' | 'skip' | 'mute' | 'rate';
+export type MobileMediaPlayerCommand = 'pause' | 'play' | 'seek' | 'skip' | 'mute' | 'rate' | 'status';
 export const AUDIO_PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 export type MobileMediaPlayerState = 'ready' | 'playing' | 'paused' | 'waiting' | 'ended' | 'error';
 
@@ -176,6 +176,17 @@ export function buildMediaPlayerWebViewHtml({
         if (!message) return;
         var command = message.command;
         ${externalControls ? `
+        if (command === 'status') {
+          if (media.error) {
+            reportMediaError();
+          } else if (media.paused && !media.ended && media.readyState >= media.HAVE_FUTURE_DATA) {
+            canPlay = true;
+            emit('ready', undefined, true);
+          } else {
+            reportPosition();
+          }
+          return;
+        }
         if (command === 'play') {
           media.play().catch(function (error) {
             if (error.name !== 'AbortError') emit('error', error.name || 'play failed', true);
@@ -203,14 +214,6 @@ export function buildMediaPlayerWebViewHtml({
         if (command === 'pause') {
           if (!media.paused) media.pause();
           emit(${externalControls ? "audioState()" : "media.ended ? 'ended' : 'paused'"}, undefined, true);
-          return;
-        }
-        if (command === 'reset') {
-          media.pause();
-          try {
-            media.currentTime = 0;
-          } catch (error) {}
-          emit('paused', undefined, true);
         }
       }
       if (!media) return;
@@ -250,7 +253,6 @@ export function buildMediaPlayerWebViewHtml({
       if (canRoute) {
         routeButton.hidden = false;
         routeButton.addEventListener('click', function () {
-          // Called on the current media element from a genuine WKWebView user gesture.
           media.webkitShowPlaybackTargetPicker();
         });
         media.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', reportPosition);

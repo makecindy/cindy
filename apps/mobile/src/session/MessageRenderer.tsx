@@ -3,7 +3,7 @@ import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
 import { SettingsLinkSpan } from './SettingsLinkSpan';
 import type { ViewInstance } from 'react-native';
-import { isPayloadDirectPreviewableUrl, resolveAttachmentPreviewSource } from './messagePayload';
+import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
   PreviewHeader,
   PreviewFooter,
@@ -87,7 +87,6 @@ import {
   RefreshCw,
   Pencil,
   PencilLine,
-  Play,
   Share as ShareIcon,
   Send,
   Smartphone,
@@ -2974,9 +2973,10 @@ export function MessageRenderer({
       lastCompanionReplyKey,
       companionTimeGroups,
       companionContinuationKeys,
+      contentWidth: viewportLayout.contentWidth,
     }),
     [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
-      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys],
+      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys, viewportLayout.contentWidth],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -7283,13 +7283,7 @@ export function AttachmentStrip({
   );
 }
 
-/**
- * ToolMediaBlock — tool 产出媒体的独立视觉消息(对齐桌面 'tool_media' RenderItem):
- * agent 出的图 / 视频(lizi_art、飞书拉图等)跳出 tool_group 折叠卡,紧跟其后作为
- * 独立块渲染,用户不展开工具行也能一眼看到。图片走 attachment 变体(原始宽高比
- * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);视频共用正文的原生预览，
- * 音频按需打开播放器。媒体按 url 去重(与 shared 发射判定同一口径)。
- */
+// Keep tool output visible even when its tool steps are collapsed.
 function ToolMediaBlock({
   item,
   actions,
@@ -7306,6 +7300,7 @@ function ToolMediaBlock({
     [item.tools],
   );
   const openPayload = actions.onOpenPayload;
+  const insetAudio = !!(actions.companion && actions.companionAvatar);
   const files = [...new Map(item.tools.flatMap((tool) => tool.files ?? []).map((file) => [file.url, file])).values()];
   const cards = [...new Map(item.tools.flatMap((tool) => (tool.cardIds ?? []).map((callId) => ({ callId, sessionId: tool.source.sessionId }))).map((card) => [card.callId, card])).values()];
   if (media.length === 0 && files.length === 0 && cards.length === 0) return null;
@@ -7320,7 +7315,7 @@ function ToolMediaBlock({
       {files.map((file) => (
         <FileChip key={file.url} name={file.title} path={file.url} layout={contentLayout}
         onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined}
-        onOpenAudioPayload={openPayload} onResolveRemoteMedia={actions.onResolveRemoteMedia} />
+        insetAudio={insetAudio} onOpenAudioPayload={openPayload} onResolveRemoteMedia={actions.onResolveRemoteMedia} />
       ))}
       {media.map((entry, index) => (
         <MediaPreview
@@ -7331,7 +7326,7 @@ function ToolMediaBlock({
           onOpen={openPayload
             ? () => openPayload(buildMediaPayload(entry, entry.title || mediaLabel(entry)))
             : undefined}
-          onOpenAudioPayload={openPayload}
+          insetAudio={insetAudio} onOpenAudioPayload={openPayload}
           onResolveRemoteMedia={actions.onResolveRemoteMedia}
           variant={entry.kind === 'image' ? 'attachment' : 'card'}
         />
@@ -7475,6 +7470,7 @@ function MediaPreview({
   label,
   onOpen,
   onOpenAudioPayload,
+  insetAudio,
   onResolveRemoteMedia,
   onImageError,
   variant = 'card',
@@ -7487,6 +7483,7 @@ function MediaPreview({
   label: string;
   onOpen?: () => void;
   onOpenAudioPayload?: (payload: MessagePayload) => void;
+  insetAudio?: boolean;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   onImageError?: () => void;
   variant?: 'card' | 'attachment';
@@ -7587,11 +7584,11 @@ function MediaPreview({
   }, [media.url, setIntrinsicSize]);
 
   if (media.kind === 'audio') {
-    return (
+    const card = (
       <AudioAttachmentCard
         key={media.url}
         title={preview.title}
-        needsFetch={preview.needsRemoteFetch === true}
+        needsFetch={!isDirectPreviewableMediaUrl(media.url)}
         availableWidth={layout.markdownTableAvailableWidth}
         presentationOnly={presentationOnly}
         prepare={onResolveRemoteMedia && onOpenAudioPayload
@@ -7602,6 +7599,7 @@ function MediaPreview({
           : onOpen}
       />
     );
+    return insetAudio ? <View style={[styles.companionAvatarInset, styles.audioReplyInset]}>{card}</View> : card;
   }
 
   if (media.kind === 'video' && !presentationOnly) {
@@ -7761,6 +7759,7 @@ function FileChip({
   audioAlign,
   mimeType,
   onOpenAudioPayload,
+  insetAudio,
   onResolveRemoteMedia,
   presentationOnly = false,
 }: {
@@ -7772,23 +7771,24 @@ function FileChip({
   audioAlign?: 'left' | 'right';
   mimeType?: string;
   onOpenAudioPayload?: (payload: MessagePayload) => void;
+  insetAudio?: boolean;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   presentationOnly?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildFilePayload(name, path ?? ''));
-  if (attachmentPreviewKind(name, mimeType) === 'audio'
-    || (audioSource && attachmentPreviewKind(previewSourceName(audioSource, '')) === 'audio')) {
-    const audioPayload = audioSource && onOpenAudioPayload
-      ? buildMediaPayload({ kind: 'audio', url: audioSource, mimeType,
-        previewable: isPayloadDirectPreviewableUrl(audioSource) }, name)
+  if (audioSource && (attachmentPreviewKind(name, mimeType) === 'audio'
+    || attachmentPreviewKind(previewSourceName(audioSource, '')) === 'audio')) {
+    const direct = isDirectPreviewableMediaUrl(audioSource);
+    const audioPayload = onOpenAudioPayload
+      ? buildMediaPayload({ kind: 'audio', url: audioSource, mimeType, previewable: direct }, name)
       : undefined;
-    return (
+    const card = (
       <AudioAttachmentCard
-        key={audioSource ?? name}
+        key={audioSource}
         title={name}
-        needsFetch={!audioSource || !isPayloadDirectPreviewableUrl(audioSource)}
+        needsFetch={!direct}
         availableWidth={layout.markdownTableAvailableWidth}
         align={audioAlign}
         presentationOnly={presentationOnly}
@@ -7800,6 +7800,7 @@ function FileChip({
           : onOpen}
       />
     );
+    return insetAudio ? <View style={[styles.companionAvatarInset, styles.audioReplyInset]}>{card}</View> : card;
   }
   return (
     <MessageContentOpenButton
@@ -8069,9 +8070,11 @@ export function MessagePayloadModal({
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
   const immersiveMermaid = payload?.kind === 'mermaid';
+  const audio = payload?.kind === 'media' && payload.media.kind === 'audio';
+  const directAudio = audio && isDirectPreviewableMediaUrl(payload.media.url);
   if (
     payload &&
-    onResolveRemoteMedia &&
+    (onResolveRemoteMedia || directAudio) &&
     ((payload.kind === "file" && payload.sourcePath) ||
       (payload.kind === "media" && !isLightboxMediaKind(payload.media.kind)))
   ) {
@@ -8079,7 +8082,7 @@ export function MessagePayloadModal({
       <RemoteAttachmentPreview
         key={payload.kind === "file" ? payload.sourcePath : payload.media.url}
         name={payload.title}
-        mediaKind={payload.kind === 'media' && payload.media.kind === 'audio' ? 'audio' : undefined}
+        mediaKind={audio ? 'audio' : undefined}
         onClose={onClose}
         onAudioPhaseChange={payload.onAudioPhaseChange}
         resolve={(signal, forceRefresh) => payload.preparedAudioSource && !forceRefresh
@@ -8352,7 +8355,6 @@ function MessagePayloadBody({
   if (payload.kind === 'media') {
     const resolved = remoteState.status === 'ready' ? remoteState.media : null;
     const displayUrl = resolved?.url ?? payload.media.url;
-    // 聊天里的图片 / 视频已分流到 ImageLightbox 全屏查看器,本查看器主要承载音频与其它媒体。
     const playerKind = payload.media.kind === 'video' || payload.media.kind === 'audio' ? payload.media.kind : null;
     const canInlinePlayer = playerKind !== null
       && isDirectPreviewableMediaUrl(displayUrl)
@@ -9949,6 +9951,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  audioReplyInset: { alignSelf: 'stretch' },
   pluginResultCard: {
     alignSelf: 'stretch',
     gap: spacing.sm,

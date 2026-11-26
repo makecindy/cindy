@@ -2179,8 +2179,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         // inline 缩略图:字节已随回包到手(data URI 可直接渲染),落盘后换 file://
         // 引用(data URI 常驻队列缓存吃内存,且 RN Image 对超长 uri 不友好)。
         // 无在世 OSS 对象,不进 pendingDiskStores 的 DELETE 编排。
-        // The audio WebView cannot read a file:// subresource from its HTTPS document.
-        // Inline media is transport-bounded; keep audio's self-contained data URI.
+        // Keep inline audio readable by the HTTPS WebView document.
         if (resolved.inlineBase64 && diskCache && media.kind !== 'audio') {
           await diskCache.storeBytes(diskSource, resolved.inlineBase64, resolved.mimeType).catch(() => undefined);
           const hit = await diskCache.lookup(diskSource).catch(() => null);

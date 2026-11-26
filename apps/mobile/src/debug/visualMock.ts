@@ -15,7 +15,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
+import { REMOTE_RESOURCE_GET_CHANNEL, type DeviceView, type LinkAcceptPayload, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
@@ -383,6 +383,17 @@ async function visualMockInvoke<T = unknown>(
   if (groupMention !== undefined) return groupMention as T;
   const sessionImport = sessionImportVisualFixture(channel, args[0]);
   if (sessionImport !== undefined) return sessionImport as T;
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL) {
+    const ref = (args[0] as { ref?: RemoteResourceRef } | undefined)?.ref;
+    if (ref?.collectionId === 'teammates' && ref.kind === 'bot' && ref.id === AUDIO_ATTACHMENT_FIXTURE) {
+      return {
+        ref, revision: '1', display: { title: 'Audio Attachment QA',
+          avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } },
+        links: [{ rel: 'conversation', target: { kind: 'session', sessionId: AUDIO_ATTACHMENT_FIXTURE } }],
+        actions: [], blocks: [],
+      } satisfies RemoteResource as T;
+    }
+  }
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
@@ -827,7 +838,7 @@ function visualMockSession(id: string): RemoteSession {
   if (id === AUDIO_ATTACHMENT_FIXTURE) {
     const row = getUiMockRows().sessions.find(session => session.id === 'ui-mock-rich-answer')!;
     return { ...catalogSession(row), id, source: 'bot', title: 'Audio Attachment QA',
-      companion: { id: 'cindy-default', role: 'canonical' } };
+      companion: { id, role: 'canonical' } };
   }
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };

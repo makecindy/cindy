@@ -61,7 +61,6 @@ export function RemoteMediaPlayerWebView({
   const mountedRef = useRef(true);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   useEffect(() => registerMobileMessageWebView('media'), []);
-  // Diagnostics: which URL scheme reached the player and how its load/playback went (never the URL).
   const lastLoggedStateRef = useRef<string | null>(null);
   const loggedAudioProgress = useRef(false);
   const loadStartedAtRef = useRef(Date.now());
@@ -92,10 +91,7 @@ export function RemoteMediaPlayerWebView({
     webViewRef.current?.stopLoading();
   }, [pausePlayback]);
 
-  // 失活即暂停(review P1):预览 pager 用 windowSize={3} 保留相邻页,相邻页的
-  // active 仍为 true,不把可见性接进播放器的话,用户滑走后上一页的媒体还在后台
-  // 继续播。判定在纯生命周期模块(行为级用例在 mediaPlayerWebView.test.ts),
-  // 这里只发 pause 命令;回到本页不自动续播,播放权交还用户。
+  // Swipe previews keep adjacent pages mounted, so pause explicitly when the page is hidden.
   useEffect(() => {
     if (lifecycleRef.current.onVisibilityChange(visible)) pausePlayback();
   }, [pausePlayback, visible]);
@@ -160,7 +156,11 @@ export function RemoteMediaPlayerWebView({
         allowsAirPlayForMediaPlayback={externalAudioControls && audioRouteLabel ? true : undefined}
         javaScriptEnabled
         mediaPlaybackRequiresUserAction={false}
-        onLoadEnd={lifecycleRef.current.onLoadEnd}
+        onLoadEnd={() => {
+          lifecycleRef.current.onLoadEnd();
+          // A cached audio source can fire its ready events before the native bridge sees them.
+          if (externalAudioControls) webViewRef.current?.postMessage(buildMediaPlayerWebViewCommand('status'));
+        }}
         onLoadStart={() => {
           lifecycleRef.current.onLoadStart();
           if (externalAudioControls) onStatusChange?.({ type: 'xdt-media-player/status', state: 'waiting', paused: true });

@@ -11,6 +11,7 @@ import type { ResolvedPreviewFile } from './RemoteAttachmentPreview';
 
 const MIN_AUDIO_CARD_WIDTH = 152;
 const MAX_AUDIO_CARD_WIDTH = 320;
+const AUDIO_CARD_WIDTH_FRACTION = 0.9;
 
 export function AudioAttachmentCard({ title, needsFetch, availableWidth, align = 'left', presentationOnly, prepare, onOpen }: {
   title: string;
@@ -58,7 +59,8 @@ export function AudioAttachmentCard({ title, needsFetch, availableWidth, align =
     : t('message.renderer.playAudio');
   const Icon = failed ? RefreshCw : fetchNeeded ? ArrowDown : Play;
   const filled = !loading && !failed && !fetchNeeded;
-  const maxWidth = Math.min(MAX_AUDIO_CARD_WIDTH, availableWidth);
+  const width = Math.min(availableWidth, MAX_AUDIO_CARD_WIDTH,
+    Math.max(MIN_AUDIO_CARD_WIDTH, Math.round(availableWidth * AUDIO_CARD_WIDTH_FRACTION)));
   return (
     <MessageContentOpenButton
       presentationOnly={presentationOnly}
@@ -67,20 +69,21 @@ export function AudioAttachmentCard({ title, needsFetch, availableWidth, align =
       onPress={onOpen ? open : undefined}
       style={[styles.card, {
         alignSelf: align === 'right' ? 'flex-end' : 'flex-start',
-        minWidth: Math.min(MIN_AUDIO_CARD_WIDTH, maxWidth),
-        maxWidth,
+        width,
       }]}
       testID="message.audioAttachmentCard"
     >
       <View style={[styles.control, filled && styles.filledControl]} accessible={false}>
-        {loading ? <ActivityIndicator color={colors.textSecondary} /> : (
-          <Icon size={iconSize.lg} strokeWidth={iconStroke.regular} color={filled ? colors.ctaText : colors.textPrimary}
+        {loading ? <ActivityIndicator size="small" color={colors.textSecondary} /> : (
+          <Icon size={iconSize.md} strokeWidth={iconStroke.regular}
+            color={filled ? colors.ctaText : failed ? colors.textPrimary : colors.textSecondary}
+            style={filled ? styles.playGlyph : undefined}
             fill={filled ? colors.ctaText : 'none'} />
         )}
       </View>
       <View style={styles.information}>
         <Text style={styles.title} numberOfLines={1} ellipsizeMode="middle">{title}</Text>
-        <Text style={styles.status} numberOfLines={1}>{action}</Text>
+        <Text style={[styles.status, failed && styles.retryStatus]} numberOfLines={1}>{action}</Text>
       </View>
     </MessageContentOpenButton>
   );
@@ -90,11 +93,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   card: {
     alignItems: 'center',
     backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
+    borderColor: colors.borderTranslucent,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.md,
+    maxWidth: '100%',
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
   },
@@ -102,12 +106,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.pill,
-    height: 44,
+    height: 36,
     justifyContent: 'center',
-    width: 44,
+    width: 36,
   },
   filledControl: { backgroundColor: colors.cta },
-  information: { flexShrink: 1, minWidth: 0, gap: spacing.xs },
-  title: { ...textStyles.bodySmall, color: colors.textPrimary, fontWeight: fontWeight.medium },
-  status: { ...textStyles.footnote, color: colors.textSecondary },
+  playGlyph: { transform: [{ translateX: 1 }] },
+  information: { flex: 1, minWidth: 0 },
+  title: { ...textStyles.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
+  status: { ...textStyles.caption, color: colors.textTertiary },
+  retryStatus: { color: colors.textSecondary },
 });

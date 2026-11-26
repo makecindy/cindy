@@ -40,7 +40,7 @@ import {
 } from '@cindy/maker-shared/payload-summary';
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
-import type { ResolveRemoteMediaFn } from './remoteMedia';
+import { isDirectPreviewableMediaUrl, type ResolveRemoteMediaFn } from './remoteMedia';
 import type { ResolvedPreviewFile } from './RemoteAttachmentPreview';
 
 export type AudioAttachmentPhase = 'idle' | 'loading' | 'ready' | 'error';
@@ -64,15 +64,20 @@ export function toRemoteAttachmentUrl(source: string): string {
 /** Direct media already has playable bytes; only host-owned references need fetching. */
 export async function resolveAttachmentPreviewSource(
   payload: Extract<MessagePayload, { kind: 'file' | 'media' }>,
-  resolve: ResolveRemoteMediaFn,
+  resolve: ResolveRemoteMediaFn | undefined,
   signal: AbortSignal,
   forceRefresh = false,
 ) {
-  if (payload.kind === 'media' && payload.media.previewable && (isPayloadDirectPreviewableUrl(payload.media.url) || /^data:audio\//i.test(payload.media.url)))
+  const audio = payload.kind === 'media' && payload.media.kind === 'audio';
+  if (payload.kind === 'media' && (audio
+    ? isDirectPreviewableMediaUrl(payload.media.url)
+    : payload.media.previewable && isPayloadDirectPreviewableUrl(payload.media.url))) {
     return { url: payload.media.url, mimeType: payload.media.mimeType };
+  }
+  if (!resolve) throw new Error('MEDIA_SOURCE_MISSING');
   const source = payload.kind === 'file' ? payload.sourcePath! : payload.media.url;
   const url = toRemoteAttachmentUrl(source);
-  const kind = payload.kind === 'media' && payload.media.kind === 'audio' ? 'audio' : 'file';
+  const kind = audio ? 'audio' : 'file';
   return resolve({ kind, url, previewable: false }, {
     front: true,
     signal,

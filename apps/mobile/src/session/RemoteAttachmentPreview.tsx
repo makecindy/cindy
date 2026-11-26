@@ -10,7 +10,9 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
+  StatusBar,
   StyleSheet,
   View,
 } from "react-native";
@@ -165,7 +167,7 @@ function RemoteAttachmentBody({
   onAudioPhaseChange?: (phase: AudioAttachmentPhase) => void;
   onClose(): void;
 }) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const chromeFrame = usePreviewChromeFrame();
@@ -291,6 +293,9 @@ function RemoteAttachmentBody({
   );
   return (
     <View style={[styles.root, { backgroundColor: colors.surface }]}>
+      {kind === 'audio' && Platform.OS === 'android' ? (
+        <StatusBar barStyle={mode === 'dark' ? 'light-content' : 'dark-content'} />
+      ) : null}
       <View
         style={[
           styles.root,

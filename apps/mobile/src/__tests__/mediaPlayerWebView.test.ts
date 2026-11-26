@@ -65,10 +65,6 @@ describe('mediaPlayerWebView', () => {
       type: 'xdt-media-player/command',
       command: 'pause',
     });
-    expect(JSON.parse(buildMediaPlayerWebViewCommand('reset'))).toEqual({
-      type: 'xdt-media-player/command',
-      command: 'reset',
-    });
   });
 
   it('builds an audio player document and escapes dynamic values', () => {
@@ -186,6 +182,29 @@ describe('mediaPlayerWebView', () => {
     audio.play.mockRejectedValueOnce({ name: 'NotAllowedError' });
     send(window, 'play');
     await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ state: 'error', error: 'NotAllowedError' }));
+  });
+
+  it('reports already loaded audio when the native bridge missed the early media events', () => {
+    const html = buildMediaPlayerWebViewHtml({ kind: 'audio', url: 'https://fixture.invalid/tone.wav', externalAudioControls: true });
+    const audio = Object.assign(new EventTarget(), {
+      querySelector: () => null, duration: 3.75, currentTime: 0, paused: true, ended: false,
+      readyState: 4, HAVE_METADATA: 1, HAVE_FUTURE_DATA: 3,
+      seekable: { length: 1, start: () => 0, end: () => 3.75 },
+      error: null as { code: number } | null,
+    });
+    const events: ReturnType<typeof parseMediaPlayerWebViewMessage>[] = [];
+    const window = Object.assign(new EventTarget(), {
+      ReactNativeWebView: { postMessage: (value: string) => events.push(parseMediaPlayerWebViewMessage(value)) },
+    });
+    const document = Object.assign(new EventTarget(), { querySelector: () => audio });
+    runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], { window, document });
+    const request = () => document.dispatchEvent(new MessageEvent('message', { data: buildMediaPlayerWebViewCommand('status') }));
+    expect(events).toHaveLength(0);
+    request();
+    expect(events.at(-1)).toMatchObject({ state: 'ready', duration: 3.75, canStart: true, canSeek: true });
+    audio.error = { code: 4 };
+    request();
+    expect(events.at(-1)).toMatchObject({ state: 'error', error: '4' });
   });
 
   it('changes mute, speed and relative seeks and opens the route picker from the same audio element', () => {

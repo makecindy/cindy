@@ -6,18 +6,20 @@ import {
   ScrollView,
   StyleSheet,
   View,
-  type GestureResponderEvent,
 } from 'react-native';
 import { Airplay, AudioLines, Pause, Play, RotateCcw, RotateCw, Volume2, VolumeX } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
-import { fontWeight, radius, spacing, textStyles, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, radius, spacing, textStyles, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { AudioPlayerSymbol } from './AudioPlayerSymbol';
+import { AudioPlayerButton } from './AudioPlayerButton';
+import { AudioPlayerToolbar } from './AudioPlayerToolbar';
+import { AudioPlayerScrubber } from './AudioPlayerScrubber';
 import { RemoteMediaPlayerWebView, type AudioPlaybackControls } from './mediaPlayerWebView';
 import { AUDIO_PLAYBACK_RATES, type MobileMediaPlayerStatus } from './mediaPlayerWebViewHtml';
 
-const THUMB_SIZE = 12;
 const SKIP_SECONDS = 10;
 
 export function AudioAttachmentPlayer({
@@ -38,7 +40,6 @@ export function AudioAttachmentPlayer({
   const styles = useThemedStyles(makeStyles);
   const controls = useRef<AudioPlaybackControls>(null);
   const [status, setStatus] = useState<MobileMediaPlayerStatus | null>(null);
-  const [trackWidth, setTrackWidth] = useState(0);
   const [dragTime, setDragTime] = useState<number | null>(null);
   const failed = readFailed || status?.state === 'error';
   const playing = status?.state === 'playing' || (status?.state === 'waiting' && status.paused === false);
@@ -49,15 +50,14 @@ export function AudioAttachmentPlayer({
   const clampTime = (seconds: number) => Math.max(0, Math.min(seconds, duration));
   const currentTime = status?.currentTime ?? 0;
   const time = duration > 0 ? clampTime((canSeek ? dragTime : null) ?? currentTime) : currentTime;
-  const trackLength = Math.max(0, trackWidth - THUMB_SIZE);
-  const position = duration > 0 ? (time / duration) * trackLength : 0;
-  const timeAtTouch = (event: GestureResponderEvent) =>
-    clampTime(((event.nativeEvent.locationX - THUMB_SIZE / 2) / trackLength) * duration);
   const elapsed = formatAudioTime(time);
   const total = duration > 0 ? formatAudioTime(duration) : '––:––';
+  const progressLabel = t('message.attachmentPreview.audioProgress');
+  const progressValue = `${elapsed} / ${total}`;
   const audioLabel = t('message.payloadPresentation.audio');
   const ToggleIcon = playing ? Pause : Play;
   const MutedIcon = status?.muted ? VolumeX : Volume2;
+  const muteColor = loading ? colors.textTertiary : status?.muted ? colors.textPrimary : colors.textSecondary;
   const rate = status?.rate ?? 1;
   const showRoute = Platform.OS === 'ios' && status?.canRoute === true && !loading;
   const routeLabel = t('message.attachmentPreview.audioOutput');
@@ -77,11 +77,15 @@ export function AudioAttachmentPlayer({
     <View style={styles.root}>
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
         <View style={styles.panel}>
-          <View style={styles.mark} accessible={false}>
-            <AudioLines size={34} color={colors.textSecondary} />
+          <View style={styles.identity}>
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" pointerEvents="none">
+              <AudioPlayerSymbol name="waveform" size={iconSize.glyph} color={colors.borderStrong}>
+                <AudioLines size={iconSize.glyph} color={colors.borderStrong} strokeWidth={iconStroke.bold} absoluteStrokeWidth />
+              </AudioPlayerSymbol>
+            </View>
+            <Text testID="message.audioTitle" accessibilityRole="header" accessibilityLabel={name}
+              numberOfLines={3} style={styles.title}>{name}</Text>
           </View>
-          <Text testID="message.audioTitle" accessibilityRole="header" accessibilityLabel={name}
-            numberOfLines={3} style={styles.title}>{name}</Text>
           {failed ? (
             <View style={styles.failure}>
               <Text accessibilityLiveRegion="polite" style={styles.status}>
@@ -100,38 +104,15 @@ export function AudioAttachmentPlayer({
           ) : (
             <>
               <View style={styles.timeline}>
-                <View
-                  accessible={canSeek}
-                  accessibilityRole="adjustable"
-                  accessibilityLabel={t('message.attachmentPreview.audioProgress')}
-                  accessibilityValue={{ text: `${elapsed} / ${total}` }}
-                  accessibilityActions={canSeek ? [{ name: 'increment' }, { name: 'decrement' }] : undefined}
-                  onAccessibilityAction={({ nativeEvent: { actionName } }) => {
-                    if (canSeek && (actionName === 'increment' || actionName === 'decrement')) {
-                      const step = Math.min(10, duration / 10);
-                      controls.current?.seek(clampTime(time + (actionName === 'increment' ? step : -step)));
-                    }
-                  }}
-                  onLayout={({ nativeEvent }) => setTrackWidth(nativeEvent.layout.width)}
-                  onStartShouldSetResponder={() => canSeek && trackLength > 0}
-                  onResponderTerminationRequest={() => false}
-                  onResponderGrant={(event) => setDragTime(timeAtTouch(event))}
-                  onResponderMove={(event) => setDragTime(timeAtTouch(event))}
-                  onResponderRelease={(event) => {
-                    setDragTime(null);
-                    if (canSeek && trackLength > 0) controls.current?.seek(timeAtTouch(event));
-                  }}
-                  onResponderTerminate={() => setDragTime(null)}
-                  style={styles.trackHit}
-                  testID="message.audioProgress"
-                >
-                  <View pointerEvents="none" style={styles.rail}>
-                    <View style={[styles.fill, { width: position }]} />
-                  </View>
-                  {canSeek && trackLength > 0
-                    ? <View pointerEvents="none" style={[styles.thumb, { left: position }]} />
-                    : null}
-                </View>
+                <AudioPlayerScrubber
+                  enabled={canSeek}
+                  time={time}
+                  duration={duration}
+                  label={progressLabel}
+                  valueText={progressValue}
+                  onPreview={setDragTime}
+                  onSeek={(target) => controls.current?.seek(clampTime(target))}
+                />
                 <View style={styles.times}>
                   <Text testID="message.audioElapsed" style={styles.time}>{elapsed}</Text>
                   <Text testID="message.audioDuration" style={styles.time}>{total}</Text>
@@ -140,76 +121,23 @@ export function AudioAttachmentPlayer({
               <View style={styles.primaryControls}>
                 <SkipButton direction="back" disabled={!canSeek}
                   onPress={() => controls.current?.skip(-SKIP_SECONDS)} />
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t(loading ? 'message.renderer.loading' :
+                <AudioPlayerButton
+                  label={t(loading ? 'message.renderer.loading' :
                     playing ? 'message.attachmentPreview.pauseAudio' : 'message.renderer.playAudio')}
-                  accessibilityState={{ disabled: loading, busy: loading }}
+                  symbol={playing ? 'pause.fill' : 'play.fill'} size={iconSize.xxl}
+                  width={64} height={64} primary loading={loading}
                   disabled={loading}
                   onPress={() => playing ? controls.current?.pause() : controls.current?.play()}
-                  style={({ pressed }) => [styles.toggle, loading && styles.loading, pressed && styles.pressed]}
+                  style={loading ? { ...styles.toggle, ...styles.loading } : styles.toggle}
                   testID="message.audioToggle"
                 >
                   {loading
-                    ? <ActivityIndicator color={colors.textSecondary} />
-                    : <ToggleIcon size={26} color={colors.ctaText} fill={colors.ctaText} />}
-                </Pressable>
+                    ? <ActivityIndicator size="small" color={colors.textSecondary} />
+                    : <ToggleIcon size={iconSize.xxl} color={colors.ctaText} fill={colors.ctaText}
+                        style={playing ? undefined : styles.playGlyph} />}
+                </AudioPlayerButton>
                 <SkipButton direction="forward" disabled={!canSeek}
                   onPress={() => controls.current?.skip(SKIP_SECONDS)} />
-              </View>
-              <View style={styles.secondaryControls}>
-                {loading ? speedButton : (
-                  <RateMenu
-                    accessibilityLabel={speedLabel}
-                    actions={AUDIO_PLAYBACK_RATES.map((choice) => ({
-                      id: String(choice), title: `${choice}×`, state: choice === rate ? 'on' : 'off',
-                    }))}
-                    onAction={(id) => controls.current?.rate(Number(id))}
-                    testID="message.audioSpeedMenu"
-                  >
-                    {speedButton}
-                  </RateMenu>
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t(status?.muted ? 'message.attachmentPreview.audioUnmute' : 'message.attachmentPreview.audioMute')}
-                  disabled={loading}
-                  onPress={() => controls.current?.mute(!status?.muted)}
-                  style={({ pressed }) => [styles.auxControl, pressed && styles.pressed]}
-                  testID="message.audioMute"
-                >
-                  <MutedIcon size={20} color={loading ? colors.textTertiary : colors.textSecondary} />
-                </Pressable>
-                {source ? (
-                  <View
-                    accessibilityElementsHidden={!showRoute}
-                    importantForAccessibility={showRoute ? 'auto' : 'no-hide-descendants'}
-                    pointerEvents={showRoute ? 'auto' : 'none'}
-                    style={showRoute ? styles.auxControl : styles.hiddenTransport}
-                    testID="message.audioRoute"
-                  >
-                    <RemoteMediaPlayerWebView
-                      kind="audio"
-                      audioControlsRef={controls}
-                      audioRouteLabel={Platform.OS === 'ios' ? routeLabel : undefined}
-                      url={source.url}
-                      mimeType={source.mimeType?.startsWith('audio/') ? source.mimeType : undefined}
-                      title={name}
-                      testID="message.attachmentAudioPlayer"
-                      style={StyleSheet.absoluteFill}
-                      onStatusChange={(next) => {
-                        setStatus((previous) => previous?.state === 'error' ? previous : next);
-                        if (!next.canSeek) setDragTime(null);
-                        onStatusChange(next);
-                      }}
-                    />
-                    {showRoute ? (
-                      <View pointerEvents="none" accessible={false} importantForAccessibility="no-hide-descendants">
-                        <Airplay size={20} color={status?.wireless ? colors.textPrimary : colors.textSecondary} />
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
               </View>
               {status?.state === 'waiting' && playing ? (
                 <Text accessibilityLiveRegion="polite" style={styles.status}>
@@ -220,6 +148,65 @@ export function AudioAttachmentPlayer({
           )}
         </View>
       </ScrollView>
+      {!failed && (
+        <AudioPlayerToolbar>
+          {loading ? speedButton : (
+            <RateMenu
+              accessibilityLabel={speedLabel}
+              actions={AUDIO_PLAYBACK_RATES.map((choice) => ({
+                id: String(choice), title: `${choice}×`, state: choice === rate ? 'on' : 'off',
+              }))}
+              onAction={(id) => controls.current?.rate(Number(id))}
+              testID="message.audioSpeedMenu"
+            >
+              {speedButton}
+            </RateMenu>
+          )}
+          <AudioPlayerButton
+            label={t(status?.muted ? 'message.attachmentPreview.audioUnmute' : 'message.attachmentPreview.audioMute')}
+            symbol={status?.muted ? 'speaker.slash' : 'speaker.wave.2'} size={iconSize.action}
+            width={48} height={44}
+            disabled={loading}
+            onPress={() => controls.current?.mute(!status?.muted)}
+            style={styles.auxControl}
+            testID="message.audioMute"
+          >
+            <MutedIcon size={iconSize.action} color={muteColor} />
+          </AudioPlayerButton>
+          {source ? (
+            <View
+              accessibilityElementsHidden={!showRoute}
+              importantForAccessibility={showRoute ? 'auto' : 'no-hide-descendants'}
+              pointerEvents={showRoute ? 'auto' : 'none'}
+              style={showRoute ? styles.auxControl : styles.hiddenTransport}
+              testID="message.audioRoute"
+            >
+              <RemoteMediaPlayerWebView
+                kind="audio"
+                audioControlsRef={controls}
+                audioRouteLabel={Platform.OS === 'ios' ? routeLabel : undefined}
+                url={source.url}
+                mimeType={source.mimeType?.startsWith('audio/') ? source.mimeType : undefined}
+                title={name}
+                testID="message.attachmentAudioPlayer"
+                style={StyleSheet.absoluteFill}
+                onStatusChange={(next) => {
+                  setStatus((previous) => previous?.state === 'error' ? previous : next);
+                  if (!next.canSeek) setDragTime(null);
+                  onStatusChange(next);
+                }}
+              />
+              {showRoute ? (
+                <View pointerEvents="none" accessible={false} importantForAccessibility="no-hide-descendants">
+                  <AudioPlayerSymbol name="airplay.audio" size={iconSize.action} color={status?.wireless ? colors.textPrimary : colors.textSecondary}>
+                    <Airplay size={iconSize.action} color={status?.wireless ? colors.textPrimary : colors.textSecondary} />
+                  </AudioPlayerSymbol>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+        </AudioPlayerToolbar>
+      )}
     </View>
   );
 }
@@ -234,18 +221,19 @@ function SkipButton({ direction, disabled, onPress }: {
   const styles = useThemedStyles(makeStyles);
   const back = direction === 'back';
   const Icon = back ? RotateCcw : RotateCw;
+  const color = disabled ? colors.textTertiary : colors.textPrimary;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={t(back ? 'message.attachmentPreview.audioBackTen' : 'message.attachmentPreview.audioForwardTen')}
+    <AudioPlayerButton
+      label={t(back ? 'message.attachmentPreview.audioBackTen' : 'message.attachmentPreview.audioForwardTen')}
+      symbol={back ? 'gobackward.10' : 'goforward.10'} size={iconSize.xxl} width={48} height={48}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.skip, pressed && styles.pressed]}
+      style={styles.skip}
       testID={back ? 'message.audioBackTen' : 'message.audioForwardTen'}
     >
-      <Icon size={29} color={disabled ? colors.textTertiary : colors.textPrimary} />
+      <Icon size={iconSize.xxl} color={color} />
       <Text style={[styles.skipNumber, disabled && styles.disabledText]}>{SKIP_SECONDS}</Text>
-    </Pressable>
+    </AudioPlayerButton>
   );
 }
 
@@ -261,24 +249,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   hiddenTransport: { position: 'absolute', width: 1, height: 1, opacity: 0 },
   content: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
   panel: { width: '100%', maxWidth: 368, alignItems: 'center', gap: spacing.xl, paddingVertical: spacing.lg },
-  mark: {
-    width: 80, height: 80, alignItems: 'center', justifyContent: 'center',
-    borderRadius: radius.container, backgroundColor: colors.surfaceChip,
-  },
+  identity: { alignSelf: 'stretch', alignItems: 'center', gap: spacing.lg },
   title: { ...textStyles.headline, fontWeight: fontWeight.semibold, color: colors.textPrimary, textAlign: 'center' },
   timeline: { alignSelf: 'stretch' },
-  trackHit: { height: 44, justifyContent: 'center' },
-  rail: { marginHorizontal: THUMB_SIZE / 2, height: 4, borderRadius: radius.pill, backgroundColor: colors.borderStrong },
-  fill: { height: '100%', borderRadius: radius.pill, backgroundColor: colors.textPrimary },
-  thumb: { position: 'absolute', width: THUMB_SIZE, height: THUMB_SIZE, borderRadius: radius.pill, backgroundColor: colors.textPrimary },
   times: { flexDirection: 'row', justifyContent: 'space-between' },
   time: { ...textStyles.caption, color: colors.textTertiary, fontVariant: ['tabular-nums'] },
   toggle: {
     width: 64, height: 64, alignItems: 'center', justifyContent: 'center',
     borderRadius: radius.pill, backgroundColor: colors.cta,
   },
+  playGlyph: { transform: [{ translateX: 1 }] },
   primaryControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.xl },
-  secondaryControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   auxControl: { width: 48, height: 44, alignItems: 'center', justifyContent: 'center' },
   skip: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   skipNumber: {

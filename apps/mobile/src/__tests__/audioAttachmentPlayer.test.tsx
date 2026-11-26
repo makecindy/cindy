@@ -13,6 +13,7 @@ const runtime = vi.hoisted(() => ({
   nodes: new Map<string, Record<string, any>>(),
   player: { play: vi.fn(), pause: vi.fn(), seek: vi.fn(), skip: vi.fn(), rate: vi.fn(), mute: vi.fn() },
   status: undefined as ((event: MobileMediaPlayerStatus) => void) | undefined,
+  statusBar: vi.fn(),
   share: vi.fn(),
   shareCopy: vi.fn(),
 }));
@@ -22,7 +23,7 @@ vi.mock('@/theme', async () => {
   const colors = () => runtime.mode === 'light' ? tokens.lightColors : tokens.darkColors;
   return {
     ...tokens,
-    useTheme: () => ({ colors: colors() }),
+    useTheme: () => ({ colors: colors(), mode: runtime.mode }),
     useThemedStyles: (makeStyles: (theme: ReturnType<typeof colors>) => unknown) => makeStyles(colors()),
   };
 });
@@ -48,6 +49,7 @@ vi.mock('react-native', () => {
     return <div>{props.children as ReactNode}</div>;
   };
   return { ActivityIndicator: () => null, Pressable: view, ScrollView: view, View: view, Modal: view,
+    StatusBar: (props: unknown) => { runtime.statusBar(props); return null; },
     Platform: { get OS() { return runtime.os; } },
     Alert: { alert: vi.fn() },
     StyleSheet: { create: (styles: unknown) => styles } };
@@ -216,6 +218,7 @@ describe('full-screen audio attachment controls', () => {
     runtime.os = 'android';
     render();
     expect(node('audioRoute').pointerEvents).toBe('none');
+    expect(node('audioToggle').android_ripple).toMatchObject({ foreground: true });
   });
 
   it('keeps a single bounded title with its full accessibility label in either theme', () => {
@@ -250,5 +253,16 @@ describe('full-screen audio attachment controls', () => {
     await act(async () => runtime.nodes.get('preview.header')!.actions[0].onPress());
     expect(runtime.shareCopy).toHaveBeenCalledWith(tone.url, tone.mimeType, name, expect.any(AbortSignal));
     expect(runtime.share).toHaveBeenCalledWith('file:///fixture/Remote.wav', { mimeType: tone.mimeType });
+  });
+
+  it('keeps status bar text legible in both Android audio preview themes', async () => {
+    runtime.os = 'android';
+    const props = { name: 'Remote.wav', mediaKind: 'audio' as const, resolve: async () => tone, onClose: vi.fn() };
+    const renderPreview = () => act(async () => root.render(<RemoteAttachmentPreview {...props} />));
+    await renderPreview();
+    expect(runtime.statusBar).toHaveBeenLastCalledWith({ barStyle: 'dark-content' });
+    runtime.mode = 'dark';
+    await renderPreview();
+    expect(runtime.statusBar).toHaveBeenLastCalledWith({ barStyle: 'light-content' });
   });
 });

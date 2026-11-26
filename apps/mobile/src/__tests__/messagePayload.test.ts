@@ -272,7 +272,7 @@ describe('messagePayload', () => {
 describe('attachment preview source', () => {
   it.each(['https://media.example.invalid/clip.mp3', 'data:audio/mpeg;base64,SUQz'])('plays direct audio %s without remote fetching', async (url) => {
     const resolve = vi.fn();
-    const payload = buildMediaPayload({ kind: 'audio', url, previewable: true, mimeType: 'audio/mpeg' }, 'clip.mp3');
+    const payload = buildMediaPayload({ kind: 'audio', url, previewable: false, mimeType: 'audio/mpeg' }, 'clip.mp3');
     await expect(resolveAttachmentPreviewSource(payload, resolve, new AbortController().signal))
       .resolves.toEqual({ url, mimeType: 'audio/mpeg' });
     expect(resolve).not.toHaveBeenCalled();
