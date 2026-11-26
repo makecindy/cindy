@@ -56,9 +56,27 @@ export function useSshDeviceHosts(enabled: boolean): {
   return { hosts, restore };
 }
 
+/**
+ * What the device said blocks SSH there, one sentence per reason. A device that gave none, or one this build does not
+ * know (`UNKNOWN`, see parseSshAccessStatus), gets the neutral sentence rather than a guess.
+ */
+const BLOCKED_NOTES: Record<NonNullable<SshDeviceHostView['blocked']>, string> = {
+  SSHD_UNREACHABLE: 'settings.remoteControl.sshAccess.device.unavailable.blocked.SSHD_UNREACHABLE',
+  REMOTE_LOGIN_OFF: 'settings.remoteControl.sshAccess.device.unavailable.blocked.REMOTE_LOGIN_OFF',
+  AUTHORIZED_KEYS_UNSUPPORTED: 'settings.remoteControl.sshAccess.device.unavailable.blocked.AUTHORIZED_KEYS_UNSUPPORTED',
+  PLATFORM_UNSUPPORTED: 'settings.remoteControl.sshAccess.device.unavailable.blocked.PLATFORM_UNSUPPORTED',
+  UNKNOWN: 'settings.remoteControl.sshAccess.device.unavailable.blocked.UNKNOWN',
+};
+
+function unavailableText(view: SshDeviceHostView, t: (key: string) => string): string {
+  if (view.reason !== 'blocked') return t(`settings.remoteControl.sshAccess.device.unavailable.${view.reason ?? 'off'}`);
+  const blocked = view.blocked && Object.hasOwn(BLOCKED_NOTES, view.blocked) ? view.blocked : 'UNKNOWN';
+  return t(BLOCKED_NOTES[blocked]);
+}
+
 function stateText(view: SshDeviceHostView, t: (key: string) => string): string | null {
   switch (view.state) {
-    case 'unavailable': return t(`settings.remoteControl.sshAccess.device.unavailable.${view.reason ?? 'off'}`);
+    case 'unavailable': return unavailableText(view, t);
     case 'user-deleted': return t('settings.remoteControl.sshAccess.device.userDeleted');
     case 'needs-update': return t('settings.remoteControl.sshAccess.device.needsUpdate');
     case 'control-off': return t('settings.remoteControl.sshAccess.device.controlOff');

@@ -7320,7 +7320,13 @@
           "pending": "正在设置 SSH…",
           "unavailable": {
             "off": "暂不可用：对方关闭了 SSH 访问。",
-            "blocked": "暂不可用：对方的 SSH 服务没有运行。",
+            "blocked": {
+              "SSHD_UNREACHABLE": "暂不可用：对方的 SSH 服务没有运行。",
+              "REMOTE_LOGIN_OFF": "暂不可用：对方 Mac 的「远程登录」没有打开。",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "暂不可用：Cindy 无法改写对方的 SSH 授权公钥文件。",
+              "PLATFORM_UNSUPPORTED": "暂不可用：对方的系统不支持 SSH 访问。",
+              "UNKNOWN": "暂不可用：对方目前无法接受 SSH 连接。"
+            },
             "revoked": "暂不可用：对方撤销了本机的访问权限。",
             "removed": "暂不可用：这台设备已不在你的账号里。"
           }

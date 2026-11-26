@@ -9,6 +9,7 @@ const STUDIO = 'studio-mac-0011223344556677';
 const AIR = 'macbook-air-8899aabbccddeeff';
 const LAB = 'lab-pc-0123012301230123';
 const MINI = 'mac-mini-4455667788990011';
+const IMAC = 'office-imac-5566778899aabbcc';
 /** A device that left the account; this computer never saw its name. */
 const GONE = 'old-laptop-aabbccddeeff0011';
 
@@ -39,6 +40,7 @@ const devices: Device[] = [
     ? [
         device({ deviceId: LAB, name: 'Lab PC', platform: 'linux', appVersion: '0.1.120' }),
         device({ deviceId: MINI, name: 'Mac mini', online: false, lastSeenAt: new Date(Date.now() - 3 * 3600e3).toISOString() }),
+        device({ deviceId: IMAC, name: 'Office iMac' }),
       ]
     : []),
 ].map((d) => (d.isSelf ? { ...d, selfName: d.name } : d));
@@ -117,6 +119,8 @@ let deviceHosts: SshDeviceHostView[] = scene === 'controller'
       { deviceId: AIR, alias: 'cindy-macbook-air', hostId: null, state: 'user-deleted', reason: null, blocked: null },
       { deviceId: LAB, alias: null, hostId: null, state: 'needs-update', reason: null, blocked: null },
       { deviceId: MINI, alias: 'cindy-mac-mini', hostId: 'cindy-mac-mini', state: 'unavailable', reason: 'off', blocked: null },
+      // Access is on there, but Remote Login is off on that Mac: the card says so.
+      { deviceId: IMAC, alias: 'cindy-office-imac', hostId: 'cindy-office-imac', state: 'unavailable', reason: 'blocked', blocked: 'REMOTE_LOGIN_OFF' },
     ]
   : [];
 
@@ -144,12 +148,19 @@ function sshHost(id: string, displayName: string, hostname: string, user: string
   };
 }
 
+/** Where each device host points (fictional addresses). */
+const ENDPOINTS: Record<string, { hostname: string; user: string }> = {
+  [CLOUD]: { hostname: '203.0.113.24', user: 'ubuntu' },
+  [MINI]: { hostname: '192.168.1.42', user: 'studio' },
+  [IMAC]: { hostname: '192.168.1.57', user: 'office' },
+};
+
 function sshHosts(): RemoteHostSnapshot[] {
   if (scene !== 'controller') return [];
   const listed = deviceHosts.filter((view) => view.hostId !== null);
   const names = new Map(devices.map((d) => [d.deviceId, d.name] as const));
   return [
-    ...listed.map((view) => sshHost(view.hostId!, names.get(view.deviceId) ?? view.hostId!, view.deviceId === CLOUD ? '203.0.113.24' : '192.168.1.42', view.deviceId === CLOUD ? 'ubuntu' : 'studio', {
+    ...listed.map((view) => sshHost(view.hostId!, names.get(view.deviceId) ?? view.hostId!, ENDPOINTS[view.deviceId]?.hostname ?? '192.168.1.31', ENDPOINTS[view.deviceId]?.user ?? 'dash', {
       device: { deviceId: view.deviceId, available: view.state === 'ready' },
     }, true)),
     sshHost('dev-server', 'dev-server', 'dev.example.com', 'dash'),

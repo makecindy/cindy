@@ -7432,7 +7432,13 @@
           "pending": "Configurando o SSH…",
           "unavailable": {
             "off": "Indisponível: o acesso SSH está desativado nesse dispositivo.",
-            "blocked": "Indisponível: o servidor SSH desse dispositivo não está em execução.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "Indisponível: o servidor SSH desse dispositivo não está em execução.",
+              "REMOTE_LOGIN_OFF": "Indisponível: o “Login Remoto” está desativado nesse Mac.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "Indisponível: o Cindy não consegue alterar o arquivo de chaves SSH autorizadas desse dispositivo.",
+              "PLATFORM_UNSUPPORTED": "Indisponível: o sistema desse dispositivo não oferece suporte ao acesso SSH.",
+              "UNKNOWN": "Indisponível: esse dispositivo não pode aceitar conexões SSH no momento."
+            },
             "revoked": "Indisponível: esse dispositivo revogou o acesso deste computador.",
             "removed": "Indisponível: esse dispositivo não está mais na sua conta."
           }

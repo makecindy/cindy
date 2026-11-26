@@ -7363,7 +7363,13 @@
           "pending": "SSH wird eingerichtet…",
           "unavailable": {
             "off": "Nicht verfügbar: Auf diesem Gerät ist der SSH-Zugriff aus.",
-            "blocked": "Nicht verfügbar: Der SSH-Server auf diesem Gerät läuft nicht.",
+            "blocked": {
+              "SSHD_UNREACHABLE": "Nicht verfügbar: Der SSH-Server auf diesem Gerät läuft nicht.",
+              "REMOTE_LOGIN_OFF": "Nicht verfügbar: „Entfernte Anmeldung“ ist auf diesem Mac ausgeschaltet.",
+              "AUTHORIZED_KEYS_UNSUPPORTED": "Nicht verfügbar: Cindy kann die Datei mit den autorisierten SSH-Schlüsseln auf diesem Gerät nicht ändern.",
+              "PLATFORM_UNSUPPORTED": "Nicht verfügbar: Das System dieses Geräts unterstützt keinen SSH-Zugriff.",
+              "UNKNOWN": "Nicht verfügbar: Dieses Gerät kann gerade keine SSH-Verbindungen annehmen."
+            },
             "revoked": "Nicht verfügbar: Dieses Gerät hat den Zugriff dieses Computers widerrufen.",
             "removed": "Nicht verfügbar: Dieses Gerät gehört nicht mehr zu deinem Konto."
           }

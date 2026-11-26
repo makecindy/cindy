@@ -6,6 +6,7 @@ const STUDIO = 'studio-mac-0011223344556677';
 const AIR = 'macbook-air-8899aabbccddeeff';
 const LAB = 'lab-pc-0123012301230123';
 const MINI = 'mac-mini-4455667788990011';
+const IMAC = 'office-imac-5566778899aabbcc';
 const SSHD_INSTALL_COMMAND = 'sudo apt install -y openssh-server && sudo systemctl enable --now ssh';
 // A narrow settings column (wide sidebar), and the narrowest one an 800px window leaves next to the default sidebar.
 const NARROW = { width: 400, height: 1000 };
@@ -13,7 +14,7 @@ const NARROW_LIST = { width: 540, height: 1000 };
 
 const scene = (name, about, extra = {}) => ({ about, data: { scene: name }, ...extra });
 const TARGET = 'A Cindy cloud host (Linux) lets the owner\'s other devices in over SSH: on by default, the terminal alias, two devices and a pasted key; adding a key checks it, removing a device asks first (remote control goes too, its sessions end) and warns about a session whose key could not be identified, ending all sessions reports the count';
-const CONTROLLER = 'This Mac keeps SSH hosts for the other devices: the terminal command and Connect on the cloud host\'s card, Add back for a host the person deleted, Needs update for an old Cindy, unavailable while the device has SSH off; the SSH list marks them 「来自我的设备」 and keeps their connection read-only';
+const CONTROLLER = 'This Mac keeps SSH hosts for the other devices: the terminal command and Connect on the cloud host\'s card, Add back for a host the person deleted, Needs update for an old Cindy, unavailable while the device has SSH off or Remote Login off (the card says which); the SSH list marks them 「来自我的设备」 and keeps their connection read-only';
 
 export default {
   name: 'ssh-access',
@@ -77,6 +78,8 @@ export default {
       const off = card(MINI);
       await off.getByText(await k('device.unavailable.off')).waitFor();
       assert.equal(await off.getByRole('button', { name: await k('device.connect'), exact: true }).count(), 0);
+      // Blocked there: the card names the device's own reason, not a generic one.
+      await card(IMAC).getByText(await k('device.unavailable.blocked.REMOTE_LOGIN_OFF'), { exact: true }).waitFor();
       // The controller's own Mac card has no SSH row about itself.
       assert.equal(await self.getByText(await k('device.rowName'), { exact: true }).count(), 0);
       await ready.scrollIntoViewIfNeeded();
@@ -93,13 +96,13 @@ export default {
       await ready.getByRole('button', { name: await k('device.connect'), exact: true }).click();
       await page.getByText(await k('device.connected', { name: 'VM-4-7-ubuntu' })).waitFor();
 
-      // The SSH list: both device hosts say where they come from, the unusable one says so.
+      // The SSH list: the device hosts say where they come from, the unusable ones say so.
       const ssh = page.locator('#settings-search-target-remote-ssh');
       await ssh.locator(':scope > button').click();
       const from = await ui.t('settings.remote.fromMyDevice');
       await ssh.getByText(from, { exact: false }).first().waitFor();
-      assert.equal(await ssh.getByText(from, { exact: false }).count(), 2);
-      assert.equal(await ssh.getByText(await ui.t('settings.remote.deviceUnavailable'), { exact: true }).count(), 1);
+      assert.equal(await ssh.getByText(from, { exact: false }).count(), 3);
+      assert.equal(await ssh.getByText(await ui.t('settings.remote.deviceUnavailable'), { exact: true }).count(), 2);
       await ssh.scrollIntoViewIfNeeded();
       await ui.capture('ssh-list');
       // Editing one keeps its connection read-only (main refuses such edits too).

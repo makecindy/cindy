@@ -13,13 +13,13 @@ import { SshDeviceHostRow, useSshDeviceHosts } from '../SshDeviceHostRow';
 // - Bug／规则依据：spec 决定 3、5、11（位置与内容、恢复默认、移除设备 = 撤销远程访问且确认框写明、手动公钥直接移除、
 //   添加公钥的校验错误、断开全部会话先确认再报告数量、macOS 只给指引、Linux 给可复制命令且不执行 sudo；只有 Linux
 //   且不以 root 运行时能断开被撤销设备自己的会话，其他情况确认框不承诺断开）；spec 决定 6（其它设备卡片：终端命令、
-//   连接、「添加到 SSH 远程主机」、需要更新、暂不可用）；DESIGN §11.1（失败提示说明哪项操作没完成）；
-//   engineering-conventions §8.6（变化通知期间只读一次、待读一笔）。
+//   连接、「添加到 SSH 远程主机」、需要更新、暂不可用，被对方阻断时写明对方给出的原因）；DESIGN §11.1（失败提示说明
+//   哪项操作没完成）；engineering-conventions §8.6（变化通知期间只读一次、待读一笔）。
 // - 现有覆盖缺口：新组件；主进程测试只覆盖 IPC 与状态，不覆盖哪些状态出现哪些按钮、确认框说什么。
 // - 最小失败输入：不支持的电脑仍显示开关；移除设备没有确认就撤销；不能按设备断开会话时（macOS、Linux 上以 root
 //   运行）确认框仍写会话会被断开；没断开任何会话时提示「已断开 0 个」；有会话没断开时只给 1.2 秒的成功提示；
 //   校验失败后弹窗关闭；断开会话不报告数量；连续通知触发多次读取；用户删过的主机仍显示「连接」；连接失败直接显示
-//   主进程的英文原始错误。
+//   主进程的英文原始错误；对方 Mac 关了「远程登录」或原因未知时卡片仍写「对方的 SSH 服务没有运行」。
 // - tier：unit（jsdom，宿主接口为内存 fake，单独运行约 3 秒）。各语言的真实句间空格见 sshAccessSetting.i18n.test.tsx。
 const { t, toast } = vi.hoisted(() => ({
   t: (key: string, values?: Record<string, unknown>) => (values ? `${key} ${JSON.stringify(values)}` : key),
@@ -259,6 +259,19 @@ describe('SSH on another device\'s card (this computer as controller)', () => {
       await act(async () => {});
       expect(toast.error).toHaveBeenCalledWith('settings.remoteControl.sshAccess.device.restoreFailed {"name":"Studio Cloud"}');
     }
+  });
+
+  // A device that blocks SSH says why; no reason, or one this build does not know, reads neutrally instead of guessing.
+  it.each([
+    ['SSHD_UNREACHABLE', 'SSHD_UNREACHABLE'],
+    ['REMOTE_LOGIN_OFF', 'REMOTE_LOGIN_OFF'],
+    ['AUTHORIZED_KEYS_UNSUPPORTED', 'AUTHORIZED_KEYS_UNSUPPORTED'],
+    ['PLATFORM_UNSUPPORTED', 'PLATFORM_UNSUPPORTED'],
+    ['UNKNOWN', 'UNKNOWN'],
+    [null, 'UNKNOWN'],
+  ] as const)('a device that blocks SSH with %s says so on its card', (blocked, note) => {
+    render(<SshDeviceHostRow view={view('unavailable', { reason: 'blocked', blocked })} name="Studio Cloud" onRestore={vi.fn()} />);
+    expect(screen.getByText(`settings.remoteControl.sshAccess.device.unavailable.blocked.${note}`)).toBeTruthy();
   });
 
   it('connects through the SSH host list and reads the device hosts once per notice burst', async () => {
