@@ -96,6 +96,8 @@ vi.mock('../../device-link/agentNetSharing.js', () => ({
   agentNetProviderExecutorProof: () => state.agentNetStandby && state.pair ? { ...state.pair, delegation: { id: 'test-signed' } } : null,
 }));
 vi.mock('../../device-link/providerShareHost.js', () => ({
+  // This fixture replaces common guest access; keep the service's synchronous phase callback live.
+  withProviderShareGuestAccessSnapshot: <T>(read: () => T): T => read(),
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
   ownedProviderShareGuestAccess: ownedGuestAccess,
   providerShareGuestDenial: () => state.accessDenial ?? (!ownedShareSnapshot() ? 'host-scope-stale' : !state.approved ? 'member-not-active' : null),

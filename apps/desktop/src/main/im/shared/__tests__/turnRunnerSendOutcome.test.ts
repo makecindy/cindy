@@ -147,8 +147,8 @@ vi.mock('../localMarkdownImages', () => ({
 
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
+  toCoreEngineKind: (kind: string) =>
+    kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'claude-code',
 }));
 
 vi.mock('../../messagePersistence', () => ({

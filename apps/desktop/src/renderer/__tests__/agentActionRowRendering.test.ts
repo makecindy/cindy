@@ -67,7 +67,7 @@ vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
-import { ToolPreviewHost } from '@/components/chat/ToolPreviewHost';
+import { FilePreviewLightboxProvider } from '@/components/chat/FilePreviewLightboxHost';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -101,7 +101,7 @@ it('keeps the opened Write snapshot when its chip leaves the running group', () 
     childItems: [{ kind: 'tools', key: 'tools', toolCalls: calls.slice(0, count),
       resultMap: new Map(), settledIds: new Set<string>() }],
   });
-  const stream = (count: number, key = 'task') => createElement(ToolPreviewHost, { key }, group(count));
+  const stream = (count: number, key = 'task') => createElement(FilePreviewLightboxProvider, { key }, group(count));
   const view = render(stream(5));
   const chip = screen.getByText('file-0.ts');
   fireEvent.click(chip);

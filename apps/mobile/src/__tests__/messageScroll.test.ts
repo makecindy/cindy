@@ -41,6 +41,7 @@ import {
   MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE,
   MOBILE_MVCP_SETTLE_QUIET_MS,
   resolveMobileNearBottomOnScroll,
+  shouldRepinMobileFollowOnViewportExpand,
   shouldUnpinMobileFollowOnDrag,
 } from '@/session/messageScroll';
 
@@ -406,6 +407,23 @@ describe('shouldUnpinMobileFollowOnDrag', () => {
     })).toBe(false);
   });
 
+  // 测试价值：验证 iOS 底部过滚区（offsetY > endOffset）回弹或微退不误解除跟随，
+  // 真正越过内容末端并超过死区才解除；覆盖缺口：此前仅测终点 > 起点，未测起点在过滚区，tier unit。
+  it('iOS 底部过滚区回退 / 回弹到末端 → 不解除;越过末端超过死区才解除', () => {
+    expect(shouldUnpinMobileFollowOnDrag({
+      dragging: true, dragStartOffsetY: 1245, metrics: metricsAt(1210),
+    })).toBe(false);
+    expect(shouldUnpinMobileFollowOnDrag({
+      dragging: true, dragStartOffsetY: 1245, metrics: metricsAt(1200),
+    })).toBe(false);
+    expect(shouldUnpinMobileFollowOnDrag({
+      dragging: true, dragStartOffsetY: 1245, metrics: metricsAt(1200 - MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE),
+    })).toBe(false);
+    expect(shouldUnpinMobileFollowOnDrag({
+      dragging: true, dragStartOffsetY: 1245, metrics: metricsAt(1200 - MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE - 1),
+    })).toBe(true);
+  });
+
   it('非拖动期(惯性 / 程序化滚动)→ 不解除', () => {
     expect(shouldUnpinMobileFollowOnDrag({
       dragging: false, dragStartOffsetY: 1200, metrics: metricsAt(1100),
@@ -421,6 +439,20 @@ describe('shouldUnpinMobileFollowOnDrag', () => {
       dragStartOffsetY: 40,
       metrics: { contentHeight: 600, offsetY: 0, viewportHeight: 800 },
     })).toBe(false);
+  });
+});
+
+// 测试价值：验证键盘收起等视口增大把滚动位置贴回最底端时允许恢复跟随，而刻意停在历史位置或视口缩小时不误恢复，tier unit。
+describe('shouldRepinMobileFollowOnViewportExpand', () => {
+  it.each([
+    { name: '键盘收起前微滑离底 42px，收起后贴底 → 恢复跟随', input: { previousViewportHeight: 608, nextViewportHeight: 956, contentHeight: 142106, offsetY: 141456 }, expected: true },
+    { name: '键盘收起后原生已 clamp 到新末端 (dist=0) → 恢复跟随', input: { previousViewportHeight: 608, nextViewportHeight: 956, contentHeight: 142106, offsetY: 141150 }, expected: true },
+    { name: '刻意上滑停在较早历史，收键盘后仍远离底部 → 保持解除', input: { previousViewportHeight: 608, nextViewportHeight: 956, contentHeight: 142106, offsetY: 140500 }, expected: false },
+    { name: '键盘弹起导致视口缩小 → 不恢复', input: { previousViewportHeight: 956, nextViewportHeight: 608, contentHeight: 142106, offsetY: 141150 }, expected: false },
+    { name: '视口高度未变化 → 不恢复', input: { previousViewportHeight: 956, nextViewportHeight: 956, contentHeight: 142106, offsetY: 141150 }, expected: false },
+    { name: '初始视口未知 → 不恢复', input: { previousViewportHeight: 0, nextViewportHeight: 956, contentHeight: 142106, offsetY: 141150 }, expected: false },
+  ])('$name', ({ input, expected }) => {
+    expect(shouldRepinMobileFollowOnViewportExpand(input)).toBe(expected);
   });
 });
 

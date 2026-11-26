@@ -2,6 +2,7 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
+import { isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
 import { hasReviewOwnerProcessEnded } from '../reviewer/reviewRunRecovery.js';
 
 /** One hidden row per task/process exposes every live turn to shared-userData peers. */
@@ -288,6 +289,7 @@ export interface SessionTurnLeaseTrackerDeps {
  */
 export class SessionTurnLeaseTracker {
   private readonly activeTurnIds = new Map<string, string>();
+  private readonly uncertainInsertTurnIds = new Map<string, string>();
   private readonly writes = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: SessionTurnLeaseTrackerDeps) {}
@@ -345,26 +347,25 @@ export class SessionTurnLeaseTracker {
     return this.enqueue(sessionId, async () => {
       try {
         const dbClient = this.deps.getDbClient();
-        if (
-          previousTurnId &&
-          (await replaceSessionTurnLease(dbClient, {
-            sessionId,
-            previousTurnId,
-            nextTurnId: turnId,
-            owner: this.deps.owner,
-            createdAt: this.deps.now(),
-          }))
-        ) {
-          return;
-        }
-        if (
-          await tryAcquireSessionTurnLease(dbClient, {
-            sessionId,
-            turnId,
-            owner: this.deps.owner,
-            createdAt: this.deps.now(),
-          })
-        ) {
+        const replace = (previousTurnId: string) => replaceSessionTurnLease(dbClient, {
+          sessionId,
+          previousTurnId,
+          nextTurnId: turnId,
+          owner: this.deps.owner,
+          createdAt: this.deps.now(),
+        });
+        const acquire = () => tryAcquireSessionTurnLease(dbClient, {
+          sessionId,
+          turnId,
+          owner: this.deps.owner,
+          createdAt: this.deps.now(),
+        }).catch((error: unknown) => {
+          if (isDbTransportOutcomeUnknown(error)) this.uncertainInsertTurnIds.set(sessionId, turnId);
+          throw error;
+        });
+
+        if ((previousTurnId && await replace(previousTurnId)) || await acquire()) {
+          this.uncertainInsertTurnIds.delete(sessionId);
           return;
         }
         const rows = await readPersistedSessionTurnLeases(dbClient, sessionId);
@@ -372,15 +373,23 @@ export class SessionTurnLeaseTracker {
           (row) => row.clientId === sessionTurnLeaseClientId(this.deps.owner),
         );
         if (!ownRow) throw new LeaseReplacementError('own-row-missing');
+        // Session rolls back the generation when lease acquisition fails before dispatch.
+        // A retry can re-use its exact lease if the earlier insert lost its reply.
+        if (
+          previousTurnId === undefined &&
+          this.uncertainInsertTurnIds.get(sessionId) === turnId &&
+          this.activeTurnIds.get(sessionId) === turnId &&
+          ownRow.lease?.turnId === turnId &&
+          ownRow.lease.owner.instanceId === this.deps.owner.instanceId &&
+          await replace(turnId)
+        ) {
+          this.uncertainInsertTurnIds.delete(sessionId);
+          return;
+        }
         const recovery = await this.clearRecoverableLease(dbClient, ownRow);
         if (recovery !== 'cleared') throw new LeaseReplacementError(recovery);
-        const acquired = await tryAcquireSessionTurnLease(dbClient, {
-          sessionId,
-          turnId,
-          owner: this.deps.owner,
-          createdAt: this.deps.now(),
-        });
-        if (!acquired) throw new Error('turn lease changed while it was being replaced');
+        if (!(await acquire())) throw new Error('turn lease changed while it was being replaced');
+        this.uncertainInsertTurnIds.delete(sessionId);
       } catch (error) {
         if (this.activeTurnIds.get(sessionId) === turnId) {
           this.activeTurnIds.delete(sessionId);

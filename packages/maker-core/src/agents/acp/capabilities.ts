@@ -177,5 +177,11 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     writableDirs: NOT_IMPLEMENTED,
     sessionHtmlExport: SDK_MISSING,
     manualCompact: SDK_MISSING,
+    // Host turn policies (IM groups, personal WeChat) need an agent that asks before every tool
+    // call of such a turn (`_meta.permissionGate`). Full access would approve those requests.
+    turnPermissionPolicy: {
+      supported: init.permissionGate ? SUPPORTED : SDK_MISSING,
+      unsupportedPermissionModes: ['bypassPermissions'],
+    },
   };
 }

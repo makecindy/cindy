@@ -122,6 +122,8 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /** Updates the STUN server list (e.g. when a peer official region's STUN resolves asynchronously) and queries any newly added servers. */
+  setStunServers?(servers: readonly string[]): void;
   /** Session requests to a relayed peer timed out; relay UDP may carry registrations but no data (relayUdp.ts noteStall). */
   relayStalled?(): void;
   /** The roster or the peer rule changed: a transport that mirrors the admitted peers elsewhere (the phone's engine) does it now. */
@@ -148,12 +150,22 @@ export interface TransportOptions {
   udp?: boolean;
   reprobeMs?: number;
   bindAddress?: string;
+  /** Optional fixed local UDP listening port (`1..65535`). Falls back to ephemeral port `0` if busy (`EADDRINUSE` / `EACCES`) or unset. */
+  bindPort?: number;
   stunServers?: string[];
   publicCandidatesOnly?: boolean;
   identity?: KeyObject;
   module?: WebAssembly.Module;
   tap?(datagram: Uint8Array, via: 'udp' | 'relay'): void;
   udpTraffic?: BigUint64Array;
+  /**
+   * The native engine's transport (Desktop): turn a `host:port` for STUN or relay UDP into the address to use, before the
+   * engine resolves it itself. The Desktop avoids proxies' Fake-IP answers this way (stun.ts `resolveUdpHost`), as the WASM
+   * transport does on its own; the phones pass none and the engine resolves names as before.
+   */
+  resolveUdpServer?(server: string): Promise<string>;
+  /** Optional plain-text transport lifecycle/fallback logger (no addresses, keys or payloads). */
+  onLog?(level: 'info' | 'warn', message: string): void;
 }
 /** Early stream events are bounded by the core's receive credit; do not lose them during admission. */
 export class ChannelEvents {

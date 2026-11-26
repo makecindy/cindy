@@ -389,8 +389,8 @@ import {
 } from './ImageGalleryContext';
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
-import { ToolPreviewHost } from './ToolPreviewHost';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
+import { FilePreviewLightboxProvider } from './FilePreviewLightboxHost';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
@@ -471,6 +471,8 @@ interface MessageStreamProps {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
+  /** Optional draft key when the session composer is still using its preview draft. */
+  quoteDraftKey?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
@@ -3253,6 +3255,7 @@ export function MessageStream({
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
+  quoteDraftKey,
   sessionTitle,
   agentKind,
   remoteHostId,
@@ -6868,13 +6871,16 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
+        不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
+      <FilePreviewLightboxProvider key={sessionId}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
-        <ToolPreviewHost key={sessionId}>
+        <>
           <div className="relative h-full w-full">
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <SelectionQuoteButton sessionId={sessionId} draftKey={quoteDraftKey} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -7335,8 +7341,9 @@ export function MessageStream({
                 chipSlot,
               )}
           </div>
-        </ToolPreviewHost>
+        </>
       </GhostFulfillmentContext.Provider>
+      </FilePreviewLightboxProvider>
     </ChatSessionFileProvider>
   );
 }

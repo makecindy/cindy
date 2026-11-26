@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -106,10 +107,12 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
-import { useToolPreview } from './ToolPreviewHost';
+import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
+import { useFilePreviewLightbox } from './FilePreviewLightboxHost';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
@@ -759,6 +762,12 @@ export interface AgentActionRowProps {
   onActivateOverride?: () => void;
 }
 
+type LightboxState =
+  | { kind: 'none' }
+  | { kind: 'file'; path: string; name: string }
+  | { kind: 'image'; src: string }
+  | { kind: 'payload'; payload: ToolPayloadMode };
+
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
   if (descriptor.changes.length !== 1) return 'chat.agentActionRow.verb.updated';
   switch (descriptor.changes[0].action) {
@@ -948,10 +957,17 @@ export function AgentActionRow({
   // v10:命令类工具走就地展开；Claude/Codex 文件编辑统一走 diff lightbox。
   const isInlineExpand = !isFilePathTool && !isFileChange;
 
-  const preview = useToolPreview();
+  const [lightbox, setLightbox] = useState<LightboxState>({ kind: 'none' });
   const [expanded, setExpanded] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const fileChipRef = useRef<HTMLSpanElement | null>(null);
+  // 文件预览交给会话级宿主(issue #12851):这一行随时会被重建(实时预览区收起 /
+  // 「最近 5 条」把旧行挤出 / work group 换 key),预览不能跟着行一起消失。
+  // 没有宿主的场景(单独渲染这一行)保留就地渲染的退路。
+  const previewHost = useFilePreviewLightbox();
+  const images = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  const attachments = useContext(AttachmentCollectionContext);
 
   /**
    * 行/chevron 激活时的分流:
@@ -967,7 +983,16 @@ export function AgentActionRow({
     const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
-      preview.open(<ToolPayloadLightbox payload={diffPayload} triggerRef={triggerRef} onClose={preview.close} />);
+      if (previewHost) {
+        previewHost.open({
+          kind: 'diff',
+          sessionId: fileCtx.sessionId,
+          payload: diffPayload,
+          triggerRef,
+        });
+      } else {
+        setLightbox({ kind: 'payload', payload: diffPayload });
+      }
       return;
     }
     if (isInlineExpand) {
@@ -990,10 +1015,24 @@ export function AgentActionRow({
           toLocalFileUrl(absPath),
           toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
         );
-        preview.open(<ImageLightbox src={src} onClose={preview.close} />);
+        if (previewHost) {
+          previewHost.open({ kind: 'image', sessionId: fileCtx.sessionId, src, images, scope, attachments, file: fileCtx });
+        } else {
+          setLightbox({ kind: 'image', src });
+        }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
-        preview.open(<TextLightbox filePath={absPath} fileName={basename(absPath)} triggerRef={triggerRef} onClose={preview.close} />);
+        if (previewHost) {
+          previewHost.open({
+            kind: 'document',
+            sessionId: fileCtx.sessionId,
+            filePath: absPath,
+            fileName: basename(absPath),
+            triggerRef,
+          });
+        } else {
+          setLightbox({ kind: 'file', path: absPath, name: basename(absPath) });
+        }
       }
       return;
     }
@@ -1001,6 +1040,8 @@ export function AgentActionRow({
     // 地把 JSON 塞进全屏 lightbox。
     setExpanded((prev) => !prev);
   };
+
+  const closeLightbox = () => setLightbox({ kind: 'none' });
 
   // 就地展开时要展示的 input 文本(已按 tool 名做了人类可读的格式化)。
   const inlineInputText = useMemo(
@@ -1234,7 +1275,22 @@ export function AgentActionRow({
         飞书拉图,都能被用户一眼看到,而不是埋在 tool_segment 折叠卡里。
       */}
 
-      {preview.localPreview}
+      {lightbox.kind === 'file' && (
+        <TextLightbox
+          filePath={lightbox.path}
+          fileName={lightbox.name}
+          triggerRef={triggerRef}
+          onClose={closeLightbox}
+        />
+      )}
+      {lightbox.kind === 'image' && <ImageLightbox src={lightbox.src} onClose={closeLightbox} />}
+      {lightbox.kind === 'payload' && (
+        <ToolPayloadLightbox
+          payload={lightbox.payload}
+          triggerRef={triggerRef}
+          onClose={closeLightbox}
+        />
+      )}
     </div>
   );
 }
