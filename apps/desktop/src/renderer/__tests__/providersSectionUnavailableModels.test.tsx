@@ -1477,8 +1477,8 @@ describe('ProvidersSection — 双栏管理', () => {
     const action = screen.getByText('settings.providers.detect.action');
     fireEvent.click(action.closest('button')!);
 
-    // 向导以 entry 直达 anthropic。
-    expect(screen.getByTestId('wizard-stub')).not.toBeNull();
+    // 向导以 entry 直达 anthropic。向导按需加载(打开时才载入)，等它出现。
+    expect(await screen.findByTestId('wizard-stub')).not.toBeNull();
     expect(wizardSpy).toHaveBeenCalledWith({ kind: 'builtin', providerId: 'anthropic' });
   });
 

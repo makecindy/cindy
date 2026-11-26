@@ -29,6 +29,7 @@ const GROUP_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-te
 export function BuddyModelPanel({
   defaultChain,
   onDefaultChange,
+  onDefaultRestore,
   defaultNote,
   buddies,
   onSetBuddy,
@@ -41,6 +42,8 @@ export function BuddyModelPanel({
   defaultChain: BotModelRoute[];
   /** 不传：这里不能改默认(那台电脑是旧版本)，改为显示 `defaultNote`。 */
   onDefaultChange?(chain: BotModelRoute[]): void;
+  /** 默认模型是自定义的：给「恢复默认」，回到按产品推荐自动选。 */
+  onDefaultRestore?(): void;
   defaultNote?: string;
   buddies: readonly BuddyModelPanelBuddy[];
   /** chain 为 null：改回跟随默认。 */
@@ -72,10 +75,13 @@ export function BuddyModelPanel({
           settingsRows={{
             primaryLabel: t('modelGroups.buddies.defaultLabel'),
             primaryHint: defaultNote ?? t('modelGroups.buddies.defaultHint'),
+            // 伙伴的模型常带远程电脑名，标签会把它挤到看不清；恢复按钮已说明是自定义的。
+            hideCustomizedBadge: true,
           }}
           value={defaultChain}
           disabled={disabled || !onDefaultChange}
           onChange={(chain) => { if (onDefaultChange && chain.length) onDefaultChange(chain); }}
+          {...(onDefaultChange && onDefaultRestore ? { onRestoreDefault: onDefaultRestore } : {})}
           {...editorProps}
         />
       </SettingsCard>

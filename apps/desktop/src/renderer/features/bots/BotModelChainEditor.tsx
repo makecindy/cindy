@@ -82,7 +82,8 @@ export function BotModelChainEditor({
    * 默认 `inline` 保持伙伴页等既有排法不变。
    */
   layout?: 'inline' | 'settings';
-  settingsRows?: { primaryLabel: string; primaryHint?: string; primaryLead?: ReactNode };
+  /** hideCustomizedBadge：只留恢复按钮，不显示「已自定义」(模型名较长、一行放不下时)。 */
+  settingsRows?: { primaryLabel: string; primaryHint?: string; primaryLead?: ReactNode; hideCustomizedBadge?: boolean };
   /**
    * 伙伴在另一台电脑(deviceId)上：那台电脑的模型组，随伙伴设置一起读来。选中只记下组，
    * 保存时由那台电脑按组此刻会选的来源补全具体模型(model-groups.md §6.2)。旧版本不带时不提供。
@@ -432,7 +433,7 @@ export function BotModelChainEditor({
                 <DefaultOverrideControls
                   isCustomized
                   // 「单独设置的伙伴」列表里每一行都是单独设置的：不再标「已自定义」，只留改回默认，模型名不被挤掉。
-                  showCustomizedBadge={!settingsRows.primaryLead}
+                  showCustomizedBadge={!settingsRows.primaryLead && !settingsRows.hideCustomizedBadge}
                   disabled={disabled}
                   onReset={() => {
                     if (!disabled) onRestoreDefault();

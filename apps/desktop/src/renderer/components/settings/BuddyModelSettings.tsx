@@ -4,12 +4,18 @@
  * 在这里改、保存到那台电脑，不跳到伙伴的设置页。伙伴的设置页里只留一行说明和入口。
  * 存下的形状与伙伴自己的设置相同(botModelChainPatch)。
  */
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { capabilitiesFollowingDefault, capabilitiesWithModelChain } from '@/features/bots/botModelChainPatch';
-import { setBotGlobalModelChain, useBotProfiles } from '@/features/bots/botStore';
+import {
+  isBotGlobalModelChainCustomized,
+  resetBotGlobalModelChain,
+  setBotGlobalModelChain,
+  subscribeBotGlobalModel,
+  useBotProfiles,
+} from '@/features/bots/botStore';
 import { useBotTranslation } from '@/features/bots/botPronounContext';
 import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from '@/features/bots/companionCloudPresentation';
@@ -40,6 +46,8 @@ export function BuddyModelSettings({ onOpenDevice }: { onOpenDevice?(deviceId: s
     return [...byDevice.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [cloud, rosterRemote]);
   const defaultChain = localBotSettingsTarget.useDefaultModelChain();
+  // 还没读到(null)时也给恢复入口，读失败不能把它藏起来。
+  const defaultCustomized = useSyncExternalStore(subscribeBotGlobalModel, isBotGlobalModelChainCustomized) !== false;
   const hiddenVendors = localBotSettingsTarget.useHiddenVendors();
   const failed = () => toast.error(t('modelGroups.buddies.saveFailed'));
 
@@ -49,6 +57,7 @@ export function BuddyModelSettings({ onOpenDevice }: { onOpenDevice?(deviceId: s
         <BuddyModelPanel
           defaultChain={defaultChain}
           onDefaultChange={(chain) => { void setBotGlobalModelChain(chain).catch(failed); }}
+          {...(defaultCustomized ? { onDefaultRestore: () => { void resetBotGlobalModelChain().catch(failed); } } : {})}
           buddies={roster.map((bot) => ({ id: bot.id, name: bot.name, avatar: bot, capabilities: bot.capabilities }))}
           onSetBuddy={(id, chain) => {
             const bot = roster.find((item) => item.id === id);
