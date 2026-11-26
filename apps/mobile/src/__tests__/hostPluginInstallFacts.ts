@@ -20,6 +20,20 @@ export const CONTRACT_SAMPLES = {
   unattributed: JSON.parse("{\"pluginId\":\"custom:Acme%20Team%20Plugins/weather-chip\",\"ghostId\":\"weather-chip\",\"namespace\":null,\"releaseId\":\"custom:Acme%20Team%20Plugins:weather-chip:2.1.0\",\"version\":\"2.1.0\",\"installState\":\"update-available\",\"sourceType\":\"local-market\",\"installedOperationAttribution\":\"unattributed\"}"),
   olderHost: JSON.parse("{\"pluginId\":\"custom:Acme%20Team%20Plugins/weather-chip\",\"ghostId\":\"weather-chip\",\"namespace\":null,\"releaseId\":\"custom:Acme%20Team%20Plugins:weather-chip:2.1.0\",\"version\":\"2.1.0\",\"installState\":\"update-available\",\"sourceType\":\"local-market\"}"),
 } as const;
+/**
+ * Contract V2.10, the official-market item (2026-11-26; the Host asserts the same bytes from its real
+ * `management:market-detail` projection, service-custom-sources.test.ts "produces the three-state contract samples for
+ * official and custom market items byte for byte"): before the install it carries no `namespace` (the older shape);
+ * once the root instance `_root__server-plugin` is installed it is `namespace: null`. The phone that ran the install
+ * reads `'self'` with its operation id; another phone reads `'unattributed'`.
+ */
+export const CONTRACT_OFFICIAL_SAMPLES = {
+  before: JSON.parse("{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"not-installed\",\"sourceType\":\"server\"}"),
+  own: JSON.parse("{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"namespace\":null,\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"installed\",\"sourceType\":\"server\",\"installedOperationId\":\"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58\",\"installedOperationAttribution\":\"self\"}"),
+  other: JSON.parse("{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"namespace\":null,\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"installed\",\"sourceType\":\"server\",\"installedOperationAttribution\":\"unattributed\"}"),
+} as const;
+/** The exact bytes of the official samples, for a byte-for-byte check against the contract text. */
+export const CONTRACT_OFFICIAL_SAMPLE_TEXT = { before: "{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"not-installed\",\"sourceType\":\"server\"}", own: "{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"namespace\":null,\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"installed\",\"sourceType\":\"server\",\"installedOperationId\":\"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58\",\"installedOperationAttribution\":\"self\"}", other: "{\"pluginId\":\"caaaaaaaaaaaaaaaaaaaaaaaa\",\"ghostId\":\"server-plugin\",\"namespace\":null,\"releaseId\":\"release-1\",\"version\":\"1.0.0\",\"installState\":\"installed\",\"sourceType\":\"server\",\"installedOperationAttribution\":\"unattributed\"}" } as const;
 /** The operation id in sample ①. */
 export const CONTRACT_SAMPLE_OPERATION_ID: string = CONTRACT_SAMPLES.own.installedOperationId;
 

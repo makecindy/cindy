@@ -12,7 +12,7 @@ import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/Plugi
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
 import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
 import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
-import { CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
+import { CONTRACT_OFFICIAL_SAMPLE_TEXT, CONTRACT_OFFICIAL_SAMPLES, CONTRACT_SAMPLE_OPERATION_ID, CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from './hostPluginInstallFacts';
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
@@ -2472,6 +2472,21 @@ describe('whether a finished operation opens an instance', () => {
     const parsed = parsePluginManagementDetail({ ...detail, ...sample, manifest: { ...manifest, id: 'weather-chip', version: sample.version } });
     expect(pluginOperationOpens(operation, { ghosts: [ghost], market: parsed })).toEqual(opens);
   });
+  // Contract V2.10, the official-market sample (byte for byte as the Host's real projection gives it): the item read
+  // before the install has no namespace; after it, the root instance and `namespace: null`. Through the phone's parser
+  // and decision: the phone that ran it opens the root instance; another phone cannot attribute it (②). No real-Host
+  // run backs this: these bytes are what stands in for it. Tier: unit (pure).
+  it.each([['own', { open: true, instanceKey: '_root__server-plugin' }], ['other', { open: false, reason: 'unconfirmed' }]] as const)(
+    'contract V2.10 official-market sample, read by %s', (name, opens) => {
+      expect(Object.keys(CONTRACT_OFFICIAL_SAMPLES.before)).not.toContain('namespace');
+      expect(JSON.stringify(CONTRACT_OFFICIAL_SAMPLES[name])).toBe(CONTRACT_OFFICIAL_SAMPLE_TEXT[name]);
+      const officialManifest = { ...manifest, id: 'server-plugin', version: '1.0.0' };
+      const before = parsePluginManagementDetail({ ...detail, ...CONTRACT_OFFICIAL_SAMPLES.before, manifest: officialManifest });
+      const record = parsePluginManagementDetail({ ...detail, ...CONTRACT_OFFICIAL_SAMPLES[name], manifest: officialManifest });
+      const root: ManagedPlugin = { ...plugin, instanceKey: '_root__server-plugin', namespace: null, manifest: { ...plugin.manifest, id: 'server-plugin', version: '1.0.0' } };
+      const operation = { operationId: CONTRACT_SAMPLE_OPERATION_ID, entry: 'market-install' as const, who: {}, detail: before };
+      expect(pluginOperationOpens(operation, { ghosts: [root], market: [record] })).toEqual(opens);
+    });
   // Every shape contract V2.10 lists under ② (not proven), through the phone's parser: never Open, never "older computer".
   it.each(secondShapes('operation-1'))('② %s', (_name, fields) => {
     const parsed = parsePluginManagementDetail({ ...detail, installState: 'update-available', ...fields });
