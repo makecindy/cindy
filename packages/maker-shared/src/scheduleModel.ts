@@ -5,6 +5,7 @@ import type {
   RemoteScheduleStatus,
   RemoteTimestamp,
 } from './scheduleTypes';
+import { parseAgentErrorCode } from './errorRedaction.js';
 import {
   presentationDate,
   presentationText,
@@ -235,7 +236,9 @@ export function summarizeRun(
       ? run.failureRecovered
         ? presentationText(localizer, 'session.failedScheduleNotice.actionRecovered', '这次操作的授权已失效。同一自动化后来已成功运行。')
         : presentationText(localizer, 'session.failedScheduleNotice.actionExpired', '这次操作的任务授权已失效。请查看自动化最近一次运行的结果。')
-      : error || previewText(result) || null,
+      : run.status === 'failed' && isOneTimeModelRebuildFailure(error)
+        ? presentationText(localizer, 'session.failedScheduleNotice.modelRebuildRetry', '指令未发送。请在电脑端打开自动化，选择「立即运行」重试。')
+        : error || previewText(result) || null,
     markReadLabel: canMarkRead
       ? presentationText(localizer, 'devices.automations.presentation.run.markRead', '已读')
       : null,
@@ -616,6 +619,8 @@ export interface FailedScheduleRunSnapshot {
   finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
+  /** Only set when a stored hook result confirms that the run was blocked before execution. */
+  preRunBlocked?: true;
   /** Optional on older hosts; error content is only disclosed on demand. */
   errorMsg?: string;
   /** The check script belongs to a plugin that is not installed or not enabled. */
@@ -685,6 +690,13 @@ export function scheduleRunMissingPlugin(run: {
   };
 }
 
+/** Only one-time failures carry this retry advice in the stored host diagnostic. */
+export function isOneTimeModelRebuildFailure(message?: string): boolean {
+  const detail = message?.replace(/^scheduled task auto-resume failed: /, '');
+  return !!detail?.startsWith('schedule model switch requires rebuilding the session before dispatch (model "')
+    && detail.endsWith('"). The prompt was not sent. Use Run now to retry the automation.');
+}
+
 /** Only recognize host error envelopes, not a code quoted in arbitrary script output. */
 export function isScheduleActionExpired(message?: string): boolean {
   const detail = message?.replace(/^scheduled task auto-resume failed: /, '');
@@ -704,6 +716,13 @@ export function scheduleFailureDetails(run: FailedScheduleRunSnapshot): string {
 
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  if ((!run.failureKind || run.failureKind === 'execution') && isOneTimeModelRebuildFailure(run.errorMsg)) {
+    return 'modelRebuildRetry';
+  }
+  if ((!run.failureKind || run.failureKind === 'execution') &&
+    parseAgentErrorCode(run.errorMsg ?? '')?.code === 'MODEL_CATALOG_UNCONFIRMED') {
+    return 'modelCatalogUnconfirmed';
+  }
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;

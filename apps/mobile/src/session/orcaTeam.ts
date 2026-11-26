@@ -46,6 +46,7 @@ export interface OrcaWorkerFormValue {
   role: string;
   /** 手动选择或恢复的完整路线；仅供控制端表单使用，不进入创建协议。 */
   modelSelectionExplicit?: boolean;
+  modelGroup?: { id: string; name: string };
   agent: OrcaWorkerAgentKind;
   /** null = 跟随被控端默认(该 Agent 上次新建任务的选择,回落 Lead 模型)。 */
   model: { id: string; providerId: string | null; effort: string | null; fast: boolean | 'ultrafast' } | null;
@@ -79,6 +80,7 @@ export function parseOrcaExecutionDevices(value: unknown): OrcaExecutionDeviceVi
       platform: typeof row.platform === 'string' ? row.platform : null,
       supported: row.supported === true,
       ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
+      ...(row.supportsModelGroup === true ? { supportsModelGroup: true } : {}),
     }];
   });
 }
@@ -207,6 +209,7 @@ function formWireFields(form: OrcaWorkerFormValue) {
   const model = form.model;
   return {
     ...(model ? { model: model.id } : {}),
+    ...(form.modelGroup ? { modelGroup: form.modelGroup.id } : {}),
     ...(model?.effort ? { effort: model.effort } : {}),
     // 选了具体模型就显式发送 Fast(含 false):省略会让被控端沿用 Lead / 默认的 Fast,与表单相反。
     // 「默认」模型(null)才省略,交给被控端一并解析。模型不支持 Fast 时被控端按 false 落。
@@ -369,11 +372,11 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 async function assertWorkerPermissionSupported(
   maker: MobileMakerTransport,
   agent: OrcaWorkerAgentKind,
-  placement: { executionDeviceId?: string; agentDeviceId?: string | null },
+  placement: { executionDeviceId?: string; agentDeviceId?: string | null; modelGroup?: OrcaWorkerFormValue['modelGroup'] | string },
 ): Promise<void> {
   // 权限协议位属于 Lead 宿主。远端 Worker / 远程供应商 Worker 的 Agent 可以只安装在另一台电脑上，
   // 因此用 Lead 已注册的 Agent 查询宿主能力，不要求 Lead 也安装该 Worker Agent。
-  const probeAgent = placement.executionDeviceId || typeof placement.agentDeviceId === 'string'
+  const probeAgent = placement.modelGroup || placement.executionDeviceId || typeof placement.agentDeviceId === 'string'
     ? (await maker.listAvailableAgents())[0]
     : agent;
   const capabilities = probeAgent
@@ -381,6 +384,9 @@ async function assertWorkerPermissionSupported(
     : null;
   if (capabilities?.supportsOrcaWorkerPermissionMode !== true) {
     throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support Orca Worker permission mode');
+  }
+  if (placement.modelGroup && capabilities?.supportsOrcaWorkerModelGroup !== true) {
+    throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] controlled device does not support Worker model groups');
   }
   // 旧被控端会静默丢掉 agentDeviceId，把 Worker 建在别处：表单展示后被控端降级时同样 fail-closed。
   if (placement.agentDeviceId !== undefined && capabilities?.supportsOrcaWorkerAgentDevice !== true) {

@@ -18,6 +18,9 @@ import {
   type PluginEnginePermissionMode,
   type PluginEngineView,
 } from '../../shared/pluginEngines';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
+import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 export { PLUGIN_ENGINE_DEFAULT_MODEL };
@@ -48,19 +51,7 @@ export function isSamePluginEngineChoice(
 }
 
 /** What the new-task draft remembers: which engine, which of its models and its permission mode. */
-export interface PluginEngineSelection {
-  providerId: string;
-  /** The other computer of this account that has the engine; absent = the computer the task is on. */
-  deviceId?: string;
-  modelId: string;
-  /**
-   * Kept with the engine choice, apart from the built-in Harness preferences: an engine offers only
-   * 'ask' / 'bypassPermissions', and picking one must not rewrite what Claude Code / Codex / Pi use.
-   */
-  permissionMode?: PluginEnginePermissionMode['id'];
-  /** Reasoning level chosen for the engine; kept across models that offer it (like built-in effort). */
-  effort?: PluginEngineEffort;
-}
+export type PluginEngineSelection = import('../../shared/pluginEngines').NewTaskPluginEngineSelection;
 
 /** A draft selection that can be used right now. */
 export interface ActivePluginEngine {
@@ -89,6 +80,49 @@ export function isPluginEngineSelectable(engine: PluginEngineView): boolean {
 }
 
 /**
+ * Engines shown in a model picker: engines reported unavailable (for example, plugin installed
+ * locally without signing in, or turned off in Settings → Model providers) and engines the user
+ * hid there stay out of the picker unless one is already the active choice.
+ */
+export function visiblePluginEngineChoices<T extends PluginEngineChoice>(
+  engines: readonly T[],
+  active?: { providerId: string; deviceId?: string | null } | null,
+): T[] {
+  return engines.filter((engine) =>
+    (isPluginEngineSelectable(engine) && engine.hidden !== true) || isSamePluginEngineChoice(active, engine));
+}
+
+function parseHarnessIdentity(providerId: string): { storagePart: string; harnessId: string } | null {
+  const key = pluginEngineKeyFromProviderId(providerId);
+  if (!key) return null;
+  const separator = key.lastIndexOf(':');
+  if (separator <= 0 || separator >= key.length - 1) return null;
+  return { storagePart: key.slice(0, separator), harnessId: key.slice(separator + 1) };
+}
+
+/**
+ * Whether two engine entries come from the same plugin harness across computers of the same
+ * account. Public/root (`foo` / `_root__foo`) and local (`.cindy` / GitHub release `_ns__local__foo`)
+ * installs of the same plugin id match; organization-scoped plugins match only the same org.
+ */
+export function sameInstalledPluginHarness(
+  a: Pick<PluginEngineView, 'providerId'>,
+  b: Pick<PluginEngineView, 'providerId'>,
+): boolean {
+  const left = parseHarnessIdentity(a.providerId);
+  const right = parseHarnessIdentity(b.providerId);
+  if (!left || !right || left.harnessId !== right.harnessId) return false;
+  if (left.storagePart === right.storagePart) return true;
+  const leftIdentity = parsePluginStoragePart(left.storagePart);
+  const rightIdentity = parsePluginStoragePart(right.storagePart);
+  if (!leftIdentity || !rightIdentity || leftIdentity.ghostId !== rightIdentity.ghostId) return false;
+  if (isOrganizationPluginNamespace(leftIdentity.namespace) || isOrganizationPluginNamespace(rightIdentity.namespace)) {
+    return leftIdentity.namespace === rightIdentity.namespace;
+  }
+  return true;
+}
+
+/**
  * The draft's remembered engine, if it can still start a task. A removed or unavailable engine
  * reads as "not selected", so the draft falls back to its built-in model like a removed plugin model.
  */
@@ -111,19 +145,43 @@ export function resolveActivePluginEngine(
   };
 }
 
-/**
- * The level a model of this engine runs with: the chosen one when the model offers it, else the
- * model's own default; null when the model offers none (the default entry, or no levels listed).
- */
+type PluginEngineEffortPurpose = 'new-task' | 'session';
+
+function modelDefaultEffort(model: PluginEngineModel | undefined, purpose: PluginEngineEffortPurpose): PluginEngineEffort | undefined {
+  const value = purpose === 'session' && model?.declaredDefaultEffort !== undefined
+    ? model.declaredDefaultEffort : model?.defaultEffort;
+  return isPluginEngineEffort(value) && model?.efforts?.includes(value) ? value : undefined;
+}
+
+/** A supported explicit choice wins. Existing tasks without one follow the plugin's default. */
 export function resolvePluginEngineEffort(
   engine: Pick<PluginEngineView, 'models'> | null | undefined,
   modelId: string | null | undefined,
   requested: unknown,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineEffort | null {
   const model = engine?.models.find((item) => item.id === modelId);
-  const offered = model?.efforts ?? [];
-  if (isPluginEngineEffort(requested) && offered.includes(requested)) return requested;
-  return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
+  if (isPluginEngineEffort(requested) && model?.efforts?.includes(requested)) return requested;
+  return modelDefaultEffort(model, purpose) ?? null;
+}
+
+/**
+ * Carries a supported effort from the running engine or the pending selection when reselecting
+ * that same engine and computer. A different engine uses its own launch default.
+ */
+export function resolvePluginEngineSessionSwitchEffort(
+  selection: PluginEngineSelection,
+  targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
+  running?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  pending?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+): PluginEngineEffort | undefined {
+  if (selection.effort) return selection.effort;
+  const sameEngine = isSamePluginEngineChoice(selection, running);
+  const carriedEffort = sameEngine ? running?.effort
+    : isSamePluginEngineChoice(selection, pending) ? pending?.effort : undefined;
+  return resolvePluginEngineEffort(
+    targetEngine, selection.modelId, carriedEffort, sameEngine ? 'session' : 'new-task',
+  ) ?? undefined;
 }
 
 /**
@@ -132,20 +190,26 @@ export function resolvePluginEngineEffort(
  * so the current choice is shown and can be picked again.
  */
 export function pluginEngineModelRows(
-  engine: Pick<PluginEngineView, 'models'>,
+  engine: Pick<PluginEngineView, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineModelRow[] {
-  const models: PluginEngineModelRow[] = engine.models.map((model: PluginEngineModel) => ({
-    id: model.id,
-    name: model.displayName,
-    ...(model.description ? { description: model.description } : {}),
-    isDefault: false,
-    efforts: model.efforts ?? [],
-    ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
-  }));
+  const models: PluginEngineModelRow[] = engine.models.map(model => {
+    const defaultEffort = modelDefaultEffort(model, purpose);
+    return {
+      id: model.id,
+      name: model.displayName,
+      ...(model.description ? { description: model.description } : {}),
+      isDefault: false,
+      efforts: model.efforts ?? [],
+      ...(defaultEffort ? { defaultEffort } : {}),
+    };
+  });
   const defaultRow: PluginEngineModelRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, isDefault: true, efforts: [] };
-  if (models.length === 0) return [defaultRow];
-  return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL ? [defaultRow, ...models] : models;
+  if (models.length === 0) return engine.defaultModelAllowed === false ? [] : [defaultRow];
+  return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL && engine.defaultModelAllowed !== false
+    ? [defaultRow, ...models]
+    : models;
 }
 
 /** Display name of a model of this engine; undefined for the default entry or an unknown id. */
@@ -185,7 +249,7 @@ export function pluginEnginePermissionMode(
 /**
  * Engine fields of the session row created for a plugin engine task (local-db sessions:create).
  * Main accepts `agentKind: 'acp'` only with an `acp-plugin:` providerId; `agentDeviceId` names the
- * other computer of this account that has the engine (never SSH or a shared provider).
+ * other computer of this account or received provider share that has the engine (never SSH).
  */
 export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): {
   agentKind: typeof PLUGIN_ENGINE_AGENT_KIND;
@@ -205,18 +269,67 @@ export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): 
 }
 
 /**
- * The engines other computers of this account offer, as picker choices. `catalogues` holds what
- * each computer last answered (null = not read yet or unreachable: it offers nothing for now);
- * only engines opened there for remote use and able to run are kept. Shared providers are not
- * computers of this account and never offer plugin engines.
+ * A computer or received share whose engines a picker offers. `catalogueKey` is where its engine
+ * list is cached when that differs from `deviceId` (read through the task computer under remote
+ * control); the choice still runs on `deviceId`.
+ */
+export interface PluginEngineSource {
+  deviceId: string;
+  name?: string | null;
+  catalogueKey?: string;
+}
+
+/**
+ * Under remote control the task computer (`hostDeviceId`) decides where its task's Agent may run,
+ * as for built-in models (provider-sharing.md §5.1): its other computers of this account (this one
+ * included) and the shares it received. Only shares of a plugin engine are kept; a built-in
+ * provider share offers no engine. Engine lists are read through the task computer.
+ * Nothing is offered while the task computer has not listed its sources (or cannot).
+ */
+export function controlledPluginEngineSources(
+  hostDeviceId: string | undefined,
+  locations: readonly { deviceId: string; name?: string | null; favoriteSource?: { providerId: string } }[] | undefined,
+  shareName: (deviceId: string) => string | null | undefined,
+): PluginEngineSource[] {
+  if (!hostDeviceId || !locations) return [];
+  return locations.flatMap((location) => {
+    if (location.deviceId === hostDeviceId) return [];
+    const share = isProviderShareAgentDeviceId(location.deviceId);
+    if (share && !pluginEngineKeyFromProviderId(location.favoriteSource?.providerId)) return [];
+    return [{
+      deviceId: location.deviceId,
+      // Shares read 「来自 X 的分享」 like this computer's own picker; the task computer's label is the fallback.
+      name: (share ? shareName(location.deviceId) : null) || location.name || null,
+      catalogueKey: modelCatalogKey(location.deviceId, hostDeviceId)!,
+    }];
+  });
+}
+
+/**
+ * The engines other computers of this account or received provider shares offer, as picker choices.
+ * `catalogues` holds what each computer/share last answered (null = not read yet or unreachable: it
+ * offers nothing for now); only engines opened there for remote use and with at least one permitted
+ * model are kept. The consumer computer does not need the plugin installed locally.
  */
 export function remotePluginEngineChoices(
-  devices: readonly { deviceId: string; name?: string | null }[],
+  devices: readonly PluginEngineSource[],
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>,
   displayName: (deviceId: string, name?: string | null) => string,
+  _installedEngines?: readonly Pick<PluginEngineView, 'providerId'>[],
 ): PluginEngineChoice[] {
   return devices.flatMap((device) =>
-    (catalogues.get(device.deviceId) ?? [])
-      .filter((engine) => !!pluginEngineKeyFromProviderId(engine.providerId) && isPluginEngineOfferedRemotely(engine))
-      .map((engine) => ({ ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name) })));
+    (catalogues.get(device.catalogueKey ?? device.deviceId) ?? [])
+      .filter((engine) =>
+        !!pluginEngineKeyFromProviderId(engine.providerId)
+        && isPluginEngineOfferedRemotely(engine)
+        && (engine.models.length > 0 || engine.defaultModelAllowed !== false))
+      .map((engine) => {
+        const choice: PluginEngineChoice = {
+          ...engine, deviceId: device.deviceId, deviceName: displayName(device.deviceId, device.name),
+        };
+        // Hiding an engine is its owner's choice for the pickers of tasks on that computer; an
+        // engine offered to this computer's tasks is listed here either way.
+        delete choice.hidden;
+        return choice;
+      }));
 }

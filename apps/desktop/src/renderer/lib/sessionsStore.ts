@@ -115,6 +115,7 @@ function withoutHiddenSessions(list: Session[]): Session[] {
 interface SessionSpendOverride {
   revision: number;
   totalCostUsd?: number;
+  totalCostUsdIsApproximate?: boolean;
   /** CN 构建推送只带结构化金额,与 totalCostUsd 一样需要防旧列表覆盖。 */
   totalMoney?: NonNullable<Session['totalMoney']>;
 }
@@ -551,6 +552,9 @@ function applySessionSpendOverrides(list: Session[], afterRevision: number): Ses
       override.totalCostUsd !== session.totalCostUsd
     ) {
       patch.totalCostUsd = override.totalCostUsd;
+    }
+    if (override.totalCostUsdIsApproximate !== undefined && override.totalCostUsdIsApproximate !== session.totalCostUsdIsApproximate) {
+      patch.totalCostUsdIsApproximate = override.totalCostUsdIsApproximate;
     }
     if (override.totalMoney && !sameMoney(override.totalMoney, session.totalMoney)) {
       patch.totalMoney = override.totalMoney;
@@ -1174,6 +1178,7 @@ export const sessionsStore = {
       const prev = sessionSpendOverrides.get(id);
       sessionSpendOverrides.set(id, {
         revision: sessionSpendRevision,
+        totalCostUsdIsApproximate: patch.totalCostUsdIsApproximate ?? prev?.totalCostUsdIsApproximate,
         totalCostUsd: patch.totalCostUsd ?? prev?.totalCostUsd,
         totalMoney: patch.totalMoney ?? prev?.totalMoney,
       });
@@ -1386,11 +1391,12 @@ if (typeof window !== 'undefined') {
   });
 
   window.electronAPI?.onUsageSessionSpendChanged?.(
-    ({ sessionId, totalMoney, totalCostUsd }, ownerStamp) => {
+    ({ sessionId, totalMoney, totalCostUsd, totalCostUsdIsApproximate }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       sessionsStore.patchLocal(sessionId, {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
+        ...(totalCostUsdIsApproximate !== undefined && { totalCostUsdIsApproximate }),
       });
     },
   );
@@ -1416,6 +1422,8 @@ if (typeof window !== 'undefined') {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
+      // A follow-up may have been absent from every loaded task list until its first worker committed.
+      if (patch.sideChatPromoted) refreshAfterNotification();
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;

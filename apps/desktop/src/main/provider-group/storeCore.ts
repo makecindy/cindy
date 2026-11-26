@@ -14,6 +14,7 @@ import { captureProviderManagementScope, withProviderGroupMutation } from './man
 import {
   isProviderGroupProviderId,
   normalizeProviderGroupConfig,
+  withLocalProviderGroupAccounts,
   type ProviderGroupConfig,
 } from '../../shared/providerGroup.js';
 
@@ -139,8 +140,9 @@ function notifyProviderGroupChanged(providerId: string): void {
       if (!remaining.has(device)) reshareCleanups[device] = randomUUID();
     }
     const bindingCleanups = { ...value.bindingCleanups };
-    const keep = normalized?.members.map((member) => member.key) ?? null;
-    if (keep === null || value.groups[providerId]?.members.some((member) => !keep.includes(member.key))) {
+    const keep = normalized ? withLocalProviderGroupAccounts(normalized, providerId).members.map(member => member.key) : null;
+    const previous = value.groups[providerId];
+    if (keep === null || (previous && withLocalProviderGroupAccounts(previous, providerId).members.some(member => !keep.includes(member.key)))) {
       const previousKeep = bindingCleanups[providerId]?.keepMemberKeys;
       bindingCleanups[providerId] = {
         token: randomUUID(),

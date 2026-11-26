@@ -423,7 +423,10 @@ export class GoalController {
     { boundary: TurnAccumulator; lastReason: string }
   >();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
-  private readonly firing = new Map<string, object>();
+  private readonly firing = new Map<string, {
+    sendStarted: boolean;
+    continueAfterOrdinaryTurn: boolean;
+  }>();
   /** 尚在 Session.send 派发边界内的 Goal fire；Stop 必须能取消 dispatch 前的异步 gate。 */
   private readonly goalDispatchAbortControllers = new Map<
     string,
@@ -2241,7 +2244,14 @@ export class GoalController {
     this.resetTurn(sessionId);
 
     if (shouldFire && updated?.status === 'active') {
-      this.scheduleContinuation(sessionId);
+      const firing = origin === 'other' ? this.firing.get(sessionId) : undefined;
+      if (firing && !firing.sendStarted) {
+        // This terminal invalidated the preparing dispatch's turn generation.
+        // Its replacement timer would be consumed while that dispatch still owns firing.
+        firing.continueAfterOrdinaryTurn = true;
+      } else {
+        this.scheduleContinuation(sessionId);
+      }
     } else if (waitingEntry) {
       // waiting:不 detach(listener 保留,用户轮 finalize / idle observer 才能唤醒),
       // 只排安全网重检轮;事件唤醒会把这条长 timer 换成防抖续跑。
@@ -2634,7 +2644,7 @@ export class GoalController {
       this.scheduleContinuation(sessionId);
       return;
     }
-    const firingOwner = {};
+    const firingOwner = { sendStarted: false, continueAfterOrdinaryTurn: false };
     this.firing.set(sessionId, firingOwner);
     const dispatchAbortController = new AbortController();
     this.goalDispatchAbortControllers.set(sessionId, {
@@ -2713,6 +2723,7 @@ export class GoalController {
         dispatchBoundary.userDispatchPending = false;
         this.deps.onGoalUserDispatched?.(sessionId, userDispatchAt);
       };
+      firingOwner.sendStarted = true;
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
@@ -2857,6 +2868,9 @@ export class GoalController {
       }
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
+        if (firingOwner.continueAfterOrdinaryTurn && !this.timers.has(sessionId)) {
+          this.scheduleContinuation(sessionId);
+        }
       }
     }
   }

@@ -102,7 +102,8 @@ function remoteHost(supported = true, replacing = false) {
       ...(replacing ? { purpose: 'share-replace', target: { namespace: null, sourceChanged: false, otherCopies: 0 } } : {}),
       facts: replacing ? { kind: 'update', name: snapshot.name, version: snapshot.version, previousVersion: snapshot.version,
         added: [], removed: [], unchangedCount: 1, builtinOauthClientChanged: false }
-        : { kind: 'install', name: snapshot.name, version: snapshot.version, permissions: [] },
+        : { kind: 'install', name: snapshot.name, version: snapshot.version,
+          permissions: [{ key: 'code', kind: 'code', labelKey: 'code' }] },
     } } };
     if (request.actionId === 'management:answer') outcome = request.input.confirmed ? 'succeeded' : 'cancelled';
     return { effects: [], result: { operationId, phase: outcome } };
@@ -123,6 +124,11 @@ it('installs on the chosen device with its consent receipt and never invokes loc
   expect(io.invoke.mock.calls.find(([, , [r]]) => r.actionId === 'management:begin')?.[2][0].input)
     .toMatchObject({ kind: 'install-share', expectedSnapshot: snapshot });
   expect(io.confirm).toHaveBeenCalledOnce();
+  // #12263: a linter cannot detect that this remote confirmation drops the host's origin.
+  render(<>{io.confirm.mock.calls[0][0].content}</>);
+  const sourceNotice = screen.getByText('settings.ghosts.installConsent.localFileSourceNotice');
+  const grants = screen.getByText('settings.ghosts.installConsent.grantsTitle');
+  expect(sourceNotice.compareDocumentPosition(grants) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 // A remote replacement with unchanged permissions must show state inheritance

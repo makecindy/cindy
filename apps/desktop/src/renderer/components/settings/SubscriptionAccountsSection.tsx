@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   ChartNoAxesColumn,
   CircleMinus,
   FolderOpen,
@@ -45,6 +47,7 @@ import {
 } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
 import {
+  isPluginEngineProviderIdShape,
   isUnusedDefaultAccount,
   type SubscriptionAccountCommand,
   type SubscriptionAccountView,
@@ -72,6 +75,16 @@ import {
   useMoveSubscriptionAccount,
   useSubscriptionPlacementTargets,
 } from './SubscriptionPlacement';
+import type { OpenAiGroupAccount } from '../../../shared/openAiAccountGroup';
+import { openAiGroupFailureKey } from './OpenAiAccountGroupSection';
+import { pluginEngineUsageAccount } from '../status/pluginEngineUsageAccount';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { usePluginEngineSignIn } from './PluginEngineSignIn';
+
+/** `acp-plugin:<plugin>:<engine>[~<suffix>]` → `<plugin>:<engine>`. */
+function pluginEngineKeyOf(providerId: string): string {
+  return providerId.slice('acp-plugin:'.length).replace(/~[a-z0-9]{8}$/, '');
+}
 
 function AccountResetCredits({ scope }: { scope: string }) {
   const { snapshot, refresh } = useCodexRateLimits(true, scope);
@@ -165,6 +178,7 @@ export function SubscriptionAccountsSection({
   defaultUsage,
   dashboard,
   expectAccounts = true,
+  openAiAccounts,
 }: {
   /** The provider whose accounts are listed: built-in, created or a legacy Codex connection. */
   providerId: string;
@@ -177,6 +191,7 @@ export function SubscriptionAccountsSection({
   dashboard?: { label: string; onOpen: () => void };
   /** Whether the first read is likely to list an account, so its row's space is held meanwhile. */
   expectAccounts?: boolean;
+  openAiAccounts?: readonly OpenAiGroupAccount[];
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
@@ -187,8 +202,15 @@ export function SubscriptionAccountsSection({
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState<ReadonlySet<string>>(() => new Set());
+  const activeTests = useRef(new Set<string>());
   const login = useRef<string | null>(null);
   const inFlight = useRef(false);
+  // A plugin engine provider (2026-11-23): accounts sign in through the plugin's own methods.
+  const plugin = isPluginEngineProviderIdShape(providerId);
+  const engineKey = plugin ? pluginEngineKeyOf(providerId) : null;
+  const engines = usePluginEngines(plugin);
+  const pluginSignIn = usePluginEngineSignIn();
   const epoch = useRef(0);
   const refresh = useCallback(async () => {
     const current = ++epoch.current;
@@ -213,7 +235,8 @@ export function SubscriptionAccountsSection({
     void refresh();
     // Change notifications name the account pool (kind), shared by every provider of that kind.
     const unsubscribe = window.electronAPI.subscriptionAccounts.onChanged((event) => {
-      if (event.providerId === kind) void refresh();
+      if (engineKey ? pluginEngineKeyOf(event.providerId) === engineKey && event.providerId.startsWith('acp-plugin:')
+        : event.providerId === kind) void refresh();
     });
     const focus = () => {
       void refresh();
@@ -231,8 +254,18 @@ export function SubscriptionAccountsSection({
           .command({ action: 'cancel', providerId, loginKey: login.current })
           .catch(() => {});
     };
-  }, [providerId, kind, refresh]);
-  const placementTargets = useSubscriptionPlacementTargets(kind, providerId);
+  }, [providerId, kind, engineKey, refresh]);
+  const builtinTargets = useSubscriptionPlacementTargets(plugin ? null : kind, providerId);
+  // A plugin engine's accounts move only between the providers of that engine.
+  const placementTargets = engineKey
+    ? engines.filter((engine) => (engine.accountProviderOf ?? engine.key) === engineKey && engine.providerId !== providerId)
+      .map((engine) => ({ id: engine.providerId, name: engine.name }))
+    : builtinTargets;
+  const pluginInfo = view?.pluginEngine;
+  const pluginMethods = pluginInfo?.methods ?? [];
+  /** Plugin engines ask the plugin's method (and a key) first; null = cancelled. */
+  const signInFields = async (title: string): Promise<{ methodId?: string; secret?: string } | null> =>
+    plugin ? pluginSignIn(pluginMethods, title) : {};
   const moveAccount = useMoveSubscriptionAccount(providerId, () => void refresh());
   const run = async (command: SubscriptionAccountCommand) => {
     if (inFlight.current) return;
@@ -256,7 +289,31 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const testKey = async (connectionId: string, agent: 'codex' | 'pi') => {
+    const key = `${connectionId}:${agent}`;
+    if (activeTests.current.has(key)) return;
+    activeTests.current.add(key);
+    setTesting(new Set(activeTests.current));
+    try {
+      const result = await window.electronAPI.providerGroup.command({ action: 'account-test', providerId, accountId: connectionId, agent });
+      if (!result.ok) toast.error(t(openAiGroupFailureKey(result.code)));
+    } catch {
+      toast.error(t('subscriptionAccounts.failed'));
+    } finally {
+      activeTests.current.delete(key);
+      setTesting(new Set(activeTests.current));
+      await refresh();
+    }
+  };
   const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
+  const mixed = accounts.some(account => account.apiKey);
+  const moveInOrder = (index: number, offset: number) => {
+    const ids = accounts.map(account => account.id);
+    const next = index + offset;
+    if (next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    void run({ action: 'reorder', providerId, accountIds: ids });
+  };
   // Strategy and weights only choose between accounts; a single account has nothing to balance.
   const balancing = accounts.length > 1;
   return (
@@ -277,13 +334,14 @@ export function SubscriptionAccountsSection({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* A built-in provider holds the CLI default login and is never merged away as a whole. */}
-          {providerId !== kind && accounts.length > 0 && (
+          {(openAiAccounts || ((plugin ? !!pluginInfo?.separate : providerId !== kind) && accounts.length > 0)) && (
             <MergeProviderButton
-              kind={kind}
+              {...(plugin ? { targets: placementTargets } : { kind: providerId !== kind && accounts.length > 0 ? kind : null })}
               providerId={providerId}
               providerName={providerName ?? providerId}
               disabled={busy}
               onDone={() => void refresh()}
+              openAiAccounts={openAiAccounts}
             />
           )}
           {dashboard && (
@@ -298,7 +356,7 @@ export function SubscriptionAccountsSection({
               {dashboard.label}
             </Button>
           )}
-          <Button
+          {(!plugin || pluginMethods.length > 0) && <Button
             data-settings-search-action="Add a subscription account or cancel its pending sign-in"
             variant="secondary"
             size="sm"
@@ -308,12 +366,14 @@ export function SubscriptionAccountsSection({
                 void window.electronAPI.subscriptionAccounts
                   .command({ action: 'cancel', providerId, loginKey: login.current })
                   .catch(() => toast.error(t('subscriptionAccounts.failed')));
-              else void run({ action: 'add', providerId, loginKey: crypto.randomUUID() });
+              else void signInFields(t('subscriptionAccounts.add')).then((fields) => {
+                if (fields) void run({ action: 'add', providerId, loginKey: crypto.randomUUID(), ...fields });
+              });
             }}
           >
             {busy ? <Spinner size={13} /> : <Plus size={14} />}
             {login.current ? t('settings.providers.button.cancel') : t('subscriptionAccounts.add')}
-          </Button>
+          </Button>}
         </div>
       </div>
       {failed && (
@@ -345,6 +405,7 @@ export function SubscriptionAccountsSection({
               {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
               <SegmentedControl
                 {...accountSetting.controlProps}
+                optionClassName="shrink-0"
                 aria-label={t('subscriptionAccounts.strategy')}
                 value={view.strategy === 'usage' ? 'least' : view.strategy}
                 disabled={busy}
@@ -377,19 +438,25 @@ export function SubscriptionAccountsSection({
                 const name =
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
-                const plan =
+                const plan = account.apiKey ? t('settings.providers.custom.fields.apiKey') : plugin ? account.plan :
                   kind === 'openai'
                     ? formatCodexPlanLabel(account.planType ?? account.plan)
                     : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
-                const usage = buildSubscriptionAccountUsageCard(
-                  account.usage,
-                  t,
-                  Date.now(),
-                  locale,
-                );
+                const usage = plugin
+                  ? account.usage?.plugin
+                    ? pluginEngineUsageAccount(account.usage.plugin, {
+                      title: t('quotaCard.usageTitle'), now: Date.now(), language: locale ?? 'en', t,
+                    })
+                    : null
+                  : buildSubscriptionAccountUsageCard(
+                    account.usage,
+                    t,
+                    Date.now(),
+                    locale,
+                  );
                 // As in provider groups, a usable account reports its load; other states add it.
                 const running = t('providerGroup.member.runningCount', { count: account.running });
-                const state = account.authIssue === 'claude-account-mismatch'
+                const state = account.authIssue === 'claude-account-mismatch' || account.authIssue === 'account-mismatch'
                   ? t('subscriptionAccounts.loginIdentityMismatchStatus')
                   : account.paused
                   ? t('providerGroup.member.status.paused')
@@ -421,13 +488,17 @@ export function SubscriptionAccountsSection({
                   date: new Intl.DateTimeFormat(isClassicalLocale(locale) ? modernLocaleOf(locale) : locale,
                     { dateStyle: 'medium', timeStyle: 'short' }).format(expiresAt),
                 }) : expiryText;
-                const signIn = () => void run({
-                  action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(),
+                const signIn = () => void signInFields(t('subscriptionAccounts.loginAccountAria', { name })).then((fields) => {
+                  if (fields) void run({
+                    action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(), ...fields,
+                  });
                 });
+                // An engine whose plugin only reports its one login has nothing to configure here.
+                const identityOnly = plugin && pluginMethods.length === 0;
                 const resetScope = account.codexResetProviderId ?? codexResetScope(account.id);
                 // Reset settings do not depend on a successful usage read. A replaced
                 // identity remounts the reader; ordinary running-count changes do not.
-                const resetNode = kind === 'openai' && connected ? (
+                const resetNode = !plugin && kind === 'openai' && connected && !account.apiKey ? (
                   <AccountResetCredits key={`${resetScope}:${account.identity ?? ''}`} scope={resetScope} />
                 ) : null;
                 const usageNode =
@@ -449,7 +520,7 @@ export function SubscriptionAccountsSection({
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <div
                         className={cn(
-                          'flex min-w-[180px] flex-1 items-center gap-3',
+                          'flex min-w-[min(180px,100%)] flex-1 items-center gap-3',
                           account.paused && 'opacity-60',
                         )}
                       >
@@ -482,14 +553,14 @@ export function SubscriptionAccountsSection({
                               />
                               <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
-                            {kind === 'anthropic' && connected && (
+                            {!plugin && kind === 'anthropic' && connected && (
                               <Tip text={expiryDetail}>
                                 <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
                                   {expiryText}
                                 </span>
                               </Tip>
                             )}
-                            {(account.status === 'signed-out' || (kind === 'anthropic' && connected && expiring)) && (
+                            {!identityOnly && (account.status === 'signed-out' || (!plugin && kind === 'anthropic' && connected && expiring)) && (
                               <Button
                                 data-settings-search-action="Sign in again to this subscription account"
                                 variant="secondary"
@@ -502,7 +573,7 @@ export function SubscriptionAccountsSection({
                                 {t('subscriptionAccounts.loginAgain')}
                               </Button>
                             )}
-                            {account.status === 'unavailable' && (
+                            {account.status === 'unavailable' && !account.apiKey && (
                               <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
                                 disabled={refreshing || busy} onClick={() => void refresh()}>
                                 {t('commonUi.retry')}
@@ -511,7 +582,13 @@ export function SubscriptionAccountsSection({
                           </div>
                         </div>
                       </div>
-                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+                      {!identityOnly && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+                        {mixed && view.strategy === 'order' && <div className="flex items-center gap-1">
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveUp')}
+                            disabled={busy || index === 0} onClick={() => moveInOrder(index, -1)}><ArrowUp size={14} /></Button>
+                          <Button {...accountSetting.controlProps} variant="secondary" tone="quiet" compact size="sm" aria-label={t('modelGroups.settings.moveDown')}
+                            disabled={busy || index === accounts.length - 1} onClick={() => moveInOrder(index, 1)}><ArrowDown size={14} /></Button>
+                        </div>}
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
@@ -571,7 +648,19 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        <DropdownMenu>
+                        {account.apiKey?.checks.map(check => {
+                          const connectionId = account.apiKey!.connectionId;
+                          const pending = testing.has(`${connectionId}:${check.agent}`);
+                          const test = t('settings.providers.custom.test.button');
+                          const engine = check.agent === 'pi' ? 'Pi' : 'Codex';
+                          const label = account.apiKey!.checks.length > 1 ? `${test} · ${engine}` : test;
+                          return <Button key={check.agent} data-settings-search-action="Test this pool API key on the selected engine" variant="secondary" tone="quiet" size="sm" loading={pending}
+                            aria-label={`${label} · ${name}`} disabled={pending || busy}
+                            onClick={() => void testKey(connectionId, check.agent)}>
+                            {label}
+                          </Button>;
+                        })}
+                        {account.apiKey?.connectionId !== providerId && <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
                                 closes the menu) never covers the controls wrapped above it. */}
@@ -592,7 +681,7 @@ export function SubscriptionAccountsSection({
                             </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem
+                            {!account.apiKey && <><DropdownMenuItem
                               disabled={busy || account.running > 0}
                               onSelect={signIn}
                             >
@@ -613,18 +702,18 @@ export function SubscriptionAccountsSection({
                             </DropdownMenuItem>
                             <MoveAccountMenu
                               targets={placementTargets}
-                              canTakeOut={providerId === kind || accounts.length > 1}
+                              canTakeOut={plugin ? !pluginInfo?.separate || accounts.length > 1 : providerId === kind || accounts.length > 1}
                               disabled={busy}
                               onMove={(target) => void moveAccount({ id: account.id, name }, target)}
                             />
-                            <DropdownMenuSeparator />
+                            <DropdownMenuSeparator /></>}
                             <DropdownMenuItem
                               variant="danger"
                               disabled={busy || account.running > 0}
                               onSelect={() => {
                                 void confirm({
                                   title: t('subscriptionAccounts.removeTitle', { name }),
-                                  description: t('subscriptionAccounts.removeDescription'),
+                                  description: t(account.apiKey ? 'openAiAccountGroup.removeDescription' : 'subscriptionAccounts.removeDescription'),
                                   confirmText: t('subscriptionAccounts.remove'),
                                   confirmVariant: 'destructive',
                                 }).then((ok) => {
@@ -641,9 +730,14 @@ export function SubscriptionAccountsSection({
                               {t('subscriptionAccounts.remove')}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                        </DropdownMenu>}
+                      </div>}
                     </div>
+                    {account.apiKey?.checks.flatMap(check => check.result ? [
+                      <p key={check.agent} role="status" className="mt-1 text-12 text-[var(--text-secondary)]">
+                        {check.result.ok ? t('openAiAccountGroup.testPassed') : t(openAiGroupFailureKey(check.result.code))}
+                      </p>,
+                    ] : [])}
                     {/* Usage sits under the account name (from the avatar edge when narrow, so the
                         labels keep their column); the right edge meets the row controls. */}
                     {usageNode && (

@@ -14,7 +14,7 @@
  * 每个窗口生命周期只弹一次;更新说明弹窗打开期间先不弹,关掉后再出现。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +30,7 @@ import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn'
 import { formatSidebarTime } from './lib/formatSidebarTime';
 import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { buildSessionSourceLabelMap } from './lib/sessionSourceLabel';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('interrupted-tasks-resume');
 
@@ -125,18 +126,12 @@ function TaskCheckbox({
   onChange: (checked: boolean) => void;
   ariaLabel?: string;
 }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
   return (
-    <input
-      ref={ref}
-      type="checkbox"
+    <Checkbox
       checked={checked}
+      indeterminate={indeterminate}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.checked)}
-      className="size-3.5 shrink-0 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
     />
   );
 }

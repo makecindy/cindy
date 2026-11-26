@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.",
-        "advice": "Demandez au propriétaire du coéquipier de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
+        "advice": "Demandez au propriétaire de l’ami de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
         "details": "Une fois Cindy et le réseau rétablis, renvoyez le message."
       }
     },
@@ -655,5 +655,6 @@
     "externalFormatError": "Rouvrez le lien complet du message d'origine."
   },
   "memberCount_many": "{{count}} membres",
-  "waitingForOwner": "En attente de confirmation"
+  "waitingForOwner": "En attente de confirmation",
+  "externalBadge": "Externe"
 }

@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage, turnUsageAdmission } from './usage/turnUsageAdmission.js';
 import { createXaiRateLimitPublisher } from './usage/xaiRateLimits.js';
 export { USAGE_XAI_RATE_LIMIT_CHANGED, USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED } from './usage/xaiRateLimits.js';
 /**
@@ -22,7 +23,7 @@ export { USAGE_XAI_RATE_LIMIT_CHANGED, USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED } f
  *   - maker-ipc/usage.ts: maker:usage:today(agentKind) handler 读 readAgentTodayUsage
  */
 
-import { BrowserWindow } from './usageBroadcastPorts.js';
+import { BrowserWindow, getTokenOwnerLifetime } from './usageBroadcastPorts.js';
 
 import { isTrustedAppRendererWindow } from './usageBroadcastPorts.js';
 
@@ -52,7 +53,7 @@ import {
 
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
-import { isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, type DataOwnerBroadcastScope } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -138,6 +139,7 @@ export async function recordTurnSpend(
 ): Promise<void> {
   try {
     const result = await incrementDailySpend(money, ts);
+    if (!mayRecordTurnUsage()) return;
     broadcastTodaySpend({
       day: result.day,
       money: result.money,
@@ -176,6 +178,7 @@ export async function readTodaySpend(): Promise<TodaySpendPayload> {
 export async function rebroadcastTodaySpend(ownerScope?: DataOwnerBroadcastScope): Promise<void> {
   try {
     const payload = await readTodaySpend();
+    if (!mayRecordTurnUsage()) return;
     if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
     broadcastTodaySpend(payload);
   } catch (err) {
@@ -211,7 +214,7 @@ export async function recordModelTurnUsage(
     // 任务用量是模型用量的细分:模型行没记上时不单独计入任务,排行不会超出总量。
     return;
   }
-  if (!sessionId) return;
+  if (!sessionId || !mayRecordTurnUsage()) return;
   try {
     await incrementDailySessionUsage(
       sessionId,
@@ -245,6 +248,7 @@ interface CodexTokenSnapshot {
   total: number;
 }
 
+let tokenOwnerLifetime: number | undefined;
 let codexTodaySnapshot: CodexTokenSnapshot = blankCodexSnapshot();
 
 function blankCodexSnapshot(): CodexTokenSnapshot {
@@ -276,11 +280,7 @@ export function recordCodexTurnUsage(usage: unknown): void {
   if (!usage || typeof usage !== 'object') return;
   const u = usage as CodexTurnUsage;
 
-  // 切日检测: localDayKey 与 snapshot.day 不一致 → 整体 reset 后再累加
-  const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) {
-    codexTodaySnapshot = blankCodexSnapshot();
-  }
+  const today = readCodexTodaySnapshot().day;
 
   const promptDelta = Number(u.promptTokens) || 0;
   const completionDelta = Number(u.completionTokens) || 0;
@@ -303,17 +303,17 @@ export function recordCodexTurnUsage(usage: unknown): void {
 
 /** 重新广播当前 Codex token 快照, 用于延迟模型用量写入后触发 renderer 刷新。 */
 export function rebroadcastCodexTodayUsage(): void {
-  const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) {
-    codexTodaySnapshot = blankCodexSnapshot();
-  }
-  broadcastCodexTokens(codexTodaySnapshot);
+  broadcastCodexTokens(readCodexTodaySnapshot());
 }
 
 /** Codex 今日 token 累计 (供 IPC handler / 内部消费)。renderer 拉取时也做切日兜底。 */
 function readCodexTodaySnapshot(): CodexTokenSnapshot {
   const today = localDayKey();
-  if (today !== codexTodaySnapshot.day) codexTodaySnapshot = blankCodexSnapshot();
+  const owner = getTokenOwnerLifetime();
+  if (today !== codexTodaySnapshot.day || owner !== tokenOwnerLifetime) {
+    tokenOwnerLifetime = owner;
+    codexTodaySnapshot = blankCodexSnapshot();
+  }
   return codexTodaySnapshot;
 }
 
@@ -1181,18 +1181,22 @@ function notifyUsageObservers(kind: UsageChangeKind): void {
 
 function broadcastTodaySpend(payload: TodaySpendPayload): void {
   notifyUsageObservers('spend');
+  const stamp = turnUsageAdmission.getStore() ? captureDataOwnerBroadcastScope().ownerStamp : undefined;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload);
+      if (stamp) win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload, stamp);
+      else win.webContents.send(USAGE_TODAY_SPEND_CHANGED, payload);
     }
   }
 }
 
 function broadcastCodexTokens(payload: CodexTokenSnapshot): void {
   notifyUsageObservers('tokens');
+  const stamp = turnUsageAdmission.getStore() ? captureDataOwnerBroadcastScope().ownerStamp : undefined;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload);
+      if (stamp) win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload, stamp);
+      else win.webContents.send(USAGE_TODAY_TOKENS_CHANGED, payload);
     }
   }
 }

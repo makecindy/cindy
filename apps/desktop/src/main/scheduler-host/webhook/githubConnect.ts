@@ -1,3 +1,4 @@
+import type { GithubUserGrant } from '../../git-context/githubAppAuthorization.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
@@ -6,9 +7,9 @@ import {
 
 interface ConnectDeps {
   start(input: { state: string; codeChallenge: string; redirectUri: string }): Promise<{ url: string }>;
-  complete(input: { state: string; code: string; verifier: string }): Promise<{ url: string }>;
+  complete(input: { state: string; code: string; verifier: string }): Promise<{ url: string; grant?: GithubUserGrant }>;
   isCurrent(): boolean;
-  onConnected(): void;
+  onConnected(grant?: GithubUserGrant): void | Promise<void>;
 }
 
 /** Browser authorization must return to the initiating Desktop. No server polling
@@ -41,12 +42,13 @@ export async function beginGithubConnect(deps: ConnectDeps): Promise<{ url: stri
       || url.searchParams.get('state') !== state || url.searchParams.getAll('code').length !== 1
       || !code || code.length > 512 || consumed) { fail(400); return; }
     consumed = true;
-    void deps.complete({ state, code, verifier }).then(result => {
+    void deps.complete({ state, code, verifier }).then(async result => {
       if (closed || !deps.isCurrent()) { fail(410); return; }
       const install = new URL(result.url);
       if (install.origin !== 'https://github.com' || install.username || install.password
         || !/^\/apps\/[a-z0-9-]+\/installations\/new$/.test(install.pathname)) throw new Error('GITHUB_INVALID_INSTALL_URL');
-      deps.onConnected();
+      await deps.onConnected(result.grant);
+      if (closed || !deps.isCurrent()) { fail(410); return; }
       res.writeHead(303, { Location: install.toString() });
       res.end();
     }).catch(() => { if (!res.writableEnded) fail(400); })

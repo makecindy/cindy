@@ -123,16 +123,16 @@ function GoalEditor({
           type="button"
           aria-label={t('goal.editGoal.trigger')}
           title={t('goal.editGoal.trigger')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: attention ? 'var(--error-fg)' : 'var(--text-tertiary)' }}
         >
           <SquarePen size={12} strokeWidth={2} />
         </button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <AlertDialog.Content
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框。
             event.preventDefault();
@@ -322,7 +322,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
             type="button"
             aria-label={t('goal.pause')}
             title={t('goal.pause')}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
             style={{ color: 'var(--text-tertiary)' }}
             onClick={() => {
               void goalApiFor(sessionId).pauseGoal(sessionId);
@@ -340,7 +340,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
             type="button"
             aria-label={t(waiting ? 'goal.wake' : 'goal.resume')}
             title={t(waiting ? 'goal.wake' : 'goal.resume')}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:opacity-80"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:opacity-80"
             style={{ color: 'var(--accent-cta-bg)' }}
             onClick={() => {
               void goalApiFor(sessionId).resumeGoal(sessionId);
@@ -354,7 +354,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           type="button"
           aria-label={t('goal.clear')}
           title={t('goal.clear')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: 'var(--text-tertiary)' }}
           onClick={() => {
             void goalApiFor(sessionId).clearGoal(sessionId);

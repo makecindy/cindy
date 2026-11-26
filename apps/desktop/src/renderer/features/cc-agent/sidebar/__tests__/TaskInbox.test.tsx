@@ -4,7 +4,7 @@
  * 规则：task-inbox.md；旧纯函数测试手动提交快照，漏掉组件没有更新快照。
  * 最小失败输入：悬停 A/B，完成 A，再恢复 A；unit，替代行内容与外部 store。
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
@@ -21,6 +21,7 @@ vi.mock('@/features/bots/TeammateInboxRow', () => ({ TeammateInboxRow: ({ entry 
 import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
+import { useInboxUnread } from '../useInboxUnread';
 beforeEach(() => following.clear());
 afterEach(() => { cleanup(); clearRemoteSessionActivity(); });
 // The controller still has a running flag when the host sends the unread result.
@@ -162,10 +163,11 @@ it.each([false, true])('settles an already-read open task without another data u
   expect(rows(0)).toContain('a');
 });
 
-it('keeps a held task Pending when its completion was blocked', async () => {
+it('immediately removes a held task and restores it if the remote completion is blocked', async () => {
   const a = { id: 'a', status: 'active', title: 'A' } as Session;
   following.add(a);
-  const onAction = vi.fn(async () => {});
+  let cancel!: () => void;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { cancel = resolve; }));
   const props: Parameters<typeof TaskInbox>[0] = {
     activeSessionId: 'a', sessions: [a], onAction,
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(), heldPriorityRanks: new Map([['a', 1]]) },
@@ -175,7 +177,9 @@ it('keeps a held task Pending when its completion was blocked', async () => {
   const view = render(<TaskInbox {...props} />);
   fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
-  await waitFor(() => expect(onAction).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('row')).toBeNull();
+  expect(view.container.querySelector('section > button')?.lastElementChild?.textContent).toBe('0');
+  await act(async () => cancel());
   expect(view.container.querySelector('section')?.querySelector('[data-testid="row"]')?.textContent).toBe('a');
 });
 
@@ -235,3 +239,48 @@ it('places teammate conversations with the tasks and removes a read one even whi
   expect(rows()).toEqual([['running', 'task'], [], [], []]);
 });
 
+
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the list's priority sort, so week-old unread archives sat above a task
+// archived a minute ago. Unit: real grouping; minimal input is an older unread and a newer read
+// task in both Pending and Done.
+it('orders each section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  const sessions = [
+    { id: 'old-unread', title: 'old-unread', status: 'active', lastActivityAt: at(7) },
+    { id: 'new-read', title: 'new-read', status: 'active', lastActivityAt: at(0) },
+    { id: 'old-unread-done', title: 'old-unread-done', status: 'archived', lastActivityAt: at(7) },
+    { id: 'new-read-done', title: 'new-read-done', status: 'archived', lastActivityAt: at(0) },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set(['old-unread', 'old-unread-done']) }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent)))
+    .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
+});
+
+// Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
+// A snoozed remote result wakes on time and clears on read despite the open row's held rank.
+it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
+  vi.useFakeTimers();
+  try {
+    const session = { id: 'remote', deviceLinkDeviceId: 'studio', status: 'active',
+      snoozedUntil: new Date(Date.now() + 1000).toISOString() } as Session;
+    const priority = { runningSessionIds: new Set<string>(), attentionSessionIds: new Set<string>(),
+      heldPriorityRanks: new Map([['remote', 1]]) };
+    const publish = (attention: boolean) => act(() => applyRemoteSessionActivity('studio', {
+      sessionId: 'remote', phase: 'completed', attention,
+    }));
+    const view = renderHook(() => useInboxUnread([session], [], priority, () => false));
+    publish(true);
+    expect(view.result.current.hasUnread).toBe(false);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(view.result.current.hasUnread).toBe(true);
+    publish(false);
+    expect(view.result.current.hasUnread).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});

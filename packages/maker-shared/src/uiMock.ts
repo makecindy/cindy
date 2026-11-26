@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { richAnswerText } from './richAnswer';
 import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
@@ -217,6 +218,17 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
     messages: [
       { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
       { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'visual-input-handoff',
+    title: 'Set up the Mac mail app',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: 'Finish setting up the mail app on my Mac.' },
+      { role: 'assistant', text: 'The app is asking for your account. Please type it on your phone.' },
     ],
   },
   {
@@ -646,5 +658,6 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
 function previewOf(task: UiMockTask): string {
   const last = [...task.messages].reverse().find((message) => message.role === 'assistant' || message.role === 'user');
   const text = last && 'text' in last ? last.text : task.title;
-  return text.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  const readable = last?.role === 'assistant' ? richAnswerText(text) : text;
+  return readable.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
 }

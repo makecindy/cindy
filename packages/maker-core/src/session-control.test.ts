@@ -683,11 +683,12 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
 
     stub.handle.send = vi.fn(async () => {
-      throw new TurnDispatchRejectedError('provider rejected before acceptance');
+      throw new TurnDispatchRejectedError('private upstream details', { diagnostic: 'pi-retry-history-frame-too-large' });
     });
     await expect(session.send('second')).resolves.toEqual({
       accepted: false,
       reason: 'provider-rejected-before-dispatch',
+      diagnostic: 'pi-retry-history-frame-too-large',
     });
     expect(session.getTurnGeneration()).toBe(1);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
@@ -1374,4 +1375,18 @@ describe('Session current-generation terminal observation', () => {
     await secondDone;
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 2 });
   });
+});
+
+// Session tier: an observer can reject a reservation before the provider sees it.
+it('releases a throwing reservation observer so the next Session send can start', async () => {
+  const stub = createHandle();
+  const session = createSession(stub);
+  const release = vi.fn();
+  const reserve = vi.fn().mockImplementationOnce(() => { throw new Error('reservation failed'); }).mockReturnValue(release);
+  session.setTurnLifecycleObserver({ onTurnReserved: reserve, beforeProviderStart() {}, onUndispatched() {}, onTerminal() {} });
+  try {
+    await expect(session.send('first')).rejects.toThrow('reservation failed');
+    expect(await session.send('retry')).toEqual({ accepted: true });
+    expect(release).toHaveBeenCalledWith(true);
+  } finally { await session.close(); }
 });

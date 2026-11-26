@@ -1,4 +1,9 @@
-import { EFFORT_VALUES } from '@cindy/model-providers';
+import {
+  EFFORT_VALUES,
+  effectiveSourceIdForModel,
+  type AgentKind,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -68,4 +73,40 @@ export function resolveNewMakerDraftEffort(args: {
   if (efforts.includes(preferred)) return preferred;
   if (defaultEffort && efforts.includes(defaultEffort)) return defaultEffort;
   return nearestSupportedEffort(efforts, preferred) ?? efforts[0] ?? currentEffort;
+}
+
+/** Resolve the saved local route only after both startup reads can speak for this device. */
+export function savedDraftModelIssue({
+  agent,
+  engineAvailable,
+  enginesLoaded,
+  enginesLoading,
+  model,
+  providerId,
+  providers,
+  providersLoading,
+  providersLoadFailed,
+}: {
+  agent: AgentKind;
+  engineAvailable: boolean;
+  enginesLoaded: boolean;
+  enginesLoading: boolean;
+  model: string;
+  providerId: string | null;
+  providers: ProviderView[];
+  providersLoading: boolean;
+  providersLoadFailed: boolean;
+}): 'loading' | 'checkFailed' | 'engine' | 'source' | 'model' | null {
+  if (!enginesLoaded && enginesLoading) return 'loading';
+  if (!enginesLoaded) return 'checkFailed';
+  if (!engineAvailable) return 'engine';
+  if (providersLoading) return 'loading';
+  if (providersLoadFailed) return 'checkFailed';
+  const source = providers.find((provider) => provider.id === providerId);
+  const effectiveSource = effectiveSourceIdForModel(providers, providerId, model, agent);
+  if (providerId && !effectiveSource &&
+      (!source?.connected || source.suspended || source.modelDiscoveryFailure)) return 'source';
+  if (!effectiveSource) return 'model';
+  const effectiveProvider = providers.find((provider) => provider.id === effectiveSource);
+  return effectiveProvider?.modelDiscoveryFailure ? 'source' : null;
 }

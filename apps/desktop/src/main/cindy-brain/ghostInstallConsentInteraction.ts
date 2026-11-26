@@ -16,6 +16,7 @@ import type { GhostPermissionItem } from '../../shared/ghost.js';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
+  ghostInstallSourceNoticeKey,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
 import { deviceName } from '../device-link/deviceName.js';
@@ -100,6 +101,8 @@ export function renderGhostInstallConsentText(
     lines.push(consentText(translate, 'installMeta', { version: facts.version, source }));
     lines.push(...targetLines);
     lines.push(consentText(translate, 'installDescription'));
+    const sourceNotice = ghostInstallSourceNoticeKey(request.origin, request.communityMarket);
+    if (sourceNotice) lines.push(translate(sourceNotice));
     if (facts.permissions.length === 0) {
       lines.push(consentText(translate, 'noPermissions'));
     } else {

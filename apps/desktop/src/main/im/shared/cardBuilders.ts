@@ -31,6 +31,7 @@ import { autoReviewUnavailablePromptLine, permissionPromptDescription } from './
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  isOneTimePermission,
   needsAskMultiCard,
   truncateBlock,
   truncateInline,
@@ -87,7 +88,8 @@ export interface ImCardBuilders {
   }): InteractiveCardSpec;
   buildPermissionModePickerCard(args: {
     sessionId: string;
-    agentKind: AgentKind;
+    /** 'acp' = plugin-engine task: the pick validates against that engine's own modes. */
+    agentKind: AgentKind | 'acp';
     modes: PermissionModeDescriptor[];
     currentMode: string;
   }): InteractiveCardSpec;
@@ -218,7 +220,7 @@ export function createCardBuilders(
           },
           // Auto 故障降级会标 forcePrompt：Claude 丢 permissionUpdates，
           // Codex 把 acceptForSession 收成单次 allow。展示「总是允许」等于说谎。
-          ...(!unavailable && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
+          ...(!unavailable && !isOneTimePermission(req) && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
             id: 'permission:allow:always',
             label: ui.cards.permission.btnAllowAlways,
             type: 'default' as const,

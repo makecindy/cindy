@@ -199,6 +199,37 @@ describe('packGhostDir', () => {
       expect(zip.file('assets/search.png')).not.toBeNull();
     }
   });
+  // #11918, unit: authoring uses the strict manifest reader even though an
+  // installed copy with this historical field can still serve its page.
+  it('rejects a quoted initialHeight at packaging and import but preserves an approved historical release', async () => {
+    const manifest = { ...GOOD_MANIFEST, schemaVersion: 3, slots: undefined, minCindyVersion: PLUGIN_UI_MIN_CINDY_VERSION,
+      mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'form.html', initialHeight: '240' }],
+        tools: { do_thing: { resourceUri: 'ui://form' } } } } };
+    const files = { 'ghost.json': JSON.stringify(manifest), 'form.html': '<p>Form</p>', 'main.js': '' };
+    const dir = await makeSrcDir(files);
+    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('resources[0].initialHeight') });
+
+    const archive = new JSZip();
+    for (const [name, contents] of Object.entries(files)) archive.file(name, contents);
+    const file = path.join(workDir, 'historical.cindy');
+    await fs.promises.writeFile(file, await archive.generateAsync({ type: 'nodebuffer' }));
+    const options = { getRootDir: () => path.join(workDir, 'ghosts') };
+    const manager = new GhostManager(options);
+    const reopened = new GhostManager(options);
+    try {
+      expect(await manager.install(file)).toMatchObject({ rejection: { code: 'file-invalid' } });
+      const historic = await manager.install(file, { manifestSource: 'stored-release', uiCapabilityApproved: true, initiallyEnabled: true });
+      if ('rejection' in historic) throw new Error(historic.rejection.reason);
+      expect(historic.ghost.approval.state).toBe('approved');
+      const [ghost] = reopened.list();
+      expect(ghost).toMatchObject({ enabled: true, approval: historic.ghost.approval, uiCapabilityApproved: true });
+      expect(getPluginToolUi(ghost.manifest)?.resources).toEqual([{ uri: 'ui://form', file: 'form.html' }]);
+    } finally {
+      manager.disposeNotificationIndex();
+      reopened.disposeNotificationIndex();
+    }
+  });
   it.each([null, 'xd'])('rejects author-declared namespace %s before v2 normalization', async (namespace) => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify({ ...GOOD_MANIFEST, namespace }),

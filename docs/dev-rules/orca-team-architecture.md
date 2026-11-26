@@ -224,6 +224,12 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 仅不同仓库只读主任务的仓库源分支记忆，不反写；仓库身份按 canonical baseRepo 比较。
 工具省略 `source_branch` 时，同一仓库仍取目标目录当前分支；其他仓库先读仓库记忆。
 记忆读取失败或分支不存在时退回当前检出分支；显式源分支仍严格校验提交引用。
+源分支是 origin 默认分支（`refs/remotes/origin/main` 或 `origin/main`）时，创建前与桌面新建任务
+一样先在网络预算内拉取它，拉取失败时使用本地已有的远端跟踪引用。创建和记录均使用完整远端引用。
+Orca 工具的 `origin/<branch>` 简写在校验前展开为完整远端跟踪引用。探测默认分支只决定是否拉取，
+所选远端引用缺失时创建失败。桌面新建任务保留本地分支选择，刷新只接受完整远端引用。
+工具显式指定同名本地分支时用 `refs/heads/origin/main`。面板选择、仓库记忆与当前检出
+也会补全形如 `origin/main` 的本地分支引用，保留所选分支。
 工具结果的 `worktree_source` 写明实际源分支、来源与记忆回退原因。旧 Host 缺少读取能力时，
 面板也使用当前分支，不新增远程协议或 relay 恢复行为。
 
@@ -262,7 +268,16 @@ doc rail 不走右侧栏 tab，也不做 route navigate。WorkdirBrowseRoute 的
 
 Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) => session.orcaRole === 'worker'` 识别 worker，sidebar filter 直接排除 worker，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `isOrcaWorkerSession` 与 `apps/desktop/src/renderer/features/cc-agent/CCAgentSidebarUpper.tsx` 的 `sidebarSessions` filter。worker deep link 会解析到所属 Lead 的普通 route，并通过 `?worker=` 一次性聚焦右侧栏协同 tab，见 `apps/desktop/src/renderer/lib/orcaSessionIdentity.ts` 的 `resolveSessionRoute`。
 
-Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决，只覆盖本机 Lead）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决；出错与通用等待确认只覆盖本机 Lead，提问另按下述规则跨设备汇总）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
+
+待回答问题可跨设备汇总到主任务。点击时，协同面板选择 Worker 的代理 `sessionId`，
+回答面板则展开 `executionDevice.remoteSessionId`（无运行设备时使用 Worker 自身 ID）。
+真实任务的问题状态由 `makerChatStore` 或对应设备的活动镜像提供，问题出现和清除均更新主任务提示；
+在运行设备本机查看远程 Lead 时，同样订阅真实任务的本机状态，不要求本机任务进入远程活动镜像。
+主任务自己也有问题时优先回答主任务。列表补丁中的 `orcaLeadSessionId` 与
+`orcaHasPendingQuestion` 还允许未打开聊天的控制端显示提示，兼容细则见
+[手机任务列表活动快照](protocol-compatibility/mobile-home-session-activity-snapshot.md)。
+
 
 Desktop 的「开启协同」与「创建新 Worker」共用 `CreateWorkerPopover`，表单按「让 Worker 做什么 → 首条任务 → 更多设置」
 排列（2026-11-10）。预设只决定提交的角色名和任务框里带出的内容，不改变 Agent、模型、权限或能力，逻辑在
@@ -729,6 +744,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_orca` 的
       `set_worker_runtime` 给它换路线（坑点 #6 的发送边界切换，运行设备 Worker 不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
+    - **直投派活明确失败时用户可以手动继续（2026-11-24）**：起因是一个 Worker 的直投派活撞上
+      5 小时用量上限，错误横幅既没有「重试」也没有「继续」——直投派活不经队列，明确错误（非意外中断）
+      落到无 active turn 的收尾，既不留重试记录也不标可续跑。现在同一回执（实例、轮次一致、未被用户停止、
+      队列空闲）遇到明确错误时只把投影标为 `errorCanContinue`：Desktop 与 Mobile 的横幅照常出现按钮，
+      点了发隐藏的续跑指令，不重放 Lead 的原派活，也不启动用量上限的等待续跑。
     - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
       `set_session_runtime` 登记新来源（`next_send`），`send_to_worker` 却回 `[SUBSCRIPTION_ACCOUNT_LIMITED]`：
       休眠的 Worker 在派发前先按数据库里的旧路线唤醒（`resumeWorkerSession`），撞上旧订阅的上限，登记的
@@ -804,6 +824,21 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 4. **worker 状态变更必须广播给 renderer（状态：不变量）**
    创建 worker、`enableOrca` 创建首个 worker、任意真实 worker turn 开始后的 running、idle、archive、terminal done/error 都必须广播 `ORCA_WORKER_CHANGED`。worker DB `status` 跟随真实 turn 生命周期：Lead 派活或用户直接对话 worker 时，只有真实 turn 开始才置 `running`，**产品** terminal 才置 `done/error`（auto-resume 仍 pending/deferred 的 vendor 终态不是产品终态，见消息派发与 auto-bridge 5a）；`switch_focus` / resume / restore 只能恢复可访问性，不能凭空置 `running`。实现指针：`orcaLifecycleService.ts` 的 `createWorker` / `enableTeam`、`orcaWorkerCreationService.ts` 的 `createWorkerInTeam`、`orcaTeamService.ts` 的 `dispatchWorkerTask` / `handleWorkerTurnStarted` / `handleWorkerTerminalTurn`、`register.ts` 的 status event adapter、`useWorkers.ts` 的 `useWorkers`。
+
+   Worker 的普通继续与自动续跑同样进入共同活动状态机；「不单独展示灵动岛」仅在展示层过滤，
+   不得丢弃事件或删除活动快照。`get_session_runtime`、`get_task_digest`、Lead 的活动聚合与
+   `maker:list-active` 诊断查询读取新回合的真实状态，历史 error 行保留。跨电脑通知流及重连重放仍
+   排除 Worker，避免旧控制端冒出独立卡片；远程 Worker 视图沿用任务与协同事件。错误行或空
+   agentMeta 不是已接受／已运行的证据；Stop 与切账号沿原生命周期
+   清理，不为消除旧错误而重放输入。回归见 `agent-island/__tests__/service.test.ts`、
+   `makerOrcaRoleMarking.test.ts`。
+
+   归档、结束协同或创建失败补偿在清除本机 Worker 身份前，必须先以 `discarded` 清理当前活动
+   投影；单纯 `process-closed` 会保留未读完成／错误。身份先消失会让这份活动在下一次发布时
+   变成普通任务卡片、提示音与公共通知流。统一入口是 `register.ts` 的
+   `forgetKnownOrcaWorkerSession`；不删除持久化消息或历史错误。
+   展示清理／通知刷新失败只记录诊断，不能中止 Worker 身份清理或角色落库；清理复用既有
+   best-effort close 包装，身份在 `finally` 释放；不扩大原账号、Review 与权限准入异常的捕获范围。
 
 5. **切换 session 不重置 worker 未读状态（状态：不变量）**
    worker done 的绿点由 renderer 进程级 edge-trigger attention store 维护，而不是跟随组件切换重置的局部 state。worker 状态跳变进 `done` 才标 attention；正在查看该 worker 时清除 attention；只切走 / 切回不应让同一轮 done 重新变未读。协同 tab 图标另外显示 Worker 的出错（红）与等待确认（蓝），出错取自 Worker 自己在 `sessionAttentionStore` 的 attention，等待确认取自未处理交互或任务 awaiting；多个 Worker 时按 红 > 蓝 > 绿（完成未读）取最高一档，红 / 蓝在 tab 激活时也显示，绿点仍是激活即视为看到。实现指针：`useOrcaWorkerAttentionWatcher.ts` 的 `computeWorkerAttentionUpdates`，`RolePillDropdown.tsx` 的 selected worker clear effect，`workerAttentionStore.ts` 的 `attentionWorkerIds`，`OrcaWorkersAttentionIcon.tsx` 的 `resolveOrcaWorkersTabTone`。

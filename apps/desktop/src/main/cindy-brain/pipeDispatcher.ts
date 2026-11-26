@@ -219,6 +219,8 @@ export class GhostPipeDispatcher {
     signal?: AbortSignal;
     /** Trusted Host session attribution, never accepted from plugin input. */
     sessionId?: string;
+    /** Optional live authority captured by the host for a pinned startup tool. */
+    isCurrent?: () => boolean;
     /** Host debug actions are explicitly excluded. Never exposed in plugin payloads. */
     recordUsage?: false;
     onProgress?: (progress: GhostToolProgress) => void;
@@ -263,6 +265,9 @@ export class GhostPipeDispatcher {
     }
     if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
+    }
+    if (request.isCurrent && !request.isCurrent()) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'The plugin tool authorization changed before dispatch.' };
     }
     if (this.deps.runtimeStateOf(storagePart) !== 'running') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: '插件就绪前已停止' };

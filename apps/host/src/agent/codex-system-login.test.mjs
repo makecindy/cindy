@@ -38,7 +38,12 @@ import fs from 'node:fs';
 import { configureHostOwner } from './claude-auth.mjs';
 import { createCodexLocalCliAuth } from './runtime.ts';
 import { createHostCodexSystemLogin } from './codex-system-login.ts';
-import { invalidateHostCodexLogin } from './codex-invalidation.ts';
+import { commitHostCodexDisconnectBoundary, invalidateHostCodexLogin } from './codex-invalidation.ts';
+import {
+  CODEX_USER_DISCONNECT_REASON,
+  writeInvalidatedSystemCodexAuthMarker,
+  writeUnprovenCodexAuthSuppressionMarker,
+} from '../../../desktop/src/main/maker-host/codex-auth-invalidation.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
 import { createBridgeTokenReader, createHeldLoginRefusals, createHostBridgeLoginPorts, createHostEngineLoginPorts } from './codex-runtime.ts';
 import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.ts';
@@ -664,4 +669,107 @@ test('while a desktop uses the profile, the Xiaoyuzhou recipe reads no secret an
   assert.equal(sent.length, 1);
   assert.match(sent[0], /xiaoyuzhou/i);
   assert.equal((await withRecipeHost(secrets, async () => readSecretJSON('spotify'))).access_token, 'sp-access');
+});
+
+/*
+ * 测试价值
+ * - 生产入口：createCodexLocalCliAuth 的 getState / logout 与 createHostCodexSystemLogin.reconcile。
+ * - 规则依据：docs/dev-rules/credentials-and-local-storage.md 与并存方案 A：当 profile 不被桌面占用时，
+ *   对账被 durable disconnect 或已归因服务端作废标记抑制期间仍须拆掉当前 profile 遗留的存量硬链（nlink=2 -> 1），
+ *   避免原生 Codex CLI/App 因硬链无法保存新登录；占用期间（isProfileHeld）与 unproven 标记期间一律不写不删。
+ * - 最小失败输入：codex-home/auth.json 硬链到系统登录且存在 user_disconnected / token_revoked 标记时调用 getState，
+ *   或未迁移硬链直接调用 logout。
+ * - tier：unit（临时目录真实文件链接，不读 HOME，无子进程与网络）。
+ */
+test('suppressed reconcile and explicit logout detach a legacy hardlink only when unheld and attributed', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const { root } = isolatedProfile(t, 'legacy-hardlink-owner');
+  const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
+  fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  const bytes = authJson('system-token-legacy');
+  fs.writeFileSync(systemAuth, bytes, { mode: 0o600 });
+  const systemBefore = fs.statSync(systemAuth, { bigint: true });
+
+  const makeCase = (name, heldRef) => {
+    const profileDir = path.join(root, `profile-${name}`);
+    configureHostOwner({ userDataDir: profileDir, ownerId: 'legacy-hardlink-owner' });
+    const codexHome = path.join(profileDir, 'codex-home');
+    fs.mkdirSync(codexHome, { recursive: true });
+    const localAuth = path.join(codexHome, 'auth.json');
+    fs.linkSync(systemAuth, localAuth);
+    const accounts = {
+      isCodexAccountLoginActive: () => false,
+      isCodexAccountProvider: () => false,
+      cancelCodexAccountLogin() {},
+      retireCodexAccount: async () => {},
+    };
+    const systemLogin = createHostCodexSystemLogin({
+      codexHome,
+      systemAuthPath: systemAuth,
+      loginActive: () => false,
+      isProfileHeld: () => heldRef.held,
+    });
+    const auth = createCodexLocalCliAuth(null, undefined, codexHome, accounts, undefined, {
+      systemLogin,
+      isProfileHeld: () => heldRef.held,
+    });
+    return { codexHome, localAuth, auth };
+  };
+
+  // 1. user_disconnected marker: held keeps hardlink untouched; unheld detaches it and stays disconnected.
+  const heldDisconnect = { held: true };
+  const disc = makeCase('disconnected', heldDisconnect);
+  commitHostCodexDisconnectBoundary(disc.codexHome, systemAuth);
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 2n);
+  await disc.auth.getState({ credentialMode: 'oauth-bearer' });
+  assert.equal(fs.existsSync(disc.localAuth), true, 'held read must not modify shared profile');
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 2n);
+  heldDisconnect.held = false;
+  assert.deepEqual(await disc.auth.getState({ credentialMode: 'oauth-bearer' }), {
+    authenticated: false,
+    errorReason: 'no_oauth',
+  });
+  assert.equal(fs.existsSync(disc.localAuth), false);
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 1n);
+
+  // 2. attributed server invalidation marker: held keeps hardlink; unheld getState detaches it.
+  const heldInvalidated = { held: true };
+  const inv = makeCase('invalidated', heldInvalidated);
+  assert.equal(
+    writeInvalidatedSystemCodexAuthMarker(inv.codexHome, systemAuth, 'token_revoked', inv.localAuth, 'system-shared', 'legacy-hardlink-owner'),
+    true,
+  );
+  await inv.auth.getState({ credentialMode: 'oauth-bearer' });
+  assert.equal(fs.existsSync(inv.localAuth), true);
+  heldInvalidated.held = false;
+  assert.deepEqual(await inv.auth.getState({ credentialMode: 'oauth-bearer' }), {
+    authenticated: false,
+    errorReason: 'token_revoked',
+    credentialScope: 'system-shared',
+  });
+  assert.equal(fs.existsSync(inv.localAuth), false);
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 1n);
+
+  // 3. unproven suppression marker: stays non-destructive even when unheld.
+  const unheld = { held: false };
+  const unproven = makeCase('unproven', unheld);
+  assert.equal(
+    writeUnprovenCodexAuthSuppressionMarker(unproven.codexHome, systemAuth, unproven.localAuth, 'token_revoked', 'system-shared', 'legacy-hardlink-owner'),
+    true,
+  );
+  await unproven.auth.getState({ credentialMode: 'oauth-bearer' });
+  assert.equal(fs.existsSync(unproven.localAuth), true);
+  fs.unlinkSync(unproven.localAuth);
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 1n);
+
+  // 4. explicit logout before reconcile: unlinks legacy hardlink while leaving systemAuth intact.
+  const logoutCase = makeCase('logout', unheld);
+  assert.equal(fs.statSync(systemAuth, { bigint: true }).nlink, 2n);
+  await logoutCase.auth.logout();
+  assert.equal(fs.existsSync(logoutCase.localAuth), false);
+  const systemAfter = fs.statSync(systemAuth, { bigint: true });
+  assert.equal(systemAfter.nlink, 1n);
+  assert.equal(systemAfter.ino, systemBefore.ino);
+  assert.equal(systemAfter.mtimeNs, systemBefore.mtimeNs);
+  assert.equal(fs.readFileSync(systemAuth, 'utf8'), bytes);
 });

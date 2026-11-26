@@ -20,7 +20,10 @@ export function autoReviewUnavailablePromptLine(
   request: InteractionRequest,
 ): string | null {
   if (request.kind !== 'permission') return null;
-  if (isAutoReviewUnavailableMetadata(request.metadata)) return imAutoReviewUnavailablePrompt();
+  if (isAutoReviewUnavailableMetadata(request.metadata)) {
+    return request.metadata?.autoReviewUnavailableReason === 'quota_exhausted'
+      ? imText('imBot.text.shared.retry.autoReviewQuotaExhausted') : imAutoReviewUnavailablePrompt();
+  }
   const reason = autoReviewReasonFromMetadata(request.metadata);
   return reason ? imText('imBot.text.shared.permission.autoReviewReason', { reason }) : null;
 }

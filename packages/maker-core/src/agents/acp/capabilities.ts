@@ -169,8 +169,9 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     rewind: SDK_MISSING,
     sessionTree: SDK_MISSING,
     abort: SUPPORTED,
-    // One prompt per session at a time; follow-ups wait for the next turn.
-    sameTurnSteer: SDK_MISSING,
+    // ACP v1 runs one prompt per session at a time; only agents offering the
+    // `_session/steering` extension take input into the running turn.
+    sameTurnSteer: init.steering ? SUPPORTED : SDK_MISSING,
     memory: { supported: SDK_MISSING },
     extraDirs: NOT_IMPLEMENTED,
     writableDirs: NOT_IMPLEMENTED,

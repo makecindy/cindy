@@ -2,7 +2,7 @@
  * 组内电脑的实时情况(provider-groups.md §3、§5)：可加入的电脑只列这台电脑已经能用的同一个供应商；
  * 组里每台按在线、远程调用、分享状态给出能不能用与原因。
  */
-import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareReceived, RemoteAgentCaps } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,11 @@ import { createProviderGroupDirectory, type ProviderGroupDirectoryDeps } from '.
 import { providerGroupCodexUsageSnapshot } from '../usage';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { createProviderGroupRouter } from '../router';
+import { createProviderGroupRemoteClient } from '../remoteClient';
+import { handleProviderGroupRemote } from '../remoteHandler';
+import { createProviderGroupExternalLoad } from '../externalLoad';
+import { readSharedGroupStatus, SHARED_GROUP_STATUS_TIMEOUT_MS } from '../sharedStatus';
+import type { ProviderGroupOwnerScope } from '../runtime';
 
 // Isolate the catalog reader's local preference port; never read the test runner's owner profile.
 vi.mock('../../maker-host/model-disable-store.js', () => ({
@@ -201,6 +206,43 @@ describe('listCandidates', () => {
 });
 
 describe('resolveMembers', () => {
+  // Unit regression: the settings roster and a fast member must be observable while a
+  // sibling's directory and the fast member's quota are pending. Full-view tests awaited both.
+  it('returns the roster and individual base status before slow directory and quota reads', async () => {
+    let releaseDirectory!: () => void;
+    let releaseQuota!: () => void;
+    const catalog = new Promise<void>(resolve => { releaseDirectory = resolve; });
+    const quota = new Promise<void>(resolve => { releaseQuota = resolve; });
+    const config = normalizeProviderGroupConfig({ members: [
+      { kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory(deps({
+      readDeviceProviders: async () => { await catalog; return [view('anthropic', 'Claude', { remoteInvocationEnabled: true })]; },
+      readClaudeUsage: async () => { await quota; return { updatedAt: 1_000, fiveHour: { utilization: 100 } }; },
+    }));
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true,
+      result: await handleProviderGroupRemote({
+        scope: () => ({ router, externalLoad, isCurrent: () => true }), readGroup: () => config,
+        isRemoteAllowed: () => true, now: () => 1_000, replaceReportedUsage: vi.fn(), sessionGroup: async () => null,
+      }, 'viewer', args[0]),
+    }));
+    expect(await client.view('owner', 'anthropic', { display: 'roster' }))
+      .toMatchObject({ config, rosterOnly: true, members: [] });
+    const [fast, slow] = config.members;
+    const slowRead = client.view('owner', 'anthropic', { display: { memberKey: slow.key } });
+    const enriched = client.view('owner', 'anthropic', { display: { memberKey: fast.key, details: true } });
+    expect((await client.view('owner', 'anthropic', { display: { memberKey: fast.key } })).members)
+      .toMatchObject([{ key: fast.key, state: 'available' }]);
+    releaseDirectory();
+    expect((await slowRead).members).toMatchObject([{ key: slow.key, state: 'available' }]);
+    releaseQuota();
+    expect((await enriched).members).toMatchObject([{ key: fast.key, state: 'cooling', usageLimit: { resetAtMs: null } }]);
+  });
+
   it('uses actual local and advertised device versions, including offline devices; never invents a share version', async () => {
     const directory = createProviderGroupDirectory(deps({ localAppVersion: () => '0.1.104-beta' }));
     const members: ProviderGroupConfig['members'] = [
@@ -230,6 +272,28 @@ describe('resolveMembers', () => {
     expect(readClaudeUsage).toHaveBeenCalledWith(members[1]);
     expect(result[0].claudeUsage?.fiveHour?.utilization).toBe(25);
     expect(result[4]).not.toHaveProperty('claudeUsage');
+  });
+
+  // Unit, PR #12195 review P1: created subscription providers classify as Claude/Codex, but the
+  // member computer's per-provider usage channels cannot resolve them. Minimal input: one created
+  // provider per family on a member computer; neither per-provider reader may be called.
+  it('does not read per-provider usage for providers created for subscription accounts', async () => {
+    const readClaudeUsage = vi.fn<NonNullable<ProviderGroupDirectoryDeps['readClaudeUsage']>>(async () => null);
+    const readCodexUsage = vi.fn<NonNullable<ProviderGroupDirectoryDeps['readCodexUsage']>>(async () => null);
+    const created = (id: string, family: 'anthropic' | 'openai') =>
+      view(id, id, { auth: { method: 'oauth' }, subscriptionPool: family } as unknown as Partial<ProviderView>);
+    const directory = createProviderGroupDirectory(deps({
+      readClaudeUsage, readCodexUsage,
+      readDeviceProviders: vi.fn(async () => [created('anthropic-sub-0000abcd', 'anthropic'), created('openai-sub-0000abcd', 'openai')]),
+    }));
+    const member = (providerId: string) => ({
+      key: `mini:${providerId}`, kind: 'device' as const, agentDeviceId: 'mini', providerId, limit: 4, weight: 1, paused: false,
+    });
+    const result = await directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true,
+      members: [member('anthropic-sub-0000abcd'), member('openai-sub-0000abcd')] });
+    expect(result.map(entry => entry.state)).toEqual(['ok', 'ok']);
+    expect(readClaudeUsage).not.toHaveBeenCalled();
+    expect(readCodexUsage).not.toHaveBeenCalled();
   });
 
   // Unit/privacy: OpenAI quota reads are confined to usable same-account subscriptions.
@@ -491,6 +555,92 @@ describe('resolveMembers', () => {
     });
     expect(reads).toBe(3);
   });
+});
+
+// Anonymous status must retain confirmed members when another member is slow or
+// stale (provider-groups.md §10 and the bounded-snapshot contract). Existing
+// sharedStatus tests stubbed one whole router view, hiding partial directory
+// coverage. Unit: real directory -> router -> anonymous projection, fake clocks.
+describe('anonymous status with partial member reads', () => {
+  // PR #12691 review: readProviderGroup checks the file identity synchronously.
+  // Real anonymous-status -> router -> directory entry, unit tier, in-memory
+  // local accounts: 512 unpaused members must not cause 512 store checks.
+  it('keeps configuration reads constant for a 512-member refresh', async () => {
+    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+      members: Array.from({ length: 512 }, (_, index) => ({
+        key: `local-${index}`, kind: 'local', agentDeviceId: null, providerId: 'anthropic',
+        limit: 4, weight: 1, paused: false,
+      })),
+    };
+    const readGroup = vi.fn(() => config);
+    const directory = createProviderGroupDirectory(deps({ localRunning: async () => 0 }));
+    const router = createProviderGroupRouter({ directory, readGroup,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+    const statusDeps = {
+      scope: () => ({ router, isCurrent: () => true }) as ProviderGroupOwnerScope,
+      readGroup, readCaps: vi.fn(), isIncapable: () => false,
+    };
+    expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available']);
+    expect(readGroup).toHaveBeenCalledTimes(3);
+    expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available']);
+    expect(readGroup).toHaveBeenCalledTimes(6);
+    expect(statusDeps.readCaps).not.toHaveBeenCalled();
+  });
+
+  it.each(['stale', 'expired', 'catalog-timeout', 'quota-timeout'] as const)(
+    'keeps other computers confirmed when one has %s', async (failure) => {
+      vi.useFakeTimers();
+      try {
+        let recover!: () => void;
+        const delayed = new Promise<void>((resolve) => { recover = resolve; });
+        const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [
+          { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+          ...['mini', 'other'].map((id): ProviderGroupMember => ({
+            key: `device:${id}:anthropic`, kind: 'device', agentDeviceId: id, providerId: 'anthropic', limit: 4, weight: 1, paused: false,
+          })),
+        ] };
+        const listDevices = vi.fn(async () => [device('mini'), device('other')]);
+        const readDeviceProviderCatalog = vi.fn(async (id: string) => {
+          if (id === 'other' && failure === 'catalog-timeout') await delayed;
+          return { views: [view('anthropic', 'Claude')], stale: id === 'other' && failure === 'stale',
+            remainingMs: id === 'other' && failure === 'expired' ? 0 : 60_000 };
+        });
+        const directory = createProviderGroupDirectory(deps({ listDevices, readDeviceProviderCatalog,
+          now: () => Date.now(), localRunning: async () => 0,
+          readClaudeUsage: async (member) => {
+            if (member.agentDeviceId === 'other' && failure === 'quota-timeout') await delayed;
+            return null;
+          },
+        }));
+        const router = createProviderGroupRouter({ directory, readGroup: () => config,
+          listBindings: () => ({}), isTurnRunning: () => false, now: () => Date.now(), random: () => 0 });
+        const readCaps = vi.fn(async () => ({
+          version: 1, agents: [{ kind: 'claude-code', available: true }], maxRuns: 4, uploadChunkBytes: 1024, maxPayloadBytes: 4096,
+          virtualWorkspace: true, guestRelay: true,
+        } satisfies RemoteAgentCaps));
+        const statusDeps = {
+          scope: () => ({ router, isCurrent: () => true }) as ProviderGroupOwnerScope,
+          readGroup: () => config, readCaps, isIncapable: () => false,
+        };
+        const first = readSharedGroupStatus(statusDeps, 'anthropic');
+        await vi.advanceTimersByTimeAsync(SHARED_GROUP_STATUS_TIMEOUT_MS);
+        expect(await first).toEqual(['available', 'available', 'unknown']);
+        // Per-member reads must still share the physical catalog/device reads.
+        expect(listDevices).toHaveBeenCalledTimes(1);
+        expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(2);
+        expect(readCaps).toHaveBeenCalledTimes(1);
+        if (failure === 'catalog-timeout' || failure === 'quota-timeout') {
+          recover();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(await readSharedGroupStatus(statusDeps, 'anthropic')).toEqual(['available', 'available', 'available']);
+          expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(2);
+          expect(readCaps).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe('probe (waiting for a computer to come back, §6.1)', () => {

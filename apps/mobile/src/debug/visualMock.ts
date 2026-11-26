@@ -895,7 +895,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
   if (sessionId === 'visual-teammate-process') return [
-    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
+    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -420_000),
     message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
     message(sessionId, 'fixture-note1', 'assistant', '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', -70000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
@@ -1005,6 +1005,18 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  // 代输入 in English: a Mac app asks for an account; long purpose and note exercise wrapping.
+  if (sessionId === 'visual-input-handoff') return [{ request: {
+    kind: 'input_handoff', requestId: 'visual-input-handoff-request', revision: 1, phase: 'ready',
+    purpose: 'Sign in to your mail account so the app can finish syncing your inbox',
+    note: 'Use the same account you added on your other devices.',
+    requester: 'Set up the Mac mail app',
+    source: { app: 'Mail' }, stepNumber: 1, remoteInput: true,
+    controls: [
+      { id: 'c0', kind: 'text', label: 'Email address', contentType: 'email' },
+      { id: 'c1', kind: 'text', label: 'Password', contentType: 'password' },
+    ],
+  } }];
   if (sessionId === 'visual-issue-confirm') return [{ request: {
     kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
     draft: { title: '手机无法完成问题反馈确认', type: 'bug',

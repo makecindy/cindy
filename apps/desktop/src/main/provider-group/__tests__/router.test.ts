@@ -6,7 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { RemoteAgentCaps } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
@@ -148,9 +148,37 @@ function harness(
   });
 }
 
+// Unit through router.pick: before migration neither caller may dispatch the
+// former private list. A migrated physical group is picked normally again.
+it('waits for migration before routing the same group for local and remote callers', async () => {
+  const providerId = 'anthropic';
+  let config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }], localAccountIds: ['work-key'] }, providerId)!;
+  const prepareGroup = vi.fn(async () => {});
+  const resolveMembers = vi.fn(async (_id: string, current: ProviderGroupConfig) => current.members.map(member => ({
+    member, label: member.providerId, state: 'ok' as const, view: view(member.providerId),
+  })));
+  const router = harness({}, {}, [], config, {
+    prepareGroup, readGroup: () => config,
+    directory: {
+      resolveMembers, listCandidates: async () => [], readDeviceCatalog: async () => [],
+      probe: async () => 'ok', memberLabel: member => member.providerId, invalidate() {},
+    },
+  });
+  const input = { providerId, agentKind: 'claude-code' as const, model: MODEL };
+  await expect(router.pick({ ...input, localTask: true })).resolves.toMatchObject({ kind: 'unavailable' });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'unavailable' });
+  expect(resolveMembers).not.toHaveBeenCalled();
+  prepareGroup.mockImplementation(async () => {
+    config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, providerId)!;
+  });
+  await expect(router.pick(input)).resolves.toMatchObject({ kind: 'member', member: { key: 'local' } });
+  expect(prepareGroup).toHaveBeenCalledTimes(3);
+});
+
 it('routes a shared image model only to a group member that offers it', async () => {
   const model = 'openai/gpt-image-2';
   const remote = { ...member('remote', 'device', 'remote'), providerId: 'openai-independent' };
+  const localOnly = { ...member('pool', 'device', 'pool'), providerId: 'openai-sub-12345678' };
   const local = { ...LOCAL, providerId: 'openai' };
   const directory: ProviderGroupDirectory = {
     async resolveMembers(_providerId, config) {
@@ -160,6 +188,7 @@ it('routes a shared image model only to a group member that offers it', async ()
         state: 'ok',
         view: {
           ...view(member.providerId),
+          ...(member.key === localOnly.key ? { subscriptionPool: 'openai' as const } : {}),
           imageModels: [{ id: `${member.providerId}/gpt-image-2`, name: model, disabled: member.kind === 'local' }],
         },
       }));
@@ -173,14 +202,17 @@ it('routes a shared image model only to a group member that offers it', async ()
   const router = harness({}, {}, [], undefined, {
     directory,
     readPoolScheduling: async (_member, modelId) => ({
-      version: 1, accounts: modelId === 'openai-independent/gpt-image-2' ? 1 : 0,
+      version: 1, accounts: modelId === model ? 0 : 1,
       running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
     }),
-    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, remote] }),
+    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, localOnly, remote] }),
   });
   expect(await router.pick({
     providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate',
   })).toMatchObject({ kind: 'member', member: remote });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate', exclude: new Set([remote.key]),
+  })).not.toMatchObject({ kind: 'member', member: localOnly });
 });
 
 // 2026-11-11 用户裁决：达到并发上限就不再分；没设置过上限的电脑不限制。

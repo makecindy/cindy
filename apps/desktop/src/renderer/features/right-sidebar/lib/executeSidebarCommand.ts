@@ -37,12 +37,20 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     await openPluginTaskTab(command.sessionId, command.instanceId, {
       userInitiated: command.userInitiated === true,
       ...(command.resourceViewId ? { resourceViewId: command.resourceViewId } : {}),
+      ...(command.resourceWorkingDir ? { resourceWorkingDir: command.resourceWorkingDir } : {}),
       ...(command.resourceInput ? { resourceInput: command.resourceInput } : {}),
     });
     return;
   }
   if (command.type === 'open-web-browser') {
-    await openUrlInSidebarBrowser(command.sessionId, command.url);
+    if (command.pluginPreview) {
+      await openUrlInSidebarBrowser(command.sessionId, command.url, {
+        pluginPreview: command.pluginPreview,
+        userInitiated: false,
+      });
+    } else {
+      await openUrlInSidebarBrowser(command.sessionId, command.url);
+    }
     return;
   }
   if (command.type === 'open-file-browser') {

@@ -700,13 +700,36 @@ describe('review result reading state', () => {
 // 缺口：原用例依赖已撤除的关联记录，无法覆盖无回执和正常本地迭代。
 // 最小输入：本人 API 的一个目标和一个同 ID 安装；tier: unit。
 describe('author installation projection', () => {
-  // Author detail/list projection must preserve the server-owned market reason;
-  // the previous hardcoded null erased every moderation explanation (unit).
-  it('preserves a server market reason and keeps old responses without it readable', async () => {
-    harness.list.mockResolvedValue({ plugins: [{ ...ownPlugin(), market: { ...ownPlugin().market, reason: '停止维护' } }], nextCursor: null, queriedAt: at });
-    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBe('停止维护');
+  // #11918, unit: reading an existing submission must still show its page access
+  // when the only stale field is the resource's former, untyped height hint.
+  it('shows page permissions in a stored submission with a historical height hint', async () => {
+    harness.detail.mockResolvedValue({
+      ...ownDetail(), plugin: { ...ownPlugin(), latestSubmission: submission() },
+      latestSubmissionContent: { manifest: { schemaVersion: 3, minCindyVersion: '0.1.122-beta',
+        id: 'hello', name: 'Hello', version: '1.0.0', entry: 'main.js',
+        tools: [{ name: 'open', description: 'Open' }],
+        mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'form.html', initialHeight: '240' }],
+          tools: { open: { resourceUri: 'ui://form' } } } },
+      } },
+    });
+    const { plugin } = await host.myPluginDetail('canonical-plugin');
+    expect(plugin.latestSubmission?.content?.permissions).toContainEqual(
+      expect.objectContaining({ key: 'ui:pages', detailArgs: expect.objectContaining({ pages: 'ui://form' }) }),
+    );
+  });
+  // Unit: the list projection must retain description and moderation reason from
+  // one server summary, while older projections without description stay readable.
+  it('preserves the server description and market reason in the list', async () => {
+    harness.list.mockResolvedValue({ plugins: [{
+      ...ownPlugin(), description: 'Catalog description', market: { ...ownPlugin().market, reason: '停止维护' },
+    }], nextCursor: null, queriedAt: at });
+    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0]).toMatchObject({
+      description: 'Catalog description', market: { reason: '停止维护' },
+    });
     harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });
-    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBeNull();
+    const [legacy] = (await host.listMyPlugins({ query: '', filter: 'all' })).plugins;
+    expect(legacy.market.reason).toBeNull();
+    expect(legacy.description).toBeUndefined();
   });
   async function localView() {
     harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });

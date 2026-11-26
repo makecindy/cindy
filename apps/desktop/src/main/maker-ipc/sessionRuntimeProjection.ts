@@ -48,10 +48,12 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
       return;
     }
     let baseline = baselineOverride;
+    let agentDeviceId = baseline?.agentDeviceId;
     if (!baseline) {
       const [row] = await getDbClient()
         .drizzle.select({
           agentKind: sessions.agentKind,
+          agentDeviceId: sessions.agentDeviceId,
           model: sessions.model,
           providerId: sessions.providerId,
           effort: sessions.effort,
@@ -62,6 +64,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
         .limit(1);
       // Plugin-engine tasks have no catalog runtime profile to project.
       if (!row || row.agentKind === 'acp') return;
+      agentDeviceId = row.agentDeviceId;
       baseline = {
         agentKind: dbToMakerAgentKind(row.agentKind),
         model: row.model,
@@ -72,7 +75,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
     }
     broadcastSessionPatched(
       sessionId,
-      projectSessionRuntimeControl(sessionId, baseline) as Record<string, unknown>,
+      projectSessionRuntimeControl(sessionId, baseline, agentDeviceId) as Record<string, unknown>,
     );
   };
   const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline) => {
@@ -99,6 +102,7 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
 }
 
 export interface SessionRuntimeProjectorPorts {
+  pendingWorkerQuestion?(sessionId: string): boolean | undefined;
   /** createSessionRuntimeProjection's projectScheduledPreferences. */
   projectScheduledPreferences(sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector>;
   /** Whether the task has its own runtime plugin selection (the desktop reads runtime-plugin-settings). */
@@ -116,7 +120,9 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
   const { projectScheduledPreferences } = ports;
   return (session) => {
     const runtimePluginsSelected = ports.runtimePluginsSelected(session.id);
-    if (isPluginEngineKind(session.agentKind)) return { runtimePluginsSelected };
+    const pending = ports.pendingWorkerQuestion?.(session.id);
+    const status = { runtimePluginsSelected, ...(pending === undefined ? {} : { orcaHasPendingQuestion: pending }) };
+    if (isPluginEngineKind(session.agentKind)) return status;
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
     const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
       agentKind: dbToMakerAgentKind(session.agentKind),
@@ -124,8 +130,8 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
       providerId: session.providerId?.trim() || null,
       effort: session.effort as SessionRuntimeProfile['effort'],
       fastMode: session.fastMode,
-    });
-    return { ...projection, runtimePluginsSelected };
+    }, session.agentDeviceId);
+    return { ...projection, ...status };
   };
 }
 
@@ -134,6 +140,7 @@ export interface SessionRuntimeCleanupPorts {
   cancelPendingRemoteStart(sessionId: string): void;
   /** The working-directory recovery's memory of the task (workingDirectoryRecovery.discard). */
   discardWorkingDirectoryRecovery(sessionId: string): void;
+  clearDeferredCredentialSelection(sessionId: string): void;
   /** createSessionRuntimeProjection's broadcastSessionRuntimeProjection. */
   broadcastSessionRuntimeProjection(sessionId: string): Promise<void>;
   log: { debug(message: string, context?: Record<string, unknown>): void };
@@ -150,6 +157,7 @@ export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): 
     // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
     cancelPendingRemoteStart(sessionId);
     ports.discardWorkingDirectoryRecovery(sessionId);
+    ports.clearDeferredCredentialSelection(sessionId);
     clearSessionRuntimeControlState(sessionId);
     clearSessionProvider(sessionId);
     setSessionEffort(sessionId, null);

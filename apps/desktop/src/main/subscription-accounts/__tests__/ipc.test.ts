@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
+  placementChecks: vi.fn(),
+  apiMembers: {} as Record<string, { id: string; connectionId: string; providerId: string }>,
+  apiChecks: vi.fn(),
   placementUnreadable: false,
   poolUnreadable: false,
   placementWriteFails: false,
@@ -56,7 +59,9 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ warn: h.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() }) },
 }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
-  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-upgrade-split-repairs'
+  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-api-key-members'
+    ? { invalidateIfChanged: h.apiChecks, read: () => ({ members: h.apiMembers }) }
+    : options.label === 'subscription-upgrade-split-repairs'
     ? {
         invalidateIfChanged: () => {},
         isUnreadable: () => false,
@@ -68,7 +73,7 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
       }
     : options.label === 'subscription-account-placement'
     ? {
-        invalidateIfChanged: () => {},
+        invalidateIfChanged: h.placementChecks,
         isUnreadable: () => h.placementUnreadable,
         read: () => ({ accounts: h.placement, providers: h.created, strategies: {} }),
         updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
@@ -79,7 +84,9 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
           if (next.providers) h.created = next.providers;
         },
       }
-    : {
+    : options.label === 'subscription-api-key-members'
+      ? { invalidateIfChanged: () => {}, read: () => ({ members: {}, order: {} }) }
+      : {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.poolUnreadable,
         read: () => ({ bindings: h.bindings, pools: h.pools }),
@@ -129,6 +136,8 @@ import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccount
 import {
   normalizePlacementFile,
   accountProviderId,
+  providerAccounts,
+  accountSiblings,
   createSubscriptionProvider,
   placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
@@ -177,6 +186,7 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.remoteModels = null;
   h.placement = {};
+  h.apiMembers = {};
   h.created = {};
   h.placementUnreadable = false;
   h.poolUnreadable = false;
@@ -548,6 +558,13 @@ describe('subscription management boundary', () => {
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
   });
 
+  // A saved row can move or disappear between displaying it and clicking Sign in.
+  it('reports a missing sign-in target separately from CLI or network errors', async () => {
+    h.execute.mockRejectedValue(new Error('Account not found'));
+    await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'stale' }))
+      .rejects.toThrow('[NOT_FOUND]');
+  });
+
   // 2026-11-18 user report, unit: an unreachable account service reached the renderer as the
   // generic "check the CLI login" error and left no cause in the log. Minimal input: the command
   // rejects with the classified network failure, or with an unknown error carrying file text.
@@ -693,4 +710,39 @@ describe('subscription management boundary', () => {
       invoke({ action: 'add', providerId: 'openai', loginKey: 'login' }),
     ).rejects.toThrow('[SUBSCRIPTION_LOGIN_CANCELLED]');
   });
+});
+
+// Unit: production batch selection must refresh placement once, not once per account.
+// Incident: synchronous placement metadata amplification; existing move tests never counted checks.
+// Minimal input: two accounts, then a replaced owner/config image on the next independent batch.
+it.each(['provider', 'siblings'] as const)('checks one placement image per %s batch and observes replacement', mode => {
+  const accounts = [{ id: 'default' }, { id: 'other' }];
+  h.placement = { 'openai:default': 'target', 'openai:other': 'openai' };
+  const select = () => mode === 'provider'
+    ? providerAccounts('openai', accounts, 'target') : accountSiblings('openai', accounts, 'default');
+  h.placementChecks.mockClear();
+  expect(select()).toEqual([accounts[0]]);
+  expect(h.placementChecks).toHaveBeenCalledTimes(1);
+  h.placement = { 'openai:default': 'target', 'openai:other': 'target' };
+  h.generation++;
+  expect(select()).toEqual(accounts);
+  expect(h.placementChecks).toHaveBeenCalledTimes(2);
+});
+
+// Unit: after upstream API-key pools join placement, mixed native/key batch selection
+// must agree with direct ownership without checking the membership file per account.
+it.each(['provider', 'siblings'] as const)('preserves API-key ownership in one %s batch snapshot', mode => {
+  const accounts = [{ id: 'default' }, { id: 'key-a' }, { id: 'key-b' }];
+  h.placement = { 'openai:default': 'target', 'openai:key-a': 'stale' };
+  h.apiMembers = { a: { id: 'key-a', connectionId: 'a', providerId: 'target' },
+    b: { id: 'key-b', connectionId: 'b', providerId: 'elsewhere' } };
+  h.apiChecks.mockClear(); h.placementChecks.mockClear();
+  const select = () => mode === 'provider' ? providerAccounts('openai', accounts, 'target')
+    : accountSiblings('openai', accounts, 'key-a');
+  expect(select()).toEqual(accounts.slice(0, 2));
+  expect(h.apiChecks).toHaveBeenCalledTimes(1);
+  expect(h.placementChecks).toHaveBeenCalledTimes(1);
+  h.apiMembers.b.providerId = 'target';
+  expect(select()).toEqual(accounts);
+  expect(h.apiChecks).toHaveBeenCalledTimes(2);
 });

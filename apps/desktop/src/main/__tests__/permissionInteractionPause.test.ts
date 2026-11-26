@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from '../maker-ipc/sharedPermission';
+import { schedulePendingInteractionTimeout } from '../maker-ipc/interactionTimeout';
 import { beginInteractionRoute, installDesktopInteractionHandler, type InteractionHandler, type InteractionSession } from '../maker-ipc/interactionRouter';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setSharedTaskInteractionReader, type SharedTaskPeerCapture } from '../device-link/sharedTaskDispatch.js';
 
@@ -10,7 +11,7 @@ import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setS
 const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('register.ts', source, ts.ScriptTarget.ES2022, true);
 const names = new Set([
-  'installDesktopInteractionListener', 'clearPendingInteraction',
+  'installDesktopInteractionListener', 'clearPendingInteraction', 'publishWorkerQuestionState', 'hasPendingWorkerQuestion',
   'schedulePendingPermissionTimeout',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
@@ -54,6 +55,7 @@ function harness() {
     isExecutionPaused: (id: string) => held.has(id),
     setExecutionPaused: (id: string, value: boolean) => { if (value) held.add(id); else held.delete(id); },
     onInteractionResolved: vi.fn(),
+    onBotCapabilityRefreshReady: vi.fn(),
   };
   const listeners = new Map<string, InteractionResolver>();
   const entries = new Map();
@@ -68,8 +70,10 @@ function harness() {
     assertResolveInteractionOrigin: vi.fn(), isPendingDesktopOnlyConfirmation: () => false,
     issueConfirmBridge: { pendingSnapshots: () => [] },
     pendingInteractionResolvers: entries,
+    isKnownOrcaWorkerSession: (id: string) => id === 'worker',
+    broadcastSessionPatched: vi.fn(),
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
-    PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
+    schedulePendingInteractionTimeout,
     installDesktopInteractionHandler,
     shouldNotifyAgentIslandForSession: () => false,
     flushAssistantBlock: vi.fn(), onInteractionMessage: vi.fn(),
@@ -101,11 +105,24 @@ function harness() {
     void promise.then(settled);
     return { promise, settled, lease };
   };
-  return { ...runtime, request, entries, dismiss, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
+  return { ...runtime, request, entries, dismiss, patch: deps.broadcastSessionPatched, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
 afterEach(() => { setSharedTaskInteractionReader(null); vi.clearAllTimers(); vi.useRealTimers(); });
+
+it('publishes the Worker list badge with Island disabled until its last question is answered', async () => {
+  const h = harness();
+  const a = h.request('a', 'worker', 'ask_user_question');
+  const b = h.request('b', 'worker', 'ask_user_question');
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: true });
+  const answer = { kind: 'ask_user_question', answers: { choice: 'yes' } } as const;
+  h.answer('a', answer);
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: true });
+  h.answer('b', answer);
+  expect(h.patch).toHaveBeenLastCalledWith('worker', { orcaHasPendingQuestion: false });
+  await Promise.all([a.promise, b.promise]);
+});
 
 it('does not consume the pending decision when membership is revoked after dispatch admission', async () => {
   const h = harness();

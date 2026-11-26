@@ -516,6 +516,7 @@ export function SessionContentHeader({
         (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmDelete.dirtyWorktreeWarning') : ''),
       confirmText: t('ccAgent.sidebar.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
     const visibleSessionIds = getVisibleSidebarSessionIds();
@@ -533,6 +534,7 @@ export function SessionContentHeader({
     await runSessionAction(session.id, 'delete', {
       activeSessionId: session.id,
       deleteRedirectRoute,
+      deleteTarget: session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined,
     });
   }, [
     confirmDialog,
@@ -540,6 +542,8 @@ export function SessionContentHeader({
     routeSessionById,
     runSessionAction,
     session.id,
+    session.sideChatPromoted,
+    session.source,
     showRemoteWriteBlockedToast,
     t,
   ]);
@@ -548,7 +552,7 @@ export function SessionContentHeader({
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
-      {session.source === 'side-chat' && session.parentSessionId && (
+      {!session.sideChatPromoted && session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
             aria-label={t('chat.sideChat.returnMain')}
@@ -676,7 +680,7 @@ export function SessionContentHeader({
               <button
                 ref={menuTriggerRef}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--cmd-palette-item-meta)] transition-colors',
                   'hover:bg-titlebar-button-hover hover:text-foreground',
                   'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
