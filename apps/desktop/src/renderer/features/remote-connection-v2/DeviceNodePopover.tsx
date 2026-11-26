@@ -16,7 +16,6 @@ import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
 import { ArrowUpCircle, Check, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -43,8 +42,8 @@ import {
   type PeerUpdateConfirmTarget,
   type PeerUpdateEntry,
 } from './peerAppUpdate';
-import { AutoRouteInfoButton } from './AutoRouteInfoButton';
 import { PlatformGlyph } from './PlatformGlyph';
+import { RouteChoicePanel } from './RouteChoicePanel';
 import type { TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
@@ -103,45 +102,6 @@ function ConnectionRow({ node }: { node: TopologyNode }) {
         {transport ? <span className="shrink-0 text-[var(--text-secondary)]">· {transport}</span> : null}
       </span>
     </Row>
-  );
-}
-
-function RouteOptionRow({
-  active,
-  label,
-  rttText,
-  available,
-}: {
-  active: boolean;
-  label: string;
-  rttText: string;
-  available: boolean;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-12 leading-[1.35]">
-      <span className={cn('flex min-w-0 items-start gap-2', active ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
-        <span
-          className={cn(
-            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
-            active ? 'bg-[var(--status-success)]' : 'border border-[var(--border-default)]',
-          )}
-          aria-hidden
-        />
-        <span className="min-w-0 break-words">{label}</span>
-      </span>
-      <span
-        className={cn(
-          'shrink-0 tabular-nums',
-          active
-            ? 'font-medium text-[var(--text-primary)]'
-            : available
-              ? 'text-[var(--text-secondary)]'
-              : 'text-[var(--text-tertiary)]',
-        )}
-      >
-        {rttText}
-      </span>
-    </div>
   );
 }
 
@@ -448,7 +408,6 @@ export function DeviceNodePopover({
     node.path !== null;
   const directRttMs = node.directRttMs ?? (node.path === 'direct' ? node.rttMs : null);
   const relayRttMs = node.relayRttMs ?? (node.path === 'relay' ? node.rttMs : null);
-  const directSelectable = directRttMs !== null || node.path === 'direct' || selectedPref === 'direct';
   const sub = [
     node.modelLabel,
     platformLabel(node.platform),
@@ -535,63 +494,31 @@ export function DeviceNodePopover({
         ) : null}
       </div>
       {showRoutePanel ? (
-        <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1 text-11 font-medium text-[var(--text-tertiary)]">
-              <span>{t('settings.remoteControl.v2.popover.routePreference')}</span>
-              {onPathPreferenceChange ? <AutoRouteInfoButton /> : null}
-            </span>
-            <span className="text-11 text-[var(--text-tertiary)]">
-              {t('settings.remoteControl.v2.popover.rttNote')}
-            </span>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <RouteOptionRow
-              active={node.path === 'direct'}
-              label={t('settings.remoteControl.v2.path.direct')}
-              rttText={directRttMs !== null ? formatRtt(directRttMs, t) : t('settings.remoteControl.v2.popover.routeUnavailable')}
-              available={directRttMs !== null}
-            />
-            <RouteOptionRow
-              active={node.path === 'relay'}
-              label={t('settings.remoteControl.v2.path.relay', { name: relayName })}
-              rttText={relayRttMs !== null ? formatRtt(relayRttMs, t) : t('settings.remoteControl.v2.popover.routeMeasuring')}
-              available={relayRttMs !== null}
-            />
-          </div>
-          {onPathPreferenceChange ? (
-            <SegmentedControl<DeviceLinkPeerPathPreference>
-              value={selectedPref}
-              aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-              density="sm"
-              fullWidth
-              options={[
-                { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
-                {
-                  value: 'direct',
-                  label: t('settings.remoteControl.v2.popover.routeDirect'),
-                  disabled: !directSelectable,
-                  title: !directSelectable ? t('settings.remoteControl.v2.popover.routeDirectUnavailableHint') : undefined,
-                },
-                { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
-              ]}
-              onValueChange={(next) => {
-                const seq = ++prefSeqRef.current;
-                setOptimisticPref({ id: node.id, value: next, seq });
-                Promise.resolve(onPathPreferenceChange(node, next)).then(
-                  (ok) => {
-                    if (ok === false) {
+        <RouteChoicePanel
+          activePath={node.path}
+          directRttMs={directRttMs}
+          relayRttMs={relayRttMs}
+          relayName={relayName}
+          value={selectedPref}
+          onValueChange={
+            onPathPreferenceChange
+              ? (next) => {
+                  const seq = ++prefSeqRef.current;
+                  setOptimisticPref({ id: node.id, value: next, seq });
+                  Promise.resolve(onPathPreferenceChange(node, next)).then(
+                    (ok) => {
+                      if (ok === false) {
+                        setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                      }
+                    },
+                    () => {
                       setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
-                    }
-                  },
-                  () => {
-                    setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
-                  },
-                );
-              }}
-            />
-          ) : null}
-        </div>
+                    },
+                  );
+                }
+              : undefined
+          }
+        />
       ) : null}
       {switchArea.body ? (
         <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">{switchArea.body}</div>

@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import type { Element, Root } from 'hast';
 import type { Plugin, PluggableList } from 'unified';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+import { MarkdownRenderer, normalizeMarkdownRendererContent } from '../MarkdownRenderer';
 
 import { StreamingMarkdownChunk } from '../StreamingMarkdownChunk';
 import { createWordFadeState } from '../rehypeStreamWordFade';
@@ -119,12 +127,9 @@ describe('splitStreamingMarkdownChunks', () => {
     }
   });
 
-  it('多个标题或块级 HTML 出现时保留整篇解析上下文', () => {
-    for (const headings of ['# Same\n\nbody\n\n# same', '# foo\n\nbody\n\n# foo!']) {
-      expect(splitStreamingMarkdownChunks(headings)).toEqual([
-        { start: 0, content: headings },
-      ]);
-    }
+  it('块级 HTML 出现时保留整篇解析上下文；多个标题照常分片', () => {
+    // 标题 id 由渲染后统一分配（见下方「流式标题 id」），多标题长文不必整篇重解析。
+    expect(splitStreamingMarkdownChunks('# Same\n\nbody\n\n# same').length).toBeGreaterThan(1);
 
     for (const htmlBlock of [
       '<details>\nsummary\n\nbody\n</details>\n\nafter',
@@ -254,7 +259,8 @@ describe('StreamingMarkdownChunk', () => {
     expect(state.sourceStateByKey.size).toBeGreaterThan(1);
     for (const key of completedKeys) state.timeline.settled.add(key);
 
-    view.rerender(<Harness markdown={`${initial}\n\n# Second`} />);
+    // 引用式链接定义会反向影响前文，晚到时整篇回退解析。
+    view.rerender(<Harness markdown={`${initial}\n\n[guide]: https://example.com\n\nSecond`} />);
 
     const secondFrame = Array.from(
       view.container.querySelectorAll<HTMLSpanElement>('[data-wf-key]'),
@@ -267,5 +273,80 @@ describe('StreamingMarkdownChunk', () => {
     expect(secondFrame.filter((span) => span.classList.contains('stream-word'))).toHaveLength(1);
     expect(secondFrame.at(-1)?.textContent).toBe('Second');
     expect(state.sourceStateByKey.size).toBe(1);
+  });
+});
+
+/**
+ * 流式标题 id 的回归（DESIGN.md §14.4 Stream pacing；不变量见 streamingHeadingIds.ts）。
+ *
+ * 测试价值
+ * - 生产入口与可观察结果：真实 MarkdownRenderer，流式（分片解析）与终版（整篇解析）
+ *   渲染出的标题 id 列表必须完全相同——文内锚点、目录链接在流式期间不指错。
+ * - Bug／规则依据：PR #12892 review 两次报出分片后 id 与终版不一致：引用／列表里的
+ *   标题、`$$` 公式块里的 `#` 行。根因是从源码猜标题；现在 id 来自真实解析结果。
+ * - 现有覆盖缺口：分片切分用例只看切分边界，不看渲染后的 id。
+ * - 最小失败输入：`# Same\n\n$$\n# Same\n$$\n\nbody\n\n# Same\n\ntail`，按源码预置
+ *   计数时流式 id 多出一个 -1 后缀。
+ * - tier：unit（jsdom）。
+ */
+describe('流式标题 id（MarkdownRenderer）', () => {
+  const headingIds = (root: ParentNode) =>
+    Array.from(root.querySelectorAll('h1, h2, h3, h4, h5, h6'), (heading) => heading.id);
+
+  function renderedIds(markdown: string, isStreaming: boolean): string[] {
+    const view = render(
+      <MarkdownRenderer workingDir="/task" content={markdown} isStreaming={isStreaming} streamFadeKey="heading-ids" />,
+    );
+    const ids = headingIds(view.container);
+    view.unmount();
+    return ids;
+  }
+
+  const CASES = [
+    ['# Same', 'body', '## **Bold** `code` heading', 'body', '# same', 'body', '# Same', 'body', '## Bold code heading', 'tail'].join('\n\n'),
+    '> # Same\n\nbody\n\n# Same\n\nbody\n\n# Tail',
+    '# A\n\n> ## A\n\n# A',
+    '- # Item\n\nbody\n\n# Item\n\ntail',
+    '# Same\n\n$$\n# Same\n$$\n\nbody\n\n# Same\n\ntail',
+    '# [Guide](https://example.com)\n\nbody\n\n# Guide\n\ntail',
+    '# snake_case\n\nbody\n\n# snake_case\n\ntail',
+    'Title\n=====\n\nbody\n\n# Title\n\ntail',
+    '# Energy $E=mc^2$\n\nbody\n\n# Energy $E=mc^2$\n\ntail',
+    '# Setup\n\n```bash\n# Setup\n```\n\n# Setup\n\ntail',
+  ];
+
+  it('多标题长文分片解析，各种标题写法下 id 都与终版整篇解析一致', () => {
+    expect(renderedIds(CASES[0], false)).toEqual(['same', 'bold-code-heading', 'same-1', 'same-2', 'bold-code-heading-1']);
+    for (const markdown of CASES) {
+      // 确实走了分片（否则一致是平凡的）。
+      expect(splitStreamingMarkdownChunks(normalizeMarkdownRendererContent(markdown)).length, markdown).toBeGreaterThan(1);
+      const finalIds = renderedIds(markdown, false);
+      expect(finalIds.length, markdown).toBeGreaterThan(0);
+      expect(renderedIds(markdown, true), markdown).toEqual(finalIds);
+    }
+  });
+
+  it('流式中途出现的同名标题拿到递增后缀，已显示标题的元素与 id 保持不变', () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'Date'],
+    });
+    try {
+      const reply = (content: string) => (
+        <MarkdownRenderer workingDir="/task" content={content} isStreaming streamFadeKey="heading-ids-growth" />
+      );
+      const view = render(reply('# Same\n\nbody'));
+      const first = view.container.querySelector('h1');
+      expect(first?.id).toBe('same');
+      view.rerender(reply('# Same\n\nbody\n\n> ## Same\n\n# Same\n\ntail'));
+      for (let i = 0; i < 120; i++) {
+        act(() => {
+          vi.advanceTimersByTime(1000 / 60);
+        });
+      }
+      expect(headingIds(view.container)).toEqual(['same', 'same-1', 'same-2']);
+      expect(view.container.querySelector('h1')).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

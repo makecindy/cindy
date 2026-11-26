@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Select } from '@/components/ui/select';
 import { SettingsBlock } from '@/components/ui/settings-rows';
 import {
@@ -8,42 +7,32 @@ import {
   concurrencyLimitFromOption,
   concurrencyLimitOptionValue,
   PROVIDER_GROUP_MAX_WEIGHT,
-  PROVIDER_GROUP_STRATEGIES,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
+import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
+import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 
-type SelectableStrategy = Exclude<ProviderGroupStrategy, 'usage'>;
-const strategies = PROVIDER_GROUP_STRATEGIES.filter((value): value is SelectableStrategy => value !== 'usage');
 const weights = [1, 2, 3, 5, 10, 20, 50, PROVIDER_GROUP_MAX_WEIGHT];
 
-export function ProviderGroupStrategyControl({ strategy, disabled, onChange, localAccounts = false }: {
-  strategy: ProviderGroupStrategy;
+/**
+ * 另一台电脑上的电脑组的选法：这台的智能路由管不到它，仍在组的页面里改、存到那台(本机的组在智能路由里改)。
+ * 选项、名字与说明和智能路由同一套(shared/routeStrategy.ts、modelGroups.strategy.*)，选的是同一个选择函数。
+ */
+export function ProviderGroupStrategyControl({ strategy, disabled, onChange }: {
+  strategy: RouteStrategy;
   disabled: boolean;
-  onChange: (strategy: SelectableStrategy) => void;
-  localAccounts?: boolean;
+  onChange: (strategy: RouteStrategy) => void;
 }) {
   const { t } = useTranslation();
-  // Legacy usage is handled by least-busy selection after the shared quota filter.
-  const selected = strategy === 'usage' ? 'least' : strategy;
-  const label = t(localAccounts ? 'openAiAccountGroup.strategy' : 'providerGroup.strategy.label');
+  const label = t('modelGroups.settings.pick');
   return (
     <SettingsBlock className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-13 text-[var(--text-primary)]">{label}</span>
-        <SegmentedControl
-          value={selected}
-          onValueChange={onChange}
-          aria-label={label}
-          options={strategies.map(value => ({ value, label: t(`providerGroup.strategy.${value}`), disabled }))}
-        />
-        <span className="flex-1" />
-        <span className="text-12 text-[var(--text-secondary)]">
-          {t(localAccounts && selected === 'least' ? 'openAiAccountGroup.leastHint' : `providerGroup.strategy.description.${selected}`)}
-        </span>
+        <Select label={label} value={strategy} disabled={disabled} width="sm"
+          groups={routeStrategySelectGroups(SAME_SOURCE_ROUTE_STRATEGIES, t)}
+          onValueChange={value => onChange(value as RouteStrategy)} />
       </div>
-      <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-        {t(localAccounts ? 'openAiAccountGroup.quotaHint' : 'providerGroup.strategy.quotaFirst')}
-      </span>
+      <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>
     </SettingsBlock>
   );
 }

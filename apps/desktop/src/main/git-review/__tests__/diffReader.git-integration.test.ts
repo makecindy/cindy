@@ -11,6 +11,8 @@ import { runGit } from '../gitRunner';
 import { readStatus } from '../statusReader';
 import { mapWithConcurrency, readCappedFileDiff, readDiffs, readDiffSummaryEntries, readFileDiff } from '../diffReader';
 import type { ReviewScope } from '../types';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { resolveReviewScope, withSessionReviewRowSnapshot, withSessionReviewWorkspace } from '../scopeResolver';
 
 let repoPath: string;
 
@@ -69,6 +71,36 @@ afterAll(async () => {
 });
 
 describe('git-review diffReader', () => {
+  it('returns the same staged and unstaged sibling edits for the guest and owner of an aliased shared subdirectory', async (ctx) => {
+    const alias = repoPath + '-alias';
+    await fs.symlink(repoPath, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    ctx.onTestFinished(() => fs.unlink(alias));
+    await fs.mkdir(path.join(repoPath, 'shared'));
+    const workdir = path.join(alias, 'shared');
+    const physicalRoot = await fs.realpath(repoPath);
+    // Recycled checkouts leave this historical path in the session row.
+    const row = { id: 's1', workingDir: workdir, remoteHostId: null, worktreePath: path.join(repoPath, 'removed-worktree') };
+    const read = () => withSessionReviewRowSnapshot(row, async () => {
+      const resolved = await resolveReviewScope('s1');
+      expect(await fs.realpath(resolved.repoRoot!)).toBe(physicalRoot);
+      return readDiffs(resolved, await readStatus(resolved));
+    });
+    const guest = () => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'guest', channel: 'git-review:remote-op',
+      sharedTask: { author: { sessionId: 's1', sharedTaskId: 'share', accountId: 'guest', memberId: 'member',
+        displayName: 'Guest' }, isCurrent: () => true, authorize: () => true },
+    }, read);
+    const file = path.join(repoPath, 'seed.txt');
+    await fs.writeFile(file, 'stage\n');
+    await runGit(['add', 'seed.txt'], { cwd: repoPath });
+    await fs.writeFile(file, 'terminal\n');
+    const owner = await withSessionReviewWorkspace('s1', workdir, read);
+    expect(owner.staged[0]?.rawPatch).toContain('+stage');
+    expect(owner.unstaged[0]?.rawPatch).toContain('+terminal');
+    expect(await guest()).toEqual(owner);
+    await runGit(['restore', '--source=HEAD', '--staged', '--worktree', '--', 'seed.txt'], { cwd: repoPath });
+    expect(await guest()).toMatchObject({ staged: [], unstaged: [] });
+  });
   it('reads untracked files through --no-index /dev/null', async () => {
     await fs.writeFile(path.join(repoPath, 'new file.txt'), 'hello\nworld\n');
     const status = await readStatus(scope());

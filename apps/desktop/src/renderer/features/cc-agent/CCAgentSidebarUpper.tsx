@@ -1,6 +1,7 @@
 import { projectKeyForDeepLink } from '../../../shared/projectKeys';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
+import { rememberDeviceTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
@@ -322,6 +323,11 @@ import {
   isDeviceLinkWriteBlocked,
   isRemoteSessionWriteBlocked,
 } from './lib/remoteSessionWriteGuard';
+import {
+  getOfflineInboxIntent,
+  queueOfflineInboxComplete,
+  removeOfflineInboxIntent,
+} from '@/features/device-link/offlineInboxIntentsStore';
 import {
   selectRemoteSessionBootstrapFailures,
   selectRemoteSessionBootstrapLoadingDevices,
@@ -2849,6 +2855,14 @@ function ExpandedView({
           prefetchDeviceGitSafetySettings(targetDeviceId),
         ]);
       }
+      rememberDeviceTaskWorkspace(
+        getDataOwnerGeneration().dataOwnerId,
+        project.deviceLinkDeviceId ?? null,
+        {
+          remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,
+          workingDir: project.workingDir,
+        },
+      );
       patchNewMakerDraft({
         workingDir: project.workingDir,
         remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,
@@ -3188,8 +3202,58 @@ function ExpandedView({
       sharedTaskId?: string,
     ) => {
       const session = sessionsByIdRef.current.get(sessionId);
-      if (isRemoteSessionWriteBlocked(session)) {
+      const offlineDeviceId = session?.deviceLinkDeviceId;
+      const canHandleOfflineInbox =
+        Boolean(offlineDeviceId) &&
+        isRemoteSessionWriteBlocked(session) &&
+        !isSharedTaskPeer(offlineDeviceId ?? '');
+      if (action === 'unarchive' && canHandleOfflineInbox && offlineDeviceId) {
+        if (getOfflineInboxIntent(offlineDeviceId, sessionId)?.kind === 'complete') {
+          try {
+            await removeOfflineInboxIntent(offlineDeviceId, sessionId);
+          } catch {
+            toast.error(t('ccAgent.sidebar.unarchiveFailed'));
+          }
+          return;
+        }
+      }
+      if (isRemoteSessionWriteBlocked(session) && !(action === 'complete' && canHandleOfflineInbox)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+        return;
+      }
+      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
+      // skip siblings the user has since completed and respect any intervening navigation.
+      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
+        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
+        : null;
+      const anchor = `session:${sessionId}`;
+      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
+      const advanceInbox = () => {
+        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
+        const available = getVisibleInboxTargets(inbox);
+        available.delete(anchor);
+        const remaining = [...available.keys()];
+        const removed = new Set(order.filter(id => !available.has(id)));
+        // Removing the last of the first 20 rows can reveal another task below it.
+        const original = new Set(order);
+        const queue = [...order, ...remaining.filter(id => !original.has(id))];
+        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
+        const next = key ? available.get(key) : undefined;
+        if (next && 'route' in next) navigate(next.route);
+        else if (next) void handleSessionClick(next.sessionId);
+        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+      };
+      if (action === 'complete' && canHandleOfflineInbox && offlineDeviceId && session) {
+        const rawHostSession =
+          remoteProjectsStore
+            .getDeviceSessions(offlineDeviceId)
+            .find((row) => row.id === sessionId) ?? session;
+        try {
+          await queueOfflineInboxComplete(offlineDeviceId, sessionId, rawHostSession);
+          advanceInbox();
+        } catch {
+          toast.error(t('ccAgent.sidebar.archiveFailed'));
+        }
         return;
       }
       const isArchiveLike = action === 'archive' || action === 'archive-now' || action === 'complete';
@@ -3218,28 +3282,6 @@ function ExpandedView({
         if (!(await attachedPromise)) return false;
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
-      };
-      // Snapshot the displayed queue before the inbox hides the clicked row. At commit,
-      // skip siblings the user has since completed and respect any intervening navigation.
-      const inbox = action === 'complete' && viewedSessionIdRef.current === sessionId
-        ? sidebarScrollRef.current?.querySelector('[data-task-inbox-section="inbox"]')
-        : null;
-      const anchor = `session:${sessionId}`;
-      const order = inbox ? [...getVisibleInboxTargets(inbox).keys()] : [];
-      const advanceInbox = () => {
-        if (!inbox?.isConnected || !isSessionRemovalRouteCurrent(sessionId)) return;
-        const available = getVisibleInboxTargets(inbox);
-        available.delete(anchor);
-        const remaining = [...available.keys()];
-        const removed = new Set(order.filter(id => !available.has(id)));
-        // Removing the last of the first 20 rows can reveal another task below it.
-        const original = new Set(order);
-        const queue = [...order, ...remaining.filter(id => !original.has(id))];
-        const key = pickSessionIdAfterRemoval(queue, removed, anchor) ?? remaining[0];
-        const next = key ? available.get(key) : undefined;
-        if (next && 'route' in next) navigate(next.route);
-        else if (next) void handleSessionClick(next.sessionId);
-        else navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
       };
       // For a pinned task or an active automation, Done settles this round without archiving.
       if (action === 'complete') {
@@ -3744,6 +3786,7 @@ function ExpandedView({
               onContextMenu={(event) => event.stopPropagation()}
             >
               <SearchResultsBody
+                poolCapped={search.poolCapped}
                 trimmed={search.trimmed}
                 status={search.status}
                 results={search.results}
