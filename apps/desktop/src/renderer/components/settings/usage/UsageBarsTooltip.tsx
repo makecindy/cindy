@@ -136,7 +136,7 @@ export function UsageBarsTooltip({
       aria-hidden="true"
       data-testid="usage-bars-tooltip"
       data-glide={position?.glide ? 'true' : undefined}
-      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-[10011] w-max min-w-[min(220px,calc(100vw-16px))] max-w-[min(320px,calc(100vw-16px))] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
+      className="usage-bars-tooltip animate-fade-in pointer-events-none fixed left-0 top-0 z-tooltip w-max min-w-[min(220px,calc(100vw-16px))] max-w-[min(320px,calc(100vw-16px))] max-h-[calc(100vh-16px)] overflow-hidden select-none rounded-xl bg-[var(--tooltip-bg)] px-3 py-2.5 text-[var(--tooltip-text)]"
       style={{
         transform: position ? `translate3d(${position.left}px, ${position.top}px, 0)` : undefined,
         visibility: position ? 'visible' : 'hidden',

@@ -59,7 +59,7 @@ export function NewMessageIndicator({
       style={{ bottom: bottomOffset }}
       className={cn(
         // 定位容器：absolute + 水平居中 + 底部偏移由 style 控制
-        'absolute left-1/2 z-40 -translate-x-1/2',
+        'absolute left-1/2 z-page-top -translate-x-1/2',
         // 过渡 + 显隐两态（挂外层，button 自身只管样式交互）
         'transition-all duration-150 ease-out',
         visible

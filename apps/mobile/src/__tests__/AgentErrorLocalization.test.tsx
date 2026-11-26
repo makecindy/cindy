@@ -44,6 +44,16 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10161, unit: an older history row with a bare deadline does not establish
+// whether the message was sent. Keep its generic summary on a cold task.
+it('keeps a legacy snapshot deadline in cold history generic', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const message = 'Snapshot operation deadline exceeded';
+  const [historical] = normalizeRemoteMessages([row(message)]);
+  expect(historical.body).toBe(i18n.t('session.tail.replyFailed'));
+  expect(historical.rawError).toBe(message);
+});
+
 // #10854, unit: live and persisted mobile errors share the known-reason copy;
 // the host cause stays available to diagnosis instead of becoming a false claim.
 it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
@@ -300,7 +310,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SNAPSHOT_DISPATCH_INTENT_TIMEOUT'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -434,6 +444,21 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(localized);
     expect(host.querySelector('[data-testid="session.tailBanner.continue"]')).not.toBeNull();
   });
+});
+
+// Unit: model switching on mobile can leave a failed send at the queue head.
+// Exercise the visible banner, including its retry time and optional sign-in hint.
+it('explains a mixed subscription pool failure in the mobile queue', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const until = Date.now() + 3_600_000;
+  const error = `LAZY_CREATE_FAILED: [SUBSCRIPTION_POOL_MODEL_LIMITED] diagnostic\nresetAtMs=${until}\notherAccountSignedOut=true`;
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain('当前模型的订阅额度已达上限');
+  expect(host.textContent).toContain(new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(until));
+  expect(host.textContent).toContain('另有订阅账号已登出');
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
 });
 
 // Unit regression: both live and historical mobile errors share this presenter.

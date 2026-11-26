@@ -50,7 +50,7 @@ export function JumpToBottomChip({
       aria-atomic="true"
       style={{ bottom: bottomOffset }}
       className={cn(
-        'absolute left-1/2 z-40 -translate-x-1/2',
+        'absolute left-1/2 z-page-top -translate-x-1/2',
         'transition-all duration-150 ease-out',
         visible
           ? 'pointer-events-auto translate-y-0 opacity-100'

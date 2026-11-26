@@ -41,6 +41,25 @@ beforeEach(() => {
 });
 
 describe('implicit context settings use the startup source in history protection', () => {
+  // Capacity lookup used exact IDs although the picker accepts route-defined
+  // wire prefixes. Exercise the real provider + budget resolver (unit).
+  it('resolves route wire aliases without borrowing another provider or window variant', () => {
+    const catalog = dualCatalog('claude-code');
+    const xd = catalog.providers.find(provider => provider.id === 'xd')!;
+    xd.routing['claude-code'] = {
+      upstream: 'https://example.invalid',
+      authStrategy: 'oauth-passthrough',
+      modelIdRewrite: { stripPrefix: 'gateway/' },
+    };
+    expect(resolveDesktopModelContextProviderId(catalog, 'claude-code', null, 'gateway/shared-model')).toBe('xd');
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'gateway/shared-model', null, 'required')).toBe(128_000);
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'anthropic', 'gateway/shared-model', null, 'required')).toBeNull();
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'shared-model[1m]', null, 'required')).toBeNull();
+    xd.models['claude-code']![0]!.contextWindowMax = 256_000;
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'gateway/shared-model', 500_000, 'required')).toBe(256_000);
+    xd.models['claude-code']![0]!.contextWindowVerified = false;
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'gateway/shared-model', null, 'required')).toBeNull();
+  });
   it.each(['claude-code', 'codex'] as const)('%s resolves a smaller XD budget before history switching', (agent) => {
     const catalog = dualCatalog(agent);
     state.limits.set(`${agent}:xd:shared-model`, 100_000);

@@ -69,9 +69,9 @@ export const OWNERSHIP_RULES = [
   },
   {
     owner: 'B',
-    reason: '本机屏幕截取、录制与远程桌面',
-    channel: /^(region-screenshot|recording-preview|recording-audio|remote-desktop|away-guard)/,
-    module: /^(region-screenshot|remote-desktop|remote-desktop-viewer)\b/,
+    reason: '本机屏幕截取、录制、远程桌面与本机隐私权限',
+    channel: /^(region-screenshot|recording-preview|recording-audio|remote-desktop|away-guard|local-network:)/,
+    module: /^(region-screenshot|remote-desktop|remote-desktop-viewer|local-network)\b/,
   },
   {
     owner: 'B',

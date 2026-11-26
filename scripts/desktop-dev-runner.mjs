@@ -24,7 +24,7 @@ const devScript = mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
 // validated before use; resolvePnpmInvocation then decides how to execute it
 // (JS entry via node, native binary directly, command wrapper through PATH),
 // and falls back to PATH/PATHEXT resolution when nothing usable is left.
-const invocation = resolvePnpmInvocation([devScript], {
+const invocation = resolvePnpmInvocation([devScript, ...process.argv.slice(3)], {
   npmExecPath: usablePnpmExecPath(process.env.npm_execpath, fs.existsSync),
 });
 const { command, args } = invocation;

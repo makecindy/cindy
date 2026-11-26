@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { codexAuthPathsShareEntry, inspectCodexAuthLink, relinkSharedCodexAuth } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
+import {
+  codexAuthPathsShareEntry,
+  inspectCodexAuthLink,
+  relinkSharedCodexAuth,
+  removeLegacyCodexAuthAlias,
+} from '../../../desktop/src/main/maker-host/codex-auth-link.js';
 import {
   getActiveInvalidatedSystemCodexAuthMarker,
   readInvalidatedSystemCodexAuthMarker,
@@ -128,7 +133,15 @@ export function createHostCodexSystemLogin(options: {
     // Every pass judges again: only this pass failing to link counts as unreachable.
     sharedAuthLinkUnavailable = false;
     // Step 2: an explicit disconnect or an invalidation still covering the system login.
-    if (restoreInvalidationStateOnStartup(options.codexHome, systemAuth, myAuth).suppressReconcile) return;
+    if (restoreInvalidationStateOnStartup(options.codexHome, systemAuth, myAuth).suppressReconcile) {
+      if (!options.loginActive() && profileAllowsWrite()) {
+        const marker = getActiveInvalidatedSystemCodexAuthMarker(options.codexHome, systemAuth, myAuth);
+        if (marker && !marker.unprovenCredentialAttribution && fs.existsSync(systemAuth)) {
+          removeLegacyCodexAuthAlias(systemAuth, myAuth);
+        }
+      }
+      return;
+    }
     // Step 3.
     if (!fs.existsSync(systemAuth)) return;
     // Step 4: already the same entry.

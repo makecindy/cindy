@@ -1018,17 +1018,19 @@ describe('managed ownership', () => {
     expect(result.managedConfigWriteToken).toBeUndefined();
   });
 
-  it('keeps managed aliases read-only when duplicated in any other file', async () => {
-    await fs.writeFile(mainConfig, [
-      `Include ${managedConfig}`,
-      'Include external.conf',
-      '',
-    ].join('\n'));
-    await fs.writeFile(managedConfig, 'Host duplicate\n  HostName 192.0.2.21\n');
-    await fs.writeFile(path.join(scratchDir, 'external.conf'), 'Host duplicate\n');
+  it('explains read-only aliases shared by the managed file and an external Include', async () => {
+    await fs.writeFile(mainConfig, `Include ${managedConfig}\nInclude external.conf\n`);
+    await fs.writeFile(managedConfig, `${MANAGED_CONFIG_MARKER}\nHost duplicate\n  HostName 192.0.2.21\nHost managed\n`);
+    await fs.writeFile(path.join(scratchDir, 'external.conf'), 'Host duplicate\nHost external\n');
 
-    await expect(readSshConfig(mainConfig, { managedConfigPath: managedConfig }))
-      .resolves.toMatchObject([{ id: 'duplicate', managedByCindy: false }]);
+    const { hosts } = await readSshConfigDetailed(mainConfig, { managedConfigPath: managedConfig });
+    expect(hosts.map(({ id, managedByCindy, managedAliasConflict }) => ({
+      id, managedByCindy, managedAliasConflict,
+    }))).toEqual([
+      { id: 'duplicate', managedByCindy: false, managedAliasConflict: true },
+      { id: 'managed', managedByCindy: true, managedAliasConflict: undefined },
+      { id: 'external', managedByCindy: false, managedAliasConflict: undefined },
+    ]);
   });
 
   it('marks every host read-only when managedConfigPath is omitted', async () => {

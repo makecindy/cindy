@@ -139,6 +139,11 @@ export interface NewSessionCreationParams {
   transport: NewSessionCreationTransport;
   /** 退避 / 轮询的 sleep 注入点(单测替换为立即返回;对齐 resolveInteractionResilient 的 opts.sleep 模式)。 */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * 会话在被控电脑上建成后调用一次(重跑管线不再调用)：经模型组选的来源要请那台记下任务用着谁、
+   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。抛错不影响创建。
+   */
+  onSessionCreated?: (sessionId: string) => void;
 }
 
 export interface NewSessionCreationTask {
@@ -177,6 +182,8 @@ interface InternalTask extends NewSessionCreationTask {
   error: string | null;
   firstMessageSessionRefs: MobileSessionReference[];
   precreatedWorktreeSessionCreateStarted: boolean;
+  /** onSessionCreated 已经调用过(重试同一个任务时不再调用)。 */
+  sessionCreatedNotified?: boolean;
   params: NewSessionCreationParams;
 }
 
@@ -1342,6 +1349,14 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 也不应把它当作可补偿回收的孤儿记录。冷启动时的 ownership 查询仍
     // 作为 AsyncStorage 写入失败/进程中断的最后兜底。
     forgetPrecreatedRecoveryRecord(task);
+    if (params.onSessionCreated && !task.sessionCreatedNotified) {
+      task.sessionCreatedNotified = true;
+      try {
+        params.onSessionCreated(sessionId);
+      } catch {
+        // 只影响模型组的记录与说明，任务照常进行。
+      }
+    }
 
     // 权威会话刷新(dialogue 会话此刻才拿到被控端分配的 workingDir);失败不阻断,
     // 排队 createOpts 用合成行兜底(project 会话字段本就齐全)。

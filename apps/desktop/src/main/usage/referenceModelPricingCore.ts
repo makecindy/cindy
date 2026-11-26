@@ -8,10 +8,11 @@
  * the Desktop window broadcast (broadcastReferenceModelPricing) and re-exports this module.
  */
 
-import type { AgentKind, Catalog, CatalogModel, Provider } from '@cindy/model-providers';
+import type { AgentKind, Catalog, Provider } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
+  modelCostQuote,
   modelPricingKey,
   registryPricingCatalog,
   providerReferencePriceQuote as registryQuoteForModel,
@@ -26,10 +27,8 @@ import {
   providerRegistryTariffEndedAt,
   providerSnapshotReferencePriceQuote,
 } from './accountReferencePrice.js';
-import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   applyModelPriceOverrides,
-  currencyCanProjectToLedger,
   mergeStoredModelPriceOverride,
   type ModelPriceOverridesSnapshot,
 } from './modelPriceOverrideStore.js';
@@ -38,54 +37,6 @@ export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
-
-function modelCostQuote(
-  providerId: string,
-  model: CatalogModel,
-): ModelPriceQuote | undefined {
-  const cost = model.cost;
-  if (cost?.input === undefined || cost.output === undefined) return undefined;
-  if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) return undefined;
-  const tiers = (cost.tiers ?? [])
-    .filter(tier => Number.isFinite(tier.inputTokensAbove) && tier.inputTokensAbove >= 0)
-    .sort((a, b) => a.inputTokensAbove - b.inputTokensAbove);
-  const inputTokenPriceBands = tiers.length > 0
-    ? [
-        {
-          minInputTokens: 0,
-          maxInputTokens: tiers[0]!.inputTokensAbove + 1,
-          inputPerMtok: cost.input,
-          outputPerMtok: cost.output,
-          ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
-          ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
-        },
-        ...tiers.map((tier, index) => ({
-          minInputTokens: tier.inputTokensAbove + 1,
-          ...(tiers[index + 1] ? { maxInputTokens: tiers[index + 1]!.inputTokensAbove + 1 } : {}),
-          inputPerMtok: tier.input ?? cost.input,
-          outputPerMtok: tier.output ?? cost.output,
-          ...(tier.cacheRead !== undefined || cost.cacheRead !== undefined
-            ? { cacheReadPerMtok: tier.cacheRead ?? cost.cacheRead }
-            : {}),
-          ...(tier.cacheWrite !== undefined || cost.cacheWrite !== undefined
-            ? { cacheCreatePerMtok: tier.cacheWrite ?? cost.cacheWrite }
-            : {}),
-        })),
-      ]
-    : undefined;
-  return {
-    providerId,
-    modelId: model.id,
-    currency: 'USD',
-    source: 'provider-reference',
-    approximate: true,
-    inputPerMtok: cost.input,
-    outputPerMtok: cost.output,
-    ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
-    ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
-    ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
-  };
-}
 
 /** Retain dated public prices for removed models on engines still using that public channel.
  * Models currently configured on an engine are priced separately using their actual model route.
@@ -150,7 +101,6 @@ export function getReferenceModelPricing(
   const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
-  const ledgerCurrency = currentLedgerCurrency();
   const pricing = registryPricingCatalog(registry, at);
   for (const provider of options.providers ?? catalog.providers) {
     if (provider.id === 'xd') continue;
@@ -176,7 +126,7 @@ export function getReferenceModelPricing(
             registry,
             { agent: agentKind, at, ...(nativeOAuth ? { officialOnly: true } : {}) },
           );
-          if (registryQuote && currencyCanProjectToLedger(registryQuote.currency, ledgerCurrency)) {
+          if (registryQuote) {
             (pricing[provider.id] ??= {})[modelPricingKey(model.id, agentKind)] = registryQuote;
             continue;
           }
@@ -200,7 +150,7 @@ export function getReferenceModelPricing(
     }
   }
   return {
-    ...applyModelPriceOverrides(pricing, registry, ledgerCurrency, { at, entries: options.overrides }),
+    ...applyModelPriceOverrides(pricing, registry, { at, entries: options.overrides }),
     ...getByokPricing(),
   };
 }

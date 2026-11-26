@@ -30,6 +30,7 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
 Host UI 以整版安装/更新批准有效、已启用及当前 manifest 声明为准，不另存分项批准。
 本机位置增量 `composer.header` 复用原生控件与弹层入口；旧端保留该声明但不挂载，既有位置与批准记录不变，无跨端协议变化。
+本机目录菜单位置 `workdir.menu` 随可选贡献声明生效。旧端忽略该位置和状态栏按钮的 `fontSize`，已有入口继续可用；无需迁移回执或同步更新远程端。
 旧 receipt 的 `approvedHostUi` 字段读到即忽略，不迁移、不删数据；旧页面批准与原工具审批保持不变。
 原生入口、具名页面工具及无任务全局工具不套用 Agent MCP 策略或调用时确认，仍校验归属、版本、声明与来源 ticket。
 原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
@@ -184,6 +185,15 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 
 ## 卡片来源、宿主按钮与固定尺寸（2026-11-16）
 
+本机 composer 附件能力沿用现有本地沙箱和 `maker:mcp-apps:v1`，只在执行电脑本机 View 的
+初始化能力里可选声明 `cindy/composer-attachment`，不加入 device-link、relay 或手机协议。
+资源读取和落盘在执行端完成，远程查看端、手机、共享访客与 Node Host 不声明也不处理该能力。
+旧查看端忽略该可选能力，页面必须在动态导入失败或能力缺失时继续可用。
+macOS 与 Windows 的已验证组合（目前为 Electron 42）额外声明 `drag: {version: 1}`。本地页面通过
+`cindy/composer-attachment/drag-ticket` 为本卡已有资源申请 30 秒一次性票。每 View 每分钟
+最多申请 60 次。只有来源窗口中同任务的输入框可以兑换；挂起、关闭、文档替换和撤权均使票失效。
+兑换复用按钮的读取、校验、去重和限频。其它平台保留原按钮，旧插件无需改清单或重新批准。
+
 公开 `mcpAppHistory` version 1 增加可选 `plugin: {name,source?}` 与 `customMcp: {name}`。
 source 是宿主记录的生成时快照，只包含 `{kind: "official"|"organization"|"market"|"third-party"|"local"|"unknown"}`；
 同账号与共享访客历史均不发送 namespace，公开 organization 无 namespace 仍按市场来源显示。
@@ -207,3 +217,5 @@ Host 侧 installationSource 的 namespace 校验、插件详情与安装确认�
 页签及全屏使用标准 containerDimensions 的 `{width,height}` 分支；对话保持 `{width,maxHeight}`，
 尺寸变化沿原 context 操作发送，隐藏/零尺寸不发送。无存储迁移，不重新批准插件。
 Mobile 仅 JS/TS 展示与文案修改，无原生依赖、配置或接口变化，可随热更新交付；最终指纹仍以 CI 同环境比较为准。
+
+插件资源可声明可选的 `initialHeight`。新宿主将有限数字取整并限制在 80–720 CSS px，写入资源和生成时的卡片元数据 `cindy/initial-height`，公开历史 v1 只投影 `initialHeight`。新包声明非有限数字或非数字时校验失败。旧端忽略此字段，新端读取历史安装或历史卡片时只忽略无效高度，页面与原有批准仍然可用。导出已装插件会保留原始声明；将这份文件作为新包本地安装或重新提审时，作者须先修正无效高度。每台查看设备记下的实测宽高仅存本机，不经 device-link。此提示不提高插件最低宿主版本。

@@ -4,8 +4,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock('@/lib/sessionService', async (original) => ({
+  ...await original<typeof import('@/lib/sessionService')>(),
+  resolveReferences: async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }],
+}));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'local-device' }));
-vi.mock('@/lib/makerTransport', () => ({ getSessionFor: async () => null }));
+vi.mock('@/lib/makerTransport', () => ({ getSessionFor: async () => null, getSessionOnDevice: async (id: string) => remoteSession(id) }));
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -39,6 +43,7 @@ function remoteSession(id: string): Session {
 
 afterEach(() => {
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   __resetStickySessionOriginForTest();
   mocks.navigate.mockReset();
 });
@@ -92,7 +97,7 @@ describe('AutomationOriginBadge', () => {
     fireEvent.click(button);
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/source-task', undefined));
     if (deviceId === 'local-device') expect(pin).not.toHaveBeenCalled();
-    else expect(pin).toHaveBeenCalledWith(deviceId, 'source-task');
+    else expect(getStickySessionDeviceId('source-task')).toBe(deviceId);
   });
 
   it('lists the source session id under the existing tooltip line', () => {

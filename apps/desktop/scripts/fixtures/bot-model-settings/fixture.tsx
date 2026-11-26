@@ -28,7 +28,7 @@ function Fixture() {
     : ctx.case === 'available' || ctx.case.startsWith('loading') ? { ...unknown, model: model.id, effort: 'high' } : unknown;
   const [routes, setRoutes] = useState<BotModelRoute[]>([primary,
     ...Array.from({ length: ctx.case === 'four-backups' ? 4 : 1 }, (_, i) => ({ ...(isSharedCase ? primary : unknown),
-      model: isSharedCase ? sharedModels[1]!.id
+      model: ctx.case === 'plugin-primary' ? model.id : isSharedCase ? sharedModels[1]!.id
         : i ? `vendor/very-long-unbroken-model-identifier-${i}-abcdefghijklmnopqrstuvwxyz` : 'google/gemini-4-argon-backup' }))]);
   return <main className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
     <div className="mx-auto w-full max-w-[448px]" data-model-settings-fixture>
@@ -59,6 +59,12 @@ void mountPage({
       turnPermissionPolicy: { supported: { supported: true }, unsupportedPermissionModes: [] },
     });
     return { maker: {
+      listPluginEngines: async () => ctx.case === 'plugin-primary' ? [{
+        providerId: 'acp-plugin:sample:engine', key: 'sample:engine', ghostId: 'sample', harnessId: 'engine',
+        name: 'Sample Engine', models: [{ id: 'sample-model', displayName: 'Sample Model' }],
+        availability: { state: 'available' }, defaultPermissionMode: 'ask', permissionModes: [],
+      }] : [],
+      onPluginEnginesChanged: subscription('plugin-engines'),
       listAvailableAgents: async () => ['claude-code', 'codex', 'pi'],
       getCapabilities: async () => capabilities(false),
       onProvidersChanged: subscription('providers'),

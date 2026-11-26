@@ -3,9 +3,35 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
+import { appProviderChange } from "../xdt-helper/app_models.js";
 import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+
+// #10568 / unit: ordinary tasks must discover the local migration primitive through
+// the production index; caller identity is host supplied, and SSH/plugin callers
+// cannot redirect a local buddy by supplying it in tool arguments.
+it('discovers local workspace relocation and validates its caller and action arguments', async () => {
+  const run = vi.fn(async () => ({ phase: 'pending', scope: 'local' }));
+  const context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/project', sessionId: 'task', sessionInstanceId: 'instance' };
+  const server = createXdtHelperMcpServer({ workspaceMigration: { run }, resolveSurface: async () => 'default' },
+    { agentKind: 'codex', workingDir: '/project', getSessionContext: () => context });
+  const client = new Client({ name: 'workspace-migration', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const discovery = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '工作区迁移' } }));
+    expect(discovery).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'teammates.management' })]) });
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'request', teammate_id: 'buddy', target_directory: '/data/buddy' })))
+      .toMatchObject({ ok: true, phase: 'pending' });
+    expect(run).toHaveBeenLastCalledWith({ action: 'request', teammateId: 'buddy', target: '/data/buddy', callerSessionId: 'task', callerSessionInstanceId: 'instance' }, undefined);
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy', target_directory: '/unexpected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    context.remoteHostId = 'ssh';
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy' }))).toMatchObject({ ok: false });
+    expect(run).toHaveBeenCalledOnce();
+  } finally { await client.close(); await server.close(); }
+});
 
 // Unit: native catalog discovery/mutation through the real host-tool registry.
 // Existing runtime controls lack native method argument and stdio boundaries.
@@ -2084,4 +2110,35 @@ it('discovers and generates settings links on the task computer', async () => {
     expect(parsePayload(await server.hostTools.call('get_settings_link', { page: 'slack' })))
       .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   } finally { await server.close(); }
+});
+
+// Unit, agent-user-parity.md「第一时间能发现」(PR #12041 review): the first
+// list_tools overview must name snooze and its cross-computer scope, not only
+// the expanded control list.
+it('names snooze_sessions and its cross-computer scope in the control overview', async () => {
+  const setSessionsSnooze = vi.fn(async () => ({ ok: true as const, changed: [] }));
+  const server = createXdtHelperMcpServer({ setSessionsSnooze }, { agentKind: 'codex', workingDir: '/tmp', sessionId: 's' });
+  const client = new Client({ name: 'snooze-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })) as { categories: Array<{ name: string; description: string }> };
+    const control = overview.categories.find((c) => c.name === 'control');
+    expect(control?.description).toMatch(/snooze_sessions[^；]*支持本机与跨电脑（deviceId::sessionId）/);
+    expect(server.hostTools.describe('snooze_sessions')).toMatchObject({ category: 'control' });
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit / plugin engine accounts (subscription-account-pools.md 插件引擎的账号, 2026-11-23): the
+// configure_model_provider input contract the model sees. Plugin engine providers (and providers
+// taken out of them) are accepted with a sign-in methodId; a key can never be passed by an Agent.
+// Minimal inputs: a plugin engine add with methodId; the same with a secret; a malformed plugin id.
+it('accepts plugin engine providers for account management but never a secret', () => {
+  const change = (command: Record<string, unknown>, providerId = 'acp-plugin:zcode-plugin:zcode') =>
+    appProviderChange.safeParse({ action: 'subscriptionAccounts', providerId, command });
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'zai' }).success).toBe(true);
+  expect(change({ action: 'place', accountId: 'a', target: 'acp-plugin:zcode-plugin:zcode~ab12cd34' }).success).toBe(true);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:zcode~ab12cd34').success).toBe(true);
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'api-key', secret: 'sk-1' }).success).toBe(false);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:ZCode').success).toBe(false);
 });

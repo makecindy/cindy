@@ -8,6 +8,7 @@ export default {
   notCovered: 'Real SSH/ssh-agent, credentials, service installation, persistence and remote agents',
   cases: {
     default: { about: 'Imported host explains local ssh-agent versus terminal ssh' },
+    'managed-alias-conflict': { about: 'Shared alias explains why connection details are read-only' },
     'agent-unavailable': { about: 'Local agent failure has actionable host-row and toast guidance' },
     'agent-configured-unset': { about: 'Unset IdentityAgent environment variable remains visible in the row and toast' },
     'agent-configured-empty': { about: 'Empty IdentityAgent endpoint remains visible in the row and toast' },
@@ -17,7 +18,11 @@ export default {
   async check(page, ui) {
     const hint = page.getByText(await ui.t('settings.remote.importedAgentHint'), { exact: true });
     await page.getByText('build-server', { exact: true }).waitFor();
-    if (ui.case === 'agent-unavailable' || ui.case.startsWith('agent-configured-')) {
+    if (ui.case === 'managed-alias-conflict') {
+      const conflict = page.getByText(await ui.t('settings.remote.managedAliasConflict'), { exact: true });
+      await conflict.waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.remote.button.remove'), exact: true }).count(), 0);
+    } else if (ui.case === 'agent-unavailable' || ui.case.startsWith('agent-configured-')) {
       const errorKey = {
         'agent-configured-unset': 'settings.remote.agentError.environmentUnset',
         'agent-configured-empty': 'settings.remote.agentError.endpointEmpty',

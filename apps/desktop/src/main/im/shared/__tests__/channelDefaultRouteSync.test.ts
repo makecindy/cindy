@@ -211,6 +211,81 @@ beforeEach(() => {
 });
 
 describe('syncUnderLock', () => {
+  /**
+   * 个人飞书 bot 的按群模型(2026-11-23): 生产入口 createImChannelDefaultRouteSync 的
+   * routeOverrideFor。群任务按这个群的设置算指纹与目标, 私聊任务仍按渠道设置。
+   * 缺口: 其余用例只有渠道级默认。最小失败输入: 同一渠道设置下, 群话题任务与私聊任务
+   * 各收到一条消息。tier: unit(真 SQLite)。
+   */
+  it('群任务跟随这个群的固定模型, 私聊任务仍跟随渠道设置', async () => {
+    const GROUP: ImDefaultRoute = { agentKind: 'codex', model: 'gpt-6.2-sol', providerId: null, effort: 'low' };
+    await insertTask('group', OLD);
+    await db.update(sessions).set({ feishuOpenId: 'g/oc_1/omt_t' }).where(eq(sessions.id, 'group'));
+    await insertTask('dm', OLD);
+    mocks.fingerprint.mockImplementation((...args: unknown[]) => (args[1] ? 'fp-group' : 'fp-new'));
+    mocks.resolveDefaults.mockImplementation(async (...args: unknown[]) =>
+      args[3] ? { ...GROUP, fingerprint: 'fp-group' } : { ...NEW, fingerprint: 'fp-new' });
+    const routeOverrideFor = vi.fn((_bot: string, user: string) =>
+      user.startsWith('g/oc_1') ? { ...GROUP, agentDeviceId: null, effort: 'low' as const, agentKind: 'codex' as const } : null);
+    const follower = createImChannelDefaultRouteSync({
+      source: 'feishu',
+      config: CONFIG,
+      isRouteUsable: vi.fn(async () => true),
+      routeOverrideFor,
+    });
+
+    await follower.syncUnderLock('group');
+    await follower.syncUnderLock('dm');
+
+    expect(routeOverrideFor).toHaveBeenCalledWith('cli_bot', 'g/oc_1/omt_t');
+    expect((await rowOf('group')).model).toBe(GROUP.model);
+    expect(parseImDefaultRouteRecord((await rowOf('group')).imDefaultRoute)?.fp).toBe('fp-group');
+    expect((await rowOf('dm')).model).toBe(NEW.model);
+  });
+
+  /**
+   * 绑定项目的群(2026-11-23 用户裁决): 群任务在项目目录里时跟随「项目与模型」里那一行, 还在
+   * 对话目录里的任务仍跟随渠道设置, 直到 `/new`。生产入口 createImChannelDefaultRouteSync 的
+   * laneProjectDefaultsFor。最小失败输入: 同一个群的两条任务, 一条在项目目录、一条在对话目录,
+   * 各收到一条消息。tier: unit(真 SQLite)。
+   */
+  it('群任务在绑定项目目录里时跟随项目设置, 留在对话目录里的仍跟随渠道', async () => {
+    const PROJECT: ImDefaultRoute = { agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'xhigh' };
+    await insertTask('in-project', OLD);
+    await db.update(sessions).set({ feishuOpenId: 'g/oc_1', workingDir: '/proj/cindy' }).where(eq(sessions.id, 'in-project'));
+    await insertTask('in-dialogue', OLD);
+    await db.update(sessions).set({ feishuOpenId: 'g/oc_1/omt_t' }).where(eq(sessions.id, 'in-dialogue'));
+    mocks.resolveDefaults.mockResolvedValue({ ...NEW, fingerprint: 'fp-new' });
+    const resolveProject = vi.fn(async () => ({
+      ...PROJECT,
+      effort: 'xhigh' as const,
+      agentDeviceId: null,
+      permissionMode: 'bypassPermissions' as const,
+      fastMode: false,
+      fingerprint: 'fp-project',
+    }));
+    const laneProjectDefaultsFor = vi.fn((_bot: string, _user: string, dir: string) =>
+      dir === '/proj/cindy' ? { fingerprint: 'fp-project', permissionMode: 'bypassPermissions' as const, resolve: resolveProject } : null);
+    const follower = createImChannelDefaultRouteSync({
+      source: 'feishu',
+      config: CONFIG,
+      isRouteUsable: vi.fn(async () => true),
+      laneProjectDefaultsFor,
+    });
+
+    await follower.syncUnderLock('in-project');
+    await follower.syncUnderLock('in-dialogue');
+
+    expect(laneProjectDefaultsFor).toHaveBeenCalledWith('cli_bot', 'g/oc_1', '/proj/cindy');
+    expect((await rowOf('in-project')).model).toBe(PROJECT.model);
+    expect(parseImDefaultRouteRecord((await rowOf('in-project')).imDefaultRoute)?.fp).toBe('fp-project');
+    expect((await rowOf('in-dialogue')).model).toBe(NEW.model);
+    // 记录已是项目的指纹后, 下一条消息不再解析。
+    resolveProject.mockClear();
+    await follower.syncUnderLock('in-project');
+    expect(resolveProject).not.toHaveBeenCalled();
+  });
+
   it('rechecks an automatic default after catalog changes without replacing manual task choices', async () => {
     mocks.fingerprint.mockReturnValue('automatic-intent');
     await insertTask('following', OLD, { record: buildImDefaultRouteRecord('resolved-old', OLD) });

@@ -91,6 +91,7 @@ export interface MobilePendingSendItem {
   sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
   firstSendAccepted?: boolean;
+  waitingForRemoteAccount?: true;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
   thumbs: MobileOutboxThumb[];
@@ -426,6 +427,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       }),
       phase,
       firstSendAccepted: input.acceptedFirstSendClientIds?.has(item.clientId),
+      ...(phase === 'queued' && item.waitingForRemoteAccount === true ? { waitingForRemoteAccount: true as const } : {}),
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,

@@ -37,10 +37,12 @@ import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/re
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
+import fileOpener from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-file-opener.md?raw';
 import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
 import bundledSkills from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
+import formDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-form-dialog.md?raw';
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
 import taskView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-task-view.md?raw';
 import recommendations from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-recommendations.md?raw';
@@ -87,10 +89,12 @@ export const FORGE_GUIDE = [
   sessionContext,
   directoryPicker,
   panelPreview,
+  fileOpener,
   browserExtension,
   bundledSkills,
   workspaceSessions,
   confirmDialog,
+  formDialog,
   mainView,
   taskView,
   recommendations,

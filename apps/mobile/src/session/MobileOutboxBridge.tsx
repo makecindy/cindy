@@ -20,6 +20,7 @@ import {
 } from "@/device-link/remoteStatus";
 import { i18n } from "@/i18n";
 import {
+  bindOutboxProjection,
   createDurableOutboxDelivery,
   type DeliveryProjection,
 } from "./durableOutboxDelivery";
@@ -149,28 +150,14 @@ export function MobileOutboxBridge() {
     const knownClearBoundaries = new Map<string, { epoch: number; value: number | null }>();
     // What a host answered belongs to the connection it answered on: a host that
     // restarted or was replaced by an older build must be asked again.
-
-    const learnProjection = (r: DurableOutboxRecord, projection: unknown) => {
+    const learnProjection = (r: DurableOutboxRecord, projection: unknown, epoch: number) => {
       if (!projection || typeof projection !== 'object') return;
-      const epoch = connectionEpochFor(r.deviceId);
       const value = projection as { inputDeliveryVersion?: unknown; clearBoundaryMs?: unknown };
       if (value.inputDeliveryVersion === 1) durableHosts.set(r.deviceId, epoch);
       if (value.clearBoundaryMs === null
         || (typeof value.clearBoundaryMs === 'number' && Number.isFinite(value.clearBoundaryMs))) {
-        knownClearBoundaries.set(leaseKey(r), { epoch, value: value.clearBoundaryMs });
+        knownClearBoundaries.set(outboxSessionKey(r), { epoch, value: value.clearBoundaryMs });
       }
-    };
-    const epochs = new Map<string, { authority: number; remote: number }>();
-    const leaseKey = outboxSessionKey;
-    const captureProjectionEpoch = (r: DurableOutboxRecord) => {
-      epochs.set(leaseKey(r), {
-        authority: remoteSessionStore.captureInputProjectionAuthorityEpoch(
-          r.item.sessionId,
-        ),
-        remote: remoteSessionStore.captureInputProjectionRemoteEpoch(
-          r.item.sessionId,
-        ),
-      });
     };
     const messageLeases = createOutboxMessageLeases({
       isCurrent,
@@ -187,7 +174,6 @@ export function MobileOutboxBridge() {
       canRun,
       sessionPolicy,
       projection: async (r) => {
-        captureProjectionEpoch(r);
         return invoke<DeliveryProjection>(
           r.deviceId,
           "maker:input:get-projection",
@@ -201,11 +187,8 @@ export function MobileOutboxBridge() {
       },
       knownProjection: (r) => {
         const epoch = connectionEpochFor(r.deviceId);
-        const boundary = knownClearBoundaries.get(leaseKey(r));
+        const boundary = knownClearBoundaries.get(outboxSessionKey(r));
         if (durableHosts.get(r.deviceId) !== epoch || boundary?.epoch !== epoch) return undefined;
-        // The enqueue reply is applied with the epoch captured here, exactly as
-        // it would be after a fetched projection.
-        captureProjectionEpoch(r);
         return {
           ...EMPTY_INPUT_PROJECTION,
           sessionId: r.item.sessionId,
@@ -219,18 +202,15 @@ export function MobileOutboxBridge() {
         ...fields, appState: AppState.currentState,
       }),
       session: (r) => maker(r).getSession(r.item.sessionId),
-      applyProjection: (r, projection) => {
-        guard();
-        // Every fetched projection and enqueue reply passes through here.
-        learnProjection(r, projection);
-        const epoch = epochs.get(leaseKey(r));
-        if (epoch)
-          remoteSessionStore.setInputProjectionIfCurrent(
-            r.item.sessionId,
-            projection,
-            epoch.authority,
-            epoch.remote,
-          );
+      bindProjection: (r) => {
+        const apply = bindOutboxProjection(
+          remoteSessionStore, r.item.sessionId, () => connectionEpochFor(r.deviceId),
+        );
+        return (projection) => {
+          guard();
+          const epoch = apply(projection);
+          if (epoch !== undefined) learnProjection(r, projection, epoch);
+        };
       },
       readSessionForPreparation: (record) => freshSession(record) ? undefined : readSessionOnce(record),
       prepare: async (r, prefetchedSession) => {
