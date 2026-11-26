@@ -4764,6 +4764,7 @@
         "discoveryHint": "These models were returned by the provider catalog. Speech execution has not been tested.",
         "saved": "Added",
         "reference": "Reference",
+        "realtimeConfirmed": "Realtime endpoint confirmed",
         "discovered": "Discovered",
         "more": "More speech models ({{count}})",
         "manual": "Enter a speech model ID",

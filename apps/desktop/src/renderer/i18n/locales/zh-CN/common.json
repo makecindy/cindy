@@ -4721,6 +4721,7 @@
         "discoveryHint": "以下型号由供应商目录返回，尚未验证语音调用。",
         "saved": "已添加",
         "reference": "参考型号",
+        "realtimeConfirmed": "实时端点已确认",
         "discovered": "目录返回",
         "more": "更多语音型号（{{count}}）",
         "manual": "手动输入语音型号",

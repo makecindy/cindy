@@ -4820,6 +4820,7 @@
         "discoveryHint": "Estes modelos foram devolvidos pelo catálogo do fornecedor. A execução de voz não foi testada.",
         "saved": "Adicionado",
         "reference": "Referência",
+        "realtimeConfirmed": "Endpoint em tempo real confirmado",
         "discovered": "Descoberto",
         "more": "Mais modelos de voz ({{count}})",
         "manual": "Introduzir um ID de modelo de voz",
