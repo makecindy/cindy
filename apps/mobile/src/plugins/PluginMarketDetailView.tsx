@@ -45,7 +45,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
       {!online ? <PluginNotice icon="offline" testID="plugins.market.detailOffline" title={t("plugins.market.offline", { device })} /> : null}
       {detail.failed ? (
         <PluginNotice icon="warning" testID="plugins.market.detailFailed" title={t("plugins.loadFailed")}
-          actions={[{ label: t("plugins.retry"), onPress: market.retryDetail, disabled: !online }]} />
+          actions={[{ label: t("plugins.retry"), onPress: market.retryDetail, disabled: !online, testID: "plugins.market.detailRetry" }]} />
       ) : null}
       {state.kind === "unknown" ? (
         <PluginNotice icon="warning" testID="plugins.market.resultUnknown" title={t("plugins.notice.title.resultUnknown")}

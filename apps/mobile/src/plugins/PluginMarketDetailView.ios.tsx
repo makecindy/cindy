@@ -70,7 +70,7 @@ export function PluginMarketDetailView({ detail, market, pageNotice }: PluginMar
           {detail.failed ? (
             <VStack modifiers={quiet}>
               <PluginNativeNotice icon="warning" testID="plugins.market.detailFailed" title={t("plugins.loadFailed")}
-                actions={[{ label: t("plugins.retry"), onPress: market.retryDetail, disabled: !online }]} />
+                actions={[{ label: t("plugins.retry"), onPress: market.retryDetail, disabled: !online, testID: "plugins.market.detailRetry" }]} />
             </VStack>
           ) : null}
           {state.kind === "unknown" ? (

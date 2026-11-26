@@ -1459,6 +1459,27 @@ describe("older Host without a repository identity", () => {
     });
 });
 
+// Dispatcher S-1 / T (seventh reshoots): after a failed market detail read, Retry recovered on iOS but not, as captured,
+// on Android. Both views' own Retry control reads the detail again (the same market.retryDetail; the page test covers
+// what the read then shows), and it is unavailable only while that computer is offline. Existing behaviour on
+// 5983ba71dd for both platforms; the Android capture's difference came from the mock (see the page test). Tier: unit/jsdom.
+it.each([["iOS", MarketDetailView], ["Android", AndroidMarketDetailView]] as const)(
+  "%s market detail's own Retry reads the failed detail again", (_platform, Detail) => {
+    const item = { pluginId: "market/demo", ghostId: "demo", name: "Market Demo", description: "From the market",
+      publisherKind: "official", scope: "public", sourceType: "server", installState: "not-installed", icon: null };
+    const market = marketModel();
+    const failed = { item, target: row.host, loading: false, failed: true };
+    const { rerender } = mount(Detail, { market, detail: failed });
+    const retry = () => bridge.props.get("plugins.market.detailRetry");
+    // Android: the Pressable's `disabled`; iOS: the SwiftUI button's `disabled` modifier.
+    const unavailable = () => !!retry().disabled || (retry().modifiers ?? []).some((m: any) => m?.disabled === true);
+    expect(unavailable()).toBe(false);
+    act(() => retry().onPress());
+    expect(market.retryDetail).toHaveBeenCalledOnce();
+    rerender({ market: { ...market, online: false }, detail: failed });
+    expect(unavailable()).toBe(true);
+  });
+
 // Dispatcher P-4 (iOS sixth reshoot): the market detail's source label beside the name showed "Tea…" and, at AX5, one
 // letter per line. It never truncates or wraps; once it would take more than 40% of the title column it goes under the
 // name, as in the market rows. Minimal failing input: a 120 pt label in a 200 pt column. Tier: unit/jsdom.
