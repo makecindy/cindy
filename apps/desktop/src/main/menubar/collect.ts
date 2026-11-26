@@ -223,16 +223,17 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
       : task);
   const consuming = consumingSourceIds(tasks, providers, pluginEngines);
   const collectedAt = deps.now?.() ?? deps.nowMs;
+  const currentRemote = remote.map(source => source.family === 'zhipu'
+    ? currentZhipuQuota(source, collectedAt) : source);
   for (const source of sources) {
     // A GLM window may have reset while another provider or task was still loading.
     if (source.kind === 'subscription' && source.family === 'zhipu') {
-      source.windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > collectedAt);
-      if (!source.windows.length) source.updatedAtMs = null;
+      Object.assign(source, currentZhipuQuota(source, collectedAt));
     }
     if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
   const distinct = distinctLocalSubscriptions(sources);
-  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, remote));
+  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, currentRemote));
 
   let updatedAtMs: number | null = null;
   for (const source of sources) {
@@ -904,6 +905,11 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
     })) ?? [],
     credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
   };
+}
+
+function currentZhipuQuota(source: MenubarSubscriptionInput, now: number): MenubarSubscriptionInput {
+  const windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > now);
+  return { ...source, windows, updatedAtMs: windows.length ? source.updatedAtMs : null };
 }
 
 export function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {

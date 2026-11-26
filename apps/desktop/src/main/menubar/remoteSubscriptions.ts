@@ -150,8 +150,7 @@ async function readAccount(
     if (result.status === 'unsupported') return [];
     if (result.status !== 'ready' || result.stale) return null;
     source = zhipuSource(provider, result);
-    source.windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > deps.nowMs);
-    if (!source.windows.length) source.updatedAtMs = null;
+
   }
   if (!source) return null;
   return [{ ...source, id: `remote:${device.id}:${provider.id}`, device }];
@@ -301,7 +300,7 @@ export function retainRemoteSubscriptions(
     seen.set(id, entry);
     sources.push({
       ...entry.source,
-      windows: entry.source.windows.map((window) =>
+      windows: entry.source.family === 'zhipu' ? entry.source.windows : entry.source.windows.map((window) =>
         window.resetsAtMs !== null && window.resetsAtMs <= nowMs ? { ...window, usedPercent: 0, resetsAtMs: null } : window,
       ),
       lastSeenAtMs: entry.seenAtMs,

@@ -236,6 +236,22 @@ describe('collectMenubarInputs', () => {
     expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
   });
 
+  // Tier 2: the same cached peer result is reused across a window reset.
+  it('drops expired remote GLM windows at each menu bar collection', async () => {
+    const peers = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: ready({
+      ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW + 2 }, weekly: { usedPercent: 35, resetsAt: NOW + 1 },
+    }) }), [provider({ id: 'glm-peer', agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true,
+      zhipuCodingPlanUsage: true } as never)], 'unrelated'));
+    let now = NOW;
+    const cached = deps({ listProviders: async () => [], readRemoteSubscriptions: async () => peers.sources, now: () => now });
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }, { kind: 'week' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toEqual([]);
+    expect(peers.sources[0]?.windows).toHaveLength(2);
+  });
+
   it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {
     const reset = NOW + 86_400_000;
     const providers = [
