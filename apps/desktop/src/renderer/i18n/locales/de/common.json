@@ -8773,7 +8773,7 @@
         "networkConnections": "Kann Verbindungen zu {{label}}-Adressen herstellen, die du hinzufügst",
         "networkConnectionsDetail": "Adressen werden in den Einstellungen dieses Plugins hinzugefügt. Jede neue Adresse erfordert deine Bestätigung, und die von dir angegebenen Zugangsdaten werden nur für die zugehörige Adresse eingefügt.",
         "networkConnectionsGlabCli": "Kann sich mit hinzugefügten {{label}}-Adressen verbinden und lokal per glab angemeldete Instanzen nutzen",
-        "networkConnectionsGlabCliDetail": "In den Plugin-Einstellungen hinzugefügte Zugangsdaten haben Vorrang; für andere Instanzen liest der Host bei Bedarf das lokale glab-Token und fügt es nur in HTTPS-Anfragen an diese Instanz ein. Der Plugin-Code kann das Token weder lesen noch speichern.",
+        "networkConnectionsGlabCliDetail": "In den Plugin-Einstellungen hinzugefügte Zugangsdaten haben Vorrang; für andere Instanzen liest Cindy bei Bedarf das lokale glab-Token und fügt es nur in HTTPS-Anfragen an diese Instanz ein. Der Plugin-Code kann das Token weder lesen noch speichern.",
         "codeDetailNetwork": "Läuft in einer isolierten Sandbox ohne Zugriff auf deine Dateien. Der Netzwerkzugriff ist auf die oben aufgeführten Domains beschränkt und wird vom Host vermittelt.",
         "codeDetailWithNode": "Die Panel-Oberfläche läuft in einer isolierten Sandbox. Die lokale Verarbeitung erfolgt über die oben deklarierte Node-Laufzeit.",
         "added": "Neu",
