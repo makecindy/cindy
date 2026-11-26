@@ -65,7 +65,10 @@ function fixture() {
     listen: () => () => {},
     close: async () => {},
   } as unknown as AppConnection;
-  const outgoing: JSONRPCMessage[] = [];
+  // Await the matching SDK response instead of polling/scanning all prior messages.
+  // The 256-context boundary must exercise real Host/SDK calls without accumulating
+  // hundreds of Windows timer ticks and quadratic deep-equality comparisons.
+  const responses = new Map<number, (message: JSONRPCMessage) => void>();
   const connect = AppBridge.prototype.connect;
   vi.spyOn(AppBridge.prototype, 'connect').mockImplementation(function (
     this: AppBridge,
@@ -73,8 +76,10 @@ function fixture() {
   ) {
     const send = transport.send.bind(transport);
     transport.send = async (message, options) => {
-      outgoing.push(message);
       await send(message, options);
+      if ('id' in message && typeof message.id === 'number' && !('method' in message)) {
+        responses.get(message.id)?.(message);
+      }
     };
     return connect.call(this, transport);
   });
@@ -120,16 +125,20 @@ function fixture() {
       const document = await host.open('renderer:1', sessionId, clientId, {});
       const request = async (method: string, params: Record<string, unknown>) => {
         const id = ++requestId;
-        await host.dispatch('renderer:1', sessionId, document.viewId, {
-          jsonrpc: '2.0',
-          id,
-          method,
-          params,
+        const response = new Promise<JSONRPCMessage>((resolve) => {
+          responses.set(id, resolve);
         });
-        await vi.waitFor(() => expect(outgoing).toContainEqual(expect.objectContaining({ id })), {
-          interval: 1,
-        });
-        return outgoing.find((message) => 'id' in message && message.id === id)!;
+        try {
+          await host.dispatch('renderer:1', sessionId, document.viewId, {
+            jsonrpc: '2.0',
+            id,
+            method,
+            params,
+          });
+          return await response;
+        } finally {
+          responses.delete(id);
+        }
       };
       await request('ui/initialize', {
         protocolVersion: '2026-01-26',
