@@ -277,3 +277,28 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
   目标时不恢复该任务（与旧版行为一致），不会在内置引擎上运行。
 - send_to_session、/learn 不新增字段或 channel。自建中转无需改动。
 
+## 每轮权限闸（2026-11-25）
+
+IM 群聊、访客与个人微信的轮次带宿主的 `turnPermissionPolicy`（哪些工具调用必须由人确认）。内置引擎在执行前的审批点执行它；
+ACP Agent 不问就执行的调用 Cindy 看不到，所以 ACP wire 追加一个 Cindy 扩展（ACP v1 没有对应约定）：
+Agent 在 `initialize` 结果**顶层** `_meta.permissionGate.supported === true` 时，会话能力 `turnPermissionPolicy` 为支持，
+`unsupportedPermissionModes` 为 `['bypassPermissions']`（Cindy 的「全部允许」会自动同意请求）。带策略或只许文字回复
+（`toolsDisabled`）的轮次，`session/prompt` 参数的 `_meta.permissionGate` 带 `scope: 'all-tool-calls'`，Agent 在这一轮
+及其答完后继续的工作里执行任何工具前都发 `session/request_permission`。声明支持后，所有轮次（包括普通轮次）的
+请求参数都带 `_meta.permissionGate.turnId`，Agent 在每个审批请求的同名字段回传发起该工作的轮次 ID。宿主仅处理当前
+轮次的审批请求，空闲时处理最近正常结束的轮次；已被新轮次取代、被取消或无法关联的请求拒绝。
+`routine: true` 表示 Agent 自己的规则本不会询问。宿主合并同一工具调用 ID 的已有字段，按 ACP `kind` 映射频道工具名，
+并检查自定义工具名。仅当操作和输入可识别且规则均允许时自动选 `allow_once`；执行命令必须提供 `rawInput.command`。
+IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，写文件、运行命令等仍走渠道审批。普通 IM 私聊的审批也按 ACP
+工具类型和引擎名称做安全检查。策略回调抛错按需要确认处理。主人运行中切到「全部允许」时，已受理的轮次按新档位处理，
+新策略轮仍按渠道原有准入规则。`toolsDisabled` 轮次拒绝全部请求（「全部允许」也拒绝）。
+策略轮插话只进入同样带闸的轮次（运行中的轮次没带闸时回「没有进行中的回合」，宿主改为下一轮发送），并只叠加限制。
+没有声明的 Agent：策略轮在受理前以 `TurnPermissionPolicyUnsupportedError('acp', mode)` 拒绝，IM 按「当前引擎不支持」提示；
+`toolsDisabled` 轮次照旧运行（行为与本扩展之前相同）；未声明支持的引擎也不接收上述 `_meta.permissionGate`。
+
+兼容：全部存量插件引擎不声明，行为只有「IM 策略轮被明确拒绝」这一处可见，此前这些任务整体不接 IM。不新增 manifest 字段、
+权限、批准、安装布局或包格式，已装插件无需重装或重新确认（存量插件影响：无）。远程与分享任务的能力沿用 `negotiatedCapabilities`
+带回控制端；控制端 IM 在插件引擎任务的能力未声明支持时于发送前拒绝策略轮，所以被控端仍是旧版（其 ACP 会话忽略发送选项）
+时 fail-closed，不会无闸运行。不新增 channel、中转帧或 IPC。实现见 maker-core `agents/acp/{protocol,capabilities,session}.ts`
+与 Desktop `im/shared/turnRunner.ts`；回归见 `acp-session.test.ts`「AcpSession per-turn permission gate」与
+`channelToolPolicy.test.ts`。

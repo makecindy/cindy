@@ -53,7 +53,7 @@ import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } fro
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
-  type AutoReviewHistoryMessage,
+  type AutoReviewHistory,
 } from '../maker-ipc/autoReviewUserIntent.js';
 import type {
   Maker,
@@ -384,7 +384,7 @@ export interface MakerScheduleRunnerDeps {
   logger: Logger;
   /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
   diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
-  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
@@ -3315,7 +3315,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       origin,
       onPreparing: async () => {
         await this.assertQueuedModelSelectionForPreparing(sessionId, routingBaseline.resolvedSelection);
-        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
+        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute, true);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
           // Preparation may settle a newer owner choice even when this run
@@ -3827,7 +3827,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (!selection) return;
     const live = this.deps.maker.getSession(sessionId);
     if (selection.agentKind !== 'acp') {
-      this.assertQueuedModelSelection(live, selection);
+      this.assertQueuedModelSelection(live, selection, true);
       return;
     }
     // Switching to a plugin engine closes the previous live session and defers
@@ -3857,13 +3857,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedModelSelection(
     live: ReturnType<Maker['getSession']>,
     selection: ScheduledModelSelection | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!selection) return;
     // Provider/model IDs are only unique within an Agent location. Check the
     // actual runtime at both queue boundaries, after pending user switches.
-    if (!live || live.agentKind !== selection.agentKind ||
+    if ((!live && !allowRebuildingSession) || (live && (live.agentKind !== selection.agentKind ||
       (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
+      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
@@ -3880,9 +3881,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedExplicitRoute(
     live: ReturnType<Maker['getSession']>,
     route: { agentKind: EngineKind; model: string; providerId: string | null } | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!route) return;
-    if (!live || live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId) {
+    if ((!live && !allowRebuildingSession) || (live &&
+      (live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
