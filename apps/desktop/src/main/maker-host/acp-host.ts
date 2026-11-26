@@ -17,7 +17,7 @@ import {
   type Capabilities,
   type Logger,
 } from '@cindy/maker-core';
-import { rememberPluginHarnessModels } from './pluginEngineModelCache.js';
+import { observePluginEngineModelDetails, rememberPluginHarnessModels } from './pluginEngineModelCache.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
@@ -27,7 +27,9 @@ import { withPluginEngineAccounts } from '../plugin-engine-accounts/agent.js';
 export { createAcpProcessTransport } from './acp-transport.js';
 export {
   getCachedPluginHarnessModels,
+  getReportedPluginEngineModelDetails,
   onPluginHarnessModelsChanged,
+  onReportedPluginEngineModelDetailsChanged,
   type CachedPluginEngineModel,
 } from './pluginEngineModelCache.js';
 
@@ -84,6 +86,7 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
       ),
     },
     onSessionCapabilities: rememberCapabilities,
+    observeModelDetails: observePluginEngineModelDetails,
   });
 }
 

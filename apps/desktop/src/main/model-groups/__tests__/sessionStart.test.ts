@@ -12,6 +12,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ModelGroupResolveRequest, ModelGroupResolveResult } from '../../../shared/modelGroups';
+
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
+
 import { createModelGroupSessionStart, type ModelGroupSessionStartPorts } from '../sessionStart';
 
 const routed = (agentDeviceId?: string): ModelGroupResolveResult => ({
@@ -38,6 +41,14 @@ function ports(result: ModelGroupResolveResult) {
 }
 
 describe('a mode picks the first source of a new task and is settled when its first turn is dispatched', () => {
+  // 2026-11-26 audit: only the scheduler caught a failing resolve; a Worker or other entry failed to create its
+  // task. Minimal input: resolve throws. Expected: the entry creates the task on its saved model.
+  it('creates the task on its saved model when routing itself fails', async () => {
+    const { value } = ports(routed());
+    const start = createModelGroupSessionStart({ ...value, resolve: async () => { throw new Error('catalog read failed'); } });
+    await expect(start.prepare('daily', { keptModelName: 'gpt-saved' })).resolves.toBeNull();
+  });
+
   it('gives the entry the picked source and settles only at dispatch, under that message, once', async () => {
     const { value, calls } = ports(routed('desk-2'));
     const start = createModelGroupSessionStart(value);
@@ -62,6 +73,26 @@ describe('a mode picks the first source of a new task and is settled when its fi
     start.dispatched('task-1', 'msg-2');
     expect(calls.commit).toHaveBeenCalledOnce();
     expect(calls.writeNote).toHaveBeenCalledOnce();
+  });
+
+  // model-groups.md §3(2026-11-26，dash 建议)：本机来源背后是电脑组或几个账号时，说明写到实际分到的那台电脑或账号；
+  // 别的电脑上的来源不问(那台自己分)，读不到时照旧写，不让说明迟迟不出现。
+  it('names the computer or account the inner group or pool assigned, only for a local source', async () => {
+    const run = async (result: ModelGroupResolveResult, innerChoice: ModelGroupSessionStartPorts['innerChoice']) => {
+      const { value, calls } = ports(result);
+      const start = createModelGroupSessionStart({ ...value, innerChoice });
+      start.attach('task-1', (await start.prepare('daily', { keptModelName: 'gpt-saved' }))!.token);
+      start.dispatched('task-1', 'msg-1');
+      await vi.waitFor(() => expect(calls.writeNote).toHaveBeenCalledOnce());
+      return calls.writeNote.mock.calls[0]![1].modelName as string;
+    };
+    const asked = vi.fn(async () => 'work@example.com');
+    expect(await run(routed(), asked)).toMatch(/ · work@example\.com$/);
+    expect(asked).toHaveBeenCalledWith('task-1', { providerId: 'openai-work', model: 'gpt-astra' });
+    expect(await run(routed(), async () => null)).not.toContain('work@example.com');
+    const remote = vi.fn(async () => 'never');
+    expect(await run(routed('desk-2'), remote)).not.toContain('never');
+    expect(remote).not.toHaveBeenCalled();
   });
 
   it('keeps the saved model when nothing is usable and says so; a deleted mode changes nothing', async () => {

@@ -416,6 +416,8 @@ export type SessionSendResult =
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
       diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      /** 上游拒绝这次派发时的 HTTP 状态（400–599），有界数值。 */
+      upstreamStatus?: number;
     };
 
 export interface SessionTurnControlSnapshot {
@@ -433,6 +435,36 @@ export type SessionGracefulStopResult =
   | { status: 'requested'; turnGeneration: number }
   | { status: 'unconfirmed'; turnGeneration: number; reason: string };
 
+const MAX_STALL_DIAGNOSTIC_TOOLS = 5;
+const SAFE_TOOL_LABEL_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** ACP 规范定义的固定 ToolKind 白名单；ACP 的 toolName 来自展示标题，不能当工具标识符放行。 */
+const ACP_TOOL_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read',
+  'edit',
+  'delete',
+  'move',
+  'search',
+  'execute',
+  'think',
+  'fetch',
+  'switch_mode',
+  'other',
+]);
+
+/**
+ * 仅保留受控工具标识，供超时告警日志与错误详情使用：
+ * ACP 会话只认固定 ToolKind 白名单，避免标题里的短文件名（如 payroll.csv / .env）或命令进入诊断。
+ */
+function safeActiveToolLabel(agentKind: EngineKind, data: Record<string, unknown>): string | null {
+  if (agentKind === 'acp' || typeof data.acpKind === 'string') {
+    const acpKind = typeof data.acpKind === 'string' ? data.acpKind.trim().toLowerCase() : '';
+    return ACP_TOOL_KIND_ALLOWLIST.has(acpKind) ? acpKind : null;
+  }
+  const toolName = typeof data.toolName === 'string' ? data.toolName.trim() : '';
+  if (toolName && SAFE_TOOL_LABEL_RE.test(toolName)) return toolName;
+  return null;
+}
+
 type TurnControlState = {
   generation: number;
   toolLoopMonitor: ToolLoopMonitor | null;
@@ -440,6 +472,8 @@ type TurnControlState = {
   /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
   awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
+  /** 仅保存无用户正文的安全工具标签（短标识符或 ACP kind），供超时诊断使用。 */
+  activeToolLabels: Map<string, string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
   gracefulStopState: SessionGracefulStopState;
@@ -1175,6 +1209,9 @@ export class Session {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
             ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
+            ...(!reservation.cancelled && e.upstreamStatus !== undefined
+              ? { upstreamStatus: e.upstreamStatus }
+              : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
@@ -2679,6 +2716,7 @@ export class Session {
       pendingToolLoop: null,
       awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
+      activeToolLabels: new Map(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
       gracefulStopState: 'none',
@@ -2802,8 +2840,14 @@ export class Session {
       if (data.runtimeActivity === 'snapshot') {
         return;
       }
-      if (toolUseId) control.activeToolIds.add(toolUseId);
-      else control.anonymousActiveTools += 1;
+      if (toolUseId) {
+        control.activeToolIds.add(toolUseId);
+        const label = safeActiveToolLabel(this.agentKind, data);
+        if (label) control.activeToolLabels.set(toolUseId, label);
+        else control.activeToolLabels.delete(toolUseId);
+      } else {
+        control.anonymousActiveTools += 1;
+      }
       return;
     }
     if (event.type === 'tool_result_full' || event.type === 'tool_result') {
@@ -2813,7 +2857,10 @@ export class Session {
           ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
           : []),
       ];
-      for (const id of ids) control.activeToolIds.delete(id);
+      for (const id of ids) {
+        control.activeToolIds.delete(id);
+        control.activeToolLabels.delete(id);
+      }
       if (ids.length === 0 && control.anonymousActiveTools > 0) {
         control.anonymousActiveTools -= 1;
       }
@@ -3571,12 +3618,36 @@ export class Session {
     if (this.hasRunningBackgroundTasks()) return;
     const now = Date.now();
     const msSinceLastEvent = this.lastEventAt > 0 ? now - this.lastEventAt : null;
+    const control =
+      this.turnControlState?.generation === this.turnGeneration
+        ? this.turnControlState
+        : null;
+    const activeToolCount = control
+      ? control.activeToolIds.size + control.anonymousActiveTools
+      : 0;
+    const activeToolIds = control
+      ? [...control.activeToolIds].slice(0, MAX_STALL_DIAGNOSTIC_TOOLS)
+      : [];
+    const activeTools = control
+      ? activeToolIds.map((id) => {
+          const label = control.activeToolLabels.get(id);
+          return label ? `${label}/${id}` : id;
+        })
+      : [];
     this.logger.warn('turn stall watchdog tripped — no product activity, interrupting turn', {
       turnStallMs: this.turnStallMs,
       lastEventType: this.lastEventType,
       msSinceLastEvent,
+      ...(activeToolCount > 0 ? { activeToolCount } : {}),
+      ...(activeTools.length > 0 ? { activeTools } : {}),
     });
     const minutes = Math.round(this.turnStallMs / 60_000);
+    const activeToolDetail = activeTools.length > 0
+      ? `: ${activeTools.join(', ')}${activeToolCount > activeTools.length ? `, +${activeToolCount - activeTools.length} more` : ''}`
+      : '';
+    const stallCause = activeToolCount > 0
+      ? `${activeToolCount} unfinished tool call${activeToolCount === 1 ? '' : 's'} still pending${activeToolDetail}`
+      : 'upstream, tools and the agent subprocess were all silent';
     this.fanOutEvent({
       type: 'error',
       data: {
@@ -3584,7 +3655,7 @@ export class Session {
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         message:
           `This turn produced no activity at all for ${minutes} minutes ` +
-          '(upstream, tools and the agent subprocess were all silent); ' +
+          `(${stallCause}); ` +
           'it was interrupted automatically. You can send the next message to continue.',
         isTerminal: true,
         reason: this.handle.isPreparingUserTurn?.()
@@ -3593,6 +3664,8 @@ export class Session {
         turnStallMs: this.turnStallMs,
         lastEventType: this.lastEventType,
         msSinceLastEvent,
+        ...(activeToolCount > 0 ? { activeToolCount } : {}),
+        ...(activeToolIds.length > 0 ? { activeToolIds } : {}),
       },
       source: this.eventSource,
     } as AgentEvent);

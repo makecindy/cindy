@@ -62,6 +62,7 @@ import {
   triggerXaiSubscriptionUsageRefresh,
 } from '../maker-ipc/usage.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { isCreditUsageRateLimited } from '../model-access/creditUsageRateLimit.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -741,7 +742,8 @@ export class QuotaOverviewService {
     if (!user) return null;
     if (user.membershipKind === 'org') return auth.dataOwnerId ? `quota:cloud:${auth.dataOwnerId}:${auth.ownerGeneration}:${readClaudeAccountUsageRevision()}` : null;
     if (user.membershipKind !== 'personal') return null;
-    return `${user.id}:${CURRENT_CINDY_REGION}`;
+    return JSON.stringify([auth.dataOwnerId, auth.ownerGeneration, user.id, authManager.getActiveAuthRealm(), CURRENT_CINDY_REGION,
+      getClientEndpoint('modelAccessApiBaseUrl')]);
   }
 
   private async readBalance(force: boolean, nowMs: number): Promise<MenubarBalanceReading | null> {
@@ -813,6 +815,8 @@ export class QuotaOverviewService {
         pools = totals.reduce((sum, total) => sum + Number(total), 0);
       }
     } catch (error) {
+      if (this.balanceAccountKey() !== accountKey) return null;
+      if (isCreditUsageRateLimited(error)) throw error;
       log.info('credit usage unavailable, falling back to balance', { error: errorMessage(error) });
       const balance = projectModelAccessBalance(await serverApiFetch<unknown>('/api/model-access/balance', options));
       available = Number(balance.available);

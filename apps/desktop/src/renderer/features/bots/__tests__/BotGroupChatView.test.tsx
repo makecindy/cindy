@@ -51,7 +51,12 @@ const mocks = vi.hoisted(() => ({
   groupId: 'g1',
   locationSearch: '',
   locationKey: 'initial',
-  locationState: null as { createdGroupInvite?: string | null } | null,
+  locationState: null as {
+    createdGroupInvite?: string | null;
+    openGroupInviteMenu?: { groupId: string; owner: { dataOwnerId: string; generation: number } } | null;
+  } | null,
+  navigationType: 'POP' as 'POP' | 'PUSH' | 'REPLACE',
+  ownedBots: vi.fn(),
   createInvite: vi.fn(),
   navigate: vi.fn(),
   getBotGroup: vi.fn(),
@@ -94,9 +99,11 @@ vi.mock('react-i18next', async (original) => ({
   }),
 }));
 vi.mock('@/features/cc-agent/hooks/useRemoteSessionSync', () => ({ useRemoteSessionSync: () => {} }));
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (original) => ({
+  ...(await original<typeof import('react-router-dom')>()),
   useLocation: () => ({ pathname: `/bots/groups/${mocks.groupId}`, search: mocks.locationSearch, key: mocks.locationKey, state: mocks.locationState }),
   useNavigate: () => mocks.navigate,
+  useNavigationType: () => mocks.navigationType,
   useParams: () => ({ groupId: mocks.groupId }),
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -334,15 +341,19 @@ function HeaderSlot() {
   return <header data-testid="content-header">{useFeatureContentHeader()}</header>;
 }
 
-function renderView() {
-  return render(
+function groupView() {
+  return (
     <Tooltip.Provider>
     <FeatureSidebarSlotProvider isCollapsed={false}>
       <HeaderSlot />
       <BotGroupChatView />
     </FeatureSidebarSlotProvider>
-    </Tooltip.Provider>,
+    </Tooltip.Provider>
   );
+}
+
+function renderView() {
+  return render(groupView());
 }
 
 beforeEach(() => {
@@ -363,6 +374,8 @@ beforeEach(() => {
   resetBotGroupOutboxForTests();
   mocks.groupId = 'g1';
   mocks.locationState = null;
+  mocks.navigationType = 'POP';
+  mocks.ownedBots.mockReset().mockResolvedValue({ ok: true, bots: [] });
   mocks.locationSearch = '';
   mocks.locationKey = 'initial';
   mocks.createInvite.mockReset().mockResolvedValue({ ok: true, link: 'cindy://chat-invite/preview', expiresAt: null, reusable: true });
@@ -416,7 +429,7 @@ beforeEach(() => {
       cleanupCachedImages: vi.fn(async () => undefined),
       getFileThumbnail: vi.fn(async () => null),
       maker: {
-        chatServer: { createInvite: mocks.createInvite, thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
+        chatServer: { createInvite: mocks.createInvite, ownedBots: mocks.ownedBots, thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => (args[1] as { cacheOnly?: boolean } | undefined)?.cacheOnly
           ? Promise.resolve(mocks.cachedGroup ? { ok: true, group: mocks.cachedGroup } : { ok: false, errorCode: 'NOT_FOUND' })
@@ -808,6 +821,54 @@ describe('BotGroupChatView', () => {
     mocks.groupId = 'g1';
     view.rerender(tree());
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.createInvite).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit, reviewed desktop creation design: outlet plus actual header and Radix menu.
+  // Unlike private-chat creation above, even a delayed first cloud snapshot should
+  // open only the menu. Replaying the history entry must not open it or write links.
+  it('opens the header invite menu on the first created-group entry until dismissed', async () => {
+    const initial = { openGroupInviteMenu: { groupId: 'g1', owner: mocks.ownerGeneration } };
+    const pending = Promise.withResolvers<{ ok: true; group: BotGroupDetail }>();
+    mocks.locationState = initial;
+    mocks.navigationType = 'PUSH';
+    mocks.getBotGroup.mockReturnValueOnce(pending.promise);
+    const user = userEvent.setup();
+    const view = renderView();
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    const group = detail({ serverBacked: true, canInvite: true });
+    pending.resolve({ ok: true, group });
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: /inviteFriendsItem/ })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: /inviteBotsItem/ })).toBeTruthy();
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1', {
+      replace: true, state: { openGroupInviteMenu: null },
+    });
+    expect(mocks.createInvite).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    mocks.groupId = 'g2';
+    mocks.navigationType = 'POP';
+    mocks.locationState = null;
+    view.rerender(groupView());
+    mocks.groupId = 'g1';
+    mocks.locationState = initial;
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+    view.rerender(groupView());
+    const trigger = await screen.findByTestId('chat-group-invite');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menu');
+    await user.pointer({ target: document.documentElement, keys: '[MouseLeft]' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(mocks.createInvite).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /inviteFriendsItem/ }));
+    await screen.findByRole('button', { name: 'bots.groupChat.server.copyLink' });
     expect(mocks.createInvite).toHaveBeenCalledTimes(1);
   });
 
@@ -1721,6 +1782,7 @@ describe('BotGroupChatView', () => {
   });
 
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'darwin' });
     renderView();
     expect(await screen.findByText('周六 8:10 有票')).toBeTruthy();
     // The user's own message is a right-aligned bubble rendered as Markdown.
@@ -1734,6 +1796,27 @@ describe('BotGroupChatView', () => {
     expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:2');
     expect(header.querySelector('button[title]')?.getAttribute('title')).toBe('咪咪bots.groupChat.memberSeparator小满');
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.settings.open' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
+  });
+
+  // Unit regression for the Windows feedback: the existing header test covers the macOS
+  // tooltip. Any nonempty roster reproduces the native title; 175 members match the report.
+  it('keeps the Windows group title clickable without exposing the roster as a native tooltip', async () => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'win32' });
+    const [member] = detail().members;
+    const members = Array.from({ length: 175 }, (_, index) => ({
+      ...member!,
+      botId: `bot-${index}`,
+      name: `Member ${index + 1}`,
+    }));
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ members, messages: [] }) });
+    renderView();
+
+    const header = screen.getByTestId('content-header');
+    const title = await within(header).findByRole('button', { name: /周末出游/ });
+    expect(title.getAttribute('title')).toBeNull();
+    expect(within(header).getByTestId('bot-group-header-summary').textContent).toBe('bots.groupChat.memberCount:175');
+    fireEvent.click(title);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g1?groupSettings=1');
   });
 

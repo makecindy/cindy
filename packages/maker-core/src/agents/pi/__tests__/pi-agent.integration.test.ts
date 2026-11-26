@@ -798,6 +798,48 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   });
 
+  // #11302, integration: command-discovery tests do not inspect what the
+  // provider receives when Pi includes the bundled Learn catalog on a normal turn.
+  it('keeps Learn commands out of the native catalog while preserving user input and explicit invocation', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-learn-catalog-'));
+    const skill = path.join(REPO_ROOT, 'apps/desktop/resources/system-skills/learn/SKILL.md');
+    const deps = buildDeps();
+    deps.getManagedSkills = async () => [{
+      kind: 'agent-skill', name: 'learn', source: 'skill', path: skill, claudeCommandName: 'cindy:learn',
+    }];
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'learn-catalog', workingDir, model: 'pi-test-model' });
+      for (const input of ['Explain the text /learn in this sentence.', '/skill:learn release workflow']) {
+        const before = seenRequests.length;
+        await handle.send({ type: 'user', content: input });
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') break;
+        }
+        const body = JSON.parse(seenRequests[before]!.body);
+        const system = typeof body.system === 'string' ? body.system
+          : body.system.map((block: { text: string }) => block.text).join('\n');
+        const learnDescription = system.match(/<name>learn<\/name>\s*<description>(.*?)<\/description>/s)?.[1];
+        expect(learnDescription).toBeTruthy();
+        expect(learnDescription).not.toMatch(/\/(?:skill:|cindy:)?learn\b/i);
+        const message = body.messages.at(-1);
+        expect(message.role).toBe('user');
+        const text = typeof message.content === 'string' ? message.content
+          : message.content.map((block: { text: string }) => block.text).join('');
+        if (input.startsWith('/skill:')) {
+          expect(text).toContain('start_skill_learning');
+          expect(text).toContain('release workflow');
+        } else {
+          expect(text).toBe(input);
+        }
+      }
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   // Integration: the native before_agent_start tail preserves the exact prefix.
   // A near-budget fragment also exercises file handoff instead of inline argv/env.
   it('appends selected static fragments to the actual system request with the fixed prefix intact', { timeout: 30_000 }, async () => {

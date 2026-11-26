@@ -5,6 +5,7 @@ import { ChevronRight, Monitor, QrCode, Settings2, Smartphone, X } from 'lucide-
 import * as QRCode from 'qrcode';
 
 import cindyIconUrl from '@/../../resources/icon.png?url';
+import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
@@ -516,9 +517,7 @@ export function MobileDownloadDialog({
                     {t('sidebar.mobileDownload.myDevices')}
                   </span>
                   <span className="flex items-center gap-2 text-[var(--confirm-desc)]">
-                    <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--confirm-title)]">
-                      {remotePresentation.otherDeviceCount}
-                    </span>
+                    <Badge className="tabular-nums">{remotePresentation.otherDeviceCount}</Badge>
                     <ChevronRight className="h-4 w-4" aria-hidden="true" />
                   </span>
                 </span>
