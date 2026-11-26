@@ -18,6 +18,7 @@ import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
+  readLocalSubscriptionTaskUsageLimit,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
@@ -33,9 +34,7 @@ import {
   readAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
-  subscriptionPoolAccountUsageLimit,
 } from '../usage/accountUsageLimit.js';
-import { readSubscriptionTaskUsage } from '../subscription-accounts/runtime.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
 import { GoalController, GoalControllerDisposedError } from './controller';
@@ -168,15 +167,12 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       if (row?.agentDeviceId && !row.remoteHostId) return null;
       const subscription = await (async () => {
         if (family === 'claude' || family === 'codex') {
-          const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
-          const pooled = await readSubscriptionTaskUsage(
-            poolProvider,
-            { sessionId, nativeSessionId: row?.sdkSessionId, providerId },
+          const pooled = await readLocalSubscriptionTaskUsageLimit(
+            family,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId, agentKind, modelId },
             { fresh: turnError !== undefined },
           );
-          if (pooled !== undefined) {
-            return subscriptionPoolAccountUsageLimit(family, pooled, { agentKind, modelId });
-          }
+          if (pooled !== undefined) return pooled;
         }
         return readAccountUsageLimit(agentKind, providerId, modelId);
       })().catch(() => null);

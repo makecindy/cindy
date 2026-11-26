@@ -1354,6 +1354,7 @@ import {
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   subscriptionPoolAccountUsageLimit,
+  type AccountUsageLimit,
 } from '../usage/accountUsageLimit.js';
 import { parseGeminiInputRateLimit } from '@cindy/maker-shared/error-redaction';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
@@ -1857,6 +1858,35 @@ export function resolveSessionRuntimeRoute(
  * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
  * 周期额度耗尽,按产品规则只报错不等待。
  */
+/**
+ * Read a local task's bound/pooled subscription usage limit via the subscription pool.
+ * Returns `undefined` when no subscription pool applies (including pre-pool built-in
+ * sessions with a native session id) so callers fall back to the default-account reader.
+ */
+export async function readLocalSubscriptionTaskUsageLimit(
+  family: 'claude' | 'codex',
+  keys: {
+    sessionId: string;
+    nativeSessionId?: string | null;
+    providerId?: string | null;
+    agentKind: string;
+    modelId?: string | null;
+  },
+  options: { fresh?: boolean } = {},
+): Promise<AccountUsageLimit | null | undefined> {
+  const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
+  const pooled = await readSubscriptionTaskUsage(
+    poolProvider,
+    { sessionId: keys.sessionId, nativeSessionId: keys.nativeSessionId, providerId: keys.providerId },
+    options,
+  );
+  if (pooled === undefined) return undefined;
+  return subscriptionPoolAccountUsageLimit(family, pooled, {
+    agentKind: keys.agentKind,
+    modelId: keys.modelId,
+  });
+}
+
 async function resolveSessionUsageResetAt(
   sessionId: string,
   signals: InterruptedTurnErrorSignals,
@@ -1889,15 +1919,12 @@ async function resolveSessionUsageResetAt(
     },
     readLocalLimit: async ({ agentKind, providerId, modelId, sdkSessionId }, family) => {
       if (family === 'claude' || family === 'codex') {
-        const poolProvider = family === 'claude' ? 'anthropic' : 'openai';
-        const pooled = await readSubscriptionTaskUsage(
-          poolProvider,
-          { sessionId, nativeSessionId: sdkSessionId, providerId },
+        const pooled = await readLocalSubscriptionTaskUsageLimit(
+          family,
+          { sessionId, nativeSessionId: sdkSessionId, providerId, agentKind, modelId },
           { fresh: true },
         );
-        if (pooled !== undefined) {
-          return subscriptionPoolAccountUsageLimit(family, pooled, { agentKind, modelId });
-        }
+        if (pooled !== undefined) return pooled;
       }
       return family === 'claude'
         ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId ?? undefined, { fresh: true }), modelId)
