@@ -124,6 +124,8 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
     // utility 窗的统一约定:按 key 排除,不枚举取值(见上方第 2 条)。
     parsed.searchParams.has('view') ||
     parsed.searchParams.has('sidebarWindow') ||
+    // Remote transport peers use a separate renderer (and dev-server port).
+    ['direct', 'files', 'recording'].includes(parsed.searchParams.get('mode') ?? '') ||
     // These renderer/index.tsx entries never mount MainLayout. In particular the
     // prewarmed resource window may precede the visible main window in Electron.
     ['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',

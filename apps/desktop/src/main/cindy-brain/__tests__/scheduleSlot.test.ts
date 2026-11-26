@@ -425,6 +425,9 @@ describe('选窗回落:右侧栏弹出窗口聚焦时只能落到主窗口', () 
 });
 
 describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
+  it.each(['direct', 'files', 'recording'])('excludes the %s transport renderer', mode => {
+    expect(isMainShellWindowUrl(`http://localhost:5175/index.html?mode=${mode}`)).toBe(false);
+  });
   it.each(['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',
     'regionScreenshot', 'regionScreenshotEditor', 'regionScreenshotPin', 'quotaTray'])(
     'does not send a native draft into the %s renderer', key => {
