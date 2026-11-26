@@ -72,6 +72,11 @@ export function createSidebarTaskPublisher(deps: {
         return;
       }
       lastKey = key;
+      // 这份内容已经发出去了, 结果还没回来: 在 promise 落定之前按「已处理」挡住同内容重发,
+      // 否则主进程繁忙、IPC 迟迟不返回时, 下一帧 DOM 变动就会带着同一份内容再发一次 ——
+      // 冷却判据看的 lastFailedAt 还是上一次失败的旧时间, 30 秒限频被绕过(greptile P2 on
+      // #13310)。失败回来自会重新置位并把冷却锚在失败时刻; 内容变了则走下面的新内容路径。
+      lastFailed = false;
       void result.then(
         () => {
           if (current === attempt) lastFailed = false;
