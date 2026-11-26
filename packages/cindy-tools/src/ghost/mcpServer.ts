@@ -1429,10 +1429,9 @@ export function createCindyGhostsMcpServer(
     async (input) => handleGhostManual(deps, input),
   );
 
-  server.tool(
-    "ghost_call",
-    D_GHOST_CALL,
-    {
+  server.registerTool("ghost_call", {
+    description: D_GHOST_CALL,
+    inputSchema: z.looseObject({
       ghost_id: z.string().describe("目标插件 id(来自 ghost_info / ghost_list 或用户消息附带的工具清单)"),
       namespace: ghostNamespaceInput,
       tool: z.string().describe("工具名(来自 ghost_info / ghost_list 该插件的 tools)"),
@@ -1470,10 +1469,10 @@ export function createCindyGhostsMcpServer(
         .describe(
           "可选:当 ghost_info / ghost_list 对目标插件返回 setup.state=required 时,基于该 assessment 编排 Ask 风格配置卡。assessment_revision 必须原样带回;requirement_refs 与 action_id 只能选 Host 给出的引用和动作。每个未满足 any_of 组里的所有可执行选项都必须保留为独立 step,让用户看到完整选择;Host 会拒绝隐藏任一合法配置路径的 plan。成功结果若带 setup.reauthSuggest,插件仍可用,但当前授权未含插件新增权限;通常只在插件返回权限或 scope 错误后,下一次 ghost_call 可携带只引用该 requirement 的单步 setup_plan 弹出重新连接卡,未报错时不要主动打断用户。文案保持克制:单字段配置只写一句必要说明,不要在 intro、step title、description 中重复插件名、字段 label 或 Host hint。Host 会校验并执行动作,配置完成后继续本次 ghost_call;本字段不会进入插件 args。不要提供插件名、icon、URL、凭证值或完成状态。用户取消会返回 SETUP_CANCELLED;无交互面返回 SETUP_REQUIRED + 脱敏 setup,都不要自动重试。",
         ),
-    },
-    async (input, extra) =>
-      handleGhostCall(deps, input, extractAgentToolUseId(extra), extra.signal),
-  );
+    }).refine(input => !Object.hasOwn(input, "arguments"), {
+      message: "Unknown ghost_call field 'arguments'. Use 'args' for plugin parameters.",
+    }),
+  }, (input, extra) => handleGhostCall(deps, input, extractAgentToolUseId(extra), extra.signal));
 
   const evaluationModelFields = {
     model_id: z.string().max(256).optional().describe("list_models 返回的模型 id；只有一个可用模型时可省略"),

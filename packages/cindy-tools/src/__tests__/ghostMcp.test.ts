@@ -2274,6 +2274,33 @@ describe('personal community author MCP transport', () => {
     return { client, close: async () => { await client.close(); await server.close(); } };
   }
 
+  // Unit, #11351: the SDK used to strip a misplaced arguments field before dispatch.
+  it('rejects misplaced ghost_call arguments before invoking the plugin', async () => {
+    const callGhostTool = vi.fn<CindyGhostsMcpDeps['callGhostTool']>(async ({ args }) => ({ ok: true, result: args }));
+    const { client, close } = await connected(fakeDeps({ callGhostTool }));
+    const invoke = (fields: Record<string, unknown>) => client.callTool({
+      name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', ...fields },
+    });
+    try {
+      for (const fields of [{ arguments: {} }, { args: {}, arguments: null }]) {
+        const result = await invoke(fields);
+        expect(result).toMatchObject({ isError: true, content: [
+          { type: 'text', text: expect.stringMatching(/arguments.*use.*args/i) },
+        ] });
+      }
+      expect((await invoke({ args: '{}' })).isError).toBe(true);
+      expect(callGhostTool).not.toHaveBeenCalled();
+
+      const nested = { arguments: { command: ['events'] } };
+      for (const fields of [{}, { args: nested }]) {
+        expect((await invoke(fields)).isError).toBeFalsy();
+        expect(callGhostTool).toHaveBeenLastCalledWith(expect.objectContaining({ args: fields.args ?? {} }));
+      }
+    } finally {
+      await close();
+    }
+  });
+
   // Unit: the real MCP catalog pins the startup definition and sends only the
   // approved target and validated arguments to the shared ghost_call handler.
   // The existing ghost_call tests do not cover a startup MCP definition.
