@@ -1798,10 +1798,9 @@ function MarkdownTargetLink({
     return <span>{children}</span>;
   }
 
-  const prLink = useMemo(
-    () => (allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null),
-    [allowPrivilegedLinks, target.kind, target.href],
-  );
+  // 注意：此处位于多个条件早返回之后，禁止放 Hook；parsePrLinkUrl 为轻纯函数。
+  const prLink =
+    allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
   const effectiveSessionId = sessionId ?? fileCtx.sessionId;
   const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a

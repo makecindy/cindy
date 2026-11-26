@@ -68,6 +68,7 @@ import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageUrlLink } from '../UserMessageUrlLink';
 import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { _clearSmartResolveCache } from '@/lib/localPathResolver';
 
 function hover(element: Element, type: 'over' | 'out', pointerType = 'mouse') {
   fireEvent(
@@ -150,6 +151,7 @@ describe('PrLinkHoverPopover in chat messages', () => {
 
   afterEach(() => {
     cleanup();
+    _clearSmartResolveCache();
     remoteProjectsStore.removeDevice('remote-dev');
     vi.useRealTimers();
   });
@@ -390,5 +392,134 @@ describe('PrLinkHoverPopover in chat messages', () => {
       },
     ]);
     expect(screen.getByRole('dialog').textContent).toContain('Remote draft PR');
+  });
+
+  it('transitions a cold local markdown link from local-candidate to resolved-local without hook mismatch', async () => {
+    Object.assign(window.electronAPI, {
+      resolvePathBatch: vi.fn(async () => ({
+        './README.md': {
+          status: 'unique' as const,
+          candidates: ['/tmp/README.md'],
+          kind: 'file' as const,
+        },
+      })),
+    });
+
+    render(
+      <PrRefsProvider>
+        <MarkdownRenderer
+          workingDir="/tmp"
+          currentSessionId="session-1"
+          content="See [README.md](./README.md) for local notes."
+        />
+      </PrRefsProvider>,
+    );
+
+    // First render is local-candidate (<a>); after batch resolve it transitions to resolved-local (<button> chip).
+    expect(screen.getByRole('link', { name: 'README.md' })).toBeTruthy();
+    await flushMicrotasks();
+    expect(screen.getByRole('button', { name: /README\.md/ })).toBeTruthy();
+  });
+
+  it('retries transient hover failures on the next hover instead of caching them for 60s', async () => {
+    mocks.getPrStatuses
+      .mockResolvedValueOnce([
+        {
+          ok: false,
+          provider: 'github',
+          host: 'github.com',
+          owner: 'octo',
+          repo: 'repo',
+          prNumber: 55,
+          reason: 'fetch-failed',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          ok: true,
+          provider: 'github',
+          host: 'github.com',
+          owner: 'octo',
+          repo: 'repo',
+          prNumber: 55,
+          status: 'open',
+          title: 'Recovered PR title',
+          htmlUrl: 'https://github.com/octo/repo/pull/55',
+          branch: 'fix/retry',
+          unresolvedCount: 0,
+        },
+      ]);
+
+    render(
+      <PrRefsProvider>
+        <UserMessageUrlLink url="https://github.com/octo/repo/pull/55" sessionId="session-1" />
+      </PrRefsProvider>,
+    );
+
+    const link = screen.getByRole('link');
+    hover(link, 'over');
+    advance(300);
+    await flushMicrotasks();
+    expect(mocks.getPrStatuses).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog').textContent).toContain('ccAgent.gitContext.pr.statusUnknown');
+
+    hover(link, 'out');
+    advance(300);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    hover(link, 'over');
+    advance(300);
+    await flushMicrotasks();
+    expect(mocks.getPrStatuses).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('dialog').textContent).toContain('Recovered PR title');
+  });
+
+  it('skips queued remote hover queries when their popover closes before dequeuing', async () => {
+    mocks.session = { id: 'remote-session', deviceLinkDeviceId: 'remote-dev' };
+    let resolveFirst!: (value: PrStatusResult[]) => void;
+    mocks.deviceInvoke.mockImplementationOnce(
+      () =>
+        new Promise<PrStatusResult[]>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+
+    render(
+      <PrRefsProvider>
+        <ChatSessionFileProvider
+          value={{
+            sessionId: 'remote-session',
+            workingDir: '/remote',
+            origin: { kind: 'device', deviceId: 'remote-dev' },
+          }}
+        >
+          <MarkdownRenderer
+            workingDir="/remote"
+            currentSessionId="remote-session"
+            content="Compare [PR #11](https://github.com/octo/private/pull/11) and [PR #12](https://github.com/octo/private/pull/12)."
+          />
+        </ChatSessionFileProvider>
+      </PrRefsProvider>,
+    );
+
+    const [first, second] = screen.getAllByRole('link');
+    // Hover #11 so its remote query occupies remote-dev's serial lane.
+    hover(first, 'over');
+    advance(300);
+    await flushMicrotasks();
+    expect(mocks.deviceInvoke).toHaveBeenCalledTimes(1);
+
+    // Move to #12 (queues behind #11 on remote-dev), then leave #12 so its popover closes before dequeue.
+    hover(first, 'out');
+    hover(second, 'over');
+    await flushMicrotasks();
+    hover(second, 'out');
+    advance(300);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Release #11; #12's queued task should see no active hover watcher and skip deviceLink.invoke.
+    resolveFirst([]);
+    await flushMicrotasks();
+    expect(mocks.deviceInvoke).toHaveBeenCalledTimes(1);
   });
 });

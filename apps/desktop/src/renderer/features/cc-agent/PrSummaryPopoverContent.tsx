@@ -152,8 +152,8 @@ export function PrSummaryPopoverContent({
             event.preventDefault();
             void window.electronAPI.openExternal(sessionPrUrl(prRef));
           }}
-          // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
-          className="group block min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记，使用 8px 内层控件圆角）
+          className="group block min-w-0 flex-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <span className="flex items-center gap-1 text-12 text-[var(--text-secondary)]">
             <Icon size={12} strokeWidth={1.5} className="shrink-0" style={{ color }} />

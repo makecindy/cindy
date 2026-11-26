@@ -259,7 +259,7 @@ function PrLinkHoverActive({
 
   useEffect(() => {
     if (!open) return;
-    prActions.ensurePrStatus?.(
+    return prActions.ensurePrStatus?.(
       cacheSessionId,
       { provider, host, owner, repo, prNumber },
       deviceLinkDeviceId ?? undefined,
