@@ -899,10 +899,10 @@ export function UserMessage({
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (!agentKind || pluginEngineTask || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote && !pluginEngineTask &&
-    (!agentKind || (capabilities?.rewind?.supported ?? true));
+    !isRemote &&
+    (!agentKind || pluginEngineTask || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
   const hasFiles = files && files.length > 0;

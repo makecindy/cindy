@@ -7,12 +7,22 @@
  */
 
 export {
+  ACP_ELICITATION_CREATE_METHOD,
   ACP_PROTOCOL_VERSION,
   type AcpAuthMethod,
   type AcpConfigOption,
+  type AcpElicitationResult,
+  type AcpElicitationValue,
   type AcpInitializeResult,
   type AcpMcpServer,
 } from './protocol.js';
+export {
+  encodeAcpElicitationResponse,
+  parseAcpElicitationForm,
+  type AcpElicitationChoice,
+  type AcpElicitationField,
+  type AcpElicitationForm,
+} from './elicitation.js';
 export {
   ACP_DEFAULT_MAX_LINE_CHARS,
   AcpLineDecoder,

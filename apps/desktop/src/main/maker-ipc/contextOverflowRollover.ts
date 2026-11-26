@@ -400,8 +400,8 @@ function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | und
   return typeof kind === 'string' && kind.length > 0;
 }
 
-function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
-  if (value === 'codex' || value === 'pi') return value;
+function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' | 'acp' {
+  if (value === 'codex' || value === 'pi' || value === 'acp') return value;
   return 'cc';
 }
 
@@ -529,7 +529,7 @@ export interface ContextOverflowRolloverDeps {
       reason: ContextRebuildReason;
       handoffCoverage?: HandoffCoverage;
       sourceUserClientId: string | null;
-      sourceAgentKind?: 'cc' | 'codex' | 'pi';
+      sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
       expectedClearedAt?: number | null;

@@ -61,7 +61,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
   const lineListeners = new Set<(line: string) => void>();
   const closeListeners = new Set<(info: AcpTransportClosed) => void>();
   const sent: AcpRecord[] = [];
-  const pendingAgentRequests = new Map<number, (result: AcpRecord) => void>();
+  const pendingAgentRequests = new Map<number, (message: AcpRecord) => void>();
   const prompts: Array<{ params: AcpRecord; settle: ReturnType<typeof deferred<AcpRecord>> }> = [];
   let nextAgentRequestId = 1000;
   let closed = false;
@@ -103,7 +103,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
       }
       return;
     }
-    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.((message.result ?? {}) as AcpRecord);
+    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.(message);
   };
 
   const transport: AcpLineTransport = {
@@ -142,8 +142,15 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
     requestPermission(params: AcpRecord): Promise<AcpRecord> {
       const id = nextAgentRequestId++;
       return new Promise((resolve) => {
-        pendingAgentRequests.set(id, resolve);
+        pendingAgentRequests.set(id, (msg) => resolve((msg.result ?? {}) as AcpRecord));
         toClient({ jsonrpc: '2.0', id, method: 'session/request_permission', params: { sessionId: 'sess-1', ...params } });
+      });
+    },
+    requestElicitation(params: AcpRecord): Promise<AcpRecord> {
+      const id = nextAgentRequestId++;
+      return new Promise((resolve) => {
+        pendingAgentRequests.set(id, resolve);
+        toClient({ jsonrpc: '2.0', id, method: 'elicitation/create', params: { sessionId: 'sess-1', ...params } });
       });
     },
     exit() {
@@ -221,7 +228,14 @@ describe('openAcpSession handshake', () => {
     const [initialize, sessionNew] = agent.sent;
     expect(initialize).toMatchObject({
       method: 'initialize',
-      params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+      params: {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          elicitation: { form: {} },
+        },
+      },
     });
     expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
     expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
@@ -1629,5 +1643,353 @@ describe('AcpAgent (the acp engine)', () => {
     expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
     agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
     await handle.close();
+  });
+});
+
+describe('AcpSession form elicitation, plans, additionalDirectories, planMode and context usage', () => {
+  // Rule: ACP `elicitation/create` (form mode) maps into Cindy's `ask_user_question` interaction card,
+  // collapsing companion `*_other` write-in fields into the single question's custom-answer slot.
+  // Minimal failing input: Antigravity-shaped `q1` (oneOf) + `q1_other` and `q2` (array/anyOf) + `q2_other`.
+  // Tier: unit.
+  it('translates ACP form elicitation (single, multi-select, write-in) into ask_user_question cards', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return {
+        kind: 'ask_user_question',
+        answers: {
+          q1: 'Option B',
+          q2: JSON.stringify(['Choice 1', 'Extra custom note']),
+        },
+      };
+    });
+    await session.send({ type: 'user', content: 'redesign' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const reply = await agent.requestElicitation({
+      toolCallId: 'call_ask_1',
+      mode: 'form',
+      message: 'The agent has 2 questions.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [
+              { const: '1', title: '(Recommended) Option A' },
+              { const: '2', title: 'Option B' },
+            ],
+          },
+          q1_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which scope?',
+          },
+          q2: {
+            type: 'array',
+            title: 'Which extras?',
+            items: {
+              anyOf: [
+                { const: '1', title: 'Choice 1' },
+                { const: '2', title: 'Choice 2' },
+              ],
+            },
+          },
+          q2_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which extras?',
+          },
+        },
+      },
+    });
+
+    expect(seen).toEqual([
+      {
+        kind: 'ask_user_question',
+        requestId: 'acp-elicitation-1',
+        toolUseId: 'call_ask_1',
+        questions: [
+          {
+            id: 'q1',
+            question: 'Which scope?',
+            options: [{ label: '(Recommended) Option A' }, { label: 'Option B' }],
+            multiSelect: false,
+          },
+          {
+            id: 'q2',
+            question: 'Which extras?',
+            options: [{ label: 'Choice 1' }, { label: 'Choice 2' }],
+            multiSelect: true,
+          },
+        ],
+      },
+    ]);
+    expect(reply.result).toEqual({
+      action: 'accept',
+      content: {
+        q1: '2',
+        q2: ['1'],
+        q2_other: 'Extra custom note',
+      },
+    });
+
+    // Single-select custom write-in routes to `q1_other`, skip returns `decline`, and abort returns `cancel`.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { q1: 'My custom scope' },
+    }));
+    const writeInReply = await agent.requestElicitation({
+      mode: 'form',
+      message: 'The agent has 1 question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [{ const: '1', title: 'Option A' }],
+          },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    });
+    expect(writeInReply.result).toEqual({
+      action: 'accept',
+      content: { q1_other: 'My custom scope' },
+    });
+
+    session.setInteractionResolver(async () => ({ kind: 'ask_user_question', answers: {} }));
+    const skipped = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { note: { type: 'string', title: 'Any note?' } },
+      },
+    });
+    expect(skipped.result).toEqual({ action: 'decline' });
+
+    // Unsupported mode (`url`) or password fields are rejected with JSON-RPC -32602 so the agent can fall back.
+    const urlReply = await agent.requestElicitation({
+      mode: 'url',
+      url: 'https://example.test/auth',
+      message: 'Sign in',
+    });
+    expect(urlReply.error).toMatchObject({ code: -32602 });
+
+    const secretReply = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { token: { type: 'string', format: 'password', title: 'API key' } },
+      },
+    });
+    expect(secretReply.error).toMatchObject({ code: -32602 });
+
+    // Aborting while a question card is open cancels the elicitation immediately.
+    const hanging = deferred<InteractionDecision>();
+    let aborted = false;
+    session.setInteractionResolver((_req, signal) => {
+      signal?.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return hanging.promise;
+    });
+    const pendingElicitation = agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { confirm: { type: 'boolean', title: 'Proceed?' } },
+      },
+    });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.abort();
+    expect(await pendingElicitation).toMatchObject({ result: { action: 'cancel' } });
+    expect(aborted).toBe(true);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+    await session.close();
+  });
+
+  // Rule: ACP `plan` and `plan_update` notifications emit Cindy's standard `update_plan` snapshot tool_use
+  // so PinnedPlanPanel and inline plan cards render on desktop and mobile.
+  // Minimal failing input: `session/update` with `sessionUpdate: 'plan'` or `'plan_update'`.
+  // Tier: unit.
+  it('translates ACP plan and plan_update notifications into update_plan snapshot events', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'work' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    agent.update({
+      sessionUpdate: 'plan',
+      entries: [
+        { content: 'Inspect codebase', priority: 'high', status: 'completed' },
+        { content: 'Implement fix', priority: 'high', status: 'in_progress' },
+        { content: 'Run tests', priority: 'medium', status: 'pending' },
+      ],
+    });
+    agent.update({
+      sessionUpdate: 'plan_update',
+      plan: {
+        type: 'items',
+        planId: 'custom-plan',
+        entries: [
+          { content: 'Step 1', priority: 'high', status: 'completed' },
+          { content: 'Step 2', priority: 'medium', status: 'cancelled' },
+        ],
+      },
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'done')).toBe(true));
+
+    const planEvents = events.filter((e) => e.type === 'tool_use' && (e.data as AcpRecord).toolName === 'update_plan');
+    expect(planEvents).toEqual([
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:acp-sess-1-plan-1',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Inspect codebase', status: 'completed' },
+              { step: 'Implement fix', status: 'in_progress' },
+              { step: 'Run tests', status: 'pending' },
+            ],
+          },
+        },
+      },
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:custom-plan',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Step 1', status: 'completed' },
+              { step: 'Step 2', status: 'completed' },
+            ],
+          },
+        },
+      },
+    ]);
+    await session.close();
+  });
+
+  // Rule: ACP agents advertising `sessionCapabilities.additionalDirectories`, `plan` mode, and `usage_update`
+  // expose Cindy `extraDirs`, `planMode`, and `getContextUsage` dynamically.
+  // Minimal failing input: initialize with `additionalDirectories: {}`, `mode` option containing `plan`, and `usage_update`.
+  // Tier: unit.
+  it('supports additionalDirectories, planMode toggle, and getContextUsage when negotiated', async () => {
+    const configOptions = [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gemini-4-neon', options: [{ value: 'gemini-4-neon', name: 'Gemini 4 Neon' }] },
+      { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] },
+    ];
+    let currentMode = 'default';
+    const agent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {} } },
+      configOptions,
+      handlers: {
+        'session/set_config_option': (params) => {
+          if (params.configId === 'mode' && typeof params.value === 'string') currentMode = params.value;
+          return {
+            configOptions: configOptions.map((opt) => opt.id === 'mode' ? { ...opt, currentValue: currentMode } : opt),
+          };
+        },
+      },
+    });
+    const { session } = await open(agent, { extraDirs: ['/extra/a', '/extra/b', '/extra/a'] });
+
+    const sessionNew = agent.sent.find((m) => m.method === 'session/new');
+    expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
+    expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.capabilities.planMode?.supported).toBe(true);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setPlanMode(true);
+    expect(session.getPlanMode()).toBe(true);
+    await session.setPlanMode(false);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setExtraDirs(['/extra/c']);
+
+    // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
+    await expect(session.getContextUsage()).rejects.toThrow();
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'usage_update', used: 25_000, size: 200_000 });
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1_000, outputTokens: 200, cachedReadTokens: 500, cachedWriteTokens: 0, totalTokens: 1_700 },
+    });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    expect(session.getUsageSnapshot().contextWindow).toBe(200_000);
+
+    expect(await session.getContextUsage()).toMatchObject({
+      totalTokens: 25_000,
+      maxTokens: 200_000,
+      rawMaxTokens: 200_000,
+      percentage: 12.5,
+      model: 'gemini-4-neon',
+      apiUsage: {
+        input_tokens: 1_000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 500,
+      },
+    });
+    await session.close();
+  });
+
+  it('mutates live vendorOptions in-place and queues role briefing on setVendorOptions', async () => {
+    const agent = createFakeAgent();
+    const capturedContexts: Array<Record<string, unknown>> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        capturedContexts.push(ctx as unknown as Record<string, unknown>);
+        return null;
+      },
+    });
+    const session = await engine.startSession({
+      workingDir: '/w',
+      model: '',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      pluginEngineTrustedCaller: true,
+    });
+    const vendorOptions = capturedContexts[0]?.vendorOptions as Record<string, unknown>;
+    expect(vendorOptions).toEqual({});
+
+    await session.setVendorOptions!({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+      pluginEngineRoleBriefing: 'You are now the Orca Lead.',
+    });
+    expect(vendorOptions).toEqual({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+    });
+
+    await session.send({ type: 'user', content: 'delegate this task' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const blocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(blocks.map((b) => b.text).join('\n')).toContain('You are now the Orca Lead.');
+    expect(blocks.map((b) => b.text).join('\n')).toContain('delegate this task');
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(session.isTurnRunning?.()).toBe(false));
+
+    await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    expect(vendorOptions).toEqual({});
+    await session.close();
   });
 });

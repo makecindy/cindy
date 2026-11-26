@@ -123,7 +123,9 @@ export async function commitContextRecoveryWithPorts(ports: CommitContextRecover
           ? 'codex'
           : sessionKindRow?.agentKind === 'pi'
             ? 'pi'
-            : 'cc';
+            : sessionKindRow?.agentKind === 'acp'
+              ? 'acp'
+              : 'cc';
       ports.broadcastSessionPatched(
         sessionId,
         {
@@ -209,12 +211,11 @@ export async function replayContextRecoveryWithPorts(ports: ReplayContextRecover
         .from(ports.sessions)
         .where(ports.eq(ports.sessions.id, sessionId))
         .limit(1);
-      // Plugin engines manage their own context; Cindy does not replay into a new native session.
-      if (!row?.workingDir || row.agentKind === 'acp') return { accepted: false };
+      if (!row?.workingDir) return { accepted: false };
       if (recovery?.signal?.aborted) return { accepted: false };
       const createOpts = ports.buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: ports.dbToMakerAgentKind(row.agentKind),
+        agentKind: row.agentKind === 'acp' ? 'acp' : ports.dbToMakerAgentKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,

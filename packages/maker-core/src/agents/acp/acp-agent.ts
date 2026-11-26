@@ -120,7 +120,7 @@ const NO_INIT = buildAcpCapabilities(
       loadSession: false,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      sessionCapabilities: { resume: false, close: false, list: false },
+      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false },
     },
     authMethods: [],
     steering: false,
@@ -243,6 +243,9 @@ export class AcpAgent extends BaseAgent {
 
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
+    // Mutable object shared by reference with the host MCP bridge so live
+    // `setVendorOptions` calls (e.g. upgrading a live task to Orca Lead) take effect immediately.
+    const liveVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -257,9 +260,9 @@ export class AcpAgent extends BaseAgent {
           ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           memoryEnabled: opts.makerMemoryEnabled === true,
           ...(botMcpPolicy ? { botMcpPolicy } : {}),
-          ...(opts.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
+          vendorOptions: liveVendorOptions,
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
-          // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
+          // that trusts the engine as a whole treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
         });
@@ -344,11 +347,20 @@ export class AcpAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(opts.planMode ? { planMode: true } : {}),
+          ...(!hosted && opts.extraDirs && opts.extraDirs.length > 0 ? { extraDirs: opts.extraDirs } : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           logger,
+          onVendorOptionsChange: (patch) => {
+            for (const [key, value] of Object.entries(patch)) {
+              if (key === 'pluginEngineRoleBriefing') continue;
+              if (value === null || value === undefined) delete liveVendorOptions[key];
+              else liveVendorOptions[key] = value;
+            }
+          },
           onEnded: disposeBridge,
         });
       } catch (error) {
