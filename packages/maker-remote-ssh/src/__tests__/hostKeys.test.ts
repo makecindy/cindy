@@ -93,6 +93,23 @@ describe('FileHostKeyStore', () => {
     await expect(store.set('one:22', 'SHA256:unreviewed')).rejects.toThrow();
   });
 
+  // SSH access to the person's own devices (decision 8): a host key received from the device itself is pinned
+  // under its HostKeyAlias, replacing an older value for that alias only and rereading the file first.
+  it('pins a verified key under its alias without touching other entries', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:tofu');
+    expect(await store.pin('cindy-device-abc', 'SHA256:first')).toBe(true);
+    // Another process (or an earlier version) wrote the file meanwhile: the pin rereads it.
+    const onDisk = JSON.parse(await fs.readFile(filePath, 'utf8')) as Record<string, string>;
+    await fs.writeFile(filePath, JSON.stringify({ ...onDisk, 'two:22': 'SHA256:external' }));
+    expect(await store.pin('cindy-device-abc', 'SHA256:rekeyed')).toBe(true);
+    expect(await store.pin('cindy-device-abc', 'SHA256:rekeyed')).toBe(false);
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).toEqual({
+      'one:22': 'SHA256:tofu', 'two:22': 'SHA256:external', 'cindy-device-abc': 'SHA256:rekeyed',
+    });
+    if (process.platform !== 'win32') expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
+  });
+
   it('preserves trust when confirmation expires while the temporary file is written', async () => {
     const store = new FileHostKeyStore(filePath);
     await store.set('one:22', 'SHA256:old');

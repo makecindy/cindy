@@ -72,6 +72,19 @@ export interface HostConfig {
   managedByCindy: boolean;
   /** Display-only: this alias is declared in both managed and external SSH files. */
   managedAliasConflict?: boolean;
+  /**
+   * OpenSSH `HostKeyAlias`, honoured only when it is written in the host's own block of Cindy's managed file:
+   * Cindy's host-key store then trusts the key under this name instead of `hostname:port`. Hosts from the
+   * person's own SSH config keep the `hostname:port` identity they always had.
+   */
+  hostKeyAlias?: string;
+  /**
+   * OpenSSH `StrictHostKeyChecking yes` in the host's own managed block: the host key must already be pinned,
+   * and no connection path (explicit or automatic) trusts an unknown key on first use.
+   */
+  strictHostKeyChecking?: boolean;
+  /** Writer only: the OpenSSH `UserKnownHostsFile` written next to `hostKeyAlias` for the terminal alias. */
+  userKnownHostsFile?: string;
 }
 
 /** Local verification result; never inferred from server-provided error text. */

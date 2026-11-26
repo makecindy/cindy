@@ -168,5 +168,8 @@ function connectionFieldsChanged(left: HostConfig, right: HostConfig): boolean {
   return left.hostname !== right.hostname
     || left.port !== right.port
     || left.user !== right.user
+    // A live connection was verified under its host-key identity; a new one must verify again.
+    || left.hostKeyAlias !== right.hostKeyAlias
+    || left.strictHostKeyChecking !== right.strictHostKeyChecking
     || effectiveAuthenticationFingerprint(left) !== effectiveAuthenticationFingerprint(right);
 }
