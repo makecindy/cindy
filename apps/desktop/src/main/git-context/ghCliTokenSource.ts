@@ -122,14 +122,15 @@ function parseLogins(stdout: string): GhCliLoginList | null {
     let complete = true;
     for (const entry of entries) {
       const { login, state } = (entry ?? {}) as { login?: unknown; state?: unknown };
-      // `gh auth status --json` 在个别账号校验失败时仍以 0 退出,只把那个账号标成 error。
-      // 读得到的账号照样可用,但这时的列表不完整:不能因为它的存在得出「没有账号能读」。
-      if (state === 'error') {
+      // `gh auth status --json` 在个别账号校验失败或没查完(gh 2.101 的 timeout)时仍以 0
+      // 退出,只把那个账号的 state 标成 error / timeout。读得到的账号照样可用,但这时的
+      // 列表不完整:不能因为它的存在得出「没有账号能读」——那会把一条读得到的 PR 钉成
+      // not-found,直到失败记忆过期。除 success 之外的状态一律当「这个账号没查准」。
+      if (state !== 'success') {
         complete = false;
         continue;
       }
-      if (state === 'success' && typeof login === 'string' && LOGIN_RE.test(login))
-        logins.push(login);
+      if (typeof login === 'string' && LOGIN_RE.test(login)) logins.push(login);
     }
     return { logins, complete };
   } catch {

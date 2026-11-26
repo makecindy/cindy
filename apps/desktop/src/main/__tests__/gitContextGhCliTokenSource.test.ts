@@ -150,6 +150,26 @@ describe('createGhCliTokenSource', () => {
     expect(await src.listLogins()).toEqual({ logins: ['me'], complete: false });
   });
 
+  it('没查完的账号(state=timeout)也算列表不完整,不能当成没有账号能读', async () => {
+    // gh 2.101 会给没在规定时间内查完的账号返回 state=timeout。把这种条目当成「读不到」
+    // 会让调用方写出「本机没有账号能读这个仓库」的失败记忆,把一条读得到的 PR 钉成不存在。
+    const execFileFn = vi.fn(
+      (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
+        cb(
+          null,
+          JSON.stringify({
+            hosts: {
+              'github.com': [{ login: 'me', state: 'success', active: true }, { login: 'work', state: 'timeout' }],
+            },
+          }),
+          '',
+        ),
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+
+    expect(await src.listLogins()).toEqual({ logins: ['me'], complete: false });
+  });
+
   it('gh auth status 非零退出时返回 null,不当成空列表', async () => {
     const execFileFn = vi.fn(
       (_file: string, _args: string[], _opts: { timeout: number }, cb: ExecCb) =>
