@@ -1894,7 +1894,7 @@
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
       "linkOpen": "開啟連結",
-      "streamFade": "回覆動效",
+      "streamFade": "回覆動畫",
       "compatMode": "小技巧",
       "voiceInput": "語音輸入",
       "import": "任務匯入",
@@ -1956,7 +1956,7 @@
         "add": "新增",
         "reload": "重新讀取 ~/.ssh/config",
         "connect": "連線",
-        "disconnect": "斷開",
+        "disconnect": "中斷連線",
         "remove": "移除",
         "expand": "展開 agent 設定",
         "collapse": "收起 agent 設定",
@@ -2056,7 +2056,7 @@
         "displayNamePlaceholder": "選填，僅在 Cindy 中顯示",
         "hostname": "主機名",
         "user": "使用者",
-        "port": "埠",
+        "port": "連接埠",
         "authMethod": "認證方式",
         "auth": {
           "agent": "SSH agent（推薦）",
@@ -4858,7 +4858,7 @@
       "sessionNotification": {
         "label": "任務完成通知",
         "cellLabel": "任務完成或需要回覆時傳送飛書 / Lark 訊息",
-        "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
+        "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
       "bind": "繫結",
@@ -5549,7 +5549,7 @@
         "unavailableBody": "輔助模型暫時無法使用。",
         "recovered": "輔助模型已恢復",
         "recoveredBody": "最近一次輔助請求已成功。",
-        "details": "詳細資料",
+        "details": "詳情",
         "settings": "輔助模型設定"
       },
       "viewSettings": "查看設定",
@@ -5714,7 +5714,7 @@
       "toggleAria": "切換回覆文字漸顯效果"
     },
     "personalization": {
-      "title": "個人化",
+      "title": "個性化",
       "subtitle": "自訂提示詞",
       "description": "為你的助手提供額外的指令和上下文。",
       "placeholder": "在這裡輸入自訂指令，會追加到 Claude / Codex 的系統提示詞末尾。\n\n· 僅對 {{appName}} 內嵌的 Agent 會話生效；已有會話維持啟動時快照，修改後下一個新會話才套用。\n· 想讓所有 Claude Code 會話（含終端機直接執行、其他 IDE）硬性生效：在 ~/.claude/settings.json 裡設定 SessionStart hook（harness 級強制）。\n· Codex CLI 可在 ~/.codex/hooks.json 設定 SessionStart hook 強制注入（harness 級，和 CC 同款）；或透過 ~/.codex/AGENTS.md 自動載入（軟約束，模型可能忽略）。",
@@ -6046,7 +6046,7 @@
           "updatingBody": "更新完成後會自動恢復連線。",
           "selectPluginTitle": "選擇瀏覽器擴充功能",
           "selectPluginBody": "請開啟插件詳情，選擇「使用此瀏覽器擴充功能」，確認 Cindy 使用的擴充功能。",
-          "selectPlugin": "開啟插件",
+          "selectPlugin": "打開插件",
           "updatePluginTitle": "更新 Cindy Chrome 插件",
           "updatePluginBody": "已安裝的 Cindy Chrome 插件版本較舊，還不支援「我的瀏覽器」。更新到最新版後，再依提示把擴充功能裝進瀏覽器。",
           "updatePlugin": "前往更新",
@@ -6417,7 +6417,7 @@
         "tenants": {
           "title": "分享給的帳號",
           "devices_one": "{{count}} 台裝置",
-          "devices_other": "{{count}} 台裝置",
+          "devices_other": "{{count}} 臺裝置",
           "online": "線上",
           "offline": "離線",
           "revoke": "停止分享",
@@ -6832,7 +6832,7 @@
             "checking": "正在檢查伺服器支援…",
             "unavailable": "當前伺服器尚未開放",
             "disabled": "已停用",
-            "none": "未繫結",
+            "none": "未關聯",
             "pending": "開啟 Telegram 並點選 Start 完成關聯",
             "awaiting_confirmation": "請在 Telegram 內確認切換裝置",
             "confirmed": "{{user}} 已關聯 @{{bot}}",
@@ -6888,7 +6888,7 @@
             },
             "mode": {
               "mention": "僅 @",
-              "always": "全部回應"
+              "always": "全回應"
             }
           }
         },
@@ -8946,7 +8946,7 @@
           "remoteQuickAnswerHint": "這個模型不在本機執行。快問快答只能從本機發出，會改用系統輔助模型。",
           "restoreModel": "還原預設模型"
         },
-        "toolsTitle": "Tools",
+        "toolsTitle": "工具",
         "toolCount_other": "{{count}} 個",
         "permissionsTitle": "權限",
         "infoDescription": "描述",
@@ -9565,10 +9565,10 @@
         "tokenEditPlaceholder": "留空將刪除已存 token",
         "tokenSaved": "已儲存",
         "tokenHelp": "用於鑑權：Claude 會以 Authorization: Bearer 標頭傳送；Codex 僅支援 Bearer 型鑑權。",
-        "headers": "請求頭(可選)",
+        "headers": "請求標頭（選填）",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
-        "addHeader": "新增請求頭",
+        "addHeader": "新增請求標頭",
         "removeRow": "刪除此行"
       },
       "errors": {
@@ -10465,7 +10465,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "切換側邊欄",
-    "exitFullscreen": "退出全螢幕",
+    "exitFullscreen": "結束全螢幕",
     "collapseSidebar": "收起側邊欄",
     "expandSidebar": "展開側邊欄",
     "collapsePanel": "收起",
@@ -11899,7 +11899,7 @@
       },
       "memberStatus": {
         "paused": "已暫停",
-        "unavailable": "無法使用"
+        "unavailable": "不可用"
       },
       "mention": {
         "all": "所有人",
@@ -12433,7 +12433,7 @@
         "dissolveNote": "解散後無法恢復。所有成員將無法傳送訊息，進行中的工作會停止，邀請會失效。成員仍可查看原本有權存取的歷史訊息。",
         "hide": "從我的列表移除",
         "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
-        "leave": "退出群聊",
+        "leave": "退出群組",
         "leaveNote": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
         "unavailable": "目前伺服器或電腦尚不支援此操作。",
         "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
@@ -12552,7 +12552,7 @@
         "deleteBody": "刪除後夥伴不再使用這個技能，內容無法復原。之後需要時，可以在對話裡請它重新記下。",
         "unsavedTitle": "尚有未儲存的修改",
         "unsavedDescription": "離開後會捨棄這次對技能的修改。",
-        "discard": "放棄修改",
+        "discard": "捨棄修改",
         "continueEditing": "繼續編輯",
         "descriptionLabel": "什麼時候用",
         "bodyLabel": "做法"
@@ -12814,7 +12814,7 @@
         "connecting": "連線中…",
         "offline": "已離線",
         "conflict": "另一台裝置正在使用這個機器人",
-        "error": "發生錯誤",
+        "error": "出錯",
         "idle": "未連線"
       },
       "remove": "移除",
@@ -13243,7 +13243,7 @@
           "queuedNoticeNext": "⏳ 上一輪還在跑，這則先排隊——跑完自動接上。想直接叫停就傳 `!stop`",
           "queuedNoticePosition": "⏳ 上一輪還在跑，這則排在第 {{position}} 位——會依序傳給 Agent。想直接叫停就傳 `!stop`",
           "stopDoneDropped_other": "⏹ 已叫停目前的執行，排隊中的 {{count}} 則訊息也一併撤了。任務還在——想繼續隨時傳新指令~",
-          "stopDone": "⏹ 已叫停目前的執行。任務還在——想繼續隨時傳新指令~",
+          "stopDone": "⏹ 已叫停目前執行。任務還在——想繼續隨時傳新指令~",
           "stopIdle": "🤷 現在沒有正在跑的任務，`!stop` 撲了個空。等有事要停的時候再叫我~",
           "scheduledTaskHeader": "🤖 自動化",
           "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
@@ -13256,29 +13256,29 @@
             "providerDisconnected": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），未連線或連線已失效。",
             "agentLogin": "⚠️ 目前 Discord 對話使用供應商「{{provider}}」（{{model}}），需要先登入 {{agentKind}} 憑證。",
             "fixAttached": "請在 desktop 的「設定 → 模型供應商」中修復驗證後，直接繼續傳送訊息。",
-            "fixDetached": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話曾單獨選過模型，請傳送 `/model` 重新選擇。"
+            "fixDetached": "修改「新對話配置」後直接繼續傳送訊息即可；若目前對話單獨選過模型，請傳送 `/model` 重新選擇。"
           }
         },
         "cards": {
           "permission": {
             "title": "🔧 工具呼叫：{{toolName}}",
             "paramsLabel": "**參數預覽**",
-            "btnAllowOnce": "✅ 僅限本次允許",
+            "btnAllowOnce": "✅ 僅本次允許",
             "btnAllowAlways": "✅ 一律允許",
             "btnDeny": "❌ 拒絕",
-            "resolvedAllowOnce": "✅ 已允許（僅限本次）",
-            "resolvedAllowAlways": "✅ 已允許（這個工具之後一律放行）",
+            "resolvedAllowOnce": "✅ 已允許（僅本次）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具之後都放行）",
             "resolvedDeny": "❌ 已拒絕"
           },
           "ask": {
-            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回覆我吧）_",
+            "noOptionsHint": "_（這個問題沒有預設選項，直接傳文字回我吧）_",
             "resolved": "✅ 已選：{{option}}"
           },
           "plan": {
             "title": "📋 我打算這麼做",
             "btnApprove": "✅ 做吧",
             "btnReject": "❌ 等等",
-            "resolvedApproved": "✅ 已核准，開工",
+            "resolvedApproved": "✅ 已批准，開工",
             "resolvedRejected": "❌ 已暫停"
           },
           "model": {
@@ -13294,7 +13294,7 @@
             "title": "🛡️ 調整權限模式",
             "currentLine": "**目前**：{{label}}\n_{{description}}_",
             "hint": "點下方切換。auto = 一般操作放行＋敏感操作跳出卡片；bypass = 全部放行；ask/default/plan/acceptEdits = 走卡片審批",
-            "resolved": "✅ 權限模式已切換為 {{label}}",
+            "resolved": "✅ 權限模式已切換到 {{label}}",
             "failed": "❌ 權限模式未能切換：{{reason}}",
             "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
             "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並略過一般審批。Cindy 可以修改工作區外的檔案、執行連網指令且不再詢問；內建的高風險操作仍會要求確認。",
@@ -13422,7 +13422,7 @@
           "settingsCompanion": "⚙️ 目前設定（夥伴）\n\n專案：{{workspace}}\nAgent：{{agent}}\n模型：{{model}}\n推理強度：{{effort}}\n權限：{{permission}}\n\n模型、權限和工作目錄跟隨夥伴設定，請在 Cindy 的夥伴設定裡修改。",
           "detachedBySlash": "🚪 接管結束，我們回到 Telegram 對話。下次想遠端操控 desktop 再 /ctr",
           "detachedByRevoke": "⚠️ 你在 desktop 那邊把接管收回去了，後續訊息回到 Telegram 對話。",
-          "notAttached": "🤷 你現在沒在接管任何任務，/exctr 閒著也沒事可做。",
+          "notAttached": "🤷 你現在沒有接管任何任務，/exctr 閒著也沒事可做。",
           "companionDmNew": "🧭 這裡是夥伴的主對話，會一直接著聊，不會另開新任務。想換個話題直接說就好；需要單獨做的事，夥伴會自己開背景任務。",
           "companionLaneNew": "🌱 已為這個群組開始一段新對話，之前的上下文收起來了，從頭開始吧~",
           "companionManagedCommand": "🧭 這個連線已交給夥伴，模型、權限和工作目錄跟隨夥伴設定。請在 Cindy 的夥伴設定裡修改。"
@@ -13445,7 +13445,7 @@
           "unsupportedNotice": "ℹ️ 以下內容我處理不了，先放一邊了：\n{{list}}\n\n其他部分收到啦，正在處理~",
           "companionUnavailable": "⏸ 夥伴現在接不了訊息：{{reason}}",
           "authMissing": {
-            "currentProvider": "目前供應商",
+            "currentProvider": "目前的供應商",
             "reasonGatewayKey": "需要先設定 Cindy AI Key",
             "reasonProviderKey": "還沒有設定該供應商的 API Key",
             "reasonProviderDisconnected": "未連線或連線已失效",
@@ -13465,10 +13465,10 @@
             "title": "🔧 工具呼叫：{{tool}}",
             "paramsLabel": "**參數預覽**",
             "btnAllowOnce": "✅ 僅本次允許",
-            "btnAllowAlways": "✅ 總是允許",
+            "btnAllowAlways": "✅ 一律允許",
             "btnDeny": "❌ 拒絕",
             "resolvedAllowOnce": "✅ 已允許（僅本次）",
-            "resolvedAllowAlways": "✅ 已允許（這個工具以後都放行）",
+            "resolvedAllowAlways": "✅ 已允許（這個工具之後都放行）",
             "resolvedDeny": "❌ 已拒絕"
           },
           "ask": {
@@ -13488,15 +13488,15 @@
             "currentLine": "**目前**：{{label}}\n_{{description}}_",
             "hint": "點下面切換。我會自動讓所選模型以最高推理強度執行",
             "resolvedWithEffort": "✅ 已切換到 {{label}}（推理強度：{{effort}}）",
-            "resolved": "✅ 已切到 {{label}}",
+            "resolved": "✅ 已切換到 {{label}}",
             "failed": "❌ 模型沒切過去：{{reason}}"
           },
           "permissionMode": {
             "title": "🛡️ 調一下權限模式",
             "currentLine": "**目前**：{{label}}\n_{{description}}_",
             "hint": "點下面切換。auto = 常規放行＋敏感操作跳卡片；bypass = 全放行；ask/default/plan/acceptEdits = 走卡片審批",
-            "resolved": "✅ 權限模式切到 {{label}} 了",
-            "failed": "❌ 權限模式沒切過去：{{reason}}",
+            "resolved": "✅ 權限模式已切換到 {{label}}",
+            "failed": "❌ 權限模式沒切換過去：{{reason}}",
             "fullAccessConfirmTitle": "⚠️ 確認開啟 Full access？",
             "fullAccessConfirmBody": "Full access 會關閉工作區沙箱並略過一般審批。Cindy 可以修改工作區外的檔案、執行連網指令且不再詢問；內建的高風險操作仍會要求確認。",
             "btnConfirmFullAccess": "開啟 Full access",
@@ -13519,7 +13519,7 @@
           "control": {
             "title": "🎮 挑個專案上線",
             "emptyBody": "_暫時還沒有可接管的專案~ 在 desktop 端開啟／建立一個任務再來_",
-            "hint": "點專案往下走；點 🚪 退出 取消這次",
+            "hint": "點專案繼續；點 🚪 退出 取消這次",
             "attachedSwitchHint": "🎮 目前接管中：**{{title}}**\n選個新任務直接換乘；點 🚪 退出則維持現狀",
             "btnExit": "🚪 退出",
             "resolvedExit": "🚪 走了，下次想遠端操控再 /ctr",
@@ -13608,7 +13608,7 @@
           "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
           "autoReviewReason": "自動審批需要你決定：{{reason}}",
           "previewUnserializable": "<無法序列化>",
-          "previewTruncated": "…（已截斷）",
+          "previewTruncated": "…(已截斷)",
           "choiceReceived": "已收到你的選擇。",
           "allowedSession": "✅ 已允許（本任務）",
           "allowedOnce": "✅ 已允許（僅本次）",
@@ -13734,7 +13734,7 @@
           "unsupportedOnly": "🙏 暫時無法處理這則訊息：\n{{items}}",
           "unsupportedNotice": "ℹ️ 以下內容未能處理：\n{{items}}\n\n其他內容將繼續處理。",
           "authMissing": {
-            "providerFallback": "目前供應商",
+            "providerFallback": "目前的供應商",
             "reasonGatewayKey": "需要先設定 Cindy AI Key",
             "reasonProviderKey": "尚未設定該供應商的 API Key",
             "reasonProviderDisconnected": "連線已中斷或失效",
@@ -13797,7 +13797,7 @@
             "sessionPickerTitle": "🎮 {{workspaceName}} 中的任務",
             "sessionPickerHint": "選擇任務、建立新任務或返回上一步。",
             "sessionPickerEmptyBody": "_{{workspaceName}} 中暫時沒有可用任務。_",
-            "btnNew": "➕ 新增",
+            "btnNew": "➕ 新建",
             "btnBack": "↩️ 返回",
             "resolvedSessionPick": "🎯 已接管 **{{sessionTitle}}**（{{workspaceName}}）",
             "resolvedNewSession": "✨ 已在 **{{workspaceName}}** 新增並接管任務",
@@ -13865,7 +13865,7 @@
           "completedNoText": "✅ 跑完囉（這一輪 Agent 沒說話）",
           "runtimeError": "⚠️ Agent 出狀況了：{{error}}",
           "sendInternalError": "❌ 內部出 bug 了：{{error}}",
-          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n到桌面端的「設定 → 模型供應商」連接 Cindy AI，再來 ping 我",
+          "apiKeyMissing": "⚠️ Cindy AI Key 還沒設定喔~\n到 desktop 的 設定 → 模型供應商 連接 Cindy AI，再來 ping 我",
           "controlInProgress": "🎮 你的 /ctr 還在選擇中喔 — 先把上面那張卡片操作完（或點 🚪 退出），再來發別的~",
           "credentialBusy": "⏳ 本機 Agent 正在跑另一輪，暫時不能切換憑證模式。等上一輪結束後再發一次就好。",
           "queuedNoticeFirst": "⏳ 上一輪還在跑，這則先排隊——跑完自動接上。想直接叫停就發 `!stop`",
@@ -13878,7 +13878,7 @@
           "scheduledTaskHeaderNamed": "🤖 自動化「{{name}}」",
           "unsupportedOnly": "🙏 這則訊息我吞不下：\n{{items}}\n\n我能消化的：文字、圖片（jpg/png/gif/webp）、PDF、程式碼與設定類文字檔案。",
           "unsupportedNotice": "ℹ️ 以下內容我消化不了，先放一邊了：\n{{items}}\n\n其他部分收到囉，正在處理~",
-          "companionUnavailable": "⏸ 夥伴現在無法接收訊息：{{reason}}",
+          "companionUnavailable": "⏸ 夥伴現在接不了訊息：{{reason}}",
           "authMissing": {
             "defaultProvider": "目前的供應商",
             "message": "⚠️ 目前對話使用供應商「{{provider}}」（{{model}}），{{reason}}。",
@@ -13898,7 +13898,7 @@
             "title": "🔧 工具呼叫：{{tool}}",
             "paramsLabel": "**參數預覽**",
             "btnAllowOnce": "✅ 僅本次允許",
-            "btnAllowAlways": "✅ 總是允許",
+            "btnAllowAlways": "✅ 一律允許",
             "btnDeny": "❌ 拒絕",
             "dmRoutedNotice": "🔐 `{{tool}}` 這個操作需要你確認 — 授權卡片已經發到你的私訊，去那裡點一下繼續~",
             "resolvedAllowOnce": "✅ 已允許（僅本次）",
@@ -13918,7 +13918,7 @@
             "title": "📋 我打算這麼做",
             "btnApprove": "✅ 做吧",
             "btnReject": "❌ 等等",
-            "resolvedApproved": "✅ 已核准，開工",
+            "resolvedApproved": "✅ 已批准，開工",
             "resolvedRejected": "❌ 已暫停"
           },
           "model": {
@@ -13928,7 +13928,7 @@
             "hint": "點下方切換。我會自動讓所選模型以最高推理強度執行",
             "resolved": "✅ 已切換到 {{label}}",
             "resolvedWithEffort": "✅ 已切換到 {{label}}（推理強度：{{effort}}）",
-            "failed": "❌ 模型沒切換成功：{{reason}}"
+            "failed": "❌ 模型沒切換過去：{{reason}}"
           },
           "permissionMode": {
             "title": "🛡️ 調整權限模式",
@@ -14070,7 +14070,7 @@
             "resolved": "✅ 已選：{{option}}"
           },
           "plan": {
-            "title": "📋 我打算這樣做",
+            "title": "📋 我打算這麼做",
             "btnApprove": "✅ 做吧",
             "btnReject": "❌ 等等",
             "resolvedApproved": "✅ 已批准，開工",
@@ -14154,7 +14154,7 @@
           "operationPreview": "操作：\n{{preview}}",
           "permissionReplyHint": "回覆「{{allow}}」執行一次，或回覆「{{deny}}」取消這次操作。微信內不支援永久授權。",
           "planReview": "Agent 提交了一份執行計畫：\n\n{{plan}}\n\n回覆「{{approve}}」繼續，或回覆「{{deny}}」取消。",
-          "askNoQuestion": "Agent 正在等你的回答，但沒有可顯示的問題。請回覆「繼續」。",
+          "askNoQuestion": "Agent 正在等待你的回答，但沒有可顯示的問題。請回覆「繼續」。",
           "askQuestion": "Agent 需要你的回答：\n{{question}}\n{{options}}\n請回覆選項編號，或直接輸入你的回答。"
         }
       },
@@ -14583,7 +14583,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "中國",
+        "china": "China",
         "image": "影像",
         "video": "影片",
         "audio": "音訊生成",
@@ -14623,7 +14623,7 @@
         "viaSource": "來源：{{source}}",
         "emptyTitle": "暫無可用來源",
         "emptyDesc": "連線一個支援當前模型的來源後即可選擇",
-        "disconnected": "已斷開"
+        "disconnected": "已中斷"
       },
       "agentSwitch": {
         "hint": "選擇切換到 {{agent}} 後使用的模型"
@@ -14664,7 +14664,7 @@
         "providerGroupRunningHere": "目前在這台電腦上執行",
         "providerGroupUnassigned": "開始後由供應商組選一台電腦，用量依那台顯示"
       },
-      "modelListAria": "模型清單",
+      "modelListAria": "模型列表",
       "speed": {
         "label": "速度",
         "standard": "標準",
@@ -15067,7 +15067,7 @@
     },
     "deviceSwitcher": {
       "label": "裝置",
-      "localHint": "在這臺電腦上執行",
+      "localHint": "在這台電腦上執行",
       "onlineHint": "已連線，可在其上建立",
       "offlineHint": "離線 · 連上後可用",
       "attachmentsDropped": "已移除 {{count}} 個附件：它們是上一臺裝置上的檔案",
@@ -15744,7 +15744,7 @@
       "dismissTitle": "暫不恢復"
     },
     "media": {
-      "clickToZoom": "點擊放大",
+      "clickToZoom": "點選放大",
       "audioProgress": "播放進度",
       "audioPlay": "播放音訊",
       "audioPause": "暫停音訊",
@@ -16212,7 +16212,7 @@
       "openInSidebarFileBrowser": "在檔案列表中定位",
       "openInSidebarFileBrowserFailed": "在側邊欄檔案瀏覽器中開啟失敗",
       "openInSidebarFileBrowserOutsideWorkdir": "該檔案不在當前任務工作目錄內，無法在側邊欄檔案瀏覽器中定位",
-      "openInDefaultBrowser": "在瀏覽器開啟",
+      "openInDefaultBrowser": "在瀏覽器中檢視",
       "copyLink": "複製連結",
       "addPrToHeader": "加入頂欄",
       "prAlreadyInHeader": "已在頂欄",
@@ -16454,7 +16454,7 @@
       "botTitle": "本次成果",
       "relatedFiles": "相關檔案 {{count}}",
       "openWebPreview": "開啟網頁預覽",
-      "showMore": "顯示另外 {{count}} 個",
+      "showMore": "再顯示 {{count}} 個",
       "showLess": "收起",
       "artifactLabel": "成品",
       "formats": {
@@ -17426,7 +17426,7 @@
       "agentDeviceOffline": "Agent 在 {{device}} 上執行，那臺電腦目前離線，連上後才能繼續",
       "orcaRemoteLead": "來自 {{device}} 的協同",
       "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
-      "orcaRemoteLeadUnknownDevice": "另一臺電腦",
+      "orcaRemoteLeadUnknownDevice": "另一台電腦",
       "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
     },
     "gitContext": {
@@ -17435,7 +17435,7 @@
       "branchTooltip": "當前分支：{{branch}}",
       "pr": {
         "status": {
-          "open": "開放中",
+          "open": "開啟中",
           "draft": "草稿",
           "merged": "已合併",
           "closed": "已關閉"
@@ -17520,7 +17520,7 @@
             "timeout": "裝置碼已過期，請重試取得新裝置碼。"
           },
           "account": {
-            "checking": "正在檢查 GitHub 連接…",
+            "checking": "正在檢查 GitHub 連線…",
             "connected": "已連接 · @{{login}}",
             "missing": "連接 GitHub 後即可使用。",
             "auth": "授權已失效，請重新登入或更換下方備用 Token。",
@@ -17888,7 +17888,7 @@
       "status": {
         "active": "啟用",
         "paused": "已暫停",
-        "expired": "單次",
+        "expired": "一次",
         "running": "執行中"
       },
       "summary": {
@@ -18841,7 +18841,7 @@
       "alreadyDuplicate": "已標記為重複",
       "markDuplicateDisabled": "標記為重複（已停用）",
       "markDuplicate": "標記為重複…",
-      "privateNoDuplicate": "私有 Issue 不參與重複鏈路"
+      "privateNoDuplicate": "私有 Issue 無法設定重複關聯"
     },
     "duplicate": {
       "marked": "已標記為重複",
@@ -20610,7 +20610,7 @@
           "invoiceTitle": "發票抬頭",
           "contact": "聯絡人",
           "phone": "聯絡電話",
-          "email": "信箱"
+          "email": "電子郵件"
         }
       },
       "states": {
@@ -21597,7 +21597,7 @@
         "conflictConfirm": {
           "title": "兩台電腦改到了同一處",
           "description": "確認後會建立獨立任務，由 Agent 把兩邊的修改合在一起，兩邊的功能都會保留；無法同時保留時會先問你。取消將放棄本次合併，兩邊的個人版都不變。",
-          "confirm": "確認並處理",
+          "confirm": "確認並解決",
           "cancel": "取消合併"
         }
       }
@@ -22579,7 +22579,7 @@
     "open": "開啟預覽",
     "zoomIn": "放大",
     "zoomOut": "縮小",
-    "fit": "符合視窗",
+    "fit": "適應視窗",
     "actualSize": "原始尺寸（1:1）",
     "save": "儲存原件",
     "share": "分享",

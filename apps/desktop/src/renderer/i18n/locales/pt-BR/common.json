@@ -3527,7 +3527,7 @@
       }
     },
     "sessionImport": {
-      "title": "Importar sessões",
+      "title": "Importação de sessões",
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue trabalhando. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Buscar novamente",
       "allSources": "Todas as origens",
@@ -4287,7 +4287,7 @@
           "heading": "Modelos que não são mais oferecidos",
           "intro": "Ao atualizar {{provider}}, o serviço não retornou estes modelos. Selecione os que deseja remover. Os motores que ainda os listam não são afetados.",
           "suspicious": "Estão faltando muito mais modelos do que o normal. O serviço pode ter retornado uma lista incompleta. Atualize de novo mais tarde para confirmar ou selecione apenas os modelos que você sabe que foram retirados.",
-          "selectAll": "Selecionar todos",
+          "selectAll": "Selecionar tudo",
           "selected": "{{count}} de {{total}} selecionados",
           "consequence": "Os modelos removidos deixam de aparecer na seleção de modelos e aparecerão como indisponíveis onde forem usados. Se o serviço voltar a oferecê-los, atualize para adicioná-los de novo.",
           "confirm": "Remover modelos ({{count}})",
@@ -4537,7 +4537,7 @@
         "runLocation": {
           "label": "Executar em",
           "optionLocal": "Este computador",
-          "notSignedIn": "Sem login",
+          "notSignedIn": "Login não realizado",
           "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
           "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
           "inline": "Executa em",
@@ -5160,7 +5160,7 @@
         "cancel": "Cancelar"
       },
       "lifecycleAnnouncement": {
-        "label": "Notificações de online/offline",
+        "label": "Notificações online/offline",
         "cellLabel": "Notificações de mensagens",
         "hint": "Fazer o bot do Discord enviar uma mensagem quando este dispositivo ficar online ou offline"
       },
@@ -6986,7 +6986,7 @@
             "error": {
               "load": "Não foi possível carregar o comportamento do Telegram. Verifique a conexão e tente novamente.",
               "save": "O comportamento do Telegram não foi salvo. As últimas configurações confirmadas foram restauradas.",
-              "retry": "Tentar carregar novamente"
+              "retry": "Recarregar"
             }
           },
           "groups": {
@@ -6996,7 +6996,7 @@
             "error": {
               "load": "Não foi possível carregar os grupos do Telegram. Verifique a conexão e tente novamente.",
               "save": "O modo do grupo não foi salvo. O último modo confirmado foi restaurado.",
-              "retry": "Tentar carregar novamente"
+              "retry": "Recarregar"
             },
             "mode": {
               "mention": "Somente @",
@@ -7220,7 +7220,7 @@
           "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta.",
           "routePreference": "Escolha de rota",
           "routeAuto": "Auto",
-          "routeDirect": "Direta",
+          "routeDirect": "Direto",
           "routeRelay": "Retransmissão",
           "routeUnavailable": "Indisponível",
           "routeMeasuring": "Medindo…",
@@ -7263,7 +7263,7 @@
           "reconnecting": "Reconectando",
           "toAgentNet": "Mudar para Agent-Net",
           "toDeviceLink": "Voltar para Device Link",
-          "retry": "Tentar de novo",
+          "retry": "Tentar novamente",
           "hint": "A conexão com este dispositivo passa a ter criptografia de ponta a ponta. Se ele não reconectar em 60 segundos, volta para Device Link.",
           "steps": {
             "request": {
@@ -8365,7 +8365,7 @@
         "filtersAria": "Filtrar plugins por origem",
         "origin": {
           "public": "Públicos",
-          "organization": "Da equipe",
+          "organization": "Compartilhados pela equipe",
           "local": "Locais",
           "custom": "Personalizados"
         },
@@ -8614,7 +8614,7 @@
       },
       "installConsent": {
         "installTitle": "Instalar o plugin “{{name}}”?",
-        "updateTitle": "Atualizar o plugin “{{name}}”?",
+        "updateTitle": "Atualizar o plugin \"{{name}}\"?",
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até você confirmar. O plugin é ativado logo após a instalação, e você pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
@@ -8625,7 +8625,7 @@
         "noPermissions": "Este plugin não declara permissões adicionais.",
         "addedTitle": "Permissões novas ou alteradas:",
         "removedTitle": "Não são mais necessárias:",
-        "addedBadge": "Nova",
+        "addedBadge": "Novo",
         "unchangedCount": "Permissões inalteradas: {{count}}",
         "oauthClientChanged": "Esta atualização altera o cliente OAuth. As contas conectadas que usam a autorização integrada do plugin expirarão após a atualização e precisarão ser reconectadas.",
         "originMarket": "Do marketplace de plugins do {{appName}}",
@@ -9702,7 +9702,7 @@
         "deleteFailed": "Falha ao excluir"
       },
       "deleteConfirm": {
-        "title": "Excluir \"{{name}}\"?",
+        "title": "Excluir “{{name}}”?",
         "message": "Novas sessões do Agent não carregarão mais este MCP.",
         "confirm": "Excluir"
       },
@@ -10407,7 +10407,7 @@
         "syncedAt": "Dados de {{time}}",
         "offline": "Offline",
         "remoteDisabled": "Controle remoto não permitido",
-        "unsupported": "Requer atualização do Cindy",
+        "unsupported": "Precisa atualizar o Cindy",
         "error": "Não foi possível ler",
         "noData": "Ainda sem dados"
       },
@@ -13385,7 +13385,7 @@
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
-          "runtimeError": "⚠️ O Agent deu problema: {{error}}",
+          "runtimeError": "⚠️ O Agent teve um problema: {{error}}",
           "sendInternalError": "❌ Erro interno: {{error}}",
           "apiKeyMissing": "⚠️ A Cindy AI Key ainda não foi configurada.\nConecte o Cindy AI em Configurações → Provedores no desktop e depois me chame de novo.",
           "controlInProgress": "🎮 Você ainda está escolhendo no /ctr — termine o cartão acima (ou clique em 🚪 Sair) antes de mandar outra coisa.",
@@ -13395,7 +13395,7 @@
           "stopDoneDropped_one": "⏹ Parei a execução atual e descartei também a mensagem na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
           "stopDoneDropped_other": "⏹ Parei a execução atual e descartei também as {{count}} mensagens na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
           "stopDoneDropped_many": "⏹ Parei a execução atual e descartei também as {{count}} mensagens na fila. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
-          "stopDone": "⏹ Parei a execução atual. A sessão continua aqui — mande uma nova instrução quando quiser continuar.",
+          "stopDone": "⏹ A execução atual foi interrompida. A sessão continua aqui — envie uma nova instrução quando quiser continuar.",
           "stopIdle": "🤷 Não tem nada rodando agora, então o `!stop` não tinha o que parar. Me chame quando tiver algo para interromper.",
           "scheduledTaskHeader": "🤖 Automação",
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
@@ -13408,7 +13408,7 @@
             "providerDisconnected": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), mas ele não está conectado ou a conexão expirou.",
             "agentLogin": "⚠️ Esta conversa do Discord usa o provedor “{{provider}}” ({{model}}), que exige fazer login primeiro com as credenciais do {{agentKind}}.",
             "fixAttached": "Corrija a autenticação em Configurações → Provedores no desktop e continue enviando mensagens.",
-            "fixDetached": "Altere a “Configuração de novas conversas” e continue enviando mensagens. Se você escolheu um modelo específico para esta conversa, envie `/model` para escolher de novo."
+            "fixDetached": "Altere a “Configuração de novas conversas” e é só continuar enviando mensagens. Se esta conversa tiver um modelo escolhido separadamente, envie `/model` para escolher de novo."
           }
         },
         "cards": {
@@ -13416,20 +13416,20 @@
             "title": "🔧 Chamada de ferramenta: {{toolName}}",
             "paramsLabel": "**Prévia dos parâmetros**",
             "btnAllowOnce": "✅ Permitir uma vez",
-            "btnAllowAlways": "✅ Sempre permitir",
+            "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Negar",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta ferramenta será sempre permitida daqui em diante)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta fica liberada daqui em diante)",
             "resolvedDeny": "❌ Negado"
           },
           "ask": {
-            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — é só me responder por texto.)_",
+            "noOptionsHint": "_(Esta pergunta não tem opções predefinidas — é só me responder com texto.)_",
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
             "title": "📋 Este é o meu plano",
-            "btnApprove": "✅ Pode fazer",
-            "btnReject": "❌ Espera aí",
+            "btnApprove": "✅ Pode ir",
+            "btnReject": "❌ Espera",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
             "resolvedRejected": "❌ Pausado"
           },
@@ -13629,7 +13629,7 @@
             "title": "🔧 Chamada de ferramenta: {{tool}}",
             "paramsLabel": "**Prévia dos parâmetros**",
             "btnAllowOnce": "✅ Permitir uma vez",
-            "btnAllowAlways": "✅ Sempre permitir",
+            "btnAllowAlways": "✅ Permitir sempre",
             "btnDeny": "❌ Negar",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
             "resolvedAllowAlways": "✅ Permitido (esta ferramenta fica liberada daqui em diante)",
@@ -13640,7 +13640,7 @@
             "resolved": "✅ Selecionado: {{option}}"
           },
           "plan": {
-            "title": "📋 Veja o que pretendo fazer",
+            "title": "📋 Meu plano",
             "btnApprove": "✅ Pode ir",
             "btnReject": "❌ Espere",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
@@ -13664,7 +13664,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa o sandbox do espaço de trabalho e dispensa aprovações de rotina. O Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações integradas de alto risco ainda exigirão confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
           },
           "project": {
@@ -13683,7 +13683,7 @@
           "control": {
             "title": "🎮 Escolha um projeto",
             "emptyBody": "_Ainda não há projetos para assumir. Abra ou crie uma sessão no desktop e depois volte._",
-            "hint": "Toque em um projeto para seguir; toque em 🚪 Sair para cancelar",
+            "hint": "Toque em um projeto para continuar; toque em 🚪 Sair para cancelar",
             "attachedSwitchHint": "🎮 Controlando agora: **{{title}}**\nEscolha outra sessão para trocar direto; toque em 🚪 Sair para deixar como está",
             "btnExit": "🚪 Sair",
             "resolvedExit": "🚪 Saí. Da próxima vez que quiser controle remoto, envie /ctr",
@@ -13694,7 +13694,7 @@
             "btnBack": "↩️ Voltar",
             "resolvedSessionPick": "🎯 Você entrou: **{{title}}** ({{workspace}})\nSuas mensagens agora vão direto para esta sessão; para sair, envie `/exctr` quando quiser",
             "resolvedNewSession": "✨ Nova sessão criada e sob seu controle (em **{{workspace}}**)\nEnvie uma instrução para começar; para sair, `/exctr`",
-            "attachFailed": "❌ Não foi possível assumir: {{reason}}",
+            "attachFailed": "❌ Não foi possível assumir o controle: {{reason}}",
             "sessionBusyOldCardPlaceholder": "⏳ Essa sessão ainda está rodando — abaixo tem um cartão novo, escolha de novo",
             "recentSessions": {
               "title": "🕑 Sessões recentes",
@@ -13899,8 +13899,8 @@
           "stopDoneDropped_one": "⏹ A tarefa atual foi interrompida e {{count}} mensagem na fila foi removida.",
           "stopDoneDropped_many": "⏹ A tarefa atual foi interrompida e {{count}} mensagens na fila foram removidas.",
           "stopIdle": "Não há nenhuma tarefa em execução nem na fila.",
-          "scheduledTaskHeaderNamed": "🤖 Tarefa automática “{{name}}”",
-          "scheduledTaskHeader": "🤖 Tarefa automática",
+          "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
+          "scheduledTaskHeader": "🤖 Automação",
           "unsupportedOnly": "🙏 No momento, não é possível processar esta mensagem:\n{{items}}",
           "unsupportedNotice": "ℹ️ Não foi possível processar o seguinte:\n{{items}}\n\nO restante continuará sendo processado.",
           "authMissing": {
@@ -13954,7 +13954,7 @@
             "fullAccessConfirmTitle": "⚠️ Ativar o acesso total?",
             "fullAccessConfirmBody": "O acesso total desativa a sandbox do espaço de trabalho e pula as aprovações habituais. O Cindy poderá modificar arquivos fora do espaço de trabalho e executar comandos com acesso à rede; ações integradas de alto risco continuam pedindo confirmação.",
             "btnConfirmFullAccess": "Ativar acesso total",
-            "btnCancelFullAccess": "Manter permissões",
+            "btnCancelFullAccess": "Manter permissões atuais",
             "fullAccessCancelled": "Cancelado. As permissões atuais foram mantidas"
           },
           "control": {
@@ -14073,7 +14073,7 @@
             "btnDeny": "❌ Negar",
             "dmRoutedNotice": "🔐 `{{tool}}` precisa da sua confirmação — enviei o cartão de autorização na sua conversa privada. Toque nele lá para continuar~",
             "resolvedAllowOnce": "✅ Permitido (só desta vez)",
-            "resolvedAllowAlways": "✅ Permitido (esta ferramenta será sempre permitida daqui em diante)",
+            "resolvedAllowAlways": "✅ Permitido (esta ferramenta fica liberada daqui em diante)",
             "resolvedDeny": "❌ Negado"
           },
           "ask": {
@@ -14086,9 +14086,9 @@
             }
           },
           "plan": {
-            "title": "📋 Este é o meu plano",
-            "btnApprove": "✅ Pode seguir",
-            "btnReject": "❌ Espera aí",
+            "title": "📋 Meu plano",
+            "btnApprove": "✅ Pode ir",
+            "btnReject": "❌ Espere",
             "resolvedApproved": "✅ Aprovado, mãos à obra",
             "resolvedRejected": "❌ Pausado"
           },
@@ -14111,7 +14111,7 @@
             "fullAccessConfirmBody": "O Acesso total desativa a sandbox do espaço de trabalho e pula as aprovações habituais. O Cindy pode modificar arquivos fora do espaço de trabalho e executar comandos com acesso à rede sem perguntar; ações de alto risco integradas continuam pedindo confirmação.",
             "btnConfirmFullAccess": "Ativar Acesso total",
             "btnCancelFullAccess": "Manter permissões atuais",
-            "fullAccessCancelled": "Cancelado — as permissões atuais foram mantidas"
+            "fullAccessCancelled": "Cancelado, as permissões atuais foram mantidas"
           },
           "permissionModeFix": {
             "title": "🛡️ Voltar a sessão do grupo para “Revisão automática”",
@@ -14258,7 +14258,7 @@
             "failed": "❌ Não foi possível trocar de modelo: {{reason}}"
           },
           "permissionMode": {
-            "title": "🛡️ Ajustar modo de permissão",
+            "title": "🛡️ Ajustar o modo de permissão",
             "currentLine": "**Atual**: {{label}}\n_{{description}}_",
             "hint": "Toque abaixo para trocar. auto = ações comuns liberadas, ações sensíveis pedem confirmação por cartão; bypass = libera tudo; ask/default/plan/acceptEdits = aprovação por cartão",
             "resolved": "✅ Modo de permissão trocado para {{label}}",
@@ -14327,7 +14327,7 @@
           "operationPreview": "Ação:\n{{preview}}",
           "permissionReplyHint": "Responda “{{allow}}” para executar uma vez ou “{{deny}}” para cancelar esta ação. O WeChat não oferece autorização permanente.",
           "planReview": "O Agent enviou um plano de execução:\n\n{{plan}}\n\nResponda “{{approve}}” para continuar ou “{{deny}}” para cancelar.",
-          "askNoQuestion": "O Agent está esperando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
+          "askNoQuestion": "O Agent está aguardando sua resposta, mas não há nenhuma pergunta para mostrar. Responda “continuar”.",
           "askQuestion": "O Agent precisa da sua resposta:\n{{question}}\n{{options}}\nResponda com o número de uma opção ou digite sua resposta."
         }
       },
@@ -16070,13 +16070,13 @@
     "agentActionRow": {
       "noContent": "Nada para exibir",
       "fileChange": {
-        "deleted": "Excluído",
+        "deleted": "Exclusão",
         "renamed": "Renomeado",
         "files": "{{count}} arquivos",
         "rawData": "Ver dados brutos"
       },
       "verb": {
-        "edited": "Editado",
+        "edited": "Edição",
         "created": "Criado",
         "ran": "Executado",
         "read": "Lido",
@@ -16716,7 +16716,7 @@
         "running": "Em execução",
         "progress": "Em execução",
         "done": "Concluído",
-        "completed": "Concluído",
+        "completed": "Conclusão",
         "failed": "Falhou",
         "error": "Falhou",
         "stopped": "Interrompido",
@@ -16738,7 +16738,7 @@
         "mergeApproval": "Aguardando aprovação",
         "mergeChanges": "Alterações solicitadas",
         "mergeWaiting": "Aguardando mesclagem",
-        "merged": "Mesclada",
+        "merged": "Mesclado",
         "closed": "Fechada",
         "draft": "Rascunho"
       },
@@ -17495,7 +17495,7 @@
         "nameTaken": "Já existe uma pasta com este nome",
         "nameInvalid": "O nome não pode conter \\ / : * ? \" < > | nem terminar com ponto ou espaço",
         "loadFailed": "Não foi possível carregar o local do projeto",
-        "failed": "Falha ao criar o projeto",
+        "failed": "Falha ao criar projeto",
         "done": "Projeto criado e sessão movida"
       },
       "sessionMenu": {
@@ -17622,7 +17622,7 @@
         "tomorrow": "Amanhã",
         "nextWeek": "Na próxima semana",
         "indefinite": "Indefinidamente",
-        "custom": "Personalizar…",
+        "custom": "Personalizado…",
         "wakeAt": "Data e hora de retorno",
         "timeZone": "Hora local ({{zone}})",
         "invalidTime": "Escolha uma data e hora futuras dentro de um ano.",
@@ -17663,7 +17663,7 @@
     "sessionHeader": {
       "untitled": "Sessão sem título",
       "moreActions": "Mais ações",
-      "agentDevice": "O Agent é executado em {{device}}",
+      "agentDevice": "Agent é executado em {{device}}",
       "agentDeviceOffline": "O Agent é executado em {{device}}, que está offline — ele continuará quando esse computador voltar a ficar online",
       "orcaRemoteLead": "Colaboração de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração encerrada · de {{device}}",
@@ -17761,7 +17761,7 @@
             "timeout": "O código expirou. Tente novamente para obter um novo código."
           },
           "account": {
-            "checking": "Verificando conexão com o GitHub…",
+            "checking": "Verificando a conexão com o GitHub…",
             "connected": "Conectado · @{{login}}",
             "missing": "Conecte o GitHub para começar.",
             "auth": "A autorização expirou. Entre novamente ou substitua o token alternativo abaixo.",
@@ -18247,7 +18247,7 @@
       "filterStatusHeading": "Status",
       "status": {
         "all": "Todas",
-        "active": "Ativo",
+        "active": "Ativas",
         "paused": "Em pausa"
       },
       "section": {
@@ -18617,7 +18617,7 @@
             "pushed": "Código enviado",
             "published": "Publicação",
             "merged": "Mesclagem",
-            "updated": "Atualização",
+            "updated": "Atualizado",
             "tagsChanged": "Tags enviadas",
             "declined": "Recusa",
             "deleted": "Exclusão",
@@ -19837,7 +19837,7 @@
         "message": "Escolha uma categoria antes de publicar no Mercado"
       },
       "NAME_TAKEN": {
-        "title": "Nome em uso",
+        "title": "Nome já em uso",
         "message": "Este nome já é usado por outro autor. Renomeie e publique novamente."
       },
       "INVALID_DEPT": {
@@ -20406,7 +20406,7 @@
       "labelPlaceholder": "Rótulo do Worker (deixe vazio para manter)",
       "labelInvalid": "O rótulo só pode conter letras, números, hífens e sublinhados",
       "duplicateLabel": "O rótulo {{label}} já é usado por outro Worker nesta equipe",
-      "saveFailed": "Falha ao salvar. Tente novamente.",
+      "saveFailed": "Não foi possível salvar. Tente novamente",
       "labelLocked": "O rótulo deste Worker é referenciado por um plano de equipe de plugin ativo e não pode ser alterado até o plano terminar. Altere o nome da função ou libere o Worker primeiro."
     }
   },
@@ -21803,7 +21803,7 @@
         "resolve": "Resolver conflitos",
         "retry": "Tentar novamente",
         "build": "Gerar versão pessoal",
-        "end": "Encerrar build",
+        "end": "Encerrar compilação",
         "retry-prepare": "Tentar preparar novamente",
         "retry-cleanup": "Tentar limpar novamente"
       },
@@ -22631,7 +22631,7 @@
         "notice": "Se não for você quem está configurando um computador novo, recuse.",
         "more": "e mais {{count}}",
         "allow": "Permitir",
-        "deny": "Recusar"
+        "deny": "Negar"
       }
     }
   },
@@ -22681,7 +22681,7 @@
     },
     "stepsLabel": "Etapas do guia",
     "close": "Fechar o guia",
-    "next": "Avançar",
+    "next": "Próximo",
     "skip": "Pular",
     "preparing": "Preparando…",
     "steps": {
