@@ -290,14 +290,22 @@ export class NativeTransport implements Transport {
     this.candidateList = next;
     for (const channel of this.channels.values()) channel.announceCandidates();
   }
-  async configureUdpServer(server: string): Promise<void> {
+  async configureUdpServer(server: string, extraStunServers: readonly string[] = []): Promise<void> {
     if (this.closed || !this.enhanced) return;
     this.relayUdpServer = server;
     // The next poll hands the engine the relay's UDP credentials: now, not when the engine next has something for JS.
     this.wake();
-    await this.startStun([server]);
+    await this.configureStunServers([server, ...extraStunServers]);
   }
-  private async startStun(servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
+  async configureStunServers(servers: readonly string[]): Promise<void> {
+    if (this.closed || !this.enhanced) return;
+    const unique = [...new Set(servers.map(s => s.trim()).filter(Boolean))].slice(0, MAX_STUN_SERVERS);
+    if (!unique.length) return;
+    this.stunServers = unique;
+    await this.startStun(unique);
+  }
+  private stunServers: string[] | null = null;
+  private async startStun(servers = (this.stunServers ?? this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
     if (!servers.length || !this.identity.udpPort || !this.supports('stun')) return;
     await this.call({ op: 'stun', servers }).catch(() => undefined);
   }
@@ -313,7 +321,7 @@ export class NativeTransport implements Transport {
     if (credentials === this.relayCredentials) return;
     this.relayCredentials = credentials;
     await this.call({ op: 'relayUdp', server, ...(credentials
-      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
+      ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key), ...(credentials.probe === true ? { probe: true } : {}) } : { session: null }) });
   }
   private noteRelayCredentials(credentials: object | null): void {
     if (credentials === this.relayUdpFor) return;
@@ -395,6 +403,11 @@ export class NativeTransport implements Transport {
       this.localAddresses = addresses;
       this.updateCandidates();
     }).catch(() => undefined).finally(() => { this.refreshingAddresses = false; });
+  }
+  relayStalled(): void {
+    if (this.closed || !this.enhanced || !this.supports('relay-udp-v2')) return;
+    void this.call({ op: 'relayStalled' }).catch(() => undefined);
+    this.wake();
   }
   reserve(bytes: number): void {
     if (this.pendingBytes + bytes > MAX_PENDING) throw new Error('NATIVE_TRANSPORT_BACKPRESSURE');
@@ -830,6 +843,7 @@ class NativeChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
   /** Session v2: bodies count like their lanes, on the control and normal lanes with what the core still buffers. */

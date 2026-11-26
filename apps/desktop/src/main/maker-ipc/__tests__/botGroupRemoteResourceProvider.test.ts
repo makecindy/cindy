@@ -624,4 +624,15 @@ describe('bot group remote resources', () => {
     expect(service.deleteGroup).not.toHaveBeenCalled();
   });
 
+  // Basis: bot-group-chat.md §5; emit tone='external' badge and bump revision when group.external changes (unit tier).
+  it('emits an external badge on remote list items only when group.external is true', () => {
+    const internalItem = botGroupRemoteItem(summary());
+    const externalItem = botGroupRemoteItem(summary({ external: true, orgName: '星辰科技' }));
+    expect(internalItem.display.badges).toBeUndefined();
+    expect(externalItem.display.badges).toEqual([
+      expect.objectContaining({ tone: 'external', label: expect.objectContaining({ fallback: 'External' }) }),
+    ]);
+    expect(externalItem.revision).not.toBe(internalItem.revision);
+  });
+
 });

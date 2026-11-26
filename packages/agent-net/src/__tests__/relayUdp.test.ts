@@ -23,9 +23,10 @@
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
-import { encodeUdpDown, encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
+import { UDP_RELAY_PROBE_BYTES, encodeUdpDown, encodeUdpProbeAck, encodeUdpRegisterAck, verifyUdpProbe, verifyUdpRegister, verifyUdpUp,
+  type UdpRelayCredentials } from '@cindy/agent-net-relay';
 import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, udpRelayPeerHash } from '@cindy/agent-net-relay/client';
-import { RELAY_UDP_DATA_COOLDOWNS_MS, RelaySendCounters, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
+import { RELAY_UDP_DATA_COOLDOWNS_MS, RELAY_UDP_PROBE_COOLDOWNS_MS, RelaySendCounters, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
 import { StunClient, isFakeIp, parseDohIpv4, resolveUdpHost } from '../stun.js';
 import { AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from '../transport.js';
 
@@ -467,4 +468,155 @@ it('selects relay in auto mode only when direct is significantly slower, with hy
   expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 60, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS - 1 })).toBe(true);
   expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 140, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(true);
   expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 105, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(false);
+});
+
+// 测试价值（2026-11-25 治本回归：满尺寸第 1 跳探针与单对端隔离）
+// - 生产入口与可观察结果：RelayUdpPath（transport.ts）在支持 udp-relay-probe-v1 时于准入、异常复核与恢复期直测 1350B UDP；
+//   不支持探针的旧中继下按连接隔离重传，并允许间歇正常流量重置退避档位。
+// - Bug／规则依据：2026-11-25 Lizi 真机日志（50B 登记正常、本机 UDP 健康，但单台经中转对端抖动/离线触发全局 unacked-sends，
+//   且空闲窗口清空 healthySince 导致退避一路锁死 1800s WS）。
+// - 现有覆盖缺口：原有用例仅测无探针的旧中继全员断流与连续 70s 持续流量，未覆盖满尺寸探针、单对端健康否决与间歇轮询清零。
+// - 最小失败输入：1) 50B 登记全通但 1350B 探针被吞（VPN 黑洞）；2) 1350B 探针秒回时出现静默/超时/重传（对端问题）；
+//   3) 旧中继下两台经中转设备一台健康、一台重传；4) 间隔 15s 空闲的双向确认跨过 60s。tier: unit（假计时器）。
+it('gates relay UDP admission on full-size probe, never blames hop 1 when probe passes, and recovers via probe or networkChanged', async () => {
+  fakeTimers();
+  const credentials: UdpRelayCredentials = { session: new Uint8Array(8).fill(11), key: new Uint8Array(32).fill(12), probe: true };
+  let answerProbes = false;
+  const counters = { retransmitted: 0, sent: 0, acknowledgedBytes: 0 };
+  const { path, sent, registrations } = open(credentials, { relayedSendCounters: () => ({ ...counters }) });
+  let cursor = 0;
+  const pump = () => {
+    const batch = sent.slice(cursor);
+    cursor = sent.length;
+    for (const packet of batch) {
+      const reg = verifyUdpRegister(packet, credentials.key);
+      if (reg) {
+        const proven = !!reg.cookie && Buffer.from(reg.cookie).equals(COOKIE);
+        path.intercept(encodeUdpRegisterAck(credentials, reg.counter, proven, COOKIE));
+        continue;
+      }
+      const probe = verifyUdpProbe(packet, credentials.key);
+      if (probe && answerProbes) {
+        expect(probe.size).toBe(UDP_RELAY_PROBE_BYTES);
+        path.intercept(encodeUdpProbeAck(credentials, probe.counter, probe.size));
+      }
+    }
+  };
+  const step = (ms: number) => { for (let t = 0; t < ms; t += 250) { vi.advanceTimersByTime(250); pump(); } };
+
+  // VPN swallows 1350B packets while answering 50B registrations: never enters broken UDP, suspends with probe-failed.
+  await vi.waitFor(() => expect(registrations().length).toBeGreaterThanOrEqual(1));
+  pump(); pump();
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+  step(3_000);
+  expect(path.suspension).toEqual({ reason: 'probe-failed', cooldownMs: RELAY_UDP_PROBE_COOLDOWNS_MS[0] });
+  expect(registrations().at(-1)!.receiving).toBe(false);
+
+  // When probe starts succeeding at cooldown expiry, UDP turns on seamlessly without dumping traffic blindly.
+  answerProbes = true;
+  step(RELAY_UDP_PROBE_COOLDOWNS_MS[0] + 1_000);
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  expect(registrations().at(-1)!.receiving).toBe(true);
+
+  // Wait past PROBE_FRESH_MS, then simulate peer-side silence, timeouts, and retransmits while hop-1 probe succeeds: UDP stays up.
+  step(4_000);
+  for (let i = 0; i < 4; i++) { path.send('member', new Uint8Array(1_200)); step(1_000); }
+  step(2_000);
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
+  step(4_000);
+  path.noteStall(); path.noteStall();
+  step(1_000);
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
+  step(4_000);
+  for (let i = 0; i < 6; i++) {
+    step(1_000);
+    path.send('member', new Uint8Array(1_200));
+    counters.retransmitted += 2; counters.sent += 4;
+  }
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
+  // Now hop 1 actually breaks (VPN enabled mid-session): anomaly triggers probe, probe fails -> switches to WS immediately.
+  answerProbes = false;
+  step(4_000);
+  path.noteStall(); path.noteStall();
+  step(3_000);
+  expect(path.suspension).toEqual({ reason: 'probe-failed', cooldownMs: RELAY_UDP_PROBE_COOLDOWNS_MS[0] });
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+
+  // Turning VPN off (networkChanged) immediately clears suspension and re-probes back to UDP within 1s.
+  answerProbes = true;
+  path.networkChanged();
+  step(1_000);
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+});
+
+it('does not suspend legacy relay UDP when one peer stalls while another relayed peer acknowledges cleanly, and resets backoff across idle gaps', async () => {
+  const relaySends = new RelaySendCounters();
+  const healthyPeer = {}, dyingPeer = {};
+  const healthy = { key: healthyPeer, relay: true, retransmitted: 0, sent: 0, acknowledgedBytes: 0 };
+  const dying = { key: dyingPeer, relay: true, retransmitted: 0, sent: 0, acknowledgedBytes: 0 };
+  const { path, step, reply } = await upWithAckingRelay(15, {
+    relayedSendCounters: () => relaySends.sampleDetailed([healthy, dying]),
+  });
+
+  // Dying peer retransmits 100% with 0 ACK while healthy peer keeps acknowledging cleanly -> hop 1 is healthy, no suspension.
+  for (let i = 0; i < 8; i++) {
+    step(1_000);
+    reply();
+    path.send('member', new Uint8Array(1_200));
+    healthy.sent += 4; healthy.acknowledgedBytes += 4_800;
+    dying.sent += 4; dying.retransmitted += 4;
+  }
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
+  // Even two request timeouts on the dying peer must not suspend legacy relay UDP while the healthy peer is acknowledging.
+  path.noteStall();
+  path.noteStall();
+  expect(path.suspension).toBeNull();
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+
+  // Both peers stop acknowledging (real hop-1 outage) -> suspends after 5s window.
+  for (let i = 0; i < 6; i++) {
+    step(1_000);
+    reply();
+    path.send('member', new Uint8Array(1_200));
+    healthy.sent += 2; healthy.retransmitted += 2;
+    dying.sent += 2; dying.retransmitted += 2;
+  }
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
+
+  // After cooldown, intermittent bidirectional traffic with 15s idle gaps across 65s must reset cooldown back to tier 0.
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  const poll = () => {
+    for (let i = 0; i < 6; i++) {
+      step(1_000);
+      reply();
+      path.send('member', new Uint8Array(1_200));
+      healthy.sent += 2; healthy.acknowledgedBytes += 2_400;
+    }
+  };
+  poll();
+  step(15_000); // Purely idle window must not erase healthy progress.
+  poll();
+  step(45_000);
+  poll();
+
+  // Next outage must start at the shortest cooldown (30s), not escalate to 300s.
+  for (let i = 0; i < 6; i++) {
+    step(1_000);
+    reply();
+    path.send('member', new Uint8Array(1_200));
+    healthy.sent += 2; healthy.retransmitted += 2;
+    dying.sent += 2; dying.retransmitted += 2;
+  }
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
 });

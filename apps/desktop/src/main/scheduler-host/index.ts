@@ -10,7 +10,7 @@ import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../s
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
@@ -178,6 +178,10 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
         if (selection.modelAgentKind === 'acp') {
           throw new Error('A plugin engine schedule starts a new task each run');
+        }
+        // 绑定插件引擎任务时按用户续发消息运行：沿用任务自己的引擎与模型(scheduler-host/runner.ts boundPluginEngineRefusal)。
+        if (isPluginEngineKind(row?.agentKind) && selection.modelAgentKind) {
+          throw new Error('An automation linked to a plugin engine task uses the task\'s own model; save it without choosing a model');
         }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),

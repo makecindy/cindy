@@ -7,7 +7,18 @@ import { remotePrStatuses } from '@cindy/maker-shared';
  * gh 缺失/未登录降级(不缓存,远端归一 no-token)、404/网络错误映射。依赖全注入,零网络零 Electron。
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
+import {
+  Scheduler,
+  type ListFilter,
+  type Schedule as EngineSchedule,
+  type ScheduleRun,
+  type ScheduleStorage,
+} from '@cindy/maker-scheduler';
+import { executePreRunHook } from '../scheduler-host/pre-run-hook';
 
 import {
   PrStatusService,
@@ -1212,5 +1223,378 @@ describe('PR follow watch', () => {
     await settle();
     expect(runNow).toHaveBeenCalledTimes(1);
     expect(prStatusSignature({ ok: false, prNumber: 85, reason: 'fetch-failed' } as never)).toBeNull();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：refreshGithubPrEvents + PrStatusService + PrFollowWatch 在连续 overflow 批次与忙顺延下的触发次数与参数。
+  // - 规则依据：docs/product-rules/github-status-and-associations.md（omitted > 0 补查找回评论变化）与 docs/dev-rules/server-channel-review.md（无关仓库高频 CI 溢出不得每分钟拉起全部跟进任务）。
+  // - 现有覆盖缺口：既有 overflow 用例仅验证单次调用，未覆盖同一 updated_at 连续溢出静默、评论推进 updated_at 立即补查，以及旧式无 prTrigger 跟进任务的 runner 顺延保留。
+  // - 最小失败输入：同一 PR 连续三次 overflow（第二次无变化、第三次仅 updated_at 推进）+ 首次执行返回 deferred。
+  // - tier：unit（fake timers，纯内存替身）。
+  it('suppresses repeated overflow reconciles when updated_at is unchanged, wakes on new comment timestamps, and retains deferred legacy follows', async () => {
+    vi.useFakeTimers();
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    let updatedAt = '2026-11-25T02:00:00Z';
+    const runNow = vi.fn(async () => ({ runId: 'r-ok', deferred: false }));
+    runNow.mockResolvedValueOnce({ runId: 'r-deferred', deferred: true });
+    const legacyTask = schedule('legacy-follow-324', url);
+    const watch = new PrFollowWatch({
+      listActive: async () => [legacyTask],
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ head_sha: 'a1', metadata: { updated_at: updatedAt } }),
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    try {
+      // First overflow without prior baseline reconciles once; runner defers, and legacy task retains the retry.
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(1);
+      expect(runNow).toHaveBeenLastCalledWith(
+        'legacy-follow-324',
+        { kind: 'watch', source: 'pr-status', detail: url, reason: 'reconcile' },
+        legacyTask,
+        undefined,
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(2);
+
+      // Subsequent overflow batches from busy sibling repos with identical summary + updated_at stay quiet.
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(2);
+
+      // A new issue comment during overflow advances updated_at without changing status counts -> wakes immediately.
+      updatedAt = '2026-11-25T02:05:00Z';
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Scheduler + executePreRunHook(stdin trigger 管道) + PrStatusService + PrFollowWatch + refreshGithubPrEvents 全链路下，验证 waiting(human) 长期无事件退避、显式评论即时唤醒、updated_at 缺失节流兜底以及 overflow 丢评论的双重恢复（updated_at 推进即时补查 + 定时 probe 兜底）。
+  // - 规则依据：docs/product-rules/github-status-and-associations.md 与 docs/dev-rules/server-channel-review.md。
+  // - 现有覆盖缺口：既有测试用 mock runNow 替身，未打通真实 preRunHook 子进程 stdin trigger 与 gate 状态机的退避/唤醒闭环，也未覆盖 updated_at 缺失与同秒漏更新的 probe 兜底。
+  // - 最小失败输入：waiting(human) 基线后经历 25 分钟定时 tick + 无关 overflow、显式评论、缺失 updated_at 的连续 overflow 及丢事件的评论更新。
+  // - tier：unit（临时目录真实门禁脚本 + FakeClock）。
+  it('verifies waiting(human) backoff, instant explicit-comment wakeup, missing-updated_at fallback, and overflow dropped-comment recovery through real executePreRunHook', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pr-gate-e2e-'));
+    const stateFile = path.join(tmpDir, 'gate-state.json');
+    const worldFile = path.join(tmpDir, 'pr-world.json');
+    const gateScript = path.join(tmpDir, 'pr-heartbeat-gate.mjs');
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+
+    // Mirrors official pr-heartbeat-gate.mjs + follow-pacing.mjs contract:
+    // reads stdin JSON { trigger }, enforces 30m waiting(human) pace unless triggered,
+    // runs cheap remarks probe when due, and passes (exit 0) only on new remarks.
+    fs.writeFileSync(
+      gateScript,
+      [
+        'import fs from "node:fs";',
+        'const [stateFile, worldFile, targetUrl] = process.argv.slice(2);',
+        'const rawStdin = fs.readFileSync(0, "utf8");',
+        'const payload = rawStdin ? JSON.parse(rawStdin) : {};',
+        'const world = JSON.parse(fs.readFileSync(worldFile, "utf8"));',
+        'const now = world.now;',
+        'const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf8")) : null;',
+        'const trigger = payload?.trigger;',
+        'const triggered = trigger?.kind === "watch" && trigger?.source === "pr-status" && String(trigger?.detail).toLowerCase() === targetUrl.toLowerCase();',
+        'const WAITING_PACE_MS = 30 * 60_000;',
+        'const PACE_SLACK_MS = 60_000;',
+        'if (!triggered && prev?.phase === "waiting(human)" && now - prev.lastLookAt + PACE_SLACK_MS < WAITING_PACE_MS) {',
+        '  world.notDueSkips += 1;',
+        '  fs.writeFileSync(worldFile, JSON.stringify(world));',
+        '  process.stdout.write("[pr-heartbeat-gate] SKIP reason=not-due (pace=waiting)\\nCINDY_PRECHECK_OK\\n");',
+        '  process.exit(2);',
+        '}',
+        'if (!triggered) world.probes += 1; else world.triggeredReads += 1;',
+        'fs.writeFileSync(worldFile, JSON.stringify(world));',
+        'const changed = !prev || prev.remarks !== world.remarks;',
+        'fs.writeFileSync(stateFile, JSON.stringify({ phase: "waiting(human)", remarks: world.remarks, lastLookAt: now }));',
+        'if (changed) {',
+        '  process.stdout.write("[pr-heartbeat-gate] PASS reason=changed (events=[remarks])\\nCINDY_PRECHECK_OK\\n");',
+        '  process.exit(0);',
+        '}',
+        'process.stdout.write("[pr-heartbeat-gate] SKIP reason=waiting-human\\nCINDY_PRECHECK_OK\\n");',
+        'process.exit(2);',
+      ].join('\n'),
+      'utf8',
+    );
+
+    let currentNow = Date.UTC(2026, 10, 25, 0, 0, 0);
+    const clock = {
+      now: () => currentNow,
+      advance: (ms: number) => {
+        currentNow += ms;
+      },
+    };
+    const schedulesMap = new Map<string, EngineSchedule>();
+    const runsMap = new Map<string, ScheduleRun>();
+    const storage: ScheduleStorage = {
+      async list(filter?: ListFilter) {
+        const all = [...schedulesMap.values()];
+        return filter?.status ? all.filter((s) => s.status === filter.status) : all;
+      },
+      async listActive() {
+        return [...schedulesMap.values()].filter((s) => s.status === 'active');
+      },
+      async get(id: string) {
+        const s = schedulesMap.get(id);
+        return s ? { ...s } : null;
+      },
+      async insert(sch: EngineSchedule) {
+        schedulesMap.set(sch.id, { ...sch });
+        return { ...sch };
+      },
+      async update(id: string, patch: Partial<EngineSchedule>, expected?: EngineSchedule) {
+        const ex = schedulesMap.get(id);
+        if (!ex) return null;
+        if (
+          expected &&
+          (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual', 'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const)
+            .some((key) => ex[key] !== expected[key])
+        ) {
+          return null;
+        }
+        const merged: EngineSchedule = { ...ex, ...patch };
+        if (patch.lastFinishedAt !== undefined) {
+          merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
+        }
+        schedulesMap.set(id, merged);
+        return { ...merged };
+      },
+      async delete(id: string) {
+        schedulesMap.delete(id);
+      },
+      async insertRun(run: ScheduleRun) {
+        runsMap.set(run.id, { ...run });
+        return { ...run };
+      },
+      async updateRun(id: string, patch: Partial<ScheduleRun>) {
+        const ex = runsMap.get(id);
+        if (!ex) return null;
+        const merged: ScheduleRun = { ...ex, ...patch };
+        runsMap.set(id, merged);
+        return { ...merged };
+      },
+      async listRuns(scheduleId: string, limit = 50) {
+        return [...runsMap.values()]
+          .filter((r) => r.scheduleId === scheduleId)
+          .sort((a, b) => b.firedAt - a.firedAt)
+          .slice(0, limit);
+      },
+      async hasRunningRuns(scheduleId?: string) {
+        return [...runsMap.values()].some(
+          (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+        );
+      },
+      async hasUnfinishedRuns(scheduleId: string) {
+        return [...runsMap.values()].some(
+          (r) => r.scheduleId === scheduleId && (r.status === 'running' || r.status === 'interrupted'),
+        );
+      },
+      async deleteRun(id: string) {
+        const ex = runsMap.get(id);
+        if (!ex) return null;
+        runsMap.delete(id);
+        return { ...ex };
+      },
+      async markRunningAsInterrupted() {
+        return [];
+      },
+      async touchRunHeartbeats() {},
+      async claimDueFire(id: string, expectedNextFireAt: number) {
+        const ex = schedulesMap.get(id);
+        if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+        ex.nextFireAt = undefined;
+        return { ...ex };
+      },
+    };
+    const readWorld = () =>
+      JSON.parse(fs.readFileSync(worldFile, 'utf8')) as {
+        now: number;
+        remarks: string;
+        notDueSkips: number;
+        probes: number;
+        triggeredReads: number;
+      };
+    const writeWorld = (patch: Partial<ReturnType<typeof readWorld>>) => {
+      const current = fs.existsSync(worldFile)
+        ? readWorld()
+        : { now: clock.now(), remarks: 'initial', notDueSkips: 0, probes: 0, triggeredReads: 0 };
+      fs.writeFileSync(worldFile, JSON.stringify({ ...current, ...patch, now: clock.now() }));
+    };
+    writeWorld({ remarks: 'initial' });
+
+    let agentWakeups = 0;
+    const scheduler = new Scheduler({
+      storage,
+      clock,
+      tickIntervalMs: 3_600_000,
+      runner: {
+        fire: async (sch, ctx) => {
+          writeWorld({});
+          const hook = await executePreRunHook({
+            command: sch.preRunHook!.command,
+            cwd: tmpDir,
+            signal: ctx.signal,
+            stdinPayload: {
+              event: 'schedule-pre-run',
+              scheduleId: sch.id,
+              scheduleName: sch.name,
+              runId: ctx.runId,
+              firedAt: clock.now(),
+              workingDir: tmpDir,
+              ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
+            },
+          });
+          await ctx.onPreRunHookCompleted?.(hook);
+          if (hook.status === 'skipped') {
+            return { sessionId: '', skipped: true, resultText: hook.stdout.trim() };
+          }
+          if (hook.status !== 'passed') {
+            throw new Error(hook.error ?? 'gate blocked');
+          }
+          agentWakeups += 1;
+          return { sessionId: 'sess-pr-85', resultText: `woke-${agentWakeups}` };
+        },
+      },
+    });
+
+    await scheduler.start();
+    try {
+      const follow = await scheduler.create({
+        name: 'Follow PR #85',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        intervalMs: 5 * 60_000,
+        recurring: true,
+        agentKind: 'codex',
+        prompt: 'Handle PR #85',
+        workingDir: tmpDir,
+        useWorktree: false,
+        notify: { desktop: false, feishu: false },
+        preRunHook: {
+          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(gateScript)} ${JSON.stringify(stateFile)} ${JSON.stringify(worldFile)} ${url}`,
+        },
+      });
+
+      let updatedAt: string | undefined = '2026-11-25T00:00:00Z';
+      let pendingWatchRun: Promise<unknown> | null = null;
+      const flushWatchRun = async () => {
+        const current = pendingWatchRun;
+        pendingWatchRun = null;
+        await current;
+      };
+      const watch = new PrFollowWatch({
+        now: () => clock.now(),
+        listActive: () => scheduler.list({ status: 'active' }),
+        inflight: (id) => scheduler.getInflightCount(id),
+        hasCapacity: () => scheduler.hasFreeSlot(),
+        autoRunAllowed: () => true,
+        runNow: (id, trigger) => {
+          const p = scheduler.runNow(id, { deferToCaller: true, trigger });
+          pendingWatchRun = p;
+          return p;
+        },
+      });
+      const svc = new PrStatusService({
+        readToken: TOKEN_OK,
+        now: () => clock.now(),
+        fetchPr: async () =>
+          remote({
+            head_sha: 'a1',
+            metadata: updatedAt ? { updated_at: updatedAt } : {},
+          }),
+        onObserved: (query, result) => watch.observe(query, result),
+      });
+
+      // Initial reconnect baseline (mirrors ScheduleWebhookRemote.recoverGithubPrs on welcome):
+      // establishes waiting(human) state (agentWakeups = 1) and anchors updated_at.
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'reconnect', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(1);
+      expect(readWorld()).toMatchObject({ notDueSkips: 0, probes: 0, triggeredReads: 1 });
+
+      // (1) Long-term no events in waiting(human): across +10m and +20m timed ticks AND repeated
+      // unrelated overflow batches, 0 probes/snapshots and 0 agent wakeups occur!
+      for (const stepMinutes of [10, 10]) {
+        clock.advance(2 * 60_000);
+        await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+        await flushWatchRun();
+        clock.advance((stepMinutes - 2) * 60_000);
+        await scheduler.tick();
+      }
+      expect(agentWakeups).toBe(1);
+      expect(readWorld()).toMatchObject({ notDueSkips: 2, probes: 0, triggeredReads: 1 });
+
+      // (2) Explicit new comment mid-backoff (+22m): bypasses waiting(human) immediately via stdin trigger,
+      // wakes agent once, and merges/resets the 5m timer so +25m does not duplicate-fire!
+      clock.advance(2 * 60_000);
+      writeWorld({ remarks: 'human-comment-1' });
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(2);
+      expect(readWorld().triggeredReads).toBe(2);
+      clock.advance(3 * 60_000);
+      await scheduler.tick(); // original +25m slot skipped because explicit watch reset intervalMs to +27m
+      expect(agentWakeups).toBe(2);
+
+      // (3) Missing updated_at fallback: an unseen PR with no updated_at reconciles immediately once,
+      // while a recently reconciled PR stays throttled until the 30m fallback window elapses, then reconciles once and throttles again.
+      expect(watch.needsCommentReconcile({ ...Q, prNumber: 999 }, undefined)).toBe(true);
+      updatedAt = undefined;
+      const triggeredBeforeMissing = readWorld().triggeredReads;
+      clock.advance(60_000); // +4m since step (2) reconcile -> still within 30m fallback window
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing);
+      clock.advance(27 * 60_000); // +31m since step (2) -> bounded 30m fallback reconciles once
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing + 1);
+      clock.advance(5 * 60_000); // +5m after fallback reconcile -> throttled again
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing + 1);
+
+      // (4a) Overflow dropped comment when updated_at advances -> immediate reconcile wakes agent!
+      updatedAt = '2026-11-25T01:10:00Z';
+      writeWorld({ remarks: 'dropped-comment-with-updated-at' });
+      clock.advance(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(3);
+
+      // (4b) Overflow dropped comment even when updated_at failed to advance -> retained timed check
+      // stays backed off at +15m, then runs probe once waiting(human) 30m window matures and wakes agent!
+      writeWorld({ remarks: 'dropped-comment-stale-updated-at' });
+      clock.advance(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(3); // unchanged updated_at did not trigger immediate reconcile
+      clock.advance(14 * 60_000);
+      await scheduler.tick();
+      expect(agentWakeups).toBe(3); // still within 30m waiting(human) backoff
+      clock.advance(15 * 60_000);
+      await scheduler.tick();
+      expect(agentWakeups).toBe(4);
+      expect(readWorld().probes).toBe(1);
+      expect((await scheduler.listRuns(follow.id)).some((r) => r.triggerSource === 'pr-check' && r.status === 'success')).toBe(true);
+    } finally {
+      await scheduler.stop();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

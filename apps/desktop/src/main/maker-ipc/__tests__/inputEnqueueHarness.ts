@@ -39,7 +39,9 @@ const compiledGroupFallback = transpileModule(
 
 export function createUsageLimitedTurnErrorHarness(bindings: Record<string, unknown>) {
   const fallback = new Function(...Object.keys(bindings), compiledGroupFallback)(...Object.values(bindings)) as UsageLimitAutoResume['onTurnError'];
-  const ports = { ...bindings, waitForUsageLimitAfterGroup: fallback };
+  // These fixtures exercise the ordinary scheduler/group quota route, not the
+  // account-pool-specific replay fence. Leave the host port replaceable.
+  const ports = { mixedProviderCanRetryTurn: () => true, ...bindings, waitForUsageLimitAfterGroup: fallback };
   const handler = new Function(...Object.keys(ports), compiledQuotaHandler)(...Object.values(ports)) as
     NonNullable<ConstructorParameters<typeof AgentInputCoordinator>[0]['onUsageLimitedTurnError']>;
   return Object.assign(handler, { fallback });

@@ -171,6 +171,18 @@ describe('group row', () => {
     expect(offline.querySelector('[data-testid="teammate.status.running"]')).toBeNull();
     expect(offline.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
   });
+
+  // Basis: bot-group-chat.md §5; External badge renders only when display.badges carries tone='external' (unit tier).
+  it('shows the External badge only on groups marked external for enterprise viewers', async () => {
+    const ext = row('mac', 'g-ext', { timestamp: 10, preview: 'hi', badges: [{ tone: 'external', label: '外部', accessibilityLabel: '外部' }] });
+    const internal = row('mac', 'g-int', { timestamp: 9, preview: 'hi' });
+    await act(async () => root.render(el('div', null,
+      el(BotGroupListRow, { key: ext.key, row: ext, online: true, onPress: () => {} }),
+      el(BotGroupListRow, { key: internal.key, row: internal, online: true, last: true, onPress: () => {} }),
+    )));
+    expect(byId('botGroups.item.mac.g-ext')?.querySelector('[data-testid="botGroup.externalBadge"]')?.textContent).toBe('groupChat.externalBadge');
+    expect(byId('botGroups.item.mac.g-int')?.querySelector('[data-testid="botGroup.externalBadge"]')).toBeNull();
+  });
 });
 
 describe('create from the home teammate section + menu', () => {
