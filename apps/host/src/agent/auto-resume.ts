@@ -14,6 +14,7 @@ import type { SuppressedTurnError } from '../../../desktop/src/main/maker-ipc/au
 import { readInterruptedTurnAutoResumeSettingsFrom } from '../../../desktop/src/main/maker-host/interruptedTurnAutoResumeSettingsCore.ts';
 import { readSilentStopAutoResumeSettingsFrom } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/main/maker-host/sessionRuntimeFallbackSettingsCore.ts';
+import { startSessionRuntimeFallbackTurn } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { explicitPorts } from './explicit-ports.ts';
 import type { HostProductTurn } from './product-turn.ts';
 
@@ -173,6 +174,7 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
       // The usage-limit resume arrives with the third batch; until then a person's message has no
       // usage-limit wait to restart.
       usageLimitAutoResume: { noteUserAction: () => {} },
+      startFallbackTurn: startSessionRuntimeFallbackTurn,
       // Provider-group tasks are refused at admission (see above).
       getProviderGroupService: () => null,
       // Behind the task's reply rows, as on the desktop, and with the desktop's failure handling: the

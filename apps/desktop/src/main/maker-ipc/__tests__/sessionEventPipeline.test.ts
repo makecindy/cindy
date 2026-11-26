@@ -10,6 +10,10 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
+import { registerSendToWorkerTool } from '../../../../../../packages/lizi-mcps/src/xdt-helper/send_to_worker.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { createPiTranslateContext, translatePiEvent } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
 import Database from 'better-sqlite3';
 import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
 import type { DbTransport } from '../../localDb/client/DbTransport.js';
@@ -347,7 +351,7 @@ function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKin
       hasSuppressedError: vi.fn(() => false),
     },
     pendingFailedTurnAssistantPersistId: new Map<string, string>(),
-    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
+    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn(), noteProgress: vi.fn() },
     sessionTurnActivityTracker: activity,
     sessionListActivityTracker: listActivity,
     productTurnWallClockTracker: new ProductTurnWallClockTracker(),
@@ -952,6 +956,24 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // #12759, unit: production event pipeline must only reset the breaker at a
+  // completed visible reply; tool activity and failed or empty done are not recovery.
+  it.each([
+    [{ status: 'completed', result: '完成' }, 1],
+    [{ status: 'completed', result: '   ' }, 0],
+    [{ status: 'completed', result: 'partial', silentStop: true }, 0],
+    [{ status: 'failed', result: 'partial' }, 0],
+    [{ status: 'cancelled', result: 'partial' }, 0],
+  ] as const)('resets the silent-stop breaker only for a completed visible reply: %j', async (data, calls) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    h.emit(event('tool_use', { name: 'tool' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).not.toHaveBeenCalled();
+    h.emit(event('done', data, { source: 'pi' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).toHaveBeenCalledTimes(calls);
+    await h.dispose();
+  });
+
   it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
     'runs the upstream-merge follow-up only for a successful product boundary: %s', async (status) => {
       const h = harness();
@@ -1230,6 +1252,40 @@ describe('production Session event pipeline', () => {
     }
     await microtasks();
     expect(effects.calls.filter(call => call === 'git-end' || call === 'git-abort').map(call => call.slice(4))).toEqual(desktop);
+    await h.dispose();
+  });
+
+  // #13114, integration: verify a real Orca handler receipt crosses Pi settlement
+  // and the Desktop turn boundary without inviting a duplicate dispatch.
+  it('delivers one worker instruction and settles the empty Pi Lead turn without a continuation', async () => {
+    const h = harness(undefined, 'pi');
+    effects.fn('piUsageToTokens').mockReturnValueOnce({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 });
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createPiTranslateContext(h.deps.log);
+    const registry = new XdtHelperToolRegistry();
+    const sendToWorker = vi.fn(async () => ({
+      ok: true as const, agentKind: 'pi' as const, wakeKind: 'already-active' as const,
+      targetTitle: null, targetLastUserSendAt: null,
+    }));
+    registerSendToWorkerTool(registry, {
+      getSessionContext: () => ({ sessionId: 'task' }), sendToWorker, interruptWorker: vi.fn(),
+    });
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { target_session_id: 'worker', message: 'Inspect the change' } };
+    const call = { toolName: 'cindy_mcp_call_tool', toolCallId: 'send' };
+    translatePiEvent({ type: 'agent_start' }, queue, ctx);
+    translatePiEvent({ type: 'tool_execution_start', ...call, args }, queue, ctx);
+    const result = await registry.call(args.tool, args.args);
+    translatePiEvent({ type: 'tool_execution_end', ...call, result, isError: result.isError === true }, queue, ctx);
+    translatePiEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } }, queue, ctx);
+    translatePiEvent({ type: 'agent_settled' }, queue, ctx);
+    queue.end();
+    for await (const projected of queue) h.emit(projected);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sendToWorker).toHaveBeenCalledExactlyOnceWith({
+      callerLeadSessionId: 'task', targetSessionId: 'worker', message: 'Inspect the change',
+    });
+    expect(h.deps.handleSilentStopTurnEnd).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
     await h.dispose();
   });
 

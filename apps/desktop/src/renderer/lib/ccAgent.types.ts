@@ -434,6 +434,8 @@ export interface Session {
   notificationsMuted?: boolean;
   /** Inbox deferral, saved by the task host. Missing on older hosts. */
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
