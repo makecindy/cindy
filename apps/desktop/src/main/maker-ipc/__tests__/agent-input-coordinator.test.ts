@@ -1,4 +1,9 @@
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
+import { stampSharedTaskInput } from '../sharedTaskInput.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { buildTaskDeepLink } from '../../../shared/deepLinkSchemes.js';
 import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
@@ -124,6 +129,47 @@ const mocks = vi.hoisted(() => {
 });
 
 describe('task action dispatch authorization', () => {
+  // Unit integration, shared-task-mode.md: the new native handoff must join the
+  // existing busy input queue and dispatch once when idle, preserving author/runtime.
+  // Adjacent tests enqueue local items directly and miss the guest composer path.
+  // Filtered standalone: 67.03s (65.67s existing fixture collection; new case 85ms).
+  it('drains a received shared-task handoff once after the original turn ends', async () => {
+    const h = createHarness(), sid = 'shared-target';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    const peer = sharedTaskHostPeer('share', 'owner-desktop');
+    const author = { sharedTaskId: 'share', sessionId: sid, memberId: 'member', accountId: 'guest', displayName: 'Guest' };
+    const capture = { author, isCurrent: () => true, authorize: () => true };
+    const task = { agentKind: 'pi' as const, model: 'original', workingDir: '/original', permissionMode: 'ask' };
+    const delivery = createSharedTaskDelivery({
+      caller: () => ({ key: 'source-input', current: true, accountScoped: true, planMode: false }),
+      captureGroupAccess: async () => null, assertActionCurrent: async () => {},
+      invoke: async (target, channel, args, options) => {
+        expect(target).toBe(peer);
+        options.preSend();
+        if (channel === 'local-db:sessions:get') return { ok: true, result: { id: sid, status: 'active', agentKind: 'pi', clearedAt: null } };
+        if (channel === 'maker:input:get-projection') {
+          const [clientId] = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
+          return { ok: true, result: { inputDeliveryVersion: 1, deliveryReceipts: [{ clientId,
+            state: h.coordinator.getProjection(sid).pendingQueue.some(item => item.clientId === clientId) ? 'pending' : 'unknown' }] } };
+        }
+        expect(channel).toBe('maker:input:enqueue');
+        const item = stampSharedTaskInput(args[1] as AgentInputQueuedMessage, capture, task);
+        return { ok: true, result: runDeviceLinkInvokeContext({ controllerDeviceId: 'guest-device', channel, sharedTask: capture },
+          () => h.coordinator.enqueue(sid, item)) };
+      },
+    });
+    const receipt = await delivery({ target: buildTaskDeepLink(sid, peer), message: 'Chosen result',
+      context: { sessionId: 'local-source', sessionInstanceId: 'source-instance', agentKind: 'codex', workingDir: '/source' } });
+    expect(receipt).toMatchObject({ ok: true, wake_kind: 'queued', delivery_state: 'pending' });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    expect(h.sendToAgent.mock.calls[0]).toMatchObject([sid, expect.anything(), task, {
+      persistUserMessage: { content: 'Chosen result', sharedTaskAuthor: author },
+    }]);
+  });
   // Unit regression through the production coordinator: revocation/restore cannot
   // deliver an automatic message, while the following owner input still runs.
   // teammate-authority.md「延迟投递只认真实撤权」: the revoked item settles before the
@@ -8835,6 +8881,21 @@ describe('AgentInputCoordinator steer transaction', () => {
     await expect(h.coordinator.steer(sid, makeItem('q-3', 'urgent'), { fallbackToTurn: false })).resolves.toBe(false);
     expect(h.steerToAgent).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+  });
+
+  it('re-emits steerUnsupported immediately via refreshProjection when capability is revoked mid-session', () => {
+    let supported = true;
+    const h = createHarness({ supportsSameTurnSteer: () => supported });
+    const sid = 'steer-revoked-mid-session';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued'));
+    expect(latestProjection(h.projections).steerUnsupported).toBeUndefined();
+
+    h.emitProjection.mockClear();
+    supported = false;
+    h.coordinator.refreshProjection(sid);
+    expect(h.emitProjection).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).steerUnsupported).toBe(true);
   });
 
   it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
