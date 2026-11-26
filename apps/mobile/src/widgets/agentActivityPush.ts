@@ -1,3 +1,4 @@
+import { retryAfterDeadline } from "@cindy/auth-client";
 import { AppState, Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import type { ClientEndpointRegion } from "@cindy/maker-shared/client-endpoints";
@@ -31,7 +32,8 @@ export interface ActivityPushRegistration {
 }
 /** In-memory continuity owned by the bridge, never persisted or sent. */
 export interface ActivityRecoveryState {
-  failure?: { enabled: boolean; until: number; delay: number; refreshIdentity?: string };
+  failure?: { enabled: boolean; until: number; delay: number };
+  pendingRefreshActivity?: string | null;
   identity?: string;
   lastRefreshAt?: number;
   wasStale?: boolean;
@@ -81,6 +83,7 @@ function sendRegistration(
       if (!response.ok)
         throw Object.assign(new Error("activity-registration-failed"), {
           status: response.status,
+          retryAt: response.status === 429 || response.status === 503 ? retryAfterDeadline(response) : undefined,
         });
     } finally {
       clearTimeout(timeout);
@@ -130,7 +133,7 @@ export function startActivityPushSync(options: {
   let running: Promise<void> | undefined;
   let pending = false;
   let pendingRefresh = false;
-  let retryRefresh = false;
+  let deferredRegistration = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let last: string | undefined;
   let accepted = options.initiallyRegistered === true;
@@ -181,6 +184,12 @@ export function startActivityPushSync(options: {
     )
       throw new Error("stale-activity-owner");
   };
+  const retryAfter = (delay: number) => {
+    retry ??= setTimeout(() => {
+      retry = undefined;
+      void sync();
+    }, Math.min(delay, 2_147_483_647));
+  };
   const attempt = async (refresh: boolean) => {
     try {
       assertCurrent();
@@ -226,9 +235,16 @@ export function startActivityPushSync(options: {
         mobileDebugLog("debug", "lifecycle", "activity-content", { ...times, stale: isStale === true });
       }
       const failure = recovery.failure;
-      const shouldRefresh = (refresh || becameStale || failure?.refreshIdentity === identity) && isStale !== false &&
+      if (recovery.pendingRefreshActivity !== registration.activityId || isStale === false ||
+          registration.dismissed || !registration.enabled || !registration.updateToken) {
+        recovery.pendingRefreshActivity = undefined;
+      }
+      const wantsRefresh = (refresh || becameStale || recovery.pendingRefreshActivity !== undefined) && isStale !== false &&
         registration.enabled && !registration.dismissed && !!registration.updateToken &&
-        AppState.currentState === "active" && Date.now() - (recovery.lastRefreshAt ?? -Infinity) >= 30_000;
+        AppState.currentState === "active";
+      const refreshAt = (recovery.lastRefreshAt ?? -Infinity) + 30_000;
+      const shouldRefresh = wantsRefresh && Date.now() >= refreshAt;
+      if (failure && wantsRefresh) recovery.pendingRefreshActivity = registration.activityId;
       const body = {
         ...wireRegistration,
         schemaVersion: 1,
@@ -238,7 +254,6 @@ export function startActivityPushSync(options: {
         apnsEnv: environment === "development" ? "sandbox" : "prod",
       };
       const key = JSON.stringify(body);
-      if (key === last && !shouldRefresh) return;
       if (
         registration.enabled &&
         !registration.startToken &&
@@ -247,15 +262,14 @@ export function startActivityPushSync(options: {
         options.onRegistered(false);
         return;
       }
-      if (failure?.enabled === registration.enabled && Date.now() < failure.until) {
-        retryRefresh ||= refresh;
-        retry ??= setTimeout(() => {
-          retry = undefined;
-          const refreshOnRetry = retryRefresh;
-          retryRefresh = false;
-          void sync(refreshOnRetry);
-        }, failure.until - Date.now());
+      if (failure?.enabled === registration.enabled && Date.now() < failure.until && (key !== last || wantsRefresh)) {
+        deferredRegistration ||= key !== last;
+        retryAfter(failure.until - Date.now());
         if (!accepted) options.onRegistered(false);
+        return;
+      }
+      if (key === last && !shouldRefresh) {
+        if (wantsRefresh && recovery.pendingRefreshActivity !== undefined) retryAfter(refreshAt - Date.now());
         return;
       }
       const token = await options.getAccessToken();
@@ -285,16 +299,28 @@ export function startActivityPushSync(options: {
       } catch (error) {
         assertCurrent();
         const delay = Math.min(Math.max((failure?.delay ?? 500) * 2, refreshStale ? 30_000 : 1_000), 60_000);
-        recovery.failure = { enabled: registration.enabled, until: Date.now() + delay, delay,
-          refreshIdentity: refreshStale ? identity : undefined };
+        const retryAt = error && typeof error === "object" && "retryAt" in error && typeof error.retryAt === "number"
+          ? error.retryAt : 0;
+        const until = Math.max(Date.now() + delay, retryAt);
+        recovery.failure = { enabled: registration.enabled, until, delay };
+        if (refreshStale) recovery.pendingRefreshActivity = registration.activityId;
+        const status = error && typeof error === "object" && "status" in error ? Number(error.status) : undefined;
+        if ((accepted || deferredRegistration) && key !== last && AppState.currentState === "active" &&
+            (status === undefined || status === 408 || status === 429 || status >= 500)) {
+          retryAfter(until - Date.now());
+        }
         throw error;
       }
       assertCurrent();
-      if (refreshStale) recovery.lastRefreshAt = refreshedAt;
+      if (refreshStale) {
+        recovery.lastRefreshAt = refreshedAt;
+        recovery.pendingRefreshActivity = undefined;
+      }
       recovery.failure = undefined;
+      deferredRegistration = false;
       clearTimeout(retry);
-      retryRefresh = false;
       retry = undefined;
+      if (wantsRefresh && recovery.pendingRefreshActivity !== undefined) retryAfter(Math.max(0, refreshAt - Date.now()));
       last = key;
       accepted = true;
       mobileDebugLog("info", "lifecycle", "activity-registration", {

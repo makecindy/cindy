@@ -456,14 +456,43 @@ it("coalesces native events across a failed request and backs off subsequent fai
     await attempt;
     expect(fixture.native.getPushRegistration.mock.calls.length - before).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    fetchMock.mockRejectedValueOnce(new TypeError("still offline"));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 429, headers: { "Retry-After": "5" } }));
     await vi.advanceTimersByTimeAsync(1_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    await sync.sync(true);
-    await vi.advanceTimersByTimeAsync(1_999);
+    // No subsequent event: the newest token is still owed to the service.
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(JSON.parse(fetchMock.mock.calls[3][1]!.body as string).startToken).toBe("latest");
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, #13216: the stale transition and the retry can refer to the last
+// accepted token even though a different token's PUT started the backoff.
+it.each(["stale", "rotated", "cooldown"])("retains a deferred activity refresh through %s", async scenario => {
+  const recent = scenario !== "stale";
+  vi.useFakeTimers();
+  const live = { ...registration(), activityId: "live", updateToken: "accepted", isStale: false };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: recent ? undefined : false });
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    if (recent) await vi.advanceTimersByTimeAsync(28_000);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, startToken: "changed" });
+    fetchMock.mockRejectedValueOnce(new TypeError("offline"));
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true });
+    await sync.sync(recent);
+    if (scenario === "rotated") fixture.native.getPushRegistration.mockResolvedValue({ ...live, updateToken: "new", isStale: undefined });
+    await vi.advanceTimersByTimeAsync(1_000);
+    if (scenario === "cooldown") {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetchMock.mock.calls[2][1]!.body as string)).toMatchObject({
+      updateToken: scenario === "rotated" ? "new" : "accepted", refreshStale: true,
+    });
   } finally { sync.dispose(); vi.useRealTimers(); }
 });

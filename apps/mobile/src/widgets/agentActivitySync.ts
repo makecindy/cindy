@@ -19,6 +19,7 @@ export function createAgentActivitySync(
   let stale = false;
   let disposed = false;
   let checking = false;
+  let checkPending = false;
   let staleEpisode = 0;
   let lastCheck = -Infinity;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -26,7 +27,16 @@ export function createAgentActivitySync(
   // Content nobody can confirm stays until its own stale date, then goes: an
   // absent activity is better than outdated information left on the Lock Screen.
   const endIfExpired = async () => {
-    if (!isExpired || checking || last === null || Date.now() - lastCheck < 1_000) return;
+    if (!isExpired || last === null) return;
+    if (checking) {
+      checkPending = true;
+      return;
+    }
+    const remaining = 1_000 - (Date.now() - lastCheck);
+    if (remaining > 0) {
+      timer ??= setTimeout(() => { timer = undefined; sync(); }, remaining);
+      return;
+    }
     const episode = staleEpisode;
     lastCheck = Date.now();
     checking = true;
@@ -40,6 +50,10 @@ export function createAgentActivitySync(
       /* native module unavailable: the system still marks the activity stale */
     } finally {
       checking = false;
+      if (checkPending) {
+        checkPending = false;
+        if (stale) sync();
+      }
     }
   };
 
@@ -55,9 +69,9 @@ export function createAgentActivitySync(
     }
     const json = read();
     if (json === undefined) {
-      clearTimeout(timer);
-      timer = undefined;
       if (!stale) {
+        clearTimeout(timer);
+        timer = undefined;
         // Older native builds cannot report expiry; they keep the early grey-out.
         if (!isExpired) sink.markStale();
         mobileDebugLog("info", "lifecycle", "activity-unverified");

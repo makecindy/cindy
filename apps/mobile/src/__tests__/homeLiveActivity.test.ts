@@ -269,6 +269,9 @@ it('bounds expiry reads while offline and ignores a result from an earlier disco
       await Promise.resolve();
     }
     expect(expiry).toHaveBeenCalledTimes(2);
+    expiry.mockResolvedValueOnce(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(setState).toHaveBeenLastCalledWith(null);
     controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
   } finally { controller.dispose(); vi.useRealTimers(); }
