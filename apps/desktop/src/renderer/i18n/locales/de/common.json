@@ -1851,8 +1851,7 @@
       "ariaLabel": "Einstellungen durchsuchen",
       "placeholder": "Einstellungen durchsuchen",
       "resultsLabel": "Suchergebnisse in den Einstellungen",
-      "noResults": "Keine Einstellungen gefunden. Versuche ein anderes Stichwort.",
-      "clear": "Suche leeren"
+      "noResults": "Keine Einstellungen gefunden. Versuche ein anderes Stichwort."
     },
     "back": "Zurück",
     "defaults": {
@@ -10747,7 +10746,6 @@
     "fileBrowser": {
       "noWorkdir": "Diese Sitzung hat kein lokales Arbeitsverzeichnis; der Dateibrowser ist nicht verfügbar",
       "filterPlaceholder": "Dateien filtern…",
-      "filterClear": "Filter löschen",
       "filterIndexing": "Projektdateien werden indiziert…",
       "filterNoMatch": "Keine passenden Dateien",
       "filterRgUnavailable": "ripgrep ist auf dem Remote-Gerät nicht installiert; Filtern nach Dateinamen ist nicht verfügbar",

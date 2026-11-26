@@ -1851,8 +1851,7 @@
       "ariaLabel": "Search settings",
       "placeholder": "Search settings",
       "resultsLabel": "Settings search results",
-      "noResults": "No settings found. Try another keyword.",
-      "clear": "Clear search"
+      "noResults": "No settings found. Try another keyword."
     },
     "back": "Back",
     "defaults": {
@@ -10747,7 +10746,6 @@
     "fileBrowser": {
       "noWorkdir": "This session has no local working directory; file browser unavailable",
       "filterPlaceholder": "Filter files…",
-      "filterClear": "Clear filter",
       "filterIndexing": "Indexing project files…",
       "filterNoMatch": "No matching files",
       "filterRgUnavailable": "ripgrep is not installed on the remote machine; file name filtering is unavailable",

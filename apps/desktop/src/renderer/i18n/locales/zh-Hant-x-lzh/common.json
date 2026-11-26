@@ -1821,8 +1821,7 @@
       "ariaLabel": "尋規制",
       "placeholder": "尋規制",
       "resultsLabel": "規制所尋之果",
-      "noResults": "未得其條，易他字試之",
-      "clear": "清所尋"
+      "noResults": "未得其條，易他字試之"
     },
     "back": "歸",
     "defaults": {
@@ -10703,7 +10702,6 @@
     "fileBrowser": {
       "noWorkdir": "此差事未繫此機工作目錄，覽卷不可用",
       "filterPlaceholder": "篩卷…",
-      "filterClear": "清篩",
       "filterIndexing": "方為案中諸卷立索引…",
       "filterNoMatch": "無相符之卷",
       "filterRgUnavailable": "遠方之機未裝 ripgrep，不能篩檔名",

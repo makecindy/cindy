@@ -1889,8 +1889,7 @@
       "ariaLabel": "Pesquisar configurações",
       "placeholder": "Pesquisar configurações",
       "resultsLabel": "Resultados da pesquisa de configurações",
-      "noResults": "Nenhuma configuração encontrada. Tente outra palavra-chave.",
-      "clear": "Limpar busca"
+      "noResults": "Nenhuma configuração encontrada. Tente outra palavra-chave."
     },
     "back": "Voltar",
     "defaults": {
@@ -10823,7 +10822,6 @@
     "fileBrowser": {
       "noWorkdir": "Esta sessão não tem diretório de trabalho local; explorador de arquivos indisponível",
       "filterPlaceholder": "Filtrar arquivos…",
-      "filterClear": "Limpar filtro",
       "filterIndexing": "Indexando arquivos do projeto…",
       "filterNoMatch": "Nenhum arquivo correspondente",
       "filterRgUnavailable": "O ripgrep não está instalado na máquina remota; a filtragem por nome de arquivo está indisponível",

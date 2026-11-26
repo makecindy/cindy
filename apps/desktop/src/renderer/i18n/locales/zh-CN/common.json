@@ -1821,8 +1821,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有找到设置，试试其他关键词",
-      "clear": "清除搜索"
+      "noResults": "没有找到设置，试试其他关键词"
     },
     "back": "返回",
     "defaults": {
@@ -10703,7 +10702,6 @@
     "fileBrowser": {
       "noWorkdir": "当前任务未关联本地工作目录，文件浏览器不可用",
       "filterPlaceholder": "筛选文件…",
-      "filterClear": "清除筛选",
       "filterIndexing": "正在索引项目文件…",
       "filterNoMatch": "未匹配到文件",
       "filterRgUnavailable": "远端机器未安装 ripgrep，文件名筛选不可用",

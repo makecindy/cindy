@@ -1889,8 +1889,7 @@
       "ariaLabel": "Pesquisar definições",
       "placeholder": "Pesquisar definições",
       "resultsLabel": "Resultados da pesquisa nas definições",
-      "noResults": "Não foram encontradas definições. Tente outra palavra-chave.",
-      "clear": "Limpar pesquisa"
+      "noResults": "Não foram encontradas definições. Tente outra palavra-chave."
     },
     "back": "Voltar",
     "defaults": {
@@ -10823,7 +10822,6 @@
     "fileBrowser": {
       "noWorkdir": "Esta sessão não tem um diretório de trabalho local; explorador de ficheiros indisponível",
       "filterPlaceholder": "Filtrar ficheiros…",
-      "filterClear": "Limpar filtro",
       "filterIndexing": "A indexar ficheiros do projeto…",
       "filterNoMatch": "Nenhum ficheiro correspondente",
       "filterRgUnavailable": "O ripgrep não está instalado na máquina remota; a filtragem por nome de ficheiro não está disponível",
