@@ -241,6 +241,7 @@ describe('remote project draft catalog ownership', () => {
       clear: () => { storage.clear(); },
     });
     const {
+      getLastDeviceTaskWorkspace,
       rememberDeviceTaskWorkspace,
       resolveDeviceSwitchWorkspace,
     } = await import('@/state/lastCreatedTaskWorkspace');
@@ -276,6 +277,7 @@ describe('remote project draft catalog ownership', () => {
         effectiveDeviceLinkDeviceId: state.deviceLinkDeviceId ?? undefined,
         effectiveRemoteHostId: state.remoteHostId,
         effectiveWorkingDir: state.workingDir,
+        getLastDeviceTaskWorkspace,
         rememberDeviceTaskWorkspace,
         resolveDeviceSwitchWorkspace,
         getDefaultNewTaskWorkingDir: () => null,
@@ -307,6 +309,16 @@ describe('remote project draft catalog ownership', () => {
     expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
     makeHandlers().handleDeviceChange('studio-a', 'Studio A');
     expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Regression: device A remembers /local/cindy, then enters explicit dialogue (e.g. sidebar
+    // "Dialogue +" sets workingDir=null & explicitNoProject=true), switches to B, and returns to A.
+    // A must remain in dialogue instead of reverting to /local/cindy.
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    state = { ...state, workingDir: null, explicitNoProject: true };
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: null, explicitNoProject: true });
     vi.unstubAllGlobals();
   });
 

@@ -335,4 +335,20 @@ describe('new session workspace page effects', () => {
     act(() => page.current.switchDevice('b'));
     expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/projects/legacy-b' });
   });
+
+  it('restores the target device’s own project mode when reopening after another device chose dialogue', async () => {
+    const page = mountWorkspace();
+    // Global workspaceKind is still 'dialogue' (written on device b), while remembered device a
+    // has workspaceKindByDevice.a = 'project' and workingDirByDevice.a = '/projects/alpha'.
+    await page.resolvePreferences('dialogue', 'a', { a: '/projects/alpha' }, { a: 'project', b: 'dialogue' });
+    expect(page.current.selectedDeviceId).toBe('a');
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'project', workingDir: '/projects/alpha' });
+  });
+
+  it('restores the explicit route device’s own dialogue mode on reopen even when global mode is project', async () => {
+    const page = mountWorkspace({ deviceExplicit: true });
+    await page.resolvePreferences('project', 'b', { a: '/projects/old-a', b: '/projects/b' }, { a: 'dialogue', b: 'project' });
+    expect(page.current.selectedDeviceId).toBe('a');
+    expect(page.current.draft).toMatchObject({ workspaceKind: 'dialogue', workingDir: '' });
+  });
 });

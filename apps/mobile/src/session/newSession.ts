@@ -1165,6 +1165,27 @@ export function pickInitialNewSessionWorkspace(
 }
 
 /**
+ * Resolve the initial workspace mode when the new-task screen opens for a settled device.
+ * Uses the device's own remembered workspace mode first, falling back to the legacy global
+ * workspaceKind when that device has no per-device entry.
+ */
+export function resolveInitialNewSessionWorkspaceKind(input: {
+  deviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workspaceKind' | 'workspaceKindByDevice'> | null;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): NewSessionWorkspaceKind | null {
+  const deviceId = input.deviceId.trim();
+  if (deviceId) {
+    const deviceKind =
+      input.workspaceKindOverrides?.[deviceId]
+      ?? input.preferences?.workspaceKindByDevice?.[deviceId]
+      ?? null;
+    if (deviceKind) return deviceKind;
+  }
+  return input.preferences?.workspaceKind ?? null;
+}
+
+/**
  * Resolve the target device's workspace when switching computers in the new-task form.
  * Restores that device's own last chosen project or explicit dialogue instead of letting
  * another computer's dialogue mode hide this device's remembered project.

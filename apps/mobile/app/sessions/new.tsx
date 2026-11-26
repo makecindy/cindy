@@ -1330,6 +1330,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       hasFastModeCap: capabilities?.hasFastMode === true,
     });
   useNewSessionWorkspacePreferences({
+    selectedDeviceId,
     newSessionPreferences,
     setNewSessionPreferences,
     newSessionPreferencesLoaded,

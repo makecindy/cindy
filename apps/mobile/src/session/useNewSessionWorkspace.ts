@@ -1,12 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   type Dispatch,
   type RefObject,
   type SetStateAction,
 } from "react";
 import {
   pickInitialNewSessionWorkspace,
+  resolveInitialNewSessionWorkspaceKind,
   type NewSessionDeviceOption,
   type NewSessionDraft,
   type NewSessionStoredPreferences,
@@ -91,6 +93,7 @@ interface WorkspaceIdentity {
 
 export interface NewSessionWorkspacePreferencesInput extends Pick<
   WorkspaceIdentity,
+  | "selectedDeviceId"
   | "initialWorkingDir"
   | "newSessionPreferences"
   | "newSessionPreferencesLoaded"
@@ -118,6 +121,7 @@ export function useNewSessionWorkspacePreferences(
   input: NewSessionWorkspacePreferencesInput,
 ): void {
   const {
+    selectedDeviceId,
     newSessionPreferences,
     setNewSessionPreferences,
     newSessionPreferencesLoaded,
@@ -138,6 +142,7 @@ export function useNewSessionWorkspacePreferences(
     setSelectedDeviceName,
     setDevicePickerOpen,
   } = input;
+  const appliedInitialWorkspaceKindRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     setNewSessionPreferencesLoaded(false);
@@ -156,14 +161,6 @@ export function useNewSessionWorkspacePreferences(
             ...(workspaceKindPreferenceOverridesRef?.current ?? {}),
           },
         });
-        const workspaceKind = preferences.workspaceKind;
-        if (!initialWorkingDir && workspaceKind) {
-          setDraft((current) =>
-            userTouchedWorkspaceRef.current
-              ? current
-              : { ...current, workspaceKind },
-          );
-        }
       })
       .finally(() => {
         if (!cancelled) setNewSessionPreferencesLoaded(true);
@@ -200,6 +197,38 @@ export function useNewSessionWorkspacePreferences(
     routeDeviceExplicit,
     routeDeviceId,
     routeDeviceName,
+  ]);
+  // Apply the settled device's own remembered workspace mode once preferences load,
+  // preserving explicit entry (initialWorkingDir) and restored/manual workspace choices.
+  useEffect(() => {
+    if (!newSessionPreferencesLoaded || appliedInitialWorkspaceKindRef.current) {
+      return;
+    }
+    const targetDeviceId = userTouchedDeviceRef.current
+      ? selectedDeviceId
+      : (preferredDefaultDevice?.deviceId ?? "");
+    if (!userTouchedDeviceRef.current && selectedDeviceId !== targetDeviceId) {
+      return;
+    }
+    appliedInitialWorkspaceKindRef.current = true;
+    if (initialWorkingDir || userTouchedWorkspaceRef.current) return;
+    const workspaceKind = resolveInitialNewSessionWorkspaceKind({
+      deviceId: targetDeviceId,
+      preferences: newSessionPreferences,
+      workspaceKindOverrides: workspaceKindPreferenceOverridesRef?.current,
+    });
+    if (!workspaceKind) return;
+    setDraft((current) =>
+      userTouchedWorkspaceRef.current
+        ? current
+        : { ...current, workspaceKind },
+    );
+  }, [
+    initialWorkingDir,
+    newSessionPreferences,
+    newSessionPreferencesLoaded,
+    preferredDefaultDevice?.deviceId,
+    selectedDeviceId,
   ]);
 }
 
