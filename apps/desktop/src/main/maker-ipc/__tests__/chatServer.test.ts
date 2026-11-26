@@ -3129,6 +3129,8 @@ describe('Chat Server result delivery and refresh', () => {
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
+      // Only this account's own working agent (here self-requested Cindy) drives the roster running indicator.
+      expect(result.group.teammateActivity?.phase).toBe(requester === selfId ? 'running' : 'idle');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
