@@ -2060,7 +2060,7 @@ describe('pi translator', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     const tool = { toolCallId: 'dispatch', toolName: 'cindy_mcp_call_tool' };
-    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { worker_id: 'worker', message: 'work' } };
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { target_session_id: 'worker', message: 'work' } };
     const result = { content: [{ type: 'text', text: JSON.stringify({ ok, wake_kind: wakeKind }) }] };
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(ev({ type: 'tool_execution_start', ...tool, args }), queue, ctx);
