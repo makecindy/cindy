@@ -4,8 +4,10 @@ import {
   type MobileAuthOwnerGeneration,
 } from '@/auth/authOwnerGeneration';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isSharedPermissionMode } from '@cindy/maker-shared/permission-mode';
 import {
   normalizeNewSessionAgentKind,
+  resolvePermissionModeForNewSessionAgent,
   type NewSessionAgentKind,
   type NewSessionDeviceOption,
   type NewSessionRemoteAgentPick,
@@ -19,6 +21,8 @@ export interface NewSessionPreferencePatch {
   agentKind?: NewSessionAgentKind;
   device?: NewSessionDeviceOption;
   workspaceKind?: NewSessionWorkspaceKind;
+  /** 记住跨引擎统一的最近一次权限档（内置 Harness 与插件引擎共用）。 */
+  lastPermissionMode?: string;
   /** 记住某 agent 在新建页选的权限档(单键合并进 permissionModeByAgent;'plan' 被忽略)。 */
   permissionModeForAgent?: { agentKind: NewSessionAgentKind; mode: string };
   /** 记住某台被控电脑上次显式选择的项目目录(单键合并进 workingDirByDevice;空值被忽略,#4103)。 */
@@ -87,22 +91,42 @@ async function writeNewSessionPreferences(
 ): Promise<void> {
   const current = await loadNewSessionPreferences(owner.accountKey);
   const permissionPatch = patch.permissionModeForAgent;
+  const unifiedPermissionMode =
+    typeof patch.lastPermissionMode === 'string' && isSharedPermissionMode(patch.lastPermissionMode)
+      ? patch.lastPermissionMode
+      : permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
+        ? permissionPatch.mode
+        : undefined;
   const workingDirPatch = patch.workingDirForDevice;
   const workingDirDeviceId = workingDirPatch?.deviceId.trim() ?? '';
   // 路径原样保存(macOS / Linux 允许目录名首尾带空格,浏览器也原样返回);只用 trim 判空。
   const workingDirValue = workingDirPatch && workingDirPatch.workingDir.trim() ? workingDirPatch.workingDir : '';
   const remoteAgentPatch = patch.remoteAgentForDevice;
   const remoteAgentDeviceId = remoteAgentPatch?.deviceId.trim() ?? '';
+  const nextPermissionModeByAgent: Partial<Record<NewSessionAgentKind, string>> =
+    permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
+      ? { ...current.permissionModeByAgent, [permissionPatch.agentKind]: permissionPatch.mode }
+      : { ...current.permissionModeByAgent };
+  if (unifiedPermissionMode && isRememberablePermissionMode(unifiedPermissionMode)) {
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      if (permissionPatch?.agentKind === agent) continue;
+      if (agent in nextPermissionModeByAgent || patch.lastPermissionMode !== undefined) {
+        nextPermissionModeByAgent[agent] = resolvePermissionModeForNewSessionAgent(agent, unifiedPermissionMode);
+      }
+    }
+  }
   const next: NewSessionStoredPreferences = {
     agentKind: patch.agentKind ?? current.agentKind,
     workspaceKind: patch.workspaceKind ?? current.workspaceKind,
     device: patch.device
       ? normalizeDeviceOption(patch.device)
       : current.device,
-    permissionModeByAgent:
-      permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
-        ? { ...current.permissionModeByAgent, [permissionPatch.agentKind]: permissionPatch.mode }
-        : current.permissionModeByAgent,
+    ...(unifiedPermissionMode !== undefined
+      ? { lastPermissionMode: unifiedPermissionMode }
+      : current.lastPermissionMode !== undefined
+        ? { lastPermissionMode: current.lastPermissionMode }
+        : {}),
+    permissionModeByAgent: nextPermissionModeByAgent,
     workingDirByDevice:
       workingDirDeviceId && workingDirValue
         ? { ...current.workingDirByDevice, [workingDirDeviceId]: workingDirValue }
@@ -218,15 +242,23 @@ function normalizeStoredPreferences(value: unknown): NewSessionStoredPreferences
   if (!record) return emptyPreferences();
   const deviceId = readString(record.deviceId);
   const deviceName = readString(record.deviceName);
+  const agentKind = normalizeNewSessionAgentKind(record.agentKind);
+  const permissionModeByAgent = normalizePermissionModeByAgent(record.permissionModeByAgent);
+  const rawLastPermission = readString(record.lastPermissionMode);
+  const lastPermissionMode =
+    rawLastPermission && isSharedPermissionMode(rawLastPermission)
+      ? rawLastPermission
+      : undefined;
   return {
-    agentKind: normalizeNewSessionAgentKind(record.agentKind),
+    agentKind,
     workspaceKind: record.workspaceKind === 'project' || record.workspaceKind === 'dialogue'
       ? record.workspaceKind
       : null,
     device: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,
-    permissionModeByAgent: normalizePermissionModeByAgent(record.permissionModeByAgent),
+    ...(lastPermissionMode ? { lastPermissionMode } : {}),
+    permissionModeByAgent,
     workingDirByDevice: {},
     remoteAgentByDevice: {},
   };
@@ -255,6 +287,9 @@ function serializePreferences(
           deviceId: preferences.device.deviceId,
           deviceName: preferences.device.name,
         }
+      : {}),
+    ...(preferences.lastPermissionMode && isSharedPermissionMode(preferences.lastPermissionMode)
+      ? { lastPermissionMode: preferences.lastPermissionMode }
       : {}),
     ...(permissionEntries.length > 0
       ? { permissionModeByAgent: Object.fromEntries(permissionEntries) }

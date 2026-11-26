@@ -27,6 +27,7 @@ import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { isBotGroupLaneSession } from './botGroupLane';
 import {
   botGroupNoticeKey,
@@ -217,6 +218,8 @@ export function BotGroupSidebarRow({
     now,
     t,
   );
+  const isExternalGroup = group.conversationKind !== 'direct' && group.external === true;
+  const rowLabel = isExternalGroup ? `${group.name}, ${t('bots.groupChat.externalBadge')}` : group.name;
   return (
     <div className="relative">
     <div
@@ -231,7 +234,7 @@ export function BotGroupSidebarRow({
       )}
     >
       {/* Sibling hit targets avoid nesting the topic button inside the whole-row button. */}
-      <button type="button" {...companionDragProps(`/bots/groups/${encodeURIComponent(group.id)}`, group.name)} onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
+      <button type="button" {...companionDragProps(`/bots/groups/${encodeURIComponent(group.id)}`, group.name)} onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={rowLabel} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
         aria-haspopup={onContextMenu ? 'menu' : undefined}
         className="absolute inset-0 w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
       <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />
@@ -239,6 +242,7 @@ export function BotGroupSidebarRow({
       <span className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-14 leading-5" title={group.name}>{group.name}</span>
+          {isExternalGroup && <BotGroupExternalBadge />}
           {group.archived && <span className={cn('shrink-0 text-11 leading-4', mutedClass)}>{t('bots.archived')}</span>}
           <span
             data-teammate-timestamp

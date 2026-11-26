@@ -12,13 +12,14 @@ import { MemoryError, memoryScopeDirName, resolveMemoryScopeKey } from '@cindy/m
 import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { botProfileDir, botProfileMemoryDir } from './botProfileFolder.js';
+import { TEAMMATE_PROJECT_MEMORY_SEGMENTS } from './botProjectGitignore.js';
 
 /** Written once the V2 upgrade finished on this computer (botV2Migration.ts). */
 export const TEAMMATE_V2_RECEIPT_FILE = 'v2-migration.json';
 /** Written once the teammate's project memory moved into its project folder (botProjectMode.ts). */
 export const TEAMMATE_MEMORY_MOVE_RECEIPT_FILE = 'project-memory-move.json';
-/** The memory folder, relative to the teammate's project. */
-export const TEAMMATE_PROJECT_MEMORY_SEGMENTS = ['.cindy', 'memory'] as const;
+/** The memory folder, relative to the teammate's project (defined beside its `.gitignore` entries). */
+export { TEAMMATE_PROJECT_MEMORY_SEGMENTS };
 
 /** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
 const DERIVED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md', 'README.md']);

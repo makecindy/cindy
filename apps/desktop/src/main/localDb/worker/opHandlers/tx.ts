@@ -18,6 +18,7 @@ import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
+import { isSyntheticUserMessageContent } from '../../../../shared/interruptedTurn.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
 // 默认热路径走 file worker（dbWorker.ts + dispatcher），这里要和同名 tx handler 保持一致。
 
@@ -1644,13 +1645,16 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
   const transaction = db.transaction(() => {
     let changes = 0;
     // The preflight read in Main can race with a user send. Keep the opening
-    // admission in this transaction, including a script fallback's next insert.
-    if (payload.requireNoUserMessage === true
-      && (!payload.publication || payload.publication === 'publish')
-      && db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND role = 'user' LIMIT 1").get(sessionId)) {
-      throw Object.assign(new Error('User already spoke before the opening was stored'), {
-        code: 'MESSAGE_USER_ALREADY_SPOKE',
-      });
+    // admission in this transaction, ignoring hidden legacy synthetic trigger rows.
+    if (payload.requireNoUserMessage === true && (!payload.publication || payload.publication === 'publish')) {
+      const userRows = db
+        .prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user'")
+        .all(sessionId) as Array<{ content: string }>;
+      if (userRows.some(row => !isSyntheticUserMessageContent(row.content))) {
+        throw Object.assign(new Error('User already spoke before the opening was stored'), {
+          code: 'MESSAGE_USER_ALREADY_SPOKE',
+        });
+      }
     }
     // Connection-local stages never enter history, counts or persistent FTS.
     // SQLite discards them automatically when this worker exits.

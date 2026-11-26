@@ -551,7 +551,7 @@ export interface MobileMakerTransport {
    * CHANNEL_NOT_ALLOWED，调用方忽略即可。
    */
   prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
-  createSideChat(sessionId: string): Promise<RemoteSession>;
+  createSideChat(sessionId: string, childId?: string): Promise<RemoteSession>;
   listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
@@ -1005,6 +1005,7 @@ export interface MobileMakerTransport {
 
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
+  modelGroup?: string;
   workerAgent: OrcaWorkerAgentKind;
   role?: string;
   label?: string;
@@ -1029,6 +1030,7 @@ export interface MobileOrcaEnableResult {
 
 /** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
 export interface MobileOrcaCreateWorkerInput {
+  modelGroup?: string;
   leadSessionId: string;
   role: string;
   label: string;
@@ -1302,7 +1304,7 @@ export function createMobileMakerTransport({
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),
-    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    createSideChat: (sessionId, childId) => call("maker:side-chat:v1", childId ? [{ parentSessionId: sessionId, childId }] : [sessionId]),
     listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),

@@ -24,6 +24,39 @@ interface ChatGroupNamedMember {
   id: string; kind: string; state: string; name: string; ownerActorId?: string; ownerName?: string;
 }
 
+/** Language-neutral separator for an enterprise member's default org suffix (`Name · Org`). */
+export const BOT_GROUP_ORG_SEPARATOR = ' · ';
+
+/**
+ * Formats a human member's display name for UI surfaces. When an enterprise member appears in an
+ * external or cross-org group without a custom group nickname (`showOrgName === true`), appends
+ * ` · <orgName>` once. Custom nicknames and non-human members keep their own name unchanged.
+ */
+export function chatGroupHumanDisplayName(member: {
+  name: string;
+  actorKind?: string;
+  kind?: string;
+  nickname?: string | null;
+  orgName?: string | null;
+  showOrgName?: boolean;
+}): string {
+  const name = member.name.trim();
+  const kind = member.actorKind ?? member.kind;
+  if (kind && kind !== 'human') return name;
+  if (member.nickname?.trim() || member.showOrgName !== true) return name;
+  const org = member.orgName?.trim();
+  if (!org) return name;
+  const suffix = `${BOT_GROUP_ORG_SEPARATOR}${org}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
+}
+
+export function chatGroupMentionRoster(members: readonly BotGroupMemberView[]): BotGroupMemberView[] {
+  return members.filter(member => !member.isSelf).map(member => {
+    const name = chatGroupHumanDisplayName(member);
+    return name === member.name ? member : { ...member, name, displayName: member.name };
+  });
+}
+
 /** The server's member.name already includes that room's nickname override. Display only; never infer ownership from names. */
 export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
   const owner = member.kind === 'bot' && member.ownerActorId

@@ -34,7 +34,8 @@ import {
   ownerScopedUserDataPath,
 } from './appSessionState.js';
 import { createLogger } from './logger.js';
-import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
+import { inspectSettingsJson } from './maker-host/inspect-settings-json.js';
+import { createOverrideSettingsFile, type OverrideSettingsCommitOptions } from './maker-host/override-settings-file.js';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 
@@ -224,6 +225,19 @@ function readCurrentSettings(): {
   };
 }
 
+/** Never claims legacy files or calls device-slot refresh. Missing cloud namespace is uninitialized. */
+export function inspectSidebarSettings(ownerRoot: string, mode: 'local' | 'cloud') {
+  const filePath = path.join(ownerRoot, SETTINGS_FILE_NAME);
+  const state = scopedSidebarPathState(filePath);
+  if (state === 'blocked') return { status: 'unreadable' as const };
+  if (state === 'missing' && mode === 'cloud') return { status: 'migrationPending' as const };
+  return inspectSettingsJson(filePath, raw => {
+    const hidden = raw.hiddenMainViewGhostIds;
+    if (hidden !== undefined && (!Array.isArray(hidden) || hidden.length > SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES || !hidden.every(isSidebarGhostId) || new Set(hidden).size !== hidden.length)) throw new Error('invalid sidebar plugin preferences');
+    return { hiddenMainViewGhostIds: normalizeHiddenMainViewGhostIds(hidden) };
+  }, MAX_SETTINGS_BYTES);
+}
+
 export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
   const stamp = getActiveDataOwnerPushStamp();
   const current = stamp.dataOwnerId
@@ -236,6 +250,20 @@ export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
     hiddenProjectKeys: Array.from(current.settings.hiddenProjectKeys),
     hiddenMainViewGhostIds: Array.from(current.settings.hiddenMainViewGhostIds),
   };
+}
+
+export function inspectHostSidebarSettings() {
+  if (sidebarStoreAccessResult() !== 'ready') return { status: 'unavailable' as const, revision: null };
+  return currentStore().inspect();
+}
+export async function commitHostSidebarHidden(hidden: string[], options: OverrideSettingsCommitOptions) {
+  requireSidebarStoreAccess();
+  const ownerStamp = getActiveDataOwnerPushStamp();
+  const state = await currentStore().commitAtomic({ set: { hiddenMainViewGhostIds: hidden } }, { ...options, assertCurrent: () => {
+    options.assertCurrent?.(); requireSidebarStoreAccess({ rejectSnapshotChange: true });
+  } });
+  try { options.assertCurrent?.(); broadcastHiddenMainViewGhostIdsChanged(state.value.hiddenMainViewGhostIds, ownerStamp); } catch { /* Already saved. */ }
+  return state;
 }
 
 function requirePinnedOrder(raw: unknown): string[] {

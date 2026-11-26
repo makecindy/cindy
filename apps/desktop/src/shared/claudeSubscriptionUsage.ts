@@ -91,12 +91,17 @@ function parseLegacyWindow(v: unknown): ClaudeUsageWindow | null {
   };
 }
 
+function extraUsageNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && !(typeof value === 'string' && value.trim())) return null;
+  return toFiniteNumber(value);
+}
+
 function parseExtraUsage(v: unknown): ClaudeExtraUsageSnapshot | null {
   if (!isPlainObject(v)) return null;
   const isEnabled = v.is_enabled === true;
-  const utilization = toFiniteNumber(v.utilization);
-  const usedCredits = toFiniteNumber(v.used_credits);
-  const monthlyLimit = toFiniteNumber(v.monthly_limit);
+  const utilization = extraUsageNumber(v.utilization);
+  const usedCredits = extraUsageNumber(v.used_credits);
+  const monthlyLimit = extraUsageNumber(v.monthly_limit);
   if (!isEnabled && utilization === null && usedCredits === null) return null;
   return {
     isEnabled,
@@ -110,7 +115,7 @@ function parseExtraUsage(v: unknown): ClaudeExtraUsageSnapshot | null {
  * 解析 GET /api/oauth/usage 的响应 JSON。
  *
  * 优先走新 schema 的 `limits[]`(带 severity / scoped 模型信息);旧 schema 顶层键兜底。
- * 未知字段(实验性混淆键等)一律忽略。解析不出任何窗口时返回 null。
+ * 未知字段一律忽略。没有时间窗口时，仅接受已启用且有读数的额外用量。
  */
 export function parseClaudeOAuthUsageResponse(
   data: unknown,
@@ -170,13 +175,15 @@ export function parseClaudeOAuthUsageResponse(
     if (window) scoped.push({ ...window, modelDisplayName: displayName });
   }
 
-  if (!fiveHour && !sevenDay && scoped.length === 0) return null;
+  const extraUsage = parseExtraUsage(data.extra_usage);
+  const hasExtraReading = extraUsage?.isEnabled && (extraUsage.usedCredits != null || extraUsage.utilization != null);
+  if (!fiveHour && !sevenDay && scoped.length === 0 && !hasExtraReading) return null;
 
   return {
     fiveHour,
     sevenDay,
     scoped,
-    extraUsage: parseExtraUsage(data.extra_usage),
+    extraUsage,
     source: 'oauth-endpoint',
     updatedAt: now,
   };

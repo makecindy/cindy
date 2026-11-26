@@ -15,6 +15,7 @@ export function HomeHeaderGlassButton({
   testID,
   disabled = false,
   prominent = false,
+  floatingFallback = false,
   size = navigationChrome.target,
 }: {
   accessibilityLabel: string;
@@ -23,6 +24,7 @@ export function HomeHeaderGlassButton({
   testID: string;
   disabled?: boolean;
   prominent?: boolean;
+  floatingFallback?: boolean;
   size?: number;
   artworkSize?: number;
 }) {
@@ -52,13 +54,13 @@ export function HomeHeaderGlassButton({
           </View>
         </GlassView>
       ) : (
-        <View style={styles.iconSlot}>{children}</View>
+        <View style={[styles.iconSlot, floatingFallback && styles.floating]}>{children}</View>
       )}
     </Pressable>
   );
 }
 
-const makeStyles = (_colors: ThemeColors) =>
+const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     hit: {
       flexShrink: 0,
@@ -76,6 +78,12 @@ const makeStyles = (_colors: ThemeColors) =>
       alignItems: "center",
       flex: 1,
       justifyContent: "center",
+    },
+    floating: {
+      borderRadius: radius.pill,
+      backgroundColor: colors.surfaceElevated,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
     },
     disabled: { opacity: 0.46 },
     pressed: {
