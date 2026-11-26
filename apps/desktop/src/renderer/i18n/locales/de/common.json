@@ -7347,8 +7347,7 @@
             "machines": "Remote-Anbietergeräte"
           },
           "usage": {
-            "remoteModel": "Remote-Modell",
-            "remoteTask": "Remote-Aufgabe"
+            "remoteModel": "Remote-Modell"
           },
           "bundle": {
             "mixed": "{{running}} laufend · {{ready}} bereit",

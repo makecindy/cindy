@@ -7416,8 +7416,7 @@
             "machines": "Machines fournisseurs distantes"
           },
           "usage": {
-            "remoteModel": "Modèle distant",
-            "remoteTask": "Tâche distante"
+            "remoteModel": "Modèle distant"
           },
           "bundle": {
             "mixed": "{{running}} en cours d'exécution · {{ready}} prêtes",

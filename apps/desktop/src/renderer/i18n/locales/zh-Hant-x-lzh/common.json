@@ -7304,8 +7304,7 @@
             "machines": "遠供之機"
           },
           "usage": {
-            "remoteModel": "遠模",
-            "remoteTask": "遠務"
+            "remoteModel": "遠模"
           },
           "bundle": {
             "mixed": "{{running}} 行中 · {{ready}} 待命",

@@ -7347,8 +7347,7 @@
             "machines": "Remote provider machines"
           },
           "usage": {
-            "remoteModel": "Remote model",
-            "remoteTask": "Remote task"
+            "remoteModel": "Remote model"
           },
           "bundle": {
             "mixed": "{{running}} running · {{ready}} ready",

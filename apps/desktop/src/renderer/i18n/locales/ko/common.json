@@ -7304,8 +7304,7 @@
             "machines": "원격 제공자 기기"
           },
           "usage": {
-            "remoteModel": "원격 모델",
-            "remoteTask": "원격 작업"
+            "remoteModel": "원격 모델"
           },
           "bundle": {
             "mixed": "실행 중 {{running}} · 대기 {{ready}}",

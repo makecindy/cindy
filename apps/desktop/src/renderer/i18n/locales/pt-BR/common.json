@@ -7416,8 +7416,7 @@
             "machines": "Máquinas provedoras remotas"
           },
           "usage": {
-            "remoteModel": "Modelo remoto",
-            "remoteTask": "Tarefa remota"
+            "remoteModel": "Modelo remoto"
           },
           "bundle": {
             "mixed": "{{running}} em execução · {{ready}} prontas",

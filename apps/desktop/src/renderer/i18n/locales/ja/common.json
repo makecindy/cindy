@@ -7304,8 +7304,7 @@
             "machines": "リモートプロバイダーマシン"
           },
           "usage": {
-            "remoteModel": "リモートモデル",
-            "remoteTask": "リモートタスク"
+            "remoteModel": "リモートモデル"
           },
           "bundle": {
             "mixed": "実行中 {{running}} · 待機 {{ready}}",
