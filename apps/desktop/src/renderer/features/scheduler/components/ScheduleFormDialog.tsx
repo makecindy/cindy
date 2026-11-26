@@ -351,9 +351,10 @@ export function ScheduleFormDialog({
   const prIsGitlab = !!form.prEnabled && !!form.prUrl && !isGithubPrTriggerUrl(form.prUrl);
   const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
     || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
-  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item'
+  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll'
     || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token' || form.webhookPreset === 'gitlab-plugin')
       && form.gitlabItemNumber !== undefined);
+  const gitlabMrItem = prIsGitlab || form.gitlabItemKind === 'mr';
   const chooseWebhookPreset = (value: string) => {
     setField('webhookPreset', value);
     if (value === 'gitlab-plugin' && gitlabPluginCandidate && form.gitlabPluginId !== gitlabPluginCandidate.plugin) {
@@ -368,6 +369,7 @@ export function ScheduleFormDialog({
     setField('webhookEnabled', true);
     setField('githubItemNumber', undefined);
     setField('gitlabItemNumber', undefined);
+    setField('gitlabItemKind', undefined);
   };
   const enterGithubItemPending = () => {
     leaveItemScope();
@@ -379,7 +381,7 @@ export function ScheduleFormDialog({
   };
   // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
-    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin');
+    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin' || form.webhookPreset === 'gitlab-mr-poll');
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -1353,17 +1355,50 @@ export function ScheduleFormDialog({
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
-                        && form.webhookPreset !== 'gitlab-plugin'
-                        && (!itemScope || (gitlabItemScope && form.gitlabItemNumber !== undefined))
+                        && form.webhookPreset !== 'gitlab-plugin' && form.webhookPreset !== 'gitlab-mr-poll'
+                        && (!itemScope || (gitlabItemScope && !gitlabMrItem && form.gitlabItemNumber !== undefined))
                         && <WebhookAccountManager allowOpenSchedule={false} />}
                       {eventMode && (webhookSettingsVisible || itemScope) && (
                           <WebhookSourceFields
                             preset={githubItemScope ? (form.githubItemNumber !== undefined ? 'github-app' : 'github-item')
-                              : gitlabItemScope ? (form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
+                              : gitlabItemScope ? (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' ? 'gitlab-mr-poll'
+                                : form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
                               : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
                             itemScope={itemScope}
-                            itemNeedsConnection={gitlabItemScope && form.gitlabItemNumber !== undefined}
+                            gitlabMrItem={gitlabMrItem}
+                            itemNeedsConnection={gitlabItemScope && (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' || form.gitlabItemNumber !== undefined)}
                             onConnectionChange={(value) => {
+                              if (gitlabItemScope && gitlabMrItem) {
+                                if (value === 'gitlab-mr-poll') {
+                                  if (form.gitlabItemHost && form.gitlabItemProject && form.gitlabItemNumber !== undefined) {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', gitlabItemUrl({
+                                      host: form.gitlabItemHost,
+                                      project: form.gitlabItemProject,
+                                      number: form.gitlabItemNumber,
+                                      kind: 'mr',
+                                    }));
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                    if (form.manual) {
+                                      setField('manual', false);
+                                      setField('recurring', true);
+                                      setField('cronExpr', '*/10 * * * *');
+                                      setField('intervalMs', undefined);
+                                    }
+                                  } else {
+                                    setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                  }
+                                } else {
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  chooseWebhookPreset(value);
+                                }
+                                return;
+                              }
                               // A GitLab issue keeps its project and number while switching how it is received.
                               if (gitlabItemScope && form.gitlabItemNumber !== undefined) chooseWebhookPreset(value);
                               else {
@@ -1423,26 +1458,39 @@ export function ScheduleFormDialog({
                                 prChange={form.prChange ?? 'any'}
                                 issueChange={form.gitlabIssueChange}
                                 addressAvailable={webhookReceiverReady || !!gitlabPluginCandidate}
-                                viaPlugin={form.webhookPreset === 'gitlab-plugin'}
+                                viaPlugin={!prIsGitlab && form.webhookPreset === 'gitlab-plugin'}
+                                mrCanOmitHost={!!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll'}
                                 pluginIssueChange={form.gitlabPluginIssueChange}
                                 onPluginIssueChange={(value) => setField('gitlabPluginIssueChange', value)}
                                 applied={prIsGitlab || form.gitlabItemNumber !== undefined}
                                 onTextChange={(value) => setField('gitlabItem', value)}
                                 onResolved={(item) => {
                                   setField('gitlabItemProject', item.project);
-                                  if (item.host) setField('gitlabItemHost', item.host);
-                                  if (item.kind === 'mr' && item.host) {
-                                    setField('prEnabled', true);
-                                    setField('webhookEnabled', false);
-                                    setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
-                                    setField('gitlabItemNumber', undefined);
-                                    setField('webhookPreset', 'gitlab-item');
-                                    // GitLab has no push: state changes are found by the timed check, so turn it on.
-                                    if (form.manual) {
-                                      setField('manual', false);
-                                      setField('recurring', true);
-                                      setField('cronExpr', '*/10 * * * *');
-                                      setField('intervalMs', undefined);
+                                  setField('gitlabItemHost', item.host);
+                                  setField('gitlabItemKind', item.kind);
+                                  if (item.kind === 'mr') {
+                                    // MRs prefer the GitLab plugin when installed; saved prTriggers and explicit poll selection stay on state reads.
+                                    const usePlugin = !!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll';
+                                    if (usePlugin) {
+                                      if (form.prEnabled) setField('prEnabled', false);
+                                      setField('webhookEnabled', true);
+                                      chooseWebhookPreset('gitlab-plugin');
+                                      setField('gitlabItemNumber', item.number);
+                                      return;
+                                    }
+                                    if (item.host) {
+                                      setField('prEnabled', true);
+                                      setField('webhookEnabled', false);
+                                      setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
+                                      setField('gitlabItemNumber', item.number);
+                                      setField('webhookPreset', 'gitlab-mr-poll');
+                                      // GitLab has no push: state changes are found by the timed check, so turn it on.
+                                      if (form.manual) {
+                                        setField('manual', false);
+                                        setField('recurring', true);
+                                        setField('cronExpr', '*/10 * * * *');
+                                        setField('intervalMs', undefined);
+                                      }
                                     }
                                     return;
                                   }
@@ -1456,7 +1504,15 @@ export function ScheduleFormDialog({
                                   if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
                                   if (!form.gitlabPluginIssueChange) setField('gitlabPluginIssueChange', 'any');
                                 }}
-                                onUnresolved={enterGitlabItemPending}
+                                onUnresolved={() => {
+                                  if (gitlabMrItem && form.webhookPreset === 'gitlab-mr-poll') {
+                                    if (form.prEnabled) setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    return;
+                                  }
+                                  enterGitlabItemPending();
+                                }}
                                 onPrChange={(value) => setField('prChange', value)}
                                 onIssueChange={(value) => setField('gitlabIssueChange', value)}
                               />

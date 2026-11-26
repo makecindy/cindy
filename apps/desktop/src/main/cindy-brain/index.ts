@@ -140,6 +140,7 @@ import {
   subscribedEventPluginIds,
 } from '../scheduler-host/webhook/pluginEvents.js';
 import { setGitlabPluginTokenResolver } from '../git-context/gitlabTokenChain.js';
+import { glabCliTokenSource } from '../git-context/glabCliTokenSource.js';
 import {
   app,
   BrowserWindow,
@@ -315,6 +316,7 @@ import { relocateGhostUserDataResources } from './ghostUserDataRelocation.js';
 import {
   GhostManager,
   canUseGithubHostCredentials,
+  canUseGitlabHostCredentials,
   type GhostExclusiveMutation,
   isCindyOfficialTrustInfo,
   type GhostHostTrustOverride,
@@ -446,7 +448,7 @@ import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconc
 import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
-import { GhostConnectionManager } from './ghostConnections.js';
+import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostConnections.js';
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
@@ -6955,8 +6957,9 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // 匹配注入那条连接自己的 token(tokenFor;同一 hostname 命中多个 decl
       // 时取第一个)。每单现查现读,设置页增删下一单即生效。
       connections: {
-        hostsFor: (ghostId) => {
-          const decls = (findGhostForInstanceId(ghostId))?.manifest.network?.connections ?? [];
+        hostsFor: async (ghostId) => {
+          const ghost = findGhostForInstanceId(ghostId);
+          const decls = ghost?.manifest.network?.connections ?? [];
           const mgr = getGhostConnectionManager();
           const hosts: string[] = [];
           for (const decl of decls) {
@@ -6964,16 +6967,36 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
               if (!hosts.includes(host)) hosts.push(host);
             }
           }
+          if (ghost && canUseGitlabHostCredentials(ghost) && decls.some((decl) => decl.source === 'glab-cli')) {
+            for (const host of await glabCliTokenSource.listLoggedInHosts()) {
+              const normalized = normalizeGhostConnectionHost(host);
+              if (normalized && !hosts.includes(normalized)) hosts.push(normalized);
+            }
+          }
           return hosts;
         },
         tokenFor: (ghostId, hostname) => {
-          const decls = (findGhostForInstanceId(ghostId))?.manifest.network?.connections ?? [];
+          const ghost = findGhostForInstanceId(ghostId);
+          const decls = ghost?.manifest.network?.connections ?? [];
           const mgr = getGhostConnectionManager();
           for (const decl of decls) {
             const token = mgr.resolveTokenByHost(ghostId, decl.key, hostname);
             if (token !== null) {
               return { value: token, header: decl.inject.header, format: decl.inject.format };
             }
+          }
+          const normalized = normalizeGhostConnectionHost(hostname);
+          if (
+            normalized &&
+            ghost &&
+            canUseGitlabHostCredentials(ghost) &&
+            decls.some((decl) => decl.source === 'glab-cli')
+          ) {
+            return glabCliTokenSource.readTokenDetailed(normalized).then((glab) =>
+              glab.ok
+                ? { value: glab.token, header: 'Authorization', format: 'Bearer {value}', hostManaged: true }
+                : null,
+            );
           }
           return null;
         },
@@ -9737,13 +9760,15 @@ export function registerGhostIpc(): void {
     const ghost = findGhostForInstanceId(ghostId);
     if (!ghost) return { status: 404 };
     const connectionDecls = ghost.manifest.network?.connections ?? [];
-    const decls = new Map<string, { label: string; maxConnections: number }>();
+    const decls = new Map<string, { label: string; maxConnections: number; source?: 'glab-cli' }>();
     for (const c of connectionDecls) {
       decls.set(c.key, {
         label: c.label,
         maxConnections: c.maxConnections ?? GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
+        ...(c.source === 'glab-cli' ? { source: 'glab-cli' as const } : {}),
       });
     }
+    const allowGlab = canUseGitlabHostCredentials(ghost);
     return handleGhostConnectionsRequest({
       method,
       pathname,
@@ -9751,6 +9776,7 @@ export function registerGhostIpc(): void {
       isCurrent,
       decls,
       manager: getGhostConnectionManager(),
+      ...(allowGlab ? { readGlabHosts: () => glabCliTokenSource.listLoggedInHosts() } : {}),
       ghostId,
       // 受信确认:main 侧系统模态(对照 bootstrap 的 moveToApplications 弹窗
       // 用法),默认落在「取消」上防误触;意识名从在装清单现查。

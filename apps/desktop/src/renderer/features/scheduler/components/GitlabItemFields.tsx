@@ -28,11 +28,12 @@ export function gitlabItemProblem(
   text: string,
   reference: GitlabItemReference | null,
   addressAvailable: boolean,
+  mrCanOmitHost = false,
 ): Problem | null {
   if (!text.trim()) return null;
   if (!reference) return /^\d+$/.test(text.trim()) ? 'ambiguous' : 'invalid';
-  // An MR's state is read from its instance, so the host must be known (from a link).
-  if (reference.kind === 'mr' && !reference.host) return 'needs-link';
+  // Timed MR status reads talk directly to the instance, so a full link with host is required unless using the GitLab plugin.
+  if (reference.kind === 'mr' && !mrCanOmitHost && !reference.host) return 'needs-link';
   // An issue arrives through this computer's GitLab Webhook address or the GitLab plugin.
   if (reference.kind === 'issue' && !addressAvailable) return 'needs-account';
   return null;
@@ -46,8 +47,10 @@ export interface GitlabItemFieldsProps {
   issueChange?: GitlabIssueChange;
   /** Issue 能收到事件：这台电脑能接收 Webhook 地址（已登录 Cindy），或装了 GitLab 插件；MR 不需要。 */
   addressAvailable: boolean;
-  /** Issue 通过 GitLab 插件接收：条件多一个「有新评论」。 */
+  /** 当前通过 GitLab 插件接收（MR 或 Issue）。 */
   viaPlugin?: boolean;
+  /** MR 是否允许省略域名（装了 GitLab 插件且未强制选「定时读取状态」时可只填 group/project!N）。 */
+  mrCanOmitHost?: boolean;
   pluginIssueChange?: GitlabPluginIssueChange;
   onPluginIssueChange?(change: GitlabPluginIssueChange): void;
   /** 表单里已经按当前输入保存了 MR / Issue（打开已有任务时）；为 false 时挂载后立即应用一次。 */
@@ -66,6 +69,7 @@ export function GitlabItemFields({
   issueChange,
   addressAvailable,
   viaPlugin = false,
+  mrCanOmitHost = viaPlugin,
   pluginIssueChange,
   onPluginIssueChange,
   applied,
@@ -77,9 +81,11 @@ export function GitlabItemFields({
 }: GitlabItemFieldsProps) {
   const { t } = useTranslation();
   const reference = parseGitlabItemReference(text, known);
-  const problem = gitlabItemProblem(text, reference, addressAvailable);
+  const problem = gitlabItemProblem(text, reference, addressAvailable, mrCanOmitHost);
   const usable = reference && !problem ? reference : null;
-  const key = usable ? `${usable.host ?? ''}/${usable.project}${usable.kind === 'mr' ? '!' : '#'}${usable.number}` : `raw:${text}`;
+  const key = usable
+    ? `${usable.host ?? ''}/${usable.project}${usable.kind === 'mr' ? '!' : '#'}${usable.number}:${mrCanOmitHost ? 'p' : 'l'}`
+    : `raw:${text}:${mrCanOmitHost ? 'p' : 'l'}`;
   const callbacks = useRef({ onResolved, onUnresolved });
   callbacks.current = { onResolved, onUnresolved };
   const first = useRef(true);
@@ -118,7 +124,7 @@ export function GitlabItemFields({
               options={PR_CHANGES.map((value) => ({ value, label: t(`scheduler.editor.webhook.gitlabItem.mrChange.${value}`) }))}
               onValueChange={(value) => onPrChange(value as PrChange)} />}
           </FormField>
-          <p className={hintClass}>{t('scheduler.editor.webhook.gitlabItem.mrHint')}</p>
+          <p className={hintClass}>{t(viaPlugin ? 'scheduler.editor.webhook.gitlabItem.mrPluginHint' : 'scheduler.editor.webhook.gitlabItem.mrHint')}</p>
         </>
       )}
       {usable?.kind === 'issue' && viaPlugin && (

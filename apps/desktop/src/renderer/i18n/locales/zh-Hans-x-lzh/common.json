@@ -8385,6 +8385,8 @@
         "networkSecretOauthDetail": "登录与令牌由 Cindy 代管，可新授权，亦可择同服务既连之账号。请核下列所请之权；用既连账号时，以其已有之权为准。",
         "networkConnections": "可连君所增之 {{label}}",
         "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一地址皆须君确认，君所供之凭证仅注入相应地址。",
+        "networkConnectionsGlabCli": "可连接你添加的 {{label}}，并优先复用本机 glab 已登录的实例",
+        "networkConnectionsGlabCliDetail": "你在插件设置中添加的实例凭证优先；未单独添加的实例，主机会按需读取本机 glab 的登录令牌并仅注入该实例自身的 HTTPS 请求，插件代码无法读取或保存令牌。",
         "codeDetailNetwork": "于独立沙箱中运行，不能访问君之文件；网络仅限上方所声明之网域，由主机代发。",
         "codeDetailWithNode": "面板 UI 于独立沙箱中运行；此机处理之能由上方所声明之 Node 运行环境提供。",
         "added": "新",
@@ -17988,6 +17990,8 @@
         "gitlabTokenConnectionHint": "宜于旧版 GitLab：于 Webhook 设中书 Secret token。",
         "gitlabPluginConnection": "借 GitLab 法器",
         "gitlabPluginConnectionHint": "以 GitLab 法器所连之号，每分一察，无须于 GitLab 设 Webhook，亦无须登 Cindy 之号。机寐或机关之时所变，不复补报。",
+        "gitlabMrPollConnection": "按时察其进止",
+        "gitlabMrPollConnectionHint": "依「兼按时省察」之期读取 MR 状态（不发任务），先取插件所录账号，次取此机 glab 登录。",
         "gitlabSetupHint": "存后于差事详情取收址与密钥，书于 GitLab 项之「设置 › Webhooks」。",
         "gitlabItem": {
           "label": "MR 或 Issue",
@@ -17995,6 +17999,7 @@
           "hint": "MR 书 !编号，Issue 书 #编号，亦可径贴其链。",
           "required": "请书所察之 MR 或 Issue。",
           "mrHint": "GitLab 无推报，Cindy 依「兼定时察」之时读 MR 之状（不行差事），用此机 glab 之登，或 GitLab 法器所连之号。",
+          "mrPluginHint": "GitLab 插件每分时省察此 MR 一过，新提交、评注、核准及管线成败皆在其中。",
           "issueHint": "借 GitLab Webhook 受此 Issue 之变。评语之事不能辨 MR 与 Issue，故唯应 Issue 自身之新立、修改、闭与复开。",
           "issuePluginHint": "GitLab 法器每分一察此 Issue，新评亦在其中。",
           "errors": {

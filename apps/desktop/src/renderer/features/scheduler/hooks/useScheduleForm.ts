@@ -49,7 +49,7 @@ function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   const gitlab = isGithubPrTriggerUrl(url) ? null : parseGitlabItemReference(url);
   return { prEnabled: true, prUrl: url, prChange: rules[0]!.change,
     ...(gitlab
-      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project }
+      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project, gitlabItemNumber: gitlab.number, gitlabItemKind: 'mr' as const }
       : { githubItem: url, githubItemRepository: url.split('/').slice(3, 5).join('/') }) };
 }
 
@@ -572,7 +572,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (form.webhookEnabled && form.webhookPreset === 'github-item') {
       return { key: 'scheduler.editor.webhook.item.required' };
     }
-    if (form.webhookEnabled && form.webhookPreset === 'gitlab-item') {
+    if (form.webhookEnabled && (form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll')) {
       return { key: 'scheduler.editor.webhook.gitlabItem.required' };
     }
     if (form.webhookEnabled && form.webhookPreset === 'gitlab-plugin') {

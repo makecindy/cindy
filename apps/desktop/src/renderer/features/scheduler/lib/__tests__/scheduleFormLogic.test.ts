@@ -415,6 +415,12 @@ describe('buildScheduleInput webhook trigger', () => {
       { field: 'iid', operator: 'equals' as const, value: '3' },
       { field: 'kind', operator: 'equals' as const, value: 'issue' },
     ] }] }],
+    ['one MR', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.comment', 'merge_request.approved'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '12' },
+      { field: 'kind', operator: 'equals' as const, value: 'mr' },
+    ] }] }],
   ])('reopens and saves GitLab through the plugin for %s', (_name, source) => {
     const fields = webhookSourceFormFields(source);
     expect(fields.webhookPreset).toBe('gitlab-plugin');

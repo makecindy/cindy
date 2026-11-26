@@ -281,6 +281,8 @@
       "networkSecretOauthDetail": "O fluxo de autorização e todos os tokens são gerenciados pelo host e nunca podem ser lidos pelo código do plugin; você fornece as credenciais do cliente na página de detalhes do plugin. Os escopos de permissão solicitados estão listados literalmente abaixo — revise-os antes de aprovar.",
       "networkConnections": "Pode se conectar aos endereços de {{label}} que você adicionar",
       "networkConnectionsDetail": "Os endereços são adicionados na interface de configurações deste plugin; cada novo endereço exige sua confirmação, e a credencial fornecida é injetada apenas para o respectivo endereço.",
+      "networkConnectionsGlabCli": "Pode conectar-se aos endereços de {{label}} que você adicionar e usar instâncias autenticadas no glab local",
+      "networkConnectionsGlabCliDetail": "As credenciais adicionadas nas configurações do plugin têm prioridade; nas demais instâncias, o host lê o token do glab local sob demanda e o injeta apenas em requisições HTTPS para essa instância. O código do plugin não pode ler nem armazenar o token.",
       "codeDetailNetwork": "É executado em uma sandbox isolada, sem acesso aos seus arquivos; o acesso à rede é limitado aos domínios listados acima, intermediado pelo host.",
       "codeDetailWithNode": "A interface do painel é executada em uma sandbox isolada; o processamento local é fornecido pelo ambiente de execução Node declarado acima.",
       "added": "Novo",

@@ -8419,6 +8419,8 @@
         "networkSecretOauthDetail": "ログインとトークンは Cindy が管理します。新たに認可するか、互換性のある接続済みアカウントを選択できます。以下のスコープを確認してください。接続済みアカウントでは既存の権限が適用されます。",
         "networkConnections": "あなたが追加した{{label}}に接続可能",
         "networkConnectionsDetail": "アドレスはこのプラグインの設定画面で追加します。新しいアドレスの追加には毎回あなたの確認が必要で、入力した認証情報は対応するアドレスにのみ注入されます。",
+        "networkConnectionsGlabCli": "追加した {{label}} に接続でき、ローカル glab でログイン済みのインスタンスも利用します",
+        "networkConnectionsGlabCliDetail": "プラグイン設定で追加した認証情報が優先されます。未追加のインスタンスについては、ホストがローカルの glab ログイントークンを必要に応じて読み取り、そのインスタンスへの HTTPS リクエストにのみ注入します。プラグインコードはトークンを読み取ったり保存したりできません。",
         "codeDetailNetwork": "独立したサンドボックスで実行され、ファイルにはアクセスできません。ネットワークは上記のドメインに限られ、ホストが代理送信します。",
         "codeDetailWithNode": "パネル UI は独立したサンドボックスで実行されます。ローカル処理は上記で宣言された Node ランタイムが提供します。",
         "added": "追加",
@@ -17988,6 +17990,8 @@
         "gitlabTokenConnectionHint": "古い GitLab 向け：Webhook 設定で Secret token を入力します。",
         "gitlabPluginConnection": "GitLab プラグイン経由",
         "gitlabPluginConnectionHint": "GitLab プラグインで接続したアカウントで 1 分ごとに確認します。GitLab の Webhook 設定や Cindy アカウントは不要です。このコンピュータがスリープ中や電源オフの間の変化は後から届きません。",
+        "gitlabMrPollConnection": "定期的に状態を読み取る",
+        "gitlabMrPollConnectionHint": "「定期チェックも併用」の間隔で MR の状態を読み取ります（タスクは実行しません）。GitLab プラグインのアカウントを優先し、なければローカルの glab ログインを使います。",
         "gitlabSetupHint": "保存後、タスク詳細の受信アドレスと秘密鍵を GitLab プロジェクトの「設定 › Webhooks」に入力してください。",
         "gitlabItem": {
           "label": "MR または Issue",
@@ -17995,6 +17999,7 @@
           "hint": "MR は !番号、Issue は #番号で入力するか、リンクを貼り付けてください。",
           "required": "監視する MR または Issue を入力してください。",
           "mrHint": "GitLab にはプッシュ通知がないため、Cindy は「定期チェックも行う」の間隔で MR の状態を読み取ります（タスクは実行しません）。このコンピュータの glab のログイン、または GitLab プラグインで接続したアカウントを使います。",
+          "mrPluginHint": "GitLab プラグインがこの MR を毎分チェックします（新しいコミット、コメント、承認、パイプライン結果を含む）。",
           "issueHint": "この Issue の変化は GitLab Webhook で受け取ります。コメントイベントは MR と Issue を区別できないため、Issue 自体の作成・編集・クローズ・再オープンだけに反応します。",
           "issuePluginHint": "GitLab プラグインがこの Issue を 1 分ごとに確認します（新しいコメントを含む）。",
           "errors": {

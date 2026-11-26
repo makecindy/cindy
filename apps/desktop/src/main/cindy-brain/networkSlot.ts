@@ -31,7 +31,7 @@ import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.j
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
-import { canUseGithubHostCredentials } from './GhostManager.js';
+import { canUseGithubHostCredentials, canUseGitlabHostCredentials } from './GhostManager.js';
 import {
   applyMcpAppsManualHeaders,
   pluginDeclaresMcpAppsUi,
@@ -253,8 +253,14 @@ export interface NetworkSlotDeps {
    * 未注入时连接声明形同虚设(动态地址不放行),fail-closed。
    */
   connections?: {
-    hostsFor(instanceKey: string): string[];
-    tokenFor(instanceKey: string, hostname: string): { value: string; header: string; format: string } | null;
+    hostsFor(instanceKey: string): string[] | Promise<string[]>;
+    tokenFor(
+      instanceKey: string,
+      hostname: string,
+    ):
+      | { value: string; header: string; format: string; hostManaged?: boolean }
+      | null
+      | Promise<{ value: string; header: string; format: string; hostManaged?: boolean } | null>;
   };
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -1231,10 +1237,14 @@ export class GhostNetworkSlot {
     if (ghCliSecrets.length > 0 && !canUseGithubHostCredentials(ghost)) {
       return { ok: false, message: '本插件尚未批准或安装身份待确认，已阻断 gh-cli 凭证请求' };
     }
+    const glabCliConnections = connectionDecls.filter((conn) => conn.source === 'glab-cli');
+    if (glabCliConnections.length > 0 && !canUseGitlabHostCredentials(ghost)) {
+      return { ok: false, message: '本插件尚未批准或安装身份待确认，已阻断 glab-cli 凭证请求' };
+    }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
     const connectionHosts =
-      connectionDecls.length > 0 ? (this.deps.connections?.hostsFor(instanceKey) ?? []) : [];
+      connectionDecls.length > 0 ? await (this.deps.connections?.hostsFor(instanceKey) ?? []) : [];
     // 自主调用仍只能访问 manifest 声明的地址。Agent 在途调用已经
     // 通过外层 ghost_call 的 Cindy 授权，因此可以访问未预声明的普通
     // 地址；但只有真正命中 manifest 详单的 host 才可获得 Host 托管凭证。
@@ -1870,6 +1880,7 @@ export class GhostNetworkSlot {
     }
     for (const decl of connectionDecls) {
       deleteHeaderVariants(headers, decl.inject.header);
+      if (decl.source === 'glab-cli') deleteHeaderVariants(headers, 'Authorization');
     }
     let usedExchange = false;
     const oauthInjected = new Map<string, string>();
@@ -1904,9 +1915,9 @@ export class GhostNetworkSlot {
     // 与 secrets 同款快速失败,不发一个注定 401 的请求。
     const connections = this.deps.connections;
     if (defaultTls && connectionDecls.length > 0 && connections) {
-      const connHosts = connections.hostsFor(instanceKey);
+      const connHosts = await connections.hostsFor(instanceKey);
       if (connHosts.includes(hostname)) {
-        const tok = connections.tokenFor(instanceKey, hostname);
+        const tok = await connections.tokenFor(instanceKey, hostname);
         if (!tok) {
           return {
             error: `连接地址 ${hostname} 的凭证读取失败——请到主界面侧边栏「插件」的本插件详情页重新添加该连接`,
@@ -1917,11 +1928,11 @@ export class GhostNetworkSlot {
         }
         deleteHeaderVariants(headers, tok.header);
         headers[tok.header] = tok.format.replace('{value}', () => tok.value);
-        if (retainDirectCredential) {
+        if (retainDirectCredential && !tok.hostManaged) {
           const { value, header, format } = tok;
           credentialGuards.push(() => {
             const current = connections.tokenFor(instanceKey, hostname);
-            if (!current || current.value !== value || current.header !== header || current.format !== format) {
+            if (!current || current instanceof Promise || current.hostManaged || current.value !== value || current.header !== header || current.format !== format) {
               throw new Error('CREDENTIAL_CHANGED');
             }
           });

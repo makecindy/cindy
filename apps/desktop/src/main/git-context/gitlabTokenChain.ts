@@ -8,9 +8,10 @@ interface GlabSource {
 }
 
 /**
- * GitLab MR status reads: the local glab sign-in first, then the account the user connected
- * for the same instance in the GitLab plugin. The plugin token is only read here, per host,
- * for read-only merge request status; it is never written back or handed to anything else.
+ * GitLab MR status reads: the account the user explicitly connected for this instance
+ * in the GitLab plugin first (matching the plugin's own order), then the local glab
+ * sign-in for the same host. The plugin token is only read here, per host, for read-only
+ * merge request status; it is never written back or handed to anything else.
  */
 export function createGitlabTokenChain(deps: {
   glab: GlabSource;
@@ -28,12 +29,7 @@ export function createGitlabTokenChain(deps: {
   return {
     async readTokenDetailed(rawHost: string): Promise<GlabTokenResult> {
       const host = rawHost.toLowerCase();
-      const glab = await deps.glab.readTokenDetailed(host);
-      if (glab.ok) {
-        remember(host, 'glab');
-        return glab;
-      }
-      if (!isPrHost(host)) return glab;
+      if (!isPrHost(host)) return deps.glab.readTokenDetailed(host);
       if ((pluginRejectedUntil.get(host) ?? 0) <= now()) {
         pluginRejectedUntil.delete(host);
         let token: string | null = null;
@@ -47,6 +43,8 @@ export function createGitlabTokenChain(deps: {
           return { ok: true, token };
         }
       }
+      const glab = await deps.glab.readTokenDetailed(host);
+      if (glab.ok) remember(host, 'glab');
       return glab;
     },
     rejectToken(rawHost: string): void {

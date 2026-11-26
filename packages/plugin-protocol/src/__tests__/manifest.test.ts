@@ -1566,6 +1566,68 @@ describe('Ghost manifest contract', () => {
       reason: expect.stringContaining('与 node.secretBindings'),
     });
 
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      manifest: { network: { connections: [expect.objectContaining({ key: 'gitlab_conn', source: 'glab-cli' })] } },
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'X-Custom', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        setup: { requires: [{ anyOf: ['connection:gitlab_conn'] }] },
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+
     for (const invalidBinding of [
       { ...binding, key: 'Bad-Key' },
       { ...binding, label: '' },

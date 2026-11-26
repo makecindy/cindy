@@ -197,12 +197,41 @@ export function gitlabPluginIssueChangeFromEvents(events: readonly string[] | un
   return GITLAB_PLUGIN_ISSUE_CHANGES.find((change) => [...GITLAB_PLUGIN_ISSUE_EVENTS[change]].sort().join(',') === key) ?? null;
 }
 
-/** 表单里「通过 GitLab 插件」的范围：整个项目（events 为所选事件，空表示全部）或项目里的一个 Issue。 */
+/** 通过插件指定 MR 时的条件：与「定时读取状态」的四档条件保持一致，切换连接方式时不丢条件。 */
+export const GITLAB_PLUGIN_MR_CHANGES = ['any', 'merged', 'review', 'ci'] as const;
+export type GitlabPluginMrChange = (typeof GITLAB_PLUGIN_MR_CHANGES)[number];
+
+const GITLAB_PLUGIN_MR_EVENTS: Record<GitlabPluginMrChange, readonly string[]> = {
+  any: [
+    'merge_request.updated',
+    'merge_request.comment',
+    'merge_request.approved',
+    'merge_request.pipeline',
+    'merge_request.merged',
+    'merge_request.closed',
+    'merge_request.reopened',
+  ],
+  merged: ['merge_request.merged'],
+  review: ['merge_request.comment', 'merge_request.approved'],
+  ci: ['merge_request.pipeline'],
+};
+
+export function gitlabPluginMrChangeEvents(change: GitlabPluginMrChange): string[] {
+  return [...GITLAB_PLUGIN_MR_EVENTS[change]];
+}
+
+export function gitlabPluginMrChangeFromEvents(events: readonly string[] | undefined): GitlabPluginMrChange | null {
+  const key = [...new Set(events ?? [])].sort().join(',');
+  return GITLAB_PLUGIN_MR_CHANGES.find((change) => [...GITLAB_PLUGIN_MR_EVENTS[change]].sort().join(',') === key) ?? null;
+}
+
+/** 表单里「通过 GitLab 插件」的范围：整个项目（events 为所选事件，空表示全部）或项目里的一个 MR / Issue。 */
 export interface GitlabPluginScope {
   plugin: string;
   host?: string;
   project: string;
   issue?: number;
+  mr?: number;
   events: string[];
 }
 
@@ -210,7 +239,10 @@ export function gitlabPluginSource(scope: GitlabPluginScope): { plugin: string; 
   const filters: Array<{ field: string; operator: 'equals'; value: string }> = [];
   if (scope.host) filters.push({ field: 'host', operator: 'equals', value: scope.host.toLowerCase() });
   filters.push({ field: 'project', operator: 'equals', value: scope.project.toLowerCase() });
-  if (scope.issue !== undefined) {
+  if (scope.mr !== undefined) {
+    filters.push({ field: 'iid', operator: 'equals', value: String(scope.mr) });
+    filters.push({ field: 'kind', operator: 'equals', value: 'mr' });
+  } else if (scope.issue !== undefined) {
     filters.push({ field: 'iid', operator: 'equals', value: String(scope.issue) });
     filters.push({ field: 'kind', operator: 'equals', value: 'issue' });
   }
@@ -234,7 +266,13 @@ export function gitlabPluginScopeFromSource(
   if (values.iid === undefined && values.kind === undefined) {
     return { plugin: source.plugin, ...(values.host ? { host: values.host } : {}), project: project.project, events };
   }
-  const issue = values.iid !== undefined ? positive(values.iid) : null;
-  if (values.kind !== 'issue' || !issue || String(issue) !== values.iid) return null;
-  return { plugin: source.plugin, ...(values.host ? { host: values.host } : {}), project: project.project, issue, events };
+  const iid = values.iid !== undefined ? positive(values.iid) : null;
+  if (!iid || String(iid) !== values.iid || (values.kind !== 'issue' && values.kind !== 'mr')) return null;
+  return {
+    plugin: source.plugin,
+    ...(values.host ? { host: values.host } : {}),
+    project: project.project,
+    ...(values.kind === 'mr' ? { mr: iid } : { issue: iid }),
+    events,
+  };
 }

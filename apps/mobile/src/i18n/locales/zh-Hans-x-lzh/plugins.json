@@ -277,6 +277,8 @@
       "networkSecretOauthDetail": "授权流程与一切令牌由主机代管，法器代码不能读；客户端凭证由君于本法器详情页自填。下为其所请权柄范围(scopes)之原文，请确认后再许。",
       "networkConnections": "可连君所增之 {{label}}",
       "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一址皆须君确认，君所供之凭证唯注入其对应之址。",
+      "networkConnectionsGlabCli": "可连接你添加的 {{label}}，并优先复用本机 glab 已登录的实例",
+      "networkConnectionsGlabCliDetail": "你在插件设置中添加的实例凭证优先；未单独添加的实例，主机会按需读取本机 glab 的登录令牌并仅注入该实例自身的 HTTPS 请求，插件代码无法读取或保存令牌。",
       "codeDetailNetwork": "于独立沙箱中行，不能访君之卷；网络唯限上所声明之域名，由主机代发。",
       "codeDetailWithNode": "面板 UI 于独立沙箱中行；本地处理之能由上所声明之 Node 运行时供之。",
       "added": "新",

@@ -20,16 +20,24 @@ const hintClass = 'text-12 leading-relaxed text-[var(--text-secondary)]';
 
 /** GitHub / GitLab are one sender each; scope and connection are chosen below the sender. */
 type Family = 'github' | 'gitlab';
-const FAMILY_PRESETS: Record<Family, { item: string; connections: readonly string[] }> = {
+const FAMILY_PRESETS: Record<Family, { item: string; connections: readonly string[]; mrConnections?: readonly string[] }> = {
   github: { item: 'github-item', connections: ['github-app', 'github'] },
   // gitlab-plugin: the GitLab plugin polls with its own account and publishes plugin events (no address needed).
-  gitlab: { item: 'gitlab-item', connections: ['gitlab-plugin', 'gitlab', 'gitlab-token'] },
+  // gitlab-mr-poll: host reads MR GraphQL state on the timed schedule (prTrigger).
+  gitlab: { item: 'gitlab-item', connections: ['gitlab-plugin', 'gitlab', 'gitlab-token'], mrConnections: ['gitlab-plugin', 'gitlab-mr-poll'] },
 };
 const familyOf = (preset: string): Family | null =>
   (Object.keys(FAMILY_PRESETS) as Family[]).find((family) =>
-    FAMILY_PRESETS[family].item === preset || FAMILY_PRESETS[family].connections.includes(preset)) ?? null;
+    FAMILY_PRESETS[family].item === preset ||
+    FAMILY_PRESETS[family].connections.includes(preset) ||
+    (FAMILY_PRESETS[family].mrConnections?.includes(preset) ?? false)) ?? null;
 const CONNECTION_LABELS: Record<string, string> = {
-  'github-app': 'cindy', github: 'manual', gitlab: 'gitlabSigned', 'gitlab-token': 'gitlabToken', 'gitlab-plugin': 'gitlabPlugin',
+  'github-app': 'cindy',
+  github: 'manual',
+  gitlab: 'gitlabSigned',
+  'gitlab-token': 'gitlabToken',
+  'gitlab-plugin': 'gitlabPlugin',
+  'gitlab-mr-poll': 'gitlabMrPoll',
 };
 
 interface WebhookSourceFieldsProps {
@@ -57,8 +65,10 @@ interface WebhookSourceFieldsProps {
   itemScope?: boolean;
   /** 指定范围下显示的输入框与条件。 */
   itemFields?: ReactNode;
-  /** 指定的是需要接收地址的对象（GitLab Issue），在指定范围下也要选接法。 */
+  /** 指定的是需要选连接方式的对象（GitLab Issue 或装有插件时的 GitLab MR）。 */
   itemNeedsConnection?: boolean;
+  /** 指定对象为 GitLab MR 时只提供插件与「定时读取状态」，不提供 Webhook 地址选项。 */
+  gitlabMrItem?: boolean;
   /** 装了 GitLab 插件：GitLab 多一种接法「通过 GitLab 插件」，不需要接收地址。 */
   gitlabPluginAvailable?: boolean;
   /** 整个项目且通过 GitLab 插件时的项目与事件。 */
@@ -86,6 +96,7 @@ export function WebhookSourceFields({
   itemScope = false,
   itemFields,
   itemNeedsConnection = false,
+  gitlabMrItem = false,
   gitlabPluginAvailable = false,
   gitlabPluginFields,
 }: WebhookSourceFieldsProps) {
@@ -96,15 +107,20 @@ export function WebhookSourceFields({
   const family = familyOf(preset);
   const pluginSource = preset === 'plugin';
   const gitlabPlugin = preset === 'gitlab-plugin';
+  const gitlabMrPoll = preset === 'gitlab-mr-poll';
   // Connections offered here: the plugin one only when installed; address ones only with a receiver (a saved one stays).
-  const connectionsOf = (value: Family) => FAMILY_PRESETS[value].connections.filter((connection) => connection === preset
-    || (connection === 'gitlab-plugin' ? gitlabPluginAvailable : addressSourcesAvailable));
+  const connectionsOf = (value: Family, mr = false) => {
+    const base = mr && FAMILY_PRESETS[value].mrConnections ? FAMILY_PRESETS[value].mrConnections : FAMILY_PRESETS[value].connections;
+    return base.filter((connection) => connection === preset
+      || (connection === 'gitlab-plugin' ? gitlabPluginAvailable : connection === 'gitlab-mr-poll' ? true : addressSourcesAvailable));
+  };
   const repositoryScope = !!family && !itemScope;
-  // Address-based settings (events, signing) apply to a whole repository/project or a GitLab issue.
-  const connectionVisible = !!family && (repositoryScope || itemNeedsConnection);
-  const addressPreset = family && FAMILY_PRESETS[family].connections.includes(preset) ? preset : null;
+  // Connection selector applies to a whole repository/project, a GitLab issue, or a GitLab MR when the plugin is available.
+  const offeredConnections = family ? connectionsOf(family, itemScope && gitlabMrItem) : [];
+  const connectionVisible = !!family && (repositoryScope || (itemNeedsConnection && (!gitlabMrItem || offeredConnections.length > 1)));
+  const addressPreset = family && offeredConnections.includes(preset) ? preset : null;
   // Settings that only apply to a Webhook address (events text, signing, setup hints).
-  const addressSettings = !pluginSource && !gitlabPlugin;
+  const addressSettings = !pluginSource && !gitlabPlugin && !gitlabMrPoll;
   const appSource = repositoryScope && preset === 'github-app';
   // Remembers each family's repository connection so switching scope back keeps the user's choice.
   const [lastConnection, setLastConnection] = useState<Record<Family, string>>({
@@ -124,7 +140,7 @@ export function WebhookSourceFields({
     ...(known ? [] : [{ value: preset, label: preset }]),
   ] : [...pluginOption, familyOption('github'), familyOption('gitlab')];
   const chooseConnection = (value: string) => {
-    if (family) setLastConnection((current) => ({ ...current, [family]: value }));
+    if (family && value !== 'gitlab-mr-poll') setLastConnection((current) => ({ ...current, [family]: value }));
     onConnectionChange(value);
   };
   // Whole-repository events need a receiver on this computer, or (GitLab) the GitLab plugin.
@@ -182,7 +198,7 @@ export function WebhookSourceFields({
       {connectionVisible && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.connectionLabel')}</legend>
-          {connectionsOf(family!).map((value) => {
+          {offeredConnections.map((value) => {
             const mode = CONNECTION_LABELS[value];
             return <label key={value} className="flex min-w-0 cursor-pointer items-start gap-2 py-1 text-13 text-[var(--text-primary)]">
               <input type="radio" name={connectionId} checked={addressPreset === value}
@@ -220,7 +236,7 @@ export function WebhookSourceFields({
       )}
       {addressSettings && !itemScope && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
       {repositoryScope && preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
-      {connectionVisible && family === 'gitlab' && !gitlabPlugin && <p className={hintClass}>{t('scheduler.editor.webhook.gitlabSetupHint')}</p>}
+      {connectionVisible && family === 'gitlab' && !gitlabPlugin && !gitlabMrPoll && <p className={hintClass}>{t('scheduler.editor.webhook.gitlabSetupHint')}</p>}
       {preset === 'custom' ? (
         <FormField
           label={t('scheduler.editor.webhook.customLabel')}

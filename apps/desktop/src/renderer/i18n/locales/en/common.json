@@ -8462,6 +8462,8 @@
         "networkSecretOauthDetail": "Cindy manages sign-in and tokens. You can authorize a new account or choose a compatible connected account. Review the scopes below; reused accounts retain their existing permissions.",
         "networkConnections": "Can connect to {{label}} addresses you add",
         "networkConnectionsDetail": "Addresses are added in this plugin's settings UI; every new address requires your confirmation, and the credential you provide is injected only for its own address.",
+        "networkConnectionsGlabCli": "Can connect to {{label}} addresses you add, and use instances signed in with local glab",
+        "networkConnectionsGlabCliDetail": "Credentials you add in plugin settings take priority; for other instances, the host reads your local glab login token on demand and injects it only into HTTPS requests to that instance. Plugin code cannot read or store the token.",
         "codeDetailNetwork": "Runs in an isolated sandbox with no access to your files; network access is limited to the domains listed above, relayed by the host.",
         "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
         "added": "New",
@@ -18062,6 +18064,8 @@
         "gitlabTokenConnectionHint": "For older GitLab versions: enter a secret token in the webhook settings.",
         "gitlabPluginConnection": "Through the GitLab plugin",
         "gitlabPluginConnectionHint": "Checks every minute with the account connected in the GitLab plugin. No GitLab webhook or Cindy account needed. Changes made while this computer sleeps or is off are not delivered later.",
+        "gitlabMrPollConnection": "Check state on a schedule",
+        "gitlabMrPollConnectionHint": "Reads merge request state on the “Also check on a schedule” timing (without running the task), preferring the account in the GitLab plugin and falling back to local glab.",
         "gitlabSetupHint": "After saving, copy the receiver URL and secret from the task details into the GitLab project under Settings › Webhooks.",
         "gitlabItem": {
           "label": "Merge request or issue",
@@ -18069,6 +18073,7 @@
           "hint": "Write !number for a merge request, #number for an issue, or paste a link.",
           "required": "Enter the merge request or issue to watch.",
           "mrHint": "GitLab has no push notifications. Cindy reads the merge request state on the “Also check on a schedule” timing (without running the task), using glab on this computer or the account connected in the GitLab plugin.",
+          "mrPluginHint": "The GitLab plugin checks this merge request every minute, including new commits, comments, approvals and pipeline results.",
           "issueHint": "Changes to this issue arrive through a GitLab webhook. Comment events cannot tell merge requests and issues apart, so only the issue itself being opened, edited, closed or reopened counts.",
           "issuePluginHint": "The GitLab plugin checks this issue every minute, including new comments.",
           "errors": {

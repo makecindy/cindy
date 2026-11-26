@@ -37,6 +37,8 @@ import {
   gitlabIssueChangeFromEvents,
   gitlabPluginIssueChangeEvents,
   gitlabPluginIssueChangeFromEvents,
+  gitlabPluginMrChangeEvents,
+  gitlabPluginMrChangeFromEvents,
   gitlabPluginScopeFromSource,
   gitlabPluginSource,
   issueChangeEvents,
@@ -199,8 +201,9 @@ export interface ScheduleFormState {
   gitlabItem?: string;
   gitlabItemHost?: string;
   gitlabItemProject?: string;
-  /** 识别为 Issue 时的编号；为空表示不是指定 GitLab Issue。 */
+  /** 识别出的 GitLab 单对象编号（MR 或 Issue）；为空表示不是单对象或尚未识别。 */
   gitlabItemNumber?: number;
+  gitlabItemKind?: 'mr' | 'issue';
   gitlabIssueChange?: GitlabIssueChange;
   /**
    * 「通过 GitLab 插件」（webhookPreset=gitlab-plugin，保存为插件来源）：插件安装身份、整个项目时的项目原文
@@ -699,8 +702,8 @@ export function webhookSourceFormFields(
   events?: readonly string[],
 ): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'
   | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'
-  | 'gitlabItem' | 'gitlabItemHost' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabIssueChange'
-  | 'gitlabPluginId' | 'gitlabPluginProject' | 'gitlabPluginEvents' | 'gitlabPluginIssueChange'> {
+  | 'gitlabItem' | 'gitlabItemHost' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabItemKind' | 'gitlabIssueChange'
+  | 'gitlabPluginId' | 'gitlabPluginProject' | 'gitlabPluginEvents' | 'gitlabPluginIssueChange' | 'prChange'> {
   if (source?.preset === 'github-app' && source.number !== undefined) {
     const repository = source.repositories[0] ?? '';
     const change = issueChangeFromEvents(events);
@@ -711,17 +714,22 @@ export function webhookSourceFormFields(
   if (source?.preset === 'plugin') {
     // Saved from「通过 GitLab 插件」: reopen it as GitLab; any other combination stays a plain plugin source.
     const gitlab = gitlabPluginScopeFromSource(source.sources);
+    const mrChange = gitlab?.mr !== undefined ? gitlabPluginMrChangeFromEvents(gitlab.events) : null;
     const issueChange = gitlab?.issue !== undefined ? gitlabPluginIssueChangeFromEvents(gitlab.events) : null;
-    if (gitlab && (gitlab.issue === undefined || issueChange)) {
+    if (gitlab && (gitlab.mr !== undefined ? Boolean(mrChange) : gitlab.issue === undefined || Boolean(issueChange))) {
       const project = gitlab.host ? `https://${gitlab.host}/${gitlab.project}` : gitlab.project;
       return {
         webhookPreset: 'gitlab-plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })),
         webhookSigned: true, webhookFormat: '', gitlabPluginId: gitlab.plugin,
-        ...(gitlab.issue !== undefined
-          ? { gitlabItem: gitlab.host ? `${project}/-/issues/${gitlab.issue}` : `${gitlab.project}#${gitlab.issue}`,
+        ...(gitlab.mr !== undefined
+          ? { gitlabItem: gitlab.host ? `${project}/-/merge_requests/${gitlab.mr}` : `${gitlab.project}!${gitlab.mr}`,
             ...(gitlab.host ? { gitlabItemHost: gitlab.host } : {}), gitlabItemProject: gitlab.project,
-            gitlabItemNumber: gitlab.issue, gitlabPluginIssueChange: issueChange! }
-          : { gitlabPluginProject: project, gitlabPluginEvents: gitlab.events }),
+            gitlabItemNumber: gitlab.mr, gitlabItemKind: 'mr' as const, prChange: mrChange! }
+          : gitlab.issue !== undefined
+            ? { gitlabItem: gitlab.host ? `${project}/-/issues/${gitlab.issue}` : `${gitlab.project}#${gitlab.issue}`,
+              ...(gitlab.host ? { gitlabItemHost: gitlab.host } : {}), gitlabItemProject: gitlab.project,
+              gitlabItemNumber: gitlab.issue, gitlabItemKind: 'issue' as const, gitlabPluginIssueChange: issueChange! }
+            : { gitlabPluginProject: project, gitlabPluginEvents: gitlab.events }),
       };
     }
     return { webhookPreset: 'plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })), webhookSigned: true, webhookFormat: '' };
@@ -740,7 +748,8 @@ export function webhookSourceFormFields(
     webhookSigned: !(source && 'signed' in source && source.signed === false),
     webhookFormat: '',
     // A specific GitLab issue: an address-based GitLab sender narrowed to one project and number.
-    ...(item ? { gitlabItem: `${item.repository}#${item.number}`, gitlabItemProject: item.repository, gitlabItemNumber: item.number,
+    ...(item ? { gitlabItem: `${item.repository}#${item.number}`, gitlabItemProject: item.repository,
+      gitlabItemNumber: item.number, gitlabItemKind: 'issue' as const,
       ...(gitlabChange ? { gitlabIssueChange: gitlabChange } : {}) } : {}),
   };
 }
@@ -777,9 +786,16 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
     return { source: { preset, sources } };
   }
   if (preset === 'gitlab-plugin') {
-    // GitLab through the GitLab plugin is stored as that plugin's event source with project / issue conditions.
+    // GitLab through the GitLab plugin is stored as that plugin's event source with project / MR / issue conditions.
     if (!form.gitlabPluginId) return {};
     if (form.gitlabItemNumber !== undefined && form.gitlabItemProject) {
+      if (form.gitlabItemKind === 'mr') {
+        return { source: { preset: 'plugin', sources: [gitlabPluginSource({
+          plugin: form.gitlabPluginId, ...(form.gitlabItemHost ? { host: form.gitlabItemHost } : {}),
+          project: form.gitlabItemProject, mr: form.gitlabItemNumber,
+          events: gitlabPluginMrChangeEvents(form.prChange ?? 'any'),
+        })] } };
+      }
       return { source: { preset: 'plugin', sources: [gitlabPluginSource({
         plugin: form.gitlabPluginId, ...(form.gitlabItemHost ? { host: form.gitlabItemHost } : {}),
         project: form.gitlabItemProject, issue: form.gitlabItemNumber,
@@ -860,7 +876,7 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
               // A specific Issue saves its condition as event filters; an unknown saved set is kept as is.
               : form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined && form.issueChange
                 ? issueChangeEvents(form.issueChange)
-                : form.gitlabItemNumber !== undefined && form.gitlabIssueChange
+                : form.gitlabItemKind !== 'mr' && form.gitlabItemNumber !== undefined && form.gitlabIssueChange
                   ? gitlabIssueChangeEvents(form.gitlabIssueChange)
                   : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
             ...webhookSourceInput(form),

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 import { __resetForTest as resetDraft } from '@/state/newMakerDraft';
@@ -464,6 +464,50 @@ describe('GitLab through the GitLab plugin', () => {
         { field: 'project', operator: 'equals', value: 'group/app' },
         { field: 'iid', operator: 'equals', value: '3' },
         { field: 'kind', operator: 'equals', value: 'issue' },
+      ] }] } },
+    }), true));
+  });
+
+  it('defaults a specific MR to the GitLab plugin', async () => {
+    const listEventSources = gitlabPlugin();
+    const form = mount(schedule());
+    await chooseGitlab(listEventSources);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }),
+      { target: { value: 'https://git.example.com/Group/App/-/merge_requests/12' } });
+    expect((await screen.findByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.prTrigger.condition' }));
+    fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.gitlabItem.mrChange.merged' }));
+    form.save();
+    await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      manual: true,
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '12' },
+        { field: 'kind', operator: 'equals', value: 'mr' },
+      ] }] } },
+    }), true));
+  });
+
+  it('keeps timed state check selected when reopening a saved GitLab MR prTrigger, and allows switching to the plugin', async () => {
+    const listEventSources = gitlabPlugin();
+    const existing = mount(schedule({
+      manual: false,
+      prTrigger: { url: 'https://git.example.com/group/app/-/merge_requests/12', change: 'merged' },
+    }));
+    await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+    await act(async () => { await listEventSources.mock.results[0]!.value; });
+    expect((await screen.findByRole('radio', { name: 'scheduler.editor.webhook.gitlabMrPollConnection' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.gitlabPluginConnection' }));
+    existing.save();
+    await waitFor(() => expect(existing.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+      prTrigger: null,
+      webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+        { field: 'host', operator: 'equals', value: 'git.example.com' },
+        { field: 'project', operator: 'equals', value: 'group/app' },
+        { field: 'iid', operator: 'equals', value: '12' },
+        { field: 'kind', operator: 'equals', value: 'mr' },
       ] }] } },
     }), true));
   });

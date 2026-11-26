@@ -5,6 +5,8 @@ import {
   gitlabIssueChangeFromEvents,
   gitlabPluginIssueChangeEvents,
   gitlabPluginIssueChangeFromEvents,
+  gitlabPluginMrChangeEvents,
+  gitlabPluginMrChangeFromEvents,
   gitlabPluginScopeFromSource,
   gitlabPluginSource,
   isGitlabPluginId,
@@ -141,9 +143,13 @@ describe('GitLab through the GitLab plugin', () => {
     expect(parseGitlabProjectReference(input)).toEqual(expected);
   });
 
-  it('round-trips a whole project and a single issue, and leaves other combinations alone', () => {
+  it('round-trips a whole project, a single MR and a single issue, and leaves other combinations alone', () => {
     const project = { plugin: 'cindy-gitlab', host: 'git.example.com', project: 'group/app', events: ['merge_request.merged'] };
     expect(gitlabPluginScopeFromSource([gitlabPluginSource(project)])).toEqual(project);
+    const mr = { plugin: 'cindy-gitlab', host: 'git.example.com', project: 'group/app', mr: 7, events: gitlabPluginMrChangeEvents('review') };
+    const savedMr = gitlabPluginSource(mr);
+    expect(gitlabPluginScopeFromSource([savedMr])).toEqual(mr);
+    expect(gitlabPluginMrChangeFromEvents(savedMr.events)).toBe('review');
     const issue = { plugin: 'local:cindy-gitlab', project: 'group/app', issue: 3, events: gitlabPluginIssueChangeEvents('comment') };
     const saved = gitlabPluginSource(issue);
     expect(saved.filters).toEqual([
@@ -158,7 +164,7 @@ describe('GitLab through the GitLab plugin', () => {
     expect(gitlabPluginScopeFromSource([{ plugin: 'cindy-gitlab', filters: [{ field: 'project', operator: 'contains', value: 'app' }] }])).toBeNull();
     expect(gitlabPluginScopeFromSource([{ plugin: 'cindy-gitlab', filters: [
       { field: 'project', operator: 'equals', value: 'group/app' }, { field: 'iid', operator: 'equals', value: '7' },
-      { field: 'kind', operator: 'equals', value: 'mr' },
+      { field: 'kind', operator: 'equals', value: 'pipeline' },
     ] }])).toBeNull();
     expect(isGitlabPluginId('public/cindy-gitlab')).toBe(true);
     expect(isGitlabPluginId('_ns__local__cindy-gitlab')).toBe(true);

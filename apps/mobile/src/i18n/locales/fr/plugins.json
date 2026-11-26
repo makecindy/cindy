@@ -281,6 +281,8 @@
       "networkSecretOauthDetail": "Le flux d'autorisation et tous les jetons sont gérés par l'hôte et ne peuvent jamais être lus par le code du plugin ; vous fournissez les identifiants client sur la page de détails du plugin. Les portées d'autorisation demandées sont listées telles quelles ci-dessous : vérifiez-les avant d'approuver.",
       "networkConnections": "Peut se connecter aux adresses {{label}} que vous ajoutez",
       "networkConnectionsDetail": "Les adresses sont ajoutées dans l'interface de paramètres de ce plugin ; chaque nouvelle adresse requiert votre confirmation, et l'identifiant que vous fournissez n'est injecté que pour sa propre adresse.",
+      "networkConnectionsGlabCli": "Peut se connecter aux adresses {{label}} que vous ajoutez et utiliser les instances connectées via glab local",
+      "networkConnectionsGlabCliDetail": "Les identifiants ajoutés dans les réglages de l’extension sont prioritaires ; pour les autres instances, l’hôte lit le jeton glab local à la demande et l’injecte uniquement dans les requêtes HTTPS vers cette instance. L’extension ne peut ni lire ni enregistrer le jeton.",
       "codeDetailNetwork": "S'exécute dans un bac à sable isolé, sans accès à vos fichiers ; l'accès réseau est limité aux domaines listés ci-dessus et relayé par l'hôte.",
       "codeDetailWithNode": "L'interface du panneau s'exécute dans un bac à sable isolé ; le traitement local est assuré par le runtime Node déclaré ci-dessus.",
       "added": "Nouveau",

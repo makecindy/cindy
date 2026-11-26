@@ -8534,6 +8534,8 @@
         "networkSecretOauthDetail": "O Cindy gerencia o login e os tokens. Você pode autorizar uma nova conta ou escolher uma conta conectada compatível. Confira os escopos abaixo; as contas conectadas mantêm suas permissões existentes.",
         "networkConnections": "Pode se conectar aos endereços de {{label}} que você adicionar",
         "networkConnectionsDetail": "Os endereços são adicionados na interface de configurações deste plugin; cada novo endereço exige sua confirmação, e a credencial fornecida é injetada apenas para o respectivo endereço.",
+        "networkConnectionsGlabCli": "Pode conectar-se aos endereços de {{label}} que você adicionar e usar instâncias autenticadas no glab local",
+        "networkConnectionsGlabCliDetail": "As credenciais adicionadas nas configurações do plugin têm prioridade; nas demais instâncias, o host lê o token do glab local sob demanda e o injeta apenas em requisições HTTPS para essa instância. O código do plugin não pode ler nem armazenar o token.",
         "codeDetailNetwork": "É executado em uma sandbox isolada, sem acesso aos seus arquivos; o acesso à rede é limitado aos domínios listados acima, intermediado pelo host.",
         "codeDetailWithNode": "A interface do painel é executada em uma sandbox isolada; o processamento local é fornecido pelo ambiente de execução Node declarado acima.",
         "added": "Novo",
@@ -18228,6 +18230,8 @@
         "gitlabTokenConnectionHint": "Para versões antigas do GitLab: informe um secret token nas configurações do webhook.",
         "gitlabPluginConnection": "Pelo plugin do GitLab",
         "gitlabPluginConnectionHint": "Verifica a cada minuto com a conta conectada no plugin do GitLab. Não precisa de webhook do GitLab nem de conta Cindy. Mudanças enquanto este computador está em repouso ou desligado não são entregues depois.",
+        "gitlabMrPollConnection": "Verificar estado em horário programado",
+        "gitlabMrPollConnectionHint": "Lê o estado do merge request conforme “Verificar também em horário programado” (sem executar a tarefa), priorizando a conta do plugin do GitLab e usando o glab local como alternativa.",
         "gitlabSetupHint": "Depois de salvar, copie o endereço e o segredo dos detalhes da tarefa para o projeto GitLab em Configurações › Webhooks.",
         "gitlabItem": {
           "label": "Merge request ou issue",
@@ -18235,6 +18239,7 @@
           "hint": "Escreva !número para merge request, #número para issue, ou cole um link.",
           "required": "Informe o merge request ou issue a acompanhar.",
           "mrHint": "O GitLab não envia notificações. O Cindy lê o estado no ritmo de \"Também verificar em um agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta conectada no plugin do GitLab.",
+          "mrPluginHint": "O plugin do GitLab verifica este merge request a cada minuto, incluindo novos commits, comentários, aprovações e resultados de pipeline.",
           "issueHint": "As mudanças deste issue chegam por um webhook do GitLab. Eventos de comentário não distinguem merge requests de issues, então só contam criar, editar, fechar e reabrir o issue.",
           "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
           "errors": {

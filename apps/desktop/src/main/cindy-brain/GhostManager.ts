@@ -255,6 +255,16 @@ export function canUseGithubHostCredentials(
     ghost.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
 }
 
+/** Shared glab-cli eligibility for plugin connection networking and /connections listing. */
+export function canUseGitlabHostCredentials(
+  ghost: Pick<InstalledGhost, 'manifest' | 'namespaceState' | 'approval'>,
+): boolean {
+  return ghost.approval?.state === 'approved' &&
+    ghost.namespaceState !== 'pending' &&
+    ghost.namespaceState !== 'unconfirmed' &&
+    ghost.manifest.network?.connections?.some(conn => conn.source === 'glab-cli') === true;
+}
+
 /** 完整校验官方 Host receipt；只看 level 会把损坏 receipt 误当成已回填。 */
 export function hasCindyOfficialTrustMetadata(dir: string): boolean {
   try {

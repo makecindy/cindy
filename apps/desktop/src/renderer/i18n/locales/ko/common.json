@@ -8419,6 +8419,8 @@
         "networkSecretOauthDetail": "로그인과 토큰은 Cindy가 관리합니다. 새로 인증하거나 호환되는 연결된 계정을 선택할 수 있습니다. 아래 권한 범위를 확인하세요. 연결된 계정은 기존 권한을 사용합니다.",
         "networkConnections": "내가 추가한 {{label}}에 연결 가능",
         "networkConnectionsDetail": "주소는 이 플러그인의 설정 화면에서 추가합니다. 새 주소를 추가할 때마다 확인이 필요하며, 입력한 자격 증명은 해당 주소에만 주입됩니다.",
+        "networkConnectionsGlabCli": "추가한 {{label}} 주소에 연결할 수 있으며 로컬 glab에 로그인된 인스턴스도 사용합니다",
+        "networkConnectionsGlabCliDetail": "플러그인 설정에서 추가한 자격 증명이 우선 적용됩니다. 별도로 추가하지 않은 인스턴스는 호스트가 필요할 때 로컬 glab 로그인 토큰을 읽어 해당 인스턴스의 HTTPS 요청에만 주입하며, 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다.",
         "codeDetailNetwork": "독립된 샌드박스에서 실행되며 파일에는 접근할 수 없습니다. 네트워크는 위에 표시된 도메인으로 제한되며 호스트가 대신 전송합니다.",
         "codeDetailWithNode": "패널 UI는 독립된 샌드박스에서 실행됩니다. 로컬 처리는 위에서 선언된 Node 런타임이 제공합니다.",
         "added": "추가",
@@ -17988,6 +17990,8 @@
         "gitlabTokenConnectionHint": "이전 버전의 GitLab: Webhook 설정에 Secret token을 입력하세요.",
         "gitlabPluginConnection": "GitLab 플러그인으로",
         "gitlabPluginConnectionHint": "GitLab 플러그인에 연결한 계정으로 1분마다 확인합니다. GitLab Webhook 설정이나 Cindy 계정이 필요 없습니다. 이 컴퓨터가 잠자기 중이거나 꺼져 있는 동안의 변경은 나중에 전달되지 않습니다.",
+        "gitlabMrPollConnection": "정기적으로 상태 확인",
+        "gitlabMrPollConnectionHint": "“정기 확인 병행” 주기에 따라 MR 상태를 읽으며(작업은 실행하지 않음), GitLab 플러그인 계정을 우선 사용하고 없으면 로컬 glab 로그인을 사용합니다.",
         "gitlabSetupHint": "저장한 뒤 작업 상세에서 수신 주소와 비밀 키를 복사해 GitLab 프로젝트의 설정 › Webhooks에 입력하세요.",
         "gitlabItem": {
           "label": "MR 또는 Issue",
@@ -17995,6 +17999,7 @@
           "hint": "MR은 !번호, Issue는 #번호로 쓰거나 링크를 붙여 넣으세요.",
           "required": "지켜볼 MR 또는 Issue를 입력하세요.",
           "mrHint": "GitLab에는 푸시 알림이 없어 Cindy가 \"예약 검사도 함께\" 간격으로 MR 상태를 읽습니다(작업은 실행하지 않음). 이 컴퓨터의 glab 로그인 또는 GitLab 플러그인에 연결한 계정을 사용합니다.",
+          "mrPluginHint": "GitLab 플러그인이 새 커밋, 댓글, 승인, 파이프라인 결과를 포함해 이 MR을 매분 확인합니다.",
           "issueHint": "이 Issue의 변경은 GitLab Webhook으로 받습니다. 댓글 이벤트는 MR과 Issue를 구분할 수 없어 Issue 자체의 생성, 수정, 닫기, 다시 열기에만 반응합니다.",
           "issuePluginHint": "GitLab 플러그인이 이 Issue를 1분마다 확인합니다(새 댓글 포함).",
           "errors": {

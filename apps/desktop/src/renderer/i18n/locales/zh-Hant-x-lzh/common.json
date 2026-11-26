@@ -8385,6 +8385,8 @@
         "networkSecretOauthDetail": "登入與令牌由 Cindy 代管，可新授權，亦可擇同服務既連之帳號。請核下列所請之權；用既連帳號時，以其已有之權為準。",
         "networkConnections": "可連君所增之 {{label}}",
         "networkConnectionsDetail": "位址於此法器之設定介面中增之；每增一位址皆須君確認，君所供之憑證僅注入相應位址。",
+        "networkConnectionsGlabCli": "可連線你新增的 {{label}}，並優先複用本機 glab 已登入的執行個體",
+        "networkConnectionsGlabCliDetail": "你在外掛設定中新增的執行個體憑證優先；未單獨新增的執行個體，主機會按需讀取本機 glab 的登入權杖並僅注入該執行個體自身的 HTTPS 請求，外掛程式碼無法讀取或儲存權杖。",
         "codeDetailNetwork": "於獨立沙箱中運行，不能存取君之檔案；網路僅限上方所宣告之網域，由主機代發。",
         "codeDetailWithNode": "面板 UI 於獨立沙箱中運行；此機處理之能由上方所宣告之 Node 執行環境提供。",
         "added": "新",
@@ -17988,6 +17990,8 @@
         "gitlabTokenConnectionHint": "宜於舊版 GitLab：於 Webhook 設中書 Secret token。",
         "gitlabPluginConnection": "借 GitLab 法器",
         "gitlabPluginConnectionHint": "以 GitLab 法器所連之號，每分一察，無須於 GitLab 設 Webhook，亦無須登 Cindy 之號。機寐或機關之時所變，不復補報。",
+        "gitlabMrPollConnection": "按時察其進止",
+        "gitlabMrPollConnectionHint": "依「兼按時省察」之期讀取 MR 狀態（不發任務），先取外掛所錄帳號，次取此機 glab 登入。",
         "gitlabSetupHint": "存後於差事詳情取收址與密鑰，書於 GitLab 項之「設置 › Webhooks」。",
         "gitlabItem": {
           "label": "MR 或 Issue",
@@ -17995,6 +17999,7 @@
           "hint": "MR 書 !編號，Issue 書 #編號，亦可逕貼其鏈。",
           "required": "請書所察之 MR 或 Issue。",
           "mrHint": "GitLab 無推報，Cindy 依「兼定時察」之時讀 MR 之狀（不行差事），用此機 glab 之登，或 GitLab 法器所連之號。",
+          "mrPluginHint": "GitLab 外掛每分時省察此 MR 一過，新提交、評注、核准及管線成敗皆在其中。",
           "issueHint": "藉 GitLab Webhook 受此 Issue 之變。評語之事不能辨 MR 與 Issue，故唯應 Issue 自身之新立、修改、閉與復開。",
           "issuePluginHint": "GitLab 法器每分一察此 Issue，新評亦在其中。",
           "errors": {
