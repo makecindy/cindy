@@ -42,6 +42,8 @@ const fixture = vi.hoisted(() => ({
   stubTaskSettings: false,
   extraRows: [] as any[],
   extraDevices: [] as any[],
+  /** Computers no longer in the account's list (the rest stay). */
+  removedDevices: new Set<string>(),
   offlineDevices: new Set<string>(),
   devicesFailed: false,
   devicesAbsent: false,
@@ -226,7 +228,7 @@ vi.mock("@/device-link/useDeviceManagement", () => ({
               remoteControlEnabled: true,
             },
             ...fixture.extraDevices,
-          ],
+          ].filter((device) => !fixture.removedDevices.has(device.deviceId)),
     refresh: () => fixture.devicesRefresh(),
   }),
 }));
@@ -356,6 +358,7 @@ beforeEach(() => {
   fixture.stubTaskSettings = false;
   fixture.extraRows = [];
   fixture.extraDevices = [];
+  fixture.removedDevices.clear();
   fixture.offlineDevices.clear();
   fixture.devicesFailed = false;
   fixture.devicesAbsent = false;

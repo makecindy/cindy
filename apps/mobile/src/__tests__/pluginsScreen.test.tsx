@@ -2927,6 +2927,31 @@ describe("market install recovery", () => {
       expect(fixture.props.get("directory")).toMatchObject({ deviceId: "mac", segment: "installed" });
       expect(fixture.props.get("directory").market.detail ?? null).toBeNull();
     });
+    // The record's computer is no longer in the account's list when "Go to Installed" is pressed: the computer shown stays
+    // (there is none to switch to) and only the segment changes. Locks the current behaviour; whether "Go to Installed"
+    // should be offered at all then is a proposal for the maintainer. Tier: unit/jsdom.
+    it("Go to Installed when the record's computer is no longer listed: the computer shown stays, the segment changes", async () => {
+      fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      await click("plugins.checks.close");
+      fixture.platform = "ios";
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await act(async () => fixture.props.get("directory").onDeviceChange("pc"));
+      await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+      await act(async () => fixture.props.get("plugins.slotHolder").onPress());
+      await settle(14);
+      world.operation = () => receipt("succeeded");
+      world.facts = { ghosts: [demoGhost], record: { ...item, ...evidenceOf(CONTRACT_SAMPLES.olderHost) } };
+      await verifyFrom(requests);
+      expect(status()).toContain("plugins.checks.result.legacyHost");
+      fixture.removedDevices.add("mac");
+      await act(async () => root.render(createElement(PluginsScreen)));
+      await click("plugins.checks.showInstalled");
+      await settle(6);
+      expect(byId("plugins.checks")).toBeNull();
+      expect(fixture.props.get("directory")).toMatchObject({ deviceId: "pc", segment: "installed" });
+    });
     // As the computer answers (dispatcher R-3): an older package of the same plugin installed over it rewrites the record
     // (no evidence for this phone, the record an older release on this route); the root instance gone with one of the same
     // name in another namespace leaves the root record not installed.
