@@ -179,6 +179,18 @@ describe('snapshot helper failure isolation', () => {
     await expect(oversized).resolves.toBeNull();
   });
 
+  // Unit: the display-routing suite mocks capture(), so exercise the actual
+  // verification and ICC filtering with one pixel from the helper's stdout.
+  it.each([true, false])('requires a verified color path and drops the HDR monitor ICC (HDR marker: %s)', async marked => {
+    const capture = helper.capture({ x: 0, y: 0, width: 1, height: 1 }, 960, 'verify-sdr');
+    const header = { id: 1, encoding: 'bgra', width: 1, height: 1, byteLength: 4,
+      icc: 'AQID', sdrVerified: false, ...(marked && { sdrFromHdr: true }) };
+    const pixels = Buffer.from([32, 32, 32, 255]);
+    child.stdout.write(Buffer.concat([Buffer.from(JSON.stringify(header) + '\n'), pixels]));
+    await expect(capture).resolves.toEqual(marked
+      ? { width: 1, height: 1, data: new Uint8Array(pixels), sdrFromHdr: true } : null);
+  });
+
   // Binary transport contract: SnapshotHelper.capture must survive arbitrary
   // pipe chunks, pixel bytes containing LF, and a following JSON reply. Existing
   // coverage only exercises base64 lines. Minimal input: a split 2x2 BGRA frame;

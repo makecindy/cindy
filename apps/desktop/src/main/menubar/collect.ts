@@ -1,3 +1,4 @@
+import { isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { isZhipuCodingPlanRoute, type ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
 import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
@@ -25,12 +26,12 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
-import { familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
+import { ANTIGRAVITY_LOGO, familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
 import {
   topModels,
   type MenubarBalanceInput,
@@ -159,7 +160,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         return accounts;
       }
     }
-    const kind = providerWeeklyQuotaSource(provider);
+    const kind = providerUsageReaderSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
@@ -215,7 +216,11 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     },
   };
 
-  const tasks = await collectTasks(deps, localUsage, today, safe);
+  const antigravityProviders = new Set(pluginEngines.filter(isAntigravityEngine).map(engine => engine.providerId));
+  const tasks = (await collectTasks(deps, localUsage, today, safe)).map(task =>
+    task.harness === 'acp' && task.providerId && antigravityProviders.has(task.providerId)
+      ? { ...task, logoSvg: ANTIGRAVITY_LOGO }
+      : task);
   const consuming = consumingSourceIds(tasks, providers, pluginEngines);
   const collectedAt = deps.now?.() ?? deps.nowMs;
   for (const source of sources) {
@@ -651,6 +656,7 @@ export function dayKeysEndingAt(todayKey: string, count: number): string[] {
 }
 
 function harnessOf(kind: string | null | undefined): MenubarHarness {
+  if (kind === 'acp') return kind;
   return HARNESSES.includes(kind as MenubarHarness) ? (kind as MenubarHarness) : 'claude-code';
 }
 
@@ -709,11 +715,17 @@ export function usageScope(
       continue;
     }
     const harness = harnessOf(row.agentKind);
-    const slot = HARNESSES.indexOf(harness);
     const money = finite(row.money?.amount);
-    daily.money[slot] += money;
-    daily.tokens[slot] += finite(row.tokens);
-    daily.paid += finite(row.apiMoney?.amount);
+    if (harness === 'acp') {
+      // Keep the three built-in slots and the existing auxiliary slot stable for older clients.
+      daily.tokens[3] ??= 0;
+      daily.tokens[4] = (daily.tokens[4] ?? 0) + finite(row.tokens);
+    } else {
+      const slot = HARNESSES.indexOf(harness);
+      daily.money[slot] += money;
+      daily.tokens[slot] += finite(row.tokens);
+      daily.paid += finite(row.apiMoney?.amount);
+    }
     const age = days.length - 1 - index;
     for (const window of windows) {
       if (age < Number(window)) {
@@ -737,18 +749,19 @@ function modelSeries(
   label: (model: string) => string,
 ): MenubarModelSeries {
   type Entry = { harness: MenubarHarness | 'auxiliary'; money: number[]; tokens: number[]; recent: number };
-  const byModel = new Map<string, Entry>();
+  const byModel = new Map<string, Entry & { name: string }>();
   for (const row of payload.modelDaily) {
     const index = indexOfDay.get(row.day);
     if (index === undefined) continue;
     const name = label(row.model);
-    const entry = byModel.get(name)
-      ?? { harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+    const key = row.agentKind === 'acp' ? `acp\u0000${name}` : name;
+    const entry = byModel.get(key)
+      ?? { name, harness: row.agentKind === 'auxiliary' ? 'auxiliary' : harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
     const tokens = finite(row.tokens);
     entry.money[index] += finite(row.money?.amount);
     entry.tokens[index] += tokens;
     if (dayCount - 1 - index < SERIES_DAYS) entry.recent += tokens;
-    byModel.set(name, entry);
+    byModel.set(key, entry);
   }
   const ranked = [...byModel.entries()].filter(([, entry]) => entry.recent > 0).sort((a, b) => b[1].recent - a[1].recent);
   const top = ranked.slice(0, SERIES_MODELS).map(([, entry]) => entry);
@@ -758,7 +771,7 @@ function modelSeries(
     rest.reduce((sum, entry) => sum + pick(entry)[day], 0),
   ]);
   return {
-    models: ranked.slice(0, SERIES_MODELS).map(([name, entry]) => ({ name, harness: entry.harness })),
+    models: top.map(({ name, harness }) => ({ name, harness })),
     daily: split((entry) => entry.money),
     tokens: split((entry) => entry.tokens),
   };
@@ -807,7 +820,7 @@ async function collectTasks(
   const meta = new Map((usage?.tasks ?? []).filter((task) => task.deviceId === 'local').map((task) => [task.sessionId, task]));
   const rates = new Map<string, { money: number; tokens: number; harness: MenubarHarness }>();
   for (const row of usage?.modelDaily ?? []) {
-    if (row.agentKind === 'auxiliary') continue;
+    if (row.agentKind === 'auxiliary' || row.agentKind === 'acp') continue;
     if (row.day !== today) continue;
     const rate = rates.get(row.model) ?? { money: 0, tokens: 0, harness: harnessOf(row.agentKind) };
     rate.money += finite(row.money?.amount);
@@ -841,14 +854,15 @@ async function collectTasks(
         if (!title && !model) return null;
         const tokens = tokensBySession.get(sessionId) ?? 0;
         const rate = rates.get(model);
+        const harness = harnessOf(row?.agentKind ?? rate?.harness);
         const running = activity ? isSessionActivityRunning(activity) : false;
         return {
           sessionId,
           title,
-          harness: harnessOf(row?.agentKind ?? rate?.harness),
+          harness,
           model: model ? formatModelShort(model) : '',
           tokensToday: tokens,
-          valueToday: rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
+          valueToday: harness !== 'acp' && rate && rate.tokens > 0 ? ((conversationTokensBySession.get(sessionId) ?? 0) * rate.money) / rate.tokens : 0,
           contextPercent: info && info.contextWindow > 0 ? clampPercent((info.contextTokens / info.contextWindow) * 100) : null,
           running,
           startedAtMs: running ? (activity?.startedAtMs ?? null) : null,
@@ -923,7 +937,7 @@ function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult 
  * collapse into one tube when their percentages or reset times happen to match.
  */
 export function pluginEngineSource(
-  engine: Pick<PluginEngineView, 'key' | 'providerId' | 'name'>,
+  engine: Pick<PluginEngineView, 'key' | 'providerId' | 'name'> & Partial<Pick<PluginEngineView, 'ghostId'>>,
   usage: GhostHarnessUsage | null,
   nowMs: number,
   scopeKey = 'local',
@@ -946,7 +960,8 @@ export function pluginEngineSource(
     id: engine.providerId,
     providerId: engine.providerId,
     family: 'plugin',
-    logoSvg: monogramLogo(engine.name),
+    logoSvg: isAntigravityEngine(engine)
+      ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
     plan: null,

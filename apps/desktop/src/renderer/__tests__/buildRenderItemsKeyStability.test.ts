@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { attachBotStartedTasks } from '../components/chat/BotStartedTasks';
 import {
   assistantHasFollowingUserBoundary,
+  botProcessItems,
   buildRenderItems,
   collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
@@ -28,6 +29,9 @@ import {
   isGeneratedFilesTurnSealed,
   findRestorableViewportItemIdx,
   renderItemContainsClientId,
+  renderWindowFloorClientId,
+  resolveViewportRestoreMessage,
+  restoreClientIdForItem,
   groupWorkRuns,
   insertForkOriginItem,
   isScrollNavigationKey,
@@ -56,6 +60,68 @@ const mkAssistant = (id: string, content = 'ok'): ChatMessage => ({
   clientId: id,
   role: 'assistant',
   content,
+});
+
+// Unit regression for #7594: the production companion projection used to show
+// one separator per legacy row. Existing anchor tests never folded this card type.
+describe('legacy companion context rebuild cards', () => {
+  const card = (
+    id: string,
+    handoff = 'Same handoff',
+    reason = 'idle-gap',
+    minute = 0,
+  ): ChatMessage => ({
+    ...mkAssistant(id, ''),
+    createdAt: new Date(Date.UTC(2026, 9, 28, 0, minute)).toISOString(),
+    systemCardType: 'context-rebuild',
+    systemCardData: { reason, handoff },
+  });
+
+  const project = (messages: ChatMessage[]) =>
+    botProcessItems(groupWorkRuns(buildRenderItems(messages).items, false), false);
+
+  it('coalesces repeated history while retaining every original scroll target after a prepend', () => {
+    const rows = Array.from({ length: 15 }, (_, index) => card(`old-${index}`));
+    const tail = project(rows.slice(-1));
+    const full = project(rows);
+    expect(collectDeleteAnchorClientIds(full)).toEqual(['old-14']);
+    expect(collectDeleteAnchorClientIds(full, true)).toEqual(rows.map((row) => row.clientId));
+    expect(restoreClientIdForItem(full[0]!)).toBe('old-14');
+    expect(renderWindowFloorClientId(full)).toBe('old-0');
+    expect(findRestorableViewportItemIdx(full, tail[0]!.key)).toBe(0);
+    expect(findRestorableViewportItemIdx(full, 'work-journal-old-0')).toBe(0);
+    for (const row of rows) {
+      expect(findRestorableViewportItemIdx(full, `msg-${row.clientId}`)).toBe(0);
+      expect(renderItemContainsClientId(full[0]!, row.clientId)).toBe(true);
+    }
+    expect(rows[0]?.systemCardType).toBe('context-rebuild');
+  });
+
+  it('reopens a saved duplicate-card position at its representative or the journal header', () => {
+    const [journal] = project([card('old-first'), card('old-last')]);
+    const saved = { viewportTopKey: journal!.key, offset: 350, messageOffset: 6 };
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-first' }, 80))
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 0 });
+    expect(resolveViewportRestoreMessage(journal!, saved, 80))
+      .toEqual({ clientId: undefined, itemOffset: 0, messageOffset: 6 });
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, messageClientId: 'old-last' }, 80))
+      .toEqual({ clientId: 'old-last', itemOffset: 0, messageOffset: 6 });
+    expect(resolveViewportRestoreMessage(journal!, { ...saved, offset: -6 }, 80))
+      .toEqual({ clientId: undefined, itemOffset: -6, messageOffset: 6 });
+  });
+
+  it('retains prose, distinct handoffs, other recovery cards and unloaded history boundaries', () => {
+    const rows = [
+      card('before'),
+      mkUser('real-message'),
+      card('after'),
+      card('different', 'Different handoff'),
+      card('overflow', 'Different handoff', 'context-overflow'),
+      card('last-loaded'),
+      card('separate-window', 'Same handoff', 'idle-gap', 60),
+    ];
+    expect(collectDeleteAnchorClientIds(project(rows))).toEqual(rows.map((row) => row.clientId));
+  });
 });
 
 it('keeps persistent Cindy Make progress visible in the message timeline', () => {

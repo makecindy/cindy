@@ -25,6 +25,8 @@ import { nativeToolMediaFields, type NativeToolMedia } from '@cindy/maker-shared
 
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -731,6 +733,9 @@ export function translateItemNotification(
     case 'hookPrompt':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
+    //   sleep:        codex 的 clock.sleep 长等待通知（轮询工具自带），无 UI 概念；
+    //                 落 default 会每条约一条 unhandled warning，长任务刷满日志
+    case 'sleep':
       return;
     default:
       ctx.log.warn('unhandled item type', { phase, itemType });
@@ -938,9 +943,11 @@ export function isCodexModelUnavailableError(
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
-  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
-    || tag === 'serverOverloaded' || tag === 'internalServerError'
-    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
+  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'rateLimitExceeded'
+    || tag === 'sessionBudgetExceeded' || tag === 'serverOverloaded' || tag === 'internalServerError'
+    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy'
+    || tag === 'misalignmentPolicyViolation') return false;
+  if (isProviderSafetyRefusalError(message) || isProviderSafetyRefusalError(details)) return false;
   const httpInfo: { httpStatusCode?: number | null } | undefined =
     info && typeof info === 'object' && (tag === 'httpConnectionFailed' ||
       tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected' ||
@@ -1021,31 +1028,40 @@ export function classifyCodexError(
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
     signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+  const isSafetyRefusal =
+    errorInfoTag === 'cyberPolicy' ||
+    errorInfoTag === 'misalignmentPolicyViolation' ||
+    isProviderSafetyRefusalError(message) ||
+    isProviderSafetyRefusalError(additionalDetails);
+  const overload = isSafetyRefusal
+    ? null
+    : parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
   // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
   // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
-  const usageLimit = signals.usageLimit && overload === null;
-  const additionalDetails =
-    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
-  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
-  const reason = isCapacityError
-    ? UPSTREAM_OVERLOAD_REASON
-    : isRemoteCompactEncryptedContentError(compactClassifyText)
-      ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
-      : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
-        ? CONTEXT_OVERFLOW_REASON
-        // Preserve a diagnosis that native only provided inside its exhausted
-        // transport wrapper. This reason is presentation-only: upstream-overload
-        // and errorStatus=529 also authorize host/goal retries. Do not promote
-        // nested diagnostics into those control signals or expose the body.
-        // Restrict this to the confirmed opaque stream wrapper; recognized
-        // timeout/network messages retain their existing recovery policy.
-        : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
-          && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
-          ? 'UPSTREAM_OVERLOADED'
-          : undefined;
+  const usageLimit = !isSafetyRefusal && signals.usageLimit && overload === null;
+  const reason = isSafetyRefusal
+    ? PROVIDER_SAFETY_REFUSAL_REASON
+    : isCapacityError
+      ? UPSTREAM_OVERLOAD_REASON
+      : isRemoteCompactEncryptedContentError(compactClassifyText)
+        ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
+        : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+          ? CONTEXT_OVERFLOW_REASON
+          // Preserve a diagnosis that native only provided inside its exhausted
+          // transport wrapper. This reason is presentation-only: upstream-overload
+          // and errorStatus=529 also authorize host/goal retries. Do not promote
+          // nested diagnostics into those control signals or expose the body.
+          // Restrict this to the confirmed opaque stream wrapper; recognized
+          // timeout/network messages retain their existing recovery policy.
+          : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+            && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+            ? 'UPSTREAM_OVERLOADED'
+            : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),

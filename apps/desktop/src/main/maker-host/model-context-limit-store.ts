@@ -1,3 +1,4 @@
+import path from 'node:path';
 /**
  * model-context-limit-store —— 「单模型上下文上限」override 的持久化(main 侧唯一真源)。
  *
@@ -40,6 +41,7 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
+import { inspectSettingsJson, isSettingsRecord } from './inspect-settings-json.js';
 
 const log = desktopMakerLogger.child('model-context-limit');
 
@@ -136,6 +138,17 @@ function readPrefs(): ModelContextLimitPrefs {
   // 隐藏配置层级的文件也是正式契约:mtime 守卫让「直接手改文件」在下一次读取生效。
   store.invalidateIfChanged();
   return store.read();
+}
+
+/** Only stored working-budget overrides; never resolves live model credentials/capacity. */
+export function inspectModelContextLimits(ownerRoot: string) {
+  return inspectSettingsJson(path.join(ownerRoot, 'model-context-limit-prefs.json'), (raw) => {
+    if (raw.limits !== undefined && (!isSettingsRecord(raw.limits) || Object.keys(raw.limits).length > MAX_ENTRIES ||
+      Object.entries(raw.limits).some(([key, value]) => !key || clampLimit(value) === null))) throw new Error('invalid limits');
+    const value = normalize(raw);
+    if (isSettingsRecord(raw.limits) && Object.keys(raw.limits).length !== Object.keys(value.limits).length) throw new Error('unrepresentable context key');
+    return value;
+  });
 }
 
 /** 全部 override 快照。 */
@@ -363,3 +376,6 @@ export const __testing = {
     store.invalidateIfChanged();
   },
 };
+
+/** Internal adapter; the native readers and this editor share persistence. */
+export function getHostModelContextStore() { return store; }

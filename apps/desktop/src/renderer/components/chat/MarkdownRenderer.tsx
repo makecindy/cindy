@@ -42,9 +42,12 @@ import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
+  RAW_IMAGE_TARGET_PROP,
   RAW_LOCAL_IMAGE_SRC_PROP,
   RAW_LOCAL_LINK_HREF_PROP,
 } from './remarkPreserveRawLocalDestinations';
+import { replySectionId, type GalleryOccurrence } from './ImageGalleryContext';
+import { markdownImageOccurrence } from './markdownImageTargets';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
@@ -376,6 +379,13 @@ const allowlistedImageUrlTransform: UrlTransform = (url, key) => {
 
 interface MarkdownRendererProps {
   renderRichAnswers?: boolean;
+  /**
+   * The reply's client id. With it, an image shown more than once in the reply
+   * opens the task image gallery at the copy that was clicked (replySectionId).
+   */
+  galleryMessageKey?: string;
+  /** Internal: replySectionId of the part / component node this renderer shows. */
+  gallerySection?: string;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -644,7 +654,7 @@ const baseComponents: Components = {
   table({ children, ...props }) {
     return (
       <CopyAsImageBlock
-        className="my-3"
+        className="my-3 w-[var(--cindy-markdown-table-width,100%)] max-w-full"
         contentClassName="overflow-x-auto"
         extractPlainText={tableToTsv}
       >
@@ -683,6 +693,9 @@ const baseComponents: Components = {
           // overflow-x-auto 横滚 + .is-scrolling 自动隐藏滚动条,
           // 视觉上像被右边截断。anywhere 让浏览器在任意位置可断行。
           'break-words [overflow-wrap:anywhere]',
+          // In narrow task panes, keep column labels readable and let the
+          // existing table scrollport contain columns that no longer fit.
+          '[.chat-rail-compact_&]:whitespace-nowrap',
         )}
         {...props}
       >
@@ -908,6 +921,33 @@ function markdownMediaOrigin(
   workingDir: string,
 ): RemoteMediaOrigin | undefined {
   return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
+}
+
+export interface MarkdownImageAddressOptions {
+  workingDir: string;
+  allowPrivilegedLinks: boolean;
+  remoteMediaOrigin: RemoteMediaOrigin | undefined;
+  /** A task message whose local ownership is not confirmed yet. */
+  ownershipPending: boolean;
+}
+
+/**
+ * Loadable address of an embedded image once its workspace path is settled.
+ * The reply renderer and the task image gallery share this derivation so a
+ * clicked reply image is found among the gallery entries.
+ */
+export function markdownImageAddress(
+  localSrc: string | undefined,
+  options: MarkdownImageAddressOptions,
+): { normalized: string | undefined; mediaOrigin: RemoteMediaOrigin | undefined } {
+  const mediaOrigin = markdownMediaOrigin(localSrc, options.remoteMediaOrigin, options.workingDir);
+  const normalized = normalizeMarkdownImageSrc(
+    localSrc,
+    options.workingDir,
+    options.allowPrivilegedLinks,
+    mediaOrigin ?? (options.ownershipPending ? null : undefined),
+  );
+  return { normalized, mediaOrigin };
 }
 
 /**
@@ -1860,6 +1900,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   resolveImageSrc,
   emitSourceLines = false,
+  gallerySection,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1905,7 +1946,23 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : [{ start: 0, content: renderedContent }],
     [emitSourceLines, isStreaming, renderedContent],
   );
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    galleryTarget?: string;
+    galleryOccurrence?: GalleryOccurrence;
+  } | null>(null);
+  // Links and chips open a single image; only embedded reply images carry a gallery target.
+  const setLightboxSrc = useCallback((src: string | null) => setLightbox(src ? { src } : null), []);
+  // Which repeat of an image was clicked, in the reply section the gallery lists it
+  // under. Read at click time: positions refer to the rendered text.
+  const occurrenceSourceRef = useRef({ section: gallerySection, rendered: repairedContent });
+  occurrenceSourceRef.current = { section: gallerySection, rendered: repairedContent };
+  const clickedOccurrence = useCallback((target: string, offset: number | undefined) => {
+    const { section, rendered } = occurrenceSourceRef.current;
+    if (offset === undefined || section === undefined) return undefined;
+    const index = markdownImageOccurrence(rendered, target, offset);
+    return index === undefined ? undefined : { section, index };
+  }, []);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地
   // 会话 → undefined,改写为 no-op。origin 从 ChatSessionFileContext 取(provider
@@ -1948,25 +2005,37 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
+        const rawTarget = node?.properties?.[RAW_IMAGE_TARGET_PROP];
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
+        delete (imageProps as Record<string, unknown>)[RAW_IMAGE_TARGET_PROP];
+        // Task reply images browse the task's image gallery, identified by the
+        // destination as written (`src` arrives re-encoded for URLs). File
+        // previews (no task id) keep the single-image viewer.
+        const galleryTarget =
+          currentSessionId && typeof rawTarget === 'string' && rawTarget ? rawTarget : undefined;
+        const sourceOffset = node?.position?.start.offset;
         if (resolveImageSrc) {
           const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
           return resolved ? (
             <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
           ) : null;
         }
+        const writtenSrc = typeof rawLocalSrc === 'string' ? rawLocalSrc : src;
         return (
           <WorkspaceMediaSrc
-            src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
+            src={writtenSrc}
             workingDir={workingDir}
             enabled={resolveMediaInWorkspace}
             streaming={embeddedMediaStreaming}
           >
             {(localSrc) => {
-              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
-              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks,
-                mediaOrigin ?? (currentSessionId && sessionFileCtx.localConfirmed !== true ? null : undefined));
+              const { normalized, mediaOrigin } = markdownImageAddress(localSrc, {
+                workingDir,
+                allowPrivilegedLinks,
+                remoteMediaOrigin,
+                ownershipPending: Boolean(currentSessionId) && sessionFileCtx.localConfirmed !== true,
+              });
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
@@ -1984,7 +2053,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                   streaming={isStreaming}
                   src={normalized ? rewriteToRemoteMediaOrigin(normalized, mediaOrigin) : normalized}
                   alt={alt}
-                  onZoom={setLightboxSrc}
+                  onZoom={(clicked) =>
+                    setLightbox({
+                      src: clicked,
+                      galleryTarget,
+                      galleryOccurrence: galleryTarget ? clickedOccurrence(galleryTarget, sourceOffset) : undefined,
+                    })}
                   {...imageProps}
                   allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
@@ -2166,8 +2240,14 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           {renderedContent}
         </ReactMarkdown>
       )}
-      {lightboxSrc && (
-        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      {lightbox && (
+        <ImageLightbox
+          src={lightbox.src}
+          galleryTarget={lightbox.galleryTarget}
+          galleryOccurrence={lightbox.galleryOccurrence}
+          enableGallery={lightbox.galleryTarget !== undefined}
+          onClose={() => setLightbox(null)}
+        />
       )}
       {/* ADR-4: triggerRef intentionally omitted — markdown links rendered by
           react-markdown have no stable button ref; TextLightbox falls back
@@ -2196,8 +2276,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
-  const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
+  const section = (partKey: number, nodeId?: string) =>
+    props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
+  const renderMediaFor = (partKey: number) => (node: RichNode) => {
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} gallerySection={section(partKey, node.id)} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
@@ -2223,10 +2305,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  // A reply without component blocks is one plain part starting at offset 0.
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} gallerySection={section(0)} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
-    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
+    ? <RichAnswer renderMedia={renderMediaFor(part.key)} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} gallerySection={section(part.key, id)} />} />
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} gallerySection={section(part.key)} />)}</div>;
 });

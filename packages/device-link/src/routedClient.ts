@@ -458,6 +458,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       connection => connection.onInboundPeerReleased(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
   }
 
+  override onPeerSendProgress(cb: (peer: string) => void): () => void {
+    return this.both(super.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(this, peer)) cb(peer); }),
+      connection => connection.onPeerSendProgress(peer => { if (this.acceptsScopedEvent(connection, peer)) cb(peer); }));
+  }
+
   override onReliableFrameBeforeLink(cb: (deviceId: string) => unknown): () => void {
     return this.both(super.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(this, peer) ? cb(peer) : undefined),
       connection => connection.onReliableFrameBeforeLink(peer => this.acceptsScopedEvent(connection, peer) ? cb(peer) : undefined));
@@ -501,6 +506,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.routed(dst)?.getReliableSendQueueDepth(dst) ?? super.getReliableSendQueueDepth(dst);
   }
 
+  override hasReliableSendProgress(dst: string): boolean {
+    return this.routed(dst)?.hasReliableSendProgress(dst) ?? super.hasReliableSendProgress(dst);
+  }
+
   /** 两条连接上的链路合在一起；跨账号 peer 只在专用连接上。relay 往返不覆盖：它是主连接的。 */
   override getPeerLinkSnapshots(): DeviceLinkPeerLinkSnapshot[] {
     const own = super.getPeerLinkSnapshots().filter((s) => this.routed(s.deviceId) === null);
@@ -539,7 +548,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    options?: Parameters<DeviceLinkClient['invoke']>[3],
   ): Promise<InvokeResultPayload> {
     return this.routed(dst)?.invoke(dst, payload, timeoutMs, options) ?? super.invoke(dst, payload, timeoutMs, options);
   }

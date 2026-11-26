@@ -1,4 +1,5 @@
 import { isLegacyGptContextProfile } from './legacy-context-profiles.js';
+import { findContextWindowModels } from '../../shared/sessionContextWindow.js';
 /**
  * catalog-to-descriptors —— 把 @cindy/model-providers 目录派生成 maker-core 的 per-agent
  * availableModels（ModelDescriptor[]）。
@@ -225,7 +226,7 @@ export function resolveModelContextProviderId(
   }
   if (providerId) return providerId;
   const candidates = catalog.providers.filter((provider) => provider.routing[agent]?.disabled !== true &&
-    provider.models[agent]?.some((model) => model.id === modelId));
+    findContextWindowModels(provider, agent, modelId).length > 0);
   if (candidates.length === 1) return candidates[0]!.id;
   return implicitDefaultProviderId && candidates.some((provider) => provider.id === implicitDefaultProviderId)
     ? implicitDefaultProviderId : null;

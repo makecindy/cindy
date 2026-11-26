@@ -526,6 +526,7 @@ export function sessionPatchToRow(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string | null;
@@ -556,8 +557,11 @@ export function sessionPatchToRow(
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   // Move controls explicitly set workspaceKind; an execution-only cwd update
   // (e.g. attaching a worktree) must preserve the chosen project.
-  if (patch.workspaceKind === 'dialogue'
-    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
+  if (patch.projectDir !== undefined) {
+    out.projectDir = normalizeWorkingDirForStorage(patch.projectDir);
+  } else if (patch.workspaceKind === 'dialogue' || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) {
+    out.projectDir = null;
+  }
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
     ? ('' as SessionInsert['effort'])
@@ -592,6 +596,37 @@ export function sessionPatchToRow(
   return out;
 }
 
+/**
+ * 序列化 messages.agent_meta：省略事件准备阶段每轮附带的默认 false 标记
+ * （`botPrivateReply: false`、`botTaskCoordination: false`），空对象收敛为 NULL。
+ * 实时事件流仍保留显式 false 供渲染层与提醒覆盖上一轮状态；持久层所有查询与历史
+ * 加载对缺省与 false 语义一致，不省略 `samplingAttemptPending: false` 或
+ * `turnCompleted: false` 这类显式终态覆盖字段。
+ */
+export function serializePersistedAgentMeta(
+  agentMeta: AgentMeta | Record<string, unknown> | null | undefined,
+): string | null {
+  if (agentMeta === undefined || agentMeta === null) return null;
+  if (typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return safeStringify(agentMeta);
+  }
+  const source = agentMeta as Record<string, unknown>;
+  if (source.botPrivateReply !== false && source.botTaskCoordination !== false) {
+    const serialized = safeStringify(source);
+    return serialized === '{}' ? null : serialized;
+  }
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if ((key === 'botPrivateReply' || key === 'botTaskCoordination') && value === false) {
+      continue;
+    }
+    compact[key] = value;
+  }
+  const serialized = safeStringify(compact);
+  return serialized === '{}' ? null : serialized;
+}
+
 /** Message create 入口字段映射。content / agentMeta 序列化为 JSON 字符串。 */
 export function messageCreateToRow(
   id: string,
@@ -614,10 +649,7 @@ export function messageCreateToRow(
     role: body.role as MessageInsert['role'],
     content: safeStringify(body.content),
     toolUseId: body.toolUseId ?? null,
-    agentMeta:
-      body.agentMeta === undefined || body.agentMeta === null
-        ? null
-        : safeStringify(body.agentMeta),
+    agentMeta: serializePersistedAgentMeta(body.agentMeta),
     agentKind: body.agentKind ?? null,
     createdAt: body.createdAt ?? now,
   };
@@ -1116,6 +1148,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
     triggerSource: r.triggerSource ?? null,
+    mrObservation: r.mrObservation ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

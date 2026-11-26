@@ -73,6 +73,20 @@ describe('plugin install confirmation card', () => {
     });
   });
 
+  it.each([
+    ['custom-market', undefined, 'settings.ghosts.installConsent.customMarketSourceNotice'],
+    ['local-file', undefined, 'settings.ghosts.installConsent.localFileSourceNotice'],
+    ['market', true, 'settings.ghosts.market.communityDisclaimer'],
+  ] as const)('puts the %s source notice before the permission list', (origin, communityMarket, key) => {
+    const notice = 'Review the source before installing.';
+    const text = renderGhostInstallConsentText({ ...INSTALL, origin, communityMarket }, name =>
+      name === key ? notice : translate(name),
+    );
+    expect(text.description.split('\n').slice(1)).toEqual([
+      'Confirm to install.', notice, 'It will have:', '• Reach api.weather.test',
+    ]);
+  });
+
   it('shows only what changes for an update', () => {
     const text = renderGhostInstallConsentText(
       {

@@ -142,7 +142,7 @@ function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalReco
  * 可控假 runner: run 挂起直到测试显式 resolve —— 用于验证排队;
  * sessions 表模拟 inspect。
  */
-function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean }> }) {
+function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean; companionOwned?: boolean }> }) {
   const sessions = opts?.sessions ?? {};
   const calls: HookRunRequest[] = [];
   const resolvers: Array<(o: HookRunOutcome) => void> = [];
@@ -318,6 +318,86 @@ describe('任务失败原因进主日志(issue #5912)', () => {
 
     expect(log.warn).toHaveBeenCalledWith('hook task req-other failed: im=none via=outcome reason=unclassified');
     expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/someone');
+    d.dispose();
+  });
+
+  // Hook main logs must classify known structured maker-core failure reasons (such as
+  // codex_reconnect_stalled and upstream-overload) instead of logging reason=unclassified,
+  // while still blocking arbitrary paths or unknown strings from leaking into logs (unit tier).
+  it.each([
+    {
+      requestId: 'req-stall',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+        errorReason: 'codex_reconnect_stalled',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-overload-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: '⚠️ 模型服务繁忙：上游暂时没有可用容量。',
+        errorReason: 'upstream-overload',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-upper',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'stream disconnected before completion',
+        errorReason: 'UPSTREAM_OVERLOADED',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'Selected model is at capacity. Please try a different model.',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-stall-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-unknown-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'secret /Users/dash/private.txt',
+        errorReason: 'custom/unsafe/reason',
+      },
+      expectedReason: 'unclassified',
+    },
+  ])('classifies hook failure log reason for $requestId -> $expectedReason', async ({ requestId, outcome, expectedReason }) => {
+    const fr = fakeRunner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner: fr.runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId, source: { im: 'feishu' } }), c.send);
+    await tick();
+    fr.finish(outcome);
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `hook task ${requestId} failed: im=feishu via=outcome reason=${expectedReason}`,
+    );
+    expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/dash');
     d.dispose();
   });
 });
@@ -1839,6 +1919,20 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  // PR #12405 (unit): a permitted directory may hold a teammate's private session.
+  // Exercise both routes through dispatch; the directory-only tests have no private session.
+  it.each([true, false])('rejects a private teammate session inside an allowed project (explicit=%s)', async explicit => {
+    const fr = fakeRunner({ sessions: { buddy: { workingDir: WS_DIR, usable: true, companionOwned: true } } });
+    const bindings = memoryBindings();
+    if (!explicit) bindings.set('conn-1', 'team-slack:C1:1.1', 'buddy');
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ sessionId: explicit ? 'buddy' : null }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'rejected', reason: 'workspace_not_allowed' });
+    expect(fr.calls).toHaveLength(0);
   });
 
   it('接管白名单按 inspect 完成后的当前映射判定', async () => {

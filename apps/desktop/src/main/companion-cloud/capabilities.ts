@@ -129,7 +129,7 @@ export function parseCompanionCapabilities(raw: unknown): CompanionCapabilitiesV
 }
 
 /** What the new home could not keep of the old setup; shown once as a line after the move. */
-export type CompanionArrivalNotice = 'permissions' | 'model';
+export type CompanionArrivalNotice = 'permissions' | 'model' | 'model_setup' | 'partial_content';
 
 /**
  * The settings patch for `updateBotProfile` from a cloud value and the routes usable here. Only called
