@@ -69,6 +69,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { makerChatStore } from '@/lib/makerChatStore';
+import { dismissError } from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 
 const MODEL = 'claude-opus-4-7';
@@ -789,22 +790,37 @@ describe('isLocalSentUserMessage (#2194)', () => {
     expect(makerChatStore.isLocalSentUserMessage(sid, 'qh-2')).toBe(false);
   });
 
-  it('stale Retry keeps the live error available when Main reports no recovery', async () => {
-    const sid = `retry-stale-${Math.random().toString(36).slice(2, 8)}`;
+  it.each([
+    { outcome: 'superseded', retryHead: null, retainsError: true },
+    { outcome: 'cleared concurrently', retryHead: null, retainsError: false },
+    { outcome: 'resent', retryHead: queuedItem('clone', 'original', { supersedesUserClientId: 'failed-input' }), retainsError: false },
+    { outcome: 'continued', retryHead: {
+      ...queuedItem('continue', 'continue', { originalSyntheticTrigger: 'continue' }),
+      retrySourceClientId: 'failed-input',
+    }, retainsError: false },
+  ])('Retry disposes the clicked history row only on confirmed recovery ($outcome)', async ({ retryHead, retainsError }) => {
+    const sid = `retry-row-${crypto.randomUUID()}`;
     makerChatStore.initGlobalListeners();
-    const recovery = { kind: 'active-turn' as const, item: queuedItem('failed-stale', 'original') };
     const failed = projection(sid, {
       error: 'codex reconnect stalled',
-      recovery,
+      recovery: { kind: 'active-turn', item: queuedItem('failed-input', 'original') },
       errorPersistId: 'error-stale',
     });
     projectionHandler!(failed);
-    retryLastError.mockResolvedValueOnce(failed);
+    retryLastError.mockResolvedValueOnce(retainsError ? failed : projection(sid, {
+      pendingQueue: retryHead ? [retryHead] : [],
+    }));
 
     await makerChatStore.retryLastError(sid);
 
-    expect(makerChatStore.getSnapshot(sid).disposedErrorPersistId).toBeNull();
-    expect(makerChatStore.getSnapshot(sid).error).toBe('codex reconnect stalled');
+    if (retryHead) {
+      expect(dismissError).toHaveBeenCalledWith(sid, 'error-stale');
+    } else {
+      expect(dismissError).not.toHaveBeenCalledWith(sid, 'error-stale');
+    }
+    if (retainsError) {
+      expect(makerChatStore.getSnapshot(sid).error).toBe('codex reconnect stalled');
+    }
   });
 
   // Codex review P1（第十五轮）: active-turn 人工 Retry 的产物由 main 在返回
