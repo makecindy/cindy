@@ -7122,7 +7122,14 @@
           "routeUnavailable": "無法使用",
           "routeMeasuring": "測速中…",
           "routeDirectUnavailableHint": "目前網路無法直連此裝置",
-          "routePreferenceFailed": "切換線路失敗，請重試"
+          "routePreferenceFailed": "切換線路失敗，請重試",
+          "autoRule": {
+            "title": "自動選路規則",
+            "faster": "優先選擇延遲更低的路線，低延遲微差時偏好直連。",
+            "thresholds": "中轉比直連快 25–50 ms 以上自動切到中轉；直連恢復至相差 15 ms 以內時切回直連。",
+            "cooldown": "常規切換間隔 30 秒防抖；目前路線大幅劣化（慢 2 倍且超 100 ms）時立即切換。",
+            "peerOverride": "若對端手動鎖定了直連或中轉，或對端版本較舊，則以對端設定或能力為準。"
+          }
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7269,6 +7276,99 @@
             "noUpdate": "「{{name}}」目前沒有可安裝的新版本",
             "busy": "「{{name}}」正在執行另一次更新，請稍後再試",
             "failed": "未能更新「{{name}}」上的 Cindy"
+          }
+        },
+        "tabs": {
+          "aria": "拓撲檢視",
+          "devices": "裝置連線",
+          "providers": "遠端供應商"
+        },
+        "providers": {
+          "empty": "目前沒有正在執行的遠端供應商任務。發起任務時選擇其他電腦或分享來的供應商，執行期間會在此即時顯示任務、中轉與遠端機器的連線路徑。",
+          "noMatch": "沒有符合目前篩選條件的任務、機器或中轉。",
+          "searchPlaceholder": "搜尋任務、機器或中轉…",
+          "clearFilter": "清除篩選",
+          "expand": "展開",
+          "collapse": "收合",
+          "groupTitle": "{{provider}} 供應商群組",
+          "groupCount": "共 {{count}} 台",
+          "groupIdleSummary": "其餘 {{count}} 台群組成員：{{online}} 線上 · {{offline}} 離線",
+          "filter": {
+            "aria": "依任務狀態篩選",
+            "all": "全部關聯任務 ({{count}})",
+            "running": "僅執行中 ({{count}})"
+          },
+          "columns": {
+            "tasks": "我的任務",
+            "path": "傳輸路徑",
+            "machines": "遠端供應商機器"
+          },
+          "usage": {
+            "remoteModel": "遠端模型",
+            "remoteTask": "遠端任務"
+          },
+          "bundle": {
+            "mixed": "{{running}} 個執行中 · {{ready}} 個就緒",
+            "runningOnly": "{{running}} 個執行中",
+            "readyOnly": "{{ready}} 個就緒",
+            "countBadge": "共 {{count}}",
+            "popoverTitle": "連結至 {{name}} 的任務 ({{count}})"
+          },
+          "badge": {
+            "own": "我的電腦",
+            "groupMember": "群組節點",
+            "share": "跨帳號分享",
+            "shareShort": "分享",
+            "shareGroup": "跨帳號分享群組 · {{count}} 台",
+            "shareGroupShort": "分享群組 · {{count}} 台"
+          },
+          "relayRole": {
+            "officialShort": "官方",
+            "selfHostedShort": "自建",
+            "sharerRelayShort": "分享方中轉",
+            "officialFull": "Cindy 官方中轉",
+            "selfHostedFull": "我的自建中轉",
+            "sharerRelayFull": "分享方自建中轉"
+          },
+          "status": {
+            "ready": "線上就緒",
+            "busy": "忙碌",
+            "paused": "已暫停",
+            "idle": "閒置",
+            "standby": "線上待命"
+          },
+          "machineLine": {
+            "live": "{{flow}} · 承載 {{count}} 個任務",
+            "ready": "已就緒 · 承載 {{count}} 個任務"
+          },
+          "popover": {
+            "models": "使用中模型",
+            "tasksCount": "承載任務 ({{count}})",
+            "clickToOpenHint": "點擊開啟任務",
+            "relayHost": "中轉位址",
+            "relayRegion": "區域",
+            "relayHop": "本機到中轉",
+            "relayLoad": "經此中轉",
+            "relayLoadValue": "{{machines}} 台機器 · {{tasks}} 個任務"
+          },
+          "idleStrip": {
+            "summary": "另有 {{count}} 台線上遠端供應商目前無任務呼叫",
+            "show": "展開閒置供應商",
+            "hide": "收合閒置供應商"
+          },
+          "stats": {
+            "empty": "目前無執行中的遠端供應商任務",
+            "tasks": "{{total}} 個任務",
+            "tasksWithRunning": "{{total}} 個任務（{{running}} 執行中）",
+            "machines": "{{active}} 台供應商機器",
+            "machinesWithTotal": "{{active}} 台活躍 / 共 {{total}} 台供應商機器",
+            "relays": "{{count}} 台中轉"
+          },
+          "legend": {
+            "live": "藍色流動虛線：正在收發訊息",
+            "ready": "綠色實線：Agent-Net 連線已就緒",
+            "busy": "橘點：任務執行中 / 機器忙碌",
+            "error": "紅色點線：無回應或已暫停"
           }
         }
       }
@@ -11991,6 +12091,8 @@
         "loadEarlierFailed": "更早的訊息沒能載入，請再試一次",
         "emptyTitle": "群聊裡還沒有訊息",
         "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
+        "emptyDescriptionWithAssistant": "可以 @Cindy，或從右上角邀請朋友和夥伴。",
+        "emptyDescriptionInvite": "可以從右上角邀請朋友和夥伴。",
         "roundEnded": "夥伴們說完了",
         "stepTag": "第 {{count}} 步",
         "sending": "傳送中",
@@ -12322,7 +12424,7 @@
         "loginRequired": "請先登入目前帳號，再重試。",
         "requestFailed": "暫時無法連線至群聊服務，請稍後重試。",
         "copyFailed": "複製失敗，請選取連結手動複製。",
-        "createDescription": "可以選擇夥伴，也可以先建立群組，再邀請朋友加入。",
+        "createDescription": "建立後可以邀請朋友和夥伴。",
         "settings": {
           "notifications": {
             "title": "訊息通知",
@@ -19182,6 +19284,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "在夥伴設定中選擇「{{restart}}」，可重建工作脈絡並保留歷史訊息。想單獨討論一件事，可以在訊息操作中選擇「{{startTopic}}」。",
     "viewSkillDetails": "查看技能詳情",
     "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入",
     "pluginSkillSetup": {
