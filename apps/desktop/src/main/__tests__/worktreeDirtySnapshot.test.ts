@@ -19,6 +19,7 @@ import {
   getAutoStashSha,
   getRestorableAutoStashSha,
   getSnapshotSha,
+  isIncompleteCheckoutWorktreeDirty,
   listNonReproducibleIgnoredFiles,
   restoreAutoStashToPreservedWorktree,
   snapshotRefForSession,
@@ -330,5 +331,39 @@ describe('getSnapshotSha / snapshotRefForSession', () => {
       .mockResolvedValueOnce({ stdout: `${SHA}\n`, stderr: '' });
 
     await expect(getRestorableAutoStashSha('/repo', 's1', 'wt1')).resolves.toBeNull();
+  });
+
+  // Incomplete staged checkout (--no-checkout + aborted/failed background checkout)
+  // leaves missing tracked files as ` D <path>` against a temp HEAD index. Any real
+  // user modification, untracked file, staged addition, or git error must fail closed.
+  it('treats only missing-from-checkout entries as clean in isIncompleteCheckoutWorktreeDirty', async () => {
+    gitExecMock
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: ' D README.md\0 D src/app.ts\0', stderr: '' });
+
+    await expect(isIncompleteCheckoutWorktreeDirty(WT)).resolves.toBe(false);
+    const readTreeCall = gitExecMock.mock.calls[1];
+    const statusCall = gitExecMock.mock.calls[2];
+    expect(readTreeCall?.[0]).toEqual(['read-tree', 'HEAD']);
+    expect(statusCall?.[0]).toEqual(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+    const indexPath = (readTreeCall?.[2] as { extraEnv?: Record<string, string> })?.extraEnv?.GIT_INDEX_FILE;
+    expect(indexPath).toBeTruthy();
+    expect((statusCall?.[2] as { extraEnv?: Record<string, string> })?.extraEnv?.GIT_INDEX_FILE).toBe(indexPath);
+    expect(fs.existsSync(path.dirname(indexPath!))).toBe(false);
+  });
+
+  it.each([
+    ['untracked file', '', ' D README.md\0?? user-notes.txt\0'],
+    ['modified file', '', ' M README.md\0 D src/app.ts\0'],
+    ['staged addition', 'added.ts\n', ''],
+  ])('fails closed when incomplete checkout contains %s', async (_label, cachedStdout, statusStdout) => {
+    gitExecMock.mockReset();
+    gitExecMock
+      .mockResolvedValueOnce({ stdout: cachedStdout, stderr: '' })
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: statusStdout, stderr: '' });
+
+    await expect(isIncompleteCheckoutWorktreeDirty(WT)).resolves.toBe(true);
   });
 });

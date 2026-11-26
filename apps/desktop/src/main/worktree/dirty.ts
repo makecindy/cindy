@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { gitExec } from './gitExec';
@@ -14,6 +15,57 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
     return stdout.trim().length > 0;
   } catch {
     return true;
+  }
+}
+
+/**
+ * Check whether a worktree whose initial staged background checkout never completed
+ * has any real user modifications, staged additions/edits, or untracked files.
+ *
+ * `git worktree add --no-checkout` followed by an aborted or failed background
+ * `git checkout HEAD -- .` leaves `.git/index` empty/partial, so plain
+ * `git status --porcelain` reports every unchecked-out tracked file as `D ` and
+ * partially unpacked HEAD files as `??`. Without mutating the real index:
+ *  1. Verify the real index has no staged additions/modifications (`AMCRTU`).
+ *  2. Populate a temporary `GIT_INDEX_FILE` from `HEAD` via `git read-tree HEAD`.
+ *  3. Run `git status --porcelain=v1 -z --untracked-files=all` against that temporary
+ *     index and accept only working-tree-missing tracked files (` D <path>`).
+ * Any modified/untracked/staged/unmerged entry or git error fails closed (`true`).
+ */
+export async function isIncompleteCheckoutWorktreeDirty(worktreePath: string): Promise<boolean> {
+  let tmpDir: string | null = null;
+  try {
+    const cached = await gitExec(
+      ['diff', '--cached', '--diff-filter=AMCRTU', '--name-only'],
+      worktreePath,
+      { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' } },
+    );
+    if (cached.stdout.trim().length > 0) return true;
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-wt-index-'));
+    const tmpIndex = path.join(tmpDir, 'index');
+    const indexEnv = {
+      LC_ALL: 'C',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_INDEX_FILE: tmpIndex,
+    };
+    await gitExec(['read-tree', 'HEAD'], worktreePath, { extraEnv: indexEnv });
+    const { stdout } = await gitExec(
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+      worktreePath,
+      { extraEnv: indexEnv },
+    );
+    for (const entry of stdout.split('\0')) {
+      if (!entry) continue;
+      if (!entry.startsWith(' D ')) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  } finally {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
