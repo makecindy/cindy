@@ -14,6 +14,8 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
+    'existing-login': { about: 'Add-account split action and a verified login on the executing computer' },
+    'existing-login-narrow': { about: 'Review an existing login at phone width', viewport: { width: 320, height: 650 } },
     'official-plan-name': { about: 'The account row displays official Ultra while its machine plan remains pro' },
     'official-plan-name-narrow': { about: 'The official Ultra account label at 320-pixel content width', viewport: { width: 320, height: 850 } },
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
@@ -36,6 +38,15 @@ export default {
     'plugin-engine-sign-in': { about: 'Adding a plugin engine account: choose the sign-in method and type the key in Cindy' },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('existing-login')) {
+      await page.getByText(await ui.t('subscriptionAccounts.existing.found', { count: 1 })).waitFor();
+      await ui.capture('add-account');
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.existing.menu') }).click();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.existing.connect') }).click();
+      await page.getByText('studio@example.com', { exact: true }).waitFor();
+      await ui.capture('review');
+      return;
+    }
     if (ui.case === 'provider-auth-preview') {
       await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();
       await page.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();

@@ -1226,6 +1226,36 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('shows the first native retry of a concurrency-limited Responses request', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const errorMessage = 'mock API error (429): {"code":"1302","message":"并发超限，请稍后重试"}';
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      reason: 'terminal-rate-limit-retry', isTerminal: false, willRetry: true,
+      message: errorMessage + ' (rate-limit-retry 1/6)',
+    });
+  });
+
+  // #10948, unit: replay the terminal sequences from Pi's Responses endpoint.
+  it.each([
+    ['1302: 并发超限，请稍后重试', 'agent_settled', 'upstream-overload'],
+    ['1302: 并发超限，请稍后重试', 'auto_retry_end', undefined],
+    ['insufficient_quota: Monthly quota exceeded', 'agent_settled', undefined],
+  ] as const)('classifies Responses failure %s at %s', (errorMessage, terminal, reason) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: { role: 'assistant', api: 'openai-responses', stopReason: 'error', content: [], errorMessage },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: terminal, success: false }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect((errors[0].data as { reason?: string }).reason).toBe(reason);
+  });
+
   it.each(['no retry', 'exhausted', 'stopped'] as const)(
     'settles a Chat Completions stream truncation without inventing retry progress: %s',
     outcome => {

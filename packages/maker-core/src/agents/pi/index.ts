@@ -219,6 +219,7 @@ import {
   buildReviewReadGrants } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { piUpstreamStatus } from './upstream-status.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
@@ -8308,11 +8309,21 @@ export class PiAgent extends BaseAgent {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
               if (!before.success) {
+                const oversizedFrame = before.error === PI_RPC_OVERSIZED_FRAME_ERROR;
+                // Every failed history read is a definite non-dispatch: the
+                // provider never saw this message. Keep the bounded cause so
+                // the host can say "not sent" and name the reason instead of
+                // showing the generic "reply failed".
                 throw new TurnDispatchRejectedError(
-                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
+                  oversizedFrame
                     ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
                     : 'Pi retry history unavailable',
-                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR ? { diagnostic: 'pi-retry-history-frame-too-large' } : undefined,
+                  oversizedFrame
+                    ? { diagnostic: 'pi-retry-history-frame-too-large' }
+                    : {
+                      diagnostic: 'pi-retry-history-unavailable',
+                      upstreamStatus: piUpstreamStatus(before.error),
+                    },
                 );
               }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);

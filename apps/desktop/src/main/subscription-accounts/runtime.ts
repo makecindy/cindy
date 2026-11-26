@@ -15,6 +15,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import {
   bindNativeProviderAuth,
   isNativeProviderAuthBound,
+  isNativeProviderAuthRevoked,
   isNativeProviderAuthSharedSystemCredential,
 } from '../maker-host/nativeProviderAuthBinding.js';
 import { applyRouteWeightStep, fiveHourTightFor, pickRouteMember, routeMembersFull, routeSchedulingCandidates, type RouteWeightStep, type SchedulableMember } from '../provider-group/scheduler.js';
@@ -90,6 +91,7 @@ import {
 } from './placement.js';
 import {
   loginNativeAccount,
+  readExistingLogin,
   readNativeAccount,
   readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
@@ -100,7 +102,7 @@ import {
   loginLegacyCodexProviderAccount,
   codexAccountRpc,
 } from './nativeCli.js';
-import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
+import { CodexAccountReadDeferred, AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../maker-host/codexModelMapping.js';
 import type { CatalogModel } from '@cindy/model-providers';
@@ -159,6 +161,7 @@ interface AccountSnapshot {
   codexImageAuth?: true;
   auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
+  retryDelayMs?: number;
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
   unreachable?: boolean;
@@ -810,7 +813,7 @@ async function snapshot(
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
-  const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  const ttl = cached?.unavailable ? cached.retryDelayMs ?? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
   // Quota consumers join the read for its full result.
   if (!force && cached && Date.now() - cached.at < ttl
     && (!cached.quotaPending || selectionMayUseSnapshot(cached, quota, Date.now()))
@@ -860,9 +863,10 @@ async function snapshot(
     } else {
       try {
         const imported = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
-        const expectedIdentity = provider === 'anthropic'
+        const linked = readPool(provider)?.accounts.find(account => account.id === id)?.linkedLogin;
+        const expectedIdentity = linked?.identity ?? (provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id)?.reloginIdentity
-          : undefined;
+          : undefined);
         let auth: AccountSnapshot['auth'] = imported
           ? await readLegacyCodexProviderAccount(imported, directory)
           : id === 'default' && legacyCodexDefault(provider)
@@ -909,6 +913,11 @@ async function snapshot(
               if (native.accessToken?.trim() && native.chatgptAccountId?.trim()) codexImageAuth = true;
             }
           } catch { /* Chat can use native login even when the media bridge has no credentials. */ }
+        }
+        if (linked?.accountKey && auth.authenticated && accountKey !== linked.accountKey) {
+          auth = { authenticated: false, identity: linked.identity, errorReason: 'account_mismatch' };
+          accountKey = undefined;
+          codexImageAuth = undefined;
         }
         const invalidated = state.invalidated.get(key);
         if (provider === 'openai' && invalidated && auth.authenticated) {
@@ -1056,7 +1065,11 @@ async function snapshot(
         result = {
           auth: { authenticated: false, ...(identity ? { identity } : {}) },
           unavailable: true,
-          ...(isAccountServiceUnreachable(error) ? { unreachable: true } : {}),
+          ...(isAccountServiceUnreachable(error) ? {
+            unreachable: true,
+            ...(provider === 'openai' ? { retryDelayMs: Math.min(60_000,
+              lastRead?.retryDelayMs ? 2 * lastRead.retryDelayMs : ACCOUNT_SNAPSHOT_FAILURE_TTL_MS) } : {}),
+          } : {}),
           ...(lastConfirmed ? { lastConfirmed } : {}),
           at: Date.now(),
         };
@@ -2252,7 +2265,7 @@ async function readSubscriptionPoolView(
         Date.now(),
         provider === 'openai' ? 'codex' : 'claude-code',
       );
-      const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, ...visibleAccount } = account;
+      const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, linkedLogin: _linkedLogin, ...visibleAccount } = account;
       return {
         ...visibleAccount,
         directory: directoryFor(provider, account.id),
@@ -2269,7 +2282,7 @@ async function readSubscriptionPoolView(
         ...(info.auth.errorReason === 'codex_provider_managed_auth'
           ? { authIssue: 'codex-provider-managed-auth' as const }
           : info.auth.errorReason === 'account_mismatch'
-            ? { authIssue: 'claude-account-mismatch' as const }
+            ? { authIssue: provider === 'anthropic' ? 'claude-account-mismatch' as const : 'account-mismatch' as const }
             : {}),
         status:
           disconnectedFor(pool, provider, account.id) && !preview
@@ -2529,6 +2542,7 @@ export interface SubscriptionAccountLease {
   apiConnectionId?: string;
   /** New turns must not reuse a disabled, renewing or unverified account. */
   assertDispatchable(model?: string): void;
+  verifyLinkedLogin?(): Promise<void>;
   /** Resolve an authenticated private Pi wire request to the live task model. */
   logicalModel?(wireModel: string): string;
   /** Pool account id (not the owner-scoped capability id). */
@@ -2689,7 +2703,8 @@ export async function acquireSubscriptionAccount(
     const readStartedAt = performance.now();
     // Read-only previews (anonymous group summaries, switch probes) keep waiting for quota: an
     // outer group ranks computers by the urgency they report.
-    const info = await snapshot(state, provider, id, false, false, options.dryRun ? 'read' : quota);
+    const verifyLinked = !options.dryRun && scoped.some(account => account.id === id && account.linkedLogin);
+    const info = await snapshot(state, provider, id, verifyLinked, false, options.dryRun ? 'read' : quota);
     const modelsStartedAt = performance.now();
     accountReadMs = Math.max(accountReadMs, modelsStartedAt - readStartedAt);
     if (needsModelMembership) {
@@ -2893,6 +2908,17 @@ export async function acquireSubscriptionAccount(
     if (!selected && !pinned && routeMembersFull(grouped.candidates, grouped))
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
     if (!selected || !member || !member.usable || (!control && member.paused)) {
+      if (provider === 'openai' && agent === 'codex' && !control && !options.remote && !options.dryRun && !options.capability) {
+        const candidates = pinned ? members.filter(a => a.id === pinned)
+          : members.filter(a => !a.paused && !grouped.exclude.has(a.id));
+        const deadlines = candidates.map(a => {
+          const cached = state.cache.get(keyOf(provider, a.id));
+          return !a.paused && !a.loggingIn && a.unavailable && cached?.retryDelayMs
+            ? cached.at + cached.retryDelayMs : undefined;
+        });
+        if (deadlines.length && deadlines.every((at): at is number => at !== undefined))
+          throw new CodexAccountReadDeferred(Math.min(...deadlines));
+      }
       if (!pinned) {
         // Only describe reasons proven for this request. Shared/remote callers retain
         // their opaque failure and must not learn about the owner's other accounts.
@@ -3017,6 +3043,21 @@ export async function acquireSubscriptionAccount(
   } : undefined;
   return {
     logicalModel,
+    ...(scoped.find(account => account.id === selected)?.linkedLogin ? {
+      verifyLinkedLogin: async () => {
+        assertCurrent();
+        const linked = readPool(provider)?.accounts.find(account => account.id === selected)?.linkedLogin;
+        if (!linked) throw new Error('Subscription account was disconnected');
+        const current = await readExistingLogin(provider, linked.directory);
+        assertCurrent();
+        if (!current || current.login.identity.toLowerCase() !== linked.identity.toLowerCase()
+          || current.login.accountKey !== linked.accountKey) {
+          state.cache.delete(key);
+          changed(provider);
+          throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The selected account changed');
+        }
+      },
+    } : {}),
     assertDispatchable: (dispatchModel) => {
       const requestedModel = dispatchModel !== undefined && logicalModel ? logicalModel(dispatchModel) : dispatchModel;
       assertCurrent(requestedModel, requestedModel !== undefined && requestedModel !== currentModel);
@@ -3027,10 +3068,12 @@ export async function acquireSubscriptionAccount(
         throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task API key account is unavailable');
       if ([...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === selected))
         throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
-      if (provider === 'anthropic' && account?.reloginIdentity) {
+      const pinnedIdentity = account && 'linkedLogin' in account ? account.linkedLogin?.identity : undefined;
+      const expected = pinnedIdentity ?? (provider === 'anthropic' ? account?.reloginIdentity : undefined);
+      if (expected) {
         const confirmed = state.cache.get(keyOf(provider, selected));
         if (!confirmed?.auth.authenticated
-          || confirmed.auth.identity?.trim().toLowerCase() !== account.reloginIdentity.toLowerCase())
+          || confirmed.auth.identity?.trim().toLowerCase() !== expected.toLowerCase())
           throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
       }
     },
@@ -3099,6 +3142,9 @@ export async function acquireSubscriptionAccount(
               assertCurrent();
               const tokens = await readNativeCodexTokens(directoryFor(provider, selected), refresh);
               assertCurrent();
+              const linked = readPool(provider)?.accounts.find(account => account.id === selected)?.linkedLogin;
+              if (linked && codexAccountDisplayKey(linked.identity, tokens.chatgptAccountId) !== linked.accountKey)
+                throw new Error('Subscription account changed');
               return {
                 ...tokens,
                 canDispatch: () => {
@@ -3171,9 +3217,51 @@ export async function acquireSubscriptionAccount(
   };
 }
 
+export function offerSystemLogin(provider: SubscriptionProvider, manual: boolean) {
+  const pool = readPool(provider);
+  if (legacyCodexDefault(provider) || accountProviderId(provider, 'default') !== provider) return false;
+  if (manual) return true;
+  if (pool?.disconnected || isNativeProviderAuthRevoked(provider)) return false;
+  return (!pool || pool.accounts.some(a => a.id === 'default')) && !defaultAccountBound(provider);
+}
+
+export function alreadyUsesLogin(provider: SubscriptionProvider, login: import('../../shared/subscriptionAccounts.js').LinkedLogin) {
+  const state = currentRuntime();
+  return (readPool(provider) ?? defaultPool()).accounts.some(account => {
+    if (account.id === 'default' && !defaultAccountBound(provider)) return false;
+    const cached = state.cache.get(keyOf(provider, account.id));
+    return provider === 'openai'
+      ? !!login.accountKey && (account.linkedLogin?.accountKey ?? cached?.accountKey) === login.accountKey
+      : (account.linkedLogin?.identity ?? account.lastConfirmedIdentity ?? cached?.auth.identity)?.toLowerCase() === login.identity.toLowerCase();
+  });
+}
+
+/** Attach only the login verified by the execution host. Reuse native default authorization
+ * separately; a custom directory never grants access to the system login. */
+export async function attachExternalLogin(provider: SubscriptionProvider,
+  login: import('../../shared/subscriptionAccounts.js').LinkedLogin, assertCurrent: () => void) {
+  const state = currentRuntime();
+  const accountId = `cindy-${accountOwnerPrefix()}-${randomUUID()}`;
+  await updatePool(provider, pool => {
+    assertCurrent();
+    const existing = pool.accounts.find(account => account.linkedLogin?.directory === login.directory)?.linkedLogin;
+    if (existing) {
+      if (existing.identity.toLowerCase() !== login.identity.toLowerCase() || existing.accountKey !== login.accountKey)
+        throw new Error('account_mismatch');
+      return pool;
+    }
+    if (pool.accounts.length >= MAX_SUBSCRIPTION_ACCOUNTS) throw new Error('Too many subscription accounts');
+    return { ...pool, disconnected: false, accounts: [...pool.accounts,
+      { ...DEFAULT_SUBSCRIPTION_ACCOUNT, id: accountId, linkedLogin: login }] };
+  });
+  assertOwner(state);
+  changed(provider);
+}
+
 export async function runSubscriptionAccountCommand(
   command: SubscriptionAccountCommand,
   assertCanMerge?: () => void,
+  reviewedDefault?: import('../../shared/subscriptionAccounts.js').LinkedLogin,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
   assertOwner(state);
@@ -3406,6 +3494,16 @@ export async function runSubscriptionAccountCommand(
         throw new Error('codex_provider_managed_auth');
       // Legacy Add may attach a detected login, but a later failed read must not turn that
       // read-only compatibility path into a browser login over an existing native history.
+      if (reviewedDefault) {
+        if (legacy || !currentAuth?.authenticated || currentAuth.identity?.trim().toLowerCase() !== reviewedDefault.identity.toLowerCase())
+          throw new Error('account_mismatch');
+        if (reviewedDefault.accountKey) {
+          const tokens = await readNativeCodexTokens(directory);
+          assertOwner(state);
+          if (!tokens.canDispatch() || codexAccountDisplayKey(reviewedDefault.identity, tokens.chatgptAccountId) !== reviewedDefault.accountKey)
+            throw new Error('account_mismatch');
+        }
+      }
       if (attachDetectedDefault && !currentAuth?.authenticated) throw new Error('login_failed');
       // Derive identity on the execution computer; the caller only supplies the account ID.
       const savedAccount = readPool(provider)?.accounts.find((account) => account.id === accountId);
