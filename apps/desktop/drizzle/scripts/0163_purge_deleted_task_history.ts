@@ -1,7 +1,6 @@
 import type Database from 'better-sqlite3';
 
 function run(db: Database.Database): void {
-  // Historical replay fixtures may predate the task and message tables.
   const taskTables = db.prepare(`SELECT count(*) FROM sqlite_master
     WHERE type = 'table' AND name IN ('messages', 'sessions')`).pluck().get();
   if (taskTables !== 2) return;
