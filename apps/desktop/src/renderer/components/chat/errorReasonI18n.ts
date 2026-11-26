@@ -65,6 +65,9 @@ export function errorReasonI18nKey(reason: string | null | undefined, message: s
   if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
     return 'chat.errorBanner.piRetryHistoryTooLarge';
   }
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] ')) {
+    return 'chat.errorBanner.piRetryHistoryUnavailable';
+  }
   if (message.startsWith('provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: ')) {
     return 'chat.errorBanner.messageNotSent';
   }

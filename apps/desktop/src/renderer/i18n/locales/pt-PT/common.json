@@ -2846,7 +2846,7 @@
         "description": "O Ubuntu utiliza pacotes .deb de sistema. O Arch Linux e o Omarchy utilizam o instalador gerido ao nível do utilizador com o mesmo conteúdo .deb verificado, sem um gestor de pacotes Debian.",
         "item1": "Ubuntu: utilize sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: siga o guia de instalação de utilizador em docs/linux.md.",
         "item2": "Após escolher Atualizar, as instalações .deb de sistema pedem autorização; as instalações geridas ao nível do utilizador mudam de versão sem palavra-passe de sistema. Outras instalações geridas por pacotes utilizam o respetivo gestor de pacotes.",
-        "item3": "O Linux x64 e arm64 suportam o canal Beta. As atualizações do Linux só são aplicadas quando optar por reiniciar, nunca automaticamente durante a inatividade."
+        "item3": "O Linux x64 e arm64 suportam o canal Beta. As instalações geridas ao nível do utilizador podem instalar atualizações automaticamente durante a inatividade; as instalações .deb de sistema com autorização sem palavra-passe também podem instalar atualizações durante a inatividade, enquanto as restantes só as aplicam quando optar por reiniciar."
       },
       "qnaTitle": "Perguntar diretamente",
       "qnaDescription": "Ainda precisa de ajuda? Pergunte como fazer o que tem em mente.",
@@ -2921,7 +2921,7 @@
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
       "autoUpdateDescription": "Após concluir a transferência de uma atualização, reiniciar a aplicação para a instalar quando este computador estiver inativo há 10 minutos e não houver tarefas em execução.",
-      "linuxUpdateDescription": "As atualizações exigem um reinício escolhido por si. As instalações .deb de sistema pedem a palavra-passe do sistema; as instalações geridas ao nível do utilizador não. Outras instalações utilizam o respetivo gestor de pacotes.",
+      "linuxUpdateDescription": "As instalações .deb de sistema pedem a palavra-passe do sistema, por isso as atualizações são aplicadas no reinício escolhido por si. As instalações geridas ao nível do utilizador não precisam de palavra-passe e podem ser instaladas quando o computador está inativo. Outras instalações utilizam o respetivo gestor de pacotes.",
       "autoUpdateEnabledToast": "Instalação de atualizações durante a inatividade ativada",
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível guardar as definições de atualização automática",
@@ -9704,6 +9704,7 @@
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Apenas MCP remoto http / sse. As novas sessões do Agent podem utilizá-lo após guardar; as sessões do Agent em curso não são afetadas.",
+        "embeddedGuide": "O teu assistente abriu este formulário para configurar o MCP para a tarefa atual. Segue as instruções do fornecedor do serviço para verificar os dados já preenchidos, completar o que falta e guardar a configuração.",
         "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu amigo adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
       },
       "fields": {
@@ -15781,6 +15782,8 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "piRetryHistoryTooLarge": "A mensagem não foi enviada. Ao ler o histórico para tentar novamente, o Pi encontrou uma trama que excedia o limite local de 16 MiB. Pode continuar numa nova tarefa.",
+      "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para a enviar. Pode tentar novamente ou continuar numa nova tarefa.",
+      "upstreamStatusError": "O serviço a montante devolveu {{status}}, pelo que a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
       "upstreamEmpty550": "O serviço do modelo devolveu HTTP 550 com uma resposta vazia",
       "replyFailed": "Não foi possível concluir a resposta",
@@ -16629,7 +16632,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
       "REMOTE_AGENT_UNAVAILABLE": "Não foi possível comunicar com o computador que executa o Agent. Consulte os detalhes do erro.",
-      "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Verifique a tarefa antes de tentar novamente.",
+      "REMOTE_AGENT_TIMEOUT": "O computador que executa o Agent ainda não respondeu. Verifique o progresso da tarefa. Se ainda estiver em curso ou já tiver terminado, não precisa de tentar novamente.",
       "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, pelo que as chamadas foram suspensas temporariamente. Aguarde um momento antes de tentar novamente.",
       "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando voltar a ligar-se.",
@@ -18718,6 +18721,7 @@
         "intervalChip": "Após a conclusão · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Cron personalizado",
         "intervalMinutes": "Minutos (a cada N minutos)",
         "interval": "De hora a hora (a cada N horas)",
         "daily": "Diariamente (todos os dias)",

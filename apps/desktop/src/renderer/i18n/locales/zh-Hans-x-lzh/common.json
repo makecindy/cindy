@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系统 .deb 安装套件。Arch Linux 与 Omarchy 用受管之用户目录安装程序，采同一份已验之 .deb 内容，无须 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请依 docs/linux.md 中之用户目录安装指南行之。",
         "item2": "点击更新后，系统 .deb 安装须授权；用户目录安装无须系统密码即可易版。他套件管理器所装之版，请经对应之套件管理器更新。",
-        "item3": "Linux x64 与 arm64 支持 Beta 渠道。Linux 唯于君择重新启动时施更新，闲置时不自动安装。"
+        "item3": "Linux x64 与 arm64 支持 Beta 渠道。用户目录所装者，闲时可自行安装更新；已设免密授权的系统 .deb 所装者，闲时亦可自行安装更新，其余系统 .deb 所装者，唯于君择重新启动时施更新。"
       },
       "qnaTitle": "径问",
       "qnaDescription": "未得其解？径问君所欲为",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
       "autoUpdateDescription": "更新取下既毕，若此机 10 分钟无操作且无差事方行，则自重启应用以成安装。",
-      "linuxUpdateDescription": "更新于君择重启时生效。系统 .deb 安装须系统密码，用户目录安装则否。他法所装者，请以相应套件管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装须系统密码，更新于君择重启时生效；用户目录安装则无须密码，可于闲时自行安装。他法所装者，请以相应套件管理器更新。",
       "autoUpdateEnabledToast": "已启闲时自装更新",
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
@@ -9585,6 +9585,7 @@
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 会话即可调用，方行之 Agent 会话不受影响。",
+        "embeddedGuide": "助手为此差事启 MCP 设定表。依供方所示，核已填之项，补其阙，乃存之。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同伴自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {
@@ -15607,6 +15608,8 @@
       "codexHelperUnverified": "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。",
       "requestFormatError": "应用程序所发请求格式有谬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未发。Pi 读取旧录以重试时，一帧逾本机 16 MiB 之限。可另启任务。",
+      "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
       "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
@@ -16447,7 +16450,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与行 Agent 之机通信，请阅错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之机回应逾时，结果未明。再试前请先察差事进展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之机尚未应。请先察差事进展。若尚在行，或已有果，则无须再试。",
       "REMOTE_AGENT_LINK_BUSY": "与行 Agent 之机通信繁忙，请稍候再试。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之机屡未回应，已暂停呼叫。请稍候再试。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之机已离线，待其重连再试。",
@@ -18474,6 +18477,7 @@
         "intervalChip": "毕后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 时）",
         "daily": "Daily（每日）",
