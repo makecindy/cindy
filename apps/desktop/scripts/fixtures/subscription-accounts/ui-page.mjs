@@ -7,6 +7,8 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
+    'existing-login': { about: 'Add-account split action and a verified login on the executing computer' },
+    'existing-login-narrow': { about: 'Review an existing login at phone width', viewport: { width: 320, height: 650 } },
     'official-plan-name': { about: 'The account row displays official Ultra while its machine plan remains pro' },
     'official-plan-name-narrow': { about: 'The official Ultra account label at 320-pixel content width', viewport: { width: 320, height: 850 } },
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
@@ -24,8 +26,20 @@ export default {
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
     empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
     loading: { about: 'First read still pending: one static account-row placeholder instead of a spinner' },
+    'plugin-engine': { about: 'A plugin engine provider: identity, plan and usage the plugin reports, with the same account controls' },
+    'plugin-engine-narrow': { about: 'Plugin engine accounts at 320-pixel content width', viewport: { width: 320, height: 850 } },
+    'plugin-engine-sign-in': { about: 'Adding a plugin engine account: choose the sign-in method and type the key in Cindy' },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('existing-login')) {
+      await page.getByText(await ui.t('subscriptionAccounts.existing.found', { count: 1 })).waitFor();
+      await ui.capture('add-account');
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.existing.menu') }).click();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.existing.connect') }).click();
+      await page.getByText('studio@example.com', { exact: true }).waitFor();
+      await ui.capture('review');
+      return;
+    }
     if (ui.case === 'provider-auth-preview') {
       await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();
       await page.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
@@ -36,6 +50,22 @@ export default {
     }
     await page.getByTestId('subscription-accounts').waitFor();
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+    if (ui.case.startsWith('plugin-engine')) {
+      const rows = page.getByTestId('subscription-account');
+      await rows.nth(0).getByText('me@z.ai', { exact: true }).waitFor();
+      await rows.nth(1).getByText('BigModel API Key ····a1b2', { exact: true }).waitFor();
+      await rows.nth(0).getByText('GLM Coding Plan Pro', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('switch').count(), 2);
+      if (ui.case === 'plugin-engine-sign-in') {
+        await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
+        await page.getByTestId('plugin-engine-sign-in').waitFor();
+        await page.getByRole('textbox', { name: 'Z.ai Coding Plan API Key' }).waitFor();
+        await ui.capture('sign-in');
+        return;
+      }
+      await ui.capture('accounts');
+      return;
+    }
     if (ui.case === 'identity-unknown') {
       await page.getByTestId('subscription-account').nth(1).getByRole('button', {
         name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true,

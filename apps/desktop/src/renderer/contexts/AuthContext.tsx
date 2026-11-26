@@ -509,6 +509,8 @@ export function AuthProvider({
         description: payload.message || t(descriptionKey),
         confirmText: t('logic.confirm.sessionExpiredConfirm'),
         showCancel: false,
+        // 不处理就无法继续使用:盖过任何已打开的弹窗,也不排在普通确认后面。
+        blocking: true,
       }).then(() => {
         activeUserIdRef.current = null;
         sessionsStore.reset();

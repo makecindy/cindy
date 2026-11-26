@@ -20,6 +20,7 @@ import type { withAvailabilityPolicyMutation } from './providerShareAvailability
  * 仲裁场景,见 ./ownership.ts)。缓存按文件 mtime 失效——任何实例写入后,其它实例
  * 下一次 read 会检测到 mtime 变化并从盘上重载,保证被动实例改的授权(允许被控开关 /
  * 撤销控制端)能被持有 relay 连接的实例看到;持有者对变化的响应轮询在 index.ts。
+ * 分享准入可显式复用最长 60 秒的文件检查窗口；普通读取与锁内写入仍即时检查。
  */
 
 import type { app } from 'electron';
@@ -29,6 +30,7 @@ import path from 'node:path';
 import { createLogger } from '../logger';
 import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, isSettingStringList, isSettingsObject, validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
 
 export interface DeviceLinkSettings {
   /** Device-local V2 preference; absent in existing files means V1. */
@@ -53,6 +55,8 @@ export interface DeviceLinkSettings {
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
   lastKnownDeviceNames: Record<string, string>;
+  /** 逐设备的 Agent-Net 选路偏好覆盖（仅存非 auto 的手动选择；缺省或空时省略，保持旧文件形状不变）。 */
+  peerPathPreferences?: Record<string, 'direct' | 'relay'>;
 }
 export interface DeviceLinkSettingsStorePorts {
 getUserDataDir: () => string;
@@ -63,6 +67,17 @@ const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
 
 
 const log = createLogger('device-link-settings');
+
+/** 只读持久偏好，不探测设备、relay、powerSaveBlocker 或系统授权。 */
+function inspectDeviceLinkSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize, savedSource: 'unknown',
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      remoteDesktopEnabled: isSettingBoolean, remoteControlEnabled: isSettingBoolean, keepAwake: isSettingBoolean,
+      revokedControllers: isSettingStringList, disabledControlDeviceIds: isSettingStringList,
+      lastKnownDeviceNames: (value) => isSettingsObject(value) && Object.values(value).every((name) => typeof name === 'string'),
+    }),
+  });
+}
 
 const DEFAULTS: DeviceLinkSettings = {
   agentNetEnabled: false,
@@ -96,11 +111,25 @@ function normalize(raw: unknown): DeviceLinkSettings {
       : [],
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
+    ...optional('peerPathPreferences', normalizePeerPathPreferences(r.peerPathPreferences)),
   };
 }
 
-function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch' | 'peerPathPreferences'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
   return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizePeerPathPreferences(raw: unknown): Record<string, 'direct' | 'relay'> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, 'direct' | 'relay'> = {};
+  let count = 0;
+  for (const [deviceId, pref] of Object.entries(raw as Record<string, unknown>)) {
+    const trimmed = deviceId.trim();
+    if (!trimmed || (pref !== 'direct' && pref !== 'relay')) continue;
+    out[trimmed] = pref;
+    count += 1;
+  }
+  return count > 0 ? out : undefined;
 }
 
 function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
@@ -146,8 +175,10 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 }
 
 let cached: DeviceLinkSettings | null = null;
-/** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
-let cachedMtimeMs: number | null = null;
+/** Identity also detects atomic replacements whose mtime was preserved. Missing is null. */
+let cachedIdentity: string | null = null;
+let cachedPath: string | null = null;
+let lastCheckedAt = -Infinity;
 /**
  * Writes require a readable baseline after a filesystem failure or when the Host preserves
  * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
@@ -156,24 +187,37 @@ let cachedUnreadable = false;
 const READ_RETRY_DELAY_MS = 1_000;
 let retryReadAt = 0;
 
-function statMtimeMs(file: string): number | null {
+function statFileIdentity(file: string): string | null {
   try {
-    return fs.statSync(file).mtimeMs;
+    const stat = fs.statSync(file);
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
 }
 
-function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
-  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
+/** Share admission may reuse a bounded file check; other readers and writers stay fresh. */
+function readDeviceLinkSettings(forceRead = false, maxAgeMs = 0): DeviceLinkSettings {
   const file = settingsFilePath();
-  let mtimeMs: number | null;
+  if (cachedPath !== file) {
+    cached = null;
+    cachedIdentity = null;
+    cachedUnreadable = false;
+    retryReadAt = 0;
+    cachedPath = file;
+  }
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
+  const at = performance.now();
+  if (!forceRead && cached && cachedPath === file && Number.isFinite(maxAgeMs)
+    && at >= lastCheckedAt && at - lastCheckedAt < maxAgeMs) return cached;
+  lastCheckedAt = at;
+  let identity: string | null;
   let contents: string | undefined;
   try {
-    mtimeMs = statMtimeMs(file);
-    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
-    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+    identity = statFileIdentity(file);
+    if (!forceRead && cached && identity === cachedIdentity) return cached;
+    if (identity !== null) contents = fs.readFileSync(file, 'utf-8');
   } catch (error) {
     // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
     // old grant, and let the next eligible read retry even if the mtime hasn't changed.
@@ -193,7 +237,7 @@ function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
   try {
     if (contents !== undefined) {
       cached = normalize(JSON.parse(contents));
-      cachedMtimeMs = mtimeMs;
+      cachedIdentity = identity;
       cachedUnreadable = false;
       return cached;
     }
@@ -204,14 +248,14 @@ function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
     });
     if (isPreservingUnreadableSettingsFilesByDefault()) {
       cached = { ...DEFAULTS };
-      cachedMtimeMs = mtimeMs;
+      cachedIdentity = identity;
       cachedUnreadable = true;
       return cached;
     }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
-  cachedMtimeMs = null;
+  cachedIdentity = null;
   cachedUnreadable = false;
   return cached;
 }
@@ -315,7 +359,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   // 不把 next 记入缓存:rename 与下一次 stat 之间理论上仍可能被替换(锁外读者),
   // 直接失效缓存,下一次 read 从盘上重载。
   cached = null;
-  cachedMtimeMs = null;
+  cachedIdentity = null;
   return nextValue;
 }
 
@@ -491,6 +535,22 @@ function isPlaceholderDeviceName(name: string): boolean {
   return normalized === 'unknown' || normalized === 'no';
 }
 
+async function setPeerPathPreference(
+  deviceId: string,
+  preference: 'auto' | 'direct' | 'relay',
+): Promise<Record<string, 'direct' | 'relay'>> {
+  const trimmed = deviceId.trim();
+  if (!trimmed) return readDeviceLinkSettings().peerPathPreferences ?? {};
+  // 不在写队列外拿磁盘旧值判重：快速连点（如 auto → relay → auto）必须按队列内最新值串行落地，防止先入队的旧写覆盖最后选择。
+  const next = await updateDeviceLinkSetting('peerPathPreferences', (latest) => {
+    const copy: Record<string, 'direct' | 'relay'> = { ...(latest ?? {}) };
+    if (preference === 'auto') delete copy[trimmed];
+    else copy[trimmed] = preference;
+    return Object.keys(copy).length > 0 ? copy : undefined;
+  });
+  return next ?? {};
+}
+
 const __testing = { normalize };
-return { readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
+return { inspectDeviceLinkSettings, readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, setPeerPathPreference, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
 }

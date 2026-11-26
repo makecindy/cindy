@@ -21,7 +21,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     fetch: fetchImpl, URL, Headers, AbortController, TextDecoder, process: { env: {} },
     // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
     // 指纹计算用的 createHash 必须由宿主注入。
-    setTimeout, clearTimeout, createHash,
+    Date, setTimeout, clearTimeout, createHash,
     guestToolGate: null, toolsDisabledForTurn: () => false,
     currentPermissionState: () => ({ mode: permissionMode }),
     FILE_WRITE_BUILTINS: new Set(), READONLY_BUILTINS: new Set(),
@@ -62,7 +62,7 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
     approve: () => approvalHook({ toolName: 'cindy_mcp_call_tool', toolCallId: 'call',
       input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'demo' } } },
       { ui: { input: async () => 'allow' } }),
-    connect: (server: { name: string; displayName?: string; url: string } = {
+    connect: (server: { name: string; displayName?: string; url: string; remote?: { startupTimeoutMs: number; requestTimeoutMs: number } } = {
       name: 'cindy', url: 'https://example.test/mcp',
     }) => context.connect(server, 'fake-token'),
     resultHook: (event: unknown) => resultHooks[0]?.(event),
@@ -127,6 +127,31 @@ it('keeps transformed Pi input as own JSON data without invoking prototype sette
 });
 
 describe('Pi MCP request lifecycle', () => {
+  // #8053, unit: connectServer used to discard the handshake phase on abort.
+  // A shorter request limit distinguishes measured elapsed time from the startup budget.
+  it.each(['initialize', 'tools/list'])('diagnoses a stalled custom HTTP %s at startup', async phase => {
+    vi.useFakeTimers();
+    const h = gatewayWithFetch(async (_url, options) => {
+      const { method } = JSON.parse(String(options?.body));
+      if (method === phase) {
+        return new Promise<Response>((_resolve, reject) => {
+          options!.signal!.addEventListener('abort', () => reject(new Error('fixture-secret')));
+        });
+      }
+      if (method === 'initialize') await new Promise(resolve => setTimeout(resolve, 10));
+      return Response.json({ result: {} });
+    });
+    const elapsed = phase === 'initialize' ? 25 : 35;
+    const result = expect(h.connect({
+      name: 'custom_fixture', url: 'https://example.test/mcp?key=fixture-secret',
+      remote: { startupTimeoutMs: 50, requestTimeoutMs: 25 },
+    })).rejects.toMatchObject({
+      message: 'startup timed out during ' + phase + ' after ' + elapsed + 'ms (startup budget 50ms, request limit 25ms)',
+    });
+    await vi.advanceTimersByTimeAsync(elapsed);
+    await result;
+  });
+
   // #10691: the registered gateway and real approval hook must reject missing
   // ghost_id, including an extra args wrapper, before approval/HTTP. Previously
   // only generic call_tool envelopes were checked. Unit tier, injected fetch.
@@ -324,6 +349,83 @@ describe('Pi MCP request lifecycle', () => {
     ]);
   });
 
+  // 测试价值：Pi 重连替换真实 MCP client 时，旧 Streamable HTTP 会话必须收到 DELETE，
+  // 否则真实 bridge 会把每次重连都保留到任务结束。最小失败输入是一次 initialize 后的
+  // tools/list 失败或 client 替换，tier unit，使用生成扩展的真实 HTTP client。
+  it('deletes replaced sessions and sessions whose discovery fails', async () => {
+    let initializeCount = 0;
+    let failDiscovery = false;
+    const methods: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, options?: RequestInit) => {
+      const method = options?.method ?? 'POST';
+      if (method === 'DELETE') {
+        methods.push('DELETE');
+        return new Response(null, { status: 204 });
+      }
+      const body = JSON.parse(String(options?.body));
+      methods.push(body.method);
+      if (body.method === 'initialize') {
+        initializeCount += 1;
+        return Response.json({ result: { serverInfo: { name: 'fixture' } } }, {
+          headers: { 'mcp-session-id': 'session-' + initializeCount },
+        });
+      }
+      if (body.method === 'tools/list' && failDiscovery) return new Response(null, { status: 503 });
+      return Response.json({ result: body.method === 'tools/list' ? { tools: [{ name: 'probe' }] } : {} });
+    });
+    const h = gatewayWithFetch(fetchImpl);
+    const first = await h.connect();
+    h.gateway.add('cindy', first.client, first.tools, first.displayName);
+    const second = await h.connect();
+    h.gateway.add('cindy', second.client, second.tools, second.displayName);
+    await vi.waitFor(() => expect(methods.filter(method => method === 'DELETE')).toHaveLength(1));
+
+    failDiscovery = true;
+    await expect(h.connect()).rejects.toThrow('HTTP 503');
+    await vi.waitFor(() => expect(methods.filter(method => method === 'DELETE')).toHaveLength(2));
+    expect(methods).toEqual([
+      'initialize', 'notifications/initialized', 'tools/list',
+      'initialize', 'notifications/initialized', 'tools/list', 'DELETE',
+      'initialize', 'notifications/initialized', 'tools/list', 'DELETE',
+    ]);
+  });
+
+  // 测试价值：客户端替换不能截断仍在途的 MCP 工具调用。最小失败输入是旧客户端
+  // 在 tools/call 等待响应时被新连接替换。Tier unit，真实扩展客户端 + 注入 fetch，
+  // 用虚拟时钟越过旧清理期限，覆盖之前只验证短调用的缺口。
+  it('waits for a long in-flight call before deleting a replaced session', async () => {
+    vi.useFakeTimers();
+    let finishCall!: (response: Response) => void;
+    const methods: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, options?: RequestInit) => {
+      const method = options?.method ?? 'POST';
+      if (method === 'DELETE') {
+        methods.push('DELETE');
+        return new Response(null, { status: 204 });
+      }
+      const body = JSON.parse(String(options?.body));
+      methods.push(body.method);
+      if (body.method === 'initialize') return Response.json({ result: {} }, {
+        headers: { 'mcp-session-id': 'in-flight-session' },
+      });
+      if (body.method === 'tools/list') return Response.json({ result: { tools: [{ name: 'probe' }] } });
+      if (body.id === undefined) return new Response(null, { status: 202 });
+      return new Promise<Response>(resolve => { finishCall = resolve; });
+    });
+    const h = gatewayWithFetch(fetchImpl);
+    const first = await h.connect();
+    h.gateway.add('cindy', first.client, first.tools, first.displayName);
+    const call = first.client.request('tools/call', { name: 'probe', arguments: {} });
+    await vi.waitFor(() => expect(methods).toContain('tools/call'));
+    const second = await h.connect();
+    h.gateway.add('cindy', second.client, second.tools, second.displayName);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(methods).not.toContain('DELETE');
+    finishCall(Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } }));
+    await expect(call).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    await vi.waitFor(() => expect(methods).toContain('DELETE'));
+  });
+
   it('keeps stable ids authoritative when they collide with another display name', async () => {
     const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
     h.gateway.add('alpha', h.client, [{ name: 'first' }], 'First');
@@ -458,9 +560,24 @@ describe('Pi MCP request lifecycle', () => {
     const search = (await h.list({ query: 'NEEDLE', server: 'catalog', offset: 100 })).details;
     expect(search.total).toBe(117);
     expect(search.tools).toHaveLength(17);
+    const pastLastPage = (await h.list({ query: 'NEEDLE', server: 'catalog', offset: 117 })).details;
+    expect(pastLastPage).toMatchObject({ total: 117, tools: [], hint: search.hint });
+    expect(pastLastPage).not.toHaveProperty('nextOffset');
     const exact = (await h.list({ server: 'catalog', tool: 'tool_116' })).details;
     expect(exact.tools[0].description).toBe(description);
     expect(exact.tools[0].inputSchema.properties.value.type).toBe('string');
+  });
+
+  // #10721: the registered discovery tool should not describe an empty catalog
+  // as a failed filter. Existing pagination coverage uses only nonempty catalogs.
+  // Unit tier: refresh the only server to an empty list, then pass a query.
+  it('does not suggest query recovery when the catalog has no tools', async () => {
+    const h = gatewayWithFetch(vi.fn());
+    h.gateway.add('cindy', h.client, []);
+    const unfiltered = (await h.list()).details;
+    const filtered = (await h.list({ query: 'qzv10721xkfj982none' })).details;
+    expect(filtered).toEqual(unfiltered);
+    expect(filtered).toMatchObject({ ok: true, total: 0, tools: [], availableServers: [] });
   });
 
   it.each([false, true])('keeps structured data model-visible (isError=%s) without exposing private metadata', async (isError) => {

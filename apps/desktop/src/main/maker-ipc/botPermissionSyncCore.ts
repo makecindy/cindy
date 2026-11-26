@@ -17,8 +17,12 @@ export function createBotPermissionSync(ports: {
   broadcastSessionPatched: (sessionId: string, patch: Record<string, unknown>) => void;
 }) {
   const { getMakerIfReady, broadcastSessionPatched } = ports;
-  /** Follow committed values under the same fence as explicit permission changes. */
-  async function syncBotLanePermission(sessionId: string): Promise<void> {
+  /**
+   * Follow committed values under the same fence as explicit permission changes. `announce`: tell the
+   * clients even when this lane's own reconcile changes nothing (a sibling another lane's transaction
+   * already repaired reads as unchanged here, but nobody has told the clients yet).
+   */
+  async function syncBotLanePermission(sessionId: string, announce = false): Promise<void> {
     const owner = getCurrentDbClientSnapshot();
     if (!owner) return;
     let repairedCanonicalSessionId: string | undefined;
@@ -43,19 +47,23 @@ export function createBotPermissionSync(ports: {
         if (!mode) return;
         const maker = getMakerIfReady();
         const live = maker?.getSession(sessionId);
-        if (changed || (live && live.stablePermissionModeState?.mode !== mode)) forgetCredentialGrants(sessionId);
-        if (live && live.stablePermissionModeState?.mode !== mode) {
+        const switching = !!live && live.stablePermissionModeState?.mode !== mode;
+        if (changed || switching) forgetCredentialGrants(sessionId);
+        if (live && switching) {
           try {
             await live.setPermissionMode(mode as PermissionMode);
           } catch (error) {
             assertCurrent();
+            // The saved mode stands: tell the clients now, since a later reconcile finds nothing changed.
+            broadcastSessionPatched(sessionId, { permissionMode: mode });
             // Never leave a failed tightening running with its previous authority.
             if (maker?.getSession(sessionId) === live) await maker.closeSession(sessionId);
             throw error;
           }
           assertCurrent();
         }
-        broadcastSessionPatched(sessionId, { permissionMode: mode });
+        // The reconcile before each send mostly finds the mode as it was, which the clients already show.
+        if (changed || switching || announce) broadcastSessionPatched(sessionId, { permissionMode: mode });
       });
     } finally {
       // Release the current lane's fence before visiting siblings (including this
@@ -95,7 +103,7 @@ export function createBotPermissionSync(ports: {
     // Settle every lane even if one fails, so a failure cannot strand another old runtime.
     const results = await Promise.allSettled(sessionIds.map(sessionId => {
       forgetCredentialGrants(sessionId);
-      return syncBotLanePermission(sessionId);
+      return syncBotLanePermission(sessionId, true);
     }));
     const failed = results.find(result => result.status === 'rejected');
     if (failed?.status === 'rejected') throw failed.reason;

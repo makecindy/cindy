@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}逾候未始处理，此请已终。",
-        "advice": "请同僚之主人察其机上 Cindy 是否运行、网络是否连接。",
+        "advice": "请同伴之主人察其机上 Cindy 是否运行、网络是否连接。",
         "details": "待 Cindy 与网络复常，请重遣讯。"
       }
     },
@@ -300,7 +300,7 @@
     },
     "allowMemberInvites": "许诸成员邀友",
     "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
-    "allowMentionAllBots": "许 @诸同僚",
+    "allowMentionAllBots": "许 @诸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎启之。此开关不涉 AI 代答。",
     "notifications": {
       "title": "讯息告知",
@@ -338,8 +338,8 @@
     "lifecycleUnavailable": "今之服务器或机尚不支持此举。",
     "groupDissolved": "群议已散，仍可观有权访问之旧讯。",
     "lastOwner": "请先让渡群主或解散群议，然后退出。",
-    "allBotsMentionDisabled": "群主未启 @诸同僚。",
-    "turnAlreadyStarted": "此同僚已启，不可略过",
+    "allBotsMentionDisabled": "群主未启 @诸同伴。",
+    "turnAlreadyStarted": "此同伴已启，不可略过",
     "stopOwnershipUnknown": "部分工作未能停止：无从确认由谁发起",
     "nothingToStop": "目前无可停止之工作"
   },
@@ -544,6 +544,8 @@
     "accessChat": "唯群内交流",
     "accessTools": "可用工具与数据",
     "replies": "同伴如何接话",
+    "assistant": "群中 Cindy",
+    "assistantHint": "谁 @ 之，即于其人之电脑行事。",
     "replyModeMentionedNote": "无人被 @ 时，同伴不接话。",
     "work": "分职",
     "organizerHint": "排定谁为何步；预设为首位同伴。",
@@ -646,5 +648,6 @@
     },
     "externalFormatError": "请自原讯重新打开完整链接。"
   },
-  "waitingForOwner": "待主人允"
+  "waitingForOwner": "待主人允",
+  "externalBadge": "外部"
 }

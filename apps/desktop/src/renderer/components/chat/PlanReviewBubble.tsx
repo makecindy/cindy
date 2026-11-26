@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { Badge } from '@/components/ui/badge';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -154,36 +155,26 @@ export function PlanReviewBubble({
   return (
     <div
       className={cn(
-        'w-full rounded-[12px] border p-[20px]',
+        'w-full rounded-xl border p-5',
         'border-[var(--ask-card-border)] bg-[var(--ask-card-bg)]',
-        'flex flex-col gap-[12px]',
+        'flex flex-col gap-3',
       )}
     >
       {/* Header */}
-      <div className="flex items-center gap-[8px]">
+      <div className="flex items-center gap-2">
         <span className="text-13 font-medium text-[var(--ask-header-text)]">
           {t('chat.planReviewBubble.title')}
         </span>
         {/* badge / 状态短语是 UI chrome,禁选;标题与正文保持可选 */}
         {showApprovedBadge && (
-          <span
-            className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
-              'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
-            )}
-          >
+          <Badge tone="plan" size="md">
             {t('chat.planReviewBubble.approved')}
-          </span>
+          </Badge>
         )}
         {status === 'revised' && (
-          <span
-            className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
-              'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
-            )}
-          >
+          <Badge tone="plan" size="md">
             {t('chat.planReviewBubble.revisionRequested')}
-          </span>
+          </Badge>
         )}
         {status === 'expired' && (
           <span className="select-none text-13 italic text-[var(--ask-expired-text)]">
@@ -216,7 +207,7 @@ export function PlanReviewBubble({
       )}
 
       {status === 'revised' && (
-        <div className="flex flex-col gap-[4px]">
+        <div className="flex flex-col gap-1">
           <span className="text-13 text-[var(--ask-answered-text)]">
             {t('chat.planReviewBubble.feedbackLabel')}
           </span>
@@ -353,7 +344,7 @@ function PlanMarkdownBody({
   const collapsed = !expanded && overflowing;
 
   return (
-    <div className="flex flex-col gap-[8px]">
+    <div className="flex flex-col gap-2">
       <div
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
         // 路径 4(见上方不变量注释):overflow-hidden 只挡用户手动滚动,程序化滚动
@@ -409,7 +400,7 @@ function PlanMarkdownBody({
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className={cn(
-            'inline-flex w-fit items-center gap-[4px] text-12',
+            'inline-flex w-fit items-center gap-1 text-12',
             'text-[var(--ask-option-desc)] hover:text-[var(--ask-header-text)]',
             'transition-colors',
           )}

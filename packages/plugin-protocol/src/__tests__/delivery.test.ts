@@ -58,7 +58,11 @@ describe('plugin delivery contract', () => {
   it('keeps full catalog counts independent of the page size and rejects legacy removals on read pages', () => {
     const page = { schemaVersion: 2, plugins: [candidate], nextCursor: 'next',
       counts: { all: 200, public: 200, organization: 0, personal: 0 } };
-    expect(parsePluginCatalogPage(page).counts?.all).toBe(200);
+    expect(parsePluginCatalogPage(page).counts).toEqual(page.counts);
+    const counts = { ...page.counts, official: 145, community: 0 };
+    expect(parsePluginCatalogPage({ ...page, counts }).counts).toEqual(counts);
+    for (const change of [{ official: -1 }, { community: '0' }, { community: 56 }])
+      expect(() => parsePluginCatalogPage({ ...page, counts: { ...counts, ...change } })).toThrow();
     expect(() => parsePluginCatalogPage({ ...page, removals: [] })).toThrow();
     expect(() => parsePluginCatalogPage({ ...page, counts: { ...page.counts, all: 1 } })).toThrow();
   });
@@ -146,6 +150,7 @@ describe('plugin delivery contract', () => {
   });
 
   it('parses a paginated visible Plugin summary without requiring a manifest', () => {
+    const listingIcon = { ...validIcon, thumbnailUrl: 'https://plugins.example.test/icon.png?x-oss-process=resize' };
     const response = parseListPluginsResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,
       plugins: [
@@ -164,7 +169,7 @@ describe('plugin delivery contract', () => {
             sha256: 'a'.repeat(64),
             sizeBytes: 1024,
             publishedAt: '2026-07-19T00:00:00.000Z',
-            icon: validIcon,
+            icon: listingIcon,
           },
         },
       ],
@@ -172,7 +177,7 @@ describe('plugin delivery contract', () => {
     });
     expect(response.plugins[0]?.name).toBe(validManifest.name);
     expect(response.plugins[0]?.currentRelease.version).toBe(validManifest.version);
-    expect(response.plugins[0]?.currentRelease.icon).toEqual(validIcon);
+    expect(response.plugins[0]?.currentRelease.icon).toEqual(listingIcon);
     expect(response.nextCursor).toBe(pluginId);
   });
 

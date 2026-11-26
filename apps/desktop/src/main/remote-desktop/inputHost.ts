@@ -1,3 +1,6 @@
+import { getInstanceConfig } from '../instance-runtime/config.js';
+import { openLinuxDesktopInput } from './linuxInputHost';
+import type { LinuxDesktopInput } from './linuxX11Input';
 import { app, screen } from 'electron';
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -12,6 +15,7 @@ import type {
 import { createLogger } from '../logger';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
+import { GNOME_DISPLAY } from './gnomeDesktop';
 import { readLinuxUnlockState } from './linuxCredentials';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import {
@@ -175,8 +179,22 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
   }
 }
 
-export async function readDesktopInputPermission(): Promise<DesktopPermissionStatus> {
-  if (process.platform !== 'darwin') return 'notRequired';
+export async function readDesktopInputPermission(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<DesktopPermissionStatus> {
+  return (await readDesktopInputAccess(operation)).status;
+}
+
+/**
+ * `chosenAppsOnly`: macOS 27.3 lets this Cindy control only the apps the person
+ * chose. Remote keyboard and mouse are system-wide, and macOS drops them unless
+ * every app is allowed, so the status stays `missing`; the flag only lets local
+ * settings say why. It is never part of a device-link permission reply.
+ */
+export async function readDesktopInputAccess(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<{ status: DesktopPermissionStatus; chosenAppsOnly?: true }> {
+  if (process.platform !== 'darwin') return { status: 'notRequired' };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // A cold dev build must prepare the helper too; preparation does not prompt.
@@ -188,18 +206,20 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
         timer = setTimeout(() => reject(new Error('DESKTOP_INPUT_PREPARING')), 5000);
       }),
     ]);
-    // Only --request-permission may open the macOS authorization UI.
-    const { stdout } = await exec(binary, ['--check'], {
+    // Only --request-permission may open the macOS authorization UI. A helper
+    // older than `--scope` ignores it and answers ready/permission as before.
+    const args = operation === 'postEvents' ? ['--check', '--post-events', '--scope'] : ['--check'];
+    const { stdout } = await exec(binary, args, {
       timeout: 5000,
       maxBuffer: 1024,
     });
-    return stdout.trim() === 'ready'
-      ? 'granted'
-      : stdout.trim() === 'permission'
-        ? 'missing'
-        : 'unknown';
+    const answer = stdout.trim();
+    if (answer === 'ready') return { status: 'granted' };
+    if (answer === 'permission') return { status: 'missing' };
+    if (answer === 'chosen-apps') return { status: 'missing', chosenAppsOnly: true };
+    return { status: 'unknown' };
   } catch {
-    return 'unknown';
+    return { status: 'unknown' };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -258,14 +278,19 @@ export async function verifyDesktopOwner(
 export async function requestDesktopInputPermission(
   isCurrent: () => boolean,
   signal: AbortSignal,
-): Promise<void> {
-  if (process.platform !== 'darwin') return;
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<boolean> {
+  if (process.platform !== 'darwin') return true;
   const binary = await resolveBinary();
-  if (isCurrent())
-    await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024, signal });
+  if (!isCurrent()) return false;
+  const args = ['--request-permission'];
+  if (operation === 'postEvents') args.push('--post-events');
+  const { stdout } = await exec(binary, args, { timeout: 5000, maxBuffer: 1024, signal });
+  return stdout.trim() === 'ready';
 }
 
 export class DesktopInputHost {
+  private linuxX11: LinuxDesktopInput | null = null;
   private windows: WindowsDesktopConnection | null = null;
   private queuedBytes = 0;
   private writing = Promise.resolve();
@@ -285,6 +310,7 @@ export class DesktopInputHost {
     private readonly onFailure: () => void,
     private readonly runtime: {
       platform?: NodeJS.Platform;
+      openLinuxInput?: typeof openLinuxDesktopInput;
       resolveBinary(): Promise<string>;
       spawn(binary: string, args?: string[]): ChildProcessWithoutNullStreams;
     } = {
@@ -302,6 +328,7 @@ export class DesktopInputHost {
     const platform = this.runtime.platform ?? process.platform;
     if (platform !== 'darwin' && platform !== 'win32' && platform !== 'linux')
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+    const cloudX11 = platform === 'linux' && !process.env.WAYLAND_DISPLAY && (!!getInstanceConfig() || !!this.runtime.openLinuxInput);
     // Only the macOS helper can keep input inside one window.
     if (
       window &&
@@ -313,10 +340,15 @@ export class DesktopInputHost {
         window.pid <= 0)
     )
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
-    const x11 = platform === 'linux' && isX11Desktop(platform);
+    // The managed cloud desktop keeps its guarded X11 adapter instead of XTest.
+    const x11 = platform === 'linux' && !cloudX11 && isX11Desktop(platform);
+    // GNOME's RemoteDesktop session maps normalized points onto its monitor stream.
+    const gnome = platform === 'linux' && !x11 && !cloudX11 && GNOME_DISPLAY.test(displayId);
     if (
       platform === 'linux' &&
       !x11 &&
+      !cloudX11 &&
+      !gnome &&
       displayId !== WAYLAND_DISPLAY_ID &&
       !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
     )
@@ -330,8 +362,19 @@ export class DesktopInputHost {
     if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
     this.activity = new HumanDesktopInput();
     try {
+      if (cloudX11) {
+        const connection = await (this.runtime.openLinuxInput ?? openLinuxDesktopInput)(displayId, () => {
+          if (generation === this.generation) this.onFailure();
+        });
+        if (generation !== this.generation) { await connection.stop(); throw new Error('DESKTOP_LEASE_EXPIRED'); }
+        this.linuxX11 = connection;
+        this.displayId = displayId;
+        this.heartbeat = setInterval(() => this.write([]), 2000);
+        this.privacyPaused = false;
+        return;
+      }
       this.x11Geometry = x11 ? x11InputGeometry(screen.getAllDisplays(), displayId) : null;
-      if (platform === 'linux' && !x11 && displayId !== WAYLAND_DISPLAY_ID) {
+      if (platform === 'linux' && !x11 && !gnome && displayId !== WAYLAND_DISPLAY_ID) {
         this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
         if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       } else this.linuxPoint = null;
@@ -356,7 +399,14 @@ export class DesktopInputHost {
       if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const child = window
         ? this.runtime.spawn(binary, ['--window', String(window.windowId), String(window.pid)])
-        : this.runtime.spawn(binary, this.x11Geometry ? ['--x11', ...this.x11Geometry] : []);
+        : this.runtime.spawn(
+            binary,
+            this.x11Geometry
+              ? ['--x11', ...this.x11Geometry]
+              : gnome
+                ? ['--gnome', displayId.slice('gnome:'.length)]
+                : [],
+          );
       this.child = child;
       this.displayId = displayId;
       this.window = window ? { windowId: window.windowId, pid: window.pid } : null;
@@ -380,7 +430,13 @@ export class DesktopInputHost {
           text += data.toString();
           if (text.includes('\n'))
             finish(
-              text.startsWith('ready') ? undefined : new Error('DESKTOP_ACCESSIBILITY_REQUIRED'),
+              text.startsWith('ready')
+                ? undefined
+                : new Error(
+                    platform === 'win32'
+                      ? 'DESKTOP_INPUT_UNAVAILABLE'
+                      : 'DESKTOP_ACCESSIBILITY_REQUIRED',
+                  ),
             );
         };
         child.stdout.on('data', receive);
@@ -411,9 +467,9 @@ export class DesktopInputHost {
       throw error;
     }
   }
-  input(events: DesktopInput[]): void {
+  input(events: DesktopInput[]): void | Promise<boolean> {
     if (this.privacyPaused) return;
-    if ((this.runtime.platform ?? process.platform) === 'linux') {
+    if ((this.runtime.platform ?? process.platform) === 'linux' && !this.linuxX11) {
       if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
       this.checkX11Geometry();
       // Native text is paced for Wayland clients/IMEs. Bound each acknowledged
@@ -449,7 +505,7 @@ export class DesktopInputHost {
       return;
     }
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
-    if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    if (!display || (!this.child && !this.windows && !this.linuxX11)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
     const batch = this.activity!.begin(events);
     const points: { x: number; y: number }[] = [];
@@ -463,7 +519,7 @@ export class DesktopInputHost {
       const mapped = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
       return { ...event, ...mapped };
     });
-    this.write(
+    return this.write(
       native,
       batch,
       points,
@@ -483,19 +539,21 @@ export class DesktopInputHost {
     batch?: { ready: Promise<void>; complete: () => void },
     points: { x: number; y: number }[] = [],
     wheel = false,
-  ): void {
+  ): Promise<boolean> {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
+    const linuxX11 = this.linuxX11;
     const bytes = Buffer.byteLength(line);
-    if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
+    if (this.queuedBytes + bytes > 32_768 || (!linuxX11 && !connection && (!child || child.stdin.destroyed))) {
+      batch?.complete();
       this.onFailure();
-      return;
+      return Promise.resolve(false);
     }
     this.queuedBytes += bytes;
     const generation = this.generation;
     const send = async () => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) return false;
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
         // Local-only windows must pass this batch's pointer through for as long as it is
@@ -508,7 +566,10 @@ export class DesktopInputHost {
             : undefined;
         try {
           this.checkX11Geometry(); // Recheck after waiting for earlier native batches.
-          if (connection) {
+          if (linuxX11) {
+            linuxX11.input(events as DesktopInput[]);
+            await linuxX11.settled();
+          } else if (connection) {
             if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
               throw new Error('DESKTOP_INPUT_UNAVAILABLE');
           } else {
@@ -533,11 +594,13 @@ export class DesktopInputHost {
         }
       });
       await this.writing;
+      return generation === this.generation;
     };
     // Waiting for an Agent primitive must not hold up empty native heartbeats.
-    void (batch ? batch.ready.then(send) : send())
+    return (batch ? batch.ready.then(send) : send())
       .catch(() => {
         if (generation === this.generation) this.onFailure();
+        return false;
       })
       .finally(() => {
         batch?.complete();
@@ -552,7 +615,7 @@ export class DesktopInputHost {
    * Restart only this input helper on cancel, never the media session or lease.
    */
   async pauseForPrivacy(): Promise<() => Promise<void>> {
-    if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    if (!this.child && !this.windows && !this.linuxX11) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     const displayId = this.displayId;
     const window = this.window ?? undefined;
     this.stop();
@@ -578,6 +641,8 @@ export class DesktopInputHost {
     this.privacyPaused = false;
     this.window = null;
     this.acknowledge?.(new Error('DESKTOP_LEASE_EXPIRED'));
+    const linuxX11 = this.linuxX11;
+    this.linuxX11 = null;
     const windows = this.windows;
     const writing = this.writing;
     this.windows = null;
@@ -607,6 +672,8 @@ export class DesktopInputHost {
       const timer = setTimeout(() => child.kill(), 1500);
       timer.unref();
       child.once('exit', () => clearTimeout(timer));
+    } else if (linuxX11) {
+      this.stopping = linuxX11.stop().finally(release);
     } else if (windows) {
       this.stopping = (async () => {
         try {
@@ -624,6 +691,23 @@ export class DesktopInputHost {
         }
       })();
     } else release?.();
+  }
+}
+
+/** Fractions use the same global display coordinates as pointer injection. */
+export async function isEditableDesktopPoint(displayId: string, x: number, y: number): Promise<boolean> {
+  const display = screen.getAllDisplays().find((item) => String(item.id) === displayId);
+  if (!display) return false;
+  const { bounds } = display;
+  try {
+    const { stdout } = await exec(await resolveBinary(), ['--editable-at',
+      String(Math.round(bounds.x + x * (bounds.width - 1))),
+      String(Math.round(bounds.y + y * (bounds.height - 1))),
+    ], { timeout: 1200, maxBuffer: 128 });
+    return stdout.trim() === 'editable';
+  } catch {
+    // Older signed helpers and apps with unavailable accessibility both keep manual input.
+    return false;
   }
 }
 

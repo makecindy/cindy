@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ControlResult, LiziMcpSessionContext } from "../types.js";
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
-import { errorPayload, okPayload } from "./_payload.js";
+import { controlErrorPayload, errorPayload, okPayload } from "./_payload.js";
 
 export interface ProjectManagementCallbacks {
   readInfo?(params: {
@@ -100,7 +100,7 @@ export function registerProjectManagementTools(
     const result = await run(context.sessionId);
     return result.ok
       ? okPayload(format(result))
-      : errorPayload(result.errorCode, result.message);
+      : controlErrorPayload(result);
   }
   registry.register({
     name: "list_projects",

@@ -1,3 +1,5 @@
+import { createCompanyReportingRenewal } from './companyReportingRenewal.js';
+import { companyExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
 import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
@@ -31,7 +33,8 @@ import {
   type RemoteAgentStreamItem,
 } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle, Effort, StartSessionOptions } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
+import { AgentStartupCleanupPendingError, AgentStartupResourcesReleasedError, AgentStartupStoppedError,
+  LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
 
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
@@ -61,6 +64,7 @@ import {
   type RemoteAgentHandleController,
   type RemoteAgentLink,
   type RemoteStartedInfo,
+  type SharedReconnectSendEvidence,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
@@ -70,10 +74,19 @@ import { isSharedTaskAuthorizationDenied } from './poller';
 // Local evidence from the same open that failed. An old offer or a send RPC
 // error must never authorize replay of a persisted input.
 const stoppedReconnectOffers = new WeakMap<RemoteAgentRemoteError, () => void>();
-const reconnectOfferCapture = new AsyncLocalStorage<string>();
+const reconnectOfferCapture = new AsyncLocalStorage<{
+  sessionId: string;
+  evidence?: SharedReconnectSendEvidence;
+  replacement?: boolean;
+}>();
 
-export function withSharedReconnectOfferCapture<T>(sessionId: string, send: () => Promise<T>): Promise<T> {
-  return reconnectOfferCapture.run(sessionId, send);
+export function withSharedReconnectOfferCapture<T>(
+  sessionId: string,
+  send: () => Promise<T>,
+  evidence?: SharedReconnectSendEvidence,
+  replacement?: boolean,
+): Promise<T> {
+  return reconnectOfferCapture.run({ sessionId, evidence, replacement }, send);
 }
 
 interface SharedReconnectHandoff {
@@ -103,6 +116,8 @@ export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
   servers: Map<string, LocalMcpTarget>;
   dispose(): void;
+  /** Close only the transports owned by a confirmed remote Agent process run. */
+  closeSessionInstance?(): void;
 }
 
 export interface StartRemoteAgentDeps {
@@ -294,14 +309,28 @@ const sharedGitCredentials = new GitCredentialHistory();
 
 /** 凭证类操作的确认卡：用与 Agent 自带工具同名的工具显示本机路径或命令。 */
 export function credentialConfirmation(action: ExecutorAction, description: string): LocalConfirmation {
-  const base = {
+  return confirmationFor(action, {
     description,
     metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
     suggestions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
-  };
+  });
+}
+
+/**
+ * 权限上限拦下的普通操作的确认卡：与本机任务里 Agent 发来的同名工具确认卡一样(只允许这一次，不带
+ * 会话级规则)。Agent 所在电脑没有先问本机用户时(如它的自动审查已放行)，由这张卡补问。
+ */
+export function approvalConfirmation(action: ExecutorAction): LocalConfirmation {
+  return confirmationFor(action, { metadata: { permissionScope: 'once' } });
+}
+
+function confirmationFor(
+  action: ExecutorAction,
+  base: Omit<LocalConfirmation, 'toolName' | 'input'>,
+): LocalConfirmation {
   switch (action.kind) {
     case 'exec':
-      return { ...base, toolName: 'Bash', input: { command: action.command } };
+      return { ...base, toolName: 'Bash', input: { command: action.command, cwd: action.cwd } };
     case 'write':
       return { ...base, toolName: 'Write', input: { file_path: action.path } };
     case 'fetch':
@@ -349,37 +378,59 @@ function isNativeSessionId(id: unknown): id is string {
   return typeof id === 'string' && id.length > 0 && id !== '<pending>' && id !== '<failed>';
 }
 
+function isConfirmedRunEnd(reason: string, idleReclaimed?: boolean): boolean {
+  // The executor reports idleReclaimed even if native close fails: only quiet
+  // runs are reclaimed, and the next send starts a new run.
+  return idleReclaimed === true || reason === 'ended' || reason === 'closed';
+}
+
 /**
  * 连接的状态：connecting(第一次打开或连回中)→ connected → releasing(连接池在让出名额)→ released
  * → connecting …；closed 是句柄已关闭或对方意外结束。
  */
 type LinkState = 'connecting' | 'connected' | 'releasing' | 'released' | 'closed';
 
-/** 第一次启动还没完成的远程任务(按任务 id)：任务被删除或归档时据此让对方停下。 */
-const pendingStarts = new Map<string, Set<() => void>>();
+/** 尚未完成的远程启动(按任务 id)：任务结束或主人改选时只退役这些尝试。 */
+const pendingStarts = new Map<string, Set<(reason?: Error) => void>>();
 
 /**
  * 任务被删除或归档时调用。第一次启动还没完成(对方可能还在准备、在供应商组里换电脑或启动 Agent)的，
  * 立即告诉对方结束这个任务，不让它迟到地启动并跑完这一轮(2026-10-22：慢启动期间删掉的任务，对方几分钟后
  * 仍换到另一台电脑启动并生成了回复)。启动已完成的任务由 Maker 照常关闭，这里不管。
+ * 主人明确改选时复用同一取消入口，传入改选原因；不把仍保留的任务误报为已结束。
  */
-export function cancelPendingRemoteStart(sessionId: string): void {
-  for (const cancel of [...pendingStarts.get(sessionId) ?? []]) cancel();
+export function cancelPendingRemoteStart(sessionId: string, reason?: Error): void {
+  for (const cancel of [...pendingStarts.get(sessionId) ?? []]) cancel(reason);
 }
 
-/** Reuse terminal cancellation from allocation through preparation, without a permanent task tombstone. */
+/** Reuse attempt cancellation from allocation through preparation, without a permanent task tombstone. */
 export function registerPendingRemoteStart(sessionId: string, parent = currentSessionCreationSignal(sessionId)) {
   const controller = new AbortController();
   const abort = (reason = new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.')) => controller.abort(reason);
-  const cancel = () => abort();
+  const cancel = (reason?: Error) => abort(reason);
   const cancelParent = () => abort(parent?.reason);
-  const cancels = pendingStarts.get(sessionId) ?? new Set<() => void>();
+  const cancels = pendingStarts.get(sessionId) ?? new Set<(reason?: Error) => void>();
   pendingStarts.set(sessionId, cancels);
   cancels.add(cancel);
   parent?.addEventListener('abort', cancelParent, { once: true });
   if (parent?.aborted) cancelParent();
   return {
     signal: controller.signal, abort,
+    cancellationError(startup: Promise<AgentSessionHandle>): AgentStartupCleanupPendingError {
+      const reason: unknown = controller.signal.reason;
+      const whenStopped = startup.then(handle => handle.close({ reason: 'account-boundary' }), error => {
+        if (error instanceof AgentStartupCleanupPendingError) return error.whenStopped;
+        if (error instanceof AgentStartupResourcesReleasedError || error instanceof AgentStartupStoppedError) return;
+        // A rejected wait alone does not prove the unpublished resources were released.
+        throw error;
+      });
+      // Some callers do not use Maker; retain the rejection for its lifecycle
+      // consumer without an unhandled rejection if no host subscribes to it.
+      void whenStopped.catch(() => undefined);
+      return new AgentStartupCleanupPendingError(reason instanceof Error ? reason.message : String(reason), {
+        cause: reason, whenStopped,
+      });
+    },
     dispose() {
       parent?.removeEventListener('abort', cancelParent);
       cancels.delete(cancel);
@@ -408,28 +459,25 @@ export async function startRemoteAgentSession(
   const expired = () => new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
   let rejectCancelled!: (error: unknown) => void;
   const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
-  let preparedHandle: AgentSessionHandle | undefined;
-  const closeCancelledHandle = () => {
-    void preparedHandle?.close({ reason: 'account-boundary' }).catch(() => undefined);
-  };
+  let startup!: Promise<AgentSessionHandle>;
   const onCancelled = () => {
-    closeCancelledHandle();
-    rejectCancelled(abort.signal.reason ?? expired());
+    rejectCancelled(abort.cancellationError(Promise.resolve().then(() => startup)));
   };
   abort.signal.addEventListener('abort', onCancelled, { once: true });
   const timing = remoteAgentStartupTiming(deps.log, { side: 'controller', kind, sessionId });
   let status: 'ok' | 'failed' = 'failed';
   try {
-    if (abort.signal.aborted) throw abort.signal.reason ?? expired();
+    if (abort.signal.aborted) throw new AgentStartupResourcesReleasedError(abort.signal.reason ?? expired());
     // Reject promptly even when MCP preparation or a remote RPC ignores cancellation.
     // The preparation path still owns cleanup of any late result.
-    const handle = await Promise.race([
-      prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing).then(handle => {
-        preparedHandle = handle;
-        if (abort.signal.aborted) { closeCancelledHandle(); throw abort.signal.reason ?? expired(); }
-        return handle;
-      }), cancelled,
-    ]);
+    startup = prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing).then(async handle => {
+      if (abort.signal.aborted) {
+        await handle.close({ reason: 'account-boundary' });
+        throw new AgentStartupResourcesReleasedError(abort.signal.reason ?? expired());
+      }
+      return handle;
+    });
+    const handle = await Promise.race([startup, cancelled]);
     if (handoff) {
       // As in cold startup, if O restarts between opens or the token expires,
       // G can treat an ordinary fresh open as a completed switch. This can add
@@ -502,10 +550,13 @@ async function prepareAndStartRemoteAgentSession(
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
+    // 权限上限拦下的操作都在本机补问(凭证类用分享凭证卡)，不在没有卡的情况下拒绝。
+    confirm: async (action, signal, credential) =>
+      controller?.confirm(credentialConsent && credential
+        ? credentialConfirmation(action, credentialConsent.description)
+        : approvalConfirmation(action), signal) ?? false,
     ...(credentialConsent
       ? {
-          confirm: async (action: ExecutorAction, signal: AbortSignal) =>
-            controller?.confirm(credentialConfirmation(action, credentialConsent.description), signal) ?? false,
           gitCredentials: sharedGitCredentials,
           ...(grant
             ? {
@@ -554,6 +605,7 @@ async function prepareAndStartRemoteAgentSession(
   } catch (error) {
     // A late MCP result is disposed here even though the caller already rejected.
     await disposePreparation();
+    if (signal.aborted) throw new AgentStartupResourcesReleasedError(signal.reason);
     throw error;
   } finally {
     signal.removeEventListener('abort', cancelPreparation);
@@ -591,6 +643,7 @@ async function prepareAndStartRemoteAgentSession(
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
+  let idleReclaimedByHost = false;
   /** 进行中的、要对方参与的调用数(期间不让出名额)。 */
   let inflight = 0;
   let lastActivity = Date.now();
@@ -619,7 +672,7 @@ async function prepareAndStartRemoteAgentSession(
         cwd: workspace.workingDir,
         workspace,
         authorize: (action) => executor.check(action),
-        ...(credentialConsent ? { confirm: (action: ExecutorAction) => executor.confirm(action) } : {}),
+        confirm: (action: ExecutorAction) => executor.confirm(action),
         push: async (frames) => {
           await active?.push(frames);
         },
@@ -643,12 +696,25 @@ async function prepareAndStartRemoteAgentSession(
     && controller?.isQuiet() === true
     && resumableAfterRelease();
 
-  /** 连接池让出名额：只结束对方的 Agent 进程，本机部分与对话记录都留着。 */
+  function closeRunMcpInstance(runId: string): void {
+    try { mcp.closeSessionInstance?.(); }
+    catch (error) {
+      deps.log?.warn('remote agent: closing ended run MCP instance failed', { runId, error: String(error) });
+    }
+  }
+
+  async function closeStartedRun(client: RemoteAgentRunClient): Promise<void> {
+    // A client that has already stopped polling returns from close without a remote receipt.
+    if (client.isClosed) return;
+    await client.close('close', 'navigation');
+    closeRunMcpInstance(client.runId);
+  }
+
   /** 结束对方的这个 Agent 进程，本机部分留着，状态回到已让出(调用前已置为 releasing)。 */
   async function closeRun(client: RemoteAgentRunClient): Promise<void> {
     try {
       // 用 close 而不是 detach：detach 不结束对方的进程，名额让不出来。
-      await client.close('close', 'navigation');
+      await closeStartedRun(client);
     } catch (error) {
       deps.log?.warn('remote agent: closing a released connection failed', { runId: client.runId, error: String(error) });
       // 没送到：对方可能还占着名额，连接池继续给它占位并再试一次 close。
@@ -684,8 +750,11 @@ async function prepareAndStartRemoteAgentSession(
   };
   const leavePool = deps.pool?.add(member);
 
+  let reportingTimer: ReturnType<typeof setInterval> | undefined;
+  const syncReporting = createCompanyReportingRenewal(deps.invoke);
   let localDisposal: Promise<void> | null = null;
   const disposeLocal = (): Promise<void> => {
+    clearInterval(reportingTimer);
     if (localDisposal) return localDisposal;
     linkState = 'closed';
     // Attempt every cleanup even if one fails. Preserve the settled result so
@@ -711,14 +780,17 @@ async function prepareAndStartRemoteAgentSession(
     payload: RemoteAgentOpenPayload,
     reconnect: boolean,
     onOpened: (started: RemoteStartedInfo) => void,
+    reporting: boolean,
+    runId: string,
   ): Promise<RemoteAgentRunClient> {
     let projectionReady = false;
     let opened = false;
     const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
     let closedEarly: { reason: string; message?: string } | null = null;
     const expectedResume = payload.options.resumeSessionId;
+    const capture = reconnectOfferCapture.getStore();
     const captureReconnectOffer = reconnect && deps.recoverSharedReconnect && !!expectedResume
-      && reconnectOfferCapture.getStore() === opts.sessionId
+      && capture && capture.sessionId === opts.sessionId && !capture.replacement
       && payload.acceptsGroupSwitch && !payload.groupAssigned;
     let startupSwitchToken: string | undefined;
     let resumeLost = false;
@@ -740,7 +812,8 @@ async function prepareAndStartRemoteAgentSession(
         workspace.addAliases(Object.entries(attachmentRoots).map(([name, to]) => ({ from: native.join(virtualRoot, 'additional', 'attachments', name), to })));
       }
     };
-    const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
+    const client: RemoteAgentRunClient = new RemoteAgentRunClient(runId, poller, {
+      onSend: reporting ? () => { void syncReporting(runId, isCurrent); } : undefined,
       onEvent: (event) => {
         if (!isCurrent()) return;
         touch();
@@ -814,6 +887,7 @@ async function prepareAndStartRemoteAgentSession(
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
         if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
+        if (isConfirmedRunEnd(reason, idleReclaimed)) closeRunMcpInstance(client.runId);
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
@@ -838,7 +912,11 @@ async function prepareAndStartRemoteAgentSession(
               active = null;
               relay?.reset();
               linkState = unfinished ? 'closed' : 'released';
+              idleReclaimedByHost = !unfinished;
               if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
+              // Reclaim is a live idle observation. The host stops its state
+              // timer before closing, so its last snapshot may still be busy.
+              else controller?.onState({ turnRunning: false, preparing: false });
             }
             if (releasing === pendingRelease) releasing = null;
             finishRelease();
@@ -849,11 +927,13 @@ async function prepareAndStartRemoteAgentSession(
         if ((restart || (idleReclaimed && !controller?.hasActiveTurn())) && controller) {
           relay?.reset();
           linkState = 'released';
+          idleReclaimedByHost = !restart;
+          if (!restart) controller.onState({ turnRunning: false, preparing: false });
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.
             // Resume the native conversation, never replay the original request.
-            controller.onInterrupted(() => {
+            controller.onInterrupted({ reason, runId: client.runId }, () => {
               hasHistory = true;
               restartResumeRequired = true;
             });
@@ -882,12 +962,15 @@ async function prepareAndStartRemoteAgentSession(
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
-        await client.close('close', 'navigation').catch(() => undefined);
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
       if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
-        await client.close('close', 'navigation').catch(() => undefined);
+        // Retire the rejected client before closing it. close() emits a local
+        // 'closed' even on failure, so only its successful receipt can clean up.
+        if (active === client) active = null;
+        await closeStartedRun(client).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
       }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
@@ -897,8 +980,14 @@ async function prepareAndStartRemoteAgentSession(
         deps.groupSwitch?.offer(startupSwitchToken);
       }
       linkState = 'connected';
+      idleReclaimedByHost = false;
       lastStarted = started;
       onOpened(started);
+      clearInterval(reportingTimer);
+      if (reporting && companyExecutionReporting()?.available()) {
+        reportingTimer = setInterval(() => { if (isCurrent() && !isIdle()) syncReporting(client.runId, isCurrent); }, 120000);
+        reportingTimer.unref();
+      }
       for (const item of early.splice(0)) {
         if (item.type === 'event') controller?.onEvent(item.value);
         else controller?.onState(item.value as Record<string, unknown>);
@@ -911,9 +1000,10 @@ async function prepareAndStartRemoteAgentSession(
       return client;
     } catch (error) {
       const token = startupSwitchToken;
+      const startupStopped = !remoteStarted && error instanceof RemoteAgentRemoteError && error.phase === 'start'
+        && error.info.name === 'AgentStartupStoppedError';
       if (!remoteStarted && token && isCurrent()) {
-        if (error instanceof RemoteAgentRemoteError && error.phase === 'start'
-          && error.info.name === 'AgentStartupStoppedError' && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
+        if (startupStopped && error.info.code === 'SUBSCRIPTION_ACCOUNT_LIMITED') {
           stoppedReconnectOffers.set(error, () => {
             deps.log?.info('remote agent switch credential taken over', { sessionId: opts.sessionId, phase: 'reconnect' });
             deps.groupSwitch?.offer(token);
@@ -925,12 +1015,15 @@ async function prepareAndStartRemoteAgentSession(
           deps.groupSwitch?.offer(token);
         }
       }
+      // The adapter can initialize MCP before startup returns. This typed
+      // error proves the attempt stopped; a generic start-failed frame does not.
+      if (startupStopped && isCurrent()) closeRunMcpInstance(client.runId);
       if (active === client) active = null;
       if (remoteStarted && !client.isClosed) {
         // An invalid started descriptor or a local bootstrap error can occur
         // after the other computer has started its Agent. End that run before
         // the caller falls back to another executor.
-        await client.close('close', 'navigation').catch((closeError) => {
+        await closeStartedRun(client).catch((closeError) => {
           deps.log?.warn('remote agent: closing a failed startup run failed', {
             runId: client.runId, error: String(closeError),
           });
@@ -938,7 +1031,7 @@ async function prepareAndStartRemoteAgentSession(
       } else client.abandon('start-failed');
       if (!remoteStarted && (
         (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
-        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+        || startupStopped
       )) {
         const quota = readRemoteProviderGroupUsageLimit(error);
         if (quota) throw quota;
@@ -1111,18 +1204,25 @@ async function prepareAndStartRemoteAgentSession(
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
       requireOpen();
+      const reporting = caps.companyTokenReporting === true && companyExecutionReporting()?.available() === true;
+      const reserveRun = () => {
+        const id = deps.newId();
+        if (reporting) syncReporting(id, () => stateNow() !== 'closed');
+        return id;
+      };
+      const firstRun = reserveRun();
       const payload = await buildPayload(reconnect, timing, caps);
       requireOpen();
       try {
         const client = await timing.measure('remote-open', () =>
-          openRun(payload, reconnect, onOpened),
+          openRun(payload, reconnect, onOpened, reporting, firstRun),
         );
         status = 'ok';
         return client;
       } catch (error) {
         if (!deps.pool || linkState === 'closed' || !isRemoteRunLimitError(error) || !await deps.pool.releaseForRetry(member)) throw error;
         const client = await timing.measure('remote-open', () =>
-          openRun(payload, reconnect, onOpened),
+          openRun(payload, reconnect, onOpened, reporting, reserveRun()),
         );
         status = 'ok';
         return client;
@@ -1293,6 +1393,10 @@ async function prepareAndStartRemoteAgentSession(
       controller = createRemoteAgentHandle({
         link,
         started,
+        sharedReconnectSendEvidence: () => {
+          const capture = reconnectOfferCapture.getStore();
+          return capture && capture.sessionId === opts.sessionId ? capture.evidence : undefined;
+        },
         workspace,
         getExecutorCwd: () => executor.getCwd(),
         recordApproval: (action) => executor.recordApproval(action),
@@ -1349,11 +1453,18 @@ async function prepareAndStartRemoteAgentSession(
     });
   } catch (error) {
     await disposeLocal();
+    // Remote notification is best effort. Only the completed local executor,
+    // MCP and relay teardown proves this attempt no longer owns host resources.
+    if (signal.aborted) throw new AgentStartupResourcesReleasedError(signal.reason);
     throw localizeRemoteError(error);
   } finally {
     signal.removeEventListener('abort', cancelStart);
   }
   touch();
   deps.log?.info('remote agent session started', { kind, runId: activeNow()?.runId });
-  return (controller as RemoteAgentHandleController | null)!.handle;
+  const handle = (controller as RemoteAgentHandleController | null)!.handle;
+  if (deps.recoverSharedReconnect) {
+    handle.hasReclaimedSharedRun = () => linkState === 'released' && idleReclaimedByHost;
+  }
+  return handle;
 }

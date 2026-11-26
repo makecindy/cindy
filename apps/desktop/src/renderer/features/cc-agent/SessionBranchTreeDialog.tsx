@@ -13,6 +13,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Spinner } from '@/components/ui/spinner';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface Props {
   open: boolean;
@@ -238,10 +239,10 @@ export function SessionBranchTreeDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !switchingId && onOpenChange(next)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="flex items-start gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-default)' }}>
@@ -254,7 +255,7 @@ export function SessionBranchTreeDialog({
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
-              <button type="button" className="rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-elevated)]" aria-label={t('ccAgent.sidebar.sessionBranches.close')}>
+              <button type="button" className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-elevated)]" aria-label={t('ccAgent.sidebar.sessionBranches.close')}>
                 <X size={16} />
               </button>
             </Dialog.Close>
@@ -267,12 +268,10 @@ export function SessionBranchTreeDialog({
           {session.agentKind === 'pi' && (
             <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated-soft)' }}>
               <label className="flex items-center gap-2 text-12 text-[var(--text-primary)]">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={summarize}
                   onChange={(event) => setSummarize(event.target.checked)}
                   disabled={switchingId !== null}
-                  className="accent-[var(--accent-cta-bg-pure)]"
                 />
                 {t('ccAgent.sidebar.sessionBranches.summarize')}
               </label>

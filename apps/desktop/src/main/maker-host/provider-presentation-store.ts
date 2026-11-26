@@ -1,3 +1,7 @@
+import path from 'node:path';
+import { isProviderConnectionIcon, isProviderConnectionImage, type ConnectionArtwork } from '@cindy/model-providers/branding';
+import { inspectSettingsJson, isSettingsRecord } from './inspect-settings-json.js';
+import { validateOptionalSettingsFields } from './settings-inspection.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
@@ -7,6 +11,7 @@ export interface ProviderPresentation {
   removed?: boolean;
 }
 interface PresentationFile extends ProviderPresentation {
+  connectionIcons?: Record<string, ConnectionArtwork>;
   providers?: Record<string, ProviderPresentation>;
 }
 function normalizePresentation(raw: unknown): ProviderPresentation {
@@ -19,14 +24,12 @@ function normalizePresentation(raw: unknown): ProviderPresentation {
     ...(typeof value.removed === 'boolean' ? { removed: value.removed } : {}),
   };
 }
-const log = desktopMakerLogger.child('provider-presentation');
-const store = createOverrideSettingsFile<PresentationFile>({
-  // Preserve the original OpenAI preferences without a migration or duplicate source of truth.
-  filePath: () => ownerScopedUserDataPath('local-codex-provider-prefs.json'),
-  scopeKey: activeOwnerScopeKey,
-  defaults: {},
-  normalize: (raw) => {
-    const root = normalizePresentation(raw);
+function normalizeFile(raw: unknown): PresentationFile {
+    const root: PresentationFile = normalizePresentation(raw);
+    const icons = (raw as PresentationFile | null)?.connectionIcons;
+    if (isSettingsRecord(icons)) {
+      root.connectionIcons = Object.fromEntries(Object.entries(icons).filter(([, icon]) => isProviderConnectionIcon(icon) || isProviderConnectionImage(icon)));
+    }
     const providers = (raw as PresentationFile | null)?.providers;
     if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return root;
     return {
@@ -37,13 +40,54 @@ const store = createOverrideSettingsFile<PresentationFile>({
           .map(([id, value]) => [id, normalizePresentation(value)]),
       ),
     };
-  },
+}
+const log = desktopMakerLogger.child('provider-presentation');
+const store = createOverrideSettingsFile<PresentationFile>({
+  // Preserve the original OpenAI preferences without a migration or duplicate source of truth.
+  filePath: () => ownerScopedUserDataPath('local-codex-provider-prefs.json'),
+  scopeKey: activeOwnerScopeKey,
+  defaults: {},
+  normalize: normalizeFile,
+  preserveUnreadableFile: true,
+  logLoadedValue: false,
+  maxBytes: 4 * 1024 * 1024,
   log,
   label: 'provider-presentation',
 });
-export function readProviderPresentation(providerId: string): ProviderPresentation {
+export function inspectProviderPresentations(root: string) {
+  return inspectSettingsJson(path.join(root, 'local-codex-provider-prefs.json'), raw => {
+    const validators = { name: (value: unknown) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 128, removed: (value: unknown) => typeof value === 'boolean' };
+    validateOptionalSettingsFields(raw, { ...validators, providers: isSettingsRecord });
+    if (isSettingsRecord(raw.providers)) for (const value of Object.values(raw.providers)) {
+      if (!isSettingsRecord(value)) throw new Error('invalid provider presentation');
+      validateOptionalSettingsFields(value, validators);
+    }
+    return normalizeFile(raw);
+  }, 4 * 1024 * 1024);
+}
+
+export function readProviderConnectionIcons(): Readonly<Record<string, ConnectionArtwork>> {
   store.invalidateIfChanged();
-  const { name, removed, providers } = store.read();
+  return store.read().connectionIcons ?? {};
+}
+
+export async function setProviderConnectionIcon(providerId: string, icon: ConnectionArtwork | null): Promise<void> {
+  await store.updateAtomic(({ value }) => {
+    if (icon !== null) return { connectionIcons: { ...value.connectionIcons, [providerId]: icon } };
+    if (!value.connectionIcons || !Object.hasOwn(value.connectionIcons, providerId)) return null;
+    const { [providerId]: _removed, ...remaining } = value.connectionIcons;
+    return { connectionIcons: remaining };
+  });
+}
+
+export function readProviderPresentation(providerId: string, options?: { allowSideEffects?: boolean }): ProviderPresentation {
+  let value: PresentationFile;
+  if (options?.allowSideEffects === false) {
+    const state = store.inspect();
+    if (state.status !== 'ready') throw new Error('PROVIDER_PRESENTATION_UNREADABLE');
+    value = state.value;
+  } else { store.invalidateIfChanged(); value = store.read(); }
+  const { name, removed, providers } = value;
   return providerId === 'openai'
     ? { ...(name ? { name } : {}), ...(removed !== undefined ? { removed } : {}) }
     : (providers?.[providerId] ?? {});
@@ -62,6 +106,7 @@ export async function setProviderPresentation(providerId: string, patch: Provide
   });
 }
 export const readLocalCodexPresentation = () => readProviderPresentation('openai');
+export const getHostProviderPresentationStore = () => store;
 /** Login or disconnect is already committed; display preferences cannot reverse its result. */
 export async function retainProviderPresentationAfterAuthChange(providerId: string): Promise<void> {
   try {

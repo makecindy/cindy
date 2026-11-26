@@ -1,6 +1,7 @@
 import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import {
@@ -1300,9 +1301,9 @@ function SearchResultRow({
                 </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
+                <Badge size="xs">
                   {t(`ccAgent.search.kind.${item.matchKind}`)}
-                </span>
+                </Badge>
               </Tip>
             </div>
             {meta && (
@@ -1336,7 +1337,7 @@ function SearchResultRow({
                 setExpanded(true);
               }}
               className={cn(
-                'flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-left',
+                'flex w-full items-center rounded-lg border border-transparent px-2 py-1.5 text-left',
                 'text-10 leading-none text-[var(--text-tertiary)]',
                 'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text-primary)]',
               )}
@@ -1372,7 +1373,7 @@ function SearchHitRow({
         onSelect();
       }}
       className={cn(
-        'flex w-full items-start rounded-md border border-transparent px-2 py-1.5 text-left',
+        'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',
         'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)]',
       )}
     >

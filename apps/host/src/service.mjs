@@ -1,3 +1,4 @@
+import { holdError } from './agent/profile-hold.ts';
 import { clientErrorMessage } from './client-error.mjs';
 import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-contract';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.ts';
@@ -45,9 +46,9 @@ export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
     const held = deps.profileHold?.();
-    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throwIpcError('PRECONDITION_FAILED', held);
+    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throw holdError(held);
     if (held && pathname === '/api/ghosts/install-consent/resolve' && body?.confirmed !== false)
-      throwIpcError('PRECONDITION_FAILED', held);
+      throw holdError(held);
 
     for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
       if (pathname === `/api/browser-backend/${action}`)
@@ -137,7 +138,7 @@ export function createHostService(deps) {
         return { status: 201, body: await deps.createSession(body) };
     }
     if (url.pathname === '/api/sessions/update') {
-        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
+        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}, body.deleteTarget !== undefined ? { deleteTarget: body.deleteTarget } : undefined) };
     }
     if (url.pathname === '/api/sessions/set-effort') {
       // The desktop's set-effort, set-fast-mode and set-thinking-enabled, with their IPC arguments.

@@ -1,4 +1,5 @@
 import type { UsageAttribution } from './worker/opHandlers/modelUsageTx.js';
+import type { EngineKind } from '@cindy/maker-core';
 import { sql } from 'drizzle-orm';
 
 import {
@@ -11,14 +12,12 @@ import {
 import { dailyModelUsage } from './schema.js';
 import { localDayKey } from './dailySpend.js';
 import { getDbClient } from './client/current.js';
-import { createLogger } from '../logger.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 
-const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
   attribution?: UsageAttribution;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: EngineKind;
   model: string;
   money?: RegionalMoney | null;
   inputTokensDelta: number;
@@ -54,19 +53,15 @@ export async function incrementDailyModelUsage(
   // 做法都会静默丢账。
   const money = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
   const ledgerCurrency = currentLedgerCurrency();
-  if (money && money.currency !== ledgerCurrency) {
-    log.warn(
-      `daily model usage currency differs from ledger: ${money.currency} != ${ledgerCurrency}; ` +
-        'recording into its own currency row',
-    );
-  }
-  // 纯 token 行(无金额)归到当前账本币种,让它和同轮的金额落在同一行。
+
+  // An unpriced token row can use the default bucket. Priced rows use the quote currency.
   const rowCurrency = money?.currency ?? ledgerCurrency;
   const inputTokens = sanitizeTokens(delta.inputTokensDelta);
   const outputTokens = sanitizeTokens(delta.outputTokensDelta);
   const cacheReadTokens = sanitizeTokens(delta.cacheReadTokensDelta);
   const cacheCreateTokens = sanitizeTokens(delta.cacheCreateTokensDelta);
   if (
+    delta.agentKind !== 'acp' &&
     !money?.amount &&
     inputTokens === 0 &&
     outputTokens === 0 &&

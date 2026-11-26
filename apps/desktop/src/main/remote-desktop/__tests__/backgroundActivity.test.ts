@@ -31,34 +31,38 @@ describe('capture background activity is isolated from the chat window', () => {
 
 describe('remote desktop state polling', () => {
   // Regression: plugin live screens reused the desktop lease and showed a false
-  // desktop-control warning. Existing polling coverage only exercised idle state.
-  // Unit: invoke the production STATE handler with the same active lease, with
-  // and without a plugin session; real desktop viewing/control must remain visible.
+  // desktop-control warning. The notice is now only the desktop overlay, decided
+  // by syncControlledOverlay; the in-app banner and its `active` state are gone.
+  // Unit: run the production decision with the same active lease, with and
+  // without a plugin session; real desktop viewing/control must remain visible.
   it.each([false, true])(
     'excludes plugin screens from the desktop notice (controlling=%s)',
-    async (controlling) => {
+    (controlling) => {
       const active = { peer: 'other-computer', controlling };
       for (const liveSession of [null, {}]) {
-        let handler!: () => Promise<Record<string, unknown>>;
-        compile(between(source, '  ipcMain.handle(DESKTOP_LOCAL.STATE', '  let windowsSetupBusy'), {
-          ipcMain: {
-            handle: (_name: string, callback: typeof handler) => {
-              handler = callback;
-            },
+        const update = vi.fn();
+        compile(
+          between(source, 'function syncControlledOverlay', 'let displayAwake') +
+            'syncControlledOverlay();',
+          {
+            remoteDesktop: { state: active, displayId: '1' },
+            x11LocalCapture: false,
+            supportsPrivacyScreen: true,
+            liveSession,
+            privacyRequested: false,
+            controllerDirectory: { name: () => 'Mac' },
+            controlledOverlay: { update },
           },
-          DESKTOP_LOCAL: { STATE: 'state' },
-          assertTrustedAppRendererEvent: () => {},
-          readDeviceLinkSettings: () => ({ remoteDesktopEnabled: true }),
-          remoteDesktop: { state: active },
-          liveSession,
-          controlledOverlay: { visible: false },
-          permissions: { guideOpen: false },
-        });
-        expect((await handler()).active).toEqual(liveSession ? null : active);
+        );
+        expect(update).toHaveBeenCalledWith(
+          liveSession ? null : { displayId: '1', ...active, name: 'Mac' },
+        );
       }
     },
   );
-  it('does not probe Windows for routine polls, but checks fresh status on explicit requests', async () => {
+  // Unit: the mounted settings page requests service status even while its row is hidden.
+  it('checks fresh Windows status only when explicitly requested for an enabled desktop', async () => {
+    let enabled = true;
     const readWindowsDesktopSupport = vi.fn(async () => 'ready');
     const assertTrustedAppRendererEvent = vi.fn();
     let handler: (event: unknown, check?: unknown) => Promise<Record<string, unknown>>;
@@ -70,7 +74,7 @@ describe('remote desktop state polling', () => {
       },
       DESKTOP_LOCAL: { STATE: 'state' },
       assertTrustedAppRendererEvent,
-      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: false }),
+      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: enabled }),
       remoteDesktop: { state: null },
       liveSession: null,
       controlledOverlay: { visible: false },
@@ -83,13 +87,16 @@ describe('remote desktop state polling', () => {
     for (let poll = 0; poll < 60; poll++) {
       expect(await handler!({}, poll % 2 ? false : undefined)).not.toHaveProperty('windowsSupport');
     }
+    enabled = false;
+    expect(await handler!({}, true)).not.toHaveProperty('windowsSupport');
     expect(readWindowsDesktopSupport).not.toHaveBeenCalled();
+    enabled = true;
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'ready');
     readWindowsDesktopSupport.mockResolvedValue('missing');
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'missing');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
     await expect(handler!({}, 'true')).rejects.toThrow('INVALID_PARAMS');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
-    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(63);
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(64);
   });
 });

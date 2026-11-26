@@ -12,7 +12,10 @@ import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
 import { randomUUID } from 'node:crypto';
 import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
-import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { cloudManagementExecution } from '../host-settings/managementCalls.js';
+import { presentManagementDeviceCode } from '../host-settings/managementAuthorization.js';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
+import { readProviderConnectionIcons, setProviderConnectionIcon, setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
 import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
@@ -235,18 +238,21 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const realtime = (input as Record<string, unknown>).appendRealtimeModelsOnly;
   const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
   if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
     refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
     refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
     new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
+  if (realtime !== undefined && realtime !== true) return null;
+  if (realtime && entries.length !== 1) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
   if (append && (source || policy || refreshAgents)) return null;
   const withdrawn = (input as Record<string, unknown>).removeWithdrawnModels;
@@ -267,6 +273,7 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(realtime ? { appendRealtimeModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
     ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
       .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
@@ -319,6 +326,7 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
 export interface ProviderHandlerDeps {
   /** Test seam: production reads known locations on this desktop, never renderer paths. */
   localProviderSourceContext?: () => LocalSourceContext;
+  registerCloudCredentialReplacement?(handler: import('./ipcHandlerRegistry.js').IpcHandler): void;
   /**
    * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
    *
@@ -406,6 +414,8 @@ export interface ProviderHandlerDeps {
    * event 与不受信的子 frame 都会得到 false，于是退化为纯读。缺省视为不可信。
    */
   isTrustedSender?(event: unknown): boolean;
+  /** Main-owned Device Link context; only same-account linked reads, never mutations. */
+  isRemoteContextRead?(): boolean;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -483,6 +493,9 @@ export interface ProviderHandlerDeps {
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
   getDisabledProviders?(): Record<string, boolean>;
+  /** 供应商级「在模型选择器中隐藏」(生产 = model-disable-store 的 setProviderHidden)。 */
+  setProviderHidden?(providerId: string, hidden: boolean): void;
+  getHiddenProviders?(): Record<string, boolean>;
   listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
@@ -1322,6 +1335,7 @@ export function registerProviderHandlers(
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
       deferredProviderIds?: string[];
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
@@ -1391,6 +1405,7 @@ export function registerProviderHandlers(
         providerOrder: scope === 'available' ? [...new Set([...providerOrder, ...catalogOrder])] : providerOrder,
         modelVisibilityOverrides,
         ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
+        ...(trusted ? { hiddenProviders: deps.getHiddenProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1854,17 +1869,37 @@ export function registerProviderHandlers(
     if (provider.source === 'organization') {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
+    if (value.action === 'rename' || value.action === 'appearance') {
+      const name = typeof value.name === 'string' ? value.name.trim() : undefined;
+      const icon = value.icon;
+      if ((value.name !== undefined || value.action === 'rename') && (!name || name.length > 128)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid provider name');
+      }
+      if (value.action === 'appearance' && provider.source !== 'user' || icon !== undefined &&
+          (value.action !== 'appearance' || icon !== null && !isProviderConnectionIcon(icon) && !isProviderConnectionImage(icon))) {
+        throwIpcError('INVALID_PARAMS', 'Invalid connection artwork');
+      }
       if (provider.source === 'builtin') {
-        await setProviderPresentation(providerId, { name: value.name });
+        await setProviderPresentation(providerId, { name });
       } else {
         const id = storedCustomProviderId(providerId);
-        const name = value.name.trim();
         await withProviderConfigMutation(id, async () => {
           assertOptionalRequestedOwner(value);
           const current = await getCustomProvider(id);
           assertOptionalRequestedOwner(value);
-          if (!current || !await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          if (!current) throwIpcError('NOT_FOUND', 'Provider not found');
+          const icons = icon === undefined ? {} : readProviderConnectionIcons();
+          const previousIcon = Object.hasOwn(icons, providerId) ? icons[providerId] : null;
+          if (icon !== undefined) await setProviderConnectionIcon(providerId, icon);
+          if (!name || current.name === name) return;
+          try {
+            assertOptionalRequestedOwner(value);
+            if (!await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          } catch (error) {
+            assertOptionalRequestedOwner(value);
+            if (icon !== undefined) await setProviderConnectionIcon(providerId, previousIcon ?? null);
+            throw error;
+          }
           assertOptionalRequestedOwner(value);
           await refreshCatalogAfterCommit();
         });
@@ -1971,19 +2006,23 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
-    if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
-      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
+    if (
+      i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'provider-hidden' && i.kind !== 'reset'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider", "provider-hidden" or "reset"');
     }
     if (i.remoteDeviceId !== undefined && (
-      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      (i.kind !== 'provider' && i.kind !== 'provider-hidden') || typeof i.remoteDeviceId !== 'string' ||
       !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
       isProviderShareAgentDeviceId(i.remoteDeviceId)
     )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
     const disableKey = typeof i.remoteDeviceId === 'string'
       ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
       : i.providerId as string;
-    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
-    if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
+    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余必须显式带方向。
+    if (i.kind === 'provider-hidden') {
+      if (typeof i.hidden !== 'boolean') throwIpcError('INVALID_PARAMS', 'hidden required');
+    } else if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
     }
     if (
@@ -2046,6 +2085,16 @@ export function registerProviderHandlers(
         deps.broadcastChanged();
         return { ok: true };
       }
+      if (i.kind === 'provider-hidden') {
+        // 隐藏只改陈列:与停用同一串行队列、同样的目录成员校验(只在写入方向),
+        // 取消隐藏是删条目,目录漂移后也要能清掉。
+        if (!deps.setProviderHidden) throwIpcError('INTERNAL', 'provider visibility is not wired');
+        if (i.hidden) await requireCatalogProvider(i.providerId as string);
+        assertSameOwner();
+        persist(() => deps.setProviderHidden?.(disableKey, i.hidden as boolean));
+        deps.broadcastChanged();
+        return { ok: true };
+      }
       if (i.kind === 'model') {
         const modelIds = i.modelIds as string[];
         if (i.disabled) {
@@ -2079,6 +2128,10 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
+    // 隐藏只改陈列,不收窄任何调用权限:不走「先撤销云端备用分享,再确认本机收窄」这一步。
+    // 否则一次纯显示操作会撤掉别人正在用的分享,服务器不可达时隐藏 / 取消隐藏还会直接失败。
+    // 账号复核与串行写入队列照常(都在 run / enqueueDisableWrite 里)。
+    if (i.kind === 'provider-hidden') return enqueueDisableWrite(run);
     return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
@@ -2380,6 +2433,7 @@ export function registerProviderHandlers(
   });
 
   const modelSettingsGetContext = async (input: unknown) => {
+    const owner = captureProviderOwnerSession();
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
     const view = readContextTargets(targets);
@@ -2388,12 +2442,14 @@ export function registerProviderHandlers(
       if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200)) {
         throwIpcError('INVALID_PARAMS', 'invalid context session id');
       }
-      return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
+      const codexContext = await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null;
+      assertProviderMutationOwner(owner, 'active account changed during context read');
+      return { ...view, codexContext };
     }
     return view;
   };
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+    if (!deps.isRemoteContextRead?.()) assertTrustedProviderMutationSender(event);
     return modelSettingsGetContext(input);
   });
 
@@ -2664,9 +2720,12 @@ export function registerProviderHandlers(
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
           separated = splitCustomProviderHeaders(config);
-        } else if (options.appendSpeechModelsOnly) {
+        } else if (options.appendSpeechModelsOnly || options.appendRealtimeModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
-          try { config = appendSpeechModels(previous, config, deps.listPresets()); }
+          try {
+            config = appendSpeechModels(previous, config, deps.listPresets(),
+              options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech', deps.getModelCatalog().modelRegistry);
+          }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
@@ -2823,6 +2882,17 @@ export function registerProviderHandlers(
       }
     });
   }
+  // Credential-only cloud edits retain the latest configuration inside the native queue.
+  deps.registerCloudCredentialReplacement?.(async (event, providerId, keys) => {
+    assertTrustedProviderMutationSender(event);
+    const id = storedCustomProviderId(requireProviderId(providerId));
+    const current = await getCustomProvider(id);
+    if (!current || current.auth?.method === 'oauth') throwIpcError('INVALID_PARAMS', 'API-key connection required');
+    return updateProviderFromInput(event, current, keys, { source: 'manual-settings' }, latest => {
+      if (latest.auth?.method === 'oauth') throwIpcError('INVALID_PARAMS', 'connection changed');
+      return latest;
+    });
+  });
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, (event, input, keys, options) =>
     updateProviderFromInput(event, input, keys, options),
   );
@@ -2958,6 +3028,12 @@ export function registerProviderHandlers(
                   error: removed.error ?? 'remove_failed',
                 });
               }
+            }
+            if (Object.hasOwn(readProviderConnectionIcons(), runtimeProviderId)) {
+              await setProviderConnectionIcon(runtimeProviderId, null).catch(() => {
+                log.warn('Failed to clear connection icon after provider deletion', { providerId });
+              });
+              assertProviderMutationOwner(ownerAtIngress);
             }
             // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
             // 凭证/override 的恢复只覆盖删除本身失败的场景。
@@ -3241,7 +3317,9 @@ export function registerProviderHandlers(
       }
       const { ownerId, method } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
-      if (method === 'device' && !ownerId)
+      // A cloud settings page shows the device code on the controlling computer instead.
+      const management = cloudManagementExecution();
+      if (method === 'device' && !ownerId && !management)
         throwIpcError('INVALID_PARAMS', 'device login requires an initiating window');
       if (ownerId && !sender) {
         throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
@@ -3279,6 +3357,7 @@ export function registerProviderHandlers(
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
         }, method, (code) => {
+          if (management && isCurrent()) presentManagementDeviceCode(code);
           if (!ownerId || !sender || !isCurrent()) return;
           try {
             sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {

@@ -8,15 +8,20 @@ unreadCount, runningCount, badgeCount, complete}`。`accountId` 来自已验签 
 `version` 为数据库持久单调十进制字符串，`badgeCount=waitingCount+unreadCount`。
 `complete=false` 代表部分电脑缺失／离线／摘要过期，不得作为全局角标绝对值；不按通知次数加减。
 PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→未读结果→运行中，不上传消息或工具参数。
+三个计数与本机灵动岛同口径（`buildLocalAgentIslandTaskOverview`）：不含免打扰任务、Orca Worker
+和过了岛面 TTL 的旧未读结果，只计本机任务，由服务端按电脑累加；手机灵动岛与 App 角标都随此口径，
+桌面 Dock 角标与侧栏未读点仍按各自规则保留旧未读（2026-11-25 产品确认）。
 
 `PUT /api/device-link/live-activity` 接收原生 ActivityKit 的 start/update token、activityId、
 系统启用／移除状态、本地化状态文字、构建线、APNs 环境和「服务端地址＋账号」scope。
 `supportsInputPushToken` 表示 iOS 18+ 支持；`DELETE` 只注销本账号本设备的活动，不触碰普通推送。
 APNs 采用 `CindyAgentActivityAttributes`，`attributes.accountId` 存 scope，ContentState 的既有
 必填 JSON 字段保持不变。`confirmedAt` 是可选的 Unix 秒：新原生包本地更新时写入，旧
-APNs 内容缺省仍可解码，界面用“等待更新”代替未知时间。旧消费端忽略新增字段。手机仍不以
-不完整 Home 列表覆盖已接管的服务端活动；前台恢复只重发既有注册以请求服务端同步，
-不引入客户端自行编造的服务端版本或更改 APNs 的排序规则。
+APNs 内容缺省仍可解码；界面不显示这个时间（2026-11-23 去掉过期画面，带过期画面的旧原生包
+仍用“等待更新”代替未知时间）。必填的 `staleDetail` 与注册里的 `labels.stale` 照旧发送，
+已安装的原生包靠它解码，新界面不显示。旧消费端忽略新增字段。手机仍不以
+不完整 Home 列表覆盖已接管的服务端活动。前台可另从各执行电脑取得完整摘要（见下节）；
+后台和缺少可信摘要时沿用 APNs。
 `getPushRegistration.isStale` 是原生内部观测字段，JS 序列化 HTTP 注册前剥离，兼容旧接口。
 注册 PUT 可带 `staleAt?: number | null`（2026-11-19，Unix 秒）：手机上当前内容的过期时刻，
 来自原生已有的观测值，只在有 update token 时发送；它不进去重键，内容更新不触发重新注册。
@@ -50,3 +55,19 @@ notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS
 透传既有任务活动。既有 WS 协议和 allowlist 不变，无需升级已部署的自建中转。手机 token 同步
 测试覆盖不向自建地址发送账号凭证，原有连接与本地展示保持回归覆盖。
 服务端改动在独立 server 仓维护；上线和真实系统 Push 验收分别记录，不以本地测试代替已部署。
+
+## 前台通过执行电脑更新（2026-11-22）
+
+iPhone 在现有 `sessions` 订阅声明 `task-activity-snapshot-v1`。新版 Desktop 将本机上传
+APNs 服务所用的完整投影附加 `revision`，在 `agent-island:task-activity` 通道按变化推送，
+订阅时定向重放。该通道也支持只读 invoke，供前台初次核对。标题只给有权限的同账号设备。
+版本只在本台电脑的连接生命周期内比较。共享任务和供应商分享不参与；中转继续传输原有
+invoke/push 信封，无需变更服务端、凭证或自建中转协议。
+
+新版 iOS 客户端在已有活动成功注册且处于前台时读取设备目录，收到全部在线电脑的摘要后才
+写入实时活动。缺少任一在线电脑的能力、授权或摘要时保留服务器内容，存在离线电脑时不以
+空汇总结束。退后台释放本次订阅和在途结果。ActivityKit 在 iOS 17.2 及以上用采样时间排序；
+服务端时间戳仍是发送时间。较晚的推送覆盖刚确认的前台内容，或使正在读取的摘要无法写入时，
+App 使用已有订阅重新读取执行电脑。对同一活动，每个冲突时间戳在一次前台停留期间最多触发一次核对。
+后台继续由 APNs 更新。旧桌面、旧手机、自建中转降级路径不变。桌面和 iOS 可以分别升级，
+两者均支持后启用前台更新。iOS 需要包含新原生方法的安装包。

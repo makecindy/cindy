@@ -43,13 +43,11 @@ import {
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from './botGroupMentions';
-import { isActiveBotGroupMember } from './botGroupPresentation';
+import { chatGroupMentionRoster, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
 
 type MentionOption =
   | { kind: 'all' | 'allBots'; label: string }
   | { kind: 'member'; label: string; member: BotGroupMemberView };
-
-const withoutSelf = (members: readonly BotGroupMemberView[]) => members.filter((member) => member.isSelf !== true);
 
 export function useBotGroupMentionPicker({
   text,
@@ -100,9 +98,9 @@ export function useBotGroupMentionPicker({
   const allBotLabels = useMemo(() => [allBotsLabel, 'bots'], [allBotsLabel]);
   const resolveLabels = useMemo(() => allLabels ?? [allLabel], [allLabels, allLabel]);
   // You never name yourself: the host drops you from the targets (as on mobile).
-  const mentionMembers = useMemo(() => withoutSelf(members), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
-  const query = focused && !disabled ? findBotGroupMentionQuery(text, caret) : null;
+  const query = focused && !disabled ? findBotGroupMentionQuery(text, caret, activeMembers) : null;
   const options = useMemo<MentionOption[]>(() => {
     if (!query || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
@@ -196,7 +194,7 @@ export function useBotGroupMentionPicker({
     setCaret(nextCaret);
     setHighlight(0);
     // A dismissed picker stays closed only for the `@` it was closed on.
-    if (findBotGroupMentionQuery(value, nextCaret)?.start !== dismissedStart) setDismissedStart(null);
+    if (findBotGroupMentionQuery(value, nextCaret, activeMembers)?.start !== dismissedStart) setDismissedStart(null);
   };
 
   /** Arrow keys, Enter / Tab and Esc while the list is open; true when the key was used. */
@@ -254,7 +252,7 @@ export function useBotGroupMentionPicker({
       // Shared menu panel (DESIGN §4): Board border and menu surface; no shadow, per the
       // zero-shadow Bot surfaces (botDesignContract.test.ts). Capped and scrolling so a big
       // roster stays inside a short window or the narrow thread panel.
-      className="absolute bottom-full left-0 z-20 mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
+      className="absolute bottom-full left-0 z-page-float mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
     >
       <MenuHighlightLayer />
       {options.map((option, index) => (
@@ -301,9 +299,9 @@ export function useBotGroupMentionPicker({
     reset,
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+      resolveBotGroupMentions(value, { members: chatGroupMentionRoster(roster), allLabels: resolveLabels, allBotLabels, tracked }),
     /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
     ambiguous: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      ambiguousBotGroupMentionLabels(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+      ambiguousBotGroupMentionLabels(value, { members: chatGroupMentionRoster(roster), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

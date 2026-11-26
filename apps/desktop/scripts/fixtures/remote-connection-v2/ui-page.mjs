@@ -5,12 +5,13 @@ export default {
   name: 'remote-connection-v2',
   entry: './fixture.tsx',
   viewport: { width: 1180, height: 1100 },
-  real: 'RemoteControlSection with the Agent-Net (Beta) switch on: RemoteConnectionV2Section, RemoteConnectionTopology, TopologyFlow, PlatformGlyph, DeviceNodePopover, with only the MyDevicesPanel card of this computer above it, then RelayServicePanel',
+  real: 'RemoteControlSection with the Agent-Net (Beta) switch on: RemoteConnectionV2Section, RemoteConnectionTopology, TopologyFlow, PlatformGlyph, DeviceNodePopover, below My devices (MyDevicesPanel: this computer pinned, the other devices in the collapsible list, the 云主机 row for an organization member with the entry), then RelayServicePanel',
   notCovered:
     'Live device-link IPC, real RTT and traffic sampling (send/receive times are fixture values), relay switching, SSH hosts, remote desktop launch; the legacy list page is covered by remoteControlDevicesDeepLink.test.tsx',
   stubs: {
     'src/renderer/contexts/AuthContext': {
-      partial: 'export function useAuth() { return { deviceId: "self", user: null, mode: "cloud" }; }',
+      // The 云主机 row reads the signed-in member; only the cloud-computer case sets one.
+      partial: 'export function useAuth() { return { deviceId: "self", user: null, mode: "cloud" }; } export function useOptionalAuthUser() { return globalThis.__uiPageAuthUser ?? null; } export function useOptionalDataOwnerGeneration() { return 0; }',
     },
   },
   cases: {
@@ -44,6 +45,10 @@ export default {
     },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
+    'cloud-computer': {
+      about: 'Organization member with a running cloud computer and room for another: the 云主机 row under this computer, with 管理云主机 and 添加云主机; My devices expanded above the topology',
+      storage: V2_ON,
+    },
     'remote-switch': {
       about: 'Prototype: switch another computer between Device Link and Agent-Net from its topology card (switching, reverted, outdated, phone, control off, already Agent-Net)',
       storage: V2_ON,
@@ -60,9 +65,21 @@ export default {
       about: 'Controller requires Agent-Net: card and batch explain why it cannot switch a peer to Device Link',
       storage: V2_ON,
     },
+    'removed-rejoin': {
+      about: 'This computer was removed from the account on the official network: its card explains it and offers Rejoin, which runs once',
+      storage: V2_ON,
+    },
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
+    if (ui.case === 'removed-rejoin') {
+      // Removed from the account, this computer is off the device list; its own card still shows the removal.
+      await page.getByText(await ui.t('settings.devices.rejoin.hint'), { exact: true }).waitFor({ timeout: 3000 });
+      await ui.capture('removed');
+      await page.getByRole('button', { name: await ui.t('settings.devices.rejoin.action'), exact: true }).click();
+      await page.waitForFunction(() => window.__rejoinCalls === 1);
+      return;
+    }
     if (ui.case === 'rename-self') {
       const self = page.locator('[data-device-id="self"]');
       await self.getByText('Office desktop', { exact: true }).waitFor({ timeout: 3000 });
@@ -109,15 +126,23 @@ export default {
         assert.equal(await card.getByRole('button').count(), 0);
         await ui.capture('friend-card');
         await page.keyboard.press('Escape');
-        await page.getByText('future-app · Lab Mac', { exact: true }).waitFor();
+        await page.getByText('future-app · Lab Mac', { exact: true }).filter({ visible: true }).waitFor();
         await page.getByRole('button', { name: /^future-app · Lab Mac/ }).click();
         const unknownCard = page.getByRole('dialog');
         await unknownCard.getByText('future-app 1.4.0', { exact: false }).waitFor();
         assert.equal(await unknownCard.getByRole('button').count(), 0);
         await ui.capture('unknown-app-card');
         await page.keyboard.press('Escape');
-        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
+        await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).filter({ visible: true }).waitFor();
       }
+      return;
+    }
+    if (ui.case === 'cloud-computer') {
+      for (const action of ['manageCloud', 'addCloud']) {
+        await page.getByRole('button', { name: await ui.t(`settings.remoteControl.cloudComputer.actions.${action}`) }).waitFor();
+      }
+      await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).click();
+      await page.locator('[data-device-id]').filter({ visible: true }).first().waitFor();
       return;
     }
     if (ui.case === 'switched-here') {
