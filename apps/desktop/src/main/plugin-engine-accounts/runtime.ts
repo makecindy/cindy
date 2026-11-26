@@ -571,7 +571,6 @@ export async function acquirePluginEngineAccount(
     const picked = pinnedTarget === undefined ? pickRouteMember(members, strategy, {
       exclude, lastPicked: state.lastPicked.get(selectionProvider),
       weightCounters: state.weightCounters.get(selectionProvider),
-      quotaFirst: true,
     }) : null;
     weightStep = picked?.weightStep;
     let choice = pinnedTarget ?? picked?.key ?? null;

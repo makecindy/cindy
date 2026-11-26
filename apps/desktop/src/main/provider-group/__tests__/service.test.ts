@@ -63,6 +63,8 @@ const STUDIO = member('share', 'share:s1', 'anthropic');
 
 function harness(options: {
   members?: ProviderGroupMember[];
+  /** 组的选法；默认「按顺序」。 */
+  strategy?: ProviderGroupConfig['strategy'];
   row?: Partial<ProviderGroupSessionRow>;
   offline?: string[];
   autoSwitch?: boolean;
@@ -76,7 +78,7 @@ function harness(options: {
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
-    strategy: 'order',
+    strategy: options.strategy ?? 'order',
     autoSwitch: options.autoSwitch ?? true,
     members: options.members ?? [LOCAL, MINI, STUDIO],
   };
@@ -1561,6 +1563,7 @@ describe('beforeSend', () => {
 // 2026-10-21 用户裁决(provider-groups.md §6.2「任务进行中换号」)：上一轮结束后用户发下一条消息前，另一个账号的配额明显
 // 更该先用时提议换号；用户确认才换(可选这个任务以后自动换)，定时任务的消息不换。确认、等待与失败都在这里决定，
 // 客户端只问与转达选择，所以从服务入口验证。
+// 为了先用另一台的配额而换号只属于「快作废的先用」(2026-11-26)：这一段都按这个选法建组。
 describe('switching accounts between messages to balance quota', () => {
   // 本机：周配额才用 10%，快一周后才重置；mini：一天后重置，还剩 80%(明显更该先用)。时间单位与 harness 的 now 一致。
   const paceUsage = (updatedAt: number): Record<string, ClaudeSubscriptionUsageSnapshot> => ({
@@ -1569,17 +1572,24 @@ describe('switching accounts between messages to balance quota', () => {
   });
   function paced() {
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [LOCAL, MINI], usage });
+    const h = harness({ members: [LOCAL, MINI], usage, strategy: 'expiring' });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
     return { ...h, usage };
   }
+
+  // 2026-11-26 用户裁决：选了别的选法就完全按那个选法，不再为了配额劝换(回归：「按顺序」的组仍被劝着换到更急的那台)。
+  it('does not suggest moving for quota unless the group picks by expiring quota', async () => {
+    const h = harness({ members: [LOCAL, MINI], usage: paceUsage(1_000_000), strategy: 'order' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  })
 
   // #10893: physical-device equality must not hide a more urgent independent
   // account. The accepted message must retain that exact connection binding.
   it('balances quota between two independent connections on the same computer', async () => {
     const second = member('device', 'mini', 'anthropic-second');
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [MINI, second],
+    const h = harness({ members: [MINI, second], strategy: 'expiring',
       row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
       usage: { [MINI.key]: usage.local, [second.key]: usage[MINI.key] },
     });
@@ -1597,7 +1607,7 @@ describe('switching accounts between messages to balance quota', () => {
   const backup = member('device', 'backup', 'anthropic-backup');
   function remotePaced(stale: string[]) {
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [MINI, backup, LOCAL], stale,
+    const h = harness({ members: [MINI, backup, LOCAL], stale, strategy: 'expiring',
       row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
       usage: { [MINI.key]: usage.local, [backup.key]: usage[MINI.key] },
     });

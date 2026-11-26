@@ -134,7 +134,7 @@ export function createGroupContinuityClient(deps: {
         limit: effectiveConcurrencyLimit(member),
       }));
       const picked = pickRouteMember(members, first.config.strategy, {
-        exclude: excluded, lastPicked: cursors.get(cursor), quotaFirst: true, weightCounters: weightCounters.get(cursor),
+        exclude: excluded, lastPicked: cursors.get(cursor), weightCounters: weightCounters.get(cursor),
       });
       const key = picked.key;
       if (!key) throw routeMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;

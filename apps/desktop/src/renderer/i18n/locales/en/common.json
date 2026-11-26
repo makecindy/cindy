@@ -22674,7 +22674,6 @@
   "openAiAccountGroup": {
     "strategy": "Account group strategy",
     "leastHint": "Prefer the connection running the fewest tasks",
-    "quotaHint": "When subscription usage is available, Cindy uses it to choose eligible connections before applying the group strategy.",
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
     "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",
@@ -22984,8 +22983,7 @@
       "hiddenTag": "Hidden",
       "show": "Show in the model picker",
       "assignedBy": "New tasks are assigned by “{{strategy}}”",
-      "adjust": "Adjust in Smart routing",
-      "quotaFirst": "Between accounts or computers, whatever the strategy, the one with the most quota left before its next reset goes first when subscription usage can be read; the strategy decides among those that are about the same."
+      "adjust": "Adjust in Smart routing"
     },
     "sources": {
       "models_one": "{{count}} model",

@@ -21,8 +21,8 @@ export function RouteStrategyNote({ strategy, className, providerId }: { strateg
         <span className="text-13 leading-[1.5] text-[var(--text-secondary)]">
           {t('modelGroups.auto.assignedBy', { strategy: t(`modelGroups.strategy.${strategy}.title`) })}
         </span>
-        {/* 账号之间、电脑之间配额先比(2026-10-21 用户裁决)：选了别的选法也一样，在这里说清楚。 */}
-        <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('modelGroups.auto.quotaFirst')}</span>
+        {/* 账号之间、电脑之间与智能路由同一套选法规则(2026-11-26)：写出这个选法本身怎么挑。 */}
+        <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>
       </span>
       {open && (
         <button type="button" onClick={() => open(providerId)}

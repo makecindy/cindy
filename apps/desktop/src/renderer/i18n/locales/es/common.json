@@ -22889,7 +22889,6 @@
   "openAiAccountGroup": {
     "strategy": "Estrategia del grupo de cuentas",
     "leastHint": "Priorizar la conexión con menos tareas en ejecución",
-    "quotaHint": "Si se puede consultar el uso de las suscripciones, Cindy filtra las conexiones por uso antes de aplicar la estrategia del grupo.",
     "removeDescription": "Esta conexión dejará de recibir tareas nuevas del grupo. Las tareas en curso continuarán en esta conexión.",
     "mergeDescription": "Las tareas nuevas que se inicien en {{target}} podrán usar ambos proveedores. Las sesiones iniciadas, las claves y las tareas existentes se mantienen. Cindy probará la clave API de {{apiKey}} antes de vincular los proveedores.",
     "modelUnavailable": "Esta conexión no puede usar el modelo elegido para la prueba. Puedes probar de nuevo con otro candidato.",
@@ -23203,8 +23202,7 @@
       "hiddenTag": "Oculto",
       "show": "Mostrar en el selector de modelos",
       "assignedBy": "Las tareas nuevas se asignan según «{{strategy}}»",
-      "adjust": "Ajustar en Enrutamiento inteligente",
-      "quotaFirst": "Entre cuentas u ordenadores, sea cual sea la estrategia, si se puede leer el uso de la suscripción va primero la que tenga más cuota antes de su próximo reinicio; la estrategia decide entre las que están parecidas."
+      "adjust": "Ajustar en Enrutamiento inteligente"
     },
     "sources": {
       "models_one": "{{count}} modelo",

@@ -42,13 +42,7 @@ export interface PickOptions {
   /** 「按权重」上一次采用后的计数(键是成员的 key)。 */
   weightCounters?: ReadonlyMap<string, number>;
   /**
-   * 成员是同一个供应商的几个账号或几台电脑(账号池、供应商组)时为 true：它们可以互相替代，不论选法都先按配额收窄到
-   * 最急的那几个，选法只在这几个里挑(2026-10-21 用户裁决：快作废的额度最优先，对所有选法生效)。用户自己排的路由不传：
-   * 成员可以是不同的模型，列表顺序本身就是用户的意思，只有选「快作废的先用」时才按配额排。
-   */
-  quotaFirst?: boolean;
-  /**
-   * 按配额收窄时，读不到用量的成员是否与最急的那几个一起留下。供应商组的电脑为 true(2026-11-19 用户裁决)；
+   * 「快作废的先用」按配额收窄时，读不到用量的成员是否与最急的那几个一起留下。供应商组的电脑为 true(2026-11-19 用户裁决)；
    * 其他调用方不传，只在全部读不到时才都留下。
    */
   keepUnknownQuota?: boolean;
@@ -142,8 +136,9 @@ export function pickRouteMember(
 }
 
 /**
- * 这一次真正在比的那几个成员：能接的；「快作废的先用」或 quotaFirst 时再收窄到最急的那几个。
- * 实际选择与不暴露账号的池摘要共用。
+ * 这一次真正在比的那几个成员：能接的；「快作废的先用」时再收窄到最急的那几个。别的选法完全按用户选的来，
+ * 账号、电脑与智能路由同一套规则(2026-11-26 用户裁决：智能路由接管后全部按路由的逻辑，取代 10-21 的「快作废的
+ * 额度对所有选法优先」；额度用完的成员调用方本来就标成不能用)。实际选择与不暴露账号的池摘要共用。
  */
 export function routeSchedulingCandidates(
   members: readonly SchedulableMember[],
@@ -151,7 +146,7 @@ export function routeSchedulingCandidates(
   options: PickOptions = {},
 ): readonly SchedulableMember[] {
   const open = openMembers(members, options);
-  return strategy === 'expiring' || options.quotaFirst ? byQuota(open, options.keepUnknownQuota === true) : open;
+  return strategy === 'expiring' ? byQuota(open, options.keepUnknownQuota === true) : open;
 }
 
 /**

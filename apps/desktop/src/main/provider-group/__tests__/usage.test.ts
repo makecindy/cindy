@@ -105,7 +105,7 @@ describe('OpenAI group quota snapshots', () => {
       key: String(index), usable: true, paused: false, running: index === 0 ? 13 : 0,
       limit: 16, weight: 1, ...state(usage),
     }));
-    expect(pickRouteMember(members, 'expiring', { quotaFirst: true }).key).toBe('1');
+    expect(pickRouteMember(members, 'expiring').key).toBe('1');
     expect(idle?.appServerBuckets?.codex.primary?.windowMinutes).toBe(10_080);
   });
 

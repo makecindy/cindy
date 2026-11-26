@@ -13,9 +13,9 @@ import { ROUTE_STRATEGIES, routeStrategyOf, legacyPoolStrategy } from '../../../
 import { applyRouteWeightStep, pickRouteMember, routeMembersFull, type PickOptions, type SchedulableMember } from '../scheduler';
 import type { RouteStrategy } from '../../../shared/routeStrategy';
 
-/** 账号池与供应商组的调用方式：成员可以互相替代，配额先比。 */
+/** 账号池与供应商组用的就是智能路由那一个选择函数(2026-11-26 起不再另传「配额先比」)。 */
 const pickProviderGroupMember = (members: readonly SchedulableMember[], strategy: RouteStrategy, options: PickOptions = {}) =>
-  pickRouteMember(members, strategy, { quotaFirst: true, ...options }).key;
+  pickRouteMember(members, strategy, options).key;
 
 const m = (key: string, patch: Partial<SchedulableMember> = {}): SchedulableMember => ({
   key,
@@ -92,8 +92,8 @@ describe('pickProviderGroupMember', () => {
     expect(pickRouteMember([m('a'), m('b')], 'headroom')).toEqual({ key: 'a', plain: true });
   });
 
-  // 用户自己排的路由不传 quotaFirst：成员可以是不同的模型，列表顺序就是用户的意思。
-  it('keeps the listed order for user routes and applies the quota band only to expiring picks', () => {
+  // 列表顺序就是用户的意思：只有「快作废的先用」按配额排。
+  it('keeps the listed order and applies the quota band only to expiring picks', () => {
     const members = [m('first', { urgency: 0.2 }), m('urgent', { urgency: 4 })];
     expect(pickRouteMember(members, 'order').key).toBe('first');
     expect(pickRouteMember(members, 'rotate', { lastPicked: 'urgent' }).key).toBe('first');
@@ -138,33 +138,37 @@ describe('effective concurrency limit', () => {
   });
 });
 
-// 2026-10-21 用户裁决：不论选哪种组策略，都先用最急着用的额度(快作废的最优先，其次各账号平均)，
-// 组策略只在一样急的几台里挑。
-describe('the most urgent quota comes first for every strategy', () => {
-  it.each(ROUTE_STRATEGIES)('sends %s picks to the most urgent computer', (strategy) => {
-    expect(pickProviderGroupMember([m('calm', { urgency: 1 }), m('urgent', { urgency: 4, running: 3 })], strategy, {
-      lastPicked: 'urgent',
-    })).toBe('urgent');
+// 2026-11-26 用户裁决：智能路由接管账号与电脑以后全部按路由的规则(取代 10-21 的「不论选哪种组策略都先用最急的额度」)。
+// 只有「快作废的先用」按配额收窄；别的选法完全按用户选的来，额度用完的成员由调用方标成不能用。
+// 回归：选了「按顺序」「用完再换」时，别的账号额度更急就被换走，选法形同虚设。
+describe('only the expiring strategy ranks by quota; every other strategy is what the user chose', () => {
+  it.each([
+    ['expiring', {}, 'urgent'],
+    ['order', {}, 'calm'],
+    ['rotate', { lastPicked: 'urgent' }, 'calm'],
+    ['drain', { lastPicked: 'calm' }, 'calm'],
+    ['weighted', {}, 'calm'],
+    ['headroom', {}, 'calm'],
+    ['cheapest', {}, 'calm'],
+  ] as const)('%s', (strategy, options, expected) => {
+    expect(pickProviderGroupMember([m('calm', { urgency: 1 }), m('urgent', { urgency: 4, running: 3 })], strategy, options)).toBe(expected);
   });
 
-  it('lets each strategy choose among computers at least 90% as urgent as the most urgent one', () => {
+  it('lets expiring choose the least busy among computers at least 90% as urgent as the most urgent one', () => {
     const similar = [
       m('far', { urgency: 1.79 }),
       m('a', { urgency: 1.9, running: 2, weight: 1 }),
       m('b', { urgency: 2, running: 1, weight: 3 }),
       m('c', { urgency: 1.8, weight: 1 }),
     ];
-    expect(pickProviderGroupMember(similar, 'order')).toBe('a');
     expect(pickProviderGroupMember(similar, 'expiring')).toBe('c');
-    expect(pickProviderGroupMember(similar, 'rotate', { lastPicked: 'a' })).toBe('b');
-    expect(pickProviderGroupMember(similar, 'rotate', { lastPicked: 'c' })).toBe('a');
-    expect(pickProviderGroupMember(similar, 'weighted')).toBe('b');
+    expect(pickProviderGroupMember(similar, 'order')).toBe('far');
   });
 
-  // 默认(账号池等)：只要有一台读得到，读不到的就不参与；全部读不到时原样交给组策略。
-  it('drops unreadable members by default once one is known, and keeps plain strategies when none is known', () => {
-    expect(pickProviderGroupMember([m('shared'), m('own', { urgency: 0.2, running: 3 })], 'order')).toBe('own');
-    expect(pickProviderGroupMember([m('a', { running: 1 }), m('b', { urgency: null })], 'order')).toBe('a');
+  // 默认(账号池等)：「快作废的先用」时只要有一台读得到，读不到的就不参与；全部读不到时都留下。
+  it('drops unreadable members for expiring once one is known, and keeps them for other strategies', () => {
+    expect(pickProviderGroupMember([m('shared'), m('own', { urgency: 0.2, running: 3 })], 'expiring')).toBe('own');
+    expect(pickProviderGroupMember([m('shared'), m('own', { urgency: 0.2, running: 3 })], 'order')).toBe('shared');
     expect(pickProviderGroupMember([m('a', { running: 1 }), m('b')], 'expiring')).toBe('b');
   });
 
@@ -186,11 +190,13 @@ describe('the most urgent quota comes first for every strategy', () => {
     expect(pickProviderGroupMember(members.slice(0, 2), 'expiring', { keepUnknownQuota: true })).toBe('urgent');
   });
 
-  // 2026-10-21 用户裁决：5 小时配额快满、离重置还早的先不分新任务(刚开始就撞上限会被迫换电脑)，都是这样时照常分。
-  it('avoids a nearly full 5-hour window, even ahead of urgency and of unreadable computers, unless all are like that', () => {
+  // 2026-10-21 用户裁决：「快作废的先用」时 5 小时配额快满、离重置还早的先不分新任务，都是这样时照常分。
+  // 别的选法按用户选的来(2026-11-26)。
+  it('avoids a nearly full 5-hour window for expiring, even ahead of urgency and of unreadable computers, unless all are like that', () => {
     const tight = m('tight', { urgency: 9, fiveHourTight: true });
-    expect(pickProviderGroupMember([tight, m('calm', { urgency: 1 })], 'order')).toBe('calm');
-    expect(pickProviderGroupMember([tight, m('api')], 'order')).toBe('api');
-    expect(pickProviderGroupMember([tight, m('also', { urgency: 2, fiveHourTight: true })], 'order')).toBe('tight');
+    expect(pickProviderGroupMember([tight, m('calm', { urgency: 1 })], 'expiring')).toBe('calm');
+    expect(pickProviderGroupMember([tight, m('api')], 'expiring')).toBe('api');
+    expect(pickProviderGroupMember([tight, m('also', { urgency: 2, fiveHourTight: true })], 'expiring')).toBe('tight');
+    expect(pickProviderGroupMember([tight, m('calm', { urgency: 1 })], 'order')).toBe('tight');
   });
 });

@@ -7,6 +7,7 @@ import type { RemoteAgentCaps } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { normalizeProviderGroupConfig, type ProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
+import { parseSubscriptionPoolScheduling } from '../../../shared/subscriptionAccounts';
 import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc';
 import { createProviderGroupDirectory, type ProviderGroupDirectory, type ResolvedProviderGroupMember } from '../directory';
@@ -71,6 +72,27 @@ describe('subscription pools within a group', () => {
     }, { readPoolScheduling: async m => m.kind === 'local' ? summary(2, 0, 4) : summary(1, 3) });
     expect(await capped.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
       .toMatchObject({ kind: 'member', member: { key: remote.key } });
+  });
+
+  // 2026-11-26 audit: a computer with several accounts sent no remaining-quota share, so "headroom" fell back to plain
+  // list order whenever every computer had a pool. Minimal input: the second computer's next account has more left.
+  // An older computer that omits the field is still read as unknown.
+  it('picks by the remaining quota of each computer\'s next account, and treats an old summary as unknown', async () => {
+    const withHeadroom = (headroom: number | undefined) => ({ ...summary(1, 0), ...(headroom === undefined ? {} : { headroom }) });
+    const pick = (local: number | undefined, other: number | undefined) => harness({}, {}, [], { ...config, strategy: 'headroom' }, {
+      readPoolScheduling: async m => withHeadroom(m.kind === 'local' ? local : other),
+    }).pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true });
+    expect(await pick(20, 70)).toMatchObject({ kind: 'member', member: { key: remote.key } });
+    expect(await pick(undefined, 70)).toMatchObject({ kind: 'member', member: { key: remote.key } });
+    expect(await pick(undefined, undefined)).toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+
+  it('reads the optional remaining-quota share from a computer\'s summary and nothing more', () => {
+    const wire = { version: 1, accounts: 1, running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false };
+    expect(parseSubscriptionPoolScheduling(wire)).toMatchObject({ headroom: null });
+    expect(parseSubscriptionPoolScheduling({ ...wire, headroom: 64 })).toMatchObject({ headroom: 64 });
+    expect(parseSubscriptionPoolScheduling({ ...wire, headroom: 140 })).toMatchObject({ headroom: 100 });
+    expect(parseSubscriptionPoolScheduling({ ...wire, headroom: 'lots' })).toMatchObject({ headroom: null });
   });
 
   it('gives two ready accounts two round-robin turns without changing machine weights', async () => {

@@ -523,7 +523,8 @@ describe('ProviderGroupSection', () => {
       initialConfig={stored}
     />);
     await screen.findAllByTestId('provider-group-member');
-    expect(screen.getByText('账号之间、电脑之间不论选哪种选法，读得到订阅用量时都先用快重置、还剩得多的那个；差不多时才按选法挑。')).toBeTruthy();
+    // 2026-11-26：账号与电脑按智能路由同一套选法，说明写这个选法本身(通用，不写 Claude 专属的话)。
+    expect(screen.getByText('剩得多又快重置的订阅配额先用，不浪费；读不到配额的来源排在后面。')).toBeTruthy();
   });
 });
 

@@ -22585,7 +22585,6 @@
   "openAiAccountGroup": {
     "strategy": "账号组策略",
     "leastHint": "优先分给运行任务最少的连接",
-    "quotaHint": "能读取订阅用量时，会先按用量筛选连接，再按组策略分配。",
     "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
     "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
     "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
@@ -22891,8 +22890,7 @@
       "hiddenTag": "已隐藏",
       "show": "选模型时显示",
       "assignedBy": "新任务按「{{strategy}}」分配",
-      "adjust": "在智能路由里调整",
-      "quotaFirst": "账号之间、电脑之间不论选哪种选法，读得到订阅用量时都先用快重置、还剩得多的那个；差不多时才按选法挑。"
+      "adjust": "在智能路由里调整"
     },
     "sources": {
       "models_other": "{{count}} 个模型",

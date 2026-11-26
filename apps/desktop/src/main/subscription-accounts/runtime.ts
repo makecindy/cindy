@@ -459,8 +459,8 @@ function accountCandidates<T extends SchedulableMember & { id: string; accountKe
       weight: group[0].weight,
     };
   });
-  // Accounts of one provider are interchangeable: quota comes first whatever the strategy.
-  return { candidates, exclude, lastPicked, quotaFirst: true as const };
+  // The pool follows the chosen strategy exactly, as a smart route does; only "expiring" ranks by quota.
+  return { candidates, exclude, lastPicked };
 }
 
 /** Management acts on the account shown by readSubscriptionPool, including its retained homes.
@@ -2867,6 +2867,7 @@ export async function acquireSubscriptionAccount(
         totalRunning: grouped.candidates.reduce((sum, m) => sum + m.running, 0),
         full: !pinned && routeMembersFull(eligible, grouped),
         urgency: next?.urgency ?? null, fiveHourTight: next?.fiveHourTight ?? false,
+        headroom: next?.headroom ?? null,
       });
       return { scheduling: true as const };
     }

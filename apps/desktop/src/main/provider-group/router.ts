@@ -432,8 +432,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           weight: r.member.weight,
           urgency: schedule ? schedule.urgency : quota.urgency,
           fiveHourTight: schedule ? schedule.fiveHourTight : quota.fiveHourTight,
-          // 账号调度摘要不带余量：有摘要的成员按读不到处理，「余量最多的先用」时排在读得到的后面。
-          headroom: schedule ? null : quota.headroom,
+          // 有几个账号的电脑用它自己下一个会用的账号的余量；旧版电脑的摘要不带，按读不到处理(排在读得到的后面)。
+          headroom: schedule ? (schedule.headroom ?? null) : quota.headroom,
         };
       });
       const picked = pickRouteMember(schedulable, config.strategy, {
@@ -441,7 +441,6 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
         lastPicked: lastPicked.get(input.providerId) ?? null,
         roundPicks: roundPicks.get(input.providerId),
         weightCounters: weightCounters.get(input.providerId),
-        quotaFirst: true,
         keepUnknownQuota: true,
       });
       const key = picked.key;

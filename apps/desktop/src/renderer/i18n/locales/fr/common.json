@@ -22889,7 +22889,6 @@
   "openAiAccountGroup": {
     "strategy": "Stratégie du groupe de comptes",
     "leastHint": "Privilégier la connexion qui exécute le moins de tâches",
-    "quotaHint": "Lorsque les données d’utilisation des abonnements sont disponibles, Cindy filtre les connexions selon leur utilisation avant d’appliquer la stratégie du groupe.",
     "removeDescription": "Cette connexion ne recevra plus de nouvelles tâches du groupe. Les tâches en cours resteront sur cette connexion.",
     "mergeDescription": "Les nouvelles tâches lancées via {{target}} pourront utiliser les deux fournisseurs. Les connexions, les clés et les tâches existantes restent en place. Cindy testera la clé API de {{apiKey}} avant de relier les fournisseurs.",
     "modelUnavailable": "Cette connexion ne peut pas utiliser le modèle choisi pour le test. Un nouveau test peut essayer un autre modèle.",
@@ -23203,8 +23202,7 @@
       "hiddenTag": "Masqué",
       "show": "Afficher dans le sélecteur de modèles",
       "assignedBy": "Les nouvelles tâches sont réparties selon « {{strategy}} »",
-      "adjust": "Ajuster dans Routage intelligent",
-      "quotaFirst": "Entre comptes ou ordinateurs, quelle que soit la stratégie, celui qui a le plus de quota avant sa prochaine réinitialisation passe en premier lorsque l’utilisation de l’abonnement est lisible ; la stratégie départage ceux qui sont proches."
+      "adjust": "Ajuster dans Routage intelligent"
     },
     "sources": {
       "models_one": "{{count}} modèle",

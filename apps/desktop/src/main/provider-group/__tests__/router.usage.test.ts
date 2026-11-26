@@ -56,7 +56,7 @@ describe('OpenAI subscription group routing', () => {
     return { config, usage, router, pick, writeCooling, remote: config.members[1].key };
   }
 
-  it.each(ROUTE_STRATEGIES)('excludes exhausted windows and prefers the most urgent weekly quota (%s)', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('excludes exhausted windows for the %s strategy', async (strategy) => {
     const h = openaiHarness();
     h.config.strategy = strategy;
     h.usage.set(h.remote, quota(40, 60));
@@ -67,6 +67,12 @@ describe('OpenAI subscription group routing', () => {
         state: 'cooling', usageLimit: { resetAtMs: short === 100 ? NOW + 2 * 3_600_000 : NOW + 3 * 86_400_000 },
       });
     }
+  });
+
+  // Ranking by quota belongs to "expiring" only (2026-11-26: the chosen strategy is followed as on a smart route).
+  it('prefers the most urgent weekly quota when picking by expiring quota', async () => {
+    const h = openaiHarness();
+    h.config.strategy = 'expiring';
     h.usage.set('local', quota(10, 20));
     h.usage.set(h.remote, quota(40, 70, NOW + 3 * 3_600_000));
     expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
@@ -302,9 +308,10 @@ describe('provider-group quota routing', () => {
       });
       return pick.kind === 'member' ? pick.member.key : pick.kind;
     };
-    // Quota comes first for every strategy: a clearly lower-usage computer wins for everyone.
-    expect(await choose(true, false, [85, 90])).toBe(remote);
-    expect(await choose(false, false, [85, 90])).toBe(remote);
+    // Only the quota strategies rank by usage (2026-11-26); every other strategy keeps its own choice, here the group order.
+    const byQuota = strategy === 'expiring' || strategy === 'headroom';
+    expect(await choose(true, false, [85, 90])).toBe(byQuota ? remote : 'local');
+    expect(await choose(false, false, [85, 90])).toBe(byQuota ? remote : 'local');
     // Similar usage leaves the choice to the strategy, which starts with this computer in group order.
     expect(await choose(true, false, [10, 20])).toBe('local');
     expect(await choose(false, false, [10, 20])).toBe('local');
@@ -397,7 +404,9 @@ describe('provider-group quota routing', () => {
     expect(await context.router.pick(input)).toMatchObject({ kind: 'member', member: { key: remote } });
     context.usage.set('local', { ...snapshot(10, 20), scoped: [{ modelDisplayName: 'Opus', utilization: 100, resetsAt: 80_000 }] });
     expect(await context.router.pick(input)).toMatchObject({ kind: 'member', member: { key: remote } });
-    expect(await context.router.pick({ ...input, model: SONNET })).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    // "Use one up first" stays on the computer it moved to while that one can still take the task.
+    expect(await context.router.pick({ ...input, model: SONNET }))
+      .toMatchObject({ kind: 'member', member: { key: strategy === 'drain' ? remote : 'local' } });
   });
 
   it.each(ROUTE_STRATEGIES)('excludes an exhausted account for the %s strategy', async (strategy) => {
@@ -521,13 +530,13 @@ describe('received share computers in a provider group', () => {
   });
 
   it('ranks a share computer by the quota its sharer opened, without exhausting it or exposing it', async () => {
-    const h = shareHarness('order');
-    // 快重置还剩一半：比组所在电脑更急，按顺序也先分给它。
+    const h = shareHarness('expiring');
+    // 快重置还剩一半：比组里的电脑都急，先分给它。
     h.setShare(insights(50, NOW + HOUR));
     expect(await h.pick()).toMatchObject({ member: { key: h.shared } });
     // 刚重置、几乎用完：明显不急，回到组里读得到额度的电脑。
     h.setShare(insights(5, NOW + WEEK - HOUR));
-    expect(await h.pick()).toMatchObject({ member: { key: h.local } });
+    expect(await h.pick()).not.toMatchObject({ member: { key: h.shared } });
     // 周额度显示用完也不据此判冷却(只代表分享者的一个账号)；额度不随组状态外传，也不作为任务进行中换号的目标。
     h.setShare(insights(0, NOW + 2 * HOUR));
     const shareRow = (await h.router.view('anthropic', OPUS)).members.find((member) => member.key === h.shared);

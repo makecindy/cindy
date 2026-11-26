@@ -19,6 +19,9 @@ Claude 登录、额度及账号视图可选追加 `planDisplayName`；匿名用�
 回包为 `{providerId, model, scheduling}`；`scheduling` 为 null 或版本 1 的匿名对象：`accounts`（当前配额候选带中
 可新分配的不同账号数）、`running`（池策略下一账号负载）、`totalRunning`（含预约的池内总负载）、`full`、
 `urgency` 和 `fiveHourTight`。不含账号 ID、身份、目录、原生会话 ID 或真实账号指纹。
+2026-11-26 起版本 1 对象可选追加 `headroom`（池下一个会用的账号的剩余配额占比，0–100，读不到为 null），供组的「余量最多的先用」
+比较这台；不升版本号。旧执行端不回这个字段，组主按读不到处理（排在读得到的后面）；旧组主忽略它。解析只收有限数值并收敛到
+0–100，其他值按 null。不新增 channel、请求参数或权限。
 
 请求只接受合法供应商 ID 形状和有界模型字符串，再由执行端解析实际账号归属；命名订阅池也适用。
 共享任务访客和供应商分享 peer 不可读取；`ownComputer: true` 只能在已验证同账号上下文中生效，false 保持更严格的

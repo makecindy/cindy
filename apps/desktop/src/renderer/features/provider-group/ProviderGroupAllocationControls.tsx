@@ -33,9 +33,6 @@ export function ProviderGroupStrategyControl({ strategy, disabled, onChange, loc
           onValueChange={value => onChange(value as RouteStrategy)} />
       </div>
       <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t(`modelGroups.strategy.${strategy}.hint`)}</span>
-      <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-        {t(localAccounts ? 'openAiAccountGroup.quotaHint' : 'modelGroups.auto.quotaFirst')}
-      </span>
     </SettingsBlock>
   );
 }

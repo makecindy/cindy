@@ -22674,7 +22674,6 @@
   "openAiAccountGroup": {
     "strategy": "Strategie der Kontogruppe",
     "leastHint": "Verbindung mit den wenigsten laufenden Aufgaben bevorzugen",
-    "quotaHint": "Wenn Abo-Nutzungsdaten vorliegen, wählt Cindy die geeigneten Verbindungen anhand dieser Daten aus und wendet dann die Gruppenstrategie an.",
     "removeDescription": "Diese Verbindung erhält keine neuen Aufgaben aus der Gruppe. Laufende Aufgaben bleiben auf dieser Verbindung.",
     "mergeDescription": "Über {{target}} gestartete neue Aufgaben können beide Anbieter nutzen. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Vor der Verknüpfung testet Cindy den API-Schlüssel von {{apiKey}}.",
     "modelUnavailable": "Diese Verbindung kann das ausgewählte Testmodell nicht verwenden. Ein erneuter Test kann ein anderes Modell ausprobieren.",
@@ -22984,8 +22983,7 @@
       "hiddenTag": "Ausgeblendet",
       "show": "In der Modellauswahl anzeigen",
       "assignedBy": "Neue Aufgaben werden nach „{{strategy}}“ verteilt",
-      "adjust": "Unter „Smartes Routing“ anpassen",
-      "quotaFirst": "Zwischen Konten oder Computern gilt unabhängig von der Strategie: Lässt sich die Abo-Nutzung lesen, kommt zuerst, wer vor dem nächsten Zurücksetzen am meisten Kontingent übrig hat; bei ähnlichem Stand entscheidet die Strategie."
+      "adjust": "Unter „Smartes Routing“ anpassen"
     },
     "sources": {
       "models_one": "{{count}} Modell",
