@@ -1,5 +1,5 @@
 import { createDrizzleProxy } from '../../localDb/client/drizzleProxy';
-import type { DbTransport } from '../../localDb/client/DbTransport';
+import type { DbTransport, WorkerMessage } from '../../localDb/client/DbTransport';
 /**
  * scheduler storage DB-tier smoke。
  *
@@ -9,6 +9,7 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
 
 import { Scheduler, RUN_HEARTBEAT_INTERVAL_MS, type Schedule, type ScheduleRun } from '@cindy/maker-scheduler';
 import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -308,12 +309,29 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[], 
   };
 }
 
-// #12161, DB tier: a caller timeout used to release a retry while the old
-// worker write could still execute. Five delayed writes and one healthy retry
-// distinguish caller settlement from the lifetime of the database work.
+// #12161, DB tier. A stalled automatic run must regain its interval without
+// restart. Caller timeouts and promises in the engine tests cannot tell us how
+// many envelopes the worker still owns, or whether an UPDATE really ran.
 it('bounds timed-out replans and restores a claimed interval through the worker', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'scheduler-replan-'));
   const dbPath = join(dir, 'scheduler.db');
+  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const posted = new Set<number>();
+  const writeIds = new Set<number>();
+  const workerReplies = new Map<number, boolean>();
+  let envelopePeak = 0;
+  const portPost = Worker.prototype.postMessage;
+  const observePost = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, req, transfers) {
+    if (req.startState) {
+      if (!posted.size) this.on('message', (msg: WorkerMessage) => {
+        if ('id' in msg && posted.has(msg.id)) workerReplies.set(msg.id, msg.ok);
+      });
+      posted.add(req.id);
+      if (/^update /i.test(req.args.sql)) writeIds.add(req.id);
+      envelopePeak = Math.max(envelopePeak, posted.size - workerReplies.size);
+    }
+    return portPost.call(this, req, transfers);
+  });
   let transport: WorkerThreadTransport | undefined;
   let scheduler: Scheduler | undefined;
   try {
@@ -327,19 +345,21 @@ it('bounds timed-out replans and restores a claimed interval through the worker'
     transport = new WorkerThreadTransport({
       dbPath, drizzleDir: dir, rpcTimeoutMs: 500,
       workerScriptPath: join(__dirname, 'fixtures/gated-replan-worker.cjs'),
-      betterSqliteModulePath: require.resolve('better-sqlite3'),
+      betterSqliteModulePath: join(__dirname, 'fixtures/replan-sqlite.cjs'),
     });
     const db = createDrizzleProxy(transport);
     const storage = new DrizzleScheduleStorage(() => db);
     const arrivals = Array.from({ length: 6 }, () => Promise.withResolvers<void>());
     const entered: number[] = [];
     const finished: number[] = [];
+    const sqlStarts: number[] = [];
     const timedOut: number[] = [];
     const cancelled = new Set<number>();
     const lateReplies: { id: number; ok?: boolean }[] = [];
     let peak = 0;
     transport.on('log', ({ scope, payload }) => {
-      const e = payload as { event: string; id: number; ok?: boolean; cancelledBeforeStart?: boolean };
+      const e = payload as { event: string; id: number; ok?: boolean; nextFireAt: number; cancelledBeforeStart?: boolean };
+      if (scope === 'replan-test' && e.event === 'sqlite-start') sqlStarts.push(e.nextFireAt);
       if (scope === 'replan-test' && e.event === 'entered') {
         arrivals[entered.length]?.resolve();
         entered.push(e.id);
@@ -385,17 +405,50 @@ it('bounds timed-out replans and restores a claimed interval through the worker'
       expect(retryErrors[attempt - 1]).toContain(`RPC timeout: op="rawAll" id=${timedOut[attempt - 1]} `);
       expect((await storage.listActive())[0].nextFireAt).toBeUndefined();
       now += 30_000;
-      retry = scheduler.tick();
+      if (attempt < 5) retry = scheduler.tick();
     }
+    // Healthy reads and more ticks cannot post a sixth envelope to this path.
+    for (let probe = 0; probe < 2; probe++) {
+      await scheduler.tick();
+      expect(entered).toHaveLength(5);
+      expect(posted.size - workerReplies.size).toBe(5);
+    }
+    expect(sqlStarts).toEqual([]);
+    await transport.send('releaseReplans', { count: 1 });
+    // Now stall the entire port. Its one free slot admits a replan read, which
+    // times out before the worker can receive it. Further ticks must stay bounded.
+    await transport.send('blockWorker', { gate });
+    const beforeRead = posted.size;
+    retry = scheduler.tick();
+    await vi.waitFor(() => expect(posted.size).toBe(beforeRead + 1));
+    await vi.advanceTimersByTimeAsync(500);
     await retry;
+    const overBudget = scheduler.tick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posted.size).toBe(beforeRead + 1);
+    await overBudget;
+    expect(retryErrors.at(-1)).toContain('replan RPC limit reached');
+    expect(posted.size - workerReplies.size).toBe(5);
+    Atomics.store(gate, 0, 1);
+    Atomics.notify(gate, 0);
+    await storage.listActive(); // FIFO barrier after the blocked read
+    await scheduler.tick();
     expect(entered).toHaveLength(6);
     await vi.waitFor(() => expect(finished).toEqual([entered[5]]));
-    expect(peak).toBeLessThanOrEqual(5);
+    expect(peak).toBe(1);
+    expect(envelopePeak).toBe(5);
+    expect(sqlStarts).toEqual([now + 60_000]);
     expect((await storage.get('sch-1'))?.nextFireAt).toBe(now + 60_000);
     await transport.send('releaseReplans');
     expect(lateReplies).toEqual(timedOut.map(id => ({ id, ok: false })));
+    expect([...writeIds]).toEqual(entered);
+    expect(workerReplies.size).toBe(posted.size);
+    expect(sqlStarts).toEqual([now + 60_000]);
     expect((await storage.get('sch-1'))?.nextFireAt).toBe(now + 60_000);
   } finally {
+    Atomics.store(gate, 0, 1);
+    Atomics.notify(gate, 0);
+    observePost.mockRestore();
     await scheduler?.stop();
     vi.useRealTimers();
     await transport?.close();

@@ -533,6 +533,20 @@ const OUTSTANDING_PROBE_MAX_MS = 30 * 60_000;
  */
 const MAX_OUTSTANDING_PROBES = 2;
 
+type ScheduleRowStorage = Pick<ScheduleStorage, 'get' | 'update'>;
+
+// Scope the actual DB calls, including expiry fallback reads. Notifications
+// and their subscribers still use the connection's normal admission policy.
+function replanRowStorage(storage: ScheduleStorage): ScheduleRowStorage {
+  const withLimit = storage.withReplanRequestLimit?.bind(storage);
+  if (!withLimit) return storage;
+  const limit = MAX_OUTSTANDING_STORAGE_REQUESTS + MAX_OUTSTANDING_PROBES;
+  return {
+    get: id => withLimit(id, limit, () => storage.get(id)),
+    update: (id, patch, expected) => withLimit(id, limit, () => storage.update(id, patch, expected)),
+  };
+}
+
 /** 公开快照字段之外，再保留最近一次长跑诊断时间用于日志节流。 */
 /**
  * 排期补偿只需要这四项。单独抽出来是为了让"补排失败后的重试凭据"能纯内存留存:
@@ -612,6 +626,7 @@ export function normalizeScheduleModelGroup(value: unknown): string | undefined 
 
 export class Scheduler extends EventEmitter {
   private readonly storage: ScheduleStorage;
+  private readonly replanStorage: ScheduleRowStorage;
   private readonly runner: ScheduleRunner;
   private readonly captureFireContext?: () => () => void;
   private readonly clock: Clock;
@@ -876,6 +891,7 @@ export class Scheduler extends EventEmitter {
   constructor(opts: SchedulerOptions) {
     super();
     this.storage = opts.storage;
+    this.replanStorage = replanRowStorage(opts.storage);
     this.runner = opts.runner;
     this.captureFireContext = opts.captureFireContext;
     this.clock = opts.clock ?? { now: () => Date.now() };
@@ -1440,6 +1456,7 @@ export class Scheduler extends EventEmitter {
     schedule: Schedule,
     now: number,
     preGateDeadline?: number,
+    storage: ScheduleRowStorage = this.storage,
   ): Promise<boolean> {
     if (!hasExpired(schedule, now)) return false;
     // 同一条任务的过期写入还在途(上一轮的 storage.update 没 settle):这一轮不再
@@ -1471,7 +1488,7 @@ export class Scheduler extends EventEmitter {
     // (Codex P1 on #11577)。
     const generation = this.lifecycleGeneration;
     try {
-      updatePromise = this.storage.update(schedule.id, {
+      updatePromise = storage.update(schedule.id, {
         status: 'expired', nextFireAt: undefined,
       }, schedule);
       this.trackPendingExpireWrite(schedule.id, schedule.updatedAt, updatePromise);
@@ -1489,7 +1506,7 @@ export class Scheduler extends EventEmitter {
         // 保留**原来那次**读的 promise,超时后的迟到收口用它,不再另起一次读
         // (Codex P1 on #11577:另起的那次更慢或失败时,这一行的结果就丢了,
         // 缓存一直停在旧的截止时间,临近的触发要等到下一次 DB sync 才恢复)。
-        fallbackRead = this.getExpiryFallbackRead(schedule.id);
+        fallbackRead = this.getExpiryFallbackRead(schedule.id, storage);
         current = await withStorageTimeout(
           fallbackRead,
           Math.max(1, preGateRemaining(
@@ -1524,7 +1541,7 @@ export class Scheduler extends EventEmitter {
         // 迟到收口按状态对齐缓存并补发事件;迟到的 CAS 败者只对齐缓存(胜者
         // 自己已发过)。与真实异常同向:本轮绝不派发,持久化下轮重试。
         this.logPreGateTimeout(err.phase);
-        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise, generation, fallbackRead);
+        if (updatePromise) this.armExpireLateApply(schedule.id, updatePromise, generation, storage, fallbackRead);
         return true;
       }
       // Keep it available for persistence retry, but never dispatch past deadline.
@@ -1547,6 +1564,7 @@ export class Scheduler extends EventEmitter {
     scheduleId: string,
     update: Promise<Schedule | null>,
     generation: number,
+    storage: ScheduleRowStorage,
     fallbackRead?: Promise<Schedule | null>,
   ): void {
     void update.then(
@@ -1567,7 +1585,7 @@ export class Scheduler extends EventEmitter {
         }
         // CAS 败者:回读真实行。优先用**原来那次**读;没有就取一份在途的
         // (同一任务只保留一份,见 getExpiryFallbackRead)。
-        const read = fallbackRead ?? this.getExpiryFallbackRead(scheduleId);
+        const read = fallbackRead ?? this.getExpiryFallbackRead(scheduleId, storage);
         void read.then(
           (current) => {
             if (generation !== this.lifecycleGeneration) return;
@@ -1601,7 +1619,7 @@ export class Scheduler extends EventEmitter {
    * 永远对齐不进来(Codex P2 on #11577 / #12087)。代次不前进(一直健康或整体
    * 楔住)时照旧复用:未完成的 RPC 仍是一条任务一份,不重新打开无界增长的口子。
    */
-  private getExpiryFallbackRead(scheduleId: string): Promise<Schedule | null> {
+  private getExpiryFallbackRead(scheduleId: string, storage: ScheduleRowStorage): Promise<Schedule | null> {
     const existing = this.pendingExpireReads.get(scheduleId);
     if (existing && existing.generation >= this.listActiveGeneration) return existing.read;
     // 换发到上限:旧请求取消不了,再发一条就是无界的存储调用堆积(Codex P1 on
@@ -1613,7 +1631,7 @@ export class Scheduler extends EventEmitter {
     ) {
       return existing.read;
     }
-    const read = this.storage.get(scheduleId);
+    const read = storage.get(scheduleId);
     this.pendingExpireReads.set(scheduleId, { read, generation: this.listActiveGeneration });
     this.trackOutstandingRequest(expiryReadKey(scheduleId), read);
     const clear = () => {
@@ -4634,10 +4652,10 @@ export class Scheduler extends EventEmitter {
       // 代次快照:代次前进(listActive 从失败恢复)说明本次补排已被退役 —— 换发出来
       // 的那次会按恢复时刻落笔,本次不落笔(Codex P1 on #12087)。
       const generation = this.listActiveGeneration;
-      const current = await this.storage.get(scheduleId);
+      const current = await this.replanStorage.get(scheduleId);
       if (!current) return true; // 行已删,无需补排
       if (current.status !== 'active') return true; // paused / expired:resume 时自己会重算
-      if (await this.expireSchedule(current, now)) return true;
+      if (await this.expireSchedule(current, now, undefined, this.replanStorage)) return true;
       if (this.listActiveGeneration !== generation) {
         // 本次补排已被退役:让换发出来的那次落笔。凭据继续上膛 —— 换发出来的那次
         // 补排要靠它才发得出去(它按同一个凭据换发),摘掉就永远发不出去了。
@@ -4681,7 +4699,7 @@ export class Scheduler extends EventEmitter {
         // 为空:按一次性语义收尾,这条任务就停摆到进程重启(周期 DB sync 只重灌行、
         // 不补 nextFireAt,Codex P1 on #12087 的第五轮复评)。回读新版,按它自己的
         // recurring 语义补排。
-        const fresh = await this.storage.get(scheduleId);
+        const fresh = await this.replanStorage.get(scheduleId);
         if (
           fresh &&
           fresh.status === 'active' &&
@@ -4720,7 +4738,7 @@ export class Scheduler extends EventEmitter {
     attempt: ReplanAttempt,
     now: number,
   ): Promise<Schedule | null> {
-    const updated = await this.storage.update(scheduleId, {
+    const updated = await this.replanStorage.update(scheduleId, {
       lastFiredAt: attempt.startedAt,
       lastFinishedAt: now,
       status: 'expired',
@@ -4751,7 +4769,7 @@ export class Scheduler extends EventEmitter {
     freshNext: number,
     attempt: ReplanAttempt,
   ): Promise<Schedule | null> {
-    const write = this.storage.update(scheduleId, { nextFireAt: freshNext }, fresh);
+    const write = this.replanStorage.update(scheduleId, { nextFireAt: freshNext }, fresh);
     const receipt = this.recordReplanWrite(scheduleId, freshNext, attempt.issueSeq, fresh);
     void write.then(
       (row) => {
@@ -4803,7 +4821,7 @@ export class Scheduler extends EventEmitter {
       //   (这次触发已经被消耗掉了)。
       // - 行里有排期且不是退役写入 → 保留对方的结果:用户改的 cadence 优先于
       //   我们算的值(Codex P1 on #12087)。
-      const fresh = await this.storage.get(scheduleId);
+      const fresh = await this.replanStorage.get(scheduleId);
       if (
         fresh &&
         fresh.status === 'active' &&

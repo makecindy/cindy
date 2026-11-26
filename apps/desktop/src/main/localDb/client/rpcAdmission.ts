@@ -9,15 +9,19 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type DbRpcAdmissionClass = 'interactive' | 'background';
 
-// A scheduling CAS can be retried once the worker is fenced from starting it.
-const retryableWrite = new AsyncLocalStorage<boolean>();
-
-export function runAsRetryableDbWrite<T>(fn: () => T): T {
-  return retryableWrite.run(true, fn);
+export interface ReplanRpcLimit {
+  scheduleId: string;
+  limit: number;
 }
 
-export function isRetryableDbWrite(): boolean {
-  return retryableWrite.getStore() === true;
+const replan = new AsyncLocalStorage<ReplanRpcLimit>();
+
+export function withReplanRpcLimit<T>(scheduleId: string, limit: number, work: () => T): T {
+  return replan.run({ scheduleId, limit }, work);
+}
+
+export function currentReplanRpcLimit(): ReplanRpcLimit | undefined {
+  return replan.getStore();
 }
 
 const storage = new AsyncLocalStorage<DbRpcAdmissionClass>();

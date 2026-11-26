@@ -421,6 +421,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
     private readonly broadcastSessionPatched: typeof BroadcastSessionPatched,
+    readonly withReplanRequestLimit?: ScheduleStorage['withReplanRequestLimit'],
   ) {}
 
   private sidebarIndexGeneration = 0;

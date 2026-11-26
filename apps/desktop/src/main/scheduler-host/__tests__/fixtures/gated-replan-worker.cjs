@@ -19,8 +19,13 @@ parentPort.on('message', async (req) => {
     parentPort.postMessage({ id: req.id, ok: true });
     return;
   }
+  if (req.op === 'blockWorker') {
+    parentPort.postMessage({ id: req.id, ok: true });
+    Atomics.wait(req.args.gate, 0, 0, 5000); // Also unblock teardown if the test fails.
+    return;
+  }
   if (req.op === 'releaseReplans') {
-    for (const pending of held.splice(0)) await dispatch(pending);
+    for (const pending of held.splice(0, req.args?.count ?? held.length)) await dispatch(pending);
     parentPort.postMessage({ id: req.id, ok: true });
     return;
   }
