@@ -408,7 +408,7 @@ it('requests one GLM response for speech and an already delivered task result, r
   expect(f.handoff).toHaveBeenCalledExactlyOnceWith('current-input', 'follow up');
 });
 
-it.each(['before stop', 'after stop'] as const)(
+it.each(['before mute', 'before stop', 'after stop'] as const)(
   'resumes a pending GLM task result once when muted speech ends (commit %s)', async commitOrder => {
     const f = await fixture('glm-realtime');
     const requests = () => f.received.filter(e => e.type === 'response.create');
@@ -418,6 +418,10 @@ it.each(['before stop', 'after stop'] as const)(
     await f.drainEvents();
 
     f.session.deliverResult('earlier-task', 'Earlier task completed');
+    if (commitOrder === 'before mute') {
+      commit();
+      await f.drainEvents();
+    }
     f.session.setMuted(true);
     if (commitOrder === 'before stop') commit();
     await f.drainEvents();
@@ -436,6 +440,7 @@ it.each(['before stop', 'after stop'] as const)(
     expect(requests()).toHaveLength(1);
     expect(f.events).toContainEqual({ type: 'realtime-audio', itemId: 'answer' });
     expect(f.turns.some(([, role]) => role === 'user')).toBe(false);
+    expect(f.received.some(e => e.type === 'response.cancel')).toBe(false);
   },
 );
 

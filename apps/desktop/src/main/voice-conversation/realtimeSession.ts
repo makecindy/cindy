@@ -535,6 +535,8 @@ export class RealtimeVoiceSession {
     this.continueResponse();
   }
   private continueResponse(): void {
+    const queuedInput = this.queuedReply?.inputId;
+    if (queuedInput && this.inputs.get(queuedInput)?.suppressed) this.queuedReply = undefined;
     if (
       (!this.pendingContinuation && !this.queuedReply) ||
       // A background reply would supersede the GLM call awaiting its transcript or handoff receipt.

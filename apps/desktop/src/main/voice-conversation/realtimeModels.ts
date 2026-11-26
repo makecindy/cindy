@@ -120,7 +120,6 @@ function bindings(deps: SpeechCatalogDeps, selection?: RealtimeRoute) {
           },
           connection: protocol ? { url: realtimeSocketUrl(voiceBase, media.id, fixed), headers, protocol } : undefined,
         });
-        break;
       }
     }
   }

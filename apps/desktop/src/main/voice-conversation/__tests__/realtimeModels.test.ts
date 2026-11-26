@@ -246,4 +246,10 @@ it('keeps Flash on a runtime whose own key was confirmed when another chat route
   expect(realtimeModels(deps)).toMatchObject([{ id, agent: 'codex', protocol: 'glm-realtime' }]);
   expect(resolveRealtimeConnection(deps, { ...selected, modelId: id }).url).toBe('wss://open.bigmodel.cn/api/paas/v4/realtime');
   expect(() => resolveRealtimeConnection(deps, { ...selected, agent: 'claude-code', modelId: id })).toThrow('realtime_model_unavailable');
+  // A recovered sibling route must not invalidate the composer's saved runtime key.
+  const provider = deps.catalog.providers[0];
+  provider.models['claude-code']![0].userModelConfig!.discoveredMetadata = models[0].discoveredMetadata;
+  deps.readKey = (_provider, agent) => 'fixture-' + agent;
+  expect(realtimeModels(deps).map(m => m.agent)).toEqual(['claude-code', 'codex']);
+  expect(resolveRealtimeConnection(deps, { ...selected, modelId: id }).headers.authorization).toBe('Bearer fixture-codex');
 });
