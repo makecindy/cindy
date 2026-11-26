@@ -25,7 +25,7 @@ vi.mock('../../provider-group/managementScope.js', () => ({ captureProviderManag
 } }));
 vi.mock('../providerShareApi.js', () => ({ providerShareOwnerKey: () => f.scope }));
 vi.mock('../providerShareAvailabilityPolicy.js', () => ({ withAvailabilityPolicyLock: (work: () => unknown) => work(), rememberAvailabilityShare: (...args: any[]) => f.remember(...args) }));
-vi.mock('../providerShareAvailabilityGuests.js', () => ({ knownStandbyGuests: () => [], reconcileStandbyGuest: (...args: any[]) => f.reconcile(...args) }));
+vi.mock('../providerShareAvailabilityGuests.js', () => ({ knownStandbyGuests: () => realGuests.knownStandbyGuests(), reconcileStandbyGuest: (...args: any[]) => f.reconcile(...args) }));
 vi.mock('../../provider-group/store.js', () => ({ readProviderGroup: () => ({ allowFast: false }) }));
 vi.mock('../../provider-group/fastPolicyStore.js', () => ({ groupFastPolicyStore: { receive: async () => {}, requireOrigin: () => {}, outgoing: () => ({ group: { revision: 7, allowFast: false } }) } }));
 vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: () => ({ resolveMembers: async () => f.members }) }));
@@ -41,7 +41,7 @@ vi.mock('../../maker-host/subscription-fast-policy.js', () => ({ notifySubscript
 vi.mock('../providerShareUsageStore.js', async importOriginal => ({ ...await importOriginal<object>(), getProviderShareUsageStore: () => f.usage }));
 import { createProviderShareUsageStore } from '../providerShareUsageStore.js';
 import { createRemoteAgentHost } from '../../remote-agent/host/runHost.js';
-import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
+import { publishShareAvailability, prepareShareAvailability, refreshStandbyGuests, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
 import { readDeviceProviderCatalog, readRemoteProviderRoute } from '../../remote-agent/controller/deviceCatalog.js';
 import { remoteAgentProviders } from '../../../renderer/components/new-chat/unifiedModelSelection.js';
 vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: (...args: unknown[]) => f.invoke(...args) }));
@@ -65,6 +65,129 @@ beforeEach(async () => {
 });
 afterEach(() => { realDelegation.clearProviderShareDelegations(); fs.rmSync(dir, { recursive: true, force: true }); });
 describe('standby client production entry points (all identities/providers are local fakes)', () => {
+  // Unit: periodic/event refresh used to resend every settled 404. Two retained
+  // guests and real HTTP error parsing expose physical requests, independent
+  // recovery, and foreground admission without a cached successful grant.
+  it('paces missing standby probes while healthy guests and foreground admission remain fresh', async () => {
+    vi.useFakeTimers();
+    const missing = providerShareGuestPeer('missing', 'member', 'guest');
+    const healthy = providerShareGuestPeer('healthy', 'member', 'guest');
+    await realGuests.reconcileStandbyGuest(missing, 1);
+    await realGuests.reconcileStandbyGuest(healthy, 1);
+    let recovered = false;
+    f.request.mockImplementation(realApi.serverApiFetch);
+    f.netFetch.mockImplementation(async (url: string) => url.includes('/missing/') && !recovered
+      ? Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 })
+      : Response.json({ joinedAt: 1, assignments: [] }));
+    const count = (share: string) => f.netFetch.mock.calls.filter(([url]) => String(url).includes(`/${share}/`)).length;
+    try {
+      await refreshStandbyGuests();
+      await refreshStandbyGuests(); // model/group event immediately after settle
+      expect(count('missing')).toBe(1);
+      expect(count('healthy')).toBe(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshStandbyGuests();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshStandbyGuests();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshStandbyGuests();
+      expect(count('missing')).toBe(3); // next periodic tick is in the 120s failure window
+      expect(count('healthy')).toBe(5);
+      expect(realGuests.knownStandbyGuests()).toEqual([missing, healthy]);
+      expect(f.reconcile).toHaveBeenCalledTimes(5);
+      recovered = true;
+      await prepareShareAvailability(missing); // native open cannot be deferred by a probe failure
+      expect(count('missing')).toBe(4);
+      await refreshStandbyGuests();
+      expect(count('missing')).toBe(5); // success clears only this peer's failure window
+    } finally { vi.useRealTimers(); }
+  });
+  // Unit: prior coverage tested single preparation errors, not background
+  // cooldown isolation. One failed refresh followed by a boundary/new lease
+  // must still reach the physical transport, without borrowing old permission.
+  it.each(['account', 'endpoint', 'generation', 'transient'] as const)(
+    'keeps fresh background validation after %s', async boundary => {
+      const peer = providerShareGuestPeer('share', 'member', 'guest');
+      await realGuests.reconcileStandbyGuest(peer, 1);
+      f.request.mockRejectedValue(Object.assign(new Error('absent'), { code: boundary === 'transient' ? 'TIMEOUT' : 'NOT_FOUND' }));
+      await refreshStandbyGuests();
+      if (boundary === 'account') f.scope = 'other';
+      if (boundary === 'endpoint') f.endpoint = 'https://other.invalid';
+      if (boundary === 'generation') f.root = `${dir}/new-generation`;
+      // Keep the stored history available in the simulated new generation.
+      if (boundary === 'generation') await realGuests.reconcileStandbyGuest(peer, 1);
+      f.request.mockResolvedValue({ joinedAt: 1, assignments: [] });
+      await refreshStandbyGuests();
+      expect(f.request).toHaveBeenCalledTimes(2);
+    },
+  );
+  it('recovers on a later periodic probe without granting during the failure window', async () => {
+    vi.useFakeTimers();
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    await realGuests.reconcileStandbyGuest(peer, 1);
+    f.request.mockRejectedValue(Object.assign(new Error('absent'), { code: 'NOT_FOUND' }));
+    try {
+      await refreshStandbyGuests();
+      f.request.mockResolvedValue({ joinedAt: 1, assignments: [] });
+      await refreshStandbyGuests();
+      expect(f.request).toHaveBeenCalledTimes(1);
+      expect(f.apply).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshStandbyGuests();
+      expect(f.request).toHaveBeenCalledTimes(2);
+      expect(f.reconcile).toHaveBeenCalledWith(peer, 1);
+      expect(realGuests.knownStandbyGuests()).toEqual([peer]);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['account', 'endpoint', 'generation'] as const)('discards a late failed background probe after %s changes', async boundary => {
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    await realGuests.reconcileStandbyGuest(peer, 1);
+    const response = Promise.withResolvers<unknown>();
+    f.request.mockReturnValueOnce(response.promise);
+    const old = refreshStandbyGuests();
+    const rejected = expect(old).rejects.toThrow();
+    if (boundary === 'account') f.scope = 'other';
+    if (boundary === 'endpoint') f.endpoint = 'https://other.invalid';
+    if (boundary === 'generation') {
+      f.root = `${dir}/new-generation`;
+      await realGuests.reconcileStandbyGuest(peer, 1);
+    }
+    f.request.mockResolvedValue({ joinedAt: 1, assignments: [] });
+    await prepareShareAvailability(peer); // cannot join the old in-flight scope
+    response.reject(Object.assign(new Error('old 404'), { code: 'NOT_FOUND' }));
+    await rejected;
+    await refreshStandbyGuests();
+    expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.invalidate).not.toHaveBeenCalled();
+  });
+  // Real lease store prunes both wall and monotonic deadlines. A fresh O grant
+  // must bypass an older probe failure; an expired/revoked grant cannot do so.
+  it.each(['live', 'expired', 'revoked'] as const)('keeps the %s lease boundary during probe cooldown', async state => {
+    vi.useFakeTimers();
+    f.self = 'standby';
+    f.invalidate.mockImplementation(realDelegation.invalidateProviderShareDelegation);
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    await realGuests.reconcileStandbyGuest(peer, 1);
+    f.request.mockRejectedValue(Object.assign(new Error('absent'), { code: 'NOT_FOUND' }));
+    try {
+      await refreshStandbyGuests();
+      await realDelegation.applyProviderShareDelegation('owner-pc', {
+        op: 'delegate', action: 'grant', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        sessionId: 'task', providerId: 'local', model: 'allowed', generation: 'generation',
+      }, async () => ({ active: true, ownerDeviceId: 'owner-pc', generation: 'generation', expiresAt: Date.now() + 1_000 }), true);
+      if (state === 'expired') await vi.advanceTimersByTimeAsync(1_001);
+      if (state === 'revoked') {
+        const [item] = realDelegation.delegatedProviderShareLeases();
+        realDelegation.invalidateProviderShareDelegation(peer, 'task', item.lease.nonce);
+      }
+      f.leases = realDelegation.delegatedProviderShareLeases();
+      f.request.mockResolvedValue({ joinedAt: 1, assignments: [] });
+      await refreshStandbyGuests();
+      expect(f.request).toHaveBeenCalledTimes(state === 'live' ? 2 : 1);
+      // A live grant gets a fresh read; the empty server assignment revokes it.
+      expect(realDelegation.delegatedProviderShareSessionAllowed(peer, 'task')).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
   // Unit: NOT_FOUND is not proof of membership removal. The old mock-only
   // assertion required purging history shared by owner-direct and standby runs.
   // Real HTTP error + durable membership + runHost purge expose that data loss.
