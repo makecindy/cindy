@@ -377,6 +377,22 @@ describe('appBadgeService', () => {
     expect(setOverlayIcon).toHaveBeenLastCalledWith(null, '');
   });
 
+  // The Windows badge clear case only covers zero. Muting a group can leave other attention
+  // visible, so exercise a decreasing, still-positive count through the projection IPC (unit).
+  it('redraws a lower Windows badge without flashing again', async () => {
+    await freshService('win32');
+    await publish({ sender: mainWebContents }, 2);
+    expect(flashFrame).toHaveBeenLastCalledWith(true);
+    flashFrame.mockClear();
+
+    await publish({ sender: mainWebContents }, 1);
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    expect(flashFrame).not.toHaveBeenCalled();
+
+    await publish({ sender: mainWebContents }, 0);
+    expect(flashFrame).toHaveBeenLastCalledWith(false);
+  });
+
   it('refreshes Windows descriptions without changing attention or flashing again', async () => {
     const service = await freshService('win32');
     await publish({ sender: mainWebContents }, 3);

@@ -39,9 +39,12 @@ export function AppBadgeAttentionSync() {
   const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [cloud, rosterRemoteBots]);
   useCompanionIslandChats(allBots, bots, unread, remoteBots);
   useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
-  const localTeammates = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length
-    + groups.filter(group => !group.archived && isBotGroupUnread(group)).length;
-  const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
+  const unreadLocalBots = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length;
+  const unreadGroups = groups.filter(group => !group.archived && isBotGroupUnread(group));
+  const teammates = unreadLocalBots + unreadGroups.length + remoteBots.filter(isRemoteBotUnread).length;
+  const systemBadgeGroups = window.electronAPI?.platform === 'win32'
+    ? unreadGroups.filter(group => group.notificationMode !== 'none').length
+    : unreadGroups.length;
   const owner = getDataOwnerGeneration();
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
@@ -92,7 +95,7 @@ export function AppBadgeAttentionSync() {
     if (isLoading || error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
-        count: count + localTeammates,
+        count: count + unreadLocalBots + systemBadgeGroups,
         sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
@@ -101,6 +104,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, localTeammates, isLoading, error, catalogSessionIds, owner]);
+  }, [count, unreadLocalBots, systemBadgeGroups, isLoading, error, catalogSessionIds, owner]);
   return null;
 }

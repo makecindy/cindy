@@ -92,7 +92,8 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
     projectedAttentionCount = count;
     // 曾进入普通目录的任务始终归投影管理，删除/断连后不能被旧通知重新计入。
     for (const sessionId of uniqueSessionIds) projectedSessionIds.add(sessionId);
-    if (getAttentionCount() !== previousCount) applyBadge();
+    // Removing attention can redraw the overlay without requesting another flash.
+    if (count !== previousCount) applyBadge(count === 0 || count > previousCount);
   });
   ipcMain.handle(
     'notification:mark-session-attention',
@@ -170,10 +171,10 @@ export function hasSessionAttention(sessionId: string): boolean {
   return attentionSessionIds.has(sessionId);
 }
 
-function applyBadge(): void {
+function applyBadge(updateWindowsFlash = true): void {
   const count = getAttentionCount();
   if (process.platform === 'win32') {
-    applyWindowsBadge(count);
+    applyWindowsBadge(count, updateWindowsFlash);
     return;
   }
   applyCountBadge(count);

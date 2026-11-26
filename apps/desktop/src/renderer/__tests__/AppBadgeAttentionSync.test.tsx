@@ -101,6 +101,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({ isOrcaWorkerSession: () => false }
 
 import { AppBadgeAttentionSync } from '../components/layout/AppBadgeAttentionSync';
 import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSessionDisplayRunningState';
+import { useNavigationAttention } from '../lib/navigationAttentionStore';
 
 afterEach(() => {
   cleanup();
@@ -335,4 +336,28 @@ it('excludes archived group unread state from the app badge', () => {
   botState.unreadGroups = new Set(['active-group', 'archived-group']);
   render(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+});
+
+// bot-group-chat.md, section 8.5: group settings must preserve unread while suppressing system reminders.
+// The archived-group case does not exercise a visible, unread group with notifications disabled (unit).
+it('keeps muted group unread in navigation without adding it to the Windows taskbar badge', () => {
+  vi.stubGlobal('electronAPI', { platform: 'win32', notificationSetAppAttentionCount: state.publish });
+  const group = { id: 'group', archived: false, notificationMode: 'all' };
+  botState.groups = [group];
+  botState.unreadGroups = new Set([group.id]);
+  const view = render(<AppBadgeAttentionSync />);
+  const navigation = renderHook(useNavigationAttention);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+
+  botState.groups = [{ ...group, notificationMode: 'none' }];
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
+  expect(navigation.result.current.teammates).toBe(1);
+
+  state.publish.mockClear();
+  botState.groups = [...botState.groups, { id: 'another-muted-group', notificationMode: 'none' }];
+  botState.unreadGroups.add('another-muted-group');
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(navigation.result.current.teammates).toBe(2);
+  expect(state.publish).not.toHaveBeenCalled();
 });
