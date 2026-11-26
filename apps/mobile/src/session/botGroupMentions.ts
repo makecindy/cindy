@@ -1,6 +1,6 @@
 import type { BotGroupMemberView, BotGroupMention } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
-import { botGroupMentionRanges, splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
+import { chatGroupHumanDisplayName, chatGroupMentionRoster } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupMentionRanges, resolveBotGroupMentions, splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 
 // Sent text keeps its original locale and wording across product renames.
 // Share historical labels with segmentation so a shorter member name cannot split them.
@@ -52,7 +52,19 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
   // A missing target position means the current roster cannot account for the
   // saved recipients. In that case there is no basis to infer personal ranges.
   const candidates = groups.every(ranges => ranges.length) ? groups.flat() : [];
-  const personal = groups.flatMap(ranges => ranges.length === 1 ? ranges : [])
+  // An isolated occurrence of an unambiguous typed name would address that
+  // member even without a pick. Check all labels, including unaddressed names,
+  // so a longer match cannot explain away this occurrence.
+  const roster = chatGroupMentionRoster(members);
+  const typedLabels = roster.flatMap(member => [member.name, member.nickname || member.displayName || member.name]);
+  const possibleRanges = rangesFor([...context.labels, ...typedLabels, ...allLabels, ...allBotsLabels]);
+  const personal = groups.flatMap((ranges, index) => ranges.length === 1 ? ranges : ranges.filter(range => {
+    if (possibleRanges.some(other => (other.start !== range.start || other.end !== range.end) && overlaps(other, range))) return false;
+    const spelling = text.slice(range.start, range.end);
+    if (!typedLabels.some(label => spelling === `@${label.trim()}`)) return false;
+    const typed = resolveBotGroupMentions(spelling, { members: roster, allLabels, allBotLabels: [...allBotsLabels, 'bots'] });
+    return typed.botIds.length === 1 && typed.botIds[0] === mentions.botIds[index];
+  }))
     .filter(range => candidates.includes(range) && !candidates.some(other => other !== range && overlaps(other, range))
       && !broadcasts.some(ranges => ranges.some(broadcast => overlaps(range, broadcast))));
   return [...fixedBroadcasts.filter(range => !fixedBroadcasts.some(other => other !== range && overlaps(other, range))), ...personal]

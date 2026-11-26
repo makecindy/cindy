@@ -328,6 +328,14 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
     expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
     expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann 你好 @Ann', { members: [ann] });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann', '@Ann']);
+    await renderBody('@Ann 你好 @Team @Ann', {
+      members: [ann, member('team', 'Team @Ann')], labels: ['Ann', 'Team @Ann'],
+      mentions: { all: false, botIds: ['ann-1', 'team'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann 你好 @Team @Ann');
     await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
     expect(links()).toHaveLength(0);
     await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
