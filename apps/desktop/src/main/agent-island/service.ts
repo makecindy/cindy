@@ -41,6 +41,7 @@ import {
   findSecondaryWindowForGroupChat,
   findSecondaryWindowForSession,
   isSecondaryAppWindow,
+  queueSecondaryWindowBootGroupNavigation,
   updateSecondaryWindowVisibleSessions,
 } from '../secondaryWindowRegistry.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
@@ -3165,13 +3166,22 @@ export class AgentIslandService {
       const secondaryGroup = findSecondaryWindowForGroupChat({ groupId: group.input.groupId });
       if (secondaryGroup) {
         this.raiseWindowIfNeeded(secondaryGroup.window);
-        if (!secondaryGroup.isBooting) {
-          sendWindowDeepLink(secondaryGroup.window, {
-            type: 'chat-message',
-            groupId: group.input.groupId,
-            messageId: group.input.messageId,
-            ...(group.input.threadRootId ? { threadRootId: group.input.threadRootId } : {}),
-          });
+        const payload = {
+          type: 'chat-message' as const,
+          groupId: group.input.groupId,
+          messageId: group.input.messageId,
+          ...(group.input.threadRootId ? { threadRootId: group.input.threadRootId } : {}),
+        };
+        if (secondaryGroup.isBooting) {
+          queueSecondaryWindowBootGroupNavigation(
+            secondaryGroup.window,
+            { groupId: group.input.groupId },
+            (win) => {
+              sendWindowDeepLink(win, payload);
+            },
+          );
+        } else {
+          sendWindowDeepLink(secondaryGroup.window, payload);
         }
         return;
       }
@@ -3196,7 +3206,7 @@ export class AgentIslandService {
       const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
       if (focusChanged) this.publish();
       this.raiseWindowIfNeeded(secondarySession.window);
-      if (secondarySession.matchKind === 'split-pane') {
+      if (secondarySession.matchKind === 'navigate') {
         sendWindowDeepLink(secondarySession.window, {
           type: 'session',
           id: nextSessionId,

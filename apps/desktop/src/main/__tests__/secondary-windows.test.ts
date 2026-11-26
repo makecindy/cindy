@@ -207,7 +207,21 @@ describe('secondary window target matching', () => {
     updateSecondaryWindowVisibleSessions(remoteTaskWin as unknown as BrowserWindow, ['lead-1', 'split-2']);
     expect(findSecondaryWindowForSession({ sessionId: 'split-2' })).toEqual({
       window: remoteTaskWin,
-      matchKind: 'split-pane',
+      matchKind: 'navigate',
+    });
+
+    // 文件浏览页聊天栏折叠（未上报可见会话）需要导航切回对话；聊天栏展开时保持 direct
+    remoteTaskWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=file-task#/cc-agent/files/file-task';
+    updateSecondaryWindowVisibleSessions(remoteTaskWin as unknown as BrowserWindow, null);
+    expect(findSecondaryWindowForSession({ sessionId: 'file-task' })).toEqual({
+      window: remoteTaskWin,
+      matchKind: 'navigate',
+    });
+    updateSecondaryWindowVisibleSessions(remoteTaskWin as unknown as BrowserWindow, 'file-task');
+    expect(findSecondaryWindowForSession({ sessionId: 'file-task' })).toEqual({
+      window: remoteTaskWin,
+      matchKind: 'direct',
     });
 
     // 远程伙伴拖出后 URL 不含 sessionId，按 companion 身份命中

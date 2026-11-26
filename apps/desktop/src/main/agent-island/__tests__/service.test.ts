@@ -7965,6 +7965,7 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
     const focus = vi.fn(() => { focused = true; });
     const moveTop = vi.fn();
     const setAlwaysOnTop = vi.fn();
+    const webContentsListeners = new Map<string, Array<() => void>>();
     const win = {
       isDestroyed: () => destroyed,
       isFocused: () => focused,
@@ -7981,7 +7982,11 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
         isDestroyed: () => destroyed,
         isLoading: () => false,
         getURL: () => currentUrl,
-        on: vi.fn(),
+        on: vi.fn((event: string, listener: () => void) => {
+          const list = webContentsListeners.get(event) ?? [];
+          list.push(listener);
+          webContentsListeners.set(event, list);
+        }),
         send,
       },
     } as unknown as BrowserWindow;
@@ -7993,6 +7998,9 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
       focus,
       setUrl: (next: string) => { currentUrl = next; },
       setFocused: (next: boolean) => { focused = next; },
+      emitWebContents: (event: string) => {
+        for (const listener of [...(webContentsListeners.get(event) ?? [])]) listener();
+      },
       destroy: () => {
         destroyed = true;
         unregisterSecondaryAppWindow(win);
@@ -8175,6 +8183,107 @@ describe('灵动岛点击优先唤起已拖出的副窗口', () => {
       expect(consumeHandler({ sender: secondary.win.webContents }, 'pane-b', entryId)).toEqual({
         ok: true,
         consumed: true,
+      });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('navigates a files-view secondary window back to chat when its chat rail is collapsed, but keeps it when expanded', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=files-task#/cc-agent/files/files-task',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'files-task', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockReturnValue(secondary.win);
+      // 聊天栏折叠时 WorkdirBrowseRoute 上报 null，点击灵动岛必须导航切回对话
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        null,
+      );
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('files-task');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'files-task' });
+      expect(main.focus).not.toHaveBeenCalled();
+
+      // 聊天栏展开（已上报可见会话）时仅聚焦副窗，不离开文件页
+      secondary.send.mockClear();
+      secondary.setFocused(false);
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        'files-task',
+      );
+      (service as unknown as { focusSession(id: string): void }).focusSession('files-task');
+
+      expect(secondary.focus).toHaveBeenCalledTimes(2);
+      expect(secondary.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('delivers the clicked group message anchor once a booting group secondary window finishes boot navigation', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-boot#/cc-agent/boot',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/groups/grp-boot', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setGroupChat('grp-boot', {
+        groupId: 'grp-boot',
+        name: 'Boot Group',
+        messageId: 'msg-42',
+        threadRootId: 'root-7',
+        mentioned: true,
+        preview: 'Check this',
+        lastMessageAt: Date.now(),
+        members: [],
+      });
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:grp-boot');
+
+      // 启动网关阶段先聚焦但不抢跑发导航，避免与 SecondaryWindowBootGate 竞态
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+
+      // SecondaryWindowBootGate 落到目标群聊路由后立即补发消息锚点，且仅补发一次
+      secondary.setUrl(
+        'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-boot#/bots/groups/grp-boot',
+      );
+      secondary.emitWebContents('did-navigate-in-page');
+      secondary.emitWebContents('did-navigate-in-page');
+
+      expect(secondary.send).toHaveBeenCalledTimes(1);
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'chat-message',
+        groupId: 'grp-boot',
+        messageId: 'msg-42',
+        threadRootId: 'root-7',
       });
     } finally {
       secondary.destroy();

@@ -17,6 +17,12 @@ interface SecondaryWindowMeta extends SecondaryWindowBootInfo {
   createdOrder: number;
   lastFocusedOrder: number;
   reportedSessionIds: ReadonlySet<string>;
+  /** 群聊副窗尚在 /cc-agent/boot 启动期间收到的消息定位，落到目标群聊路由后立即补发。 */
+  pendingBootGroupDelivery: {
+    groupId: string;
+    conversationKind: 'group' | 'direct';
+    deliver: (win: BrowserWindow) => void;
+  } | null;
 }
 
 export type SecondaryWindowUrlTarget =
@@ -25,6 +31,8 @@ export type SecondaryWindowUrlTarget =
       sessionId: string;
       workerSessionId: string | null;
       deviceId: string | null;
+      /** true 表示停在 /cc-agent/files/:sessionId 文件浏览页，聊天栏可能已折叠。 */
+      isFilesView?: boolean;
     }
   | {
       kind: 'companion';
@@ -51,7 +59,13 @@ export interface SecondaryWindowGroupMatchTarget {
 
 export interface SecondaryWindowSessionMatch {
   window: BrowserWindow;
-  matchKind: 'direct' | 'booting' | 'split-pane';
+  /**
+   * - `direct`: 副窗当前主视图已直接展示该会话对话（无需再发导航）。
+   * - `booting`: 副窗尚在 `/cc-agent/boot` 网关启动中，将由 boot gate 自行落地。
+   * - `navigate`: 副窗承载该会话但对话当前未在前台展示（后台分屏栏或文件页聊天栏已折叠），
+   *   聚焦后需要向该副窗发送 `deep-link:navigate` 以切到对话视图。
+   */
+  matchKind: 'direct' | 'booting' | 'navigate';
 }
 
 export interface SecondaryWindowGroupMatch {
@@ -111,12 +125,12 @@ function parseRouteTarget(
   );
   if (!normalizedPath) return null;
 
-  const segments = normalizedPath.slice(1).split('/');
   const params = new URLSearchParams(rawSearch);
 
-  if (segments[0] === 'cc-agent') {
-    if (segments.length === 2) {
-      const sessionId = safeDecodeSegment(segments[1] ?? '').trim();
+  if (normalizedPath.startsWith('/cc-agent/')) {
+    const restSegments = normalizedPath.slice('/cc-agent/'.length).split('/');
+    if (restSegments.length === 1) {
+      const sessionId = safeDecodeSegment(restSegments[0] ?? '').trim();
       if (!sessionId || NON_SESSION_CC_AGENT_SEGMENTS.has(sessionId)) return null;
       const explicitDevice = normalizeDeviceId(params.get('device'));
       const deviceId =
@@ -125,43 +139,50 @@ function parseRouteTarget(
       const workerSessionId = params.get('worker')?.trim() || null;
       return { kind: 'session', sessionId, workerSessionId, deviceId };
     }
-    if (segments.length === 3 && (segments[1] === 'files' || segments[1] === 'orca')) {
-      const sessionId = safeDecodeSegment(segments[2] ?? '').trim();
+    if (restSegments.length === 2 && (restSegments[0] === 'files' || restSegments[0] === 'orca')) {
+      const sessionId = safeDecodeSegment(restSegments[1] ?? '').trim();
       if (!sessionId) return null;
       const explicitDevice = normalizeDeviceId(params.get('device'));
       const deviceId =
         explicitDevice ??
         (bootFallback?.bootSession === sessionId ? bootFallback.bootDeviceId : null);
-      return { kind: 'session', sessionId, workerSessionId: null, deviceId };
+      return {
+        kind: 'session',
+        sessionId,
+        workerSessionId: null,
+        deviceId,
+        ...(restSegments[0] === 'files' ? { isFilesView: true } : {}),
+      };
     }
     return null;
   }
 
-  if (segments[0] === 'bots') {
-    if (segments[1] === 'groups' && segments.length === 3) {
-      const groupId = safeDecodeSegment(segments[2] ?? '').trim();
+  if (normalizedPath.startsWith('/bots/')) {
+    const restSegments = normalizedPath.slice('/bots/'.length).split('/');
+    if (restSegments[0] === 'groups' && restSegments.length === 2) {
+      const groupId = safeDecodeSegment(restSegments[1] ?? '').trim();
       if (!groupId) return null;
       const conversationKind = params.get('conversationKind') === 'direct' ? 'direct' : 'group';
       return { kind: 'group', groupId, conversationKind };
     }
     if (
-      segments[1] === 'remote' &&
-      (segments.length === 4 ||
-        (segments.length === 6 && (segments[4] === 'session' || segments[4] === 'history')))
+      restSegments[0] === 'remote' &&
+      (restSegments.length === 3 ||
+        (restSegments.length === 5 && (restSegments[3] === 'session' || restSegments[3] === 'history')))
     ) {
-      const deviceId = safeDecodeSegment(segments[2] ?? '').trim();
-      const botId = safeDecodeSegment(segments[3] ?? '').trim();
-      const sessionId = segments.length === 6 ? safeDecodeSegment(segments[5] ?? '').trim() : '';
+      const deviceId = safeDecodeSegment(restSegments[1] ?? '').trim();
+      const botId = safeDecodeSegment(restSegments[2] ?? '').trim();
+      const sessionId = restSegments.length === 5 ? safeDecodeSegment(restSegments[4] ?? '').trim() : '';
       if (!deviceId || !botId) return null;
       return { kind: 'companion', deviceId, botId, sessionId: sessionId || null };
     }
     if (
-      segments.length === 2 ||
-      (segments.length === 4 && (segments[2] === 'session' || segments[2] === 'history'))
+      restSegments.length === 1 ||
+      (restSegments.length === 3 && (restSegments[1] === 'session' || restSegments[1] === 'history'))
     ) {
-      const botId = safeDecodeSegment(segments[1] ?? '').trim();
+      const botId = safeDecodeSegment(restSegments[0] ?? '').trim();
       if (!botId || NON_BOT_SEGMENTS.has(botId)) return null;
-      const sessionId = segments.length === 4 ? safeDecodeSegment(segments[3] ?? '').trim() : '';
+      const sessionId = restSegments.length === 3 ? safeDecodeSegment(restSegments[2] ?? '').trim() : '';
       return { kind: 'companion', deviceId: null, botId, sessionId: sessionId || null };
     }
   }
@@ -243,6 +264,7 @@ export function registerSecondaryAppWindow(
     bootSession: bootInfo.bootSession,
     bootDeviceId: normalizeDeviceId(bootInfo.bootDeviceId),
     reportedSessionIds: new Set(),
+    pendingBootGroupDelivery: null,
   });
   win.on?.('focus', () => {
     const meta = secondaryWindowMeta.get(win);
@@ -252,9 +274,50 @@ export function registerSecondaryAppWindow(
     const meta = secondaryWindowMeta.get(win);
     if (meta) meta.reportedSessionIds = new Set();
   });
+  // SecondaryWindowBootGate 位于 MainLayout 之内；一旦页面内导航离开 /cc-agent/boot
+  // 落到目标群聊路由，MainLayout 的 onDeepLinkNavigate 必然已挂载，可安全补发消息定位。
+  win.webContents?.on?.('did-navigate-in-page', () => {
+    flushPendingBootGroupDelivery(win);
+  });
   win.once?.('closed', () => {
     unregisterSecondaryAppWindow(win);
   });
+}
+
+function flushPendingBootGroupDelivery(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  const meta = secondaryWindowMeta.get(win);
+  const pending = meta?.pendingBootGroupDelivery;
+  if (!meta || !pending) return;
+  const { target, isBooting } = parseSecondaryWindowUrlTarget(readWindowUrl(win), meta);
+  if (isBooting) return;
+  meta.pendingBootGroupDelivery = null;
+  if (
+    target?.kind === 'group' &&
+    target.groupId === pending.groupId &&
+    target.conversationKind === pending.conversationKind
+  ) {
+    pending.deliver(win);
+  }
+}
+
+/**
+ * 群聊副窗口仍在启动网关（`/cc-agent/boot`）时暂存本次消息/线程定位，待落到目标群聊后补发。
+ * 若调用瞬间窗口其实已离开启动态且命中目标群聊，则立即投递；仅保留最新一次点击。
+ */
+export function queueSecondaryWindowBootGroupNavigation(
+  win: BrowserWindow,
+  target: SecondaryWindowGroupMatchTarget,
+  deliver: (win: BrowserWindow) => void,
+): void {
+  if (!isSecondaryAppWindow(win)) return;
+  const meta = secondaryWindowMeta.get(win);
+  if (!meta) return;
+  const groupId = target.groupId.trim();
+  if (!groupId) return;
+  const conversationKind = target.conversationKind ?? 'group';
+  meta.pendingBootGroupDelivery = { groupId, conversationKind, deliver };
+  flushPendingBootGroupDelivery(win);
 }
 
 export function unregisterSecondaryAppWindow(win: BrowserWindow): void {
@@ -369,7 +432,15 @@ export function findSecondaryWindowForSession(
       const sameSession =
         urlTarget.sessionId === sessionId || urlTarget.workerSessionId === sessionId;
       if (sameSession && isDeviceCompatible(urlTarget.deviceId, targetDeviceId)) {
-        matchKind = isBooting ? 'booting' : 'direct';
+        if (isBooting) {
+          matchKind = 'booting';
+        } else if (urlTarget.isFilesView && !meta?.reportedSessionIds.has(sessionId)) {
+          // 文件浏览页聊天栏折叠时 WorkdirBrowseRoute 会上报 null；仅聚焦会让对话继续隐藏，
+          // 需要发送会话导航切回对话视图。聊天栏展开时 reportedSessionIds 含该会话，保持 direct。
+          matchKind = 'navigate';
+        } else {
+          matchKind = 'direct';
+        }
       }
     } else if (urlTarget?.kind === 'companion') {
       const matchesBySession =
@@ -386,7 +457,7 @@ export function findSecondaryWindowForSession(
     if (!matchKind && meta?.reportedSessionIds.has(sessionId)) {
       const urlDevice = urlTarget?.kind === 'session' ? urlTarget.deviceId : null;
       if (isDeviceCompatible(urlDevice, targetDeviceId)) {
-        matchKind = 'split-pane';
+        matchKind = 'navigate';
       }
     }
 
@@ -395,7 +466,7 @@ export function findSecondaryWindowForSession(
       result: { window: win, matchKind },
       focused: safeIsFocused(win),
       minimized: safeIsMinimized(win),
-      directMatch: matchKind !== 'split-pane',
+      directMatch: matchKind !== 'navigate',
       lastFocusedOrder: meta?.lastFocusedOrder ?? 0,
     });
   }
