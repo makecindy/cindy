@@ -48,7 +48,13 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
-import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useAppShortcut, useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -318,6 +324,13 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
+
+  const canShowTaskMenu = !isEditing && !readOnly && (!sharedGuest || session.status === 'active');
+  const copyShortcut = useAppShortcutDisplay('copy-session-link');
+  useAppShortcut('copy-session-link', () => {
+    void handleCopyDeepLink();
+    return true;
+  }, { enabled: canShowTaskMenu });
 
   const handleOpenInNewWindow = useCallback(() => {
     if (remoteWritesBlocked) {
@@ -660,7 +673,7 @@ export function SessionContentHeader({
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
-      {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
+      {canShowTaskMenu && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
@@ -707,6 +720,7 @@ export function SessionContentHeader({
                 className={MENU_ITEM_CLASS}
               >
                 {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
+                {copyShortcut && <DropdownMenuShortcut aria-hidden>{copyShortcut}</DropdownMenuShortcut>}
               </DropdownMenuItem>
             }
             exportShare={
