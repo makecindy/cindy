@@ -1743,6 +1743,7 @@ export async function readSubscriptionTaskUsage(
     keys.nativeSessionId ? `native:${keys.nativeSessionId}` : '',
   ].find((key) => !!key && !!readAccountBinding(key, provider));
   const binding = bindingKey ? readAccountBinding(bindingKey, provider) : undefined;
+  const fresh = options.fresh === true;
   if (binding && bindingKey) {
     const current = () => {
       const pool = readPool(provider);
@@ -1752,7 +1753,7 @@ export async function readSubscriptionTaskUsage(
         && readAccountBinding(bindingKey, provider)?.accountId === binding.accountId;
     };
     if (!current()) return null;
-    const info = await snapshot(state, provider, binding.accountId, options.fresh === true);
+    const info = await snapshot(state, provider, binding.accountId, fresh, fresh);
     assertOwner(state);
     if (!current() || !info.auth.authenticated) return null;
     return info.usage ?? null;
@@ -1772,12 +1773,16 @@ export async function readSubscriptionTaskUsage(
         && (pinned !== 'default' || defaultAccountBound(provider));
     };
     if (!current()) return null;
-    const info = await snapshot(state, provider, pinned, options.fresh === true);
+    const info = await snapshot(state, provider, pinned, fresh, fresh);
     assertOwner(state);
     if (!current() || !info.auth.authenticated) return null;
     return info.usage ?? null;
   }
-  return readSubscriptionPoolUsage(routeId);
+  // Pre-pool sessions on a built-in provider carry a native session id without a pool
+  // binding and keep resuming on the CLI default account. Return undefined so callers
+  // use the default account reader instead of picking another pool member.
+  if (routeId === provider && keys.nativeSessionId) return undefined;
+  return readSubscriptionPoolUsage(routeId, options);
 }
 
 /**
@@ -2083,6 +2088,7 @@ export async function canSwitchHostedSubscriptionAccount(
 
 export async function readSubscriptionPoolUsage(
   providerId: string,
+  options: { fresh?: boolean } = {},
 ): Promise<Usage | null | undefined> {
   const found = poolFor(providerId);
   if (!found) return undefined;
@@ -2091,7 +2097,8 @@ export async function readSubscriptionPoolUsage(
   const state = currentRuntime();
   // A provider's quota comes from its own accounts only.
   const members = providerAccounts(provider, pool.accounts, ref.providerId);
-  const infos = await Promise.all(members.map((a) => snapshot(state, provider, a.id)));
+  const fresh = options.fresh === true;
+  const infos = await Promise.all(members.map((a) => snapshot(state, provider, a.id, fresh, fresh)));
   assertOwner(state);
   const latest = readPool(provider);
   if (!latest || (latest.disconnected && ref.providerId === provider)) return null;

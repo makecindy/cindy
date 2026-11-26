@@ -6333,6 +6333,46 @@ describe('native account assignment on the executing computer', () => {
     h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.filter(a => a.id !== 'second');
     expect(await readSubscriptionTaskUsage('anthropic', { sessionId: 'task-1', providerId })).toBeNull();
   });
+
+  // Regression (unit, PR #13205 review): fresh=true must bypass the 3-minute usage cache
+  // (forceUsage=true) so a post-limit lookup sees the newly exhausted window, and unbound
+  // pre-pool sessions with a nativeSessionId on a built-in provider must return undefined
+  // (default-account fallback) instead of picking another pool member with remaining quota.
+  it('forces fresh usage on post-limit task lookup and preserves pre-pool default fallback', async () => {
+    const resetsAt = Date.now() / 1000 + 7200;
+    let secondUtilization = 40;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? secondUtilization : 100, resetsAt },
+      },
+    }));
+    h.bindings.set('task:bound-task', { providerId: 'anthropic', accountId: 'second' });
+
+    // Prime the 3-minute usage cache with a non-exhausted reading.
+    expect((await readSubscriptionTaskUsage('anthropic', { sessionId: 'bound-task', providerId: 'anthropic' }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(40);
+    // Exhaust quota externally; fresh=true must force a usage re-read rather than reusing 40%.
+    secondUtilization = 100;
+    expect((await readSubscriptionTaskUsage('anthropic', { sessionId: 'bound-task', providerId: 'anthropic' }, { fresh: true }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(100);
+
+    // Same forceUsage guarantee for a merged created provider resolved via pinnedOwnAccount.
+    const mergedId = 'anthropic-sub-a1b2c3d4';
+    h.created[mergedId] = { kind: 'anthropic', name: 'Claude · Merged', account: 'second' };
+    h.placement['anthropic:second'] = 'anthropic';
+    secondUtilization = 55;
+    expect((await readSubscriptionTaskUsage('anthropic', { providerId: mergedId }, { fresh: true }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(55);
+
+    // Unbound pre-pool session on built-in `anthropic` has a nativeSessionId and no binding:
+    // must return undefined so callers read the CLI default account instead of `second`.
+    expect(await readSubscriptionTaskUsage('anthropic', {
+      sessionId: 'pre-pool-task',
+      nativeSessionId: 'pre-pool-sdk-id',
+      providerId: 'anthropic',
+    }, { fresh: true })).toBeUndefined();
+  });
   // User-reported quota oscillation / unit: frequent SDK events used to renew
   // the cache clock forever. Existing tests never cross endpoint TTL with events.
   it('refreshes authoritative Claude percentages despite continuous SDK events', async () => {
