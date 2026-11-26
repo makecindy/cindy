@@ -437,15 +437,16 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
 }
 
 /** device-link:订阅某被控设备时预取其供应商目录(与 prefetchDeviceCapabilities 并列调用)。 */
-export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
+export async function prefetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPayload | null> {
   try {
-    await fetchDeviceProviders(deviceId);
+    return await fetchDeviceProviders(deviceId);
   } catch (err) {
     // swallow:打开会话时 hook 会再取一次(旧版被控端不支持时回退扁平列表)。
     log.debug('prefetchDeviceProviders failed (non-fatal)', {
       deviceId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return null;
   }
 }
 
@@ -496,10 +497,11 @@ export function getDeviceProvidersGeneration(deviceId: string): number {
   return deviceGen.get(deviceId) ?? 0;
 }
 
+let allEvictGen = 0;
 const routedProviderGenerations = new Map<string, number>();
 
 export function getRoutedProviderGeneration(deviceId: string): number {
-  return routedProviderGenerations.get(deviceId) ?? 0;
+  return allEvictGen + (routedProviderGenerations.get(deviceId) ?? 0);
 }
 
 export function evictDeviceProviders(
@@ -539,6 +541,7 @@ export function evictDeviceProviders(
 
 /** 账号边界：缓存、在途读取及挂载中的旧账号目录一起失效。 */
 export function evictAllDeviceProviders(): void {
+  allEvictGen += 1;
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys(), ...deviceGen.keys()]);
   for (const deviceId of devices) evictDeviceProviders(deviceId);
 }

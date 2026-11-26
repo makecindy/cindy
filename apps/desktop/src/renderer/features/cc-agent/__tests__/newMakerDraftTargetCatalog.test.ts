@@ -204,12 +204,20 @@ function harness(options: {
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
     invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
+    evictDeviceCapabilities: bindings.evictDeviceCapabilities,
+    evictDeviceProviders: bindings.evictDeviceProviders,
     current: () => current,
     add: () => add({ kind: 'device-link', deviceId: 'target-device', deviceName: 'Target', path: '/remote/project' }),
   };
 }
 
 describe('remote project draft catalog ownership', () => {
+  it('only evicts the target host direct cache so its routed shared-model catalogs stay warm', async () => {
+    const h = harness({ previous: selection('low') });
+    await h.add();
+    expect(h.evictDeviceCapabilities).toHaveBeenCalledWith('target-device', { directOnly: true });
+    expect(h.evictDeviceProviders).toHaveBeenCalledWith('target-device', { directOnly: true });
+  });
   it.each([false, true])('seeds the new task device using its source-level efforts (previous separate Agent: %s)', async (separateAgent) => {
     const h = harness({ separateAgent, previous: selection('low') });
     await h.add();
