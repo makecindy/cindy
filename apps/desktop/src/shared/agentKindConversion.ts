@@ -50,3 +50,8 @@ export function makerToDbEngineKind(maker: string | null | undefined): DbEngineK
 export function isPluginEngineKind(kind: string | null | undefined): kind is 'acp' {
   return kind === 'acp';
 }
+
+/** 宽输入归一成 DbEngineKind;保留插件引擎 'acp',其余回落同 normalizeDbAgentKind。 */
+export function normalizeDbEngineKind(value: string | null | undefined): DbEngineKind {
+  return value === 'acp' ? 'acp' : normalizeDbAgentKind(value);
+}

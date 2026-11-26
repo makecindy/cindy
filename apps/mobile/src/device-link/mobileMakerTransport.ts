@@ -490,7 +490,7 @@ export interface MobileMakerTransport {
   /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
   predictNextPrompt(request: {
     sessionId: string;
-    agentKind: MobileAgentKind;
+    agentKind: MobileAgentKind | 'acp';
     turnGen: number;
     completionRevision: number;
     cacheOnly?: boolean;

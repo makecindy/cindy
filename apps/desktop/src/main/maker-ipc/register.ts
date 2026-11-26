@@ -123,7 +123,8 @@ import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getRemoteLinkCloseEpoch, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer, setRemoteInputPeerReadyListener } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { readDeviceProviderCatalog, readDeviceProviderViews, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readDeviceProviderViews, readRemotePluginEngines, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
+import { setPluginModelPickerPluginEnginesProvider } from '../cindy-brain/ghostModelPicker.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
@@ -309,7 +310,7 @@ import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
-import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, like, lt, ne, or, sql } from 'drizzle-orm';
 import {
   applyScheduledModelSelection,
   createScheduledModelScope,
@@ -2072,7 +2073,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
 /** Used by ordinary and goal waits; never substitutes this computer's quota for an SSH/remote agent. */
 export async function hasRestoredCodexQuota(sessionId: string, expectedProvider: string): Promise<boolean> {
   const row = await getSessionRowSnapshot(sessionId);
-  if (!row || sessionUsesOtherMachineAccount(row)) return false;
+  if (!row || sessionUsesOtherMachineAccount(row) || isPluginEngineKind(row.agentKind)) return false;
   const kind = row.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
   if (!kind) return false;
   const route = resolveSessionRuntimeRoute(sessionId, kind, row);
@@ -9095,8 +9096,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    // 审查任务的设置固定跟随源任务，不归供应商组分配。协同的 Lead 与 Worker 与普通任务一样归组(2026-10-10)。
-    if (!row || row.source === 'review') return null;
+    // 审查任务的设置固定跟随源任务，不归供应商组分配；插件引擎任务不归内置供应商组管理。协同的 Lead 与 Worker 与普通任务一样归组(2026-10-10)。
+    if (!row || row.source === 'review' || isPluginEngineKind(row.agentKind)) return null;
     return {
       agentKind: dbToMakerAgentKind(row.agentKind),
       model: row.model ?? null,
@@ -9134,14 +9135,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       })
       .from(sessions)
       .where(inArray(sessions.id, [...sessionIds]));
-    return rows.map((row) => ({
-      id: row.id,
-      agentKind: dbToMakerAgentKind(row.agentKind),
-      model: row.model ?? null,
-      providerId: row.providerId ?? null,
-      agentDeviceId: row.agentDeviceId ?? null,
-      remoteHostId: row.remoteHostId ?? null,
-    }));
+    return rows
+      .filter((row) => !isPluginEngineKind(row.agentKind))
+      .map((row) => ({
+        id: row.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        model: row.model ?? null,
+        providerId: row.providerId ?? null,
+        agentDeviceId: row.agentDeviceId ?? null,
+        remoteHostId: row.remoteHostId ?? null,
+      }));
   }
 
   async function resolveProviderGroupImplicitProvider(agentKind: AgentKind, model: string, agentDeviceId?: string): Promise<string | null> {
@@ -11064,6 +11067,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 在那台运行。
       if (source.agentDeviceId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Review is not available for tasks whose agent runs on another computer');
+      }
+      // 插件引擎暂不支持只读审查沙盒（reviewMode / reviewReadPaths 仅内置引擎强制执行）。
+      if (isPluginEngineKind(source.agentKind)) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Review is not available for tasks running on a plugin engine');
       }
       if (!source.workingDir) {
         throwIpcError('INVALID_PARAMS', 'The source task has no working directory to review');
@@ -14582,10 +14589,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // A saved run location is checked against that computer's (or share's) catalog, the
   // same reader explicit remote plugin routes use; it never falls back to a local namesake.
   const readPluginRouteProviders = (deviceId: string) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
+  const admitLocalPluginEngineTaskRoute = (selection: {
+    providerId?: string | null;
+    model?: string;
+    effort?: string | null;
+    fastMode?: boolean | 'ultrafast';
+  }): PluginTaskRoute => {
+    if (selection.fastMode === true || selection.fastMode === 'ultrafast') {
+      throw new Error('插件引擎不支持 Fast 模式，请重新选择模型');
+    }
+    const providerId = typeof selection.providerId === 'string' ? selection.providerId.trim() : '';
+    const admitted = admitPluginEngineSwitchTarget(
+      {
+        providerId,
+        model: selection.model?.trim() || 'default',
+        effort: selection.effort ?? '',
+      },
+      listPluginEngineViews(),
+    );
+    return {
+      agentKind: 'acp',
+      providerId,
+      model: admitted.model,
+      effort: admitted.effort,
+      fastMode: false,
+    };
+  };
   setPluginTaskConfigValidator(async config => {
     const remote = savedPluginTaskRemoteRoute(config);
     if (remote) {
-      await resolveRemotePluginTaskRoute(remote, { readProviders: readPluginRouteProviders, assertCurrent: () => {} });
+      await resolveRemotePluginTaskRoute(remote, {
+        readProviders: readPluginRouteProviders,
+        readPluginEngines: readRemotePluginEngines,
+        assertCurrent: () => {},
+      });
+      return;
+    }
+    if (config.agentKind === 'acp') {
+      admitLocalPluginEngineTaskRoute(config);
       return;
     }
     await resolveSessionExecution(config);
@@ -14598,15 +14639,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     config: Parameters<typeof resolveSessionExecution>[0] & Parameters<typeof savedPluginTaskRemoteRoute>[0],
     sourceSessionId?: string,
     existing?: Parameters<typeof resolveSessionExecution>[2],
-  ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
+  ): Promise<import('./ghostErrandRunner.js').GhostErrandExecution> => {
     const remote = savedPluginTaskRemoteRoute(config);
-    if (!remote) return resolveSessionExecution(config, sourceSessionId, existing);
-    const route = await resolveRemotePluginTaskRoute(remote, {
-      readProviders: readPluginRouteProviders, assertCurrent: captureSessionOwner(),
-    });
-    return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
-      providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
-      fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+    if (remote) {
+      const route = await resolveRemotePluginTaskRoute(remote, {
+        readProviders: readPluginRouteProviders,
+        readPluginEngines: readRemotePluginEngines,
+        assertCurrent: captureSessionOwner(),
+      });
+      return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
+        providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+    }
+    if (config.agentKind === 'acp') {
+      const route = admitLocalPluginEngineTaskRoute(config);
+      return {
+        agentKind: 'acp',
+        model: route.model,
+        providerId: route.providerId,
+        ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: false,
+      };
+    }
+    if (!config.agentKind && !config.model && !config.providerId && existing?.agentKind === 'acp') {
+      const route = admitLocalPluginEngineTaskRoute(existing);
+      return {
+        agentKind: 'acp',
+        model: route.model,
+        providerId: route.providerId,
+        ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: false,
+      };
+    }
+    return resolveSessionExecution(config, sourceSessionId, existing);
   };
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
@@ -14707,6 +14772,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (remote) {
         return resolveRemotePluginTaskRoute(remote, {
           readProviders: readPluginRouteProviders,
+          readPluginEngines: readRemotePluginEngines,
           assertCurrent: () => assertPlugin(pluginId),
         });
       }
@@ -14714,6 +14780,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const selection = { ...localDefaults, ...requested };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
+      if (selection.agentKind === 'acp') {
+        try {
+          const admitted = admitLocalPluginEngineTaskRoute(selection);
+          assertPlugin(pluginId);
+          return admitted;
+        } catch (error) {
+          throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+        }
+      }
+      if (sourceSessionId && !selection.agentKind && !selection.model && !selection.providerId) {
+        const sourceMeta = await maker.getSessionMeta(sourceSessionId);
+        assertPlugin(pluginId);
+        if (sourceMeta && isPluginEngineKind(sourceMeta.agentKind) && !sourceMeta.remoteHostId) {
+          if (sourceMeta.agentDeviceId) {
+            return resolveRemotePluginTaskRoute(
+              {
+                agentDeviceId: sourceMeta.agentDeviceId,
+                agentKind: 'acp',
+                providerId: sourceMeta.providerId ?? '',
+                model: sourceMeta.model,
+                effort: sourceMeta.effort ?? '',
+                fastMode: false,
+              },
+              {
+                readProviders: readPluginRouteProviders,
+                readPluginEngines: readRemotePluginEngines,
+                assertCurrent: () => assertPlugin(pluginId),
+              },
+            );
+          }
+          try {
+            const admitted = admitLocalPluginEngineTaskRoute({
+              providerId: sourceMeta.providerId,
+              model: sourceMeta.model,
+              effort: sourceMeta.effort,
+              fastMode: false,
+            });
+            assertPlugin(pluginId);
+            return admitted;
+          } catch (error) {
+            throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+          }
+        }
+      }
       try {
         let execution: Awaited<ReturnType<typeof resolveSessionExecution>> | undefined;
         if (!sourceSessionId && pluginTaskSelectionIsOpen(selection)) {
@@ -14842,10 +14952,54 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       readLiveSession: taskId => maker.getSession(taskId),
       setModel: async (taskId, route, assertUnchanged, permissionMode) => {
-        const current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
+        const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+        const switchViaAgentSwitch = async () => {
+          try {
+            const switched = await performSessionAgentSwitch(agentSwitchDeps, {
+              sessionId: taskId,
+              targetAgentKind: targetAgent,
+              model: route.model,
+              providerId: route.providerId,
+              effort: route.effort || null,
+              fastMode: targetAgent === 'acp' ? false : route.fastMode,
+              agentDeviceId: route.agentDeviceId ?? null,
+              runtimeSource: 'agent',
+              assertSelectionCurrent: () => {},
+              beforeMutation: assertUnchanged,
+            });
+            if (permissionMode !== undefined) {
+              await assertUnchanged();
+              await commitSessionPermissionMode(taskId, permissionMode, false, assertUnchanged);
+            }
+            return { status: switched.deferred ? 'deferred' as const : 'applied' as const };
+          } catch (error) {
+            if (error instanceof PluginTaskError) throw error;
+            throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+          }
+        };
+        if (targetAgent === 'acp') {
+          await assertUnchanged();
+          return switchViaAgentSwitch();
+        }
+        let current: Awaited<ReturnType<typeof sessionControlService.getSessionRuntime>>;
+        try {
+          current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
+        } catch (error) {
+          // A task currently running on a plugin engine has no built-in runtime profile;
+          // route its switch back to a built-in harness through performSessionAgentSwitch.
+          const [taskRow] = await snapshot.client.drizzle
+            .select({ agentKind: sessions.agentKind })
+            .from(sessions)
+            .where(eq(sessions.id, taskId))
+            .limit(1);
+          if (taskRow && isPluginEngineKind(taskRow.agentKind)) {
+            await assertUnchanged();
+            return switchViaAgentSwitch();
+          }
+          throw error;
+        }
         if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
         await assertUnchanged();
-        const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
         const pendingAgent = current.runtime.pendingMutation?.profile.agentKind;
         const location = route.agentDeviceId ?? null;
         const selectedLocation = (current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile).agentDeviceId ?? null;
@@ -14966,7 +15120,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         const [row] = await snapshot.client.drizzle.select().from(sessions).where(eq(sessions.id, taskId)).limit(1);
         assertCurrent();
-        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
+        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi', 'acp'].includes(row.agentKind)) return null;
         const runtime = await readSessionRuntimeProfiles(taskId);
         assertCurrent();
         // A queued input will execute the accepted next-send route. Keep its
@@ -15833,9 +15987,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 的会话聚焦通道。注入方式与 setGhostAgentTurnRunner 同款倒置,避免
   // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
   setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir);
+  setPluginModelPickerPluginEnginesProvider(listPluginEngineViews);
   setGhostAgentModelLocationSources({
     listLocations: readWorkerAgentLocations,
     readRemoteViews: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+    readRemotePluginEngines,
     readRemoteStatus: async (agentDeviceId, agent) => {
       const result = await remoteBackgroundInvoke(agentDeviceId, 'maker:agent:status', [agent]);
       if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
@@ -17166,9 +17322,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
         id: leadRow.id,
-        // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
-        agentKind: dbToMakerAgentKind(leadRow.agentKind),
+        // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+        // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
+        agentKind: dbToMakerEngineKind(leadRow.agentKind),
         workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
         model: leadRow.model,
@@ -17654,6 +17810,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .where(
               and(
                 eq(sessions.status, 'active'),
+                ne(sessions.agentKind, 'acp'),
                 or(eq(sessions.model, 'auto'), like(sessions.model, 'auto/%')),
                 isNull(sessions.remoteHostId),
                 isNull(sessions.agentDeviceId),
@@ -23256,6 +23413,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
+      if (!requestedRoute && isPluginEngineKind(row?.agentKind)) return null;
       const agent = requestedRoute
         ? requestedRoute.agent!
         : dbToMakerAgentKind(row?.agentKind);

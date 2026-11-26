@@ -85,6 +85,23 @@ describe('mobileHomeListCache', () => {
     expect(sessions.find(row => row.id === 'ordinary')).not.toHaveProperty('sideChatPromoted');
   });
 
+  it('preserves plugin-engine agentKind, providerId and agentDeviceId across cold starts', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('acp-task', 'mac', {
+        agentKind: 'acp',
+        providerId: 'acp-plugin:antigravity:agy',
+        agentDeviceId: 'studio-mac',
+      }),
+    ]);
+    const [{ sessions }] = await getCachedHomeListSnapshot(USER_ID);
+    expect(sessions[0]).toMatchObject({
+      id: 'acp-task',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      agentDeviceId: 'studio-mac',
+    });
+  });
+
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 

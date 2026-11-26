@@ -8,6 +8,8 @@ import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelec
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { usePluginModelPickerEngines } from '@/hooks/usePluginModelPickerEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import type { Effort } from '@/lib/userPreferences.types';
 import type {
@@ -31,10 +33,11 @@ export function PluginModelPickerPopover({
   const [error, setError] = useState(false);
   const lock = useRef<'selection' | 'cancel' | null>(null);
   const answerSequence = useRef(0);
+  const isAcpRoute = route?.agentKind === 'acp';
   const preferenceStore = useTransientModelPickerPreferences();
   const agents = useModelPickerAgents(
-    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
-    modelCatalogKey(route?.agentDeviceId),
+    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind === 'codex' || route?.agentKind === 'pi' ? route.agentKind : 'codex'),
+    modelCatalogKey(isAcpRoute ? undefined : route?.agentDeviceId),
   );
   const [anchor, setAnchor] = useState<DOMRect>();
   const answerRef = useRef(onAnswer);
@@ -128,6 +131,23 @@ export function PluginModelPickerPopover({
     draft.current = value;
     setRoute(value);
   };
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: true,
+    allowRemote: request.allowRemote === true,
+    active: route,
+    onSelect: async (selection) => {
+      const next: PluginModelPickerRoute = {
+        ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+        agentKind: 'acp',
+        providerId: selection.providerId,
+        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        effort: selection.effort ?? '',
+        fastMode: false,
+      };
+      update(next);
+      return answer(next);
+    },
+  });
   const close = () => {
     // Parameter edits apply on dismissal; an untouched picker returns cancellation.
     void answer(
@@ -171,13 +191,14 @@ export function PluginModelPickerPopover({
         <ModelRouteSelectorContent
           sshRemote={!request.allowRemote}
           preferenceStore={preferenceStore}
-          agentDeviceId={route?.agentDeviceId}
-          modelId={route?.model ?? ''}
-          currentProviderId={route?.providerId ?? null}
-          vendorKey={route?.agentKind}
-          effort={(route?.effort ?? '') as Effort}
-          fastMode={route?.fastMode ?? false}
+          agentDeviceId={isAcpRoute ? undefined : route?.agentDeviceId}
+          modelId={isAcpRoute ? '' : (route?.model ?? '')}
+          currentProviderId={isAcpRoute ? null : (route?.providerId ?? null)}
+          vendorKey={route?.agentKind === 'acp' ? undefined : route?.agentKind}
+          effort={isAcpRoute ? ('' as Effort) : ((route?.effort ?? '') as Effort)}
+          fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
           unifiedAgents={agents}
+          pluginEngines={pluginEngines}
           onModelChange={() => false}
           onEffortChange={(effort) => {
             if (draft.current) update({ ...draft.current, effort });
@@ -219,13 +240,32 @@ export function PluginModelPickerDialog({
 }) {
   const { t } = useTranslation();
   const [route, setRoute] = useState(request.initial);
+  const isAcpRoute = route?.agentKind === 'acp';
   const preferenceStore = useTransientModelPickerPreferences(deviceId);
   const agents = useModelPickerAgents(
-    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
-    modelCatalogKey(route?.agentDeviceId ?? deviceId, deviceId),
+    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind === 'codex' || route?.agentKind === 'pi' ? route.agentKind : 'codex'),
+    modelCatalogKey((isAcpRoute ? undefined : route?.agentDeviceId) ?? deviceId, deviceId),
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(false);
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: true,
+    allowRemote: request.allowRemote === true,
+    hostDeviceId: deviceId,
+    active: route,
+    onSelect: (selection) => {
+      setRoute({
+        ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+        agentKind: 'acp',
+        providerId: selection.providerId,
+        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        effort: selection.effort ?? '',
+        fastMode: false,
+      });
+      setError(false);
+      return true;
+    },
+  });
   const lock = useRef(false);
   const answer = async (value: PluginModelPickerRoute | null) => {
     if (lock.current) return;
@@ -265,13 +305,14 @@ export function PluginModelPickerDialog({
             sshRemote={!request.allowRemote}
             preferenceStore={preferenceStore}
             deviceId={deviceId}
-            agentDeviceId={route?.agentDeviceId}
-            modelId={route?.model ?? ''}
-            currentProviderId={route?.providerId ?? null}
-            vendorKey={route?.agentKind}
-            effort={(route?.effort ?? '') as Effort}
-            fastMode={route?.fastMode ?? false}
+            agentDeviceId={isAcpRoute ? undefined : route?.agentDeviceId}
+            modelId={isAcpRoute ? '' : (route?.model ?? '')}
+            currentProviderId={isAcpRoute ? null : (route?.providerId ?? null)}
+            vendorKey={route?.agentKind === 'acp' ? undefined : route?.agentKind}
+            effort={isAcpRoute ? ('' as Effort) : ((route?.effort ?? '') as Effort)}
+            fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
             unifiedAgents={agents}
+            pluginEngines={pluginEngines}
             onModelChange={() => false}
             onEffortChange={(effort) => {
               setRoute((r) => (r ? { ...r, effort } : r));

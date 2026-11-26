@@ -16,6 +16,8 @@ import type { PluginTaskPreferences } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { usePluginModelPickerEngines } from '@/hooks/usePluginModelPickerEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
@@ -30,7 +32,7 @@ import { isPluginTaskPermissionMode, PLUGIN_TASK_PERMISSION_MODES } from '../../
 const TASK_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface TaskConfig {
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   model?: string;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
@@ -115,6 +117,8 @@ export function PluginTaskPrefs({
     config.fastMode,
   ].some((value) => value !== undefined);
   const vendor = config.agentKind;
+  const isAcpVendor = vendor === 'acp';
+  const builtinVendor = isAcpVendor ? undefined : vendor;
   const agentDeviceId = config.agentDeviceId ?? null;
   // Same candidates as an ordinary task on this plugin's computer. Quick-answer-only
   // plugins stay local (one-shot requests cannot run elsewhere); an older controlled
@@ -122,12 +126,28 @@ export function PluginTaskPrefs({
   const remoteRoutesSupported = showTaskRows && (!remote || remote.value.remoteRoutes === true);
   const routeDevices = useModelRouteDevices({
     controlledDeviceId: remote ? remote.deviceId : null,
-    leadAgentDeviceId: agentDeviceId,
+    leadAgentDeviceId: isAcpVendor ? null : agentDeviceId,
   });
   const pickerAgents = useModelPickerAgents(
-    vendor === 'cc' ? 'claude-code' : (vendor ?? 'codex'),
-    agentDeviceId ?? remote?.deviceId,
+    builtinVendor === 'cc' ? 'claude-code' : (builtinVendor ?? 'codex'),
+    (isAcpVendor ? null : agentDeviceId) ?? remote?.deviceId,
   );
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: showTaskRows,
+    allowRemote: remoteRoutesSupported,
+    hostDeviceId: remote?.deviceId,
+    active: config,
+    onSelect: (selection) =>
+      save({
+        ...config,
+        agentKind: 'acp',
+        providerId: selection.providerId,
+        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        agentDeviceId: selection.deviceId ?? null,
+        effort: TASK_EFFORTS.has(selection.effort ?? '') ? selection.effort : undefined,
+        fastMode: false,
+      }),
+  });
   const agentDeviceName = agentDeviceId
     ? (routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
     : null;
@@ -225,9 +245,10 @@ export function PluginTaskPrefs({
             <ModelSelector
               {...modelSource}
               {...(triggerCatalogDeviceId ? { deviceId: triggerCatalogDeviceId } : {})}
-              agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
+              agentDevice={!isAcpVendor && agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
+              pluginEngines={pluginEngines}
               onUnifiedSelect={({ engine, providerId, modelId, effort, fast, agentDevice }) =>
                 save({
                   ...config,
@@ -240,11 +261,11 @@ export function PluginTaskPrefs({
                   fastMode: fast,
                 })
               }
-              modelId={shownModel}
-              effort={shownEffort}
-              fastMode={shownFast}
-              vendorKey={vendor}
-              currentProviderId={config.providerId ?? null}
+              modelId={isAcpVendor ? '' : shownModel}
+              effort={isAcpVendor ? ('' as Effort) : shownEffort}
+              fastMode={isAcpVendor ? false : shownFast}
+              vendorKey={builtinVendor}
+              currentProviderId={isAcpVendor ? null : (config.providerId ?? null)}
               triggerVariant="field"
               popoverSide="bottom"
               dense={appearance !== 'plugin'}
@@ -256,10 +277,10 @@ export function PluginTaskPrefs({
               }}
               onModelChange={(modelId) => {
                 // 选模型即整组钉住(agent 一起钉);未选过时没有可钉的 agent,交给统一面板。
-                if (!vendor) return false;
+                if (!builtinVendor) return false;
                 return save({
                   ...config,
-                  agentKind: vendor,
+                  agentKind: builtinVendor,
                   model: modelId,
                   effort: undefined,
                   fastMode: false,
@@ -267,17 +288,17 @@ export function PluginTaskPrefs({
               }}
               onEffortChange={(effort) => {
                 if (!customized || !TASK_EFFORTS.has(effort)) return;
-                return save({ ...config, effort, fastMode: shownFast });
+                return save({ ...config, effort, fastMode: isAcpVendor ? false : shownFast });
               }}
               onFastModeChange={(enabled) => {
-                if (!customized) return false;
+                if (!customized || isAcpVendor) return false;
                 return save({ ...config, fastMode: enabled });
               }}
               onProviderChange={(providerId, modelId, reconciledEffort, reconciledFast) => {
-                if (!vendor) return false;
+                if (!builtinVendor) return false;
                 return save({
                   ...config,
-                  agentKind: vendor,
+                  agentKind: builtinVendor,
                   model: modelId ?? config.model,
                   effort: TASK_EFFORTS.has(reconciledEffort ?? '') ? reconciledEffort : undefined,
                   providerId: providerId ?? undefined,
@@ -323,7 +344,7 @@ export function PluginTaskPrefs({
                       ? t('newChat.permissionSelector.modes.claude-code.acceptEdits.label')
                       : undefined
                 }
-                vendorKey={vendor}
+                vendorKey={builtinVendor}
                 triggerVariant="field"
                 ariaContext={t('settings.ghosts.detail.errandPrefs.permission')}
                 allowedModes={PLUGIN_TASK_PERMISSION_MODES.filter(

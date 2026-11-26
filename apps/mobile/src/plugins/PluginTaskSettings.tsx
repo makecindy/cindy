@@ -23,6 +23,12 @@ import {
   normalizeMobileAgentCapabilities,
   type MobileAgentCapabilities,
 } from "@/session/agentCapabilities";
+import {
+  isPluginEngineEffort,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineModelName,
+  usePluginEngines,
+} from "@/session/pluginEngines";
 import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { permissionPresentation } from "@/session/permissionPresentation";
 import {
@@ -101,8 +107,14 @@ export function PluginTaskSettings({
     };
   }, []);
   const config = preferences?.config;
+  const isAcpConfig = config?.agentKind === "acp";
   const agent =
-    config?.agentKind === "cc" ? "claude-code" : (config?.agentKind ?? "codex");
+    config?.agentKind === "cc"
+      ? "claude-code"
+      : config?.agentKind === "codex" || config?.agentKind === "pi"
+        ? config.agentKind
+        : "codex";
+  const pluginEngines = usePluginEngines(maker, deviceId, picker || isAcpConfig);
   useEffect(() => {
     let cancelled = false;
     if (!picker) return;
@@ -188,11 +200,26 @@ export function PluginTaskSettings({
   const location = agentDeviceId
     ? remoteCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)
     : undefined;
-  const modelName =
-    (agentDeviceId ? (location?.providers ?? []) : providers.providers)
-      .find((p) => p.id === config?.providerId)
-      ?.models[agent]?.find((m) => m.id === config?.model)?.name ??
-    config?.model;
+  const activePluginEngine =
+    isAcpConfig && config?.providerId && !agentDeviceId
+      ? {
+          providerId: config.providerId,
+          modelId: config.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+          ...(isPluginEngineEffort(config.effort) ? { effort: config.effort } : {}),
+        }
+      : null;
+  const matchedPluginEngine = activePluginEngine
+    ? pluginEngines.engines.find((engine) => engine.providerId === activePluginEngine.providerId)
+    : undefined;
+  const modelName = isAcpConfig
+    ? pluginEngineModelName(matchedPluginEngine, config?.model)
+      ?? (config?.model && config.model !== PLUGIN_ENGINE_DEFAULT_MODEL
+        ? config.model
+        : matchedPluginEngine?.name ?? t("models.pluginEngines.genericName"))
+    : ((agentDeviceId ? (location?.providers ?? []) : providers.providers)
+        .find((p) => p.id === config?.providerId)
+        ?.models[agent]?.find((m) => m.id === config?.model)?.name ??
+      config?.model);
   const name = modelName && location ? `${modelName} · ${location.name}` : modelName;
   return (
     <View>
@@ -271,10 +298,10 @@ export function PluginTaskSettings({
         modelVisibilityOverrides={providers.modelVisibilityOverrides}
         flatOptions={[]}
         capabilities={capabilities}
-        activeModelId={config?.model ?? ""}
-        selectedProviderId={config?.providerId ?? null}
-        selectedEffort={config?.effort ?? ""}
-        selectedFastMode={config?.fastMode ?? false}
+        activeModelId={isAcpConfig ? "" : (config?.model ?? "")}
+        selectedProviderId={isAcpConfig ? null : (config?.providerId ?? null)}
+        selectedEffort={isAcpConfig ? "" : (config?.effort ?? "")}
+        selectedFastMode={isAcpConfig ? false : (config?.fastMode ?? false)}
         loading={providers.loading}
         disabled={busy || error}
         hidePermissionTrigger
@@ -291,10 +318,33 @@ export function PluginTaskSettings({
           remote: remoteSupported
             ? {
                 catalogs: remoteCatalogs,
-                selectedDeviceId: agentDeviceId,
+                selectedDeviceId: isAcpConfig ? null : agentDeviceId,
                 hostDeviceId: deviceId,
               }
             : undefined,
+          ...(pluginEngines.engines.length || activePluginEngine
+            ? {
+                pluginEngines: {
+                  engines: pluginEngines.engines,
+                  active: activePluginEngine,
+                  onSelect: async (next) => {
+                    const result = await save({
+                      model: {
+                        agentKind: "acp",
+                        model: next.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                        providerId: next.providerId,
+                        ...(remoteSupported ? { agentDeviceId: null } : {}),
+                        ...(next.effort ? { effort: next.effort } : {}),
+                        fastMode: false,
+                      },
+                    });
+                    if (result && current()) setPicker(false);
+                    return result;
+                  },
+                  onOpen: pluginEngines.refresh,
+                },
+              }
+            : {}),
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
           loadCapabilities: async (kind) => {

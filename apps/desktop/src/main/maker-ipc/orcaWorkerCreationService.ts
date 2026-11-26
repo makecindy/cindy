@@ -26,7 +26,7 @@ export interface OrcaTeamSnapshot {
 /** 解析 worker 默认 model/effort/fastMode 所需的 lead session 字段。 */
 export interface OrcaLeadSessionSnapshot {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workspaceKind: 'project' | 'dialogue';
   workingDir: string | null;
   model: string;
@@ -1154,7 +1154,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
     }
     const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
-      keptModelName: params.model || lead.model,
+      keptModelName: params.model || (lead.agentKind === 'acp' ? '' : lead.model),
     }) : null;
     const groupRoute = modelGroup?.route;
     if (groupRoute) {
@@ -1183,11 +1183,24 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
       }
+      const pluginProviderId =
+        (typeof params.providerId === 'string' && params.providerId.trim())
+        || (lead.agentKind === 'acp' && typeof lead.providerId === 'string' && lead.providerId.trim()
+          ? lead.providerId.trim()
+          : null);
+      const pluginModel =
+        params.model?.trim()
+        || (lead.agentKind === 'acp'
+          && pluginProviderId
+          && pluginProviderId === lead.providerId?.trim()
+          && lead.model?.trim()
+          ? lead.model.trim()
+          : 'default');
       let admitted: ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>;
       try {
         admitted = deps.admitPluginEngineWorker({
-          providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
-          model: params.model?.trim() || 'default',
+          providerId: pluginProviderId,
+          model: pluginModel,
           effort: params.effort,
           permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
         });
@@ -1225,7 +1238,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         workerAgentDeviceId: null,
         resolved: {
           model: admitted.model,
-          providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
+          providerId: pluginProviderId,
           effort: admitted.effort || null,
           fastMode: false,
         },

@@ -179,8 +179,9 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     if (
       (r.agentDeviceId !== undefined && (typeof r.agentDeviceId !== 'string' ||
         !/^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId) || r.agentDeviceId === 'local')) ||
-      !['cc', 'codex', 'pi'].includes(String(r.agentKind)) ||
+      !['cc', 'codex', 'pi', 'acp'].includes(String(r.agentKind)) ||
       !text(r.providerId, 128) ||
+      (r.agentKind === 'acp' && (!(r.providerId as string).startsWith('acp-plugin:') || r.fastMode !== false)) ||
       !text(r.model, 256) ||
       (typeof r.effort !== 'string' || r.effort.length > 32) ||
       (typeof r.fastMode !== 'boolean' && r.fastMode !== 'ultrafast')

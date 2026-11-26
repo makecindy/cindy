@@ -275,7 +275,7 @@ export interface PluginPagePoll {
 export interface PluginModelSelection {
   /** Optional Agent location relative to the plugin's execution computer. */
   agentDeviceId?: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   providerId: string;
   model: string;
   effort: string;
@@ -287,9 +287,12 @@ export function isPluginModelSelection(value: unknown): value is PluginModelSele
   const v = value as Record<string, unknown>;
   const text = (key: string, max: number) => typeof v[key] === 'string' &&
     (v[key] as string).trim().length > 0 && (v[key] as string).length <= max;
+  const acpValid = v.agentKind !== 'acp' || (
+    typeof v.providerId === 'string' && v.providerId.startsWith('acp-plugin:') && v.fastMode === false
+  );
   return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'].includes(key)) &&
     (v.agentDeviceId === undefined || text('agentDeviceId', 128)) &&
-    ['cc', 'codex', 'pi'].includes(String(v.agentKind)) && text('providerId', 128) && text('model', 256) &&
+    ['cc', 'codex', 'pi', 'acp'].includes(String(v.agentKind)) && acpValid && text('providerId', 128) && text('model', 256) &&
     typeof v.effort === 'string' && v.effort.length <= 32 &&
     (typeof v.fastMode === 'boolean' || v.fastMode === 'ultrafast');
 }
@@ -340,7 +343,7 @@ export function isPluginPageSurface(
 export interface PluginTaskPreferences {
   revision: string;
   config: {
-    agentKind?: "cc" | "codex" | "pi";
+    agentKind?: "cc" | "codex" | "pi" | "acp";
     model?: string;
     providerId?: string;
     /** Remote run location, null = explicit Host choice, omitted = legacy default/reuse behavior. */

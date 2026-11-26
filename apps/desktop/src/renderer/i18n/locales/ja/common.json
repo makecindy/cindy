@@ -17139,7 +17139,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterGroupBy": {
         "project": "プロジェクト",

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
+import type { PluginEngineView } from '../../../shared/pluginEngines.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
@@ -49,6 +50,41 @@ it.each(['other-computer', 'share:provider'])('admits %s only against its author
   deps.readProviders = async () => { return []; };
   deps.assertCurrent.mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw new PluginTaskError('PERMISSION_DENIED', 'Owner changed'); });
   await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+it.each(['other-computer', 'share:provider'])('admits remote plugin-engine (acp) routes on %s only against live offered engines', async agentDeviceId => {
+  const route: PluginTaskRoute = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    effort: 'high',
+    fastMode: false,
+    agentDeviceId,
+  };
+  let engine: PluginEngineView = {
+    key: 'antigravity:agy',
+    providerId: 'acp-plugin:antigravity:agy',
+    ghostId: 'antigravity',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'high'] }],
+    permissionModes: [],
+    defaultPermissionMode: 'ask',
+  };
+  const deps = {
+    assertCurrent: vi.fn(),
+    readProviders: vi.fn(async () => []),
+    readPluginEngines: vi.fn(async () => [engine]),
+  };
+  expect(await resolveRemotePluginTaskRoute(route, deps)).toEqual(route);
+  expect(deps.readPluginEngines).toHaveBeenCalledWith(agentDeviceId);
+  expect(deps.readProviders).not.toHaveBeenCalled();
+  for (const changed of [{ providerId: 'acp-plugin:other:x' }, { model: 'other' }, { effort: 'xhigh' }, { fastMode: true }]) {
+    await expect(resolveRemotePluginTaskRoute({ ...route, ...changed }, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
+  }
+  engine = { ...engine, suspended: true };
+  await expect(resolveRemotePluginTaskRoute(route, deps)).rejects.toMatchObject({ code: 'ROUTE_UNAVAILABLE' });
 });
 
 it.each(['other-computer', 'share:provider'])('forwards %s from the production task creator into ordinary Session storage', async agentDeviceId => {
@@ -455,7 +491,17 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
       }),
       routeUnavailable: () => { throw Error('unavailable'); },
       // These configurations name a complete route, so the auxiliary-chain default never applies.
-      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts,
+      pluginTaskSelectionIsOpen, pluginTaskRouteAttempts, savedPluginTaskRemoteRoute,
+      readRemotePluginEngines: async () => [],
+      admitLocalPluginEngineTaskRoute: (sel: Record<string, unknown>) => ({
+        agentKind: 'acp' as const,
+        providerId: String(sel.providerId ?? ''),
+        model: String(sel.model ?? ''),
+        effort: typeof sel.effort === 'string' ? sel.effort : '',
+        fastMode: false as const,
+      }),
+      isPluginEngineKind: (kind: unknown) => kind === 'acp',
+      maker: { getSessionMeta: async () => null },
       getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
       auxiliaryChainSessionCandidates: () => [],
       resolvePluginWorkerDirectory: async () => { if (phase === 'directory') change(); return '/root'; },

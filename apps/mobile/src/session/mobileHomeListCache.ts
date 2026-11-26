@@ -233,12 +233,16 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
     fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
-    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
+    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'acp'
+      ? item.agentKind
+      : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
     lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  if (session.agentKind === 'acp' && typeof item.providerId === 'string') session.providerId = truncateText(item.providerId);
+  if (typeof item.agentDeviceId === 'string') session.agentDeviceId = item.agentDeviceId;
   // Project identity must round-trip exactly; truncating a path changes the project key.
   if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);

@@ -1,6 +1,10 @@
 import type { ProviderView } from '@cindy/model-providers';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
-import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
+import {
+  isPluginEngineModelRouteAvailable,
+  isPluginModelPickerRouteAvailable,
+} from '../cindy-brain/ghostModelPicker.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { PluginTaskError } from './pluginTaskService.js';
 
@@ -8,10 +12,28 @@ import { PluginTaskError } from './pluginTaskService.js';
  * Revalidate on create, setModel and send/accept; a revoked source cannot borrow local namesakes. */
 export async function resolveRemotePluginTaskRoute(route: PluginTaskRoute, deps: {
   readProviders(deviceId: string): Promise<ProviderView[]>;
+  readPluginEngines?: (deviceId: string) => Promise<readonly PluginEngineView[]>;
   assertCurrent(): void;
 }): Promise<PluginTaskRoute> {
   const selection = { ...route };
   deps.assertCurrent();
+  if (selection.agentKind === 'acp') {
+    if (!deps.readPluginEngines) {
+      throw new PluginTaskError('ROUTE_UNAVAILABLE', '远程插件引擎不可用，请恢复连接或重新选择模型');
+    }
+    let engines: readonly PluginEngineView[];
+    try {
+      engines = await deps.readPluginEngines(selection.agentDeviceId!);
+    } catch {
+      deps.assertCurrent();
+      throw new PluginTaskError('ROUTE_UNAVAILABLE', '远程插件引擎不可用，请恢复连接或重新选择模型');
+    }
+    deps.assertCurrent();
+    if (!isPluginEngineModelRouteAvailable(selection, engines)) {
+      throw new PluginTaskError('ROUTE_UNAVAILABLE', '所选来源的模型、引擎或配置已不可用，请重新选择');
+    }
+    return selection;
+  }
   let providers: ProviderView[];
   try {
     providers = await deps.readProviders(selection.agentDeviceId!);

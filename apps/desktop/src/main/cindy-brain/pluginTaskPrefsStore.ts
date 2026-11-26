@@ -52,7 +52,7 @@ export async function relocateGhostErrandPrefs(from: string, to: string): Promis
 }
 
 /** 插件任务可选的 agent 种类(与 sessions.agent_kind 同词汇表)。 */
-export const PLUGIN_TASK_AGENT_KINDS = ['cc', 'codex', 'pi'] as const;
+export const PLUGIN_TASK_AGENT_KINDS = ['cc', 'codex', 'pi', 'acp'] as const;
 export type PluginTaskAgentKind = (typeof PLUGIN_TASK_AGENT_KINDS)[number];
 
 /** 插件任务可选的思考强度(与 worker 同集合;包含 minimal)。 */
@@ -115,8 +115,10 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   ) {
     cfg.effort = r.effort as PluginTaskEffort;
   }
-  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')) cfg.fastMode = r.fastMode;
-  if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128) {
+  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')
+    && (cfg.agentKind !== 'acp' || r.fastMode === false)) cfg.fastMode = r.fastMode;
+  if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128
+    && (cfg.agentKind !== 'acp' || r.providerId.startsWith('acp-plugin:'))) {
     cfg.providerId = r.providerId;
   }
   if ((r.agentDeviceId === null || isPluginTaskAgentDeviceId(r.agentDeviceId)) && cfg.agentKind && cfg.model && cfg.providerId) {

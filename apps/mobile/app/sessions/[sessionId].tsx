@@ -1554,7 +1554,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ownerId: auth.user?.id, deviceId, sessionId, maker,
     available: remoteHistoryAvailable && !revokedDevices.has(deviceId) && !unresponsiveDevices.has(deviceId),
     connectionEpoch,
-    agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
+    agentKind: recommendationSession
+      ? (isPluginEngineSessionKind(recommendationSession.agentKind)
+        ? 'acp'
+        : agentKindForSession(recommendationSession))
+      : null,
     revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
     composerSource: composerDraftSource,
     queueEditing: queueEditing !== null || messageEditing !== null,

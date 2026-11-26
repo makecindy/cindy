@@ -78,7 +78,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。

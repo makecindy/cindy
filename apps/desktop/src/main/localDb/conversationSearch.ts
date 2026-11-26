@@ -21,7 +21,7 @@ import { getDbClient } from './client/current.js';
 import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion.js';
 import { botProfiles, botSessionLinks, messages, projectAliases, sessions, sessionTaskTags, taskTags } from './schema.js';
 import { prepareChatHistorySearch } from './chatHistorySearch.js';
-import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { normalizeDbEngineKind } from '../../shared/agentKindConversion.js';
 import { visibleTextMatchesMessagesFtsQuery } from './chatHistorySearch.pure.js';
 import {
   collectContentHitsUntilUniqueSessions,
@@ -298,7 +298,7 @@ function normalizeStatusFilter(
 }
 
 function normalizeAgentFilter(value: ConversationSearchFilters['agentKind']): ConversationSearchAgentFilter {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : 'all';
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : 'all';
 }
 
 function normalizeLastActivity(
@@ -459,7 +459,7 @@ function sessionSummaryFromRow(
     projectDir: row.projectDir,
     ...(taskProjectDir ? { taskProjectDir } : {}),
     workspaceKind: row.workspaceKind,
-    agentKind: normalizeDbAgentKind(row.agentKind),
+    agentKind: normalizeDbEngineKind(row.agentKind),
     status: row.status,
     source: row.source,
     orcaRole: row.orcaRole,

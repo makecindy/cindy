@@ -22,7 +22,11 @@ const state = vi.hoisted(() => ({
   saveFavorites: vi.fn(async () => {}),
   favorites: [] as any[],
   answer: vi.fn(async () => ({ handled: true, accepted: true })),
-  maker: { getCapabilities: vi.fn(async () => ({ hasFastMode: true, availableModels: [] })) },
+  maker: {
+    getCapabilities: vi.fn(async () => ({ hasFastMode: true, availableModels: [] })),
+    listPluginEngines: vi.fn(async () => []),
+    refreshPluginEngines: vi.fn(async () => {}),
+  },
 }));
 vi.mock('@/session/useRemoteAgentCatalogs', () => ({ useRemoteAgentCatalogs: () => state.remoteCatalogs }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, Alert: { alert: vi.fn() } }));
@@ -32,7 +36,9 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   default: { getItem: async () => null, setItem: state.setItem },
 }));
 vi.mock('@/auth/authOwnerGeneration', () => ({
-  getMobileAuthOwner: () => ({ accountKey: 'owner' }), isMobileAuthOwnerCurrent: () => true,
+  getMobileAuthOwner: () => ({ accountKey: 'owner' }),
+  isMobileAuthOwnerCurrent: () => true,
+  subscribeMobileAuthOwner: () => () => {},
 }));
 vi.mock('@/device-link/useDeviceProviders', () => ({
   useDeviceProviders: () => ({ ready: true, providers: [{ id: 'account', name: 'Account', connected: true, models: {} }] }),
