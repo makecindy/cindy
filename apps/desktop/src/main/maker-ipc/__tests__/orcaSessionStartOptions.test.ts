@@ -1,7 +1,9 @@
+import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { knownNonOrcaSessionIds } from '../orcaMcpHydrationCache';
-import { preparePersistedOrcaSessionStart } from '../orcaSessionStartOptions';
+import { appendOrcaDiscoveryPrompt, ORCA_DIRECT_TASK_CREATE, preparePersistedOrcaSessionStart } from '../orcaSessionStartOptions';
+import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 
 function baseOpts(id: string): MakerSessionCreateOpts {
@@ -147,5 +149,86 @@ describe('persisted Orca session start options', () => {
     expect(opts.userPrompt).toBe(promptWithProjectContext);
     expect(deps.getSessionRole).toHaveBeenCalledTimes(1);
     expect(deps.listWorkersByLead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ordinary Orca discovery at session startup', () => {
+  // Unit: exercise the production startup injection. The existing role tests
+  // cannot catch advertising unavailable tools to ordinary sessions.
+  const row: SessionRowSnapshot = {
+    status: 'idle', title: null, userSendAt: null, providerId: null,
+    workingDir: '/repo', workspaceKind: 'project', source: 'desktop',
+  };
+  const managed = (dir: string) => dir === '/managed-dialogue';
+  const hasDiscovery = (opts: MakerSessionCreateOpts) => opts.userPrompt?.includes('start_team on cindy_orca') ?? false;
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('appends a stable introduction for a fresh or restored %s ordinary task', async agentKind => {
+    const start = async (resumed: boolean) => {
+      knownNonOrcaSessionIds.clear();
+      const opts = { ...baseOpts('ordinary'), agentKind, userPrompt: 'My preferences', ...(resumed ? { resumeSessionId: 'native-id' } : {}) };
+      await preparePersistedOrcaSessionStart('ordinary', opts, {
+        getSessionRole: async () => null, getWorkerLink: vi.fn(), warn: vi.fn(),
+      });
+      appendOrcaDiscoveryPrompt(opts, row, () => true, managed);
+      return opts;
+    };
+    const fresh = await start(false);
+    const resumed = await start(true);
+    expect(hasDiscovery(fresh)).toBe(true);
+    expect(fresh.userPrompt).toContain('My preferences\n\n');
+    expect(fresh.userPrompt).toContain('native subagent capability');
+    expect(resumed.userPrompt).toBe(fresh.userPrompt);
+  });
+
+  it.each([
+    { name: 'global disabled', row: {}, opts: {}, global: false, project: undefined, expected: false },
+    { name: 'ordinary side-chat', row: { source: 'side-chat' }, opts: {}, global: true, project: undefined, expected: true },
+    { name: 'project disabled', row: {}, opts: {}, global: true, project: false, expected: false },
+    { name: 'project enabled', row: {}, opts: {}, global: false, project: true, expected: true },
+    { name: 'Pi project enabled but global disabled', row: {}, opts: { agentKind: 'pi' as const }, global: false, project: true, expected: false },
+    { name: 'managed dialogue ignores project override', row: { workspaceKind: 'dialogue', workingDir: '/managed-dialogue' }, opts: {}, global: true, project: false, expected: true },
+    { name: 'managed dialogue respects global disabled', row: { workspaceKind: 'dialogue', workingDir: '/managed-dialogue' }, opts: {}, global: false, project: true, expected: false },
+    { name: 'explicit dialogue directory respects project override', row: { workspaceKind: 'dialogue' }, opts: {}, global: true, project: false, expected: false },
+    { name: 'SSH ignores local project override', row: { remoteHostId: 'ssh' }, opts: {}, global: true, project: false, expected: true },
+    { name: 'SSH respects global disabled', row: { remoteHostId: 'ssh' }, opts: {}, global: false, project: true, expected: false },
+  ])('$name', ({ row: patch, opts: optsPatch, global, project, expected }) => {
+    const opts = { ...baseOpts('ordinary'), ...optsPatch };
+    appendOrcaDiscoveryPrompt(opts, { ...row, ...patch }, (_id, dir) => dir ? project ?? global : global, managed);
+    expect(hasDiscovery(opts)).toBe(expected);
+  });
+
+  it('introduces Orca for a new direct mobile/device-link task before its row exists, without assuming missing rows are ordinary', () => {
+    const options = () => ({ ...baseOpts('direct'), workspaceKind: 'project' as const });
+    const direct = { ...options(), [ORCA_DIRECT_TASK_CREATE]: true as const };
+    appendOrcaDiscoveryPrompt(direct, null, () => true, managed);
+    expect(hasDiscovery(direct)).toBe(true);
+
+    for (const [opts, lookup] of [
+      [options(), null],
+      [{ ...options(), [ORCA_DIRECT_TASK_CREATE]: true as const }, undefined],
+      [{ ...options(), [ORCA_DIRECT_TASK_CREATE]: true as const, resumeSessionId: 'native-id' }, null],
+    ] as const) {
+      appendOrcaDiscoveryPrompt(opts, lookup, () => true, managed);
+      expect(hasDiscovery(opts)).toBe(false);
+    }
+  });
+
+  it.each([
+    { name: 'persisted lead', row: { orcaRole: 'lead' as const }, opts: {} },
+    { name: 'persisted worker', row: { orcaRole: 'worker' as const }, opts: {} },
+    { name: 'remote worker', row: { orcaRemoteLead: '{}' }, opts: {} },
+    { name: 'runtime role', row: {}, opts: { vendorOptions: { orcaRole: 'lead' } } },
+    { name: 'remote worker runtime marker', row: {}, opts: { vendorOptions: { orcaRemoteWorker: true } } },
+    { name: 'review mode', row: {}, opts: { reviewMode: true as const } },
+    { name: 'review source', row: { source: 'review' }, opts: {} },
+    { name: 'bot source', row: { source: 'bot' }, opts: {} },
+    { name: 'restricted local application', row: {}, opts: { [LOCAL_AGENT_CLIENT]: { url: 'http://localhost', token: 'fixture', hostToolsOnly: true } } },
+    { name: 'plugin engine', row: {}, opts: { agentKind: 'acp' as const } },
+    { name: 'unsupported workspace', row: { workspaceKind: null }, opts: {} },
+    { name: 'missing working directory', row: { workingDir: '' }, opts: {} },
+  ])('does not advertise Orca for $name', ({ row: patch, opts: optsPatch }) => {
+    const opts = { ...baseOpts('ordinary'), ...optsPatch, userPrompt: 'My preferences' };
+    appendOrcaDiscoveryPrompt(opts, { ...row, ...patch }, () => true, managed);
+    expect(opts.userPrompt).toBe('My preferences');
   });
 });
