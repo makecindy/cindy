@@ -2778,7 +2778,7 @@
         "description": "Ubuntu 用系统 .deb 安装套件。Arch Linux 与 Omarchy 用受管之用户目录安装程序，采同一份已验之 .deb 内容，无须 Debian 套件管理器。",
         "item1": "Ubuntu：用 sudo apt install ./cindy-<version>-<arch>.deb。Arch/Omarchy：请依 docs/linux.md 中之用户目录安装指南行之。",
         "item2": "点击更新后，系统 .deb 安装须授权；用户目录安装无须系统密码即可易版。他套件管理器所装之版，请经对应之套件管理器更新。",
-        "item3": "Linux x64 与 arm64 支持 Beta 渠道。Linux 唯于君择重新启动时施更新，闲置时不自动安装。"
+        "item3": "Linux x64 与 arm64 支持 Beta 渠道。用户目录所装者，闲时可自行安装更新；已设免密授权的系统 .deb 所装者，闲时亦可自行安装更新，其余系统 .deb 所装者，唯于君择重新启动时施更新。"
       },
       "qnaTitle": "径问",
       "qnaDescription": "未得其解？径问君所欲为",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
       "autoUpdateDescription": "更新取下既毕，若此机 10 分钟无操作且无差事方行，则自重启应用以成安装。",
-      "linuxUpdateDescription": "更新于君择重启时生效。系统 .deb 安装须系统密码，用户目录安装则否。他法所装者，请以相应套件管理器更新。",
+      "linuxUpdateDescription": "系统 .deb 安装须系统密码，更新于君择重启时生效；用户目录安装则无须密码，可于闲时自行安装。他法所装者，请以相应套件管理器更新。",
       "autoUpdateEnabledToast": "已启闲时自装更新",
       "autoUpdateDisabledToast": "已阖闲时自装更新",
       "autoUpdateSaveFailed": "自更新之设未能存",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停此供方",
         "enableProvider": "启此供方",
+        "icon": "连接之徽",
+        "appearance": "名与徽",
+        "ownImage": "自择图",
+        "imageError": "请择 PNG、JPG 或 WebP 图，不逾 10 MB。",
+        "connectionIcon": {
+          "default": "如常",
+          "personal": "私用",
+          "work": "公用"
+        },
         "hideProvider": "隐于模型之选",
         "showProvider": "显于模型之选"
       },
@@ -7236,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "本机已选「唯用 Agent-Net」。须先于本机解此限，乃可使彼机返 Device Link。",
             "agent-net-only-relay": "此连线之网络唯通 Agent-Net，不可返 Device Link。须先改用支持 Device Link 之线路。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "有新版 {{version}}，点之即更",
+          "downloading": "方取 {{version}}…",
+          "relaunching": "方重启以更 {{version}}…",
+          "confirm": {
+            "title": "更「{{name}}」之 Cindy 乎？",
+            "selfTitle": "更此机之 Cindy 乎？",
+            "description": "将自 {{from}} 更至 {{to}}。既成，彼机 Cindy 将重启，远连暂断。",
+            "selfDescription": "将自 {{from}} 更至 {{to}}。既成，此机 Cindy 将重启。",
+            "busyWarning": "彼机方有行役或幕后之务，重启则中辍。",
+            "selfBusyWarning": "此机方有行役或幕后之务，重启则中辍。",
+            "linuxPermissionHint": "Linux 所管之装，或须于彼机入系统密匙。",
+            "windowsPermissionHint": "若装于护目录，或须于彼机允系统之权。",
+            "action": "即刻更新"
+          },
+          "toast": {
+            "started": "已启「{{name}}」更至 {{version}}",
+            "relaunching": "「{{name}}」方重启以更 {{version}}",
+            "versionChanged": "「{{name}}」新版已易，请复启卡片核之",
+            "noUpdate": "「{{name}}」今无可装之新版",
+            "busy": "「{{name}}」方行他更，少顷再试",
+            "failed": "未能更「{{name}}」之 Cindy"
           }
         }
       }
@@ -14729,11 +14762,11 @@
         },
         "acp": {
           "ask": {
-            "label": "逐项确认",
+            "label": "预设权柄",
             "description": "Agent 求权时由君裁可；Agent 未求确认之举，Cindy 无从拦阻。"
           },
           "default": {
-            "label": "常法",
+            "label": "预设权柄",
             "description": "依 Agent 之常法行事；其请权限，由君定之。"
           },
           "acceptEdits": {
@@ -14741,15 +14774,15 @@
             "description": "Agent 径改文件；他事请权限，由君定之。"
           },
           "auto": {
-            "label": "自断",
+            "label": "自审",
             "description": "Agent 自断何事须确认；其请权限，由君定之。"
           },
           "plan": {
-            "label": "但谋划",
+            "label": "谋定模式",
             "description": "Agent 唯析事谋划，不改文件。"
           },
           "bypassPermissions": {
-            "label": "尽许",
+            "label": "完全访问",
             "description": "Agent 所求之权，一概自许。"
           }
         }
@@ -15574,7 +15607,10 @@
       "codexHelperUnverified": "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。",
       "requestFormatError": "应用程序所发请求格式有谬，此答未能竟。",
       "piRetryHistoryTooLarge": "此信未发。Pi 读取旧录以重试时，一帧逾本机 16 MiB 之限。可另启任务。",
+      "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
+      "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
+      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
@@ -15833,6 +15869,10 @@
       "diffUnchangedLines_one": "{{count}} 行未易",
       "diffUnchangedLines_other": "{{count}} 行未易",
       "diffPreviewLoading": "方备差异先览…"
+    },
+    "filePreview": {
+      "changed": "卷已易",
+      "refreshHint": "点之即重载"
     },
     "textLightbox": {
       "unreadable": "此卷不能读",
@@ -18436,6 +18476,7 @@
         "intervalChip": "毕后计时 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 时）",
         "daily": "Daily（每日）",

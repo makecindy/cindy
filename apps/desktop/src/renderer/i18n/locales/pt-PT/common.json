@@ -2846,7 +2846,7 @@
         "description": "O Ubuntu utiliza pacotes .deb de sistema. O Arch Linux e o Omarchy utilizam o instalador gerido ao nível do utilizador com o mesmo conteúdo .deb verificado, sem um gestor de pacotes Debian.",
         "item1": "Ubuntu: utilize sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: siga o guia de instalação de utilizador em docs/linux.md.",
         "item2": "Após escolher Atualizar, as instalações .deb de sistema pedem autorização; as instalações geridas ao nível do utilizador mudam de versão sem palavra-passe de sistema. Outras instalações geridas por pacotes utilizam o respetivo gestor de pacotes.",
-        "item3": "O Linux x64 e arm64 suportam o canal Beta. As atualizações do Linux só são aplicadas quando optar por reiniciar, nunca automaticamente durante a inatividade."
+        "item3": "O Linux x64 e arm64 suportam o canal Beta. As instalações geridas ao nível do utilizador podem instalar atualizações automaticamente durante a inatividade; as instalações .deb de sistema com autorização sem palavra-passe também podem instalar atualizações durante a inatividade, enquanto as restantes só as aplicam quando optar por reiniciar."
       },
       "qnaTitle": "Perguntar diretamente",
       "qnaDescription": "Ainda precisa de ajuda? Pergunte como fazer o que tem em mente.",
@@ -2921,7 +2921,7 @@
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
       "autoUpdateDescription": "Após concluir a transferência de uma atualização, reiniciar a aplicação para a instalar quando este computador estiver inativo há 10 minutos e não houver tarefas em execução.",
-      "linuxUpdateDescription": "As atualizações exigem um reinício escolhido por si. As instalações .deb de sistema pedem a palavra-passe do sistema; as instalações geridas ao nível do utilizador não. Outras instalações utilizam o respetivo gestor de pacotes.",
+      "linuxUpdateDescription": "As instalações .deb de sistema pedem a palavra-passe do sistema, por isso as atualizações são aplicadas no reinício escolhido por si. As instalações geridas ao nível do utilizador não precisam de palavra-passe e podem ser instaladas quando o computador está inativo. Outras instalações utilizam o respetivo gestor de pacotes.",
       "autoUpdateEnabledToast": "Instalação de atualizações durante a inatividade ativada",
       "autoUpdateDisabledToast": "Instalação de atualizações durante a inatividade desativada",
       "autoUpdateSaveFailed": "Não foi possível guardar as definições de atualização automática",
@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Desativar este fornecedor",
         "enableProvider": "Ativar este fornecedor",
+        "icon": "Ícone da ligação",
+        "appearance": "Nome e ícone",
+        "ownImage": "Escolher imagem",
+        "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predefinido",
+          "personal": "Pessoal",
+          "work": "Trabalho"
+        },
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
@@ -5958,7 +5967,7 @@
       "uninstallTitle": "Desinstalar extensão Pi?",
       "uninstallDescription": "{{name}} será removida deste dispositivo. As tarefas Pi já abertas mantêm a extensão antiga até serem fechadas.",
       "confirmUninstall": "Desinstalar",
-      "extensionDialogConfirm": "Confirmar",
+      "extensionDialogConfirm": "Continuar",
       "cancel": "Cancelar",
       "resources": {
         "extension": "Código da extensão",
@@ -7348,6 +7357,30 @@
           "disableBlocked": {
             "controller-encryption-required": "Este computador tem «Usar apenas Agent-Net» ativado. Desative essa opção aqui antes de voltar o outro computador para Device Link.",
             "agent-net-only-relay": "Esta ligação usa uma rede que só suporta Agent-Net. Escolha primeiro uma rota compatível com Device Link."
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "Versão {{version}} disponível — clique para atualizar",
+          "downloading": "A transferir {{version}}…",
+          "relaunching": "A reiniciar para instalar {{version}}…",
+          "confirm": {
+            "title": "Atualizar o Cindy em «{{name}}»?",
+            "selfTitle": "Atualizar o Cindy neste computador?",
+            "description": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado nesse dispositivo. A ligação remota será interrompida brevemente.",
+            "selfDescription": "O Cindy será atualizado de {{from}} para {{to}} e reiniciado neste computador.",
+            "busyWarning": "Tarefas em curso ou processos em segundo plano nesse dispositivo serão interrompidos pelo reinício.",
+            "selfBusyWarning": "Tarefas em curso ou processos em segundo plano neste computador serão interrompidos pelo reinício.",
+            "linuxPermissionHint": "Instalações geridas em Linux podem pedir a palavra-passe do sistema no dispositivo de destino.",
+            "windowsPermissionHint": "Instalações numa pasta protegida podem pedir permissão do sistema no dispositivo de destino.",
+            "action": "Atualizar agora"
+          },
+          "toast": {
+            "started": "A atualizar «{{name}}» para {{version}}",
+            "relaunching": "«{{name}}» está a reiniciar para instalar {{version}}",
+            "versionChanged": "A versão disponível em «{{name}}» mudou. Reabra o cartão para rever.",
+            "noUpdate": "Não existe nenhuma atualização instalável disponível em «{{name}}».",
+            "busy": "«{{name}}» já está a executar uma atualização. Tente novamente dentro de momentos.",
+            "failed": "Não foi possível atualizar o Cindy em «{{name}}»."
           }
         }
       }
@@ -9882,7 +9915,7 @@
       "allow": "Permitir",
       "deny": "Recusar",
       "questionTitle": "É necessária a sua intervenção",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "planTitle": "Revisão do plano",
       "approve": "Aprovar",
       "requestChanges": "Pedir alterações",
@@ -12465,7 +12498,7 @@
           "soleOwnerHint": "É o único membro restante. Arquive este grupo para manter o histórico e o restaurar mais tarde.",
           "archive": "Arquivar grupo",
           "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções dos amigos. O histórico é mantido. Pesquise o grupo para consultar o histórico ou desarquivá-lo.",
-          "confirm": "Confirmar",
+          "confirm": "Continuar",
           "lastOwner": "Transfira a propriedade para outro membro antes de sair ou remover o proprietário atual.",
           "conflict": "Alguém atualizou este grupo. Atualize e tente novamente.",
           "unarchive": "Desarquivar grupo",
@@ -13338,7 +13371,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmar",
+      "confirm": "Continuar",
       "cancel": "Cancelar",
       "dontShowAgain": "Não voltar a mostrar"
     },
@@ -14902,27 +14935,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar sempre",
+            "label": "Permissões predefinidas",
             "description": "A sua confirmação é pedida quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
           },
           "default": {
-            "label": "Predefinido",
+            "label": "Permissões predefinidas",
             "description": "O agente trabalha da forma predefinida; confirma os pedidos de permissão."
           },
           "acceptEdits": {
-            "label": "Aceitar edições",
+            "label": "Aceitar edições automaticamente",
             "description": "O agente edita ficheiros diretamente; confirma os restantes pedidos de permissão."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisão automática",
             "description": "O agente decide o que precisa de confirmação; confirma os pedidos que fizer."
           },
           "plan": {
-            "label": "Apenas planear",
+            "label": "Modo de planeamento",
             "description": "O agente apenas analisa e planeia; não edita ficheiros."
           },
           "bypassPermissions": {
-            "label": "Permitir tudo",
+            "label": "Acesso total",
             "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
@@ -15562,7 +15595,7 @@
       "back": "Voltar",
       "skip": "Ignorar",
       "next": "Seguinte",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Escreva outra coisa…",
@@ -15748,7 +15781,10 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "piRetryHistoryTooLarge": "A mensagem não foi enviada. Ao ler o histórico para tentar novamente, o Pi encontrou uma trama que excedia o limite local de 16 MiB. Pode continuar numa nova tarefa.",
+      "piRetryHistoryUnavailable": "A mensagem não foi enviada. O Pi não conseguiu ler o histórico necessário para a enviar. Pode tentar novamente ou continuar numa nova tarefa.",
+      "upstreamStatusError": "O serviço a montante devolveu {{status}}, pelo que a resposta não pôde ser concluída.",
       "messageNotSent": "A mensagem não foi enviada.",
+      "upstreamEmpty550": "O serviço do modelo devolveu HTTP 550 com uma resposta vazia",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "A tua mensagem não foi enviada. Seleciona «Tentar novamente» para a enviar sem alterações. Se enviares uma nova mensagem, esta substitui a anterior.",
       "retryTitle": "Reenviar a última mensagem",
@@ -16015,6 +16051,10 @@
       "diffUnchangedLines_other": "{{count}} linhas sem alterações",
       "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "A preparar pré-visualização do diff…"
+    },
+    "filePreview": {
+      "changed": "Ficheiro alterado",
+      "refreshHint": "Clique para atualizar"
     },
     "textLightbox": {
       "unreadable": "Não é possível ler este ficheiro",
@@ -18680,6 +18720,7 @@
         "intervalChip": "Após a conclusão · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Cron personalizado",
         "intervalMinutes": "Minutos (a cada N minutos)",
         "interval": "De hora a hora (a cada N horas)",
         "daily": "Diariamente (todos os dias)",

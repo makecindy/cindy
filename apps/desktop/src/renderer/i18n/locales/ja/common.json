@@ -2778,7 +2778,7 @@
         "description": "Ubuntu はシステムの .deb パッケージを使用します。Arch Linux と Omarchy は、同じ検証済み .deb の内容をユーザーディレクトリにインストールします。Debian のパッケージマネージャーは不要です。",
         "item1": "Ubuntu：sudo apt install ./cindy-<version>-<arch>.deb を実行します。Arch/Omarchy：docs/linux.md のユーザーインストール手順に従ってください。",
         "item2": "更新時、システムの .deb インストールは認証を要求します。ユーザーインストールはシステムパスワードなしでバージョンを切り替えます。それ以外は対応するパッケージマネージャーで更新してください。",
-        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。更新は再起動を選択したときのみ適用され、アイドル時には自動適用されません。"
+        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。ユーザーインストールはアイドル時に更新を自動でインストールできます。パスワードなしの認証を設定したシステム .deb インストールもアイドル時に更新を自動でインストールできます。それ以外のシステム .deb インストールでは、再起動を選択したときのみ更新が適用されます。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "答えが見つからなければ、やりたいことを質問してください。",
@@ -2853,7 +2853,7 @@
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
       "autoUpdateDescription": "更新のダウンロード完了後、このコンピューターが 10 分間操作されず、実行中のタスクがない場合に、アプリを自動的に再起動してインストールします。",
-      "linuxUpdateDescription": "更新は再起動を選択したときに適用されます。システムの .deb インストールにはシステムパスワードが必要ですが、ユーザーインストールには不要です。それ以外はパッケージマネージャーで更新してください。",
+      "linuxUpdateDescription": "システムの .deb インストールにはシステムパスワードが必要なため、更新は再起動を選択したときに適用されます。ユーザーインストールはパスワード不要で、アイドル時に自動でインストールできます。それ以外はパッケージマネージャーで更新してください。",
       "autoUpdateEnabledToast": "アイドル時の更新インストールを有効にしました",
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "このプロバイダーを無効にする",
         "enableProvider": "このプロバイダーを有効にする",
+        "icon": "接続アイコン",
+        "appearance": "名前とアイコン",
+        "ownImage": "画像を選ぶ",
+        "imageError": "10 MB 以下の PNG、JPG、WebP 画像を選んでください。",
+        "connectionIcon": {
+          "default": "デフォルト",
+          "personal": "個人用",
+          "work": "仕事用"
+        },
         "hideProvider": "モデル選択で非表示にする",
         "showProvider": "モデル選択に表示する"
       },
@@ -5653,7 +5662,7 @@
       "title": "パーソナライズ",
       "subtitle": "カスタムプロンプト",
       "description": "アシスタントに追加の指示やコンテキストを与えます。",
-      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
+      "placeholder": "ここにカスタム指示を入力してください。Claude / Codex のシステムプロンプト末尾に追加されます。\n\n· {{appName}} の内蔵セッションのみに適用されます。既存のセッションは起動時スナップショットを保持し、変更は次回の新規セッションから有効になります。\n· すべての Claude Code セッション(ターミナルや他の IDE を含む)で強制的に有効にするには、~/.claude/settings.json に SessionStart フックを設定してください(Harness レベルの強制)。\n· Codex CLI は ~/.codex/hooks.json に SessionStart フックを設定すると Harness レベルで強制注入できます（CC と同等）。または ~/.codex/AGENTS.md による自動読み込み（ソフト制約、モデルが無視する場合あり）も利用できます。",
       "ariaLabel": "カスタム指示",
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
@@ -5854,7 +5863,7 @@
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
       "confirmUninstall": "アンインストール",
-      "extensionDialogConfirm": "確認",
+      "extensionDialogConfirm": "続行",
       "cancel": "キャンセル",
       "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
       "resources": {
@@ -7236,6 +7245,30 @@
           "disableBlocked": {
             "controller-encryption-required": "この端末では「Agent-Net のみ使用」が有効です。相手を Device Link に戻す前に、この端末で無効にしてください。",
             "agent-net-only-relay": "この接続のネットワークは Agent-Net のみに対応しています。Device Link に対応する接続経路に変更してから戻してください。"
+          }
+        },
+        "peerUpdate": {
+          "availableTip": "新バージョン {{version}} があります（クリックして更新）",
+          "downloading": "{{version}} をダウンロード中…",
+          "relaunching": "{{version}} に更新するため再起動中…",
+          "confirm": {
+            "title": "「{{name}}」の Cindy を更新しますか？",
+            "selfTitle": "このコンピュータの Cindy を更新しますか？",
+            "description": "Cindy を {{from}} から {{to}} に更新して再起動します。リモート接続は一時的に切断されます。",
+            "selfDescription": "Cindy を {{from}} から {{to}} に更新し、このコンピュータで再起動します。",
+            "busyWarning": "実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "selfBusyWarning": "このコンピュータで実行中のタスクやバックグラウンド処理は再起動によって中断されます。",
+            "linuxPermissionHint": "Linux の管理パッケージでは、対象デバイスでシステムパスワードの入力が必要になる場合があります。",
+            "windowsPermissionHint": "保護されたフォルダにインストールされている場合、対象デバイスでシステム権限の確認が必要になることがあります。",
+            "action": "今すぐ更新"
+          },
+          "toast": {
+            "started": "「{{name}}」の {{version}} への更新を開始しました",
+            "relaunching": "「{{name}}」は {{version}} を適用するため再起動中です",
+            "versionChanged": "「{{name}}」の利用可能なバージョンが変わりました。カードを開き直して確認してください。",
+            "noUpdate": "「{{name}}」にインストール可能な更新はありません。",
+            "busy": "「{{name}}」では別の更新が進行中です。しばらくしてから再試行してください。",
+            "failed": "「{{name}}」の Cindy を更新できませんでした。"
           }
         }
       }
@@ -9763,7 +9796,7 @@
       "allow": "許可",
       "deny": "拒否",
       "questionTitle": "回答が必要です",
-      "submit": "送信",
+      "submit": "回答を送信",
       "planTitle": "プランの確認",
       "approve": "承認",
       "requestChanges": "修正を依頼",
@@ -10323,10 +10356,10 @@
       }
     },
     "byAgent": {
-      "title": "Agent / harness 別",
+      "title": "Agent / Harness 別",
       "subtitle": "直近 30 日",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "直近 30 日のトークン",
         "totalInRange": "{{range}}のトークン",
         "share": "割合",
@@ -12332,7 +12365,7 @@
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
           "archive": "グループをアーカイブ",
           "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-          "confirm": "確認",
+          "confirm": "続行",
           "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
           "conflict": "設定が更新されました。再読み込みしてお試しください。",
           "unarchive": "アーカイブを解除",
@@ -13188,7 +13221,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "確認",
+      "confirm": "続行",
       "cancel": "キャンセル",
       "dontShowAgain": "次回から表示しない"
     },
@@ -14729,11 +14762,11 @@
         },
         "acp": {
           "ask": {
-            "label": "その都度確認",
+            "label": "デフォルト権限",
             "description": "Agent が権限を求めたときにあなたが確認します。Agent が確認を求めない操作は Cindy では止められません。"
           },
           "default": {
-            "label": "デフォルト",
+            "label": "デフォルト権限",
             "description": "Agent の既定の動作で進めます。権限の要求はあなたが確認します。"
           },
           "acceptEdits": {
@@ -14741,15 +14774,15 @@
             "description": "Agent はファイルを直接編集します。その他の権限の要求はあなたが確認します。"
           },
           "auto": {
-            "label": "自動",
+            "label": "自動レビュー",
             "description": "確認が必要な操作は Agent が判断します。要求された権限はあなたが確認します。"
           },
           "plan": {
-            "label": "計画のみ",
+            "label": "計画モード",
             "description": "Agent は分析と計画だけを行い、ファイルは編集しません。"
           },
           "bypassPermissions": {
-            "label": "すべて許可",
+            "label": "フルアクセス",
             "description": "Agent が求める権限はすべて自動で許可されます。"
           }
         }
@@ -15412,7 +15445,7 @@
       "back": "戻る",
       "skip": "スキップ",
       "next": "次へ",
-      "submit": "送信",
+      "submit": "回答を送信",
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
@@ -15583,7 +15616,10 @@
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
+      "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
+      "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
       "messageNotSent": "メッセージは送信されませんでした。",
+      "upstreamEmpty550": "モデルサービスが空の応答で HTTP 550 を返しました",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
       "retryTitle": "最後のメッセージを再送信",
@@ -15842,6 +15878,10 @@
       "diffUnchangedLines_one": "変更なし {{count}} 行",
       "diffUnchangedLines_other": "変更なし {{count}} 行",
       "diffPreviewLoading": "差分プレビューを準備しています…"
+    },
+    "filePreview": {
+      "changed": "ファイルが変更されました",
+      "refreshHint": "クリックして更新"
     },
     "textLightbox": {
       "unreadable": "このファイルを読み取れません",
@@ -18436,6 +18476,7 @@
         "intervalChip": "完了後に計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "カスタム Cron",
         "intervalMinutes": "分（N 分ごと）",
         "interval": "Hourly（N 時間ごと）",
         "daily": "Daily（毎日）",

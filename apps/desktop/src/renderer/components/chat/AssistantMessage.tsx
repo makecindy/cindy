@@ -299,7 +299,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   // 到新会话（语义在 main 侧 forkSessionAtMessage 按 role 分支）。capability /
   // remote gate 与 UserMessage 同款；assistant 分叉无可预填文本 → 不传 draftText。
   const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
-  // 插件引擎任务(agent_kind = 'acp')不支持分叉，也不读内置 Harness 的能力(docs/plans/acp-plugin-bridge.md)。
+  // 插件引擎任务(agent_kind = 'acp')不读内置 Harness 的能力；它的分叉由主进程从 Cindy 的记录交接
+  // (docs/plans/acp-plugin-bridge.md)，与引擎能否复制原生历史无关。
   const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // deviceId 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,见该文件注释)。
@@ -311,7 +312,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const isRemote = Boolean(remoteHostId);
   const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,
