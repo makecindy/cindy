@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "No se subieron {{count}} imágenes",
     "waitingForNamedComputer": "Se enviará automáticamente cuando se conecte {{name}}",
     "reconnectComputer": "Reconectar",
+    "pendingDelivery": "Pendiente de entrega",
+    "pendingDeliveryHint": "Guardado en este teléfono. Esperando la confirmación de tu computadora.",
     "waitingForComputer": "Se enviará cuando tu computadora vuelva a conectarse",
     "waitingForNetwork": "Se enviará cuando vuelvas a estar en línea",
     "queued": "En cola",
