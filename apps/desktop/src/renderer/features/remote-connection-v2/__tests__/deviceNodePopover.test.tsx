@@ -30,7 +30,8 @@ vi.mock('react-i18next', async () => {
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
 import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
-import { isNonDevAppVersion, peerUpdateStore, startPeerUpdate } from '../peerAppUpdate';
+import { isNonDevAppVersion, peerUpdateStore, probePeerUpdate, startPeerUpdate } from '../peerAppUpdate';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { TopologyModel, TopologyNode } from '../topologyModel';
 
 function node(partial: Partial<TopologyNode> = {}): TopologyNode {
@@ -488,5 +489,40 @@ describe('HubNodePopover', () => {
     expect(polls).toBe(1);
     expect(onError).toHaveBeenCalledWith('download_failed');
     expect(peerUpdateStore.getSnapshot().entries.get('peer-x')).toMatchObject({ kind: 'available', targetVersion: '0.1.145' });
+  });
+
+  it('re-probes unwatched downloading state on reopen and clears caches/watchers on account switch', async () => {
+    vi.useFakeTimers();
+    let state: 'downloading' | 'ready' = 'downloading';
+    const command = vi.fn(async () => ({
+      state: {},
+      peerUpdate: {
+        ok: true,
+        result: { version: 1, state, currentVersion: '0.1.143', targetVersion: '0.1.145', busy: false },
+      },
+    }));
+    vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+
+    // Read-only probe sees peer downloading on its own; next probe must re-query and see ready.
+    const first = await probePeerUpdate('peer-bg');
+    expect(first).toMatchObject({ kind: 'updating', phase: 'downloading' });
+    state = 'ready';
+    const second = await probePeerUpdate('peer-bg');
+    expect(second).toMatchObject({ kind: 'available', targetVersion: '0.1.145', ready: true });
+    expect(command).toHaveBeenCalledTimes(2);
+
+    // Account switch clears cached state and stops active watchers.
+    command.mockImplementation(async (input: { request: { action: string } }) => (
+      input.request.action === 'install'
+        ? { state: {}, peerUpdate: { ok: true, result: { version: 1, accepted: true, state: 'downloading', targetVersion: '0.1.145' } } }
+        : { state: {}, peerUpdate: { ok: true, result: { version: 1, state: 'downloading', currentVersion: '0.1.143', targetVersion: '0.1.145' } } }
+    ));
+    await startPeerUpdate('__self__', '0.1.145', '0.1.143');
+    expect(peerUpdateStore.getSnapshot().entries.has('__self__')).toBe(true);
+    const callsBeforeSwitch = command.mock.calls.length;
+    setDataOwnerGeneration('account-next');
+    expect(peerUpdateStore.getSnapshot().entries.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(command).toHaveBeenCalledTimes(callsBeforeSwitch);
   });
 });

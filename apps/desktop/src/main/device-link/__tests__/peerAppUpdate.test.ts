@@ -176,4 +176,23 @@ describe('createPeerAppUpdateHandler', () => {
     });
     ctx.handler.dispose();
   });
+
+  it('coalesces concurrent install requests across awaited check so apply runs once without false failure', async () => {
+    const resolvers: Array<(v: PeerAppUpdateCheckResult) => void> = [];
+    const ctx = setup({
+      check: vi.fn(() => new Promise<PeerAppUpdateCheckResult>((resolve) => { resolvers.push(resolve); })),
+    });
+    const first = ctx.handler.handle({ action: 'install', expectedVersion: '0.1.145' }, 'ctrl-1', 'Mac A');
+    const second = ctx.handler.handle({ action: 'install', expectedVersion: '0.1.145' }, 'ctrl-2', 'Mac B');
+    for (const resolve of resolvers) {
+      resolve({ status: 'available', currentVersion: '0.1.143', targetVersion: '0.1.145' });
+    }
+    const [r1, r2] = await Promise.all([first, second]);
+    expect(r1).toEqual({ version: 1, accepted: true, state: 'downloading', targetVersion: '0.1.145' });
+    expect(r2).toEqual(r1);
+
+    await vi.advanceTimersByTimeAsync(PEER_APP_UPDATE_APPLY_DELAY_MS);
+    expect(ctx.apply).toHaveBeenCalledTimes(1);
+    ctx.handler.dispose();
+  });
 });

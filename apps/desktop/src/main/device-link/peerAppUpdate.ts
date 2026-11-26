@@ -197,6 +197,18 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
     }
 
     const checked = await runCheck(false);
+    // Re-check after awaiting runCheck(false) so concurrent install requests do not overwrite activeInstall.
+    if (activeInstall) {
+      if (activeInstall.targetVersion === expectedVersion) {
+        return {
+          version: PEER_APP_UPDATE_VERSION,
+          accepted: true,
+          state: activeInstall.phase,
+          targetVersion: activeInstall.targetVersion,
+        };
+      }
+      throw new PeerAppUpdateError('PEER_APP_UPDATE_BUSY', 'another update is already in progress');
+    }
     if (checked.status === 'unsupported') {
       throw new PeerAppUpdateError('PEER_APP_UPDATE_UNSUPPORTED', checked.reason ?? 'unsupported');
     }
@@ -216,7 +228,8 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
     const initialPhase: 'downloading' | 'relaunching' = checked.status === 'ready' ? 'relaunching' : 'downloading';
     statusCache = null;
     lastFailure = null;
-    activeInstall = { targetVersion: expectedVersion, phase: initialPhase };
+    const currentInstall = { targetVersion: expectedVersion, phase: initialPhase };
+    activeInstall = currentInstall;
     ports.log.info('peer app update accepted', {
       controllerDeviceId: controllerDeviceId.slice(0, 8),
       controllerName,
@@ -227,7 +240,7 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
 
     pendingTimer = later(() => {
       pendingTimer = null;
-      void runInstall(expectedVersion, isOwnerCurrent);
+      void runInstall(currentInstall, isOwnerCurrent);
     }, PEER_APP_UPDATE_APPLY_DELAY_MS);
 
     return {
@@ -238,9 +251,13 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
     };
   }
 
-  async function runInstall(expectedVersion: string, isOwnerCurrent: () => boolean): Promise<void> {
+  async function runInstall(
+    install: { targetVersion: string; phase: 'downloading' | 'relaunching' },
+    isOwnerCurrent: () => boolean,
+  ): Promise<void> {
+    const expectedVersion = install.targetVersion;
     if (!isOwnerCurrent()) {
-      activeInstall = null;
+      if (activeInstall === install) activeInstall = null;
       lastFailure = { targetVersion: expectedVersion, errorCode: 'relaunch_cancelled', at: ports.now() };
       return;
     }
@@ -249,26 +266,26 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
         expectedVersion,
         beforeRelaunch: async () => {
           if (!isOwnerCurrent()) return false;
-          if (activeInstall && activeInstall.targetVersion === expectedVersion) {
-            activeInstall.phase = 'relaunching';
+          if (activeInstall === install) {
+            install.phase = 'relaunching';
           }
           return true;
         },
         beforeSpawn: () => isOwnerCurrent(),
       });
-      if (outcome.status === 'relaunching') {
-        if (activeInstall && activeInstall.targetVersion === expectedVersion) {
-          activeInstall.phase = 'relaunching';
+      if (outcome.status === 'relaunching' || outcome.errorCode === 'relaunch_in_progress') {
+        if (activeInstall === install) {
+          install.phase = 'relaunching';
         }
         relaunchStaleTimer = later(() => {
           relaunchStaleTimer = null;
-          if (activeInstall && activeInstall.targetVersion === expectedVersion) {
+          if (activeInstall === install) {
             activeInstall = null;
           }
         }, RELAUNCH_STALE_MS);
         return;
       }
-      activeInstall = null;
+      if (activeInstall === install) activeInstall = null;
       lastFailure = {
         targetVersion: expectedVersion,
         errorCode: outcome.errorCode ?? 'relaunch_not_started',
@@ -276,7 +293,7 @@ export function createPeerAppUpdateHandler(ports: PeerAppUpdatePorts) {
       };
       ports.log.warn('peer app update failed', { targetVersion: expectedVersion, errorCode: lastFailure.errorCode });
     } catch (error) {
-      activeInstall = null;
+      if (activeInstall === install) activeInstall = null;
       lastFailure = {
         targetVersion: expectedVersion,
         errorCode: 'relaunch_not_started',

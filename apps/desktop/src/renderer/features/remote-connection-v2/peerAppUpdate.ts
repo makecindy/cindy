@@ -16,6 +16,12 @@ import {
   type PeerAppUpdateStatus,
 } from '@cindy/device-link';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 import type { PeerAppUpdateReply } from '../../../shared/selfHostedRelay';
 import type { TopologyNode } from './topologyModel';
 
@@ -113,6 +119,18 @@ function setEntry(targetId: string, entry: PeerUpdateEntry | null): void {
   publish();
 }
 
+function clearAllState(): void {
+  for (const stop of watchAbort.values()) stop();
+  watchAbort.clear();
+  entries.clear();
+  probedAt.clear();
+  probing.clear();
+  publish();
+}
+
+// 切换账号 / 登出时立即中止所有观察器并清空缓存，防止跨账号复用 __self__ 或迟到回包。
+subscribeDataOwnerGeneration(clearAllState);
+
 export const peerUpdateStore = {
   subscribe(cb: () => void): () => void {
     listeners.add(cb);
@@ -124,12 +142,7 @@ export const peerUpdateStore = {
     return snapshot;
   },
   resetForTest(): void {
-    for (const stop of watchAbort.values()) stop();
-    watchAbort.clear();
-    entries.clear();
-    probedAt.clear();
-    probing.clear();
-    publish();
+    clearAllState();
   },
 };
 
@@ -216,20 +229,29 @@ export function probePeerUpdate(
 ): Promise<PeerUpdateEntry> {
   syncPeerUpdateVersion(targetId, options?.observedVersion);
   const existing = entries.get(targetId);
-  if (existing?.kind === 'updating') return Promise.resolve(existing);
+  // 仅在观察器仍在跟踪一次进行中的更新时跳过探测；只读看到的 downloading 或超时后的旧状态重新打开卡片应重新查询。
+  if (existing?.kind === 'updating' && watchAbort.has(targetId)) return Promise.resolve(existing);
   const last = probedAt.get(targetId) ?? 0;
-  if (!options?.force && existing && existing.kind !== 'checking' && Date.now() - last < PROBE_COOLDOWN_MS) {
+  if (
+    !options?.force
+    && existing
+    && existing.kind !== 'checking'
+    && existing.kind !== 'updating'
+    && Date.now() - last < PROBE_COOLDOWN_MS
+  ) {
     return Promise.resolve(existing);
   }
   const inflight = probing.get(targetId);
   if (inflight) return inflight;
 
+  const owner = getDataOwnerGeneration();
   if (!existing) setEntry(targetId, { kind: 'checking' });
   const req = ask(targetId, { action: 'status' }).then((reply) => {
-    probing.delete(targetId);
+    if (probing.get(targetId) === req) probing.delete(targetId);
+    if (!isDataOwnerGenerationCurrent(owner)) return { kind: 'unavailable' } as PeerUpdateEntry;
     const { entry } = entryFromReply(reply);
-    // 正在更新中的状态不被迟到的旧 probe 覆盖
-    if (entries.get(targetId)?.kind === 'updating' && entry.kind !== 'updating') {
+    // 观察器仍在跟踪的新发起更新不被迟到的旧 probe 覆盖
+    if (entries.get(targetId)?.kind === 'updating' && watchAbort.has(targetId) && entry.kind !== 'updating') {
       return entries.get(targetId)!;
     }
     probedAt.set(targetId, Date.now());
@@ -244,6 +266,7 @@ function watchUpdatingPeer(
   targetId: string,
   expectedVersion: string,
   initialPhase: 'downloading' | 'relaunching',
+  owner: DataOwnerGeneration,
   onBackgroundError?: (errorCode: string) => void,
 ): void {
   watchAbort.get(targetId)?.();
@@ -261,7 +284,10 @@ function watchUpdatingPeer(
   watchAbort.set(targetId, stop);
 
   const schedule = () => {
-    if (stopped) return;
+    if (stopped || !isDataOwnerGenerationCurrent(owner)) {
+      stop();
+      return;
+    }
     const maxTicks = phase === 'downloading' ? MAX_DOWNLOAD_TICKS : MAX_RELAUNCH_TICKS;
     if (ticks >= maxTicks) {
       stop();
@@ -270,10 +296,16 @@ function watchUpdatingPeer(
     const delay = phase === 'downloading' ? WATCH_DOWNLOAD_INTERVAL_MS : WATCH_RELAUNCH_INTERVAL_MS;
     timer = setTimeout(async () => {
       timer = null;
-      if (stopped) return;
+      if (stopped || !isDataOwnerGenerationCurrent(owner)) {
+        stop();
+        return;
+      }
       ticks += 1;
       const reply = await ask(targetId, { action: 'status' });
-      if (stopped) return;
+      if (stopped || !isDataOwnerGenerationCurrent(owner)) {
+        stop();
+        return;
+      }
       if (!reply.ok) {
         // relaunching 期间连接断开是预期行为（对端正在重启）；停止轮询，等重连后版本号刷新。
         if (phase === 'relaunching') {
@@ -317,7 +349,11 @@ export async function startPeerUpdate(
   currentVersion: string,
   onBackgroundError?: (errorCode: string) => void,
 ): Promise<StartPeerUpdateResult> {
+  const owner = getDataOwnerGeneration();
   const reply = await ask(targetId, { action: 'install', expectedVersion });
+  if (!isDataOwnerGenerationCurrent(owner)) {
+    return { ok: false, code: 'UNREACHABLE' };
+  }
   if (!reply.ok) {
     const code = peerAppUpdateErrorCode(reply.message);
     if (code === 'PEER_APP_UPDATE_VERSION_CHANGED' || code === 'PEER_APP_UPDATE_NO_UPDATE') {
@@ -334,6 +370,6 @@ export async function startPeerUpdate(
     currentVersion,
     targetVersion: accepted.targetVersion,
   });
-  watchUpdatingPeer(targetId, accepted.targetVersion, accepted.state, onBackgroundError);
+  watchUpdatingPeer(targetId, accepted.targetVersion, accepted.state, owner, onBackgroundError);
   return { ok: true, state: accepted.state, targetVersion: accepted.targetVersion };
 }

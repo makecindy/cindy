@@ -7368,8 +7368,8 @@
             "selfTitle": "Mettre à jour Cindy sur cet ordinateur ?",
             "description": "Cindy passera de {{from}} à {{to}} puis redémarrera sur cet appareil. La connexion à distance sera brièvement interrompue.",
             "selfDescription": "Cindy passera de {{from}} à {{to}} puis redémarrera sur cet ordinateur.",
-            "busyWarning": "Les tâches en cours ou travaux en arrière-plan sur cet appareil seront interrompus par le redémarrage.",
-            "selfBusyWarning": "Les tâches en cours ou travaux en arrière-plan sur cet ordinateur seront interrompus par le redémarrage.",
+            "busyWarning": "Les tâches en cours d'exécution ou travaux en arrière-plan sur cet appareil seront interrompus par le redémarrage.",
+            "selfBusyWarning": "Les tâches en cours d'exécution ou travaux en arrière-plan sur cet ordinateur seront interrompus par le redémarrage.",
             "linuxPermissionHint": "Les installations Linux gérées peuvent demander le mot de passe système sur l’appareil cible.",
             "windowsPermissionHint": "Une installation dans un dossier protégé peut demander une autorisation système sur l’appareil cible.",
             "action": "Mettre à jour"
@@ -7379,7 +7379,7 @@
             "relaunching": "« {{name}} » redémarre pour installer {{version}}",
             "versionChanged": "La version disponible sur « {{name}} » a changé. Rouvrez la carte pour vérifier.",
             "noUpdate": "Aucune mise à jour installable n’est disponible sur « {{name}} ».",
-            "busy": "« {{name}} » exécute déjà une mise à jour. Réessayez dans un instant.",
+            "busy": "« {{name}} » a déjà une mise à jour en cours d'exécution. Réessayez dans un instant.",
             "failed": "Impossible de mettre à jour Cindy sur « {{name}} »."
           }
         }
