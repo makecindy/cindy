@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { toast } from '@/lib/toast';
 import { RemoteSection } from '../RemoteSection';
 import { parseSelfHostedRelayCommand } from '../../../../shared/selfHostedRelay';
 
@@ -11,6 +12,7 @@ vi.mock('../SshKeySetupDialog', () => ({ SshKeySetupDialog: () => null }));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const legacyHost: RemoteHostSnapshot = {
@@ -169,4 +171,35 @@ it('labels a host of the person\'s own device, marks it unavailable and keeps it
   expect((screen.getByDisplayValue('203.0.113.7') as HTMLInputElement).disabled).toBe(true);
   expect(screen.getByText('settings.remote.edit.deviceHostReadOnly')).toBeTruthy();
   expect((screen.getByLabelText('settings.remote.add.displayName') as HTMLInputElement).disabled).toBe(false);
+});
+
+// The row of a device host offers its terminal command next to the alias, with the same compact button and feedback
+// as the device's card in 我的设备 (spec decision 6, approved mock). Entry: RemoteSection with the host list from the
+// bridge; observable: the copy button only on that row, the clipboard text and the toasts. Gap: the device card test
+// covers its own button only. Minimal failing input: one device host and one ordinary host. Unit tier (jsdom).
+it('copies a device host\'s terminal command from its row, with the device card\'s feedback', async () => {
+  const deviceHost: RemoteHostSnapshot = {
+    ...legacyHost,
+    config: { ...legacyHost.config, id: 'cindy-studio', displayName: 'Studio', hostname: '203.0.113.7', authMethod: 'key', identityFileConfigured: true, deviceHost: true },
+    device: { deviceId: 'studio', available: true },
+  };
+  const writeText = vi.fn(async (_text: string) => undefined);
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const copied = vi.spyOn(toast, 'success');
+  const failed = vi.spyOn(toast, 'error');
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: { list: async () => ({ hosts: [deviceHost, legacyHost] }), onStatusChanged: () => () => {} },
+  });
+  render(<RemoteSection />);
+  await act(async () => {});
+  const copy = screen.getAllByRole('button', { name: 'settings.remoteControl.sshAccess.device.copy' });
+  expect(copy).toHaveLength(1);
+  fireEvent.click(copy[0]!);
+  await act(async () => {});
+  expect(writeText).toHaveBeenCalledWith('ssh cindy-studio');
+  expect(copied).toHaveBeenCalledWith('settings.remoteControl.sshAccess.copied');
+  writeText.mockRejectedValueOnce(new Error('clipboard denied'));
+  fireEvent.click(copy[0]!);
+  await act(async () => {});
+  expect(failed).toHaveBeenCalledWith('settings.remoteControl.sshAccess.copyFailed');
 });

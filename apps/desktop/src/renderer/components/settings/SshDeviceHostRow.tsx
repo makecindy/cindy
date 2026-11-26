@@ -6,14 +6,12 @@
  * 数据来自主进程的控制端记录(ssh-access/sshAccessController.ts),由 useSshDeviceHosts 在页面上读一份共用。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import type { SshDeviceHostView } from '../../../shared/sshAccess';
-import { toastSshConnectError } from './RemoteSection';
+import { SshCommandCopyButton, toastSshConnectError } from './RemoteSection';
 
 /**
  * The hosts this computer keeps for the person's other devices, by device id. One reader for the whole page:
@@ -99,15 +97,6 @@ export function SshDeviceHostRow({ view, name, onRestore }: {
   const usable = view.state === 'ready' && view.hostId !== null;
   const note = stateText(view, t);
 
-  const copy = async () => {
-    if (!command) return;
-    try {
-      await navigator.clipboard.writeText(command);
-      toast.success(t('settings.remoteControl.sshAccess.copied'));
-    } catch {
-      toast.error(t('settings.remoteControl.sshAccess.copyFailed'));
-    }
-  };
   const connect = async () => {
     if (!view.hostId || busy) return;
     setBusy(true);
@@ -142,22 +131,7 @@ export function SshDeviceHostRow({ view, name, onRestore }: {
             {command}
           </code>
         )}
-        {command && view.hostId !== null && (
-          <Tip text={t('settings.remoteControl.sshAccess.device.copy')}>
-            <Button
-              data-settings-search-action="Copy the terminal command that opens SSH to this device"
-              variant="secondary"
-              tone="quiet"
-              size="sm"
-              type="button"
-              aria-label={t('settings.remoteControl.sshAccess.device.copy')}
-              className="w-7 px-0"
-              onClick={() => void copy()}
-            >
-              <Copy size={13} aria-hidden />
-            </Button>
-          </Tip>
-        )}
+        {command && view.hostId !== null && <SshCommandCopyButton command={command} />}
         {usable && (
           <Button
             data-settings-search-action="Connect Cindy to this device's SSH host"

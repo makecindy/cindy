@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
+  Copy,
   Plus,
   Server,
   RefreshCw,
@@ -93,6 +94,38 @@ export function toastSshConnectError(err: unknown, t: (key: string, values?: Rec
   }
 }
 
+/**
+ * Copies the terminal command that opens SSH to one of the person's own devices (`ssh <alias>`): the same compact icon
+ * button and the same feedback on the device's card in 我的设备 and on its row in this list.
+ */
+export function SshCommandCopyButton({ command }: { command: string }) {
+  const { t } = useTranslation();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast.success(t('settings.remoteControl.sshAccess.copied'));
+    } catch {
+      toast.error(t('settings.remoteControl.sshAccess.copyFailed'));
+    }
+  };
+  return (
+    <Tip text={t('settings.remoteControl.sshAccess.device.copy')}>
+      <Button
+        data-settings-search-action="Copy the terminal command that opens SSH to this device"
+        variant="secondary"
+        tone="quiet"
+        size="sm"
+        type="button"
+        aria-label={t('settings.remoteControl.sshAccess.device.copy')}
+        className="w-7 px-0"
+        onClick={() => void copy()}
+      >
+        <Copy size={13} aria-hidden />
+      </Button>
+    </Tip>
+  );
+}
+
 function statusVariables(status: Status): { dot: string; label: string } {
   // Status dot uses semantic colors (sanctioned exception to the "no hue" rule;
   // user explicitly asked for 绿/橙/红/灰 signaling — see colors.ts notes).
@@ -131,6 +164,9 @@ function HostRow({
     || snap.status === 'authenticating' || snap.status === 'reconnecting';
   const canExpand = snap.status === 'ready';
   const displayName = snap.config.displayName?.trim() || snap.config.id;
+  const showAlias = displayName !== snap.config.id;
+  // A host of the person's own devices: its alias is also the terminal command's (`ssh cindy-…`).
+  const command = snap.config.deviceHost ? `ssh ${snap.config.id}` : null;
 
   // For non-failed states append " · via <auth-label>" so the user can see
   // which credential is actually carrying the connection. Catches the case
@@ -187,14 +223,24 @@ function HostRow({
           >
             {displayName}
           </span>
-          {displayName !== snap.config.id && (
-            <code
-              className="min-w-0 max-w-full truncate text-11"
-              style={{ color: 'var(--settings-integration-subtitle)' }}
-              title={snap.config.id}
-            >
-              {snap.config.id}
-            </code>
+          {(showAlias || command) && (
+            <span className="flex min-w-0 max-w-full items-center gap-1">
+              {showAlias && (
+                <code
+                  className="min-w-0 truncate text-11"
+                  style={{ color: 'var(--settings-integration-subtitle)' }}
+                  title={snap.config.id}
+                >
+                  {snap.config.id}
+                </code>
+              )}
+              {/* The button is taller than the text; the negative margin keeps the title line as tall as before. */}
+              {command && (
+                <span className="-my-1 flex shrink-0">
+                  <SshCommandCopyButton command={command} />
+                </span>
+              )}
+            </span>
           )}
           <span className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <span
