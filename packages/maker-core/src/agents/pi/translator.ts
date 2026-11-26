@@ -1,3 +1,4 @@
+import { markPiResponsesCompletion, type PiResponsesCompletion } from './responses-completion.js';
 import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
@@ -19,12 +20,15 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  */
 
 import { randomUUID } from 'node:crypto';
+import { PI_NATIVE_SUBAGENT_DISPLAY_NAME } from './session-tree.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { StartSessionOptions } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   type NonSecretErrorSignals,
 } from '@cindy/maker-shared/error-redaction';
@@ -99,9 +103,14 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: NonSecretErrorSignals['errorStatus'];
+  errorStatus?: NonSecretErrorSignals['errorStatus'] | 400;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
+  reason?:
+    | typeof CONTEXT_OVERFLOW_REASON
+    | typeof UPSTREAM_STREAM_INTERRUPTED_REASON
+    | typeof PI_GATEWAY_DROP_REASON
+    | typeof UNSUPPORTED_REQUEST_OPTION_REASON
+    | typeof PROVIDER_SAFETY_REFUSAL_REASON;
 }
 
 interface PiThinkingBlock {
@@ -205,6 +214,8 @@ export interface PiTranslateContext {
   finalAssistantText: string;
   /** Latest assistant stop reason for classifying the settled turn outcome. */
   finalAssistantStopReason: string | null;
+  /** Narrow close-time evidence, independent of native agent_settled. */
+  replyPhase: 'delivered' | 'agent-ended' | 'threshold-compaction' | null;
   /**
    * Pi 会先用 message_end(stopReason=error) 报 provider 错误，之后仍可能自动重试。
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
@@ -324,6 +335,7 @@ export function createPiTranslateContext(
     streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     finalAssistantStopReason: null,
+    replyPhase: null,
     turnWallClockStartedAt: 0,
     // Pi routes both verbatim-thinking and summary-thinking models: configure explicitly
     // from the active model/API, defaulting to verbatim when none is supplied.
@@ -754,21 +766,40 @@ function isPiAbortedRequest(error: string): boolean {
   return /^Request was aborted[.!]?$/i.test(error.trim());
 }
 
+/** OpenAI-compatible gateways can wrap the upstream JSON error in a JSON string. */
+function isPiInvalidRequestEnvelope(rawError: string): boolean {
+  if (!rawError.startsWith('400:')) return false;
+  try {
+    const body = JSON.parse(rawError.slice(4));
+    if (body?.type === 'invalid_request_error') return true;
+    const upstream = typeof body?.message === 'string' && !body.error
+      ? JSON.parse(body.message)
+      : body;
+    return upstream?.error?.type === 'invalid_request_error';
+  } catch {
+    return false;
+  }
+}
+
 function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
+  const errorStatus = signals.errorStatus ?? (isPiInvalidRequestEnvelope(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
+  const isSafetyRefusal = isProviderSafetyRefusalError(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
-    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
-    ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(isContextOverflowErrorMessage(redactedError)
-      ? { reason: CONTEXT_OVERFLOW_REASON }
-      : isUnsupportedRequestOptionErrorMessage(redactedError)
-        ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
-        : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
-          ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-          : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
+    ...(!isSafetyRefusal && signals.usageLimit ? { usageLimit: true } : {}),
+    ...(isSafetyRefusal
+      ? { reason: PROVIDER_SAFETY_REFUSAL_REASON }
+      : isContextOverflowErrorMessage(redactedError)
+        ? { reason: CONTEXT_OVERFLOW_REASON }
+        : isUnsupportedRequestOptionErrorMessage(redactedError)
+          ? { reason: UNSUPPORTED_REQUEST_OPTION_REASON }
+          : isStreamInterruptedErrorMessage(redactedError) || isPiAbortedRequest(redactedError)
+            ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+            : {}),
   };
 }
 
@@ -855,6 +886,7 @@ export function translatePiEvent(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
+  responsesCompletion?: PiResponsesCompletion,
 ): void {
   const projection = piToolMarkupProjection(ctx);
   const message = event.message as PiAssistantMessage | undefined;
@@ -864,7 +896,16 @@ export function translatePiEvent(
     || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
   const generation = ctx.turnGeneration;
-  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  // Projection normalizes the reply and can convert a nominal completion into an
+  // error. Attach private proof to the final event object, after that projection.
+  const sink = responsesCompletion ? { push: (terminal: AgentEvent) => {
+    const result = terminal.data as { status?: string; silentStop?: boolean; result?: string } | null;
+    if (terminal.type === 'done' && result?.status === 'completed' && !result.silentStop && result.result?.trim()) {
+      markPiResponsesCompletion(terminal, responsesCompletion);
+    }
+    return queue.push(terminal);
+  } } : queue;
+  translatePiEventInternal(event, projection.queue(sink) as AsyncQueue<AgentEvent>, ctx);
   if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
   if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
 }
@@ -876,6 +917,7 @@ function translatePiEventInternal(
 ): void {
   switch (event.type) {
     case 'agent_start': {
+      ctx.replyPhase = null;
       if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
           && ctx.pendingHostTurnStartToken === null) {
         ctx.pendingAssistantError = null;
@@ -933,9 +975,11 @@ function translatePiEventInternal(
     }
 
     case 'turn_start':
+      ctx.replyPhase = null;
       return;
 
     case 'message_start': {
+      ctx.replyPhase = null;
       // Pi also starts user prompts and tool results; only assistant messages are
       // model requests that queue a price tier and open generation timing.
       const role = (event.message as { role?: string } | undefined)?.role;
@@ -1033,6 +1077,8 @@ function translatePiEventInternal(
       if (!transientAssistantFailure && message.stopReason === 'stop') {
         ctx.finalAssistantText = fullText;
       }
+      ctx.replyPhase = !transientAssistantFailure && message.stopReason === 'stop' && fullText.trim()
+        ? 'delivered' : null;
       if (!transientAssistantFailure && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
         ctx.finalAssistantText = fullText;
@@ -1093,13 +1139,16 @@ function translatePiEventInternal(
           toolUseId,
           ...parseMessageToolUse({
             role: 'tool_use',
-            content: { toolName, input: toolArgs },
+            content: {
+              toolName: toolName === PI_SUBAGENT_TOOL_NAME ? PI_NATIVE_SUBAGENT_DISPLAY_NAME : toolName,
+              input: toolArgs,
+            },
             toolUseId,
           }),
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+      if (toolName === PI_SUBAGENT_RUNTIME_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
         const rawTitle = toolArgs.title;
         const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
           ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
@@ -1237,6 +1286,7 @@ function translatePiEventInternal(
     }
 
     case 'agent_end':
+      ctx.replyPhase = ctx.replyPhase === 'delivered' ? 'agent-ended' : null;
       // 可能跟 retry / compaction / queued follow-up;终态一律等 agent_settled。
       return;
 
@@ -1260,6 +1310,9 @@ function translatePiEventInternal(
       const outputLimited = !hostAbortRequested
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantStopReason === 'length';
+      const safetyRefusalStopped = !hostAbortRequested
+        && !ctx.terminalAssistantErrorEmitted
+        && (ctx.finalAssistantStopReason === 'refusal' || ctx.finalAssistantStopReason === 'content_filter');
       const usage = {
         ...piTurnUsageOf(ctx),
         // durationMs is deliberately generation-only. Prefer the calibrated meter's
@@ -1284,6 +1337,12 @@ function translatePiEventInternal(
         // Consumers may settle on this error and ignore the paired done.
         result: ctx.finalAssistantText,
         usage,
+      } : safetyRefusalStopped && ctx.finalAssistantText.trim().length === 0 ? {
+        message: 'The model provider blocked this response under its safety policy.',
+        sdkError: `Pi response stopped with ${ctx.finalAssistantStopReason}`,
+        reason: PROVIDER_SAFETY_REFUSAL_REASON,
+        result: '',
+        usage,
       } : null);
       const outcome = terminalError || ctx.terminalAssistantErrorEmitted
         ? 'failed'
@@ -1307,6 +1366,7 @@ function translatePiEventInternal(
       }
       const silentStop = outcome === 'completed'
         && !hostAbortRequested
+        && !safetyRefusalStopped
         && pendingAssistantError === null
         && !ctx.terminalAssistantErrorEmitted
         && ctx.finalAssistantText.trim().length === 0;
@@ -1344,6 +1404,7 @@ function translatePiEventInternal(
     }
 
     case 'auto_retry_start': {
+      ctx.replyPhase = null;
       // The backoff wait is not generation time; the retried request's first block resumes.
       ctx.tokenSpeed.pause();
       // A provider retry may begin without a matching message_end for the
@@ -1381,9 +1442,10 @@ function translatePiEventInternal(
         });
         return;
       }
-      // 网络 / 超时 / Responses 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
+      // 网络 / 超时 / 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
       // 不要套 `(auto-retry N/M)`——那条跨端协议在手机上只表示过载。
-      if (isNetworkishErrorMessage(rawMessage)) {
+      // Chat Completions 的 EOF 文案只在原生重试事件内认领，保持终态和 Host 续跑判定。
+      if (isNetworkishErrorMessage(rawMessage) || sdkError?.trim() === 'Stream ended without finish_reason') {
         queue.push({
           type: 'error',
           data: {
@@ -1469,6 +1531,8 @@ function translatePiEventInternal(
     }
 
     case 'compaction_start': {
+      ctx.replyPhase = event.reason === 'threshold' && ctx.replyPhase === 'agent-ended'
+        ? 'threshold-compaction' : null;
       // Idle manual compaction is background work, while native threshold and
       // overflow compaction remain inside Pi's active agent run.
       // Latch the scope at start because a new turn may begin before end arrives.
@@ -1477,6 +1541,7 @@ function translatePiEventInternal(
     }
 
     case 'compaction_end': {
+      ctx.replyPhase = null;
       const belongsToCurrentTurn = ctx.compactTurnGeneration === null
         || ctx.compactTurnGeneration === ctx.turnGeneration;
       ctx.compactTurnGeneration = null;

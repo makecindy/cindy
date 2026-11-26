@@ -47,7 +47,10 @@
   - **登记通了不等于数据通（2026-11-22）。** 登记只证明小包能来回。设备经 UDP 发出数据后，4 秒内一个经中继转来的数据报
     （UDP 或 WebSocket）都没收到，且这期间又发了至少 3 次、跨过 1 秒（核心在重发；单个没人回应的纯确认包不算），就判定这条
     UDP 只通登记、不通数据：两个方向退回 WebSocket，登记照常低频发（每 15 秒，带「收不到」），冷却 30 秒、5 分钟、30 分钟
-    后再试，经 UDP 收到数据后冷却回到第一档。停用期间的确认不触发立即重新登记。只改设备一侧，包格式、中继和自建中转都不变。
+    后再试。冷却结束即可用 UDP 传业务数据。Desktop 和 Node Host 连续一分钟在每个 5 秒观察窗里都经 UDP 收发了数据报、
+    且中转连接累计被对端确认的字节数持续增加，才把下次故障的冷却恢复到 30 秒。请求超时中断这段观察。单向收到对端的重传
+    曾使上传反复回到同一条故障线路。设备使用可靠传输核心已有的确认计数，无需发送探测包。停用期间的确认不触发立即重新登记。
+    官方与自建中继沿用已有登记与数据报格式，仅升级设备即可生效。
     日志写作 `agent-net relayed datagrams now go over the relay WebSocket (relay UDP answered registrations but carried no data back; retrying UDP in 30s)`。
   - **收得到、发不出去也要退回。** 对端一直在重发时本机总有数据进来，上一条看不出来。会话层（`AgentNetSessionLinks`）发往一个
     此刻走中转的对端的请求超时，就报给承载它的连接（Desktop `agentNetRelayStalled`，Host `node.relayStalled`，经 worker 的
@@ -111,3 +114,25 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 （同一中转复用在途请求，成功结果保留 10 分钟，失败后 1 分钟内沿用已有结果）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
 回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
 256 KB；不下发凭据时失败）。
+
+**第 1 跳满尺寸双向 UDP 探针与单对端隔离（2026-11-25，`udp-relay-probe-v1`）。**
+真机日志暴露：只靠端到端重传（`unacked-sends`）和静默（`data-silence`）判定本机到中转的 UDP 健康度，会把单台远端对端掉线/跨网抖动
+误判成本机第 1 跳故障，连坐同机其他经中转的健康对端，且间歇轮询场景下每 5 秒窗口清空 `healthySince` 会把退避档位一路锁进 1800 秒 WS。
+- **增量能力与包格式（100% 向后兼容）**：中继在 `/api/agent-net/info` 的 `features` 声明 `udp-relay-probe-v1`，并在 WebSocket `hello.udp`
+  附带可选字段 `probe: true`；旧中继省略它，旧客户端忽略它，新旧组合无需发布顺序。新增类型字节 `0xE5`（`UDP_RELAY_PROBE`）和 `0xE6`
+  （`UDP_RELAY_PROBE_ACK`），仍在 `111` 段内：
+  - 探测 `0xE5`：`[类型 1][会话号 8][计数器 8][MAC 16][填充至 1350 字节]`，MAC 覆盖包头与填充；
+  - 确认 `0xE6`：`[类型 1][计数器 8][MAC 16][填充至探针长度 - 8 字节]`（1342 字节），MAC 覆盖包头、会话号与填充。
+  - 安全与无放大：中继仅在来源地址已被登记凭证认定、登记仍在 30 秒有效期内、计数器严格递增、验签通过且有 UDP 令牌桶余量时回复，
+    确认严格短于请求（放大系数 < 1），同时双向验证 ~1350B 业务包长能否穿过 VPN 透明代理与路径 MTU。
+- **设备侧状态机（Desktop/Host `relayUdp.ts`、Mobile 原生 `udp_paths.rs`）**：
+  - 支持 `probe: true` 时：地址认定后须先通过一次 1350B 探针才启用中转 UDP；运行中出现 `data-silence` / `request-timeouts` / `unacked-sends`
+    时先发 1350B 探针复核第 1 跳（中继秒回说明故障在对端、不熔断；2.5 秒超时才实锤 `probe-failed` 退回 WebSocket）；停用期间按
+    15s → 30s → 60s → 120s 在 WebSocket 保护下主动发单包探针，通了立即切回 UDP；换网（`networkChanged` / `migrate`）立即清冷却并重探。
+  - 连接未升级探针的旧中继时：按对端连接分别统计中转重传（`RelaySendCounters.sampleDetailed`），同期只要存在任意一台经中转对端正常确认字节
+    且无高重传，绝不熔断全局中转 UDP；全员有确认推进的偶发重传须连续两个窗口持续才触发；纯空闲窗口不再重置 `healthySince`，累计跨过 60 秒的
+    多笔双向确认即可清零退避档位。
+- **自建与官方中转**：自建中转 `packages/device-link-relay/src/version.ts` 递增到 `0.5.7`；官方中转在独立服务端仓同步 `packages/agent-net-relay`
+  前，新客户端自动走旧中继兜底逻辑（已消除单对端连坐与 30 分钟锁死），服务端同步后自动启用 `udp-relay-probe-v1`。
+回归：`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`「answers full-size UDP probes only for proven addresses with non-amplifying acks and rejects replays or tampering」、
+`packages/agent-net/src/__tests__/relayUdp.test.ts`（满尺寸探针准入/复核/换网恢复、旧中继单对端隔离与间歇流量清零）与 `packages/agent-net-native/src/udp_paths.rs` 单测。

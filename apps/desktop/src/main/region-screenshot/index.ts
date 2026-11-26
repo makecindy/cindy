@@ -247,7 +247,7 @@ async function startRegionScreenshot(): Promise<void> {
       // Windows frames and window queries share one serial native helper. Do
       // not let a slow optional query consume a queued frame's timeout (or kill
       // its helper): finish every native frame first. Electron capture (macOS,
-      // HDR / wide gamut, or after native frames fail) does not use the helper,
+      // unsupported colors, or after native frames fail) does not use the helper,
       // so the queries stay parallel with it.
       if (!nativeScreenshotPrecheck(displays, h)) await helperFree;
       const result = await measureTraceOperation('region-screenshot:windows', async () => ({

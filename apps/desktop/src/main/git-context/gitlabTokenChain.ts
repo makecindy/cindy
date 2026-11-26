@@ -16,9 +16,11 @@ interface GlabSource {
 export function createGitlabTokenChain(deps: {
   glab: GlabSource;
   pluginToken: (host: string) => string | null;
+  ownerScope?: () => string;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
+  const readScope = deps.ownerScope;
   /** Which source answered last per host, so a 401 retires that source only. */
   const lastSource = new Map<string, 'glab' | 'plugin'>();
   const pluginRejectedUntil = new Map<string, number>();
@@ -30,6 +32,7 @@ export function createGitlabTokenChain(deps: {
     async readTokenDetailed(rawHost: string): Promise<GlabTokenResult> {
       const host = rawHost.toLowerCase();
       if (!isPrHost(host)) return deps.glab.readTokenDetailed(host);
+      const scope = readScope?.();
       if ((pluginRejectedUntil.get(host) ?? 0) <= now()) {
         pluginRejectedUntil.delete(host);
         let token: string | null = null;
@@ -38,12 +41,14 @@ export function createGitlabTokenChain(deps: {
         } catch {
           token = null;
         }
+        if (readScope && scope !== readScope()) return { ok: false, reason: 'no-token' };
         if (token) {
           remember(host, 'plugin');
           return { ok: true, token };
         }
       }
       const glab = await deps.glab.readTokenDetailed(host);
+      if (readScope && scope !== readScope()) return { ok: false, reason: 'no-token' };
       if (glab.ok) remember(host, 'glab');
       return glab;
     },

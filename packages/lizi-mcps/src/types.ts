@@ -986,6 +986,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** In-process identity shared by Codex startup and registered thread contexts. */
+  startupCatalogKey?: object;
   /** Host-attested plugin caller. This never supplies or inherits a Session identity. */
   hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
   /** Host-owned memory namespace override shared with the agent prompt path. */

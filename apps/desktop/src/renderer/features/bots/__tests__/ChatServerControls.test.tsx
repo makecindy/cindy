@@ -241,7 +241,7 @@ describe('chat interaction controls', () => {
     const joined = vi.fn();
     render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
     await screen.findByText('Invited group');
-    const toggle = screen.queryByRole('switch', { name: 'bots.groupChat.mask.joinSetup' });
+    const toggle = screen.queryByRole('checkbox', { name: 'bots.groupChat.mask.joinSetup' });
     expect(!!toggle).toBe(supported);
     if (toggle) fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: k('accept') }));

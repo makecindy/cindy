@@ -3,10 +3,15 @@ export default {
   real: 'ScheduleFormDialog, WebhookSourceFields, PluginEventSourceFields, translations and theme',
   notCovered: 'Fixture plugin catalog, listening status. No real plugin, event delivery, model execution or writes.',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': '../scheduler-trigger/catalog-hooks.ts',
+    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
+    'src/renderer/hooks/useAgentCapabilities': {
+      partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
+        refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
+    },
     'src/renderer/hooks/useProviders': '../scheduler-trigger/catalog-hooks.ts',
-    'src/renderer/hooks/useDeviceProviders': '../scheduler-trigger/catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': {
+      partial: "export { useDeviceProviders } from './scripts/fixtures/scheduler-trigger/catalog-hooks';",
+    },
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',

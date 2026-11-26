@@ -5,10 +5,15 @@ export default {
   real: 'ScheduleFormDialog, form state, Webhook fields, Collapse, segmented controls, dialog positioning and theme',
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': './catalog-hooks.ts',
+    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
+    'src/renderer/hooks/useAgentCapabilities': {
+      partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
+        refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
+    },
     'src/renderer/hooks/useProviders': './catalog-hooks.ts',
-    'src/renderer/hooks/useDeviceProviders': './catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': {
+      partial: "export { useDeviceProviders } from './scripts/fixtures/scheduler-trigger/catalog-hooks';",
+    },
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',
@@ -16,7 +21,7 @@ export default {
     'src/renderer/lib/sessionService': 'export const resolveReferences = async () => [];',
     'src/renderer/features/scheduler/components/BoundSessionCard': 'export const BoundSessionCard = () => null;',
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
-    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
+    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = ({intervalMs}) => chip(intervalMs === 300000 ? '每 5 分钟' : '09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
   cases: { 'gitlab-plugin-project': { about: '装了 GitLab 插件：整个项目默认「通过 GitLab 插件」，填项目、勾事件，不需要 Webhook' },
     'gitlab-plugin-issue': { about: '装了 GitLab 插件：指定 Issue 默认通过插件，条件多「有新评论」' }, 'gitlab-mr': { about: 'GitLab 指定 MR：粘贴链接，状态变化才运行，自动打开定时检查' }, 'gitlab-issue': { about: 'GitLab 指定 Issue：#编号 / 链接，需要选签名方式' }, 'single-issue': { about: '同一个输入框填 owner/repo#7，识别为 Issue 后条件换成 Issue 的选项' }, 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
@@ -120,7 +125,8 @@ export default {
     }
     // Issue #10224: the compact field still shows the original three lines; a long
     // prompt scrolls inside it, and the expand button above it opens a large editor.
-    const prompt = await page.locator('textarea').evaluate((el) => ({
+    const promptField = page.getByRole('textbox', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+    const prompt = await promptField.evaluate((el) => ({
       height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
     }));
     console.log(`prompt field: ${JSON.stringify(prompt)}`);
@@ -137,13 +143,13 @@ export default {
       // this control by 144px in a short window. Start measuring after the user
       // has scrolled the control into view, not before Playwright's auto-scroll.
       await choice.scrollIntoViewIfNeeded();
-      await choice.evaluate((element, triggerLabel) => {
+      await choice.evaluate((element, { triggerLabel, promptElement }) => {
         const frames = []; window.__triggerFrames = frames; window.__triggerFramesDone = false;
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
             .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
-          const prompt = document.querySelector('textarea').getBoundingClientRect();
+          const prompt = promptElement.getBoundingClientRect();
           frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
         };
         sample();
@@ -154,7 +160,7 @@ export default {
             else window.__triggerFramesDone = true;
           }; tick();
         }, {once: true});
-      }, await ui.t('scheduler.editor.trigger.label'));
+      }, { triggerLabel: await ui.t('scheduler.editor.trigger.label'), promptElement: await promptField.elementHandle() });
       await choice.click();
       await page.waitForFunction(() => window.__triggerFramesDone);
       const frames = await page.evaluate(() => window.__triggerFrames);
@@ -204,7 +210,7 @@ export default {
       const collapse = await ui.t('scheduler.editor.promptDialog.collapsePrompt');
       await page.getByRole('button', { name: collapse, exact: true }).click();
       await panel.waitFor({ state: 'detached' });
-      const back = await page.locator('textarea').evaluate((el) => ({ height: el.getBoundingClientRect().height }));
+      const back = await promptField.evaluate((el) => ({ height: el.getBoundingClientRect().height }));
       assert.ok(back.height <= 60, `Collapsing did not restore the compact field: ${JSON.stringify(back)}`);
       // Focus returns to the entry button instead of restarting at the top.
       assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), expand);

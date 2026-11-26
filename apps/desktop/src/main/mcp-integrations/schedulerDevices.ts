@@ -114,10 +114,12 @@ export function createSchedulerRemoteDeps(deps: {
         const needsWebhook = input?.webhookTrigger !== undefined;
         // Plugin events are handed over on the target computer itself: no account or receiver needed there.
         const pluginEvents = (input?.webhookTrigger as { source?: { preset?: unknown } } | null | undefined)?.source?.preset === 'plugin';
+        // 设模式要对方能存：旧端会丢掉未知字段后照样报成功，任务静默按具体模型运行。清除(null)不需要。
+        const needsModelGroup = typeof input?.modelGroup === 'string' && input.modelGroup.trim() !== '';
         const needsModelSelection = patch?.modelAgentKind != null;
         const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
           || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
-        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || input?.prTrigger !== undefined) {
+        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || needsModelGroup || input?.prTrigger !== undefined) {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
           const supported = capabilities.ok ? capabilities.result as {
@@ -127,6 +129,7 @@ export function createSchedulerRemoteDeps(deps: {
             supportsSchedulePrTrigger?: boolean;
             supportsScheduleWebhookTrigger?: boolean;
             supportsSchedulePluginEventTrigger?: boolean;
+            supportsScheduleModelGroup?: boolean;
           } | null : null;
           if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
@@ -139,6 +142,9 @@ export function createSchedulerRemoteDeps(deps: {
           }
           if (pluginEvents && supported?.supportsSchedulePluginEventTrigger !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持插件事件触发，请先更新目标电脑' };
+          }
+          if (needsModelGroup && supported?.supportsScheduleModelGroup !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择模型组，请先更新目标电脑' };
           }
           if (needsModelSelection && supported?.supportsScheduleModelSelection !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化完整模型选择，请先更新目标电脑' };

@@ -25,7 +25,9 @@
       "replyAll": "悉覆此函诸受书者",
       "forward": "转致此函"
     },
+    "messageCount_one": "凡 {{count}} 函",
     "messageCount_other": "凡 {{count}} 函",
+    "showMessages_one": "示 {{count}} 函",
     "showMessages_other": "示 {{count}} 函",
     "conversationFailed": "前后之函暂不可读。",
     "expandMessage": "展 {{from}} 之函",
@@ -296,6 +298,8 @@
       "liveScreenDetail": "借远端桌面，手机或他电脑可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机或他电脑开启时方连，不示此电脑他物。",
       "preview": "可于右侧栏浏览器中启下列网站之先览页",
       "previewDetail": "唯可启下列之网站；每启皆示为何法器所启。",
+      "fileOpener": "君于 Cindy 中启下列诸类文件时，由此法器启之",
+      "fileOpenerDetail": "法器得文件之全径，代系统默认之器启之；不能启则仍用默认之器。可于法器详情中关之。",
       "nodeChildSpawn": "Node 程序可请宿主再启包内所申报之子进程",
       "nodeChildSpawnDetail": "唯可启其自身包内所申报之 JS 卷(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时子进程一并阖。",
       "skill": "为 AI 助手增技艺「{{name}}」",

@@ -226,6 +226,58 @@ it('keeps a provider application, approval, transport identity and leave on its 
   }
   expect(state.card.mock.calls.every(([, opts]) => opts.body.audience === 'cindy-agent-net-sharing')).toBe(true);
 });
+
+// Unit: both complete and partial Agent-Net received lists must carry 429 backoff
+// across reads. The real SDK sees the HTTP header and the unaffected origin still loads.
+it.each([false, true])('waits for Retry-After in received lists (healthy second origin: %s)', async (partial) => {
+  const current = state.api;
+  state.api = new AgentNetClient(current.base, current.identity, current.certificate, current.rootPublicKey, undefined, { fetch: state.http });
+  if (partial) {
+    rememberAgentNetSharingService({ ...selectedAgentNetSharingRoute('provider-share')!,
+      server: 'https://friend.example.test', networkId: 'private:friend' });
+  }
+  const startedAt = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+  const healthyShare = {
+    shareId: 'healthy-share', memberId: 'healthy-member', providerId: 'claude', providerLabel: 'Remote',
+    hostDeviceId: 'remote-host', deviceName: 'Owner', owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true,
+  };
+  let restrictedReads = 0, healthyReads = 0;
+  state.http.mockImplementation(async (url: string) => {
+    const { hostname, pathname } = new URL(String(url));
+    if (pathname.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (hostname === 'friend.example.test') {
+      healthyReads++;
+      return Response.json({ shares: [healthyShare] });
+    }
+    restrictedReads++;
+    return restrictedReads === 1
+      ? new Response('Too many requests', { status: 429, headers: { 'Retry-After': '90' } })
+      : Response.json({ shares: [] });
+  });
+  const readWhileThrottled = async () => {
+    if (partial) {
+      const result = await providerShareApi.listReceived();
+      expect(result.authorityIncomplete).toBe(true);
+      expect(result.map(share => share.shareId)).toEqual(['healthy-share']);
+    } else {
+      await expect(providerShareApi.listReceived()).rejects.toThrow('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
+    }
+  };
+  try {
+    await readWhileThrottled();
+    clock.mockReturnValue(startedAt + 61_000);
+    await readWhileThrottled();
+    expect(restrictedReads).toBe(1);
+    expect(healthyReads).toBe(partial ? 2 : 0);
+    clock.mockReturnValue(startedAt + 91_000);
+    expect((await providerShareApi.listReceived()).authorityIncomplete).toBeUndefined();
+    expect(restrictedReads).toBe(2);
+  } finally {
+    clock.mockRestore();
+  }
+});
 // Review #10578: a partial outage returns cached rows rather than throwing. Unit,
 // real Main API + aggregation + SDK; previous leave tests never populated that
 // cache. An older read must not refill it, and a later admission must still work.

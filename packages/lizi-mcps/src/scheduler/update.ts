@@ -71,6 +71,13 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('传 null = 清空(按模型默认档);省略 = 不修改。'),
+      modelGroup: z
+        .string()
+        .min(1)
+        .max(64)
+        .nullable()
+        .optional()
+        .describe('模型组(模式) id，取 schedule_list_models 的 modelGroups[].id；新建任务时按模式选来源，发到已有任务时按那个任务自己的模式。传 null = 去掉模式、按 model 运行；省略 = 不修改，但本次改了 agentKind / modelAgentKind / model / providerId 时会一并去掉模式(选了具体模型)，要保留须一并重传。'),
       workingDir: z
         .string()
         .nullable()
@@ -191,7 +198,7 @@ export function registerScheduleUpdateTool(
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
-              && !['intervalMs', 'expireAt', 'prTrigger', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+              && !['intervalMs', 'expireAt', 'prTrigger', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort', 'modelGroup'].includes(key))
             ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间、Webhook 和模型选择字段'
             : null;
         if (unsupported) {
@@ -243,7 +250,7 @@ export function registerScheduleUpdateTool(
         if (agentDeviceId === null || agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           input = { ...input, agentDeviceId: undefined };
         }
-        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId'] as const) {
+        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId', 'modelGroup'] as const) {
           if ((patch as Record<string, unknown>)[key] === null) {
             input = { ...input, [key]: undefined };
           }

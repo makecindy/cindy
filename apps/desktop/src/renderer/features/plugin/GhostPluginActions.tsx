@@ -1,6 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Github, Plus, Sparkles, Store, Upload } from 'lucide-react';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
+import { useCompactPluginControl } from './lib/useCompactPluginControl';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +13,47 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+
+export function PluginCatalogPublishButton({
+  onClick,
+  unreadTone,
+  disabled,
+}: {
+  onClick: () => void;
+  unreadTone?: 'error' | 'done';
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = t('settings.ghosts.contribution.myPlugins');
+  const [trigger, iconOnly] = useCompactPluginControl(420, '.plugin-management-layout-root');
+  return (
+    <Tip
+      ref={trigger}
+      text={label}
+      controlledOpen={iconOnly ? undefined : false}
+      resetHoverOnControlChange
+    >
+      <Button
+        variant="secondary"
+        tone="quiet"
+        size="md"
+        compact
+        disabled={disabled}
+        className={cn('plugin-publish-trigger whitespace-nowrap', iconOnly && 'w-8 px-0')}
+        aria-label={unreadTone ? `${label} · ${t('settings.ghosts.contribution.unreadReview')}` : label}
+        onClick={onClick}
+      >
+        <Upload size={15} strokeWidth={1.75} className="plugin-publish-icon" aria-hidden="true" />
+        {!iconOnly && <span>{label}</span>}
+        {unreadTone ? (
+          <span className="inline-flex" aria-hidden="true">
+            <AttentionDot tone={unreadTone} />
+          </span>
+        ) : null}
+      </Button>
+    </Tip>
+  );
+}
 
 /** Add-plugin menu shared by local and remote catalogs. */
 export function GhostPluginActions({
@@ -27,29 +72,41 @@ export function GhostPluginActions({
   installTarget?: string;
 }) {
   const { t } = useTranslation();
+  const label = t('settings.ghosts.page.addPlugin');
+  const [trigger, iconOnly] = useCompactPluginControl(720, '.plugin-management-layout-root');
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="primary"
-          size="lg"
-          type="button"
-          disabled={disabled}
-          aria-label={t('settings.ghosts.page.addPluginAria')}
-          className="plugin-management-action-trigger group shrink-0 data-[state=open]:[--button-face-bg:var(--surface-chip)]"
+        <Tip
+          ref={trigger}
+          text={label}
+          controlledOpen={iconOnly ? undefined : false}
+          resetHoverOnControlChange
         >
-          <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
-          <span className="plugin-management-action-label">
-            {t('settings.ghosts.page.addPlugin')}
-          </span>
-          <ChevronDown
-            size={13}
-            strokeWidth={1.75}
-            className="plugin-management-action-chevron transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-            aria-hidden="true"
-          />
-        </Button>
+          <Button
+            variant="primary"
+            size="md"
+            compact
+            type="button"
+            disabled={disabled}
+            aria-label={t('settings.ghosts.page.addPluginAria')}
+            className={cn('group whitespace-nowrap', iconOnly && 'w-8 px-0')}
+          >
+            <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+            {!iconOnly && (
+              <span className="inline-flex items-center gap-1">
+                {label}
+                <ChevronDown
+                  size={13}
+                  strokeWidth={1.75}
+                  className="shrink-0 text-[var(--text-tertiary)] transition-transform duration-[var(--motion-fast)] group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                  aria-hidden="true"
+                />
+              </span>
+            )}
+          </Button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"

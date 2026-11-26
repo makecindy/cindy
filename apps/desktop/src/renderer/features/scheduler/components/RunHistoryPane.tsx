@@ -164,6 +164,7 @@ export function RunHistoryPane({
         description: t('scheduler.confirm.deleteRun.description'),
         confirmText: t('scheduler.confirm.deleteRun.confirm'),
         cancelText: t('scheduler.confirm.deleteRun.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -273,6 +274,7 @@ export function RunHistoryPane({
                 onClick={() => void handleOpenWorkingDir()}
                 title={dest.workingDir}
                 className={cn(
+                  // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                   'rounded text-[var(--cmd-palette-item-meta)] underline-offset-2 transition-colors',
                   'hover:text-[var(--msg-assistant-text)] hover:underline',
                 )}

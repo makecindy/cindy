@@ -238,7 +238,8 @@ export const Z_INDEX_LAYERS = {
   "modal-popover-nested": 10020,
   "modal-blocking": 10050,
   "toast": 10100,
-  "toast-top": 10101
+  "toast-top": 10101,
+  "blocking-gate": 10200
 };
 export const Z_INDEX_CLASSES = [
   "below",
@@ -257,5 +258,6 @@ export const Z_INDEX_CLASSES = [
   "modal-popover-nested",
   "modal-blocking",
   "toast",
-  "toast-top"
+  "toast-top",
+  "blocking-gate"
 ];

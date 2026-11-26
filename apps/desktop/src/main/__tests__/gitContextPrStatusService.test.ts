@@ -1,12 +1,24 @@
-import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
-import { fetchGitlabMr } from '../git-context/gitlabPrSummary';
+import { createGlabCliTokenSource, readGitlabStatusToken } from '../git-context/glabCliTokenSource';
+import { fetchGitlabMr, fetchGitlabMrStatus } from '../git-context/gitlabPrSummary';
+import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
 import { remotePrStatuses } from '@cindy/maker-shared';
 /**
  * git-context/prStatusService 单测 — 状态映射、TTL 缓存、in-flight 去重、
  * gh 缺失/未登录降级(不缓存,远端归一 no-token)、404/网络错误映射。依赖全注入,零网络零 Electron。
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
+import {
+  Scheduler,
+  type ListFilter,
+  type Schedule as EngineSchedule,
+  type ScheduleRun,
+  type ScheduleStorage,
+} from '@cindy/maker-scheduler';
+import { executePreRunHook } from '../scheduler-host/pre-run-hook';
 
 import {
   PrStatusService,
@@ -501,6 +513,58 @@ describe('GitLab MR status', () => {
     repo: 'project',
     prNumber: 7,
   };
+  it('prefers the exact plugin host over local glab, falls back to glab, and discards a read across an account switch', async () => {
+    const cli = createGlabCliTokenSource({ exec: vi.fn((_bin, _args, _opts, cb) => cb({ code: 'ENOENT' }, '')) as never });
+    let owner = 'first';
+    const readPlugin = vi.fn(async (host: string) => host === q.host ? 'fixture' : null);
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, readPlugin)).toEqual({ ok: true, token: 'fixture' });
+    expect(await readGitlabStatusToken('other.example.com', cli, () => owner, readPlugin)).toMatchObject({ ok: false });
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, async () => {
+      owner = 'second';
+      return 'fixture';
+    })).toMatchObject({ ok: false });
+    cli.rejectToken(q.host);
+    expect(await readGitlabStatusToken(q.host, cli, () => owner, async () => null)).toEqual({ ok: false, reason: 'glab-not-logged-in' });
+  });
+
+  // The title bar should remain usable on self-managed instances with an older GraphQL schema.
+  it('keeps REST status and a scoped URL when optional summaries fail', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/api/graphql')
+      ? Response.json({ errors: [{ message: 'Unknown field' }] })
+      : Response.json({ iid: 7, title: 'Fix', state: 'opened', draft: true, source_branch: 'feature', sha: 'head' }));
+    expect(await fetchGitlabMrStatus('fake', q, fetch)).toMatchObject({
+      state: 'open', draft: true, title: 'Fix', checks: null, unresolved_count: null,
+      html_url: 'https://git.example.com/group/sub/project/-/merge_requests/7',
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://git.example.com/api/v4/projects/group%2Fsub%2Fproject/merge_requests/7');
+  });
+  // Unit regression for #12168: an unresponsive optional endpoint withheld a valid MR badge on mobile.
+  // The schema-error case above returns immediately and cannot catch a blocked supplement.
+  it('returns REST status when the concurrent GraphQL summary exhausts its shorter deadline', async () => {
+    const rest = new AbortController();
+    const summary = new AbortController();
+    const deadline = vi.spyOn(AbortSignal, 'timeout')
+      .mockReturnValueOnce(rest.signal)
+      .mockReturnValueOnce(summary.signal);
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/graphql')) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      return Response.json({ iid: 7, title: 'Fix', state: 'opened', source_branch: 'feature', sha: 'head' });
+    });
+    try {
+      const status = fetchGitlabMrStatus('fake', q, fetch);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(deadline.mock.calls[1]![0]).toBeLessThan(deadline.mock.calls[0]![0]);
+      summary.abort();
+      await expect(status).resolves.toMatchObject({ state: 'open', title: 'Fix', checks: null });
+    } finally {
+      summary.abort();
+      deadline.mockRestore();
+    }
+  });
   const mr = () => ({
     state: 'opened',
     draft: false,
@@ -832,7 +896,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' })]]);
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' }), undefined]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -897,7 +961,8 @@ describe('PR follow watch', () => {
     watch.observe(query, { ok: true, status: 'open' } as never);
     watch.observe(query, { ok: true, status: 'merged' } as never);
     await new Promise(resolve => setImmediate(resolve));
-    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: mr }), tasks[0]);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow.mock.calls[0]?.slice(0, 3)).toEqual(['mr', expect.objectContaining({ detail: mr }), tasks[0]]);
   });
 
   it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
@@ -918,7 +983,7 @@ describe('PR follow watch', () => {
     watch.observe(Q, { ok: true, status: 'merged' } as never);
     await new Promise(resolve => setImmediate(resolve));
     expect(runNow).toHaveBeenCalledTimes(1);
-    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
+    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0], undefined);
   });
 
   // #11309: a failed timed check can advance lastFiredAt without handling the merge.
@@ -940,6 +1005,87 @@ describe('PR follow watch', () => {
     watch.observe(Q, merged);
     await new Promise(resolve => setImmediate(resolve));
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // #12168: consecutive REST reads of the same head can have a missing GraphQL
+  // summary. Losing and regaining detail must not dispatch an otherwise idle task.
+  it('observes verified MR changes across missing summaries and resets the summary on a new head', async () => {
+    const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group', repo: 'project', prNumber: 7 };
+    const url = 'https://git.example.com/group/project/-/merge_requests/7';
+    const tasks = (['any', 'ci', 'review'] as const).map(change =>
+      schedule(change, url, { preRunHook: undefined, prTrigger: { url, change } }));
+    const runNow = vi.fn(async (_id: string) => null);
+    let now = 0;
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, now: () => now });
+    const observe = async (headSha: string, failed: number | null, unresolvedCount: number | null, notes = 0) => {
+      now += 300_000;
+      runNow.mockClear();
+      watch.observe(target, { ...target, ok: true, status: 'open', htmlUrl: url, title: 'Fix', branch: 'fix',
+        headSha, checks: failed === null ? null : { total: 1, passed: 1 - failed, failed, pending: 0, skipped: 0 },
+        unresolvedCount, metadata: { user_notes_count: notes } });
+      await new Promise(resolve => setImmediate(resolve));
+      return runNow.mock.calls.map(([id]) => id);
+    };
+    expect(await observe('head1', null, null)).toEqual([]);
+    expect(await observe('head1', 0, 0)).toEqual([]);
+    expect(await observe('head1', null, null)).toEqual([]);
+    expect(await observe('head1', 0, 0)).toEqual([]);
+    expect(await observe('head1', null, null, 1)).toEqual(['any', 'review']);
+    expect(await observe('head1', 1, 1, 1)).toEqual(['any', 'ci', 'review']);
+    expect(await observe('head2', null, null, 1)).toEqual(['any']);
+    expect(await observe('head2', 0, 0, 1)).toEqual([]);
+  });
+
+  // Restart the watcher between reads; only the successful run's dispatch facts survive.
+  it('recovers offline MR changes once per successful observation, including across restarts', async () => {
+    const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub', repo: 'project', prNumber: 7 };
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    const task = schedule('review-mr', url, { createdAt: 1, prTrigger: { url, change: 'any' } });
+    const runNow = vi.fn(async () => null);
+    let last: { url: string; signature: string } | null = null;
+    const restart = async (unresolvedCount: number | null, failed: number | null, pipelineId = 1) => {
+      const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+        autoRunAllowed: () => true, hasCapacity: () => true, lastSuccessfulMrObservation: async () => last, runNow });
+      const status = { ...target, ok: true as const, status: 'open' as const, title: 'Fix', branch: 'fix',
+        htmlUrl: url, headSha: 'abc', unresolvedCount, metadata: { pipeline_id: pipelineId }, checks: failed === null ? null :
+          { total: 1, failed, pending: 0, passed: 1 - failed, skipped: 0 } };
+      watch.observe(target, status);
+      await watch.reconcileInitialMrWork(task, status);
+      return { url, signature: prStatusSignature(status)! };
+    };
+    await restart(0, 0);
+    expect(runNow).not.toHaveBeenCalled();
+    last = await restart(1, 0);
+    expect(runNow).toHaveBeenLastCalledWith('review-mr', expect.objectContaining({ detail: url }), task, last);
+    await restart(null, null);
+    await restart(1, 0);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await restart(2, 1); // failed or interrupted execution: the receipt does not advance
+    last = await restart(2, 1);
+    await restart(2, 1);
+    expect(runNow).toHaveBeenCalledTimes(3);
+    last = await restart(2, 1, 2); // another failed pipeline on the same commit
+    await restart(2, 1, 2);
+    expect(runNow).toHaveBeenCalledTimes(4);
+    last = { ...last, url: url.replace('git.example', 'other.example') };
+    await restart(2, 1, 2);
+    expect(runNow).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps GitLab follow-ups local and recovers a merge missed while the host was offline', async () => {
+    const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
+    const prTrigger = normalizePrTrigger({ url: url.toUpperCase().replace('HTTPS:', 'https:'), change: 'any' });
+    expect(prTrigger.url).toBe(url);
+    const task = schedule('mr', url, { createdAt: 1, preRunHook: undefined, prTrigger });
+    expect(followedGithubPrs([task])).toEqual([]);
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, runNow });
+    watch.observe({ host: 'git.example.com', provider: 'gitlab', owner: 'group/sub', repo: 'project', prNumber: 7 },
+      { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: url }), task, expect.objectContaining({ url }));
   });
 
   it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
@@ -1029,7 +1175,7 @@ describe('PR follow watch', () => {
       if (!active) task = schedule('merge', url, { preRunHook: undefined, prTrigger: null });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
-      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task);
+      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task, undefined);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
@@ -1092,5 +1238,378 @@ describe('PR follow watch', () => {
     await settle();
     expect(runNow).toHaveBeenCalledTimes(1);
     expect(prStatusSignature({ ok: false, prNumber: 85, reason: 'fetch-failed' } as never)).toBeNull();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：refreshGithubPrEvents + PrStatusService + PrFollowWatch 在连续 overflow 批次与忙顺延下的触发次数与参数。
+  // - 规则依据：docs/product-rules/github-status-and-associations.md（omitted > 0 补查找回评论变化）与 docs/dev-rules/server-channel-review.md（无关仓库高频 CI 溢出不得每分钟拉起全部跟进任务）。
+  // - 现有覆盖缺口：既有 overflow 用例仅验证单次调用，未覆盖同一 updated_at 连续溢出静默、评论推进 updated_at 立即补查，以及旧式无 prTrigger 跟进任务的 runner 顺延保留。
+  // - 最小失败输入：同一 PR 连续三次 overflow（第二次无变化、第三次仅 updated_at 推进）+ 首次执行返回 deferred。
+  // - tier：unit（fake timers，纯内存替身）。
+  it('suppresses repeated overflow reconciles when updated_at is unchanged, wakes on new comment timestamps, and retains deferred legacy follows', async () => {
+    vi.useFakeTimers();
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    let updatedAt = '2026-11-25T02:00:00Z';
+    const runNow = vi.fn(async () => ({ runId: 'r-ok', deferred: false }));
+    runNow.mockResolvedValueOnce({ runId: 'r-deferred', deferred: true });
+    const legacyTask = schedule('legacy-follow-324', url);
+    const watch = new PrFollowWatch({
+      listActive: async () => [legacyTask],
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ head_sha: 'a1', metadata: { updated_at: updatedAt } }),
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    try {
+      // First overflow without prior baseline reconciles once; runner defers, and legacy task retains the retry.
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(1);
+      expect(runNow).toHaveBeenLastCalledWith(
+        'legacy-follow-324',
+        { kind: 'watch', source: 'pr-status', detail: url, reason: 'reconcile' },
+        legacyTask,
+        undefined,
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(2);
+
+      // Subsequent overflow batches from busy sibling repos with identical summary + updated_at stay quiet.
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(2);
+
+      // A new issue comment during overflow advances updated_at without changing status counts -> wakes immediately.
+      updatedAt = '2026-11-25T02:05:00Z';
+      await vi.advanceTimersByTimeAsync(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Scheduler + executePreRunHook(stdin trigger 管道) + PrStatusService + PrFollowWatch + refreshGithubPrEvents 全链路下，验证 waiting(human) 长期无事件退避、显式评论即时唤醒、updated_at 缺失节流兜底以及 overflow 丢评论的双重恢复（updated_at 推进即时补查 + 定时 probe 兜底）。
+  // - 规则依据：docs/product-rules/github-status-and-associations.md 与 docs/dev-rules/server-channel-review.md。
+  // - 现有覆盖缺口：既有测试用 mock runNow 替身，未打通真实 preRunHook 子进程 stdin trigger 与 gate 状态机的退避/唤醒闭环，也未覆盖 updated_at 缺失与同秒漏更新的 probe 兜底。
+  // - 最小失败输入：waiting(human) 基线后经历 25 分钟定时 tick + 无关 overflow、显式评论、缺失 updated_at 的连续 overflow 及丢事件的评论更新。
+  // - tier：unit（临时目录真实门禁脚本 + FakeClock）。
+  it('verifies waiting(human) backoff, instant explicit-comment wakeup, missing-updated_at fallback, and overflow dropped-comment recovery through real executePreRunHook', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pr-gate-e2e-'));
+    const stateFile = path.join(tmpDir, 'gate-state.json');
+    const worldFile = path.join(tmpDir, 'pr-world.json');
+    const gateScript = path.join(tmpDir, 'pr-heartbeat-gate.mjs');
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+
+    // Mirrors official pr-heartbeat-gate.mjs + follow-pacing.mjs contract:
+    // reads stdin JSON { trigger }, enforces 30m waiting(human) pace unless triggered,
+    // runs cheap remarks probe when due, and passes (exit 0) only on new remarks.
+    fs.writeFileSync(
+      gateScript,
+      [
+        'import fs from "node:fs";',
+        'const [stateFile, worldFile, targetUrl] = process.argv.slice(2);',
+        'const rawStdin = fs.readFileSync(0, "utf8");',
+        'const payload = rawStdin ? JSON.parse(rawStdin) : {};',
+        'const world = JSON.parse(fs.readFileSync(worldFile, "utf8"));',
+        'const now = world.now;',
+        'const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf8")) : null;',
+        'const trigger = payload?.trigger;',
+        'const triggered = trigger?.kind === "watch" && trigger?.source === "pr-status" && String(trigger?.detail).toLowerCase() === targetUrl.toLowerCase();',
+        'const WAITING_PACE_MS = 30 * 60_000;',
+        'const PACE_SLACK_MS = 60_000;',
+        'if (!triggered && prev?.phase === "waiting(human)" && now - prev.lastLookAt + PACE_SLACK_MS < WAITING_PACE_MS) {',
+        '  world.notDueSkips += 1;',
+        '  fs.writeFileSync(worldFile, JSON.stringify(world));',
+        '  process.stdout.write("[pr-heartbeat-gate] SKIP reason=not-due (pace=waiting)\\nCINDY_PRECHECK_OK\\n");',
+        '  process.exit(2);',
+        '}',
+        'if (!triggered) world.probes += 1; else world.triggeredReads += 1;',
+        'fs.writeFileSync(worldFile, JSON.stringify(world));',
+        'const changed = !prev || prev.remarks !== world.remarks;',
+        'fs.writeFileSync(stateFile, JSON.stringify({ phase: "waiting(human)", remarks: world.remarks, lastLookAt: now }));',
+        'if (changed) {',
+        '  process.stdout.write("[pr-heartbeat-gate] PASS reason=changed (events=[remarks])\\nCINDY_PRECHECK_OK\\n");',
+        '  process.exit(0);',
+        '}',
+        'process.stdout.write("[pr-heartbeat-gate] SKIP reason=waiting-human\\nCINDY_PRECHECK_OK\\n");',
+        'process.exit(2);',
+      ].join('\n'),
+      'utf8',
+    );
+
+    let currentNow = Date.UTC(2026, 10, 25, 0, 0, 0);
+    const clock = {
+      now: () => currentNow,
+      advance: (ms: number) => {
+        currentNow += ms;
+      },
+    };
+    const schedulesMap = new Map<string, EngineSchedule>();
+    const runsMap = new Map<string, ScheduleRun>();
+    const storage: ScheduleStorage = {
+      async list(filter?: ListFilter) {
+        const all = [...schedulesMap.values()];
+        return filter?.status ? all.filter((s) => s.status === filter.status) : all;
+      },
+      async listActive() {
+        return [...schedulesMap.values()].filter((s) => s.status === 'active');
+      },
+      async get(id: string) {
+        const s = schedulesMap.get(id);
+        return s ? { ...s } : null;
+      },
+      async insert(sch: EngineSchedule) {
+        schedulesMap.set(sch.id, { ...sch });
+        return { ...sch };
+      },
+      async update(id: string, patch: Partial<EngineSchedule>, expected?: EngineSchedule) {
+        const ex = schedulesMap.get(id);
+        if (!ex) return null;
+        if (
+          expected &&
+          (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual', 'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const)
+            .some((key) => ex[key] !== expected[key])
+        ) {
+          return null;
+        }
+        const merged: EngineSchedule = { ...ex, ...patch };
+        if (patch.lastFinishedAt !== undefined) {
+          merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
+        }
+        schedulesMap.set(id, merged);
+        return { ...merged };
+      },
+      async delete(id: string) {
+        schedulesMap.delete(id);
+      },
+      async insertRun(run: ScheduleRun) {
+        runsMap.set(run.id, { ...run });
+        return { ...run };
+      },
+      async updateRun(id: string, patch: Partial<ScheduleRun>) {
+        const ex = runsMap.get(id);
+        if (!ex) return null;
+        const merged: ScheduleRun = { ...ex, ...patch };
+        runsMap.set(id, merged);
+        return { ...merged };
+      },
+      async listRuns(scheduleId: string, limit = 50) {
+        return [...runsMap.values()]
+          .filter((r) => r.scheduleId === scheduleId)
+          .sort((a, b) => b.firedAt - a.firedAt)
+          .slice(0, limit);
+      },
+      async hasRunningRuns(scheduleId?: string) {
+        return [...runsMap.values()].some(
+          (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+        );
+      },
+      async hasUnfinishedRuns(scheduleId: string) {
+        return [...runsMap.values()].some(
+          (r) => r.scheduleId === scheduleId && (r.status === 'running' || r.status === 'interrupted'),
+        );
+      },
+      async deleteRun(id: string) {
+        const ex = runsMap.get(id);
+        if (!ex) return null;
+        runsMap.delete(id);
+        return { ...ex };
+      },
+      async markRunningAsInterrupted() {
+        return [];
+      },
+      async touchRunHeartbeats() {},
+      async claimDueFire(id: string, expectedNextFireAt: number) {
+        const ex = schedulesMap.get(id);
+        if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+        ex.nextFireAt = undefined;
+        return { ...ex };
+      },
+    };
+    const readWorld = () =>
+      JSON.parse(fs.readFileSync(worldFile, 'utf8')) as {
+        now: number;
+        remarks: string;
+        notDueSkips: number;
+        probes: number;
+        triggeredReads: number;
+      };
+    const writeWorld = (patch: Partial<ReturnType<typeof readWorld>>) => {
+      const current = fs.existsSync(worldFile)
+        ? readWorld()
+        : { now: clock.now(), remarks: 'initial', notDueSkips: 0, probes: 0, triggeredReads: 0 };
+      fs.writeFileSync(worldFile, JSON.stringify({ ...current, ...patch, now: clock.now() }));
+    };
+    writeWorld({ remarks: 'initial' });
+
+    let agentWakeups = 0;
+    const scheduler = new Scheduler({
+      storage,
+      clock,
+      tickIntervalMs: 3_600_000,
+      runner: {
+        fire: async (sch, ctx) => {
+          writeWorld({});
+          const hook = await executePreRunHook({
+            command: sch.preRunHook!.command,
+            cwd: tmpDir,
+            signal: ctx.signal,
+            stdinPayload: {
+              event: 'schedule-pre-run',
+              scheduleId: sch.id,
+              scheduleName: sch.name,
+              runId: ctx.runId,
+              firedAt: clock.now(),
+              workingDir: tmpDir,
+              ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
+            },
+          });
+          await ctx.onPreRunHookCompleted?.(hook);
+          if (hook.status === 'skipped') {
+            return { sessionId: '', skipped: true, resultText: hook.stdout.trim() };
+          }
+          if (hook.status !== 'passed') {
+            throw new Error(hook.error ?? 'gate blocked');
+          }
+          agentWakeups += 1;
+          return { sessionId: 'sess-pr-85', resultText: `woke-${agentWakeups}` };
+        },
+      },
+    });
+
+    await scheduler.start();
+    try {
+      const follow = await scheduler.create({
+        name: 'Follow PR #85',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        intervalMs: 5 * 60_000,
+        recurring: true,
+        agentKind: 'codex',
+        prompt: 'Handle PR #85',
+        workingDir: tmpDir,
+        useWorktree: false,
+        notify: { desktop: false, feishu: false },
+        preRunHook: {
+          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(gateScript)} ${JSON.stringify(stateFile)} ${JSON.stringify(worldFile)} ${url}`,
+        },
+      });
+
+      let updatedAt: string | undefined = '2026-11-25T00:00:00Z';
+      let pendingWatchRun: Promise<unknown> | null = null;
+      const flushWatchRun = async () => {
+        const current = pendingWatchRun;
+        pendingWatchRun = null;
+        await current;
+      };
+      const watch = new PrFollowWatch({
+        now: () => clock.now(),
+        listActive: () => scheduler.list({ status: 'active' }),
+        inflight: (id) => scheduler.getInflightCount(id),
+        hasCapacity: () => scheduler.hasFreeSlot(),
+        autoRunAllowed: () => true,
+        runNow: (id, trigger) => {
+          const p = scheduler.runNow(id, { deferToCaller: true, trigger });
+          pendingWatchRun = p;
+          return p;
+        },
+      });
+      const svc = new PrStatusService({
+        readToken: TOKEN_OK,
+        now: () => clock.now(),
+        fetchPr: async () =>
+          remote({
+            head_sha: 'a1',
+            metadata: updatedAt ? { updated_at: updatedAt } : {},
+          }),
+        onObserved: (query, result) => watch.observe(query, result),
+      });
+
+      // Initial reconnect baseline (mirrors ScheduleWebhookRemote.recoverGithubPrs on welcome):
+      // establishes waiting(human) state (agentWakeups = 1) and anchors updated_at.
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'reconnect', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(1);
+      expect(readWorld()).toMatchObject({ notDueSkips: 0, probes: 0, triggeredReads: 1 });
+
+      // (1) Long-term no events in waiting(human): across +10m and +20m timed ticks AND repeated
+      // unrelated overflow batches, 0 probes/snapshots and 0 agent wakeups occur!
+      for (const stepMinutes of [10, 10]) {
+        clock.advance(2 * 60_000);
+        await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+        await flushWatchRun();
+        clock.advance((stepMinutes - 2) * 60_000);
+        await scheduler.tick();
+      }
+      expect(agentWakeups).toBe(1);
+      expect(readWorld()).toMatchObject({ notDueSkips: 2, probes: 0, triggeredReads: 1 });
+
+      // (2) Explicit new comment mid-backoff (+22m): bypasses waiting(human) immediately via stdin trigger,
+      // wakes agent once, and merges/resets the 5m timer so +25m does not duplicate-fire!
+      clock.advance(2 * 60_000);
+      writeWorld({ remarks: 'human-comment-1' });
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(2);
+      expect(readWorld().triggeredReads).toBe(2);
+      clock.advance(3 * 60_000);
+      await scheduler.tick(); // original +25m slot skipped because explicit watch reset intervalMs to +27m
+      expect(agentWakeups).toBe(2);
+
+      // (3) Missing updated_at fallback: an unseen PR with no updated_at reconciles immediately once,
+      // while a recently reconciled PR stays throttled until the 30m fallback window elapses, then reconciles once and throttles again.
+      expect(watch.needsCommentReconcile({ ...Q, prNumber: 999 }, undefined)).toBe(true);
+      updatedAt = undefined;
+      const triggeredBeforeMissing = readWorld().triggeredReads;
+      clock.advance(60_000); // +4m since step (2) reconcile -> still within 30m fallback window
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing);
+      clock.advance(27 * 60_000); // +31m since step (2) -> bounded 30m fallback reconciles once
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing + 1);
+      clock.advance(5 * 60_000); // +5m after fallback reconcile -> throttled again
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(readWorld().triggeredReads).toBe(triggeredBeforeMissing + 1);
+
+      // (4a) Overflow dropped comment when updated_at advances -> immediate reconcile wakes agent!
+      updatedAt = '2026-11-25T01:10:00Z';
+      writeWorld({ remarks: 'dropped-comment-with-updated-at' });
+      clock.advance(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(3);
+
+      // (4b) Overflow dropped comment even when updated_at failed to advance -> retained timed check
+      // stays backed off at +15m, then runs probe once waiting(human) 30m window matures and wakes agent!
+      writeWorld({ remarks: 'dropped-comment-stale-updated-at' });
+      clock.advance(60_000);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+      await flushWatchRun();
+      expect(agentWakeups).toBe(3); // unchanged updated_at did not trigger immediate reconcile
+      clock.advance(14 * 60_000);
+      await scheduler.tick();
+      expect(agentWakeups).toBe(3); // still within 30m waiting(human) backoff
+      clock.advance(15 * 60_000);
+      await scheduler.tick();
+      expect(agentWakeups).toBe(4);
+      expect(readWorld().probes).toBe(1);
+      expect((await scheduler.listRuns(follow.id)).some((r) => r.triggerSource === 'pr-check' && r.status === 'success')).toBe(true);
+    } finally {
+      await scheduler.stop();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

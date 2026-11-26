@@ -48,7 +48,11 @@ export function admitPluginEngineSession(
    * What the user set for an engine in Settings → Model providers
    * (pluginEnginesIpc.pluginEngineSettingsOf); absent = nothing is turned off.
    */
-  settingsOf?: (harness: PluginHarness) => { suspended?: boolean; disabledModels?: readonly string[] },
+  settingsOf?: (provider: Pick<PluginHarness, 'key'>) => {
+    suspended?: boolean;
+    disabledModels?: readonly string[];
+    modelEfforts?: PluginEngineView['modelEfforts'];
+  },
 ): SessionOpenBody {
   const key = pluginEngineKeyFromProviderId(body.providerId);
   if (!key) throw new Error('插件引擎任务缺少引擎标识。请在新建任务时重新选择插件引擎。');
@@ -56,11 +60,14 @@ export function admitPluginEngineSession(
     throw new Error('插件引擎不能在 SSH 工作区里运行。请在新建任务时选择本机或你的另一台电脑。');
   }
   if (typeof body.agentDeviceId === 'string' && body.agentDeviceId.trim()) return admitPluginEngineSessionElsewhere(body);
-  const harness = harnesses.find((item) => item.key === key);
+  // A provider taken out of an engine (`<engine>~<suffix>`) runs that engine with its own settings
+  // (turning off, model switches); its own accounts are checked when the runtime starts
+  // (plugin-engine-accounts).
+  const harness = harnesses.find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
   if (!harness) {
     throw new Error('提供这个引擎的插件已停用或卸载。请在新建任务时重新选择模型。');
   }
-  const settings = settingsOf?.(harness);
+  const settings = settingsOf?.({ key });
   if (settings?.suspended) throw new Error(pluginEngineSuspendedMessage(harness.name));
   if (harness.availability.state === 'unavailable') {
     const hint = harness.availability.message?.trim();
@@ -70,7 +77,9 @@ export function admitPluginEngineSession(
   if (isPluginEngineModelDisabled(model, settings?.disabledModels)) throw new Error(pluginEngineModelOffMessage(harness.name));
   const requested = body.effort;
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
-  const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';
+  const saved = settings?.modelEfforts?.[model];
+  const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested
+    : saved && offered.includes(saved) ? saved : '';
   return { ...body, model, effort, fastMode: false };
 }
 
@@ -128,7 +137,9 @@ export function admitPluginEngineSwitchTarget(
     throw new Error(`${engine.name} 当前没有开放这个模型。请重新选择模型。`);
   }
   const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
-  const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort : '';
+  const saved = engine.modelEfforts?.[model];
+  const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort
+    : saved && offered.includes(saved) ? saved : '';
   const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id
     ?? engine.defaultPermissionMode;
   return { model, effort, permissionMode, engineName: engine.name };

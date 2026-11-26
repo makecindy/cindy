@@ -112,6 +112,35 @@ const sameEvents = (a: readonly string[], b: readonly string[]): boolean =>
 const sameFormat = (a: unknown, b: WebhookFormat): boolean =>
   JSON.stringify(parseWebhookFormat(a)) === JSON.stringify(parseWebhookFormat(b));
 
+function computeLocalSyncKey(
+  githubPrs: readonly string[],
+  githubAutomations: ReadonlyMap<string, Schedule>,
+  wanted: ReadonlyMap<string, WantedEndpoint>,
+): string {
+  const prs = [...new Set(githubPrs.map((url) => url.toLowerCase()))].sort();
+  const automations = [...githubAutomations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, schedule]) => {
+      const trigger = schedule.webhookTrigger;
+      const repos = trigger?.source?.preset === 'github-app'
+        ? [...new Set(trigger.source.repositories.map((repo) => repo.toLowerCase()))].sort()
+        : [];
+      const events = [...new Set(trigger?.events ?? [])].sort();
+      return [id, trigger?.endpointId ?? '', repos, events];
+    });
+  const endpoints = [...wanted.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, item]) => [
+      id,
+      item.identity,
+      [...item.events].sort(),
+      item.format ? parseWebhookFormat(item.format) : null,
+      item.scheduleName,
+      item.deviceName ?? null,
+    ]);
+  return JSON.stringify([prs, automations, endpoints]);
+}
+
 function parseEvent(value: unknown): ScheduleWebhookEvent | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -149,6 +178,8 @@ export class ScheduleWebhookRemote {
   private githubPrs: string[] = [];
   private github: GithubAppStatus = { available: false };
   private githubSynced = '';
+  private localSyncKey = '';
+  private pendingReconciles = 0;
   private githubInstallPending = false;
   private githubError: unknown = null;
   private readonly githubVerified = new Set<string>();
@@ -196,8 +227,8 @@ export class ScheduleWebhookRemote {
 
   /** 同步“哪些任务需要接收”。登录后调用；未登录时调用也安全。 */
   sync(schedules: readonly Schedule[]): Promise<void> {
-    this.githubPrs = followedGithubPrs(schedules);
-    this.githubAutomations = new Map(schedules.filter(schedule => schedule.status === 'active'
+    const githubPrs = followedGithubPrs(schedules);
+    const githubAutomations = new Map(schedules.filter(schedule => schedule.status === 'active'
       && schedule.webhookTrigger?.source?.preset === 'github-app'
       && (schedule.expireAt === undefined || schedule.expireAt > Date.now())).map(schedule => [schedule.id, schedule]));
     const wanted = new Map<string, WantedEndpoint>();
@@ -214,7 +245,22 @@ export class ScheduleWebhookRemote {
         deviceName: this.deps.deviceName?.().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
       });
     }
+    const nextSyncKey = computeLocalSyncKey(githubPrs, githubAutomations, wanted);
+    this.githubPrs = githubPrs;
+    this.githubAutomations = githubAutomations;
     this.wanted = wanted;
+    if (
+      this.running &&
+      this.loaded &&
+      this.pendingReconciles === 0 &&
+      !this.suspended &&
+      !this.replaced &&
+      !this.githubError &&
+      !this.githubInstallPending &&
+      nextSyncKey === this.localSyncKey
+    ) {
+      return this.work;
+    }
     this.running = true;
     return this.enqueueReconcile();
   }
@@ -230,6 +276,7 @@ export class ScheduleWebhookRemote {
     this.generation += 1;
     this.running = false;
     this.loaded = false;
+    this.localSyncKey = '';
     this.suspended = false;
     this.replaced = false;
     this.exhausted = null;
@@ -237,6 +284,7 @@ export class ScheduleWebhookRemote {
     this.github = { available: false };
     this.githubError = null;
     this.githubSynced = '';
+    this.localSyncKey = '';
     this.githubInstallPending = false;
     this.problems.clear();
     this.releases.clear();
@@ -313,6 +361,7 @@ export class ScheduleWebhookRemote {
       if (installation) this.githubSynced = '';
       try {
         this.loaded = false;
+        this.localSyncKey = '';
         await this.reconcile();
         if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
         if (this.githubError) throw this.githubError;
@@ -370,6 +419,7 @@ export class ScheduleWebhookRemote {
     await this.deps.onGithubDisconnected?.();
     this.github = { available: true, login: null, userAuthorization: this.github.userAuthorization };
     this.githubSynced = '';
+    this.localSyncKey = '';
     this.githubInstallPending = false;
     this.githubVerified.clear();
     this.updateConnection();
@@ -384,24 +434,27 @@ export class ScheduleWebhookRemote {
     }
   }
 
-  private async syncGithub(): Promise<void> {
+  private async syncGithub(
+    githubPrsSnapshot: readonly string[],
+    githubAutomationsSnapshot: ReadonlyMap<string, Schedule>,
+  ): Promise<void> {
     const state = await this.request<GithubAppStatus>('GET', '/github').catch(error => {
       if (error instanceof RemoteRequestError && error.status === 404) return { available: false } as GithubAppStatus;
       throw error;
     });
     if (state.login !== this.github.login || state.endpointId !== this.github.endpointId) this.githubVerified.clear();
     if (this.github.login && (state.login !== this.github.login || state.endpointId !== this.github.endpointId)) {
-      for (const id of this.githubAutomations.keys()) await this.deps.onInvalidated?.(id);
+      for (const id of githubAutomationsSnapshot.keys()) await this.deps.onInvalidated?.(id);
     }
     this.github = state;
     this.githubCheckedAt = Date.now();
     this.githubError = null;
     if (!state.available || !state.login) { this.githubSynced = ''; return; }
-    const prs = [...new Set(this.githubPrs.map(url => url.toLowerCase()))].sort().map(url => ({
+    const prs = [...new Set(githubPrsSnapshot.map(url => url.toLowerCase()))].sort().map(url => ({
       repository: url.split('/').slice(3, 5).join('/'), number: Number(url.split('/')[6]),
     }));
     const repositorySubscriptions = state.automationSubscriptions
-      ? [...new Set([...this.githubAutomations.values()].flatMap(schedule => {
+      ? [...new Set([...githubAutomationsSnapshot.values()].flatMap(schedule => {
         const source = schedule.webhookTrigger?.source;
         return source?.preset === 'github-app' ? source.repositories.map(repo => repo.toLowerCase()) : [];
       }))].sort() : [];
@@ -470,6 +523,7 @@ export class ScheduleWebhookRemote {
     await this.enqueue(async () => {
       await this.request('DELETE', `/account/endpoints/${encodeURIComponent(id)}`);
       this.loaded = false;
+      this.localSyncKey = '';
       await this.reconcile();
     });
   }
@@ -478,6 +532,7 @@ export class ScheduleWebhookRemote {
     await this.enqueue(async () => {
       const generation = this.generation;
       this.loaded = false;
+      this.localSyncKey = '';
       await this.reconcile();
       if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       const releaseId = this.releases.get(scheduleId);
@@ -496,7 +551,11 @@ export class ScheduleWebhookRemote {
 
   /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
   async refresh(): Promise<void> {
-    await this.enqueue(async () => { this.loaded = false; await this.reconcile(); });
+    await this.enqueue(async () => {
+      this.loaded = false;
+      this.localSyncKey = '';
+      await this.reconcile();
+    });
   }
 
   /** 服务器不发恢复通知，到了恢复时刻自然失效。 */
@@ -522,14 +581,23 @@ export class ScheduleWebhookRemote {
 
   /** 先把最新配置同步到服务器，避免在旧格式上设置密钥。 */
   private async currentView(scheduleId: string): Promise<RemoteEndpointView> {
-    await this.enqueueReconcile();
-    const view = this.view(scheduleId);
+    this.pendingReconciles += 1;
+    const view = await this.enqueue(async () => {
+      await this.reconcile();
+      // Capture inside the serialized lane before a queued refresh() resets loaded=false.
+      return this.view(scheduleId);
+    }).finally(() => {
+      this.pendingReconciles = Math.max(0, this.pendingReconciles - 1);
+    });
     if (!view) throw new Error('Webhook endpoint is not available');
     return view;
   }
 
   private enqueueReconcile(): Promise<void> {
-    return this.enqueue(() => this.reconcile());
+    this.pendingReconciles += 1;
+    return this.enqueue(() => this.reconcile()).finally(() => {
+      this.pendingReconciles = Math.max(0, this.pendingReconciles - 1);
+    });
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -563,6 +631,16 @@ export class ScheduleWebhookRemote {
 
   private async reconcile(): Promise<void> {
     const generation = this.generation;
+    // Capture an immutable snapshot before any network await so concurrent sync() mutations
+    // during an in-flight request can never be stamped as synced before their own reconcile runs.
+    const wantedSnapshot = new Map(this.wanted);
+    const githubPrsSnapshot = [...this.githubPrs];
+    const githubAutomationsSnapshot = new Map(this.githubAutomations);
+    const snapshotSyncKey = computeLocalSyncKey(
+      githubPrsSnapshot,
+      githubAutomationsSnapshot,
+      wantedSnapshot,
+    );
     try {
       if (!this.running || !this.deps.baseUrl() || !(await this.deps.getAccessToken()) || generation !== this.generation) return;
       if (!this.loaded) {
@@ -587,7 +665,7 @@ export class ScheduleWebhookRemote {
         for (const endpoint of endpoints) this.views.set(endpoint.scheduleId, endpoint);
         this.loaded = true;
       }
-      for (const [scheduleId, wanted] of this.wanted) {
+      for (const [scheduleId, wanted] of wantedSnapshot) {
         if (generation !== this.generation) return;
         if (this.releases.has(scheduleId)) continue;
         let view = this.views.get(scheduleId);
@@ -615,25 +693,31 @@ export class ScheduleWebhookRemote {
       }
       for (const [scheduleId, view] of this.views) {
         if (generation !== this.generation) return;
-        if (this.wanted.has(scheduleId)) continue;
+        if (wantedSnapshot.has(scheduleId)) continue;
         await this.request('DELETE', `/endpoints/${view.id}`);
         this.views.delete(scheduleId);
         this.problems.delete(scheduleId);
       }
       for (const scheduleId of this.identities.keys()) {
-        if (!this.wanted.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
+        if (!wantedSnapshot.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
       }
-      try { await this.syncGithub(); }
+      try { await this.syncGithub(githubPrsSnapshot, githubAutomationsSnapshot); }
       catch (error) {
         if (generation !== this.generation) return;
         this.githubError = error;
+        this.localSyncKey = '';
         this.scheduleRetry();
       }
       if (generation !== this.generation) return;
       this.suspended = false;
+      const latestKey = computeLocalSyncKey(this.githubPrs, this.githubAutomations, this.wanted);
+      this.localSyncKey = this.loaded && !this.githubError && latestKey === snapshotSyncKey
+        ? snapshotSyncKey
+        : '';
     } catch (error) {
       if (generation !== this.generation) return;
       this.loaded = false;
+      this.localSyncKey = '';
       if (error instanceof RemoteRequestError && error.code === 'WEBHOOK_ACCOUNT_SUSPENDED') this.suspended = true;
       this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error) });
       this.scheduleRetry();

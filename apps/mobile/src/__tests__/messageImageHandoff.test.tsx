@@ -167,6 +167,25 @@ describe('image frame continuity', () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
+  it('keeps the thumbnail frame stable when Android decodes the same image again at the new size', () => {
+    const f = fixture();
+    const uri = 'https://example.com/generated.webp';
+    const show = (url: string) => f.render(<f.MediaPreview layout={f.layout} label="Generated image"
+      variant="attachment" media={{ kind: 'image', url, previewable: true }} />);
+    show(uri);
+    // A 1024 × 576 WebP at 420 dpi alternated between these two decoded sizes
+    // in the real Android view. The second decode must not resize the frame again.
+    act(() => f.handlers.get(uri)!.onLoad({ source: { width: 735, height: 413 } }));
+    expect(f.frame()).toEqual(['280px', '157px']);
+    act(() => f.handlers.get(uri)!.onLoad({ source: { width: 732, height: 412 } }));
+    expect(f.frame()).toEqual(['280px', '157px']);
+
+    const replacement = 'https://example.com/replacement.webp';
+    show(replacement);
+    act(() => f.handlers.get(replacement)!.onLoad({ source: { width: 400, height: 400 } }));
+    expect(f.frame()).toEqual(['180px', '180px']);
+  });
+
   it('shows a same-size failure state after a direct image fails and keeps its viewer action', () => {
     const f = fixture();
     const open = vi.fn();

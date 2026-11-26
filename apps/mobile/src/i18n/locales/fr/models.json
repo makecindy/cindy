@@ -123,7 +123,10 @@
       "expiring": "Bientôt expiré d'abord",
       "order": "Dans l'ordre",
       "rotate": "À tour de rôle",
-      "cheapest": "Le moins cher"
+      "cheapest": "Le moins cher",
+      "drain": "Épuiser puis passer",
+      "headroom": "Le plus de quota restant",
+      "weighted": "Par poids"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -136,6 +139,11 @@
       "soonestUntil": "Toutes les sources ont épuisé leur quota ; celle-ci revient en premier ({{reset}})",
       "cheapest": "Prix affiché le plus bas",
       "cheapestFree": "Il reste du quota d'abonnement, sans coût supplémentaire",
+      "drain": "Toujours utilisée jusqu’à épuisement de son quota",
+      "drainNext": "La source précédente était épuisée ou indisponible, d’où le passage à celle-ci",
+      "headroom": "Le plus de quota restant",
+      "headroomQuota": "Il lui reste {{left}} % de quota, plus que toute autre source",
+      "weighted": "Son tour selon le poids",
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
       "exceptionHours": "Sur cette plage horaire, utilise « {{name}} »",
@@ -152,7 +160,6 @@
     "genericName": "Moteur de plugin",
     "defaultModel": "Modèle par défaut",
     "unavailable": "{{engine}} est indisponible",
-    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}",
-    "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer."
+    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}"
   }
 }

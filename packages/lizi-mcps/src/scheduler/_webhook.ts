@@ -52,4 +52,4 @@ export function assertWebhookReceiverAvailable(
 export const schedulePrTriggerSchema = z.strictObject({
   url: z.string().url(),
   change: z.enum(['any', 'merged', 'review', 'ci']),
-}).nullable().optional().describe('在指定 GitHub PR 或 GitLab MR（https://<实例>/group/project/-/merge_requests/N）变化时提前运行。GitLab 没有推送，靠定时检查读取状态，建议同时设 manual:false 的定时条件。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。可与重复定时检查并用。null 关闭 PR 提前触发。');
+}).nullable().optional().describe('在指定 GitHub PR 或 GitLab MR（https://<实例>/group/project/-/merge_requests/N）变化时提前运行。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。GitHub 可选周期补查；GitLab 定时读取状态须启用重复定时检查（recurring=true、manual=false）。null 关闭 PR 提前触发。');

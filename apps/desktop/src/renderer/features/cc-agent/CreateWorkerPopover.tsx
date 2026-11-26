@@ -39,6 +39,9 @@ import {
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector, type RemoteAgentSelectorOptions } from '@/components/new-chat/ModelSelector';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import type { ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
@@ -111,6 +114,7 @@ export interface CreateWorkerForm {
   /** 'acp' = 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：providerId 指出是哪一个引擎。 */
   agent: 'claude-code' | 'codex' | 'pi' | 'acp';
   model: string;
+  modelGroup?: string;
   /** 插件引擎 Worker 用引擎自己列出的档位。 */
   effort?: Effort | PluginEngineEffort;
   fast?: boolean | 'ultrafast';
@@ -142,6 +146,7 @@ export interface ExecutionDeviceOption {
   /** false = 版本过旧，不可选。 */
   supported: boolean;
   supportsAgentDevice?: boolean;
+  supportsModelGroup?: boolean;
 }
 
 export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
@@ -157,6 +162,7 @@ export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
         platform: typeof row.platform === 'string' ? row.platform : null,
         supported: row.supported === true,
         ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
+        ...(row.supportsModelGroup === true ? { supportsModelGroup: true } : {}),
       },
     ];
   });
@@ -251,6 +257,7 @@ export function CreateWorkerPopover({
   // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
   // 面板退化为被控端纯列表(无来源维度),恒为 null。
   const [providerSource, setProviderSource] = useState<string | null>(null);
+  const [modelGroup, setModelGroup] = useState<string | null>(null);
   const [initialTask, setInitialTask] = useState('');
   const [selectedWorkerPermissionMode, setSelectedWorkerPermissionMode] =
     useState<OrcaWorkerPermissionMode>(DEFAULT_ORCA_WORKER_PERMISSION_MODE);
@@ -285,7 +292,7 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
-  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，也不用 worktree。被停用、卸载或报告
+  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，worktree 与内置 Worker 相同。被停用、卸载或报告
   // 不可用时按没选处理，回到下面的内置模型。
   const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
   useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
@@ -296,7 +303,6 @@ export function CreateWorkerPopover({
     () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
     [pluginEnginesAllowed, pluginEngineList, pluginEngine],
   );
-  const pluginEngineWorktree = !!activePluginEngine && !!project.fields.worktree;
   const pluginEnginePicker = useMemo(
     () => pluginEnginesAllowed && pluginEngineList.length
       ? {
@@ -309,6 +315,7 @@ export function CreateWorkerPopover({
               }
             : null,
           onSelect: (selection: PluginEngineSelection) => {
+            setModelGroup(null);
             // 插件引擎只在这台电脑运行：Worker 的 Agent 位置一并收回本机。
             setAgentDeviceId(null);
             setPluginEngine((previous) => {
@@ -364,6 +371,22 @@ export function CreateWorkerPopover({
     && sshRemote !== true
     && (!executionDeviceId || executionDevice?.supportsAgentDevice === true)
     && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
+  const modelGroupsAllowed = open && !sshRemote
+    && (!leadDeviceId || taskHostCaps?.supportsOrcaWorkerModelGroup === true)
+    && (!executionDeviceId || executionDevice?.supportsModelGroup === true);
+  const localModelGroups = useModelGroups(modelGroupsAllowed && !workerHostDeviceId);
+  const remoteModelGroups = useDeviceModelGroups(modelGroupsAllowed ? workerHostDeviceId : null, true);
+  const modelGroupsConfig = workerHostDeviceId ? remoteModelGroups.config : localModelGroups.config;
+  const workerModelGroups: ModelGroupsPickerProps | undefined = modelGroupsAllowed && modelGroupsConfig
+    ? {
+        config: modelGroupsConfig,
+        active: modelGroup ? { type: 'route', id: modelGroup } : null,
+        onSelect: (selection) => {
+          setPluginEngine(null);
+          setModelGroup(selection.id);
+        },
+      }
+    : undefined;
   const activeModels = useMemo(() => {
     return selectWorkerModels({
       agent,
@@ -575,6 +598,7 @@ export function CreateWorkerPopover({
       restoreFormRef.current(stored, readWorkerRolePrefs(stored, getDataOwnerGeneration().dataOwnerId), true);
     }
     setMoreSettingsOpen(false);
+    setModelGroup(null);
     setExecutionDeviceId(null);
     setRemoteDirMode('dialogue');
     setRemoteDir('');
@@ -626,6 +650,7 @@ export function CreateWorkerPopover({
       if (next === executionDeviceId) return;
       restoredModelSelectionRef.current = false;
       modelSelectionChosenRef.current = false;
+      setModelGroup(null);
       setExecutionDeviceId(next);
       setAgentDeviceId(next ? null : leadAgentDeviceIdRef.current);
       setRemoteDirMode('dialogue');
@@ -717,6 +742,7 @@ export function CreateWorkerPopover({
             },
       };
       setPrefs(snapshot);
+      setModelGroup(null);
       setAgent(nextAgent);
       const remembered = snapshot[nextAgent];
       setModel(remembered.model);
@@ -1056,7 +1082,7 @@ export function CreateWorkerPopover({
   const agentLocationUnsendable =
     !agentLocationSelectable && agentDeviceId !== (executionDeviceId ? null : leadAgentDeviceId ?? null);
   // Keep the remembered route intact; explain the blocked form only after its catalog settles.
-  const savedModelUnavailable = prefsRestored && !modelCatalogLoading
+  const savedModelUnavailable = !modelGroup && prefsRestored && !modelCatalogLoading
     && (activeCaps !== null || activeCapabilitiesState.error !== null)
     && restoredModelSelectionRef.current
     && (rememberedSourceUnavailable || !currentModel || agentLocationUnsendable);
@@ -1067,10 +1093,12 @@ export function CreateWorkerPopover({
     activeRole.length <= 32 &&
     !remoteDirInvalid &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
-    // 插件引擎不读内置模型目录与来源：只需不选 worktree。
+    // 插件引擎不读内置模型目录与来源。
     (activePluginEngine
-      ? !pluginEngineWorktree
-      : !remoteModelListBlocked && !agentLocationUnsendable && !rememberedSourceUnavailable && !!currentModel);
+      ? true
+      : modelGroup
+        ? modelGroupsAllowed
+        : !remoteModelListBlocked && !agentLocationUnsendable && !rememberedSourceUnavailable && !!currentModel);
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
 
@@ -1213,6 +1241,7 @@ export function CreateWorkerPopover({
         role: activeRole,
         agent,
         model,
+        ...(modelGroup ? { modelGroup } : {}),
         effort: submitEffort,
         fast: currentModelSupportsFast ? fast : undefined,
         providerId: submitProviderId,
@@ -1249,6 +1278,7 @@ export function CreateWorkerPopover({
     agentLocationSelectable,
     deviceId,
     model,
+    modelGroup,
     effort,
     fast,
     providerSource,
@@ -1351,7 +1381,7 @@ export function CreateWorkerPopover({
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
             disabled={isSubmitting}
             onClick={handleClose}
           >
@@ -1497,9 +1527,11 @@ export function CreateWorkerPopover({
                 ariaContext={savedModelUnavailable && !activePluginEngine ? t('orca.createWorker.savedModelUnavailable') : undefined}
                 fastModeConfigurable={['codex', 'pi']}
                 unifiedAgents={pickerAgents}
+                modelGroups={workerModelGroups}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
                   setPluginEngine(null);
+                  setModelGroup(null);
                   modelSelectionChosenRef.current = true;
                   restoredModelSelectionRef.current = false;
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
@@ -1517,6 +1549,7 @@ export function CreateWorkerPopover({
                 effort={effort}
                 onModelChange={(...args: Parameters<typeof updateModel>) => {
                   setPluginEngine(null);
+                  setModelGroup(null);
                   updateModel(...args);
                 }}
                 onEffortChange={updateEffort}
@@ -1570,11 +1603,7 @@ export function CreateWorkerPopover({
             </div>
           </div>
         </div>
-        {pluginEngineWorktree ? (
-          <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
-            {t('orca.createWorker.pluginEngineNoWorktree')}
-          </p>
-        ) : activePluginEngine ? null : noAvailableLocalModels ? (
+        {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
           <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
             {t('orca.createWorker.noAvailableModels', {
               agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',

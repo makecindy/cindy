@@ -207,7 +207,7 @@ const DESCRIPTION = [
   '',
   '参数:',
   '- role: worker 角色 (developer / reviewer / tester / merger 或自定义 string)',
-  '- agent: 可选 (codex / claude-code / pi / acp)。acp = 本机插件提供的执行引擎：取 list_available_models 的 plugin_engines，provider_id 传该项 provider_id，model 传其 models[].id(default = 由引擎自己选)；只在本机运行，不能配 execution_device_id、远程 agent_device_id 或 new_worktree，不使用创建偏好。不传按用户在创建 Worker 面板手工提交过的组合；没有适用记忆时需指定 agent。记忆整条不可用且未能确定 agent 时返回 INVALID_PARAMS，指定 agent 后重试即可。显式来源或位置完全禁用记忆，agent/model/effort/fast 都走原策略。',
+  '- agent: 可选 (codex / claude-code / pi / acp)。acp = 本机插件提供的执行引擎：取 list_available_models 的 plugin_engines，provider_id 传该项 provider_id，model 传其 models[].id(default = 由引擎自己选)；只在本机运行，不能配 execution_device_id 或远程 agent_device_id，不使用创建偏好；new_worktree 与内置 Worker 相同。不传按用户在创建 Worker 面板手工提交过的组合；没有适用记忆时需指定 agent。记忆整条不可用且未能确定 agent 时返回 INVALID_PARAMS，指定 agent 后重试即可。显式来源或位置完全禁用记忆，agent/model/effort/fast 都走原策略。',
   '- model: 可选，Worker 模型 id；不传优先使用适用的手工组合，否则走原默认策略。有适用的手工组合时，只传 model 可按目录推断 agent，歧义时须指定 agent；没有适用组合时需同时指定 agent。',
   '- provider_id: 可选, 模型来源 provider id。优先使用 list_available_models 对应模型返回的 provider_id；显式传入后 host 会严格校验该来源已连接且提供所选模型。',
   '- effort: 可选, reasoning/thinking 强度 (low / medium / high / xhigh / max / ultra)。Codex: 映射 OpenAI reasoning effort(max/ultra 仅部分模型如 GPT-5.6 Sol 支持); Claude Code: 映射 extended thinking token 预算(无 ultra,自动降级为 max)。显式传入时必须匹配所选 model 能力；当前 worker 模型都不把 minimal 作为可选思考档。',

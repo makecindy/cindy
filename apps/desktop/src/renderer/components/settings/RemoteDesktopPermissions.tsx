@@ -100,7 +100,14 @@ export function RemoteDesktopPermissions() {
               <p className="whitespace-pre-line text-12 text-[var(--settings-section-desc)]">
                 {value === 'unknown' ? `${t('remoteDesktop.permissionUnknown')} · ` : ''}
                 {modernPermissions && permission === 'accessibility'
-                  ? t('macControlPermission.review', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+                  // Remote keyboard and mouse are system-wide: macOS 27.3 drops them
+                  // unless Cindy may control every app, so never suggest Choose Apps here.
+                  ? t(
+                      status?.accessibilityChosenAppsOnly
+                        ? 'macControlPermission.chosenAppsOnly'
+                        : 'macControlPermission.reviewWholeMac',
+                      { app: window.electronAPI.macPermissionAppName ?? 'Cindy' },
+                    )
                   : t(`remoteDesktop.${permission}Help`)}
               </p>
             )}
