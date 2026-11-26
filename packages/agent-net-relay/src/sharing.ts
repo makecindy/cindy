@@ -264,13 +264,18 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           const existing = waiting.find(r => r.guestDeviceId === actor.deviceId && r.scope.memberId === memberId
             && r.scope.guestSubject === actor.accountId && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey
             && r.hostDeviceId === linked.hostDeviceId && r.scope.memberVersion === linked.generation);
-          // Only guests still waiting for the host's signature count; a signed (and renewing) guest holds no place.
-          // Checked again inside the write, so concurrent new guests cannot both take the last place.
-          const alreadyWaiting = waiting.some(r => r.guestDeviceId === actor.deviceId);
-          const unsignedGuests = (pending: readonly DelegationRequest[]) => new Set(pending.filter(r => r.networkId === linked.networkId
-            && r.kind === 'provider-share' && r.resourceId === resourceId && r.expiresAt > now && r.guestDeviceId !== actor.deviceId
-            && !host.grant(r).delegation).map(r => r.guestDeviceId)).size;
-          const admit = (pending: readonly DelegationRequest[]) => alreadyWaiting || unsignedGuests(pending) < MAX_LINKED_SHARE_PENDING_GUESTS;
+          // A place is a request of the current registration (host and generation) still waiting for its signature;
+          // requests left from an earlier registration can never be signed and hold none. Checked again inside the
+          // write, so concurrent new guests cannot both take the last place.
+          const waitingForSignature = (r: DelegationRequest) => r.networkId === linked.networkId && r.kind === 'provider-share'
+            && r.resourceId === resourceId && r.expiresAt > now && r.hostDeviceId === linked.hostDeviceId
+            && r.scope.memberVersion === linked.generation && !host.grant(r).delegation;
+          // No new place: renewing a signed request with the same keys, or replacing this device's own waiting request.
+          const exempt = (!!existing && !!host.grant(existing).delegation)
+            || waiting.some(r => r.guestDeviceId === actor.deviceId && waitingForSignature(r));
+          const unsignedGuests = (pending: readonly DelegationRequest[]) => new Set(pending.filter(r => r.guestDeviceId !== actor.deviceId
+            && waitingForSignature(r)).map(r => r.guestDeviceId)).size;
+          const admit = (pending: readonly DelegationRequest[]) => exempt || unsignedGuests(pending) < MAX_LINKED_SHARE_PENDING_GUESTS;
           if (!admit(waiting)) throw new AppError('TOO_MANY_REQUESTS', 429, 'Too many pending guests');
           request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind: 'provider-share', resourceId,
             hostDeviceId: linked.hostDeviceId, networkId: linked.networkId, scope: { memberId, guestSubject: actor.accountId, memberVersion: linked.generation },

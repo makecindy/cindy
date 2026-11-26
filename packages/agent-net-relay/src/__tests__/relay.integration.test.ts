@@ -582,8 +582,8 @@ describe('independent V2 relay', () => {
       }, ...(body ? { body } : {}) });
       return { status: response.status, body: await response.json() as any };
     };
-    const ask = (n: number, resourceId = 'v1-share') => {
-      const identity = guests.get(String(n)) ?? generateIdentity('guest-device-' + n); guests.set(String(n), identity);
+    const ask = (n: number, resourceId = 'v1-share', fresh = false) => {
+      const identity = !fresh && guests.get(String(n)) || generateIdentity('guest-device-' + n); guests.set(String(n), identity);
       return call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId, memberId: 'v1-member-' + n,
         signingKey: identity.signingKey, transportKey: identity.transportKey }, 'Bearer guest-' + n, false, identity);
     };
@@ -622,6 +622,9 @@ describe('independent V2 relay', () => {
     expect(raced.map(response => response.status).sort()).toEqual([200, 429]);
     expect(raced.find(response => response.status === 429)?.body).toMatchObject({ error: { code: 'TOO_MANY_REQUESTS' } });
     expect((await ask(66)).status).toBe(429);
+    // The signed device renews with its keys (no new place) but cannot add a new unsigned request with fresh keys.
+    expect((await ask(0)).status).toBe(200);
+    expect((await ask(0, 'v1-share', true)).status).toBe(429);
     // A guest already waiting may still renew; removing the link withdraws the signed lease at once.
     expect((await ask(3)).status).toBe(200);
     expect((await call('/sharing/provider-shares/linked/v1-share/remove', 'POST', {})).body).toEqual({ removed: true });
@@ -632,6 +635,8 @@ describe('independent V2 relay', () => {
     await expect(signed.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
     const again = await ask(0);
     expect(again.body.id).not.toBe(first.body.id);
+    // Requests left from the earlier registration can never be signed and no longer hold places.
+    expect((await ask(70)).status).toBe(200);
     // Another computer of the account takes the share over: the guest's request moves to it under a new ID it can sign.
     const second = await f.join('second');
     expect((await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-share' }, 'Bearer second-host', second.client)).status).toBe(200);
