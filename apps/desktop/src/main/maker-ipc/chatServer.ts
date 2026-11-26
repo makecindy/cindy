@@ -516,7 +516,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let value = histories.get(reader);
     if (!value) {
       value = createChatHistory({ api: route => api(route, 'GET', undefined, reader === selfId ? undefined : reader),
-        store: deps.chatHistoryStore(config.baseUrl, selfId, reader, current), current, newGeneration: randomUUID });
+        store: deps.chatHistoryStore(config.baseUrl, selfId, reader, current), current, newGeneration: randomUUID, readerId: reader });
       if (connected) value.reconnect();
       histories.set(reader, value);
     }
