@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { chatGroupNotificationMode, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -480,7 +480,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     ...(room.kind !== 'direct' && room.org_name ? { orgName: room.org_name } : {}),
     ...(room.kind !== 'direct' && room.external === true ? { external: true } : {}),
-    ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: chatGroupNotificationMode(room, mainRead) } : {}),
+    ...(room.kind !== 'direct' && page.snapshot.reads ? chatGroupNotificationPreference(room, mainRead) : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
     canStopAll: false, supportsOwnedStop: true,
