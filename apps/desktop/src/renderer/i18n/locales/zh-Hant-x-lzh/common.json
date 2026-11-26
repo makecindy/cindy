@@ -18474,6 +18474,7 @@
         "intervalChip": "畢後計時 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "自定 Cron",
         "intervalMinutes": "分（每 N 分）",
         "interval": "Hourly（每 N 時）",
         "daily": "Daily（每日）",

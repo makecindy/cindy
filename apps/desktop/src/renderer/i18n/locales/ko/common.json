@@ -18474,6 +18474,7 @@
         "intervalChip": "완료 후 대기 · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "사용자 지정 Cron",
         "intervalMinutes": "분 (N분마다)",
         "interval": "Hourly (N시간마다)",
         "daily": "Daily (매일)",

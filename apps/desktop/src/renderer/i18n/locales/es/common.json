@@ -18718,6 +18718,7 @@
         "intervalChip": "Después de finalizar · {{schedule}}"
       },
       "scheduleMenu": {
+        "custom": "Cron personalizado",
         "intervalMinutes": "Minutos (cada N minutos)",
         "interval": "Por hora (cada N horas)",
         "daily": "Diariamente (todos los días)",
