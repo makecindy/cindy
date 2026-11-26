@@ -4744,6 +4744,15 @@
       "menu": {
         "disableProvider": "Desativar este fornecedor",
         "enableProvider": "Ativar este fornecedor",
+        "icon": "Ícone da ligação",
+        "appearance": "Nome e ícone",
+        "ownImage": "Escolher imagem",
+        "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
+        "connectionIcon": {
+          "default": "Predefinido",
+          "personal": "Pessoal",
+          "work": "Trabalho"
+        },
         "hideProvider": "Ocultar do seletor de modelos",
         "showProvider": "Mostrar no seletor de modelos"
       },
@@ -5958,7 +5967,7 @@
       "uninstallTitle": "Desinstalar extensão Pi?",
       "uninstallDescription": "{{name}} será removida deste dispositivo. As tarefas Pi já abertas mantêm a extensão antiga até serem fechadas.",
       "confirmUninstall": "Desinstalar",
-      "extensionDialogConfirm": "Confirmar",
+      "extensionDialogConfirm": "Continuar",
       "cancel": "Cancelar",
       "resources": {
         "extension": "Código da extensão",
@@ -9882,7 +9891,7 @@
       "allow": "Permitir",
       "deny": "Recusar",
       "questionTitle": "É necessária a sua intervenção",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "planTitle": "Revisão do plano",
       "approve": "Aprovar",
       "requestChanges": "Pedir alterações",
@@ -12465,7 +12474,7 @@
           "soleOwnerHint": "É o único membro restante. Arquive este grupo para manter o histórico e o restaurar mais tarde.",
           "archive": "Arquivar grupo",
           "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções dos amigos. O histórico é mantido. Pesquise o grupo para consultar o histórico ou desarquivá-lo.",
-          "confirm": "Confirmar",
+          "confirm": "Continuar",
           "lastOwner": "Transfira a propriedade para outro membro antes de sair ou remover o proprietário atual.",
           "conflict": "Alguém atualizou este grupo. Atualize e tente novamente.",
           "unarchive": "Desarquivar grupo",
@@ -13338,7 +13347,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "Confirmar",
+      "confirm": "Continuar",
       "cancel": "Cancelar",
       "dontShowAgain": "Não voltar a mostrar"
     },
@@ -14902,27 +14911,27 @@
         },
         "acp": {
           "ask": {
-            "label": "Confirmar sempre",
+            "label": "Permissões predefinidas",
             "description": "A sua confirmação é pedida quando o Agent pede permissão. O Cindy não consegue bloquear ações para as quais o Agent não pede confirmação."
           },
           "default": {
-            "label": "Predefinido",
+            "label": "Permissões predefinidas",
             "description": "O agente trabalha da forma predefinida; confirma os pedidos de permissão."
           },
           "acceptEdits": {
-            "label": "Aceitar edições",
+            "label": "Aceitar edições automaticamente",
             "description": "O agente edita ficheiros diretamente; confirma os restantes pedidos de permissão."
           },
           "auto": {
-            "label": "Automático",
+            "label": "Revisão automática",
             "description": "O agente decide o que precisa de confirmação; confirma os pedidos que fizer."
           },
           "plan": {
-            "label": "Apenas planear",
+            "label": "Modo de planeamento",
             "description": "O agente apenas analisa e planeia; não edita ficheiros."
           },
           "bypassPermissions": {
-            "label": "Permitir tudo",
+            "label": "Acesso total",
             "description": "Todas as permissões pedidas pelo Agent são concedidas automaticamente."
           }
         }
@@ -15562,7 +15571,7 @@
       "back": "Voltar",
       "skip": "Ignorar",
       "next": "Seguinte",
-      "submit": "Submeter",
+      "submit": "Enviar resposta",
       "sendAndContinue": "Enviar e continuar",
       "close": "Fechar",
       "customAnswer": "Escreva outra coisa…",
@@ -16015,6 +16024,10 @@
       "diffUnchangedLines_other": "{{count}} linhas sem alterações",
       "diffUnchangedLines_many": "{{count}} linhas sem alterações",
       "diffPreviewLoading": "A preparar pré-visualização do diff…"
+    },
+    "filePreview": {
+      "changed": "Ficheiro alterado",
+      "refreshHint": "Clique para atualizar"
     },
     "textLightbox": {
       "unreadable": "Não é possível ler este ficheiro",

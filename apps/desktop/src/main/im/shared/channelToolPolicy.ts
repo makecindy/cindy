@@ -107,7 +107,23 @@ function* unwrapInnerCalls(
 export function checkChannelDestructiveToolCall(
   toolName: string,
   input: unknown,
+  metadata?: Record<string, unknown>,
 ): GuardResult {
+  const acpPolicyToolName = metadata?.acpPolicyToolName;
+  const acpReportedToolName = metadata?.acpReportedToolName;
+  const command = record(input)?.command;
+  if (metadata?.acpToolKind === 'execute' && (typeof command !== 'string' || command.trim() === '')) {
+    return { destructive: true, reason: 'ACP command missing' };
+  }
+  if (typeof acpPolicyToolName === 'string' && acpPolicyToolName !== toolName) {
+    const canonical = checkChannelDestructiveToolCall(acpPolicyToolName, input);
+    if (canonical.destructive) return canonical;
+  }
+  if (typeof acpReportedToolName === 'string' && acpReportedToolName !== toolName
+    && acpReportedToolName !== acpPolicyToolName) {
+    const reported = checkChannelDestructiveToolCall(acpReportedToolName, input);
+    if (reported.destructive) return reported;
+  }
   const direct = checkDestructiveToolCall(toolName, record(input));
   if (direct.destructive) return direct;
   for (const inner of unwrapInnerCalls(toolName, input)) {

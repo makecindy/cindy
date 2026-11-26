@@ -514,6 +514,17 @@ async function loadCore(): Promise<WebAssembly.Module> {
   })().catch((error) => { coreModule = null; throw error; });
   return coreModule;
 }
+/**
+ * The native engine's Node module (packages/agent-net-native/node), staged beside the worker bundle by packaging (forge
+ * `stageAgentNetNative`) or for development by `node packages/agent-net-native/node/build.mjs`. The worker runs the transport on
+ * it, off this thread and the worker's JS alike; without the module, or when it does not load, the worker stays on WASM.
+ */
+const AGENT_NET_NATIVE_BINDING = 'cindy-agent-net.node';
+function agentNetNative(): { binding: string } | undefined {
+  const binding = [path.join(process.resourcesPath ?? '', 'agent-net', AGENT_NET_NATIVE_BINDING),
+    path.join(app.getAppPath(), 'resources', 'agent-net', AGENT_NET_NATIVE_BINDING)].find(file => fs.existsSync(file));
+  return binding ? { binding } : undefined;
+}
 /** Resource-only sockets do not replace the main topology/presence connection.
  * DeviceLink's routing owner closes them on resource/account disposal. */
 export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCurrent: () => void): Promise<AgentNetAppSocket> {
@@ -527,7 +538,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
-      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read), native: agentNetNative(),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -632,7 +643,7 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
     ...(bindPort !== undefined ? { bindPort } : {}),
     ...(initialPeerPathPreferences ? { initialPeerPathPreferences } : {}),
-    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read), native: agentNetNative(),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     ...(identityConflict ? { onRelayReplaced() {
