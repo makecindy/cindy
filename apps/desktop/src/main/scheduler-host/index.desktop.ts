@@ -47,7 +47,7 @@ import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { admitPluginEngineSwitchTarget } from '../maker-ipc/pluginEngineSessionAdmission.js';
 import { MakerScheduleRunner } from './runner.desktop';
 import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
-import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { readAutoReviewHistoryPage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
@@ -105,7 +105,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
       readAutoReviewHistory: async (sessionId) => {
         await drainPersistQueue();
-        return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
+        return readAutoReviewHistoryPage(sessionId);
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
       resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {

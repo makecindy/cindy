@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "停用此供应商",
         "enableProvider": "启用此供应商",
+        "icon": "连接图标",
+        "appearance": "名称与图标",
+        "ownImage": "选择自己的图片",
+        "imageError": "请选择 10 MB 以内的 PNG、JPG 或 WebP 图片。",
+        "connectionIcon": {
+          "default": "默认",
+          "personal": "个人",
+          "work": "工作"
+        },
         "hideProvider": "在模型选择器中隐藏",
         "showProvider": "在模型选择器中显示"
       },
@@ -5855,7 +5864,7 @@
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
       "confirmUninstall": "卸载",
-      "extensionDialogConfirm": "确认",
+      "extensionDialogConfirm": "继续",
       "cancel": "取消",
       "resources": {
         "extension": "扩展代码",
@@ -9763,7 +9772,7 @@
       "allow": "允许",
       "deny": "拒绝",
       "questionTitle": "需要你回答",
-      "submit": "提交",
+      "submit": "发送答复",
       "planTitle": "计划待审核",
       "approve": "批准",
       "requestChanges": "要求修改",
@@ -12332,7 +12341,7 @@
           "soleOwnerHint": "群里只剩你。可以归档群，保留历史记录，以后再恢复使用。",
           "archive": "归档群",
           "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
-          "confirm": "确认",
+          "confirm": "继续",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
           "unarchive": "取消归档",
@@ -13188,7 +13197,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "确认",
+      "confirm": "继续",
       "cancel": "取消",
       "dontShowAgain": "下次不再提示"
     },
@@ -15412,7 +15421,7 @@
       "back": "返回",
       "skip": "跳过",
       "next": "下一题",
-      "submit": "提交",
+      "submit": "发送答复",
       "sendAndContinue": "发送并继续",
       "close": "关闭",
       "customAnswer": "输入其他回答…",
@@ -15842,6 +15851,10 @@
       "diffUnchangedLines_one": "{{count}} 行未变",
       "diffUnchangedLines_other": "{{count}} 行未变",
       "diffPreviewLoading": "正在准备差异预览…"
+    },
+    "filePreview": {
+      "changed": "文件已变更",
+      "refreshHint": "点击刷新"
     },
     "textLightbox": {
       "unreadable": "无法读取该文件",

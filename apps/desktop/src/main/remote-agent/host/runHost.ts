@@ -254,6 +254,8 @@ export interface RemoteAgentHostDeps {
   };
   startHosted(input: HostedStartInput): Promise<AgentSessionHandle>;
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
+  /** Scope only synchronous common guest checks; per-task leases still run independently. */
+  withPollAuthorizationSnapshot?<T>(read: () => T): T;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
   /**
@@ -3288,43 +3290,46 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const run = runs.get(key(controller, runId));
       return run && delegatedRunAllowed(run) && run.log.isValidCursor(cursor) ? [{ run, cursor }] : [];
     });
-    touch(true);
-    const initial = live();
+    const phase = <T>(read: () => T): T => deps.withPollAuthorizationSnapshot
+      ? deps.withPollAuthorizationSnapshot(read) : read();
+    const initial = phase(() => { touch(true); return live(); });
     const anyReady = initial.length < wanted.length || initial.some(({ run, cursor }) => run.log.isReady(cursor));
     if (!anyReady && waitMs > 0) await waitForAny(initial.map(({ run }) => run.log), waitMs, signal);
-    touch(false);
-    const out: RemoteAgentPollResult = { runs: [] };
-    let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
-    const start = wanted.length ? pollRotation++ % wanted.length : 0;
-    for (let index = 0; index < wanted.length; index += 1) {
-      const { runId, cursor } = wanted[(start + index) % wanted.length];
-      const run = runs.get(key(controller, runId));
-      if (run && !delegatedRunAllowed(run)) {
-        // A sibling task may keep this guest peer authorized after this task's
-        // grant expires. Do not disguise that denial as a missing/restarted run,
-        // and never read the now-unauthorized task's buffered content.
-        void finishRun(run, 'access-revoked', 'navigation');
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
-        out.runs.push({ runId, cursor: cursor + data.length, data: data.toString('base64'), done: true });
-        continue;
+    return phase(() => {
+      touch(false);
+      const out: RemoteAgentPollResult = { runs: [] };
+      let budget = Math.min(REMOTE_AGENT_POLL_MAX_BYTES, maxBytes);
+      const start = wanted.length ? pollRotation++ % wanted.length : 0;
+      for (let index = 0; index < wanted.length; index += 1) {
+        const { runId, cursor } = wanted[(start + index) % wanted.length];
+        const run = runs.get(key(controller, runId));
+        if (run && !delegatedRunAllowed(run)) {
+          // A sibling task may keep this guest peer authorized after this task's
+          // grant expires. Do not disguise that denial as a missing/restarted run,
+          // and never read the now-unauthorized task's buffered content.
+          void finishRun(run, 'access-revoked', 'navigation');
+          const data = Buffer.from(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
+          out.runs.push({ runId, cursor: cursor + data.length, data: data.toString('base64'), done: true });
+          continue;
+        }
+        // 不存在或游标超出已写范围(对端状态与本机不一致)：控制端按任务丢失处理。
+        if (!run || !run.log.isValidCursor(cursor)) {
+          out.runs.push({ runId, cursor, missing: true });
+          continue;
+        }
+        const result = run.log.readNow(cursor, Math.min(REMOTE_AGENT_READ_MAX_BYTES, budget));
+        if (!result.data?.length && !result.done) continue;
+        budget -= result.data?.length ?? 0;
+        out.runs.push({
+          runId,
+          ...(result.from !== cursor ? { from: result.from } : {}),
+          cursor: result.cursor,
+          ...(result.data?.length ? { data: result.data.toString('base64') } : {}),
+          ...(result.done ? { done: true as const } : {}),
+        });
       }
-      // 不存在或游标超出已写范围(对端状态与本机不一致)：控制端按任务丢失处理。
-      if (!run || !run.log.isValidCursor(cursor)) {
-        out.runs.push({ runId, cursor, missing: true });
-        continue;
-      }
-      const result = run.log.readNow(cursor, Math.min(REMOTE_AGENT_READ_MAX_BYTES, budget));
-      if (!result.data?.length && !result.done) continue;
-      budget -= result.data?.length ?? 0;
-      out.runs.push({
-        runId,
-        ...(result.from !== cursor ? { from: result.from } : {}),
-        cursor: result.cursor,
-        ...(result.data?.length ? { data: result.data.toString('base64') } : {}),
-        ...(result.done ? { done: true as const } : {}),
-      });
-    }
-    return out;
+      return out;
+    });
   }
 
   /**
