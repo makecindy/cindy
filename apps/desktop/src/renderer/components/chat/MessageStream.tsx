@@ -6873,7 +6873,7 @@ export function MessageStream({
     <ChatSessionFileProvider value={sessionFileValue}>
       {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
         不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
-      <FilePreviewLightboxProvider>
+      <FilePreviewLightboxProvider key={sessionId}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
