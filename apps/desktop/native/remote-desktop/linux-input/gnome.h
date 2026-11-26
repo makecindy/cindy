@@ -26,6 +26,8 @@ static struct {
   size_t size;
 } gnome_saved[GNOME_SAVED_TYPES];
 static int gnome_saved_count;
+/* Bumped whenever another application takes the clipboard. */
+static unsigned gnome_owner_generation;
 static const char *gnome_text_offer; /* non-NULL while our text is offered */
 static size_t gnome_text_size;
 static unsigned gnome_transfers;
@@ -99,6 +101,7 @@ static void gnome_on_owner(GDBusConnection *connection, const gchar *sender,
   gnome_session_owns = ours;
   if (!ours) {
     /* Another application copied something: that is what to restore. */
+    gnome_owner_generation++;
     g_strfreev(gnome_owner_types);
     gnome_owner_types = NULL;
     /* GNOME 46 wraps the list as (as); accept a bare as as well. */
@@ -198,16 +201,16 @@ static void gnome_pump(int milliseconds) {
   }
 }
 /* Read one offered type of the current clipboard, bounded in size and time. */
-static bool gnome_read_type(const char *type, size_t limit, unsigned char **out,
-                            size_t *size) {
+static bool gnome_read_type(const char *type, size_t limit, gint64 timeout_us,
+                            unsigned char **out, size_t *size) {
   int fd = gnome_fd_call("SelectionRead", g_variant_new("(s)", type));
   if (fd < 0)
     return false;
   fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
   GByteArray *bytes = g_byte_array_new();
-  gint64 until = g_get_monotonic_time() + 500000;
+  gint64 until = g_get_monotonic_time() + timeout_us;
   bool ok = false;
-  for (;;) {
+  while (!stopping) {
     unsigned char chunk[65536];
     ssize_t n = read(fd, chunk, sizeof(chunk));
     if (n > 0) {
@@ -248,6 +251,55 @@ static bool gnome_offer(const char *const *types, size_t count) {
                                            (gssize)count));
   return gnome_notify("SetSelection", g_variant_new("(a{sv})", &options));
 }
+/* Save the clipboard owner's offered types. The whole save is bounded (1.5 s,
+ * 24 attempts) so it, the paste and the restore finish well inside the
+ * helper's 6 s heartbeat. Reads dispatch D-Bus signals, so a new copy can
+ * replace the owner mid-save: work on a private copy of the type list, and
+ * when the owner changes, drop the partial save (the owner callback already
+ * did) and read the new owner once more. */
+static void gnome_save_clipboard(void) {
+  gint64 deadline = g_get_monotonic_time() + 1500000;
+  for (int pass = 0; pass < 2 && !stopping; pass++) {
+    if (gnome_session_owns || !gnome_owner_types || gnome_saved_count)
+      return;
+    unsigned generation = gnome_owner_generation;
+    char **types = g_strdupv(gnome_owner_types);
+    size_t total = 0;
+    int attempts = 0;
+    bool changed = false;
+    for (char **type = types; *type && gnome_saved_count < GNOME_SAVED_TYPES &&
+                              attempts < 24 && !stopping;
+         type++) {
+      /* X11 selection bookkeeping targets carry no content. */
+      if (!strcmp(*type, "TARGETS") || !strcmp(*type, "MULTIPLE") ||
+          !strcmp(*type, "TIMESTAMP") || !strcmp(*type, "SAVE_TARGETS"))
+        continue;
+      gint64 left = deadline - g_get_monotonic_time();
+      if (left <= 0)
+        break;
+      attempts++;
+      unsigned char *data = NULL;
+      size_t size = 0;
+      bool read = gnome_read_type(*type, GNOME_SAVED_BYTES - total,
+                                  left < 500000 ? left : 500000, &data, &size);
+      if (gnome_owner_generation != generation) {
+        g_free(data);
+        changed = true;
+        break;
+      }
+      if (!read)
+        continue;
+      gnome_saved[gnome_saved_count].type = g_strdup(*type);
+      gnome_saved[gnome_saved_count].data = data;
+      gnome_saved[gnome_saved_count].size = size;
+      gnome_saved_count++;
+      total += size;
+    }
+    g_strfreev(types);
+    if (!changed)
+      return;
+  }
+}
 /* Mutter types only keysyms present in the active layout, so other text
  * (Chinese, emoji) is pasted: save the user's clipboard (up to 16 types and
  * 8 MiB, in memory only), offer the text, press Shift+Insert (Ctrl+V would be
@@ -263,25 +315,9 @@ static bool gnome_paste(const char *text) {
     gnome_pump(100); /* the current owner's offer arrives as a signal */
   }
   /* Our own restored offer already holds the user's clipboard. */
-  if (!gnome_session_owns && gnome_owner_types && !gnome_saved_count) {
-    size_t total = 0;
-    for (char **type = gnome_owner_types;
-         *type && gnome_saved_count < GNOME_SAVED_TYPES; type++) {
-      /* X11 selection bookkeeping targets carry no content. */
-      if (!strcmp(*type, "TARGETS") || !strcmp(*type, "MULTIPLE") ||
-          !strcmp(*type, "TIMESTAMP") || !strcmp(*type, "SAVE_TARGETS"))
-        continue;
-      unsigned char *data;
-      size_t size;
-      if (!gnome_read_type(*type, GNOME_SAVED_BYTES - total, &data, &size))
-        continue;
-      gnome_saved[gnome_saved_count].type = g_strdup(*type);
-      gnome_saved[gnome_saved_count].data = data;
-      gnome_saved[gnome_saved_count].size = size;
-      gnome_saved_count++;
-      total += size;
-    }
-  }
+  gnome_save_clipboard();
+  if (stopping)
+    return false;
   gnome_text_offer = text;
   gnome_text_size = strlen(text);
   bool ok = gnome_offer(gnome_text_types, G_N_ELEMENTS(gnome_text_types));
@@ -299,6 +335,8 @@ static bool gnome_paste(const char *text) {
   if (ok)
     gnome_pump(150);
   gnome_text_offer = NULL;
+  /* Restore even when stopping, so the user's clipboard is never left behind.
+   * A copy made during the paste dropped the saved contents and wins. */
   if (gnome_saved_count) {
     const char *types[GNOME_SAVED_TYPES];
     for (int i = 0; i < gnome_saved_count; i++)

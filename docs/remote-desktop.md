@@ -1632,7 +1632,8 @@ Viewers that do not request the overlay keep the previous capture unchanged.
 `cindy-linux-desktop-capture` reads the selected monitor's root-window rectangle
 (MIT-SHM when available, otherwise GetImage). The rectangle is the same one the
 XTest input helper uses (`x11InputGeometry`), so pointer and clicks share one
-mapping; mixed monitor scaling keeps Chromium capture. GetImage never contains
+mapping; mixed monitor scaling, and monitors beyond the helper's buffer bound
+(8192 per side, 16777216 pixels, e.g. an 8K monitor), keep Chromium capture. GetImage never contains
 the pointer. XFIXES supplies the cursor raster, hotspot, position and theme name;
 names map to shape keywords in `linux-capture/cursor_shape.h` (CSS names from
 GTK/Chromium and legacy cursor-font names from Qt/Xt). A fully transparent raster
@@ -1646,7 +1647,8 @@ D-Bus APIs instead of the portal picker, so unattended connections do not wait
 for a local dialog. Monitors come from `org.gnome.Mutter.DisplayConfig`
 (`gnome:<connector>` IDs, logical sizes). Video records one monitor through
 `org.gnome.Mutter.ScreenCast` into PipeWire shared memory with the metadata
-cursor mode (no DMA-BUF import); the latest frame is kept in memory and re-sent
+cursor mode (no DMA-BUF import). GNOME has no fallback capture, so streams up
+to 8192x8192 are accepted (an 8K monitor is 33 megapixels); the latest frame is kept in memory and re-sent
 unchanged while Mutter reports no damage. Cursor rasters (up to Mutter's 384x384
 offer; above 256x256 they are dropped) come from stream metadata. Wayland has no
 cursor names: the shape is found by comparing the raster with the user's cursor
@@ -1669,10 +1671,14 @@ drops the rest. ASCII commits are therefore typed as keysyms, while a commit
 containing any other character (Chinese, emoji) is pasted whole through the
 session's clipboard (product decision 2026-11-26): the helper reads the current
 owner's offered types (up to 16 types and 8 MiB, memory only, skipping X11
-bookkeeping targets), offers the text, presses Shift+Insert (Ctrl+V is literal
+bookkeeping targets; at most 24 reads and 1.5 s in total, so the paste stays well
+inside the 6 s input heartbeat). Reads dispatch D-Bus signals, so it works on a
+private copy of the type list; a copy made meanwhile drops the partial save and
+the new owner is read once more. It then offers the text, presses Shift+Insert (Ctrl+V is literal
 input in terminals), waits up to 1.5 s for the focused application's read, then
-offers the saved contents again. Mutter's clipboard manager keeps them after the
-session ends. A clipboard that was empty keeps the pasted text, since Mutter
+offers the saved contents again (also when the helper is stopping). A copy made
+during the paste replaces the saved contents and is kept. Mutter's clipboard
+manager keeps the restored contents after the session ends. A clipboard that was empty keeps the pasted text, since Mutter
 offers no way to clear it. Applications without a Shift+Insert paste binding
 do not receive such text. GNOME 46 sends `mime-types` wrapped as `(as)`; both
 forms are accepted.

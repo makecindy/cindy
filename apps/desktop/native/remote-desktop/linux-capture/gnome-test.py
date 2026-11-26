@@ -86,15 +86,22 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
         owner = rd('/org/gnome/Mutter/RemoteDesktop', RD, 'CreateSession').unpack()[0]
         rd(owner, RDS, 'Start')
         rd(owner, RDS, 'EnableClipboard', GLib.Variant('(a{sv})', ({},)))
+        owned = {'text': 'copied before', 'recopy': False}
+        def offer(types):
+            rd(owner, RDS, 'SetSelection', GLib.Variant('(a{sv})', (
+                {'mime-types': GLib.Variant('as', types)},)))
         def serve(conn, sender, path, iface, signal, params):
             serial = params.unpack()[1]
+            if owned['recopy']:
+                # Copy again while the helper is saving the previous contents.
+                owned.update(recopy=False, text='copied again')
+                offer(['text/plain;charset=utf-8'])
             reply, fds = rd(owner, RDS, 'SelectionWrite', GLib.Variant('(u)', (serial,)),
                             Gio.UnixFDList.new())
-            fd = fds.get(reply.unpack()[0]); os.write(fd, 'copied before'.encode()); os.close(fd)
+            fd = fds.get(reply.unpack()[0]); os.write(fd, owned['text'].encode()); os.close(fd)
             rd(owner, RDS, 'SelectionWriteDone', GLib.Variant('(ub)', (serial, True)))
         connection.signal_subscribe(RD, RDS, 'SelectionTransfer', owner, None, 0, serve)
-        rd(owner, RDS, 'SetSelection', GLib.Variant('(a{sv})', (
-            {'mime-types': GLib.Variant('as', ['text/plain;charset=utf-8'])},)))
+        offer(['text/plain;charset=utf-8'])
         context = GLib.MainContext.default()
         def pump(seconds):
             end = time.monotonic() + seconds
@@ -178,6 +185,13 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
         # The pasted glyphs appear right after "cindy" in the search entry.
         assert region_difference(typed, pasted, 545, 52) > 60, 'Chinese text not pasted'
         assert clipboard() == 'copied before', 'pasting replaced the clipboard'
+        # A copy made mid-save replaces the type list the helper is reading.
+        owned.update(text='copied first', recopy=True)
+        offer(['text/plain;charset=utf-8', 'text/html', 'application/x-cindy-test'])
+        pump(0.3)
+        send([{'kind': 'text', 'text': '文字'}])
+        assert pointer.poll() is None, 'helper died when the clipboard changed mid-save'
+        assert clipboard() == 'copied again', 'the newest copy was not kept'
 
         send([{'kind': 'button', 'x': 0.5, 'y': 0.5, 'button': 0, 'down': True},
               {'kind': 'button', 'x': 0.5, 'y': 0.5, 'button': 0, 'down': False},
@@ -200,7 +214,8 @@ with tempfile.TemporaryDirectory(prefix='cindy-gnome-test-') as temp:
             pass
         assert orphan.wait(timeout=5) != 0, 'helper survived its compositor'
         print('PASS: probes, monitors, cursor-free video with embedded control, cursor '
-              'position/shape, pointer/text/wheel/keys, Chinese paste with clipboard restored, '
+              'position/shape, pointer/text/wheel/keys, Chinese paste with clipboard restored '
+              '(including a copy made mid-save), '
               'EOF teardown, compositor exit')
     finally:
         for p in helpers:

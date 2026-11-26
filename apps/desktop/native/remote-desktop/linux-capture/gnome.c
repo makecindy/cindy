@@ -394,8 +394,7 @@ static void on_param_changed(void *data, uint32_t id,
       media_subtype != SPA_MEDIA_SUBTYPE_raw ||
       spa_format_video_raw_parse(param, &info) < 0 || !info.size.width ||
       !info.size.height || info.size.width > 8192 ||
-      info.size.height > 8192 ||
-      (uint64_t)info.size.width * info.size.height > 16777216) {
+      info.size.height > 8192) {
     g.failed = 1;
     return;
   }
@@ -409,7 +408,11 @@ static void on_param_changed(void *data, uint32_t id,
     g.failed = 1;
     return;
   }
-  /* A new size invalidates the previous picture and its cursor scale. */
+  /* Mutter records the monitor at its native size and GNOME has no other
+   * capture path to fall back to, so accept every size up to the offered
+   * 8192x8192 (an 8K monitor is 33 megapixels; one latest frame is kept and
+   * the encoder downscales to 1920). A new size invalidates the previous
+   * picture and its cursor scale. */
   g.width = info.size.width;
   g.height = info.size.height;
   g.frame_serial++;

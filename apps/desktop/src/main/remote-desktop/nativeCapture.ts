@@ -170,11 +170,15 @@ export async function photographMacWindow(
 
 /** The X root pixel rectangle of one Electron display, shared with XTest input
  * so pointer coordinates and cursor positions use the same mapping. Mixed
- * scaling is ambiguous and keeps the existing Chromium capture. */
+ * scaling, and monitors beyond the helper's buffer bound (`x11_geometry` in
+ * linux-capture/x11.h: 8192 per side, 16777216 pixels), keep the existing
+ * Chromium capture instead of failing the cursor-overlay connection. */
 export function x11CaptureDisplay(display: string): { output: string; scale: number } | null {
   try {
     const displays = screen.getAllDisplays();
     const geometry = x11InputGeometry(displays, display);
+    const [, , width, height] = geometry.map(Number);
+    if (width > 8192 || height > 8192 || width * height > 16_777_216) return null;
     const scale = displays.find((item) => String(item.id) === display)?.scaleFactor ?? 1;
     return { output: `x11:${geometry.join(',')}`, scale };
   } catch {
