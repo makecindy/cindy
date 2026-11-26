@@ -11562,15 +11562,7 @@
       "openSettings": "往设"
     },
     "modelChain": {
-      "primary": "首选模型",
-      "fallback": "备选 {{index}}",
-      "routeLabel": "模型候选 {{index}}",
-      "add": "增备选模型",
-      "remove": "去此候选",
-      "moveUp": "上之",
-      "moveDown": "下之",
-      "description": "至多设 5 模型。当前候选不可用时，同伴依序自行接替，不劳君易差事或再试。",
-      "options": "备选模型（{{count}}）"
+      "routeLabel": "模型候选 {{index}}"
     },
     "actions": {
       "message": "遣讯",

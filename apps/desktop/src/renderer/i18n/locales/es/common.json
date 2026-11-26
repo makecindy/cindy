@@ -11695,15 +11695,7 @@
       "openSettings": "Abrir ajustes"
     },
     "modelChain": {
-      "primary": "Modelo principal",
-      "fallback": "Alternativa {{index}}",
-      "routeLabel": "Modelo candidato {{index}}",
-      "add": "Agregar modelo alternativo",
-      "remove": "Quitar este candidato",
-      "moveUp": "Subir",
-      "moveDown": "Bajar",
-      "description": "Configura hasta 5 modelos. Si uno no está disponible, el amigo continúa automáticamente con el siguiente, sin cambiar de tarea ni reintentar manualmente.",
-      "options": "Modelos de respaldo ({{count}})"
+      "routeLabel": "Modelo candidato {{index}}"
     },
     "actions": {
       "message": "Mensaje",

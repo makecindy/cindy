@@ -11562,15 +11562,7 @@
       "openSettings": "前往設定"
     },
     "modelChain": {
-      "primary": "首選模型",
-      "fallback": "備用 {{index}}",
-      "routeLabel": "模型候選 {{index}}",
-      "add": "新增備用模型",
-      "remove": "移除這個候選",
-      "moveUp": "上移",
-      "moveDown": "下移",
-      "description": "最多設定 5 個模型。目前候選無法使用時，夥伴會依序自動接替，不需要你切換任務或重試。",
-      "options": "備用模型（{{count}}）"
+      "routeLabel": "模型候選 {{index}}"
     },
     "actions": {
       "message": "傳訊息",

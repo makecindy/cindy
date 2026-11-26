@@ -11695,15 +11695,7 @@
       "openSettings": "Ouvrir les réglages"
     },
     "modelChain": {
-      "primary": "Modèle principal",
-      "fallback": "Secours {{index}}",
-      "routeLabel": "Modèle candidat {{index}}",
-      "add": "Ajouter un modèle de secours",
-      "remove": "Retirer ce candidat",
-      "moveUp": "Monter",
-      "moveDown": "Descendre",
-      "description": "Configurez jusqu'à 5 modèles. Si l'un d'eux est indisponible, l’ami continue automatiquement avec le suivant, sans changer de tâche ni réessayer manuellement.",
-      "options": "Modèles de secours ({{count}})"
+      "routeLabel": "Modèle candidat {{index}}"
     },
     "actions": {
       "message": "Écrire",

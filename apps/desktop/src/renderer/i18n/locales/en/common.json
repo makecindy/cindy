@@ -11608,15 +11608,7 @@
       "openSettings": "Open settings"
     },
     "modelChain": {
-      "primary": "Primary model",
-      "fallback": "Fallback {{index}}",
-      "routeLabel": "Model candidate {{index}}",
-      "add": "Add fallback model",
-      "remove": "Remove this candidate",
-      "moveUp": "Move up",
-      "moveDown": "Move down",
-      "description": "Configure up to 5 models. If one is unavailable, the buddy automatically continues with the next one—no task switching or manual retry.",
-      "options": "Backup models ({{count}})"
+      "routeLabel": "Model candidate {{index}}"
     },
     "actions": {
       "message": "Message",

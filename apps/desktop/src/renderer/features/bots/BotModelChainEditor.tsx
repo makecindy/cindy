@@ -428,7 +428,8 @@ export function BotModelChainEditor({
           hint={settingsRows.primaryHint}
           trailing={
             // 与同页 Subagent、辅助模型的选择框同一种带框字段，同一层级的控件长得一样。
-            <div className="flex min-w-0 flex-1 items-center gap-2">
+            // 基础宽度 16rem：放不下时整行换到标题下面，不把模型名挤成两个字。
+            <div className="flex min-w-0 flex-[1_1_16rem] items-center gap-2">
               {onRestoreDefault ? (
                 <DefaultOverrideControls
                   isCustomized

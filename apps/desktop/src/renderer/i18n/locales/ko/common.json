@@ -11562,15 +11562,7 @@
       "openSettings": "설정 열기"
     },
     "modelChain": {
-      "primary": "기본 모델",
-      "fallback": "대체 {{index}}",
-      "routeLabel": "모델 후보 {{index}}",
-      "add": "대체 모델 추가",
-      "remove": "이 후보 제거",
-      "moveUp": "위로 이동",
-      "moveDown": "아래로 이동",
-      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 동반자가 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
-      "options": "예비 모델 ({{count}})"
+      "routeLabel": "모델 후보 {{index}}"
     },
     "actions": {
       "message": "메시지",

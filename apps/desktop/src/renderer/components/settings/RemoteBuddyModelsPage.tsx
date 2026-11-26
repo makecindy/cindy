@@ -33,7 +33,8 @@ export function RemoteBuddyModelsPage({ deviceId, onBack }: { deviceId: string; 
   const cloud = useCompanionCloud();
   const bots = useMemo(() => cloudRemoteBots(cloud, rosterRemote).filter((bot) => bot.deviceId === deviceId), [cloud, rosterRemote, deviceId]);
   const deviceName = bots[0]?.deviceName ?? deviceId;
-  const botIds = bots.map((bot) => bot.id).join('\u0000');
+  // 按 id 排：名册刷新只换了顺序时不重读每位伙伴的资料(每位一次远程读取)。
+  const botIds = bots.map((bot) => bot.id).sort().join('\u0000');
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
   const [saving, setSaving] = useState(false);

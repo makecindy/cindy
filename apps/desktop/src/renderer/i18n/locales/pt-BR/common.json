@@ -11695,15 +11695,7 @@
       "openSettings": "Abrir configurações"
     },
     "modelChain": {
-      "primary": "Modelo principal",
-      "fallback": "Alternativa {{index}}",
-      "routeLabel": "Modelo candidato {{index}}",
-      "add": "Adicionar modelo alternativo",
-      "remove": "Remover este candidato",
-      "moveUp": "Mover para cima",
-      "moveDown": "Mover para baixo",
-      "description": "Configure até 5 modelos. Se um estiver indisponível, o amigo continuará automaticamente com o próximo — sem trocar de tarefa nem tentar novamente manualmente.",
-      "options": "Modelos de reserva ({{count}})"
+      "routeLabel": "Modelo candidato {{index}}"
     },
     "actions": {
       "message": "Mensagem",

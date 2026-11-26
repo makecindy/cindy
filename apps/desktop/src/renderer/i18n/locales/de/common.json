@@ -11608,15 +11608,7 @@
       "openSettings": "Einstellungen öffnen"
     },
     "modelChain": {
-      "primary": "Primäres Modell",
-      "fallback": "Ersatzmodell {{index}}",
-      "routeLabel": "Modellkandidat {{index}}",
-      "add": "Ersatzmodell hinzufügen",
-      "remove": "Diesen Kandidaten entfernen",
-      "moveUp": "Nach oben verschieben",
-      "moveDown": "Nach unten verschieben",
-      "description": "Konfiguriere bis zu 5 Modelle. Ist eines nicht verfügbar, fährt der Freund automatisch mit dem nächsten fort – ohne Aufgabenwechsel oder manuellen Neuversuch.",
-      "options": "Ersatzmodelle ({{count}})"
+      "routeLabel": "Modellkandidat {{index}}"
     },
     "actions": {
       "message": "Nachricht",

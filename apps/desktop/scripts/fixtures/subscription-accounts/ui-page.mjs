@@ -30,7 +30,7 @@ export default {
     'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
     empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
-    loading: { about: 'First read still pending: one static account-row placeholder instead of a spinner' },
+    loading: { about: 'First read still pending: a static placeholder in the collapsed summary line instead of a spinner' },
     'plugin-engine': { about: 'A plugin engine provider: identity, plan and usage the plugin reports, with the same account controls' },
     'plugin-engine-narrow': { about: 'Plugin engine accounts at 320-pixel content width', viewport: { width: 320, height: 850 } },
     'plugin-engine-sign-in': { about: 'Adding a plugin engine account: choose the sign-in method and type the key in Cindy' },
@@ -45,7 +45,8 @@ export default {
       return;
     }
     await page.getByTestId('subscription-accounts').waitFor();
-    await expandAccounts(page);
+    // 第一次读取还没回来时没有可点开的：占位在收起的摘要那一行。
+    if (ui.case !== 'loading') await expandAccounts(page);
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
     if (ui.case.startsWith('plugin-engine')) {
       const rows = page.getByTestId('subscription-account');

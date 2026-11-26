@@ -11562,15 +11562,7 @@
       "openSettings": "去设置"
     },
     "modelChain": {
-      "primary": "主模型",
-      "fallback": "备用 {{index}}",
-      "routeLabel": "模型候选 {{index}}",
-      "add": "添加备用模型",
-      "remove": "移除这个候选",
-      "moveUp": "上移",
-      "moveDown": "下移",
-      "description": "最多设置 5 个模型。当前候选不可用时，伙伴会按顺序自动接替，不需要你切任务或重试。",
-      "options": "备用模型（{{count}}）"
+      "routeLabel": "模型候选 {{index}}"
     },
     "actions": {
       "message": "发消息",

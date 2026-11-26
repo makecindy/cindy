@@ -122,7 +122,12 @@ const LOADING_REVEAL_MS = 200;
  * row's space from the first frame (invisible until the reveal), so a quick read changes only
  * the contents, not the page height; static, without shimmer.
  */
-function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: string }) {
+function AccountListPlaceholder({ reserve, label, compact = false }: {
+  reserve: boolean;
+  label: string;
+  /** 账号区收起时：占摘要那一行，读完换成摘要，高度不变。 */
+  compact?: boolean;
+}) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setVisible(true), LOADING_REVEAL_MS);
@@ -130,6 +135,16 @@ function AccountListPlaceholder({ reserve, label }: { reserve: boolean; label: s
   }, []);
   if (!reserve && !visible) return null;
   const block = 'rounded-full bg-[var(--surface-chip)]';
+  if (compact) {
+    return (
+      <div role="status" aria-label={label} data-testid="subscription-accounts-loading" className="mt-1.5 flex h-[17px] items-center">
+        <div aria-hidden="true" className={cn('flex items-center gap-4', visible ? 'animate-fade-in' : 'invisible')}>
+          <span className={cn('h-2.5 w-36', block)} />
+          <span className={cn('h-2.5 w-14', block)} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       role="status"
@@ -410,6 +425,10 @@ export function SubscriptionAccountsSection({
           </Button>}
         </div>
       </div>
+      {/* 收起时第一次读取还没回来：在摘要的位置占一行，不让这一块只剩标题、看不出在读。 */}
+      {!expanded && !view && !failed && (
+        <AccountListPlaceholder compact reserve={expectAccounts} label={t('ccAgent.common.loading')} />
+      )}
       {!expanded && summary.length > 0 && (
         <button
           type="button"
@@ -442,7 +461,7 @@ export function SubscriptionAccountsSection({
           </Button>
         </div>
       )}
-      {!view && !failed && (
+      {expanded && !view && !failed && (
         <AccountListPlaceholder reserve={expectAccounts} label={t('ccAgent.common.loading')} />
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}

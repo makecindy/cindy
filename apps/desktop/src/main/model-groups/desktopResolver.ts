@@ -100,7 +100,10 @@ function readRemoteCatalogs(): Promise<void> {
     if (scope !== activeOwnerScopeKey()) return;
     remoteCatalogs = { scope, at: Date.now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
     publishCatalog();
-  })().catch(() => undefined).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
+  })().catch(() => {
+    // 这一轮意外失败也记下时间：一分钟内不再重读，失败时不随每次取配置、发消息反复读远端。
+    if (scope === activeOwnerScopeKey()) remoteCatalogs = { scope, at: Date.now(), value: new Map() };
+  }).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
   remoteReading = { scope, promise };
   return promise;
 }
