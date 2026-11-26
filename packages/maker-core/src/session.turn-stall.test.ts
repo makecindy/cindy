@@ -948,6 +948,73 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
+  it('reports pending unfinished tool calls in stall timeout diagnostics without leaking command text', async () => {
+    vi.useFakeTimers();
+    try {
+      const diagnostics: LoggedError[] = [];
+      const stub = createStubHandle();
+      const session = createSession(stub, { diagnostics });
+      const seen: AgentEvent[] = [];
+      session.onEvent((ev) => seen.push(ev));
+
+      await session.send('diagnose');
+      // Display-only snapshot and settled tools must not be reported as stuck.
+      stub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'plan:1', toolName: 'update_plan', runtimeActivity: 'snapshot', input: {} },
+      } as AgentEvent);
+      stub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'call_done', toolName: 'Read', input: {} },
+      } as AgentEvent);
+      stub.pushEvent({
+        type: 'tool_result_full',
+        data: { toolUseId: 'call_done', fullText: 'ok', isError: false },
+      } as AgentEvent);
+      // Unfinished ACP execute call whose toolName holds raw shell command text.
+      stub.pushEvent({
+        type: 'tool_use',
+        data: {
+          toolUseId: 'call_hung_fifo',
+          toolName: 'grep -rn secret /Users/alice/private/app/apps/',
+          acpKind: 'execute',
+          input: {},
+        },
+      } as AgentEvent);
+      // Unfinished standard identifier tool call.
+      stub.pushEvent({
+        type: 'tool_use',
+        data: { toolUseId: 'call_bash', toolName: 'Bash', input: {} },
+      } as AgentEvent);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+
+      const terminal = seen.find((ev) => ev.type === 'error');
+      expect(terminal).toBeDefined();
+      const data = terminal!.data as {
+        reason?: string;
+        message?: string;
+        activeToolCount?: number;
+        activeToolIds?: string[];
+      };
+      expect(data.reason).toBe('turn_no_event_timeout');
+      expect(data.activeToolCount).toBe(2);
+      expect(data.activeToolIds).toEqual(['call_hung_fifo', 'call_bash']);
+      expect(data.message).toContain('2 unfinished tool calls still pending: execute/call_hung_fifo, Bash/call_bash');
+      expect(data.message).not.toContain('secret');
+      expect(data.message).not.toContain('/Users/alice');
+
+      const warn = diagnostics.find((d) => d.msg.includes('turn stall watchdog tripped'));
+      expect(warn?.meta).toMatchObject({
+        activeToolCount: 2,
+        activeTools: ['execute/call_hung_fifo', 'Bash/call_bash'],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('turnStallMs=0 关闭看门狗', async () => {
     vi.useFakeTimers();
     try {
