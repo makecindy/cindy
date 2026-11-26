@@ -3971,6 +3971,25 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     expect(createMessage).toHaveBeenCalledTimes(1); // 只落一条
   });
 
+  // #10700 / reconnect handoff: the coordinator test stops at the persistence port.
+  // Unit: drive the production broadcaster with one terminal error carrying both fields.
+  it('persists model group details alongside the reconnect disposition in one error row', async () => {
+    const message = 'The replacement model stopped responding';
+    const modelFallbackDetails = 'Primary: HTTP 403\n\nBackup: The replacement model stopped responding';
+    const detail = { message, modelFallbackDetails, reason: 'codex_reconnect_stalled', reconnectHandoff: 'exhausted' };
+    const persistId = onTurnErrorEvent(SESSION, detail);
+    expect(persistId).toBeTruthy();
+    expect(onTurnErrorEvent(SESSION, detail)).toBe(persistId);
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ clientId: persistId, role: 'error', content: expect.objectContaining(detail) }),
+      expect.anything(),
+    );
+  });
+
   it('不同 message 不受 dedup 影响', async () => {
     onTurnErrorEvent(SESSION, { message: '错误 A' });
     onTurnErrorEvent(SESSION, { message: '错误 B' });

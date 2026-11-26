@@ -476,7 +476,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+Codex 的 120 秒 reconnect watchdog 只确认模型连接未在时限内恢复。诊断记录本次重连最后收到的尝试序号与上限、
+中断时仍登记为未完成的工具调用数，以及已知的上游网关状态码。工具仍在等待不能证明工具引起了断线。
+stderr 仍只作诊断日志
 （唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
 [实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
@@ -508,7 +510,7 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
 不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
 保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
-既有合成 UI 动作策略；Codex 重连超时后的人工继续同样保留原计划选项。
+既有合成 UI 动作策略。Codex 重连超时后的人工继续即使尚无助手消息也只发 CONTINUE，并保留原 Plan 与权限选项。
 
 Codex 重连超时后，宿主在发给模型的续跑消息中说明断线原因。收到工具错误时，模型可从
 原有的工具结果继续诊断；工具已开始但尚未收到结果时，先核对实际状态，避免重复执行。

@@ -63,7 +63,7 @@ function errorResult(errorCode: HistoryReadErrorCode | 'HOST_NOT_READY' | 'INTER
   return { ok: false, errorCode, message };
 }
 
-function parseEncodedIpcError(message: string): { code: string; message: string } | null {
+export function parseEncodedIpcError(message: string): { code: string; message: string } | null {
   const match = message.match(/(?:^|:\s*(?:Error:\s*)?)\[([A-Z0-9_]+)]\s*(.*)$/);
   return match ? { code: match[1], message: match[2] || message } : null;
 }

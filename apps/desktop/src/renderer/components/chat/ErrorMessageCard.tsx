@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import { localizeOutputLimit } from './outputLimitI18n';
 import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
@@ -36,7 +37,7 @@ import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { parseUpstreamStatusError } from '@/utils/upstreamStatusError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
-import { errorReasonI18nKey } from './errorReasonI18n';
+import { errorReasonI18nKey, localizeReconnectStall } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
@@ -44,6 +45,7 @@ export function ErrorMessageCard({
   message,
   reason,
   providerId,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   modelFallbackDetails,
@@ -58,6 +60,7 @@ export function ErrorMessageCard({
   kind?: 'reply-error' | 'blocked-input';
   reason?: string;
   providerId?: string;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -85,6 +88,7 @@ export function ErrorMessageCard({
   });
   const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
+    reason === 'codex_reconnect_stalled' ? localizeReconnectStall(t, reconnectHandoff) :
     reason === 'output-limit'
       ? localizeOutputLimit(t, outputLimit)
       : toolLoopI18nKey && toolLoop

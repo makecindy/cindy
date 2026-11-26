@@ -21,6 +21,7 @@
  */
 
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import type { ReconnectHandoff } from '../../shared/agentInputQueue.js';
 import type { BotGroupLaneTerminal } from './botGroupChatService.js';
 
 export type AutoResumeOutcome = 'succeeded' | 'failed';
@@ -31,6 +32,7 @@ export interface SuppressedTurnError {
   reason?: string;
   sdkError?: string;
   modelFallbackDetails?: string;
+  reconnectHandoff?: ReconnectHandoff;
 }
 
 interface ModelFallbackHistory {
@@ -393,13 +395,14 @@ export class AutoResumeBookkeeping {
   surfaceSuppressedError(
     sessionId: string,
     opts?: {
+      reconnectHandoff?: ReconnectHandoff;
       attemptToken?: number;
       deferredOwner?: SuppressedTurnErrorOwner;
       force?: boolean;
     },
   ): boolean {
     if (opts && !this.canReleaseSuppressedError(sessionId, opts)) return false;
-    return this.releaseSuppressedError(sessionId, true);
+    return this.releaseSuppressedError(sessionId, true, opts?.reconnectHandoff);
   }
 
   private canReleaseSuppressedError(
@@ -430,13 +433,14 @@ export class AutoResumeBookkeeping {
     return true;
   }
 
-  private releaseSuppressedError(sessionId: string, surfaceError: boolean): boolean {
+  private releaseSuppressedError(sessionId: string, surfaceError: boolean, reconnectHandoff?: ReconnectHandoff): boolean {
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
     const attemptToken = entry.attemptToken;
     const orcaTerminal = entry.orcaTerminal;
     this.suppressedErrors.delete(sessionId);
     this.suppressedErrorClients.delete(sessionId);
+    if (reconnectHandoff && entry.detail.reason === 'codex_reconnect_stalled') entry.detail.reconnectHandoff = reconnectHandoff;
     this.deps.persistSuppressedError(sessionId, entry.detail);
     if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, entry.detail);
     this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);

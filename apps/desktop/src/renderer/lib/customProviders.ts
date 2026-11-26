@@ -132,9 +132,10 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     const models = p.models[agent] ?? [];
+    const catalogPresetId = routing?.catalogPresetId ?? models[0]?.catalogPresetId;
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
-      ...(models[0]?.catalogPresetId ? { catalogPresetId: models[0].catalogPresetId } : {}),
+      ...(catalogPresetId ? { catalogPresetId } : {}),
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
       ...(agent === 'codex' && routing?.supportsImageGeneration === true
