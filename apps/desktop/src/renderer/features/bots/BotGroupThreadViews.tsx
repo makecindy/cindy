@@ -87,10 +87,9 @@ export function BotGroupThreadPreview({ message, members, onOpen }: {
       <span className="shrink-0 font-medium text-[var(--text-primary)] underline-offset-[3px] group-hover/thread:underline">
         {t('bots.groupChat.server.replyCount', { count })}
       </span>
-      {/* Unread replies replace the last-reply time: a dot in the unread color, the words stay neutral. */}
+      {/* Keep the spacing between counts when unread replies replace the last-reply time. */}
       {unread ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-12 font-medium text-[var(--text-primary)]" data-thread-unread={unread.count}>
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]" />
+        <span className="flex min-w-0 items-center gap-1.5 pl-3 text-12 font-medium text-[var(--text-primary)]" data-thread-unread={unread.count}>
           <span className="truncate">{t(key('newReplies'), { count: unread.count })}</span>
           {unread.mentioned ? <span className="shrink-0">{t(key('mentionedYou'))}</span> : null}
         </span>

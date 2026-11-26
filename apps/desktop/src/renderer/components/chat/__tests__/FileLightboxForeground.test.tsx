@@ -7,8 +7,10 @@
  * - Bug／规则依据：#11952 review 指出文件类模态预览（ZIP 等）缺少 layer 标记，
  *   打开图片浮窗后再开文件预览会误把旧图片判为前景。
  * - 现有覆盖缺口：VideoLightbox 已有 layer 测试，FileLightbox 的无渲染文件路径没有覆盖。
- * - 最小失败输入：本地 `.zip` 文件路径 + 二进制内容替身；只 stub 文件读取与正文组件。
+ * - 最小失败输入：本地 `.zip` 文件路径 + 二进制内容替身；只 stub 文件读取、正文组件与
+ *   系统预览能力探测所需的 `electronAPI`。
  * - tier：unit（进程内 DOM，无真实 I/O）。
+ * - 实测耗时：单文件运行约 4.1s。
  */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -34,10 +36,15 @@ import { FileLightbox } from '../FileLightbox';
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 it('registers an unrenderable file preview as the active foreground layer', () => {
+  vi.stubGlobal('electronAPI', {
+    platform: 'darwin',
+    openSystemPreview: vi.fn(async () => true),
+  });
   render(
     <ChatSessionFileProvider
       value={{ sessionId: 'task', workingDir: '/repo', origin: { kind: 'local' } }}

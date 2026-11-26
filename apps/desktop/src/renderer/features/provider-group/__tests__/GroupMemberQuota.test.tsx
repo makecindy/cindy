@@ -1128,6 +1128,26 @@ describe('GroupMemberQuota', () => {
     expect(screen.getByText('providerGroup.member.quota.none')).toBeTruthy();
   });
 
+  // Unit, PR #12195 review P1: providers Cindy creates for subscription accounts now classify as
+  // Claude/Codex, but the member computer's per-provider usage channels cannot resolve them (Claude
+  // returns null, Codex rejects the id). Minimal input: one created provider per family on a
+  // member computer, through the real subscription card. The row keeps saying there is no quota
+  // and never starts the per-provider polling.
+  it.each([
+    { family: 'anthropic', providerId: 'anthropic-sub-0000abcd' },
+    { family: 'openai', providerId: 'openai-sub-0000abcd' },
+  ] as const)('does not poll per-provider usage for a created $family provider', async ({ family, providerId }) => {
+    vi.useFakeTimers();
+    mocks.realCard = true;
+    mocks.byDevice.mini = [{ id: providerId, name: providerId, source: 'builtin', connected: true,
+      auth: { method: 'oauth' }, access: { kind: 'subscription', product: 'test' }, subscriptionPool: family }];
+    await show({ kind: 'device', deviceId: 'mini', providerId });
+    await act(async () => vi.advanceTimersByTime(45_000));
+    expect(screen.getByText('providerGroup.member.quota.none')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.quota.unavailable')).toBeNull();
+    expect(mocks.remoteInvoke.mock.calls.filter(([, channel]) => String(channel).startsWith('maker:usage:'))).toEqual([]);
+  });
+
   it('stops saying it is reading when the quota never arrives', async () => {
     vi.useFakeTimers();
     mocks.cards = {};

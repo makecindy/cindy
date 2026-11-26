@@ -172,8 +172,12 @@ const cards = {
 
 const turnRunner = {
   getMakerSessionById: vi.fn(() => null),
+  getPermissionModes: vi.fn<ImTurnRunner['getPermissionModes']>(),
   prewireAttachedSession: vi.fn(async () => {}),
-} as unknown as ImTurnRunner & { prewireAttachedSession: ReturnType<typeof vi.fn> };
+} as unknown as ImTurnRunner & {
+  prewireAttachedSession: ReturnType<typeof vi.fn>;
+  getPermissionModes: ReturnType<typeof vi.fn<ImTurnRunner['getPermissionModes']>>;
+};
 
 const adapter = {
   channel: 'slack',
@@ -517,6 +521,7 @@ describe('/permission Full access 确认', () => {
   async function pressPermission(
     im: ChannelIM,
     buttonId: 'permmode:pick' | 'permmode:confirm-full-access' | 'permmode:cancel-full-access',
+    overrides: Record<string, string> = {},
   ): Promise<void> {
     const attach = createCardActionHandler(adapter, cards, turnRunner);
     let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
@@ -534,9 +539,28 @@ describe('/permission Full access 确认', () => {
         mode: 'bypassPermissions',
         modeLabel: 'Full access',
         agentKind: 'codex',
+        ...overrides,
       },
     } as unknown as IMCardActionEvent);
   }
+
+  // Unit, #12820: existing confirmation cases use built-in engines. A cold remote ACP
+  // task's card must validate and persist a mode offered by the stored route.
+  it('applies a mode offered by the cold plugin task’s execution computer', async () => {
+    const providerId = 'acp-plugin:test:engine';
+    const agentDeviceId = 'other-computer';
+    mocks.getMaker.mockReturnValue({
+      getSessionMeta: vi.fn(async () => ({ agentKind: 'acp', providerId, agentDeviceId })),
+    });
+    turnRunner.getPermissionModes.mockImplementationOnce(async (_kind, route) =>
+      route.agentDeviceId === agentDeviceId ? [{ id: 'plan', displayName: 'Plan' }] : [],
+    );
+
+    await pressPermission(makeIm(), 'permmode:pick', { agentKind: 'acp', mode: 'plan', modeLabel: 'Plan' });
+
+    expect(turnRunner.getPermissionModes).toHaveBeenCalledWith('acp', { sessionId: 'sess-target', providerId, agentDeviceId });
+    expect(mocks.updatePermissionMode).toHaveBeenCalledWith('sess-target', 'plan');
+  });
 
   it('first replaces the picker with a confirmation card without changing state', async () => {
     const im = makeIm();

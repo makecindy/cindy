@@ -8,6 +8,7 @@
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
 export * from "./protocol.js";
+export * from "./deviceNameMerge.js";
 export * from "./allowlist.js";
 export * from "./client.js";
 export * from "./routedClient.js";

@@ -470,6 +470,8 @@ interface MessageStreamProps {
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
+  /** Optional draft key when the session composer is still using its preview draft. */
+  quoteDraftKey?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
@@ -3276,6 +3278,7 @@ export function MessageStream({
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
+  quoteDraftKey,
   sessionTitle,
   agentKind,
   remoteHostId,
@@ -6897,7 +6900,7 @@ export function MessageStream({
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
+              <SelectionQuoteButton sessionId={sessionId} draftKey={quoteDraftKey} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
