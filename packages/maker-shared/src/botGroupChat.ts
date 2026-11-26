@@ -928,6 +928,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'set-assistant'
   | 'notifications'
   | 'mask'
   | 'mask-mentions'
@@ -973,6 +974,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   supportsMemberRemoval?: boolean;
   /** Revision-checked settings and additive `add-member` ({ botId }) on server groups. */
   supportsSettingsManagement?: boolean;
+  /** The host can route set-assistant through desktop group management. */
+  supportsAssistantManagement?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';

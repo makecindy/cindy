@@ -544,6 +544,8 @@
     "accessChat": "Group chat only",
     "accessTools": "Can use tools and info",
     "replies": "How buddies reply",
+    "assistant": "Group Cindy",
+    "assistantHint": "Works on the computer of whoever @mentions it.",
     "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
     "work": "Work splits",
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",

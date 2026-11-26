@@ -544,6 +544,8 @@
     "accessChat": "僅群內交流",
     "accessTools": "可用工具與資料",
     "replies": "夥伴怎麼接話",
+    "assistant": "群裡的 Cindy",
+    "assistantHint": "誰 @ 它，就在誰自己的電腦上做。",
     "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
     "work": "分工",
     "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
