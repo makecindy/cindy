@@ -62,6 +62,8 @@ export function resolveQueueHoldRow(
     canHold: !isHeld && !isAfterStop,
     canRelease: isHeld,
     movable: !isHeld && !isAfterStop,
-    dimmed: isHeld || isAfterStop,
+    // 停点行本身保持正常亮度：暂停标识已说明它停在这里，而「继续发送」就在它的
+    // 菜单里，跟着一起变淡会让人以为点不了。只有被它拦住的后继行需要变淡。
+    dimmed: isAfterStop,
   };
 }

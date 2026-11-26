@@ -1,6 +1,7 @@
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { appendPendingQueueItems } from '../../../src/renderer/components/chat/pendingQueueItems';
+import { findStopIndex } from '../../../src/renderer/components/new-chat/pendingQueueHold';
 import { mountPage } from '../../ui-page/harness';
 import { PendingQueueBubble } from '../../../src/renderer/components/chat/PendingQueueBubble';
 import type { QueuedMessage } from '../../../src/renderer/lib/makerChatStore';
@@ -71,4 +72,42 @@ function Fixture() {
     </main>
   );
 }
-void mountPage({ route: '/sessions/queue-fixture', render: () => <Fixture /> });
+function HoldFixture() {
+  const [queue, setQueue] = useState<QueuedMessage[]>([
+    entry('before-a', '这条按计划先发出。'),
+    entry('before-b', '这一条也照常发出，先不动。'),
+    { ...entry('stop', '这条之后我先停一下，等你确认再发。') },
+    entry('after-a', '这部分也先不发，等你继续后再发。'),
+  ]);
+  const stopIndex = findStopIndex(queue);
+  const setHeld = (clientId: string | null) =>
+    setQueue((items) => items.map((item) => ({ ...item, held: item.clientId === clientId })));
+  return (
+    <main className="mx-auto flex max-w-[880px] flex-col gap-4 p-6">
+      {queue.map((item, index) => (
+        <PendingQueueBubble pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+          key={item.clientId}
+          entry={item}
+          index={index}
+          count={queue.length}
+          editingClientId={null}
+          steeringClientIds={[]}
+          editLocks={[]}
+          interactionLocks={[]}
+          stopIndex={stopIndex}
+          onHold={(clientId) => setHeld(clientId)}
+          onReleaseHold={() => setHeld(null)}
+          onEdit={() => {}}
+          onSteer={async () => true}
+          onRemove={() => {}}
+          onMove={() => {}}
+        />
+      ))}
+    </main>
+  );
+}
+
+void mountPage({
+  route: '/sessions/queue-fixture',
+  render: (ctx) => (ctx.case ?? '').startsWith('hold') ? <HoldFixture /> : <Fixture />,
+});

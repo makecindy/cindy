@@ -51,7 +51,7 @@ describe('pending queue hold row projection', () => {
       canRelease: true,
       canSteer: false,
       movable: false,
-      dimmed: true,
+      dimmed: false,
     });
   });
 

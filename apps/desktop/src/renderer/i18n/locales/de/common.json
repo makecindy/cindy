@@ -14406,14 +14406,10 @@
       "editCancelAria": "Bearbeitung abbrechen (Esc)",
       "syntheticContinueLabel": "Unvollendete Aufgabe fortsetzen (Systemanweisung)",
       "syntheticTriggerLabel": "Systemanweisung",
-      "holdAria": "Hier pausieren",
-      "holdTip": "Diese und alle folgenden Nachrichten anhalten",
-      "heldRowAria": "Haltepunkt: Diese und alle folgenden Nachrichten werden nicht automatisch gesendet. Die laufende Aufgabe wird normal beendet.",
-      "releaseHoldTip": "Hier angehalten – zum Weitersenden fortsetzen",
-      "releaseHoldAria": "Automatisches Senden ab dieser Nachricht fortsetzen",
-      "holdAction": "Hier stoppen",
-      "releaseHoldAction": "Senden fortsetzen",
-      "heldRowLabel": "Warteschlange stoppt hier"
+      "holdAction": "Pausieren",
+      "releaseHoldAction": "Fortsetzen",
+      "heldRowLabel": "Ab dieser Nachricht pausiert",
+      "heldHint": "Diese und die folgenden Nachrichten werden vorerst nicht gesendet; die laufende Aufgabe wird weiter ausgeführt."
     },
     "newChatView": {
       "missing": {

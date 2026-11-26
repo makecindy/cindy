@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { getPendingQueueRowPresentation } from '../new-chat/pendingQueueRowPresentation';
 import { resolveQueueHoldRow } from '../new-chat/pendingQueueHold';
 import { UserMessage } from './UserMessage';
@@ -84,6 +85,8 @@ export function PendingQueueBubble({
   const releaseAvailable = Boolean(onReleaseHold) && !readOnly && holdRow.canRelease && !busy;
   const movableRow = holdRow.movable;
   const [open, setOpen] = useState(false);
+  // 暂停/继续是悬停才出现的图标按钮：平时不占位，悬停或键盘聚焦时才显形。
+  const holdButtonClass = `flex shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] opacity-0 hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)] focus-visible:opacity-100 group-hover:opacity-100 ${simplifiedBotConversation ? 'h-8 w-8' : 'h-6 w-6'}`;
   const sentAt = new Date(entry.chatMessage.createdAt ?? 0).getTime();
   const [statusShown, setStatusShown] = useState(!localSend || Date.now() - sentAt >= 600);
   useEffect(() => {
@@ -120,7 +123,32 @@ export function PendingQueueBubble({
           <span>{t('newChat.pendingQueue.editingInComposer')}</span>
         </>
       ) : !statusShown || sending ? null : (
-        <DropdownMenu open={open} onOpenChange={setOpen}>
+        <>
+          {holdAvailable && (
+            <Tip text={t('newChat.pendingQueue.holdAction')} side="top">
+              <button
+                type="button"
+                onClick={() => onHold?.(entry.clientId)}
+                aria-label={t('newChat.pendingQueue.holdAction')}
+                className={holdButtonClass}
+              >
+                <Pause size={13} aria-hidden />
+              </button>
+            </Tip>
+          )}
+          {releaseAvailable && (
+            <Tip text={t('newChat.pendingQueue.releaseHoldAction')} side="top">
+              <button
+                type="button"
+                onClick={() => onReleaseHold?.()}
+                aria-label={t('newChat.pendingQueue.releaseHoldAction')}
+                className={holdButtonClass}
+              >
+                <Play size={13} aria-hidden />
+              </button>
+            </Tip>
+          )}
+          <DropdownMenu open={open} onOpenChange={setOpen}>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -134,28 +162,6 @@ export function PendingQueueBubble({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {holdAvailable && (
-              <DropdownMenuItem
-                className="gap-2"
-                onSelect={() => {
-                  if (!busy) onHold?.(entry.clientId);
-                }}
-              >
-                <Pause size={16} className="shrink-0" />
-                {t('newChat.pendingQueue.holdAction')}
-              </DropdownMenuItem>
-            )}
-            {releaseAvailable && (
-              <DropdownMenuItem
-                className="gap-2"
-                onSelect={() => {
-                  if (!busy) onReleaseHold?.();
-                }}
-              >
-                <Play size={16} className="shrink-0" />
-                {t('newChat.pendingQueue.releaseHoldAction')}
-              </DropdownMenuItem>
-            )}
             {onSteer && !availability.actions.steer.disabled && holdRow.canSteer && (
               <DropdownMenuItem
                 className="gap-2"
@@ -213,6 +219,7 @@ export function PendingQueueBubble({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        </>
       )}
     </div>
   );
@@ -220,12 +227,16 @@ export function PendingQueueBubble({
     <div
       data-pending-queue-message={entry.clientId}
       data-queue-hold={holdRow.isHeld ? 'stop' : holdRow.isAfterStop ? 'after-stop' : undefined}
-      className={holdRow.dimmed && !editing ? 'opacity-45' : undefined}
+      className={holdRow.dimmed && !editing ? 'group opacity-45' : 'group'}
     >
       {holdRow.isHeld && (
-        <div className="mb-1 flex items-center justify-end gap-1 text-12 text-[var(--text-secondary)]">
-          <Pause size={13} aria-hidden />
-          <span>{t('newChat.pendingQueue.heldRowLabel')}</span>
+        <div className="mb-1 text-right">
+          <Tip text={t('newChat.pendingQueue.heldHint')} side="top">
+            <span className="inline-flex max-w-full items-center gap-1 text-12 text-[var(--text-secondary)]">
+              <Pause size={13} aria-hidden />
+              {t('newChat.pendingQueue.heldRowLabel')}
+            </span>
+          </Tip>
         </div>
       )}
       {senderLabel && (

@@ -14522,14 +14522,10 @@
       "syntheticContinueLabel": "Continuar a tarefa inacabada (instrução do sistema)",
       "syntheticTriggerLabel": "Instrução do sistema",
       "showMore_many": "mais {{count}}",
-      "holdAria": "Pausar aqui",
-      "holdTip": "Suspender esta mensagem e as seguintes",
-      "heldRowAria": "Ponto de parada: esta mensagem e as seguintes não serão enviadas automaticamente. A tarefa atual termina normalmente.",
-      "releaseHoldTip": "Em pausa aqui — retome para continuar enviando",
-      "releaseHoldAria": "Retomar o envio automático a partir desta mensagem",
-      "holdAction": "Parar aqui",
-      "releaseHoldAction": "Retomar o envio",
-      "heldRowLabel": "A fila para aqui"
+      "holdAction": "Pausar",
+      "releaseHoldAction": "Retomar",
+      "heldRowLabel": "Pausado a partir desta mensagem",
+      "heldHint": "Esta mensagem e as seguintes não são enviadas por enquanto; a tarefa atual termina normalmente."
     },
     "newChatView": {
       "missing": {
