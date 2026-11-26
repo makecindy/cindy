@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HistoryViewController, HistoryViewHandoff, projectHistoryView, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
-import type { RemoteMessage } from '../session/types';
+import { remoteSessionStore } from '../session/remoteSessionStore';
+import type { PendingInteraction, RemoteMessage } from '../session/types';
 
 const row = (id: string, streaming = false): RemoteMessage => ({
   id, clientId: id, sessionId: 's', role: id === 'user' ? 'user' : 'assistant',
@@ -485,5 +486,203 @@ describe('mobile history handoff', () => {
     expect(handoff.reconcile(view.getSnapshot(), [at('a1', 1), reply]).tail.size).toBe(0);
     expect(handoff.reconcile(view.getSnapshot(), [at('a1', 1)]).messages.map((row) => row.clientId)).toEqual(['a1', 'reply']);
     view.setActive(false);
+  });
+
+  // Unit regression (mobile live ask_user submit under history-view-v1):
+  // Root cause: beginOptimisticInteractionDismiss hid InteractionPanel without updating the
+  // ask_user row, and HistoryViewHandoff ignored ask_user rows, causing disappearance or an
+  // "unanswered" flash until the debounced refresh returned. Existing handoff tests only
+  // covered user/assistant rows. Minimal failing input: a pending ask_user in (or absent from)
+  // a ready snapshot submitted via remoteSessionStore.
+  it.each([true, false])('shows answered ask_user immediately on submit and rolls back on failure (inSnapshot=%s)', async (inSnapshot) => {
+    remoteSessionStore.clear();
+    const sessionId = 's-ask-live';
+    const requestId = 'req-sync-1';
+    const persistId = 'ask-persist-1';
+    const questions = [{ id: 'q1', question: '按这个方案开工吗？', options: [{ label: '照此开工' }] }];
+    const pendingInteraction: PendingInteraction = {
+      persistId,
+      request: { kind: 'ask_user_question', requestId, questions },
+    };
+    const userRow: RemoteMessage = {
+      id: 'u1', clientId: 'u1', sessionId, role: 'user', content: '帮我改造', toolUseId: null,
+      createdAt: '2026-09-08T00:00:00Z', agentMeta: null,
+    };
+    const pendingAskRow: RemoteMessage = {
+      id: persistId, clientId: persistId, sessionId, role: 'ask_user',
+      content: { requestId, questions, status: 'pending', answers: null },
+      toolUseId: null, createdAt: '2026-09-08T00:00:10Z', agentMeta: null,
+    };
+    let pageRows: RemoteMessage[] = inSnapshot ? [userRow, pendingAskRow] : [userRow];
+    const view = new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items: projectHistoryView(pageRows, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const handoff = createHandoff();
+    const renderAskBodies = () => {
+      const snapshot = view.getSnapshot();
+      const raw = remoteSessionStore.getMessages(sessionId);
+      const state = handoff.reconcile(snapshot, raw);
+      const pendingIds = new Set(
+        remoteSessionStore.getPendingInteractions(sessionId)
+          .filter((item) => item.request.kind === 'ask_user_question')
+          .map((item) => String(item.request.requestId)),
+      );
+      return buildMobileHistoryRenderItems({
+        view, snapshot, messages: state.messages, staleTail: state.tail, pendingHandoff: state.pending,
+        pendingQuestionIds: pendingIds, streaming: true, sessionId,
+      }).filter((item) => item.type === 'message' && item.message.kind === 'ask_user')
+        .map((item) => item.type === 'message' ? item.message.body : '');
+    };
+    try {
+      view.setActive(true);
+      await view.refresh();
+      remoteSessionStore.setPendingInteractions(sessionId, [pendingInteraction]);
+      expect(renderAskBodies()).toEqual([]);
+
+      // Optimistic submit: answered Q/A appears immediately with zero disappearance or "unanswered" flash.
+      remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, requestId, {
+        item: pendingInteraction,
+        decision: { kind: 'ask_user_question', answers: { q1: '照此开工' } },
+      });
+      expect(renderAskBodies()).toEqual(['Q: 按这个方案开工吗？\nA: 照此开工']);
+
+      // Failed submit rolls back cleanly: card returns to pending and stream hides the pending row again.
+      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, requestId, {
+        kind: 'restore',
+        item: pendingInteraction,
+      });
+      expect(remoteSessionStore.getPendingInteractions(sessionId).map((i) => i.request.requestId)).toEqual([requestId]);
+      expect(renderAskBodies()).toEqual([]);
+
+      // Cross-device resolution via maker:interaction-dismissed with decision also shows answered immediately.
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+        sessionId,
+        requestId,
+        reason: 'resolved',
+        resolvedAs: 'allow',
+        decision: { kind: 'ask_user_question', answers: { q1: '照此开工' } },
+      });
+      expect(renderAskBodies()).toEqual(['Q: 按这个方案开工吗？\nA: 照此开工']);
+
+      // Authoritative refresh takes over seamlessly.
+      pageRows = [userRow, {
+        ...pendingAskRow,
+        content: { requestId, questions, status: 'answered', answers: { q1: '照此开工' } },
+      }];
+      await view.refresh(false, true);
+      expect(renderAskBodies()).toEqual(['Q: 按这个方案开工吗？\nA: 照此开工']);
+    } finally {
+      view.setActive(false);
+      remoteSessionStore.clear();
+    }
+  });
+
+  // Unit regression (live async mid-work question stays at answer slot across all 4 handoff frames):
+  // Root cause: async ask_user persisted before proposal prose jumped above prose on submit,
+  // vanished at the answer position, or flickered between Host's ask_user and reply pushes.
+  // Minimal failing input: user -> work -> async ask_user -> proposal assistant -> live submit.
+  it('keeps an async question anchored after proposal prose across optimistic submit, pushes, and refresh', async () => {
+    remoteSessionStore.clear();
+    const sessionId = 's-async-live';
+    const requestId = 'async-question:req-1';
+    const persistId = 'ask-async-1';
+    const questions = [{ id: requestId, question: '方案确认：照此开工吗？', options: [{ label: '照此开工' }] }];
+    const pendingInteraction: PendingInteraction = {
+      persistId,
+      request: { kind: 'ask_user_question', requestId, delivery: 'async', questions },
+    };
+    const userRow: RemoteMessage = {
+      id: 'u1', clientId: 'u1', sessionId, role: 'user', content: '帮我出方案', toolUseId: null,
+      createdAt: '2026-09-08T00:00:00Z', agentMeta: null,
+    };
+    const thinkRow: RemoteMessage = {
+      id: 't1', clientId: 't1', sessionId, role: 'thinking',
+      content: { text: '分析方案', durationMs: 30_000, finishedAt: Date.parse('2026-09-08T00:00:35Z') },
+      toolUseId: null, createdAt: '2026-09-08T00:00:05Z', agentMeta: null,
+    };
+    const pendingAskRow: RemoteMessage = {
+      id: persistId, clientId: persistId, sessionId, role: 'ask_user',
+      content: { requestId, questions, status: 'pending', answers: null },
+      toolUseId: null, createdAt: '2026-09-08T00:00:36Z', agentMeta: null,
+    };
+    const proposalRow: RemoteMessage = {
+      id: 'a1', clientId: 'a1', sessionId, role: 'assistant',
+      content: '方案已经整理好，请在下方确认是否照此开工。', toolUseId: null,
+      createdAt: '2026-09-08T00:00:40Z', agentMeta: { turnCompleted: true },
+    };
+    const answeredAskRow: RemoteMessage = {
+      ...pendingAskRow,
+      content: { requestId, questions, status: 'answered', answers: { [requestId]: '照此开工' } },
+      agentMeta: { autoReviewUserText: { text: 'Clarifications:\n- 照此开工', acceptedAt: Date.parse('2026-09-08T00:05:00Z') } },
+    };
+    const replyRow: RemoteMessage = {
+      id: 'r1', clientId: `question-reply:answered:${requestId}:deadbeef`, sessionId, role: 'user',
+      content: '> 方案确认：照此开工吗？\n\n照此开工', toolUseId: null,
+      createdAt: '2026-09-08T00:05:00Z', agentMeta: null,
+    };
+    let pageRows: RemoteMessage[] = [userRow, thinkRow, pendingAskRow, proposalRow];
+    const view = new HistoryViewController<RemoteMessage>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items: projectHistoryView(pageRows, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    const handoff = createHandoff();
+    const renderSequence = () => {
+      const snapshot = view.getSnapshot();
+      const raw = remoteSessionStore.getMessages(sessionId);
+      const state = handoff.reconcile(snapshot, raw);
+      const pendingIds = new Set(
+        remoteSessionStore.getPendingInteractions(sessionId)
+          .filter((item) => item.request.kind === 'ask_user_question')
+          .map((item) => String(item.request.requestId)),
+      );
+      return buildMobileHistoryRenderItems({
+        view, snapshot, messages: state.messages, staleTail: state.tail, pendingHandoff: state.pending,
+        pendingQuestionIds: pendingIds, streaming: false, sessionId,
+      }).map((item) => item.type === 'work_group'
+        ? 'work_group'
+        : item.type === 'message'
+          ? `${item.message.kind}:${item.message.source.clientId}`
+          : item.type);
+    };
+    try {
+      view.setActive(true);
+      await view.refresh();
+      remoteSessionStore.setPendingInteractions(sessionId, [pendingInteraction]);
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1']);
+
+      // Frame 1: optimistic submit immediately places Q/A right below proposal prose.
+      remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, requestId, {
+        item: pendingInteraction,
+        decision: { kind: 'ask_user_question', answers: { [requestId]: '照此开工' } },
+      });
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
+
+      // Frame 2: Host ask_user update arrives before question-reply:answered: — still anchored below proposal.
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId,
+        message: answeredAskRow,
+      });
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
+
+      // Frame 3: Host question-reply:answered: push arrives — Q/A stays at the exact same spot, no duplicate bubble.
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId,
+        message: replyRow,
+      });
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
+
+      // Frame 4: authoritative history refresh completes — identical natural sequence.
+      pageRows = [userRow, thinkRow, answeredAskRow, proposalRow, replyRow];
+      await view.refresh(false, true);
+      expect(renderSequence()).toEqual(['user:u1', 'work_group', 'assistant:a1', `ask_user:${persistId}`]);
+    } finally {
+      view.setActive(false);
+      remoteSessionStore.clear();
+    }
   });
 });

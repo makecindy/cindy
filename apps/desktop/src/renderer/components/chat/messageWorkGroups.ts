@@ -1,5 +1,6 @@
 /** Desktop item projection for the shared work-run grouping algorithm. No UI side effects. */
 import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
@@ -425,10 +426,12 @@ export function messageTs(msg: ChatMessage): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** 边界项(用户消息 / assistant 正文)的时间戳;非 message 项(卡片等)返回 null,
- *  让下一段退回段内锚点,避免把已折叠段的时长重复计入。 */
+/** 边界项(用户消息 / assistant 正文)的时间戳;非 message 项(卡片等)及交互卡返回 null,
+ *  让下一段退回段内锚点,避免把已折叠段或等待人回答的时长重复计入。 */
 function boundaryTs(item: RenderItem | undefined): number | null {
-  return item && item.type === 'message' ? messageTs(item.message) : null;
+  if (!item || item.type !== 'message') return null;
+  if (item.message.role === 'ask_user' || item.message.role === 'plan_review') return null;
+  return messageTs(item.message);
 }
 
 /** run 首子项的起始时间戳。 */
@@ -486,8 +489,12 @@ function createWorkGroup(
     prevBoundaryTs !== null && (anchorTs === null || prevBoundaryTs <= anchorTs)
       ? prevBoundaryTs
       : anchorTs;
+  const nextIsHiddenAsyncAnswerBoundary =
+    nextItem?.type === 'message'
+    && nextItem.message.isSyntheticTrigger === true
+    && isAnsweredAsyncQuestionClientId(nextItem.message.clientId);
   const endTs =
-    nextItem && nextItem.type === 'message'
+    nextItem && nextItem.type === 'message' && !nextIsHiddenAsyncAnswerBoundary
       ? messageTs(nextItem.message)
       : workRunFallbackEndTs(run);
   const durationMs =

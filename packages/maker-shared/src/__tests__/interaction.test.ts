@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   splitQuestionReferences,
+  answeredAsyncQuestionRequestId,
   asyncQuestionNeedsSupplement,
   asyncQuestionReplyDisplayText,
   formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement,
+  placeAnsweredAsyncQuestionsAtReplies,
   withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
@@ -1095,5 +1097,43 @@ describe('interaction shared model', () => {
       stepCount: 0,
       terminal: false,
     });
+  });
+
+  // Unit regression (async question reply parsing & relocation):
+  // Root cause: async requestIds contain colons (e.g. async-question:<uuid>:0), so parsing
+  // question-reply:answered:<requestId>:<digest> must split at the last colon; relocation
+  // moves only paired answered ask_user rows (or optimistic async tails) while leaving sync
+  // questions and unmatched rows untouched.
+  it('parses colon-bearing async requestIds and places answered async questions after their replies', () => {
+    expect(answeredAsyncQuestionRequestId('question-reply:answered:async-question:abc-1:0:deadbeef')).toBe('async-question:abc-1:0');
+    expect(answeredAsyncQuestionRequestId('question-reply:answered:q1:digest')).toBe('q1');
+    expect(answeredAsyncQuestionRequestId('question-reply:q1:digest')).toBeNull();
+    expect(answeredAsyncQuestionRequestId('user-1')).toBeNull();
+
+    type Row = { id: string; role: 'user' | 'ask' | 'assistant'; reqId?: string; optimisticTail?: boolean };
+    const rows: Row[] = [
+      { id: 'u1', role: 'user' },
+      { id: 'ask-async', role: 'ask', reqId: 'async-question:abc-1:0' },
+      { id: 'ask-sync', role: 'ask', reqId: 'sync-1' },
+      { id: 'proposal', role: 'assistant' },
+      { id: 'question-reply:answered:async-question:abc-1:0:deadbeef', role: 'user' },
+      { id: 'final', role: 'assistant' },
+    ];
+    const placed = placeAnsweredAsyncQuestionsAtReplies(rows, (row) => {
+      if (row.role === 'ask' && row.reqId) return { kind: 'answered-ask', requestId: row.reqId, optimisticTail: row.optimisticTail };
+      if (row.role === 'user') {
+        const reqId = answeredAsyncQuestionRequestId(row.id);
+        return reqId ? { kind: 'answer-reply', requestId: reqId } : null;
+      }
+      return null;
+    });
+    expect(placed.map((row) => row.id)).toEqual([
+      'u1',
+      'ask-sync',
+      'proposal',
+      'question-reply:answered:async-question:abc-1:0:deadbeef',
+      'ask-async',
+      'final',
+    ]);
   });
 });

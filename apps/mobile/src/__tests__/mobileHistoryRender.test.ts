@@ -434,3 +434,132 @@ it.each([false, true])('hides only the live error identity and restores history 
     expect(render(null)).toEqual(['client-1', 'client-3']);
   } finally { view.setActive(false); }
 });
+
+// Unit regression (mid-work async & sync ask_user timeline placement and work duration):
+// Root cause: async ask_user stayed at T_ask before concurrent work while its reply row was
+// hidden, placeholder.createdAt used endedAtMs (doubling fallback duration), and boundaryTimestamp
+// used T_ask (counting human wait time into post-answer work). Existing tests did not exercise
+// ask_user across history-view-v1, raw fallback, and streaming prefix cache.
+it.each([
+  { ready: true, delivery: 'steer' as const },
+  { ready: true, delivery: 'enqueue' as const },
+  { ready: false, delivery: 'steer' as const },
+  { ready: false, delivery: 'enqueue' as const },
+])('places answered async mid-work Q/A at answer slot and excludes human wait from work durations (history=$ready, delivery=$delivery)', async ({ ready, delivery }) => {
+  const base = Date.parse('2026-09-08T00:00:00Z');
+  const at = (sec: number) => new Date(base + sec * 1000).toISOString();
+  const make = (id: string, role: RemoteMessage['role'], content: unknown, sec: number, agentMeta: Record<string, unknown> | null = null): RemoteMessage => ({
+    id, clientId: id, sessionId: 'session', role, content, toolUseId: null, createdAt: at(sec), agentMeta,
+  });
+  const reqId = 'async-question:mid-1';
+  const rows: RemoteMessage[] = [
+    make('u1', 'user', '帮我完成改造', 0),
+    make('th1', 'thinking', { text: '初步调研', durationMs: 10_000, finishedAt: base + 15_000 }, 5),
+    make('ask1', 'ask_user', {
+      requestId: reqId,
+      questions: [{ id: reqId, question: '是否照此开工？' }],
+      status: 'answered',
+      answers: { [reqId]: '照此开工' },
+    }, 16, { autoReviewUserText: { text: 'Clarifications:\n- 照此开工', acceptedAt: base + 300_000 } }),
+    make('th2', 'thinking', { text: '继续准备', durationMs: 100_000, finishedAt: base + 120_000 }, 20),
+    make(`question-reply:answered:${reqId}:deadbeef`, 'user', '> 是否照此开工？\n\n照此开工', 300, delivery === 'steer' ? { delivery: 'steer' } : null),
+    make('th3', 'thinking', { text: '按确认方案实现', durationMs: 25_000, finishedAt: base + 330_000 }, 305),
+    make('a1', 'assistant', '已按确认方案完成改造。', 340, { turnCompleted: true }),
+  ];
+  const { view } = harness(rows, false, true);
+  if (ready) await view.refresh();
+  try {
+    const result = buildMobileSessionRenderWindow({
+      history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session' },
+      raw: { cacheKey: 'zh-CN', messages: rows, options: { sessionId: 'session' } },
+    });
+    const summary = result.items.map((item) => item.type === 'work_group'
+      ? { type: 'work_group', durationMs: item.durationMs }
+      : item.type === 'message'
+        ? { type: 'message', kind: item.message.kind, clientId: item.message.source.clientId }
+        : { type: item.type });
+    expect(summary.map((item) => item.type === 'message' ? `${item.kind}:${item.clientId}` : item.type))
+      .toEqual(['user:u1', 'work_group', 'ask_user:ask1', 'work_group', 'assistant:a1']);
+    const workGroups = result.items.filter((item) => item.type === 'work_group');
+    // Pre-answer work ends at 120s (not stretched across 180s human wait to 300s, and never doubled).
+    expect(workGroups[0]?.type === 'work_group' ? workGroups[0].durationMs : undefined).toBe(120_000);
+    // Post-answer work starts at answer time (300s) and ends at final assistant (340s) = 40s.
+    expect(workGroups[1]?.type === 'work_group' ? workGroups[1].durationMs : undefined).toBe(40_000);
+  } finally {
+    view.setActive(false);
+  }
+});
+
+// Unit regression: sync mid-work question keeps two work folds around Q/A and excludes human wait
+// time from the post-answer work group, and streaming prefix cache does not split async pairs.
+it.each([true, false])('excludes human wait from post-answer work after sync ask_user (history=%s)', async (ready) => {
+  const base = Date.parse('2026-09-08T00:00:00Z');
+  const at = (sec: number) => new Date(base + sec * 1000).toISOString();
+  const make = (id: string, role: RemoteMessage['role'], content: unknown, sec: number, agentMeta: Record<string, unknown> | null = null): RemoteMessage => ({
+    id, clientId: id, sessionId: 'session', role, content, toolUseId: null, createdAt: at(sec), agentMeta,
+  });
+  const rows: RemoteMessage[] = [
+    make('u1', 'user', '修复问题', 0),
+    make('th1', 'thinking', { text: '排查中', durationMs: 110_000, finishedAt: base + 120_000 }, 10),
+    make('ask1', 'ask_user', {
+      requestId: 'sync-1',
+      questions: [{ id: 'sync-1', question: '确认方案？' }],
+      status: 'answered',
+      answers: { 'sync-1': '照此开工' },
+    }, 120, { autoReviewUserText: { text: 'Clarifications:\n- 照此开工', acceptedAt: base + 360_000 } }),
+    make('th2', 'thinking', { text: '实施修复', durationMs: 25_000, finishedAt: base + 386_000 }, 361),
+    make('a1', 'assistant', '修复完成。', 390, { turnCompleted: true }),
+  ];
+  const { view } = harness(rows, false, true);
+  if (ready) await view.refresh();
+  try {
+    const result = buildMobileSessionRenderWindow({
+      history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session' },
+      raw: { cacheKey: 'zh-CN', messages: rows, options: { sessionId: 'session' } },
+    });
+    const workGroups = result.items.filter((item) => item.type === 'work_group');
+    expect(result.items.map((item) => item.type === 'message' ? `${item.message.kind}:${item.message.source.clientId}` : item.type))
+      .toEqual(['user:u1', 'work_group', 'ask_user:ask1', 'work_group', 'assistant:a1']);
+    expect(workGroups[0]?.type === 'work_group' ? workGroups[0].durationMs : undefined).toBe(120_000);
+    // 4-minute human wait (120s..360s) must not inflate the 30s post-answer work group.
+    expect(workGroups[1]?.type === 'work_group' ? workGroups[1].durationMs : undefined).toBe(30_000);
+  } finally {
+    view.setActive(false);
+  }
+});
+
+// Unit regression: streaming prefix cache must not split an answered async ask_user in the prefix
+// from its question-reply:answered: row in the active streaming tail.
+it('relocates an async ask_user when streaming prefix cache spans its reply', () => {
+  const base = Date.parse('2026-09-08T00:00:00Z');
+  const at = (sec: number) => new Date(base + sec * 1000).toISOString();
+  const make = (id: string, role: RemoteMessage['role'], content: unknown, sec: number, agentMeta: Record<string, unknown> | null = null): RemoteMessage => ({
+    id, clientId: id, sessionId: 'session', role, content, toolUseId: null, createdAt: at(sec), agentMeta,
+  });
+  const reqId = 'async-question:stream-1';
+  const prefixCache = { current: null as ReturnType<typeof buildMobileStreamingRenderWindow>['prefix'] };
+  const rows: RemoteMessage[] = [
+    make('u0', 'user', '第一轮', 0),
+    make('a0', 'assistant', '第一轮回复', 5, { turnCompleted: true }),
+    make('u1', 'user', '第二轮', 10),
+    make('ask1', 'ask_user', {
+      requestId: reqId,
+      questions: [{ id: reqId, question: '继续吗？' }],
+      status: 'answered',
+      answers: { [reqId]: '照此开工' },
+    }, 15),
+    make('proposal', 'assistant', '这是提案正文', 20, { turnCompleted: true }),
+    make(`question-reply:answered:${reqId}:abc`, 'user', '> 继续吗？\n\n照此开工', 60),
+    make('stream', 'assistant', '正在开工…', 65, { isStreaming: true }),
+  ];
+  const window = buildMobileStreamingRenderWindow({
+    cacheKey: 'zh-CN',
+    messages: rows,
+    options: { sessionId: 'session', isSessionStreaming: true },
+    prefixCache,
+  });
+  const ids = window.items
+    .filter((item) => item.type === 'message')
+    .map((item) => item.type === 'message' ? `${item.message.kind}:${item.message.source.clientId}` : '');
+  expect(ids).toEqual(['user:u0', 'assistant:a0', 'user:u1', 'assistant:proposal', 'ask_user:ask1', 'assistant:stream']);
+});

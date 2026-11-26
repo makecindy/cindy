@@ -27,7 +27,11 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText, parseInputHandoffEndRecord } from '@cindy/maker-shared/synthetic-trigger';
 import {
-  asyncQuestionReplyDisplayText, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+  answeredAsyncQuestionRequestId,
+  asyncQuestionReplyDisplayText,
+  isAnsweredAsyncQuestionClientId,
+  isAsyncQuestionReplyClientId,
+  placeAnsweredAsyncQuestionsAtReplies,
 } from '@cindy/maker-shared/interaction';
 import {
   isHookSchedulerOrigin,
@@ -296,12 +300,49 @@ export function normalizeRemoteMessages(
       return typeof message.content === 'string' && message.content.trim() ? 'prose' : 'other';
     },
   );
-  const toolResultPairing = buildMessageToolResultPairing(sorted, {
+  const relocatedAskCreatedAt = new WeakMap<RemoteMessage, string>();
+  const ordered = placeAnsweredAsyncQuestionsAtReplies(
+    sorted,
+    (message) => {
+      if (message.role === 'ask_user') {
+        const content = readRecord(message.content);
+        const requestId = readString(content?.requestId);
+        if (content?.status === 'answered' && requestId) {
+          return {
+            kind: 'answered-ask',
+            requestId,
+            optimisticTail: message.agentMeta?.optimisticAsyncAnswer === true,
+          };
+        }
+        return null;
+      }
+      if (message.role === 'user') {
+        const requestId = answeredAsyncQuestionRequestId(message.clientId);
+        return requestId ? { kind: 'answer-reply', requestId } : null;
+      }
+      return null;
+    },
+    (askRow, replyRow) => {
+      if (replyRow?.createdAt) {
+        relocatedAskCreatedAt.set(askRow, replyRow.createdAt);
+      } else {
+        const autoReview = readRecord(askRow.agentMeta?.autoReviewUserText);
+        const acceptedAt = typeof autoReview?.acceptedAt === 'number' && Number.isFinite(autoReview.acceptedAt)
+          ? autoReview.acceptedAt
+          : null;
+        if (acceptedAt !== null) {
+          relocatedAskCreatedAt.set(askRow, new Date(acceptedAt).toISOString());
+        }
+      }
+      return askRow;
+    },
+  );
+  const toolResultPairing = buildMessageToolResultPairing(ordered, {
     contentToPreview: toolResultContentToPreview,
   });
 
   const result: NormalizedRemoteMessage[] = [];
-  for (const message of sorted) {
+  for (const message of ordered) {
     if (message.role === 'tool_result') continue;
     if (message.role === 'assistant') {
       const app = message.agentMeta?.mcpApp === true ? parseMcpAppHistory(message.content) : undefined;
@@ -389,7 +430,7 @@ export function normalizeRemoteMessages(
     }
 
     if (message.role === 'ask_user') {
-      const ask = normalizeAskUser(message, options.pendingQuestionIds);
+      const ask = normalizeAskUser(message, options.pendingQuestionIds, relocatedAskCreatedAt.get(message));
       if (ask) result.push(ask);
       continue;
     }
@@ -925,7 +966,11 @@ function normalizeGoalCard(message: RemoteMessage): NormalizedRemoteMessage | nu
   };
 }
 
-function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlySet<string>): NormalizedRemoteMessage | null {
+function normalizeAskUser(
+  message: RemoteMessage,
+  pendingQuestionIds?: ReadonlySet<string>,
+  createdAtOverride?: string,
+): NormalizedRemoteMessage | null {
   const content = readRecord(message.content);
   if (!content) return null;
   const withdrawalReason = content.status === 'cancelled' ? readString(content.withdrawalReason) : undefined;
@@ -957,7 +1002,7 @@ function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlyS
     label: 'ask_user',
     body,
     align: 'agent',
-    createdAt: message.createdAt,
+    createdAt: createdAtOverride ?? message.createdAt,
   };
 }
 

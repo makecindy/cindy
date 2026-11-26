@@ -1,6 +1,7 @@
 import { hasRichAnswer, richAnswerMediaSources } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isContinuationMessage } from './syntheticTrigger.js';
+import { isAnsweredAsyncQuestionClientId } from './interaction.js';
 export { collapseLegacyIdleGapCards, groupWorkRuns, groupTeammateProcess, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
@@ -1731,11 +1732,27 @@ function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
       (item.type === 'message' && item.message.kind === 'assistant' && item.message.failedSamplingAttempt === true));
 }
 
-/** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
+function interactionAcceptedAtMs(
+  source: MessageRenderSourceMessageLike | undefined,
+): number | null {
+  const autoReview = source?.agentMeta?.autoReviewUserText;
+  if (!autoReview || typeof autoReview !== 'object' || Array.isArray(autoReview)) return null;
+  const acceptedAt = (autoReview as { acceptedAt?: unknown }).acceptedAt;
+  return typeof acceptedAt === 'number' && Number.isFinite(acceptedAt) && acceptedAt > 0
+    ? acceptedAt
+    : null;
+}
+
+/** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界，
+ *  交互卡按作答确认时刻（无则退回后续首活动锚点），不把等待人回答的时间算入工作时长。 */
 function boundaryTimestamp<TMessage extends MessageRenderNormalizedMessage>(
   item: MessageRenderItem<TMessage> | undefined,
 ): number | null {
-  return item?.type === 'message' ? itemTimestamp(item) : null;
+  if (item?.type !== 'message') return null;
+  if (item.message.kind === 'ask_user' || item.message.kind === 'plan_review') {
+    return interactionAcceptedAtMs(item.message.source);
+  }
+  return itemTimestamp(item);
 }
 
 function createWorkGroup<
@@ -1754,8 +1771,12 @@ function createWorkGroup<
     previousBoundaryMs !== null && (anchor === null || previousBoundaryMs <= anchor)
       ? previousBoundaryMs
       : anchor;
-  const end =
+  const nextIsHiddenAsyncAnswerBoundary =
     nextItem?.type === 'message'
+    && nextItem.message.kind === 'user'
+    && isAnsweredAsyncQuestionClientId(nextItem.message.source.clientId);
+  const end =
+    nextItem?.type === 'message' && !nextIsHiddenAsyncAnswerBoundary
       ? itemTimestamp(nextItem)
       : workRunFallbackEnd(children);
   const durationMs = start !== null && end !== null && end >= start ? end - start : undefined;

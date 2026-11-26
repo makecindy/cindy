@@ -2,6 +2,7 @@ import { isTeammateTask } from './teammateTaskSource';
 import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { receiveTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import {
   createContext,
@@ -297,8 +298,288 @@ const inFlightInteractionResolves = new Set<string>();
  */
 const confirmedInteractionDismissals = new Set<string>();
 
+type OptimisticInteractionMessageRollback =
+  | { existed: true; previous: RemoteMessage }
+  | { existed: false; clientId: string };
+const optimisticInteractionMessageRollbacks = new Map<string, OptimisticInteractionMessageRollback>();
+const OPTIMISTIC_ASK_CLIENT_ID_PREFIX = 'optimistic-ask:';
+const OPTIMISTIC_PLAN_CLIENT_ID_PREFIX = 'optimistic-plan:';
+
 function interactionResolveKey(sessionId: string, requestId: string): string {
   return `${sessionId}\u0000${requestId}`;
+}
+
+function readMessageInteractionRequestId(message: RemoteMessage | undefined): string | null {
+  if (!message || (message.role !== 'ask_user' && message.role !== 'plan_review')) return null;
+  if (!isRecord(message.content)) return null;
+  return readString(message.content, 'requestId');
+}
+
+function isPendingInteractionContent(content: unknown): boolean {
+  return isRecord(content) && readString(content, 'status') === 'pending';
+}
+
+function isSyntheticInteractionMessage(message: RemoteMessage | undefined): boolean {
+  if (!message) return false;
+  return message.clientId.startsWith(OPTIMISTIC_ASK_CLIENT_ID_PREFIX)
+    || message.clientId.startsWith(OPTIMISTIC_PLAN_CLIENT_ID_PREFIX);
+}
+
+function syntheticInteractionClientId(kind: 'ask_user_question' | 'plan_review', requestId: string): string {
+  return `${kind === 'ask_user_question' ? OPTIMISTIC_ASK_CLIENT_ID_PREFIX : OPTIMISTIC_PLAN_CLIENT_ID_PREFIX}${requestId}`;
+}
+
+function preserveInFlightOptimisticInteraction(
+  sessionId: string,
+  existing: RemoteMessage | undefined,
+  incoming: RemoteMessage,
+): RemoteMessage {
+  if (!existing || existing.role !== incoming.role) return incoming;
+  if (existing.role !== 'ask_user' && existing.role !== 'plan_review') return incoming;
+  const requestId = readMessageInteractionRequestId(incoming) ?? readMessageInteractionRequestId(existing);
+  if (!requestId) return incoming;
+  const key = interactionResolveKey(sessionId, requestId);
+  if (
+    inFlightInteractionResolves.has(key)
+    && isPendingInteractionContent(incoming.content)
+    && !isPendingInteractionContent(existing.content)
+  ) {
+    return {
+      ...existing,
+      id: incoming.id,
+      clientId: incoming.clientId,
+      createdAt: incoming.createdAt,
+      ...(incoming.rowid !== undefined ? { rowid: incoming.rowid } : {}),
+    };
+  }
+  // Keep an optimistic async answer anchored at the tail across the brief gap
+  // between Host's ask_user update and the matching question-reply:answered: push.
+  if (
+    existing.role === 'ask_user'
+    && existing.agentMeta?.optimisticAsyncAnswer === true
+    && isRecord(incoming.content)
+    && readString(incoming.content, 'status') === 'answered'
+    && (inFlightInteractionResolves.has(key) || confirmedInteractionDismissals.has(key))
+    && !(messages.get(sessionId) ?? []).some(
+      (row) => row.role === 'user' && isAnsweredAsyncQuestionClientId(row.clientId) && row.clientId.includes(`:${requestId}:`),
+    )
+  ) {
+    return {
+      ...incoming,
+      agentMeta: {
+        ...(incoming.agentMeta ?? {}),
+        optimisticAsyncAnswer: true,
+      },
+    };
+  }
+  return incoming;
+}
+
+function buildResolvedInteractionContent(
+  kind: 'ask_user_question' | 'plan_review',
+  requestId: string,
+  request: PendingInteraction['request'] | undefined,
+  decision: Record<string, unknown>,
+  existingContent: unknown,
+): Record<string, unknown> {
+  const existing = isRecord(existingContent) ? existingContent : {};
+  if (kind === 'ask_user_question') {
+    const cancelled = decision.dismissed === true;
+    const answers = isRecord(decision.answers) ? decision.answers : {};
+    const questions = Array.isArray(request?.questions)
+      ? request.questions
+      : Array.isArray(existing.questions)
+        ? existing.questions
+        : [];
+    const withdrawalReason = cancelled && typeof decision.withdrawalReason === 'string'
+      ? decision.withdrawalReason
+      : undefined;
+    return {
+      ...existing,
+      requestId,
+      questions,
+      status: cancelled ? 'cancelled' : 'answered',
+      answers,
+      ...(withdrawalReason ? { withdrawalReason } : {}),
+    };
+  }
+  const behavior = decision.behavior === 'allow' ? 'allow' : 'deny';
+  const dismissed = behavior === 'deny' && decision.dismissed === true;
+  const status = behavior === 'allow' ? 'approved' : dismissed ? 'cancelled' : 'revised';
+  const plan = typeof decision.editedPlan === 'string'
+    ? decision.editedPlan
+    : typeof request?.plan === 'string'
+      ? request.plan
+      : typeof existing.plan === 'string'
+        ? existing.plan
+        : '';
+  const planFilePath = typeof request?.planFilePath === 'string'
+    ? request.planFilePath
+    : typeof existing.planFilePath === 'string'
+      ? existing.planFilePath
+      : '';
+  const feedback = behavior === 'deny' && !dismissed && typeof decision.reason === 'string'
+    ? decision.reason
+    : null;
+  return {
+    ...existing,
+    requestId,
+    plan,
+    planFilePath,
+    status,
+    feedback,
+  };
+}
+
+function findInteractionMessageIndex(
+  list: readonly RemoteMessage[],
+  requestId: string,
+  persistId?: string,
+): number {
+  if (persistId) {
+    const byPersist = list.findIndex((m) => m.clientId === persistId || m.id === persistId);
+    if (byPersist >= 0) return byPersist;
+  }
+  return list.findIndex((m) => readMessageInteractionRequestId(m) === requestId);
+}
+
+function applyInteractionResolutionToMessages(
+  sessionId: string,
+  requestId: string,
+  params: {
+    item?: PendingInteraction;
+    decision?: Record<string, unknown>;
+    withdrawalReason?: string;
+    optimistic?: boolean;
+    recordRollback?: boolean;
+  },
+): boolean {
+  const existingList = messages.get(sessionId) ?? [];
+  const existingIndex = findInteractionMessageIndex(existingList, requestId, params.item?.persistId);
+  const existing = existingIndex >= 0 ? existingList[existingIndex] : undefined;
+  const rawKind = params.item?.request.kind;
+  const kind: 'ask_user_question' | 'plan_review' | null =
+    rawKind === 'ask_user_question' || rawKind === 'plan_review'
+      ? rawKind
+      : existing?.role === 'ask_user'
+        ? 'ask_user_question'
+        : existing?.role === 'plan_review'
+          ? 'plan_review'
+          : null;
+  if (!kind) return false;
+
+  if (params.withdrawalReason !== undefined && !params.decision) {
+    if (!existing || existing.role !== 'ask_user' || !isPendingInteractionContent(existing.content)) return false;
+    const prevContent = isRecord(existing.content) ? existing.content : {};
+    const updated: RemoteMessage = {
+      ...existing,
+      content: {
+        ...prevContent,
+        requestId,
+        status: 'cancelled',
+        withdrawalReason: params.withdrawalReason,
+      },
+      cacheReceipt: nextHistoryCacheReceipt(),
+    };
+    const next = existingList.slice();
+    next[existingIndex] = updated;
+    messages.set(sessionId, next);
+    bumpMessageVersion(sessionId);
+    return true;
+  }
+
+  const decision = params.decision;
+  if (!decision || decision.inProgress === true) return false;
+  const nextContent = buildResolvedInteractionContent(
+    kind,
+    requestId,
+    params.item?.request,
+    decision,
+    existing?.content,
+  );
+  const acceptedAt = Date.now();
+  const isAsyncOptimistic = params.optimistic === true
+    && kind === 'ask_user_question'
+    && params.item?.request.delivery === 'async'
+    && decision.dismissed !== true;
+  const rollbackKey = interactionResolveKey(sessionId, requestId);
+
+  if (existing) {
+    if (params.recordRollback && !optimisticInteractionMessageRollbacks.has(rollbackKey)) {
+      optimisticInteractionMessageRollbacks.set(rollbackKey, { existed: true, previous: existing });
+    }
+    const nextMeta: Record<string, unknown> = {
+      ...(existing.agentMeta ?? {}),
+      autoReviewUserText: { text: '', acceptedAt },
+    };
+    if (isAsyncOptimistic) nextMeta.optimisticAsyncAnswer = true;
+    else delete nextMeta.optimisticAsyncAnswer;
+    const updated: RemoteMessage = {
+      ...existing,
+      content: nextContent,
+      cacheReceipt: nextHistoryCacheReceipt(),
+      agentMeta: nextMeta,
+    };
+    const next = existingList.slice();
+    next[existingIndex] = updated;
+    messages.set(sessionId, next);
+    bumpMessageVersion(sessionId);
+    return true;
+  }
+
+  if (!params.item) return false;
+  const clientId = params.item.persistId || syntheticInteractionClientId(kind, requestId);
+  const latestMs = existingList.reduce((max, row) => {
+    const ms = Date.parse(row.createdAt);
+    return Number.isFinite(ms) ? Math.max(max, ms) : max;
+  }, 0);
+  const createdAt = new Date(Math.max(acceptedAt, latestMs > 0 ? latestMs + 1 : acceptedAt)).toISOString();
+  if (params.recordRollback && !optimisticInteractionMessageRollbacks.has(rollbackKey)) {
+    optimisticInteractionMessageRollbacks.set(rollbackKey, { existed: false, clientId });
+  }
+  const inserted: RemoteMessage = {
+    id: clientId,
+    clientId,
+    sessionId,
+    role: kind === 'ask_user_question' ? 'ask_user' : 'plan_review',
+    content: nextContent,
+    toolUseId: null,
+    createdAt,
+    cacheReceipt: nextHistoryCacheReceipt(),
+    agentMeta: {
+      autoReviewUserText: { text: '', acceptedAt },
+      ...(isAsyncOptimistic ? { optimisticAsyncAnswer: true } : {}),
+    },
+  };
+  messages.set(sessionId, normalizeMessages([...existingList, inserted]));
+  applyMessageWriteRetention(sessionId);
+  bumpMessageVersion(sessionId);
+  return true;
+}
+
+function rollbackOptimisticInteractionMessage(sessionId: string, requestId: string): boolean {
+  const key = interactionResolveKey(sessionId, requestId);
+  const entry = optimisticInteractionMessageRollbacks.get(key);
+  if (!entry) return false;
+  optimisticInteractionMessageRollbacks.delete(key);
+  const existingList = messages.get(sessionId);
+  if (!existingList) return false;
+  if (entry.existed) {
+    const index = existingList.findIndex(
+      (m) => m.clientId === entry.previous.clientId || m.id === entry.previous.id,
+    );
+    if (index < 0) return false;
+    const next = existingList.slice();
+    next[index] = { ...entry.previous, cacheReceipt: nextHistoryCacheReceipt() };
+    messages.set(sessionId, next);
+    bumpMessageVersion(sessionId);
+    return true;
+  }
+  const next = existingList.filter((m) => m.clientId !== entry.clientId && m.id !== entry.clientId);
+  if (next.length === existingList.length) return false;
+  messages.set(sessionId, next);
+  bumpMessageVersion(sessionId);
+  return true;
 }
 
 /**
@@ -1229,6 +1510,9 @@ function removeSessionRuntimeState(sessionId: string): void {
   const sessionPrefix = interactionResolveKey(sessionId, '');
   for (const key of interactionRevisionFloors.keys()) {
     if (key.startsWith(sessionPrefix)) interactionRevisionFloors.delete(key);
+  }
+  for (const key of optimisticInteractionMessageRollbacks.keys()) {
+    if (key.startsWith(sessionPrefix)) optimisticInteractionMessageRollbacks.delete(key);
   }
 }
 
@@ -2634,11 +2918,21 @@ function upsertMessage(
     || priorIdentities?.has(message.id) === true
     || (message.clientId ? priorIdentities?.has(message.clientId) === true : false);
   const candidateIndex = options.knownIndex ?? -1;
-  const index = candidateIndex >= 0
+  const incomingInteractionReqId = !isSyntheticInteractionMessage(message)
+    ? readMessageInteractionRequestId(message)
+    : null;
+  const directIndex = candidateIndex >= 0
     && candidateIndex < existing.length
     && messageIdentityMatches(existing[candidateIndex], message)
     ? candidateIndex
     : existing.findIndex((item) => messageIdentityMatches(item, message));
+  const index = directIndex >= 0
+    ? directIndex
+    : incomingInteractionReqId
+      ? existing.findIndex(
+          (item) => isSyntheticInteractionMessage(item) && readMessageInteractionRequestId(item) === incomingInteractionReqId,
+        )
+      : -1;
   let fallbackIndex = -1;
   if (index < 0 && isPersistedAssistantMessage(message)) {
     fallbackIndex = findPendingGeneratedStreamingFallbackIndex(sessionId, existing);
@@ -2673,7 +2967,11 @@ function upsertMessage(
     bumpMessageVersion(sessionId);
     return true;
   }
-  const replacement = preferCompleteMessage(existing[index], message);
+  const replacement = preserveInFlightOptimisticInteraction(
+    sessionId,
+    existing[index],
+    preferCompleteMessage(existing[index], message),
+  );
   if (remoteMessageEqual(existing[index], replacement)) {
     if (
       message.role !== 'assistant'
@@ -4029,11 +4327,29 @@ export const remoteSessionStore = {
       if (isPersistedAssistantMessage(item)) excludeFromGeneratedStream(sessionId, item.id, item.clientId);
       const directKey = messageKey(item);
       const identityKey = findMessageMergeKey(byKey, item);
-      const key = identityKey ?? directKey;
-      const existingMatch = byKey.get(key)
+      let key = identityKey ?? directKey;
+      let existingMatch = byKey.get(key)
         ?? existingByKey.get(directKey)
         ?? findMessageByIdentity(existing, item);
-      byKey.set(key, preferCompleteMessage(existingMatch, item));
+      const incomingInteractionReqId = !isSyntheticInteractionMessage(item)
+        ? readMessageInteractionRequestId(item)
+        : null;
+      if (incomingInteractionReqId) {
+        const syntheticKey = syntheticInteractionClientId(
+          item.role === 'ask_user' ? 'ask_user_question' : 'plan_review',
+          incomingInteractionReqId,
+        );
+        const syntheticRow = byKey.get(syntheticKey) ?? existingByKey.get(syntheticKey);
+        if (syntheticRow) {
+          byKey.delete(syntheticKey);
+          if (!existingMatch) existingMatch = syntheticRow;
+          key = directKey;
+        }
+      }
+      byKey.set(
+        key,
+        preserveInFlightOptimisticInteraction(sessionId, existingMatch, preferCompleteMessage(existingMatch, item)),
+      );
       if (item.role === 'assistant') {
         forgetPendingLiveAssistantMessageIdentity(
           sessionId,
@@ -4138,9 +4454,27 @@ export const remoteSessionStore = {
     for (const rawItem of list) {
       const item = overlayLivePlanSnapshot(sessionId, rawItem);
       const identityKey = findMessageMergeKey(byKey, item);
-      const key = identityKey ?? messageKey(item);
-      const existingMatch = byKey.get(key);
-      byKey.set(key, preferCompleteMessage(existingMatch, item));
+      let key = identityKey ?? messageKey(item);
+      let existingMatch = byKey.get(key);
+      const incomingInteractionReqId = !isSyntheticInteractionMessage(item)
+        ? readMessageInteractionRequestId(item)
+        : null;
+      if (incomingInteractionReqId) {
+        const syntheticKey = syntheticInteractionClientId(
+          item.role === 'ask_user' ? 'ask_user_question' : 'plan_review',
+          incomingInteractionReqId,
+        );
+        const syntheticRow = byKey.get(syntheticKey);
+        if (syntheticRow) {
+          byKey.delete(syntheticKey);
+          if (!existingMatch) existingMatch = syntheticRow;
+          key = messageKey(item);
+        }
+      }
+      byKey.set(
+        key,
+        preserveInFlightOptimisticInteraction(sessionId, existingMatch, preferCompleteMessage(existingMatch, item)),
+      );
       if (item.role === 'assistant') {
         forgetPendingLiveAssistantMessageIdentity(
           sessionId,
@@ -4675,10 +5009,38 @@ export const remoteSessionStore = {
    * 在被控端确认前无法把同一张卡灌回来。结果落定后必须调 settleOptimistic-
    * InteractionDismiss 收口,否则该 requestId 的卡被永久抑制。
    */
-  beginOptimisticInteractionDismiss(sessionId: string, requestId: string): void {
+  beginOptimisticInteractionDismiss(
+    sessionId: string,
+    requestId: string,
+    optimistic?: { item: PendingInteraction; decision: Record<string, unknown> },
+  ): void {
     if (!requestId) return;
     inFlightInteractionResolves.add(interactionResolveKey(sessionId, requestId));
+    const messageChanged = optimistic
+      ? applyInteractionResolutionToMessages(sessionId, requestId, {
+          item: optimistic.item,
+          decision: optimistic.decision,
+          optimistic: true,
+          recordRollback: true,
+        })
+      : false;
+    const hadPending = (pendingInteractions.get(sessionId) ?? []).some(
+      (i) => i.request.requestId === requestId,
+    );
     this.dismissInteraction(sessionId, requestId);
+    if (messageChanged && !hadPending) emit();
+  },
+
+  applyOptimisticInteractionResolution(
+    sessionId: string,
+    requestId: string,
+    item: PendingInteraction,
+    decision: Record<string, unknown>,
+  ): void {
+    if (!sessionId || !requestId) return;
+    if (applyInteractionResolutionToMessages(sessionId, requestId, { item, decision, optimistic: true })) {
+      emit();
+    }
   },
 
   /**
@@ -4695,8 +5057,12 @@ export const remoteSessionStore = {
     const key = interactionResolveKey(sessionId, requestId);
     inFlightInteractionResolves.delete(key);
     if (outcome.kind === 'restore') {
+      const rolledBack = rollbackOptimisticInteractionMessage(sessionId, requestId);
+      const before = pendingInteractions.get(sessionId);
       this.applyInteractionRequest(sessionId, outcome.item);
+      if (rolledBack && pendingInteractions.get(sessionId) === before) emit();
     } else {
+      optimisticInteractionMessageRollbacks.delete(key);
       confirmedInteractionDismissals.add(key);
     }
   },
@@ -4832,7 +5198,11 @@ export const remoteSessionStore = {
       const fromList = payload.listMessage === true;
       if (fromList && (!sessionId || !listMessageWriteAllowed(sessionId, deviceId))) return;
       if (sessionId && message) {
-        const received = fromList ? { ...message, cacheReceipt: nextHistoryCacheReceipt() } : message;
+        const stampReceipt = fromList
+          || message.role === 'ask_user'
+          || message.role === 'plan_review'
+          || (message.role === 'user' && isAnsweredAsyncQuestionClientId(message.clientId));
+        const received = stampReceipt ? { ...message, cacheReceipt: nextHistoryCacheReceipt() } : message;
         this.appendMessage(sessionId, received, { listMessage: fromList });
         if (fromList) void cacheSessionListMessage(deviceId, sessionId, received);
       }
@@ -5019,6 +5389,21 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId && acceptSessionStateSource(sessionId, deviceId, sessionInteractionSources)) {
+        const pendingItem = (pendingInteractions.get(sessionId) ?? []).find(
+          (item) => item.request.requestId === requestId,
+        );
+        let messageChanged = false;
+        if (payload.reason === 'resolved' && isRecord(payload.decision)) {
+          messageChanged = applyInteractionResolutionToMessages(sessionId, requestId, {
+            item: pendingItem,
+            decision: payload.decision,
+          });
+        } else if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
+          messageChanged = applyInteractionResolutionToMessages(sessionId, requestId, {
+            item: pendingItem,
+            withdrawalReason: payload.withdrawalReason,
+          });
+        }
         if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
           this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
           const retained = protectedQuestions.get(sessionId);
@@ -5040,6 +5425,7 @@ export const remoteSessionStore = {
         // 灌回面板闪回(codex review P2)。条目一律等 setPendingInteractions 的
         // 「缺席即过期」自然回收。
         this.dismissInteraction(sessionId, requestId);
+        if (messageChanged && !pendingItem) emit();
       }
       return;
     }
@@ -5581,6 +5967,7 @@ export const remoteSessionStore = {
     pendingInteractionsAuthoritative.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
+    optimisticInteractionMessageRollbacks.clear();
     interactionRevisionFloors.clear();
     inputProjections.clear();
     inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;

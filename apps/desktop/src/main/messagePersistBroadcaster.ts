@@ -2177,10 +2177,14 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const createdAt = Date.now();
     const requestId = typeof req.requestId === 'string' ? req.requestId : '';
     if (!requestId) return undefined;
-    const meta: AgentMeta & { autoReviewUserText?: unknown } = {
+    const meta: AgentMeta & { autoReviewUserText?: unknown; parentUuid?: unknown; parentToolUseId?: unknown } = {
       ...lastAgentMetaBySession.get(sessionId),
     };
     delete meta.autoReviewUserText;
+    // Top-level interaction prompts must never inherit a preceding subagent's
+    // parentUuid/parentToolUseId, or history/mobile subagent grouping hides the card.
+    delete meta.parentUuid;
+    delete meta.parentToolUseId;
 
     if (req.kind === 'ask_user_question') {
       const persistId = createId();

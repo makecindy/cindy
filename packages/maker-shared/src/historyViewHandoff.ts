@@ -99,7 +99,7 @@ export class HistoryViewHandoff<T extends HistoryMessageSource> {
     }
     const endMs = snapshot.stale ? historyViewEndMs(snapshot) : 0;
     for (const row of raw) {
-      if (row.role !== 'user' && row.role !== 'assistant') continue;
+      if (row.role !== 'user' && row.role !== 'assistant' && row.role !== 'ask_user' && row.role !== 'plan_review') continue;
       const known = history.get(row.clientId);
       if (known) {
         if (receivedAfterRead(row)) {

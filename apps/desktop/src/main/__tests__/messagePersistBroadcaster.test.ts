@@ -4554,6 +4554,31 @@ describe('ask_user persist first-write-wins', () => {
     });
   });
 
+  // Unit regression (top-level ask_user must not inherit subagent parentUuid):
+  // Root cause: onInteractionMessage spread lastAgentMetaBySession verbatim; if the preceding
+  // event came from a subagent, its parentUuid caused subagent grouping to hide the Q/A card.
+  // Minimal failing input: a subagent tool_use with parentUuid followed by onInteractionMessage.
+  it('strips subagent parentUuid and parentToolUseId from top-level ask_user metadata', async () => {
+    noteAgentMeta(SESSION, {
+      parentUuid: 'toolu_parent_agent',
+      parentToolUseId: 'toolu_parent_agent',
+      model: 'claude-sonnet-4-6',
+    } as never);
+    const persistId = onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'ask-after-subagent',
+      questions: [{ question: '照此开工？' }],
+    });
+    await flushWrites();
+    const askCall = vi.mocked(createMessage).mock.calls.find(
+      (call) => call[1]?.clientId === persistId && call[1]?.role === 'ask_user',
+    );
+    expect(askCall).toBeDefined();
+    expect(askCall?.[1]?.agentMeta).not.toHaveProperty('parentUuid');
+    expect(askCall?.[1]?.agentMeta).not.toHaveProperty('parentToolUseId');
+    expect(askCall?.[1]?.agentMeta).toMatchObject({ model: 'claude-sonnet-4-6' });
+  });
+
   it('ignores a later cancelled write after the winner already answered', async () => {
     const persistId = onInteractionMessage(SESSION, {
       kind: 'ask_user_question',

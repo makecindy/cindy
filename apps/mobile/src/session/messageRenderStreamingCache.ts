@@ -4,6 +4,10 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import type { MessageRenderOptions } from '@cindy/maker-shared/message-render';
 import { isPlanUserBoundary } from '@cindy/maker-shared/message-render';
+import {
+  answeredAsyncQuestionRequestId,
+  isAnsweredAsyncQuestionClientId,
+} from '@cindy/maker-shared/interaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import { extractPayloadToolResultMedia } from '@cindy/maker-shared/payload-summary';
 import {
@@ -171,7 +175,7 @@ export function buildMobileStreamingRenderWindow(
       taskUpdates,
     });
   }
-  if (activeTurnStart <= 0) {
+  if (activeTurnStart <= 0 || prefixHasRelocatedAsyncQuestion(messages, activeTurnStart)) {
     const items = buildMobileMessageRenderItems(messages, options, taskUpdates);
     const result = {
       diffCount: countMobileRenderItemDiffs(items),
@@ -541,6 +545,7 @@ function stableAssistantBoundaryCanSplit(
   // cannot diverge when the completed assistant and its following delta arrive in one batch.
   if (
     collectMobileMarkdownImages(contentToPreview(messages[boundaryIndex]?.content)).length > 0
+    || prefixHasRelocatedAsyncQuestion(messages, boundaryIndex + 1)
   ) {
     return false;
   }
@@ -686,6 +691,37 @@ function remoteToolUseId(message: RemoteMessage): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function prefixHasRelocatedAsyncQuestion(
+  messages: readonly RemoteMessage[],
+  splitIndex: number,
+): boolean {
+  if (splitIndex <= 0 || splitIndex >= messages.length) return false;
+  const tailReplyRequestIds = new Set<string>();
+  for (let index = splitIndex; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+    const requestId = answeredAsyncQuestionRequestId(message.clientId);
+    if (requestId) tailReplyRequestIds.add(requestId);
+  }
+  for (let index = 0; index < splitIndex; index += 1) {
+    const message = messages[index];
+    if (message.role !== 'ask_user') continue;
+    if (message.agentMeta?.optimisticAsyncAnswer === true) return true;
+    if (tailReplyRequestIds.size === 0) continue;
+    const content = message.content && typeof message.content === 'object' && !Array.isArray(message.content)
+      ? (message.content as Record<string, unknown>)
+      : null;
+    if (
+      content?.status === 'answered'
+      && typeof content.requestId === 'string'
+      && tailReplyRequestIds.has(content.requestId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function findLastRootUserMessageIndex(messages: readonly RemoteMessage[], includeSteering = true): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -694,6 +730,7 @@ function findLastRootUserMessageIndex(messages: readonly RemoteMessage[], includ
       && (includeSteering || message.agentMeta?.delivery !== 'steer')
       && isPlanUserBoundary(message)
       && !remoteUserMessageIsSynthetic(message.content)
+      && !isAnsweredAsyncQuestionClientId(message.clientId)
     ) {
       return index;
     }

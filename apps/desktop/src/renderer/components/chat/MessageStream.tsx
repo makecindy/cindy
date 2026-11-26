@@ -14,6 +14,10 @@ import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
 export { botProcessItems, simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
+import {
+  answeredAsyncQuestionRequestId,
+  placeAnsweredAsyncQuestionsAtReplies,
+} from '@cindy/maker-shared/interaction';
 import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
  * MessageStream
@@ -1772,6 +1776,23 @@ export function buildRenderItems(
         ? 'prose'
         : 'other';
     });
+  }
+  const reorderedAsyncQuestions = placeAnsweredAsyncQuestionsAtReplies(
+    allMessages,
+    (message) => {
+      if (message.role === 'ask_user' && message.askUserStatus === 'answered' && message.askUserRequestId) {
+        return { kind: 'answered-ask', requestId: message.askUserRequestId };
+      }
+      if (message.role === 'user') {
+        const requestId = answeredAsyncQuestionRequestId(message.clientId);
+        return requestId ? { kind: 'answer-reply', requestId } : null;
+      }
+      return null;
+    },
+    (askRow, replyRow) => (replyRow?.createdAt ? { ...askRow, createdAt: replyRow.createdAt } : askRow),
+  );
+  if (reorderedAsyncQuestions !== allMessages) {
+    allMessages = [...reorderedAsyncQuestions];
   }
   // ── Pass -1: 剔除子代理内部消息 ──
   // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并

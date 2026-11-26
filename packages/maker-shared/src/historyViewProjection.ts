@@ -282,11 +282,26 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     const ms = item.type === 'group' ? item.summary.endedAtMs : rowEndMs(item.row);
     return Number.isFinite(ms) ? ms : null;
   };
+  const interactionAcceptedAtMs = (row: T): number | null => {
+    const autoReview = (row.agentMeta as { autoReviewUserText?: { acceptedAt?: unknown } } | null | undefined)?.autoReviewUserText;
+    const acceptedAt = autoReview?.acceptedAt;
+    return typeof acceptedAt === 'number' && Number.isFinite(acceptedAt) && acceptedAt > 0 ? acceptedAt : null;
+  };
+  const boundaryTimestamp = (item: Item | undefined): number | null => {
+    if (!item) return null;
+    if (item.type === 'source' && (item.row.role === 'ask_user' || item.row.role === 'plan_review')) {
+      return interactionAcceptedAtMs(item.row);
+    }
+    return timestamp(item);
+  };
   const group = (run: SourceItem<T>[], active: boolean, boundary: number | null): GroupItem<T> => {
     const first = run[0].row;
     const last = run[run.length - 1].row;
     const anchor = run.find((item) => item.activity && item.row.role !== 'tool_result')?.row ?? first;
-    const startedAtMs = boundary ?? Date.parse(first.createdAt);
+    const firstMs = Date.parse(first.createdAt);
+    const startedAtMs = boundary !== null && (!Number.isFinite(firstMs) || boundary <= firstMs)
+      ? boundary
+      : firstMs;
     // 并行的动作可能乱序完成:按起点排的行里,更早的 thinking 可能结束得比最后一行还晚。
     const endedAtMs = run.reduce((end, item) => Math.max(end, rowEndMs(item.row)), 0);
     const hash = historyRowsHash(run.map((item) => item.row));
@@ -358,7 +373,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     foldAnswerTail: false,
     startTimestamp: timestamp,
     endTimestamp,
-    boundaryTimestamp: timestamp,
+    boundaryTimestamp,
     userBoundaryEnd: (item, previous) => timestamp(item) ?? previous,
     createGroup: (run, _next, active, boundary) => activityGroup(run, active, boundary),
     createCompletedGroup: (run, _next, boundary) => {
@@ -374,7 +389,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       };
       for (const item of run) {
         if (item.activity) activities.push(item);
-        else { flush(); children.push(toViewItem(item)); previous = timestamp(item); }
+        else { flush(); children.push(toViewItem(item)); previous = boundaryTimestamp(item); }
       }
       flush();
       return nest(result, children);

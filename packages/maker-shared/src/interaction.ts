@@ -49,6 +49,75 @@ export function isAnsweredAsyncQuestionClientId(clientId: unknown): boolean {
   return typeof clientId === 'string' && clientId.startsWith(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX);
 }
 
+/** Extract the original question requestId from a persisted answered-reply clientId. */
+export function answeredAsyncQuestionRequestId(clientId: unknown): string | null {
+  if (!isAnsweredAsyncQuestionClientId(clientId)) return null;
+  const rest = (clientId as string).slice(ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX.length);
+  if (!rest) return null;
+  const sep = rest.lastIndexOf(':');
+  return sep > 0 ? rest.slice(0, sep) : rest;
+}
+
+export type AsyncQuestionPlacementRole =
+  | { kind: 'answered-ask'; requestId: string; optimisticTail?: boolean }
+  | { kind: 'answer-reply'; requestId: string }
+  | null;
+
+/**
+ * Async questions persist their `ask_user` row when asked (before any proposal prose or
+ * concurrent work), while the user's answer lands later as a hidden `question-reply:answered:`
+ * row. Move paired answered cards to immediately after their reply slot so the Q/A appears
+ * where the user answered instead of jumping back toward the start of the turn.
+ */
+export function placeAnsweredAsyncQuestionsAtReplies<T>(
+  rows: readonly T[],
+  classify: (row: T) => AsyncQuestionPlacementRole,
+  relocate?: (askRow: T, replyRow: T | null) => T,
+): readonly T[] {
+  const replyIndexByRequestId = new Map<string, number>();
+  const roles = new Array<AsyncQuestionPlacementRole>(rows.length);
+  let hasAnsweredAsk = false;
+  for (let index = 0; index < rows.length; index += 1) {
+    const role = classify(rows[index]);
+    roles[index] = role;
+    if (role?.kind === 'answer-reply' && role.requestId && !replyIndexByRequestId.has(role.requestId)) {
+      replyIndexByRequestId.set(role.requestId, index);
+    } else if (role?.kind === 'answered-ask' && role.requestId) {
+      hasAnsweredAsk = true;
+    }
+  }
+  if (!hasAnsweredAsk) return rows;
+
+  const movedIndexes = new Set<number>();
+  const afterReply = new Map<number, T[]>();
+  const tail: T[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const role = roles[index];
+    if (role?.kind !== 'answered-ask' || !role.requestId) continue;
+    const replyIndex = replyIndexByRequestId.get(role.requestId);
+    if (replyIndex !== undefined && replyIndex > index) {
+      movedIndexes.add(index);
+      const bucket = afterReply.get(replyIndex);
+      const placed = relocate ? relocate(rows[index], rows[replyIndex]) : rows[index];
+      if (bucket) bucket.push(placed);
+      else afterReply.set(replyIndex, [placed]);
+    } else if (replyIndex === undefined && role.optimisticTail === true && index < rows.length - 1) {
+      movedIndexes.add(index);
+      tail.push(relocate ? relocate(rows[index], null) : rows[index]);
+    }
+  }
+  if (movedIndexes.size === 0) return rows;
+
+  const result: T[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (!movedIndexes.has(index)) result.push(rows[index]);
+    const inserted = afterReply.get(index);
+    if (inserted) result.push(...inserted);
+  }
+  if (tail.length > 0) result.push(...tail);
+  return result;
+}
+
 function asyncQuestionReplies(questions: readonly AskQuestion[], answers: Record<string, string>) {
   return questions.flatMap((q) => {
     const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);

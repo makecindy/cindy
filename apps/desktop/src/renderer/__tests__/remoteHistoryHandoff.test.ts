@@ -462,3 +462,52 @@ it.each([false, true])('builds the displayed source and retains tool results (re
   }
   view.setActive(false);
 });
+
+// Unit regression (Desktop MessageStream async Q/A placement & sync post-answer work duration):
+// Root cause: async ask_user stayed before proposal prose while its reply row was hidden, and
+// boundaryTs used ask_user's T_ask (counting human wait time into post-answer work).
+it.each([true, false])('places desktop async ask_user at its reply slot and excludes human wait from post-answer work (ready=%s)', async (ready) => {
+  const base = Date.parse('2026-09-08T00:00:00Z');
+  const at = (sec: number) => new Date(base + sec * 1000).toISOString();
+  const rows: HistoryChatMessage[] = [
+    { id: 'u1', clientId: 'u1', role: 'user', content: '出方案并开工', createdAt: at(0) },
+    { id: 'th1', clientId: 'th1', role: 'thinking', content: '调研中', thinkingDurationMs: 20_000, createdAt: at(10) },
+    {
+      id: 'ask1', clientId: 'ask1', role: 'ask_user', content: '照此开工？', createdAt: at(31),
+      askUserRequestId: 'async-question:d1', askUserStatus: 'answered',
+      askUserQuestions: [{ id: 'async-question:d1', question: '照此开工？' }],
+      askUserAnswers: { 'async-question:d1': '照此开工' },
+    },
+    { id: 'a1', clientId: 'a1', role: 'assistant', content: '方案如下，请确认。', createdAt: at(35), turnCompleted: true },
+    {
+      id: 'reply1', clientId: 'question-reply:answered:async-question:d1:deadbeef',
+      role: 'user', content: '', isSyntheticTrigger: true, createdAt: at(300),
+    },
+    { id: 'th2', clientId: 'th2', role: 'thinking', content: '实施中', thinkingDurationMs: 20_000, createdAt: at(305) },
+    { id: 'a2', clientId: 'a2', role: 'assistant', content: '已完成。', createdAt: at(335), turnCompleted: true },
+  ];
+  const view = new HistoryViewController<HistoryChatMessage>({
+    page: async () => ({ version: 1, items: [{ type: 'messages', key: 'page', messages: rows }], hasMore: false, nextCursor: null }),
+    details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+    expanded: async () => undefined,
+  });
+  if (ready) await view.refresh();
+  try {
+    const result = buildMessageStreamRenderProjection({
+      historyView: view, historySnapshot: view.getSnapshot(), historyLiveMessages: [],
+      isSessionStreaming: false, generatedFilesItemCache: new Map(),
+      buildRaw: () => ({
+        ...buildRenderItems(rows),
+        items: groupWorkRuns(buildRenderItems(rows).items, false),
+      }),
+    });
+    const visibleKinds = result.items
+      .filter((item) => !(item.type === 'message' && item.message.isSyntheticTrigger))
+      .map((item) => item.type === 'work_group' ? 'work_group' : item.type === 'message' ? `${item.message.role}:${item.message.clientId}` : item.type);
+    expect(visibleKinds).toEqual(['user:u1', 'work_group', 'assistant:a1', 'ask_user:ask1', 'work_group', 'assistant:a2']);
+    const workGroups = result.items.filter((item) => item.type === 'work_group');
+    expect(workGroups[1]?.type === 'work_group' ? workGroups[1].durationMs : undefined).toBe(30_000);
+  } finally {
+    view.setActive(false);
+  }
+});
