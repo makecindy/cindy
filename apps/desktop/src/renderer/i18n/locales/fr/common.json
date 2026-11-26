@@ -7396,7 +7396,7 @@
           "providers": "Fournisseurs distants"
         },
         "providers": {
-          "empty": "Aucune tâche n’est en cours sur un fournisseur distant. Lorsqu’une tâche s’exécute sur un autre ordinateur ou fournisseur partagé, son trajet et son relais s’affichent ici.",
+          "empty": "Aucune tâche n’est en cours d'exécution sur un fournisseur distant. Lorsqu’une tâche s’exécute sur un autre ordinateur ou fournisseur partagé, son trajet et son relais s’affichent ici.",
           "noMatch": "Aucune tâche, machine ou relais ne correspond au filtre.",
           "searchPlaceholder": "Rechercher tâches, machines ou relais…",
           "clearFilter": "Effacer le filtre",
@@ -7408,7 +7408,7 @@
           "filter": {
             "aria": "Filtrer par état des tâches",
             "all": "Toutes les tâches ({{count}})",
-            "running": "En cours ({{count}})"
+            "running": "En cours d'exécution ({{count}})"
           },
           "columns": {
             "tasks": "Mes tâches",
@@ -7420,8 +7420,8 @@
             "remoteTask": "Tâche distante"
           },
           "bundle": {
-            "mixed": "{{running}} en cours · {{ready}} prêtes",
-            "runningOnly": "{{running}} en cours",
+            "mixed": "{{running}} en cours d'exécution · {{ready}} prêtes",
+            "runningOnly": "{{running}} en cours d'exécution",
             "readyOnly": "{{ready}} prêtes",
             "countBadge": "{{count}} tot.",
             "popoverTitle": "Tâches sur {{name}} ({{count}})"
@@ -7469,9 +7469,9 @@
             "hide": "Masquer les fournisseurs inactifs"
           },
           "stats": {
-            "empty": "Aucune tâche en cours sur un fournisseur distant",
+            "empty": "Aucune tâche en cours d'exécution sur un fournisseur distant",
             "tasks": "{{total}} tâches",
-            "tasksWithRunning": "{{total}} tâches ({{running}} en cours)",
+            "tasksWithRunning": "{{total}} tâches ({{running}} en cours d'exécution)",
             "machines": "{{active}} machines fournisseurs",
             "machinesWithTotal": "{{active}} actives / {{total}} fournisseurs",
             "relays": "{{count}} relais"
@@ -7479,7 +7479,7 @@
           "legend": {
             "live": "Tirets bleus animés : échange de messages",
             "ready": "Ligne verte : lien Agent-Net prêt",
-            "busy": "Point orange : tâche en cours / occupé",
+            "busy": "Point orange : tâche en cours d'exécution / occupé",
             "error": "Pointillés rouges : sans réponse ou en pause"
           }
         }

@@ -14,7 +14,7 @@
  * 本机连接流量来自同一份快照。第三方之间的链路不画。
  */
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
 import { useDeleteDeviceDialog } from '@/components/settings/useDeleteDeviceDialog';
@@ -35,13 +35,16 @@ import { createLogger } from '@/lib/logger';
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { startPeerUpdate, type PeerUpdateConfirmTarget } from './peerAppUpdate';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
-import { RemoteProviderTopologyPanel } from './RemoteProviderTopology';
 import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
 import { relativeTime } from './topologyPresentation';
 import { usePeerLinks } from './usePeerLinks';
 import { useRecentPresence, type PresenceEvent } from './useRecentPresence';
+
+const LazyRemoteProviderTopologyPanel = lazy(() =>
+  import('./RemoteProviderTopology').then((m) => ({ default: m.RemoteProviderTopologyPanel })),
+);
 
 const log = createLogger('RemoteConnectionV2Section');
 
@@ -283,17 +286,26 @@ export function RemoteConnectionV2Section({
     <>
       <section className="flex flex-col gap-3">
         {effectiveTab === 'providers' ? (
-          <RemoteProviderTopologyPanel
-            devices={s.devices ?? []}
-            peerLinks={peerLinks}
-            primaryRelayName={relayName}
-            primarySelfHosted={relay.state?.mode === 'self-hosted'}
-            unresponsiveIds={unresponsive}
-            tabControl={tabControl}
-            statusRight={statusRight}
-            onPathPreferenceChange={handlePathPreferenceById}
-            onRemoteDesktop={handleRemoteDesktopById}
-          />
+          <Suspense
+            fallback={
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-12">
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">{tabControl}</span>
+                {statusRight}
+              </div>
+            }
+          >
+            <LazyRemoteProviderTopologyPanel
+              devices={s.devices ?? []}
+              peerLinks={peerLinks}
+              primaryRelayName={relayName}
+              primarySelfHosted={relay.state?.mode === 'self-hosted'}
+              unresponsiveIds={unresponsive}
+              tabControl={tabControl}
+              statusRight={statusRight}
+              onPathPreferenceChange={handlePathPreferenceById}
+              onRemoteDesktop={handleRemoteDesktopById}
+            />
+          </Suspense>
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-12">

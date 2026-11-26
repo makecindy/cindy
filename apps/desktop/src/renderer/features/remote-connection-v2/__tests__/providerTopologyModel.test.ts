@@ -280,4 +280,84 @@ describe('buildProviderTopology', () => {
     });
     expect(byRelay.machines.map((m) => m.targetId)).toEqual(['dev-b']);
   });
+
+  it('deduplicates default official relay across own devices and shares, and matches provider groups by providerId', () => {
+    const share = makeShare({
+      shareId: 'sh-official',
+      owner: { displayName: 'Dash', avatarUrl: null, region: 'cn' },
+    });
+    const localGroups: Record<string, ProviderGroupConfig> = {
+      'claude-code': {
+        strategy: 'order',
+        autoSwitch: true,
+        members: [
+          { key: 'own:dual', kind: 'device', agentDeviceId: 'dev-dual', providerId: 'claude-code', label: 'Dual Host', limit: 4, weight: 1, paused: false },
+          { key: 'own:other', kind: 'device', agentDeviceId: 'dev-other', providerId: 'claude-code', label: 'Other Host', limit: 4, weight: 1, paused: false },
+        ],
+      },
+      codex: {
+        strategy: 'order',
+        autoSwitch: true,
+        members: [
+          { key: 'own:dual', kind: 'device', agentDeviceId: 'dev-dual', providerId: 'codex', label: 'Dual Host', limit: 4, weight: 1, paused: false },
+          { key: 'own:other2', kind: 'device', agentDeviceId: 'dev-other', providerId: 'codex', label: 'Other Host', limit: 4, weight: 1, paused: false },
+        ],
+      },
+    };
+    const sessions: Session[] = [
+      // dev-dual is running a Codex task, so it must join the codex group (not claude-code)
+      makeSession({ id: 't-codex', title: 'Codex run', agentDeviceId: 'dev-dual', providerId: 'codex', model: 'gpt-5.4' }),
+      makeSession({ id: 't-share', title: 'Share run', agentDeviceId: 'share:sh-official', providerId: 'claude-code' }),
+    ];
+    const devices = [
+      makeDevice({ deviceId: 'dev-dual', name: 'Dual Host' }),
+      makeDevice({ deviceId: 'dev-other', name: 'Other Host' }),
+    ];
+    const peerLinks = makePeerLinks({
+      agentNetRoutes: [
+        { deviceId: 'dev-dual', path: 'relay', rttMs: 42, directRttMs: null, relayRttMs: 42, pathPreference: 'auto' },
+      ],
+      providerShareRoutes: [
+        {
+          shareId: 'sh-official',
+          path: 'relay',
+          rttMs: 55,
+          sentAgoMs: null,
+          receivedAgoMs: null,
+          relayKind: 'official',
+          relayHost: null,
+          relayTransport: 'udp',
+          relayRttMs: 14,
+        },
+      ],
+    });
+
+    const model = buildProviderTopology({
+      sessions,
+      runningSessionIds: new Set(['t-codex', 't-share']),
+      devices,
+      peerLinks,
+      localGroups,
+      receivedShares: [share],
+      shareDisplayNames: new Map([['sh-official', '来自 Dash 的分享']]),
+      primaryRelayName: 'Cindy 中转',
+      primarySelfHosted: false,
+      officialRelayLabel: 'Cindy 中转',
+      unresponsiveIds: new Set(),
+      scope: 'running',
+      query: '',
+    });
+
+    // Both own machine and regionless official share reuse a single official relay node
+    expect(model.relays).toHaveLength(1);
+    expect(model.stats.relayCount).toBe(1);
+    expect(model.machines.every((m) => m.relayId === model.relays[0].id)).toBe(true);
+
+    // dev-dual running Codex task is placed in the codex group, not claude-code
+    const groupBlock = model.blocks.find((b) => b.kind === 'group');
+    expect(groupBlock?.kind).toBe('group');
+    if (groupBlock?.kind === 'group') {
+      expect(groupBlock.providerId).toBe('codex');
+    }
+  });
 });

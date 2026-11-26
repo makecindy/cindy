@@ -189,7 +189,7 @@
 .rcv2-prov-group-frame {
   background-color: color-mix(in srgb, var(--surface-chip) 46%, transparent);
   border: 1px solid var(--border-default);
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .rcv2-prov-rtt-pill {

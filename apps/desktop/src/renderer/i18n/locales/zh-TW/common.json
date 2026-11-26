@@ -7312,7 +7312,7 @@
             "runningOnly": "{{running}} 個執行中",
             "readyOnly": "{{ready}} 個就緒",
             "countBadge": "共 {{count}}",
-            "popoverTitle": "綁定至 {{name}} 的任務 ({{count}})"
+            "popoverTitle": "連結至 {{name}} 的任務 ({{count}})"
           },
           "badge": {
             "own": "我的電腦",

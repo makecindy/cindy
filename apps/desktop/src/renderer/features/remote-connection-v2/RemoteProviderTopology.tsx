@@ -35,6 +35,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SettingsCard } from '@/components/ui/settings-rows';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+  useRemoteSessionActivityRevision,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { providerShareDisplayNames } from '@/features/provider-share/providerShareNames';
 import { ShareAvatar } from '@/features/provider-share/ShareAvatar';
@@ -1503,16 +1508,9 @@ export function RemoteProviderTopologyPanel({
     makerChatStore.getRunningSnapshot,
     makerChatStore.getRunningSnapshot,
   );
+  const remoteActivityRevision = useRemoteSessionActivityRevision();
   const localGroups = useLocalProviderGroups();
   const { received: receivedShares } = useProviderShareReceived();
-
-  const runningSessionIds = useMemo<ReadonlySet<string>>(() => {
-    const set = new Set<string>();
-    for (const [id, info] of runningStatusMap) {
-      if (info.isRunning) set.add(id);
-    }
-    return set;
-  }, [runningStatusMap]);
 
   const mergedSessions = useMemo<Session[]>(() => {
     const byId = new Map<string, Session>();
@@ -1524,6 +1522,21 @@ export function RemoteProviderTopologyPanel({
     }
     return Array.from(byId.values());
   }, [localSessions, remoteSessions]);
+
+  const runningSessionIds = useMemo<ReadonlySet<string>>(() => {
+    const set = new Set<string>();
+    for (const [id, info] of runningStatusMap) {
+      if (info.isRunning) set.add(id);
+    }
+    void remoteActivityRevision;
+    for (const s of mergedSessions) {
+      if (!s.deviceLinkDeviceId) continue;
+      if (isRemoteSessionActivityActive(getRemoteSessionActivity(s.id, s.deviceLinkDeviceId))) {
+        set.add(s.id);
+      }
+    }
+    return set;
+  }, [runningStatusMap, remoteActivityRevision, mergedSessions]);
 
   const shareDisplayNames = useMemo(
     () => providerShareDisplayNames(receivedShares, t),

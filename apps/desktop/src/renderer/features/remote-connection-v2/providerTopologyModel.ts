@@ -332,6 +332,9 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
     }
     if (route.relayKind === 'official') {
       if (!route.region) {
+        if (!input.primarySelfHosted) {
+          return ensurePrimaryRelay();
+        }
         const id = 'relay:official:default';
         let r = relaysMap.get(id);
         if (!r) {
@@ -385,8 +388,9 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
     return r;
   };
 
-  // 3) 归属本机建的供应商组（agentDeviceId → groupId）
-  const groupByAgentDevice = new Map<string, { groupId: string; providerId: string; config: ProviderGroupConfig }>();
+  // 3) 归属本机建的供应商组：按 (agentDeviceId, providerId) 精准匹配，避免同一台电脑上不同供应商任务混入同一个组
+  const groupByDeviceAndProvider = new Map<string, { groupId: string; providerId: string; config: ProviderGroupConfig }>();
+  const groupIdsByAgentDevice = new Map<string, Set<string>>();
   const localGroupEntries = Object.entries(input.localGroups).filter(([, cfg]) => {
     const remoteMembers = cfg.members.filter((m) => m.kind !== 'local' && m.agentDeviceId);
     return remoteMembers.length >= 1 && cfg.members.length >= 2;
@@ -395,11 +399,40 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
     const groupId = `group:${providerId}`;
     for (const member of config.members) {
       if (member.kind === 'local' || !member.agentDeviceId) continue;
-      if (!groupByAgentDevice.has(member.agentDeviceId)) {
-        groupByAgentDevice.set(member.agentDeviceId, { groupId, providerId, config });
+      groupByDeviceAndProvider.set(`${member.agentDeviceId}\0${providerId}`, { groupId, providerId, config });
+      let set = groupIdsByAgentDevice.get(member.agentDeviceId);
+      if (!set) {
+        set = new Set();
+        groupIdsByAgentDevice.set(member.agentDeviceId, set);
       }
+      set.add(groupId);
     }
   }
+
+  const resolveMachineGroup = (
+    agentDeviceId: string,
+    tasks: readonly ProviderTopologyTask[],
+    shareProviderId: string | null,
+  ): { groupId: string; providerId: string; config: ProviderGroupConfig } | null => {
+    const scopedTasks = input.scope === 'running' ? tasks.filter((t) => t.running) : tasks;
+    const candidateTasks = scopedTasks.length > 0 ? scopedTasks : tasks;
+    const matchedGroups = new Map<string, { groupId: string; providerId: string; config: ProviderGroupConfig }>();
+    let hasUngroupedProvider = false;
+    for (const task of candidateTasks) {
+      const pid = task.providerId ?? shareProviderId;
+      if (!pid) {
+        hasUngroupedProvider = true;
+        continue;
+      }
+      const ref = groupByDeviceAndProvider.get(`${agentDeviceId}\0${pid}`);
+      if (ref) matchedGroups.set(ref.groupId, ref);
+      else hasUngroupedProvider = true;
+    }
+    if (matchedGroups.size === 1 && !hasUngroupedProvider) {
+      return matchedGroups.values().next().value ?? null;
+    }
+    return null;
+  };
 
   // 4) 为每个有任务绑定的远程机器构造节点
   const allMachines: ProviderTopologyMachine[] = [];
@@ -408,7 +441,8 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
   for (const [agentDeviceId, tasks] of tasksByAgentDevice.entries()) {
     usedAgentDevices.add(agentDeviceId);
     const shareId = parseShareAgentDeviceId(agentDeviceId);
-    const groupRef = groupByAgentDevice.get(agentDeviceId) ?? null;
+    const shareMeta = shareId ? shareById.get(shareId) ?? null : null;
+    const groupRef = resolveMachineGroup(agentDeviceId, tasks, shareMeta?.providerId ?? null);
     const usedModels = Array.from(new Set(tasks.map((t) => t.model).filter((m) => m && m !== '—'))).slice(0, 3);
 
     if (shareId) {
@@ -702,11 +736,18 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
   // 8) 汇总当前无执行中任务调用、但在线待命的独立远程供应商机器（默认折叠在底栏）
   const activeAgentDevices = new Set(filteredMachines.map((m) => m.agentDeviceId));
   const activeGroupIds = new Set(blocks.filter((b) => b.kind === 'group').map((b) => b.id));
+  const hasActiveGroup = (agentDeviceId: string): boolean => {
+    const ids = groupIdsByAgentDevice.get(agentDeviceId);
+    if (!ids) return false;
+    for (const gid of ids) {
+      if (activeGroupIds.has(gid)) return true;
+    }
+    return false;
+  };
   const idleProviders: IdleStandbyProvider[] = [];
   for (const dev of deviceById.values()) {
     if (!dev.online || isMobilePlatform(dev.platform) || !dev.remoteControlEnabled) continue;
-    const grp = groupByAgentDevice.get(dev.deviceId);
-    if (activeAgentDevices.has(dev.deviceId) || (grp && activeGroupIds.has(grp.groupId))) continue;
+    if (activeAgentDevices.has(dev.deviceId) || hasActiveGroup(dev.deviceId)) continue;
     const rt = agentNetByDeviceId.get(dev.deviceId);
     const lk = linkByDeviceId.get(dev.deviceId);
     const p = lk?.open ? lk.path : rt?.path === 'connecting' ? null : rt?.path ?? null;
@@ -733,8 +774,7 @@ export function buildProviderTopology(input: BuildProviderTopologyInput): Provid
   for (const share of input.receivedShares) {
     const aid = `${PROVIDER_SHARE_AGENT_DEVICE_PREFIX}${share.shareId}`;
     if (share.status !== 'active' || !share.hostOnline) continue;
-    const grp = groupByAgentDevice.get(aid);
-    if (activeAgentDevices.has(aid) || (grp && activeGroupIds.has(grp.groupId))) continue;
+    if (activeAgentDevices.has(aid) || hasActiveGroup(aid)) continue;
     const sr = shareRouteById.get(share.shareId);
     const p = sr?.path === 'connecting' ? null : sr?.path ?? null;
     const displayName = input.shareDisplayNames.get(share.shareId) ?? share.owner.displayName;
