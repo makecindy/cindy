@@ -276,7 +276,7 @@ export class UserBrowserBackend implements BrowserBackend {
       }
       if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request, disconnectedMessage);
-      this.noteSessionTab(request, result);
+      if (!this.disposed) this.noteSessionTab(request, result);
       return result;
     } catch (err) {
       if (request.action === 'upload' && err instanceof UploadSizeError && err.limit === UPLOAD_CHUNKED_BYTES_MAX) {
@@ -419,6 +419,12 @@ export class UserBrowserBackend implements BrowserBackend {
     this.disposed = true;
     this.recipeSessions.dispose();
     this.targets.clear();
+    this.sessionTabs.clear();
+    this.clientBoots.clear();
+    this.everReady.clear();
+    this.recipePumps.clear();
+    this.lastFailedLaunchAt = null;
+    this.preparing = null;
   }
 
   private noteSessionTab(request: BackendRequest, result: BackendResult): void {
@@ -1551,6 +1557,10 @@ export class UserBrowserBackend implements BrowserBackend {
     }
     const begun = await this.pageJob(control, record, 'cdp', { op: 'begin' });
     if (!begun.ok) return this.failureResult(req.action, begun);
+    if (this.disposed) {
+      void this.pageJob(control, record, 'cdp', { op: 'end' }).catch(() => {});
+      return actionFailed(req.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
+    }
     const listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
     const closers = new Set<() => void>();
     const deliver = (job: BrowserExtensionJobResult) => {

@@ -1478,4 +1478,102 @@ describe('automatic browser startup', () => {
       expect(startBrowser).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
   });
+
+  // Regression (P0-1): dispose() must clear all session/client/recipe tracking maps
+  // (`targets`, `sessionTabs`, `clientBoots`, `everReady`, `recipePumps`) and prevent
+  // concurrent in-flight calls from repopulating them after disposal.
+  it('clears targets, sessionTabs, clientBoots, everReady, and recipePumps on dispose()', async () => {
+    const fake = fakeControl({ version: '0.4.68' });
+    const origConnected = fake.control.bridge.connectedClients.bind(fake.control.bridge);
+    fake.control.bridge.connectedClients = () =>
+      origConnected().map((c) => ({ ...c, boot: 'boot-dispose-1' }));
+    fake.responses.set('cdp', () => ({ ok: true }));
+
+    const b = backend(fake.control);
+    const internals = b as unknown as {
+      targets: Map<string, unknown>;
+      sessionTabs: Map<string, unknown>;
+      clientBoots: Map<string, unknown>;
+      everReady: Set<string>;
+      recipePumps: Map<string, unknown>;
+    };
+
+    // Populate targets, clientBoots, everReady, sessionTabs, and recipePumps via real call() paths.
+    expect((await call(b, { action: 'tabs' })).ok).toBe(true);
+    expect(
+      (await call(b, { action: 'snapshot', targetId: 't1', __mcpSessionId: 's-dispose' } as unknown as Parameters<typeof call>[1])).ok,
+    ).toBe(true);
+    const begun = await call(b, {
+      action: 'recipeCommand',
+      targetId: 't1',
+      __mcpSessionId: 's-dispose',
+      recipeCommand: { method: 'Cindy.begin' },
+    } as unknown as Parameters<typeof call>[1]);
+    expect(begun.ok).toBe(true);
+
+    expect(internals.targets.size).toBeGreaterThan(0);
+    expect(internals.sessionTabs.size).toBeGreaterThan(0);
+    expect(internals.clientBoots.size).toBeGreaterThan(0);
+    expect(internals.everReady.size).toBeGreaterThan(0);
+    expect(internals.recipePumps.size).toBeGreaterThan(0);
+
+    await b.dispose();
+
+    expect(internals.targets.size).toBe(0);
+    expect(internals.sessionTabs.size).toBe(0);
+    expect(internals.clientBoots.size).toBe(0);
+    expect(internals.everReady.size).toBe(0);
+    expect(internals.recipePumps.size).toBe(0);
+
+    // clearSessionMarks after dispose must not issue stale unmark calls.
+    const jobsBeforeClear = fake.jobs.length;
+    await b.clearSessionMarks('s-dispose');
+    expect(fake.jobs.slice(jobsBeforeClear)).toEqual([]);
+
+    // Post-dispose call fails cleanly with BROWSER_RUNTIME_UNAVAILABLE.
+    expect(await call(b, { action: 'tabs' })).toMatchObject({
+      ok: false,
+      errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+    });
+  });
+
+  it('does not repopulate recipePumps or sessionTabs when an in-flight Cindy.begin settles after dispose()', async () => {
+    const fake = fakeControl({ version: '0.4.68' });
+    let resolveBegin!: (value: { ok: boolean; [key: string]: unknown }) => void;
+    const origAct = fake.control.bridge.act.bind(fake.control.bridge);
+    fake.control.bridge.act = vi.fn(async (action: unknown, payloadInput?: unknown) => {
+      const payload = (payloadInput ?? {}) as Record<string, unknown>;
+      if (action === 'cdp' && payload.op === 'begin') {
+        fake.jobs.push([String(action), payload]);
+        return await new Promise<{ ok: boolean; [key: string]: unknown }>((resolve) => {
+          resolveBegin = resolve;
+        });
+      }
+      return origAct(action, payloadInput);
+    });
+    fake.responses.set('cdp', () => ({ ok: true }));
+
+    const b = backend(fake.control);
+    const internals = b as unknown as {
+      sessionTabs: Map<string, unknown>;
+      recipePumps: Map<string, unknown>;
+    };
+    await call(b, { action: 'tabs' });
+    const pendingBegin = call(b, {
+      action: 'recipeCommand',
+      targetId: 't1',
+      __mcpSessionId: 's-race',
+      recipeCommand: { method: 'Cindy.begin' },
+    } as unknown as Parameters<typeof call>[1]);
+    await vi.waitFor(() => expect(resolveBegin).toBeDefined());
+
+    await b.dispose();
+    resolveBegin({ ok: true });
+    const res = await pendingBegin;
+
+    expect(res).toMatchObject({ ok: false, errorCode: 'BROWSER_RUNTIME_UNAVAILABLE' });
+    expect(internals.recipePumps.size).toBe(0);
+    expect(internals.sessionTabs.size).toBe(0);
+    expect(fake.jobs.some(([action, payload]) => action === 'cdp' && payload.op === 'end')).toBe(true);
+  });
 });
