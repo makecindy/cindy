@@ -62,7 +62,8 @@ export const STREAM_REVEAL = {
   busyFactor: 4,
 } as const;
 
-const WIDE_CHAR = /[⺀-鿿가-힯豈-﫿＀-￯\u3000-〿]/;
+// CJK 部首至统一汉字（含 CJK 标点 U+3000–303F）、韩文音节、兼容汉字、全角形式。
+const WIDE_CHAR = /[\u2E80-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/;
 const BREAK_AFTER = /[\s.,;:!?)\]}>，。；：！？、）】」』》…—-]/;
 
 function isHighSurrogate(code: number): boolean {
