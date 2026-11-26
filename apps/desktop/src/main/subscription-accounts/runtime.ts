@@ -99,7 +99,7 @@ import {
   loginLegacyCodexProviderAccount,
   codexAccountRpc,
 } from './nativeCli.js';
-import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
+import { CodexAccountReadDeferred, AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../maker-host/codexModelMapping.js';
 import type { CatalogModel } from '@cindy/model-providers';
@@ -158,6 +158,7 @@ interface AccountSnapshot {
   codexImageAuth?: true;
   auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
+  retryDelayMs?: number;
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
   unreachable?: boolean;
@@ -805,7 +806,7 @@ async function snapshot(
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
-  const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  const ttl = cached?.unavailable ? cached.retryDelayMs ?? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
   // Quota consumers join the read for its full result.
   if (!force && cached && Date.now() - cached.at < ttl
     && (!cached.quotaPending || selectionMayUseSnapshot(cached, quota, Date.now()))
@@ -1051,7 +1052,11 @@ async function snapshot(
         result = {
           auth: { authenticated: false, ...(identity ? { identity } : {}) },
           unavailable: true,
-          ...(isAccountServiceUnreachable(error) ? { unreachable: true } : {}),
+          ...(isAccountServiceUnreachable(error) ? {
+            unreachable: true,
+            ...(provider === 'openai' ? { retryDelayMs: Math.min(60_000,
+              lastRead?.retryDelayMs ? 2 * lastRead.retryDelayMs : ACCOUNT_SNAPSHOT_FAILURE_TTL_MS) } : {}),
+          } : {}),
           ...(lastConfirmed ? { lastConfirmed } : {}),
           at: Date.now(),
         };
@@ -2880,6 +2885,17 @@ export async function acquireSubscriptionAccount(
     if (!selected && !pinned && providerGroupMembersFull(grouped.candidates, grouped))
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
     if (!selected || !member || !member.usable || (!control && member.paused)) {
+      if (provider === 'openai' && agent === 'codex' && !control && !options.remote && !options.dryRun && !options.capability) {
+        const candidates = pinned ? members.filter(a => a.id === pinned)
+          : members.filter(a => !a.paused && !grouped.exclude.has(a.id));
+        const deadlines = candidates.map(a => {
+          const cached = state.cache.get(keyOf(provider, a.id));
+          return !a.paused && !a.loggingIn && a.unavailable && cached?.retryDelayMs
+            ? cached.at + cached.retryDelayMs : undefined;
+        });
+        if (deadlines.length && deadlines.every((at): at is number => at !== undefined))
+          throw new CodexAccountReadDeferred(Math.min(...deadlines));
+      }
       if (!pinned) {
         // Only describe reasons proven for this request. Shared/remote callers retain
         // their opaque failure and must not learn about the owner's other accounts.

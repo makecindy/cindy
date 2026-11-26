@@ -8910,6 +8910,81 @@ describe('shared subscription recovery through controller and account allocation
 describe('unreachable account service', () => {
   const unreachable = () => new AccountServiceUnreachableError('Codex account request failed');
 
+  // #13018, unit. The allocator alone cannot prove a queued input wakes. Two tasks
+  // share a timed-out account read; drive the send transaction through native admission.
+  it('coalesces local Codex account retries and dispatches only the surviving original inputs', async () => {
+    vi.useFakeTimers();
+    const sessions = new Map<string, Session>();
+    const sent: Array<[string, unknown]> = [];
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+    const nativeStart: BaseAgent['startSession'] = async opts => {
+      let finish!: () => void;
+      const closed = new Promise<void>(resolve => { finish = resolve; });
+      return { id: opts.sessionId!, agentKind: 'codex', model: opts.model!, steer: vi.fn(), getUsageSnapshot: vi.fn(),
+        send: async message => { sent.push([opts.sessionId!, message]); },
+        close: async () => finish(), abort: async () => {}, events: async function* () { await closed; },
+        setInteractionResolver() {},
+      };
+    };
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: nativeStart } as BaseAgent);
+    const persisted = vi.fn(async () => {});
+    const transaction = sharedAccountSendTransaction({
+      getSession: id => sessions.get(id),
+      bootstrapSession: async opts => {
+        const id = opts.id!;
+        const handle = await agent.startSession({ ...opts, sessionId: id, providerId: 'openai',
+          resumeSessionId: 'native-' + id } as StartSessionOptions);
+        const session = new Session({ id, agentKind: 'codex', workDir: opts.workingDir,
+          permissionMode: 'default', capabilities: {} as never, handle, logger });
+        sessions.set(id, session);
+        return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      },
+      createDbMessage: persisted,
+    });
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome,
+      steerToAgent: async () => {}, abortSession: async () => {}, touchUserSend: async () => {},
+      createUserMessage: vi.fn(), isTurnRunning: () => false, hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+      getTurnGeneration: () => null, emitProjection() {},
+    });
+    try {
+      h.pools.openai = { strategy: 'order', accounts: [account('second')] };
+      h.read.mockRejectedValue(unreachable());
+      const enqueue = (id: string) => {
+        h.bindings.set('task:' + id, { providerId: 'openai', accountId: 'second' });
+        coordinator.enqueue(id, { clientId: id, text: id, persistedContent: id, model: 'gpt-6',
+          effort: 'medium', workingDir: '/work', permissionMode: 'default',
+          createOpts: { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', workingDir: '/work' },
+          chatMessage: { role: 'user', clientId: id, content: id, isStreaming: false, createdAt: new Date().toISOString() },
+        });
+      };
+      for (const id of ['first', 'second', 'cancelled']) enqueue(id);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(coordinator.getProjection('first').error).toContain('CODEX_ACCOUNT_READ_RETRY');
+      expect(h.read).toHaveBeenCalledTimes(1);
+      coordinator.remove('cancelled', 'cancelled');
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(h.read).toHaveBeenCalledTimes(2);
+      h.read.mockResolvedValue({ authenticated: true, identity: 'account' });
+      await vi.advanceTimersByTimeAsync(5_998);
+      expect(sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sent.sort()).toEqual(['first', 'second'].map(id => [id, { type: 'user', content: id }]));
+      expect(persisted).toHaveBeenCalledTimes(2);
+      expect(h.read).toHaveBeenCalledTimes(3);
+      h.read.mockResolvedValue({ authenticated: false });
+      enqueue('signed-out');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(coordinator.getProjection('signed-out').error).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+      expect(h.read).toHaveBeenCalledTimes(4);
+      expect(sent).toHaveLength(2);
+    } finally {
+      await Promise.all([...sessions.values()].map(session => session.close()));
+      vi.useRealTimers();
+    }
+  });
+
   // The sign-in still has to be confirmed (登录完成须确认, 2026-11-16): an offline confirmation is
   // not a completed login, but it must say the service was unreachable instead of a generic failure.
   it('still opens the browser login for a known account and reports an unconfirmed result as unreachable', async () => {
@@ -8965,7 +9040,7 @@ describe('unreachable account service', () => {
     expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
     expect(hasConnectedSubscriptionPool('openai', { includeBoundAccounts: true })).toBe(false);
     expect(readSubscriptionPoolCodexModels('openai', { includeBoundAccounts: true })).toEqual([]);
-    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('No subscription account is available');
+    await expect(acquireSubscriptionAccount('openai', 'gpt-kept', [])).rejects.toThrow('CODEX_ACCOUNT_SERVICE_UNREACHABLE');
 
     // Back online: the account reads again and its list is fetched afresh.
     h.read.mockResolvedValue({ authenticated: true, identity: 'account' });

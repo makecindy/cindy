@@ -16656,6 +16656,8 @@
       "retryIn": "{{seconds}} 秒后自动重试"
     },
     "subscriptionAccountError": {
+      "unreachable": "暂时连不上 Codex 账号服务。",
+      "rechecking": "暂时连不上 Codex 账号服务，将于 {{resetAt}} 自动重试。",
       "poolModelLimited": "当前模型的订阅额度已达上限。可以先切换模型。",
       "poolRetryUntil": "可在 {{resetAt}} 后重试。",
       "poolOtherSignedOut": "另有订阅账号已登出，可在执行任务的电脑上重新登录后重试。",
