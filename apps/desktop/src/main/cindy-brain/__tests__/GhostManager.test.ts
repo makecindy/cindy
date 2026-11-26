@@ -3642,6 +3642,31 @@ describe('GhostManager · install', () => {
     expect(manager.list()).toHaveLength(2);
   });
 
+  /* 测试价值（PR #12731 维护者评审 6069999202：安装代次）
+   * - 生产入口与可观察结果：真实 GhostManager 的 install / update / uninstall 与 installationRevision()。
+   * - 覆盖缺口：市场在途读取按这个计数判断「是否早于某次变更」；它不前进，变更后的读取就会并入变更前的读取；
+   *   读取本身让它前进，没有变更时的复用就会被拆开。
+   * - 最小失败输入：装一个、更新、卸载，各自之后计数前进；只读 list() 不前进。
+   * - tier：unit。
+   */
+  it('advances the installation revision after every committed change and never on reads', async () => {
+    const start = manager.installationRevision();
+    const installed = await manager.install(await makeCindy('revision.cindy', goodManifest()));
+    if (!('ghost' in installed)) throw new Error('expected committed install');
+    const afterInstall = manager.installationRevision();
+    expect(afterInstall).toBeGreaterThan(start);
+    manager.list();
+    await manager.listAsync();
+    expect(manager.installationRevision()).toBe(afterInstall);
+    await manager.update(await makeCindy('revision-next.cindy', { ...goodManifest(), version: '2.0.0' }), {
+      expectedInstalledApproval: ghostInstallApprovalToken(installed.ghost.approval),
+    });
+    const afterUpdate = manager.installationRevision();
+    expect(afterUpdate).toBeGreaterThan(afterInstall);
+    await manager.uninstall(installedGhostPhysicalRelId(manager.list()[0]!));
+    expect(manager.installationRevision()).toBeGreaterThan(afterUpdate);
+  });
+
   it('reads namespaced receipts from storage part and install rel id', async () => {
     const organizationOrigin = forgeInstallOriginForMembership('org');
     const result = await manager.install(

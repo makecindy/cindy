@@ -129,6 +129,15 @@ function sameInstallationRecord(current: PluginMarketInstallationRecord, expecte
   return canonicalJson(withoutRemoteOperationBinding(current)) === canonicalJson(withoutRemoteOperationBinding(expected));
 }
 
+/**
+ * 本进程内账本写入的次数（任何实例、任何 owner；写盘结束或日志重放后前进，写失败也算）。市场读取用它判断「在途读取是否早于某次安装
+ * 记录的变化」：发起后计数变了的在途读取，之后的请求不再并入（见 PluginMarketService.installGeneration）。
+ */
+let ledgerWriteRevision = 0;
+export function pluginMarketLedgerRevision(): number {
+  return ledgerWriteRevision;
+}
+
 export type PluginMarketAuthorizationTarget = { ghostId: string; namespace?: string | null };
 
 export type PluginMarketAuthorizationLookup =
@@ -435,9 +444,14 @@ export class PluginMarketLedger {
         !isLedgerSnapshotText(snapshot.main)) {
       throw new Error('Plugin market ledger pending write is unreadable');
     }
-    atomicWriteFileSync(this.nsFilePath(), snapshot.namespaced);
-    atomicWriteFileSync(this.customFilePath(), snapshot.custom);
-    atomicWriteFileSync(this.filePath(), snapshot.main);
+    try {
+      atomicWriteFileSync(this.nsFilePath(), snapshot.namespaced);
+      atomicWriteFileSync(this.customFilePath(), snapshot.custom);
+      atomicWriteFileSync(this.filePath(), snapshot.main);
+    } finally {
+      // 重放让日志里的变更此刻才对读取可见，同样算一次记录变化。
+      ledgerWriteRevision++;
+    }
     try {
       fs.unlinkSync(this.pendingFilePath());
     } catch (error) {
@@ -1063,9 +1077,14 @@ export class PluginMarketLedger {
       this.pendingFilePath(),
       JSON.stringify({ schemaVersion: LEDGER_SCHEMA_VERSION, targets }, null, 2) + '\n',
     );
-    atomicWriteFileSync(this.nsFilePath(), targets.namespaced);
-    atomicWriteFileSync(this.customFilePath(), targets.custom);
-    atomicWriteFileSync(this.filePath(), targets.main);
+    try {
+      atomicWriteFileSync(this.nsFilePath(), targets.namespaced);
+      atomicWriteFileSync(this.customFilePath(), targets.custom);
+      atomicWriteFileSync(this.filePath(), targets.main);
+    } finally {
+      // 日志已落盘：这次变更要么现在写完，要么由下一次读取重放，都算一次记录变化（宁可多算）。
+      ledgerWriteRevision++;
+    }
     try {
       fs.unlinkSync(this.pendingFilePath());
     } catch (error) {

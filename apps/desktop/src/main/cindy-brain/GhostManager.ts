@@ -733,6 +733,8 @@ export class GhostManager {
   private readonly retirements = new FeatureRetirementStore(() => this.receiptStore.rootDir());
   private ownerContextKey: string;
   private mutationTail: Promise<void> = Promise.resolve();
+  /** 已完成的互斥变更（安装、更新、卸载、启停、批准等）次数；变更结束、放行下一个之前前进。 */
+  private completedMutations = 0;
   /** One small archive, for the inspect → consent → install path only. */
   private parsedPackageCache: {
     manifestSource?: 'stored-release';
@@ -2364,8 +2366,17 @@ export class GhostManager {
       capabilityActive = false;
       this.activeMutationContext = null;
       this.notificationIndex.invalidate();
+      this.completedMutations++;
       release();
     }
+  }
+
+  /**
+   * 已装集合与批准状态的变更代次：每完成一次互斥变更就前进（只增，进程内）。读取方据此判断一个在途读取是否早于
+   * 某次变更，不读盘、不扫描。
+   */
+  installationRevision(): number {
+    return this.completedMutations;
   }
 
   /**
