@@ -241,6 +241,20 @@ RPC 准入不计模型任务席位。调度中保留完整 peer 身份，取消�
 截短的请求 id 与设备引用，不含参数或结果内容；③ 慢阈值沿用既有 `slow execution`，不新增高频
 日志。自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`。
 
+### 手机新建任务首条消息的分段计时（2026-11-26）
+
+用户反馈手机新任务点发送后二三十秒才发出去，现有日志只有 `maker:create-session` 的总时长，
+分不清卡在建链、查模型、电脑建会话还是交出首条消息。两端各补一条分段计时，只记录、不改行为：
+
+- 手机：`new-session` 的 `creation timing`（`session/newSessionCreationTiming.ts`），
+  每次管线收口写一条，含点发送到管线开始的 `prepareMs`、各阶段 `stagesMs`、失败那一步的
+  `restMs` 与首条消息 clientId 末 8 位。发件箱路径交出后，送达电脑的耗时看同一 clientId 的
+  `send accepted`。只进用户开启的本机诊断录制。
+- 电脑：`session-start-timing` 的 `session start timing`（`maker-ipc/sessionStartTiming.ts`），
+  `bootstrapSession` 每次结束写一条，分供应商组选电脑、等账号模型目录、目录授权、Agent 启动等
+  阶段。该 scope 已精确加入上传白名单，只有固定阶段名、Agent 种类枚举与毫秒数。Codex 内部
+  app-server 启动与 `thread/start` 的拆分仍看本机任务日志的 `startSession` 与 `thread/start ok`。
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装
@@ -945,6 +959,26 @@ Agent-Net 时（开关开着，或路由只走 Agent-Net）：这时业务拿到
 
 ### 共享连接静默与请求隔离
 
+正常状态的共享 WebSocket 同样按物理数据帧限制突发：`DeviceLinkClient` 的首发、ACK 后排空、
+定时 drain／重传、直连回退和裸回包逃生共用每 25ms 滚动区间最多 64 帧的预算，按活跃 relay peer
+公平分配。同一轮同步执行也最多写出 64 帧；同步生产者即使运行超过 25ms，也须先让出事件循环
+才恢复这一轮额度，预算复位与连接停止时清理唯一的让出计时器。原子分片可超过单 peer 份额，
+但不能借未来信用突破连接预算；计量保守延续至最后一片
+真实写入后，失败未写出的片退回预算。等待继续使用原有有界 pending 和 retry timer，只有尚未写出的
+突发等待项才临时加快 drain，不增加重试次数或延长已写请求的截止时间。没有可靠 pending 的旧版
+数据路径达到预算时返回既有 `BACKPRESSURE`；已保留可靠副本的裸回包仍保留原副本。
+认证完成后因数据预算尚未写出的旧版帧保留在原认证队列，由原有计时器继续排空；仍复核原请求
+期限、取消与签名身份，队列后方的控制帧可以继续写出。ACK、认证、建链、心跳和直连协商信令
+不受数据预算阻塞，直连数据及 Agent-Net 的逐 peer 可靠虚拟 socket 不占该物理 relay 信用。
+1013／重启后的低速恢复预算继续独立生效，不把正常吞吐永久限制在 8 帧／250ms。
+
+这是本机写出节奏，理论数据帧上限为每秒 2,560 帧，不是服务端确认或端到端 credit：网络缓冲仍可
+合并多个短区间，控制帧也占服务端队列，持续慢授权仍可能触发 1013。不得据此承诺消除任意服务端
+积压。wire、能力和签名不变，自建中转既有 kind／dst 转发直接兼容，无需升级。
+回归见 `packages/device-link/src/__tests__/client.test.ts` 与
+`scripts/device-link/reconnect.test.ts`：9 peer ×16 条小消息在修前一次写出 144 帧，真实回环
+合包触及 128 帧入口硬边界；修后分段交付、原连接保留，另覆盖原子大包、小 peer、直连及取消。
+
 2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接
 静默时复用现有有界网络探测，不直接累加某台电脑的熔断失败。任一 peer 的有效回包
 都能结束探测；只有共享探测本身超时才恢复整条连接。探测期间后台刷新以未发送的
@@ -1165,15 +1199,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   地址时，ICE 仍能由对端打通：控制通道一直能直连，只公布 mDNS 名的文件通道不能。Info.plist
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
-  更新过的构建工具重新生成运行时才生效。
-- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  更新过的构建工具重新生成运行时才生效。此外，同版本 Electron 主二进制原厂共享同一个 Mach-O
+  `LC_UUID`，macOS 27.3 实测（2026-11-26）与开发态 `Electron.app` 或其他 Electron 应用撞
+  `LC_UUID` 时，`nehelper` 会静默继承拒绝、不弹系统授权框也不把 Cindy 列进系统设置；两处
+  构建入口都在签名前通过 [`scripts/macos-macho-uuid.mjs`](../../scripts/macos-macho-uuid.mjs)
+  按 `(bundleId, electronVersion)` 为主二进制写入确定且唯一的 `LC_UUID`。
+- **应用内检测与提醒（2026-11-22，2026-11-26 改进）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
   与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
   向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
   TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
-  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
-  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
-  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
-  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测在 App 处于前台时也是未决定的 App 触发
+  系统询问的方式（后台时 `nehelper` 会跳过弹窗）；为避免把刚弹出的原生授权框顶掉，点击「开启」先将
+  窗口拉回前台触发探测并在 3 分钟内每 2 秒复查，不再在 1.2 秒后强跳系统设置。若系统已有决定（不会再弹
+  原框），界面给出「打开系统设置」（二次点击支持「在新窗口打开」避开卡页）与「在访达中显示当前 App」
+  入口，便于在「隐私与安全性 › 本地网络」打开或通过 `+` 添加。由拒绝变为允许时，Device Link 调用与
+  网卡变化相同的 `notifyNetworkChanged()` /
   `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
   在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
   （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
@@ -1355,6 +1395,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    打开或连回 Agent 前的只读 `caps` 查询复用共享瞬态重试策略（最多 6 次），等待启动建连或拥堵冷却
    结束；授权拒绝、旧端不支持等非瞬态错误立即结束。只重读这台电脑的能力，不重建 link、不重启 relay，
    不重放 `open`、上传或发送。回归见 `remote-agent/__tests__/connectionPool.test.ts`。其余 op 不自动重放。
+   已发送的 `call` 有两条独立的回传路径：请求回执和现有轮询里的 `result(callId)`。请求回执超时时，
+   控制端采用同一 run、同一 callId 已收到的执行结果；结果尚未到达时再等最多 30 秒。到期仍无结果就保留
+   原超时错误。整个核对过程复用现有轮询，其他任务的游标与重试预算照常。回归见
+   [runClientReply.test.ts](../../apps/desktop/src/main/remote-agent/__tests__/runClientReply.test.ts)。
    设备熔断的 `DEVICE_UNRESPONSIVE` 也属于瞬态错误：`poll` 保留原游标与原两分钟窗口，
    等底层既有单飞探测恢复；注销 run 取消后续重试。共享判据同时让 `reply` / `push` 在原有
    交付次数上限内重试，复用原 requestId／载荷或 seq／帧，不重新执行工具或重放 `open` / `call`。

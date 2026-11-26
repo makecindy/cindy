@@ -6079,9 +6079,11 @@ describe('Teammate model selection shares profile persistence and route reconcil
   // 用户反馈：伙伴用 update_teammate_profile 改自己的模型时选不到插件引擎（设置页可以）。DB tier：经真实
   // 伙伴工具服务读到本机插件引擎、保存进伙伴自己的模型链，并由同一读取入口解析出插件引擎路由；应用默认不变。
   it('saves a plugin engine of this computer into its own chain through the teammate tool', async () => {
-    const { service, sessionId } = await setupModelControl();
+    const { service, sessionId, id } = await setupModelControl();
     pluginEngineViews.list = () => [{ key: 'agy:agy', providerId: 'acp-plugin:agy:agy', ghostId: 'agy', harnessId: 'agy', name: 'Antigravity',
-      availability: { state: 'available' }, models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['high'] }],
+      availability: { state: 'available' }, models: ['gemini-3-pro', 'gemini-3-pro '].map(id => ({
+        id, displayName: 'Gemini 3 Pro', efforts: ['high'],
+      })),
       permissionModes: [], defaultPermissionMode: 'ask' }];
     try {
       const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
@@ -6089,11 +6091,21 @@ describe('Teammate model selection shares profile persistence and route reconcil
       if (!listed.ok) throw new Error(listed.message);
       const choice = listed.available.find(item => item.route.harness === 'acp' && item.route.model === 'gemini-3-pro');
       expect(choice).toMatchObject({ teammateOnly: true, route: { providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' } });
+      const alias = listed.available.find(item => item.route.model === 'gemini-3-pro ');
+      // #12940, DB tier: distinct catalog IDs can collapse to one persisted route.
+      const before = await invoke('local-db:bots:get', 'bot-1');
+      const baseline = JSON.stringify({ scopeId: 'legacy', agentKind: 'pi', model: 'old-model' });
+      h.sqlite!.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?').run(baseline, sessionId);
       expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
-        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
+        modelChain: [{ id: choice!.id }, { id: alias!.id }] })).toMatchObject({ ok: false, errorCode: 'BOT_PROFILE_UPDATE_FAILED' });
+      expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+      expect(h.sqlite!.prepare('SELECT scheduled_model_baseline FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe(baseline);
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }, { id, effort: 'low' }] })).toMatchObject({ ok: true, effective: 'next-turn' });
       const after = await invoke('local-db:bots:get', 'bot-1');
       expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
         { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
+        { harness: 'pi', providerId: 'xd', model: 'enabled-alternate-model', effort: 'low', fastMode: false },
       ]);
       expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
       // Fast is not offered for plugin engines.

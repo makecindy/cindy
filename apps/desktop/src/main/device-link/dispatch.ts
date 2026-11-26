@@ -15,6 +15,7 @@ import type { TaskTagRequest } from '@cindy/maker-shared';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import {
   AGENT_NET_SWITCH_CHANNEL,
+  PEER_APP_UPDATE_CHANNEL,
   FILE_PEER_CHANNEL,
   isFilePeerStreamTransfer,
   REMOTE_AGENT_CHANNEL,
@@ -290,6 +291,14 @@ export interface SetupTransferRemoteHandler {
  * 能不能打开 Agent-Net、请它打开 / 关闭。Main 在 bootstrap 注入，未就绪时明确拒绝。
  */
 export interface AgentNetSwitchRemoteHandler {
+  handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
+}
+
+/**
+ * 远程应用更新检查与触发(2026-11-26 用户确认):同账号电脑查询这台电脑是否有可安装的
+ * Cindy 新版本，并在二次确认后触发内置更新链路。Main 在 bootstrap 注入，未就绪时明确拒绝。
+ */
+export interface PeerAppUpdateRemoteHandler {
   handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
 }
 
@@ -875,6 +884,11 @@ let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
 
 function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
   agentNetSwitchRemoteHandler = handler;
+}
+let peerAppUpdateRemoteHandler: PeerAppUpdateRemoteHandler | null = null;
+
+function setPeerAppUpdateRemoteHandler(handler: PeerAppUpdateRemoteHandler | null): void {
+  peerAppUpdateRemoteHandler = handler;
 }
 
 const cloudPrivateInvokeHandlers = new Map<string, CloudPrivateInvokeHandler>();
@@ -5360,6 +5374,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] agent-net switch failed` } };
     }
   }
+  if (payload.channel === PEER_APP_UPDATE_CHANNEL) {
+    // 只给同账号电脑：共享任务访客与供应商分享受邀者无权检查或触发这台电脑的应用更新。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = peerAppUpdateRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[PEER_APP_UPDATE_UNAVAILABLE] not ready yet' } };
+    try {
+      const name = resolveControllerName(src, undefined) ?? src.slice(0, 8);
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => timing.measure('handler', () => handler.handle(payload.args?.[0], src, name)),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const code = /\bPEER_APP_UPDATE_[A-Z_]+\b/.exec(message)?.[0] ?? 'PEER_APP_UPDATE_UNAVAILABLE';
+      return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] peer app update failed` } };
+    }
+  }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
     try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
@@ -5910,6 +5944,7 @@ return {
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
