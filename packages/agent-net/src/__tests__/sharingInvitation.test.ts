@@ -61,6 +61,71 @@ it('waits for a fresh host signature instead of accepting the expiring lease aga
   try { const pending = lease.acquire(); await vi.advanceTimersByTimeAsync(251); expect(await pending).toEqual(fresh); expect(calls).toBe(2); }
   finally { lease.close(); client.close(); vi.useRealTimers(); }
 });
+
+// Unit, #13041: the existing fresh-lease test never receives a 429. Exercise
+// the production acquire entry with a rate-limited POST or status poll.
+it.each(['post', 'status'] as const)('honors the lease Retry-After after a 429 from %s', async limitedStep => {
+  vi.useFakeTimers();
+  const { identity: host, bootstrap } = createPrivateNetwork('Rate limited lease');
+  const guest = generateIdentity('guest');
+  const membership = { memberId: 'member', guestSubject: 'guest-account', memberVersion: 1 };
+  const scope = { kind: 'shared-task', resourceId: 'task', networkId: bootstrap.networkId,
+    rootPublicKey: bootstrap.rootPublicKey, hostDeviceId: host.deviceId, ...membership } as const;
+  const delegation = createDelegation(host, bootstrap.ownerCertificate, { ...scope, guest, scope: membership });
+  const signer = { identity: guest, sign: async (value: string) => signature(guest.signingPrivateKey, value),
+    random: async () => toBase64Url(new Uint8Array(18).fill(5)) };
+  const reply = { id: delegation.id, networkId: scope.networkId, rootPublicKey: scope.rootPublicKey,
+    certificate: bootstrap.ownerCertificate };
+  const now = Date.now();
+  const initialPollDelay = limitedStep === 'status' ? 250 : 0;
+  const deadline = now + initialPollDelay + 90_000;
+  const headers: Record<string, string> = limitedStep === 'post' ? { 'Retry-After': '90' }
+    : { Date: new Date(0).toUTCString(), 'Retry-After': new Date(90_000).toUTCString() };
+  let current = true;
+  const fetch = vi.fn(async (url: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (String(init?.body).includes('"resourceId":"independent"')) {
+      return Response.json({ error: { code: 'PERMISSION_DENIED' } }, { status: 403 });
+    }
+    if (Date.now() >= deadline) {
+      return Response.json({ ...reply, status: 'ready', delegation });
+    }
+    if (limitedStep === 'status' && !String(url).endsWith('/status')) {
+      return Response.json({ ...reply, status: 'pending' });
+    }
+    return Response.json({ error: { code: 'TOO_MANY_REQUESTS' } }, { status: 429, headers });
+  });
+  const client = new AgentNetSharingClient({ base: 'https://relay.example.test', networkId: scope.networkId,
+    rootPublicKey: scope.rootPublicKey, signer, assertCurrent() {}, hash: bytes => bytes, fetch,
+    getIdentityCard: async () => ({ card: 'unit-card', expiresAt: new Date(Date.now() + 300_000).toISOString() }) });
+  const options = { client, applicant: signer, scope, verifyCertificate, verifyDelegation,
+    assertCurrent() { if (!current) throw new Error('AGENT_NET_OWNER_CHANGED'); } };
+  const lease = new AgentNetSharingTransport(options);
+  const initialCalls = limitedStep === 'status' ? 2 : 1;
+  try {
+    const first = expect(lease.acquire()).rejects.toMatchObject({ status: 429, retryAt: deadline });
+    await vi.advanceTimersByTimeAsync(initialPollDelay);
+    await first;
+    await vi.advanceTimersByTimeAsync(89_999);
+    const blocked = lease.acquire().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls);
+    await expect(blocked).resolves.toMatchObject({ status: 429, retryAt: deadline });
+    const independent = new AgentNetSharingTransport({ ...options, scope: { ...scope, resourceId: 'independent' } });
+    await expect(independent.acquire()).rejects.toMatchObject({ status: 403, code: 'PERMISSION_DENIED' });
+    independent.close();
+    current = false;
+    expect(() => lease.acquire()).toThrow('AGENT_NET_OWNER_CHANGED');
+    current = true;
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(lease.acquire()).resolves.toEqual(delegation);
+    await expect(lease.acquire()).resolves.toEqual(delegation);
+    expect(fetch).toHaveBeenCalledTimes(initialCalls + 2);
+    lease.close();
+    expect(() => lease.acquire()).toThrow('AGENT_NET_SHARING_CLOSED');
+  } finally {
+    lease.close(); client.close(); vi.useRealTimers();
+  }
+});
 it.each(['shared-task', 'provider-share'] as const)('round-trips a %s web invitation and existing Cindy native handoff with the same pinned scope', kind => {
   const value = { ...receipt, kind }, server = 'https://relay.example.test';
   const link = buildAgentNetSharingInvitation(value, server, 'cindycn');
