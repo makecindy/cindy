@@ -300,7 +300,7 @@
     "goalResumed": "Utilização reposta, a continuar o objetivo",
     "goalCapacityRetry": "O serviço do modelo estava ocupado — a tentar o objetivo novamente",
     "autoResume": {
-      "separator": "Ligação interrompida — retomada automaticamente",
+      "separator": "Resposta vazia — retoma automática",
       "succeeded": "Ligação restabelecida",
       "failed": "Falha ao restabelecer a ligação",
       "neutral": "Restabelecer ligação",

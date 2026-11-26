@@ -299,7 +299,7 @@
     "goalResumed": "Nutzung wieder verfügbar, Ziel wird weiterverfolgt",
     "goalCapacityRetry": "Modelldienst war ausgelastet — Ziel wird erneut versucht",
     "autoResume": {
-      "separator": "Verbindung unterbrochen — automatisch fortgesetzt",
+      "separator": "Leere Antwort – automatisch fortgesetzt",
       "succeeded": "Verbindung wiederhergestellt",
       "failed": "Erneute Verbindung fehlgeschlagen",
       "neutral": "Erneut verbinden",

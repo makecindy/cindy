@@ -299,7 +299,7 @@
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
     "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",
     "autoResume": {
-      "separator": "연결이 중단되어 자동으로 재개되었습니다",
+      "separator": "응답이 비어 있어 자동으로 재개했습니다",
       "succeeded": "다시 연결되었습니다",
       "failed": "다시 연결하지 못했습니다",
       "neutral": "다시 연결",

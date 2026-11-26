@@ -299,7 +299,7 @@
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",
     "autoResume": {
-      "separator": "Connection interrupted — resumed automatically",
+      "separator": "Empty response — resumed automatically",
       "succeeded": "Reconnected",
       "failed": "Reconnect failed",
       "neutral": "Reconnect",

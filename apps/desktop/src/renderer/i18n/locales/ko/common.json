@@ -16272,7 +16272,7 @@
         "groupSwitch": "다른 컴퓨터로 자동 전환해 이어서 진행했습니다"
       },
       "autoResumeSeparator": {
-        "label": "연결이 중단되어 자동으로 재개되었습니다"
+        "label": "응답이 비어 있어 자동으로 재개했습니다"
       },
       "autoResumePending": {
         "label": "다시 연결하는 중",
