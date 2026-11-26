@@ -37,6 +37,9 @@ vi.mock('../appearance-settings-ipc.js', () => ({
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
+vi.mock('../windowMaximizeState.js', () => ({
+  installWindowMaximizeStateBroadcast: vi.fn(),
+}));
 vi.mock('../window-theme-mode-store.js', () => ({ readWindowThemeSnapshot: () => null }));
 
 import { openSessionInNewWindow } from '../secondary-windows';

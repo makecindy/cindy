@@ -28,6 +28,7 @@ import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
 import { markRsbWindowWebContentsId } from './registry.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import { installWindowMaximizeStateBroadcast } from '../windowMaximizeState.js';
 
 const log = createLogger('right-sidebar-window');
 
@@ -113,6 +114,7 @@ export function createSidebarHostWindow(options: SidebarHostWindowOptions): Brow
   win.on('leave-full-screen', () => {
     if (!win.isDestroyed()) win.webContents.send('fullscreen-change', false);
   });
+  installWindowMaximizeStateBroadcast(win);
   markRsbWindowWebContentsId(win.webContents.id);
   markAppContentWindow(win);
   installWindowHiddenBroadcast(win);
