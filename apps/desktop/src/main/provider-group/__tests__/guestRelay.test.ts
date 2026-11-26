@@ -151,7 +151,7 @@ describe('provider group guest relay planner', () => {
   // reserveFor regression missed guests, whose pending handles live externally.
   it('balances concurrent guest reservations and retires pending load on state or release', async () => {
     const second = member('device:second:anthropic-3', 'device', 'second', 'anthropic-3');
-    const config = { ...CONFIG, strategy: 'least' as const, members: [MINI, second] };
+    const config = { ...CONFIG, strategy: 'expiring' as const, members: [MINI, second] };
     const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
     const directory = createProviderGroupDirectory({
       listLocalProviders: async () => [], localDeviceName: () => 'O',
@@ -163,7 +163,7 @@ describe('provider group guest relay planner', () => {
       listReceivedShares: () => [], isMobilePlatform: () => false, now: () => 1_000,
     });
     const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
-      isTurnRunning: () => false, now: () => 1_000, random: () => 0,
+      isTurnRunning: () => false, now: () => 1_000,
       externalRunning: (p, m) => externalLoad.running(p, m), externalPending: (p, m) => externalLoad.pending(p, m),
       readPoolScheduling: async m => ({ version: 1, accounts: m.key === MINI.key ? 2 : 1,
         running: m.key === MINI.key ? 0 : 3, totalRunning: m.key === MINI.key ? 4 : 3,

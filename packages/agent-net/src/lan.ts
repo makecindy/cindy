@@ -17,13 +17,23 @@ export class LanDiscovery {
   private started = false;
   private closed = false;
   private readonly interfaces: string[] = [];
+  private port: number;
   constructor(private readonly options: {
     identity: Identity; networkId: string; port: number;
     /** Match an explicitly bound transport, including loopback-only integration runs. */
     interfaceAddress?: string;
     certificateFor(device: string): DeviceCertificate | undefined;
     onCandidate(device: string, address: { address: string; port: number }): void;
-  }) {}
+  }) {
+    this.port = options.port;
+  }
+  /** 底层 UDP 套接字重建换端口后同步更新公告端口并立即广播。 */
+  updatePort(port: number): void {
+    if (this.closed || !Number.isInteger(port) || port < 1 || port > 65535 || this.port === port) return;
+    this.port = port;
+    this.answered.clear();
+    this.announce();
+  }
   start(): void {
     if (this.started || this.closed) return;
     this.started = true;
@@ -48,8 +58,8 @@ export class LanDiscovery {
     socket.unref();
   }
   beacon(): string {
-    const { identity, networkId, port } = this.options;
-    const body = { v: 2 as const, network: networkId, device: identity.deviceId, key: identity.transportKey, port, at: Date.now(), nonce: randomBytes(12).toString('base64url') };
+    const { identity, networkId } = this.options;
+    const body = { v: 2 as const, network: networkId, device: identity.deviceId, key: identity.transportKey, port: this.port, at: Date.now(), nonce: randomBytes(12).toString('base64url') };
     return JSON.stringify({ ...body, signature: signature(identity.signingPrivateKey, payload(body)) });
   }
   private announce(): void {

@@ -30,7 +30,7 @@ function restoredRows(): ChatMessage[] {
   } as Message);
   return makerChatStore.__mapServerMessagesForTest([
     row('request', 'user', 'Check the project', 1000),
-    row('timeout', 'error', { message: raw, reason: 'codex_reconnect_stalled' }, 2000),
+    row('timeout', 'error', { message: raw, reason: 'codex_reconnect_stalled', reconnectHandoff: 'disabled' }, 2000),
     row('location', 'agent_switch', { fromAgentKind: 'codex', toAgentKind: 'codex', nativeHistory: 'restored' }, 3000),
   ]);
 }
@@ -46,9 +46,9 @@ describe('terminal error tail across noninteractive boundaries', () => {
     const retry = vi.fn();
     const dismiss = vi.fn();
     render(<ErrorTailErrorBanner errorText={remoteErrorMessageForBanner(error!.content)}
-      errorReason={error!.errorReason} agentKind="codex" onContinue={retry} onDismiss={dismiss} />);
-    expect(screen.getByText('logic.errors.upstreamResponseIdleTimeout')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.retry' }));
+      errorReason={error!.errorReason} reconnectHandoff={error!.reconnectHandoff} agentKind="codex" onContinue={retry} onDismiss={dismiss} />);
+    expect(screen.getByText('logic.errors.codexReconnectStalled logic.errors.reconnectAutoResumeDisabled')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.silentStopContinueTitle' }));
     expect(retry).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.cancelTitle' }));
     expect(dismiss).toHaveBeenCalledOnce();

@@ -49,6 +49,7 @@ export interface OutboxSessionAccessDeps {
   ): Promise<unknown>;
   readSession(record: DurableOutboxRecord): Promise<RemoteSession>;
   isForeground(): boolean;
+  canContinueInBackground?(record: DurableOutboxRecord): boolean;
   canConnect(deviceId: string): boolean;
   isCreationHeld(sessionId: string): boolean;
   hasCreationTask(sessionId: string): boolean;
@@ -90,7 +91,7 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
     return read;
   };
   const canRun = (record: DurableOutboxRecord) => {
-    if (record.chat || !deps.isForeground()) return false;
+    if (record.chat || !(deps.isForeground() || deps.canContinueInBackground?.(record) === true)) return false;
     const row = knownSession(record);
     return (!CINDY_MAKE_ENABLED && isCindyMakeSource(row?.source)) ||
       isDurableOutboxSettled(record) ||

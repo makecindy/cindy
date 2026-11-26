@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { Button } from '../button';
 import { Input } from '../input';
 import { ConfirmDialog } from '../confirm-dialog';
+import { CountBadge } from '../badge';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
@@ -83,4 +84,25 @@ it('prioritizes typed confirmation over explicit main focus and blocks busy clos
   fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
   expect(close).not.toHaveBeenCalled();
+});
+
+// CountBadge replaced the sidebar-only NavigationCountBadge (DESIGN.md §4 Badges). Screen readers
+// must hear the full count label as part of the row's name, not the clipped "99+", and an empty
+// count must leave no badge behind.
+it('reads a count badge by its label, caps the visible count and hides it at zero', () => {
+  const { rerender } = render(
+    <button type="button">
+      Teammates
+      <CountBadge count={120} label="120 unread messages" />
+    </button>,
+  );
+  expect(screen.getByRole('button', { name: /^Teammates\s*120 unread messages$/ })).toBeTruthy();
+  expect(screen.getByText('99+').getAttribute('aria-hidden')).toBe('true');
+  rerender(
+    <button type="button">
+      Teammates
+      <CountBadge count={0} label="0 unread messages" />
+    </button>,
+  );
+  expect(screen.getByRole('button').textContent).toBe('Teammates');
 });

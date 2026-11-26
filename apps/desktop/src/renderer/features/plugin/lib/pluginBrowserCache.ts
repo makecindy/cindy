@@ -19,9 +19,9 @@ export function trimPluginPages<T>(pages: Map<number, T>, limit: number, range?:
   }
   for (const key of keys.slice(limit)) pages.delete(key);
 }
-// Both publisher tabs browse the same public page. The catalog accepts up to 100 summaries.
+// Browse All with the same bounded batch as the publisher tabs; searches stay compact.
 export function pluginCatalogPageLimit(scope: string, query: string) {
-  return scope === 'public' && !query.trim() ? 100 : PLUGIN_PAGE_SIZE;
+  return (scope === 'public' || scope === 'all') && !query.trim() ? 100 : PLUGIN_PAGE_SIZE;
 }
 export function pluginPageSize(items: readonly PluginMarketItem[]) {
   const size = { all: items.length, official: 0, community: 0 };
