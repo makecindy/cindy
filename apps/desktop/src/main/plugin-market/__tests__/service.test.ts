@@ -1233,10 +1233,16 @@ describe('PluginMarketService migration and defaultInstall', () => {
    * - tier：unit（临时目录，运行时替身）。
    */
   function simulatorRemote(service: PluginMarketService) {
+    const projected = () => runtime.ghosts.map((ghost) => ({
+      ...ghost, approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    })) as unknown as InstalledGhost[];
     const management = new RemotePluginManagement({
-      list: () => runtime.ghosts.map((ghost) => ({
-        ...ghost, approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-      })) as unknown as InstalledGhost[],
+      list: projected,
+      instance: (instanceKey) => {
+        const ghost = projected().find((candidate) => installedGhostStoragePart(candidate) === instanceKey);
+        return ghost ? { storagePart: instanceKey, approval: ghostInstallApprovalToken(ghost.approval), version: ghost.manifest.version }
+          : undefined;
+      },
       capture: () => () => true,
       captureReceipt: () => () => true,
       market: {
@@ -1247,7 +1253,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
             consent: { prompt, initiator: 'user' }, assertCurrent, assertScope, ...(remoteOperation ? { remoteOperation } : {}),
           });
         },
-        installedOperations: (items, controller) => service.withInstalledOperationIds(items, controller),
+        installedOperations: (items, controller, live) => service.withInstalledOperationIds(items, controller, live),
       },
       setEnabled: async () => {},
       uninstall: async () => {},

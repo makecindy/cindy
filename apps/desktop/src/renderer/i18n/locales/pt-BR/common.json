@@ -15753,6 +15753,8 @@
       "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
+      "piRetryHistoryTooLarge": "A mensagem não foi enviada. Ao ler o histórico para tentar novamente, o Pi encontrou um quadro que excedia o limite local de 16 MiB. Você pode continuar em uma nova tarefa.",
+      "messageNotSent": "A mensagem não foi enviada.",
       "replyFailed": "Não foi possível concluir a resposta",
       "queuedSendRecovery": "Sua mensagem não foi enviada. Selecione “Tentar novamente” para enviá-la sem alterações. Uma nova mensagem substituirá a anterior.",
       "retryTitle": "Reenviar a última mensagem",

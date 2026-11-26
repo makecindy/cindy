@@ -348,6 +348,7 @@ import {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
 } from '../../shared/pluginIdentity.js';
+import { projectInstalledOperationAttribution } from '../../shared/pluginMarket.js';
 import { LEGACY_SIMULATOR_ID, validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 import type { GhostInstallReceipt } from './ghostInstallReceipt.js';
 import { allocateArchiveInstanceKey, selectMarketPluginIdForInstance } from './pluginInstanceRegistry.js';
@@ -9440,6 +9441,25 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
+    // 契约 V2.10：目录、推荐、详情只为本控制端的 'self' 候选按实例键读当前批准令牌与版本：只读该实例的注册表项与
+    // 批准记录，不做完整实例投影（不读安装来源和市场账本），不重扫全部安装。会话与账号门禁与 availableGhosts()
+    // 同一口径。读不到即 undefined，按未证实处理。
+    instance: (instanceKey) => {
+      try {
+        if (isAppSessionBoundaryPending()) return undefined;
+        const facts = getGhostManager().readInstalledInstanceApproval(instanceKey);
+        if (!facts) return undefined;
+        if (!getAppCapabilities().canUseCindyAccountServices && ghostRequiresCindyAccount(facts.manifest)) return undefined;
+        return {
+          storagePart: instanceKey,
+          approval: ghostInstallApprovalToken({ state: 'approved', revision: facts.revision }),
+          version: facts.manifest.version,
+        };
+      } catch {
+        // 读不到（换号中、根目录或批准记录异常）就按未证实处理，不让整次读取失败。
+        return undefined;
+      }
+    },
     publication: {
       prepare: async (id, expected) => {
         const host = await import('../plugin-contributions/host.js');
@@ -9509,7 +9529,9 @@ export function registerGhostIpc(): void {
       },
       installedOperations: (items, controller, live) => {
         const services = requireRemotePluginManagementServices();
-        return services.market.installedOperations ? services.market.installedOperations(items, controller, live) : Promise.resolve([...items]);
+        return services.market.installedOperations ? services.market.installedOperations(items, controller, live)
+          // 服务层不支持归属：已装条目一律 'unattributed'，不把条目上可能带着的字段原样放出。
+          : Promise.resolve(items.map((item) => projectInstalledOperationAttribution(item, null)));
       },
     },
     setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },

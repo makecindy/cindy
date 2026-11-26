@@ -65,6 +65,7 @@ import {
   isPluginMarketOperationId,
   isPluginMarketSort,
   projectInstalledOperationAttribution,
+  type InstalledInstanceFacts,
   isPluginMarketSourceId,
   marketSourceKey,
   parseCustomMarketPluginId,
@@ -633,25 +634,46 @@ function isGhostBusy(
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
-/** 写进安装记录的远程操作证据（契约 V2.9），落位时再补上当次包的 raw manifest 摘要。 */
+/**
+ * 远程操作证据（契约 V2.9／V2.10）。提交回调把落位结果记进 `placed`（不写账本）；整次安装成功收尾后，
+ * installReviewed 才把它补进账本——此后不再有任何步骤能让回执变成 failed，所以「读到 'self' ⇒ 该操作的回执是
+ * succeeded」。
+ */
 interface RemoteOperationEvidence {
   operationId: string;
   /** 发起方设备身份的本机不可逆标识。 */
   controller: string;
   keyId: string;
+  placed?: {
+    ledger: PluginMarketLedger;
+    /** 提交回调写下的那条记录（不含证据）。 */
+    record: PluginMarketInstallationRecord;
+    binding: NonNullable<PluginMarketInstallationRecord['remoteOperationBinding']>;
+  };
 }
 
 /**
- * 契约 V2.9／V2.10：本次远程操作落位的那份包的证据。`approval` 是落位后实例的批准令牌（每次落位新铸的修订），
- * 把证据钉在这一次安装上：同版本、同字节的另一次安装也对不上。实例未批准时不留证据。
+ * 契约 V2.9／V2.10：本次远程操作落位的那份包的证据，只记在内存里，等安装成功收尾再写。`approval` 是落位后实例
+ * 的批准令牌（每次落位新铸的修订），把证据钉在这一次安装上：同版本、同字节的另一次安装也对不上。实例未批准时不留证据。
  */
-function remoteOperationBindingOf(
+function stageRemoteOperationBinding(
   evidence: RemoteOperationEvidence | null | undefined,
-  rawManifestSha256: string,
+  ledger: PluginMarketLedger,
+  record: PluginMarketInstallationRecord,
   installed: InstalledGhost,
-): Pick<PluginMarketInstallationRecord, 'remoteOperationBinding'> {
-  if (!evidence || installed.approval?.state !== 'approved') return {};
-  return { remoteOperationBinding: { ...evidence, rawManifestSha256, approval: ghostInstallApprovalToken(installed.approval) } };
+): void {
+  if (!evidence || installed.approval?.state !== 'approved' || typeof record.rawManifestSha256 !== 'string') return;
+  evidence.placed = {
+    ledger,
+    record,
+    binding: {
+      operationId: evidence.operationId,
+      controller: evidence.controller,
+      keyId: evidence.keyId,
+      rawManifestSha256: record.rawManifestSha256,
+      approval: ghostInstallApprovalToken(installed.approval),
+    },
+  };
 }
 
 /** 同一 owner 当前密钥下的来源标识视图（见 sources/sourceId.ts）。只有同一 keyId 算出的标识才能比较。 */
@@ -1181,6 +1203,28 @@ function operationEvidenceByInstance(
   return evidence;
 }
 
+/**
+ * 契约 V2.10：条目投影所用的本机快照是否早于 `liveGhosts`——某个条目对应的实例在 `liveGhosts` 里存在，但快照里
+ * 没有它，或快照里的不是同一次安装（实例键、批准令牌、版本）。纯内存比对。
+ */
+function marketPartOlderThanInstances(items: readonly PluginMarketItem[], liveGhosts: readonly InstalledGhost[]): boolean {
+  const live: LocalInstallSnapshot = {
+    ...EMPTY_LOCAL_INSTALL_SNAPSHOT,
+    ghosts: [...liveGhosts],
+    ghostsById: indexByGhostId(liveGhosts, (ghost) => ghost.manifest.id),
+  };
+  return items.some((item) => {
+    const local = itemInstallSnapshots.get(item);
+    if (!local) return false;
+    const now = snapshotGhost(live, item);
+    if (!now) return false;
+    const then = snapshotGhost(local, item);
+    if (!then) return true;
+    const a = instanceFactsOf(then), b = instanceFactsOf(now);
+    return a.storagePart !== b.storagePart || a.approval !== b.approval || a.version !== b.version;
+  });
+}
+
 /** 一条可投影为 `'self'` 的操作证据，连同核实它时用的已装实例与账本记录。 */
 interface InstalledOperationEvidence {
   operationId: string;
@@ -1192,21 +1236,54 @@ interface InstalledOperationEvidence {
  * 契约 V2.10：这条证据对应的那次安装，是否仍是出口要返回的那个实例的当前安装。两项同时成立才算：
  * - 账本里该实例的记录仍是核实时那一份（逐字节相同）。任何安装、更新、重装（包括同一份包被别人再装一遍）、
  *   卸载、换源都会重写记录，所以换装一定对不上。
- * - `live` 给出时，其中的同一实例仍是核实时那次安装：同一批准修订（每次落位都新铸）、同一版本。
- *   这一项把归属与同一响应里返回的实例列表钉在一起。
+ * - `current`（出口此刻读到的同一实例；`'unchecked'` 只用于不经远程出口的调用）仍是核实时那次安装：同一批准
+ *   修订（每次落位都新铸）、同一版本。快照出口给的是它随后原样放进响应的那份列表里的实例；目录、推荐、
+ *   详情给的是按实例单独读到的当前实例。读不到即对不上。
  */
 function evidenceStillCurrent(
   evidence: InstalledOperationEvidence,
-  ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>>,
-  live: readonly InstalledGhost[] | undefined,
-): boolean {
-  if (JSON.stringify(ledgerNow[pluginLedgerRecordKey(evidence.record)]) !== JSON.stringify(evidence.record)) return false;
-  if (!live) return true;
-  const part = installedGhostStoragePart(evidence.ghost);
-  const current = live.find((ghost) => installedGhostStoragePart(ghost) === part);
-  return Boolean(current &&
-    ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(evidence.ghost.approval) &&
-    current.manifest.version === evidence.ghost.manifest.version);
+  ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null,
+  current: InstalledInstanceFacts | undefined | 'unchecked',
+): 'current' | 'changed' | 'unverifiable' {
+  // 读不到账本或读不到当前实例：无法核实，按未证实处理，但不是「换装」，不触发重读。
+  if (!ledgerNow) return 'unverifiable';
+  if (JSON.stringify(ledgerNow[pluginLedgerRecordKey(evidence.record)]) !== JSON.stringify(evidence.record)) return 'changed';
+  if (current === 'unchecked') return 'current';
+  if (!current) return 'unverifiable';
+  const verified = instanceFactsOf(evidence.ghost);
+  return current.storagePart === verified.storagePart && current.approval === verified.approval &&
+    current.version === verified.version
+    ? 'current'
+    : 'changed';
+}
+
+function instanceFactsOf(ghost: InstalledGhost): InstalledInstanceFacts {
+  return {
+    storagePart: installedGhostStoragePart(ghost),
+    approval: ghostInstallApprovalToken(ghost.approval),
+    version: ghost.manifest.version,
+  };
+}
+
+/**
+ * 契约 V2.10：这些条目里有没有可能成为 `'self'` 的——条目已装或可更新，且它投影时那份快照里，同一实例的
+ * 已装记录带着操作证据（还没比对控制端）。只看内存里的快照，不读文件；没有时整次投影不读密钥、账本或实例。
+ */
+function mayCarryOperationEvidence(items: readonly PluginMarketItem[]): boolean {
+  const bound = new Map<LocalInstallSnapshot, Set<string>>();
+  return items.some((item) => {
+    if (item.installState !== 'installed' && item.installState !== 'update-available') return false;
+    const local = itemInstallSnapshots.get(item);
+    if (!local) return false;
+    let keys = bound.get(local);
+    if (!keys) {
+      keys = new Set(Object.values(local.installations)
+        .filter((record) => record.installed && record.remoteOperationBinding !== undefined)
+        .map(marketInstanceKey));
+      bound.set(local, keys);
+    }
+    return keys.has(marketInstanceKey(item));
+  });
 }
 
 function indexByGhostId<T>(items: readonly T[], ghostId: (item: T) => string): Map<string, T[]> {
@@ -2470,7 +2547,7 @@ export class PluginMarketService {
     if (context.remoteOperation) assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
-      return this.customInstall(
+      return this.finishRemoteOperation(operationEvidence, await this.customInstall(
         customRef,
         options,
         {
@@ -2485,7 +2562,7 @@ export class PluginMarketService {
         assertScope,
         progress,
         operationEvidence,
-      );
+      ));
     }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2520,7 +2597,7 @@ export class PluginMarketService {
     const local = this.localInstallSnapshot(ledger, undefined, plugin.ghostId);
     const target = organizationDeliveryTarget(plugin, local, owner);
     const existing = snapshotGhost(local, target);
-    return this.installDetail(
+    return this.finishRemoteOperation(operationEvidence, await this.installDetail(
       plugin,
       {
         consent: {
@@ -2547,7 +2624,39 @@ export class PluginMarketService {
       owner,
       ledger,
       local,
-    );
+    ));
+  }
+
+  /**
+   * 契约 V2.10：远程操作的安装已成功收尾（此后回执只会是 succeeded），把提交回调记下的证据补进它写下的那条记录。
+   * 记录在此期间被任何写入改过、或已带证据，就放弃（读成 'unattributed'，安全方向）。这里的任何失败都只记日志：
+   * 包已落位、安装已成功，不能因为补证据失败把回执改成 failed。进程在落位后、补证据前退出时同样没有证据。
+   */
+  private async finishRemoteOperation<T>(evidence: RemoteOperationEvidence | null, result: T): Promise<T> {
+    const placed = evidence?.placed;
+    if (!placed) return result;
+    try {
+      const attached = await this.withCapturedLedgerMutation(placed.ledger,
+        () => placed.ledger.attachRemoteOperationBinding(placed.record, placed.binding));
+      if (attached) {
+        // 补写之前开始的只读在途读取看不到这份证据：之后的请求不再并入它们，另起读取。只放掉只读的发现读取与本机
+        // 扫描；带对账的快照不动（它们承载自动更新与延后对账状态，不能并发再起一份）。
+        for (const key of [...this.snapshotFlights.keys()]) {
+          if ((JSON.parse(key) as unknown[])[1] === true) this.snapshotFlights.delete(key);
+        }
+        this.localReadFlights.clear();
+      } else {
+        log.info('remote operation evidence not recorded: the installation changed before the operation finished', {
+          ghostId: placed.record.ghostId,
+        });
+      }
+    } catch (error) {
+      log.warn('remote operation evidence was not recorded', {
+        ghostId: placed.record.ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return result;
   }
 
   async uninstall(pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> {
@@ -3053,7 +3162,7 @@ export class PluginMarketService {
             // 不应把成功安装误报成失败或漏写来源。
             const manifestDigest = evidence.legacyManifestDigest;
             await this.withCapturedLedgerMutation(ledger, () => {
-              ledger.upsertInstallation({
+              const record: PluginMarketInstallationRecord = {
                 pluginId,
                 ghostId: plugin.ghostId,
                 releaseId,
@@ -3077,8 +3186,10 @@ export class PluginMarketService {
                 ...(sourceId && sourceIdKeyId
                   ? { sourceIdBinding: { sourceId, sourceKey, rawManifestSha256: evidence.rawManifestSha256, keyId: sourceIdKeyId } }
                   : {}),
-                ...remoteOperationBindingOf(operationEvidence, evidence.rawManifestSha256, _installed),
-              });
+              };
+              ledger.upsertInstallation(record);
+              // 契约 V2.10：操作证据等整次安装成功收尾再写（见 installReviewed）。
+              stageRemoteOperationBinding(operationEvidence, ledger, record, _installed);
             });
             replacedRoute = null;
           },
@@ -3720,12 +3831,11 @@ export class PluginMarketService {
               rawManifestSha256: evidence.rawManifestSha256,
               legacyManifestDigest: evidence.legacyManifestDigest,
               legacyManifestDigests: [],
-            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}),
-            ...remoteOperationBindingOf(options.remoteOperation, evidence.rawManifestSha256, _committed) };
+            }), ...(options.verifiedServerRoot ? { serverRoot: options.verifiedServerRoot } : {}) };
+            // 契约 V2.10：操作证据等整次安装成功收尾再写（见 installReviewed）；迁移与普通提交都先写不含证据的记录。
+            stageRemoteOperationBinding(options.remoteOperation, ledger, next, _committed);
             if (simulatorMigration) {
-              // 契约 V2.10：本次远程更新生成的新绑定由这里显式交给账本；恢复中断迁移的路径不传，旧绑定因此被清除。
-              if (!currentRecordNow ||
-                  !ledger.migrateSimulatorInstallation(currentRecordNow, next, next.remoteOperationBinding)) {
+              if (!currentRecordNow || !ledger.migrateSimulatorInstallation(currentRecordNow, next)) {
                 throwIpcError('PRECONDITION_FAILED', 'Simulator market route changed during migration');
               }
             } else if (resubscribeSubject) {
@@ -3779,31 +3889,59 @@ export class PluginMarketService {
    * - 只按条目自己投影时用的那份本机快照核实（见 itemInstallSnapshots），与 `installState` 同出一次账本读取。
    * - 记录里的操作证据由当前密钥为这个控制端算出、绑定的包摘要等于记录与磁盘上的包、且属于同一实例时，才是
    *   `'self'` 候选；其余已装条目一律 `'unattributed'`（不说明是谁）。
-   * - 候选在最后一个 await 之后同步复核（evidenceStillCurrent）：账本记录仍是那一份，且 `live.ghosts()` 返回的、
-   *   出口随后原样放进同一响应的实例仍是那次安装。对不上即降为 `'unattributed'` 并调用 `live.onChanged`，
-   *   由出口决定是否整次重读。宁可不给「打开」，也不把一次安装的凭据配给另一次安装。
+   * - 候选在最后一个 await 之后同步复核（evidenceStillCurrent）：账本记录仍是那一份，且当前实例仍是那次安装。
+   *   当前实例的来源由出口决定：返回 `ghosts[]` 的快照出口给 `live.ghosts`（整份列表，出口本来就要读、读一次、
+   *   原样放进响应）；目录、推荐、详情给 `live.instance`，只对本控制端的 `'self'` 候选按实例读取，没有候选时
+   *   零额外读取。对不上即降为 `'unattributed'` 并调用 `live.onChanged`，由出口决定是否整次重读。
+   *   宁可不给「打开」，也不把一次安装的凭据配给另一次安装。
    * - 出口统一经 projectInstalledOperationAttribution，传入条目上已有的两个字段先去掉。本机界面不经过这里。
    */
   async withInstalledOperationIds<T extends PluginMarketItem>(
     items: readonly T[],
     controller: string,
-    live?: { ghosts(): readonly InstalledGhost[]; onChanged?(): void },
+    live?: {
+      ghosts?(): readonly InstalledGhost[];
+      instance?(instanceKey: string): InstalledInstanceFacts | undefined;
+      onChanged?(): void;
+    },
   ): Promise<T[]> {
     let tag: string | null = null;
     let keyId: string | null = null;
     let ledger: PluginMarketLedger | null = null;
-    if (items.length > 0 && controller && canCaptureMarketOwner()) {
-      const owner = captureMarketOwner();
-      const sourceIds = await this.preparedSourceIds();
-      requireSameMarketOwner(owner);
-      tag = sourceIds.controllerTag?.(controller) ?? null;
-      keyId = sourceIds.keyId();
-      ledger = this.ledgerForOwner(owner);
+    // 没有任何条目带操作证据时（空页、未安装、本机装的、旧记录）不读密钥文件，整次投影零额外读取。
+    if (controller && mayCarryOperationEvidence(items) && canCaptureMarketOwner()) {
+      try {
+        const owner = captureMarketOwner();
+        const sourceIds = await this.preparedSourceIds();
+        requireSameMarketOwner(owner);
+        tag = sourceIds.controllerTag?.(controller) ?? null;
+        keyId = sourceIds.keyId();
+        ledger = this.ledgerForOwner(owner);
+      } catch {
+        // 换号或密钥不可用：不给任何 'self'（下面一律 'unattributed'），是否整次作废由出口的 current() 决定。
+        tag = keyId = null;
+        ledger = null;
+      }
     }
-    // 以下全部同步：响应里的实例列表、账本复核与归属出自同一时刻。
-    const liveGhosts = live?.ghosts();
+    // 以下全部同步：响应里的实例、账本复核与归属出自同一时刻。快照出口的整份列表在这里读（它本来就要读），
+    // 其它出口只对候选按实例读。
+    const liveGhosts = live?.ghosts?.();
+    // 快照出口：市场部分可能来自一次更早开始、被共享的在途读取（比如装完立刻读，市场部分却在提交之前读的）。
+    // 只要某个条目对应的实例在这份列表里是新出现的或已不是那次安装，就请出口整次重读一次。只在内存里比对，
+    // 不新增任何读取；列表里没有的实例（被移除、或按账号门禁不可见）不算。
+    if (liveGhosts && live?.onChanged && marketPartOlderThanInstances(items, liveGhosts)) live.onChanged();
+    const instances = new Map<string, InstalledInstanceFacts | undefined>();
+    const currentInstance = (part: string): InstalledInstanceFacts | undefined | 'unchecked' => {
+      if (!live) return 'unchecked';
+      if (liveGhosts) {
+        const ghost = liveGhosts.find((candidate) => installedGhostStoragePart(candidate) === part);
+        return ghost ? instanceFactsOf(ghost) : undefined;
+      }
+      if (!instances.has(part)) instances.set(part, live.instance?.(part));
+      return instances.get(part);
+    };
     const evidenceBySnapshot = new Map<LocalInstallSnapshot, Map<string, InstalledOperationEvidence>>();
-    let ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null = null;
+    let ledgerNow: Readonly<Record<string, PluginMarketInstallationRecord>> | null | undefined;
     return items.map((item) => {
       const local = itemInstallSnapshots.get(item);
       let operationId: string | undefined;
@@ -3815,12 +3953,14 @@ export class PluginMarketService {
         }
         const candidate = evidence.get(marketInstanceKey(item));
         if (candidate) {
-          if (!ledgerNow) {
+          if (ledgerNow === undefined) {
             // 读不到账本就无法复核，按未证实处理（不让整次读取失败）。
-            try { ledgerNow = ledger.read().installations; } catch { ledgerNow = {}; }
+            try { ledgerNow = ledger.read().installations; } catch { ledgerNow = null; }
           }
-          if (evidenceStillCurrent(candidate, ledgerNow, liveGhosts)) operationId = candidate.operationId;
-          else live?.onChanged?.();
+          const verdict = evidenceStillCurrent(candidate, ledgerNow, currentInstance(installedGhostStoragePart(candidate.ghost)));
+          if (verdict === 'current') operationId = candidate.operationId;
+          // 只有确有换装的证据才让出口重读；读不到（注册表答不了、账本不可读）直接按未证实给出，不重复读取。
+          else if (verdict === 'changed') live?.onChanged?.();
         }
       }
       return projectInstalledOperationAttribution(item, operationId);

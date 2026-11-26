@@ -192,11 +192,18 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 降级时，旧版本的读取校验同样只认已知键，读到的记录原样写回，字段被保留。旧版本重新安装或更新时写出不含
     此字段的记录，结果是缺省；旧版本的卸载标记、摘要补写保留字段，但不改来源与包摘要，绑定仍然成立。
 - **操作级安装证据 `installedOperationId`**（市场条目可选字段，服务端与自定义市场都给）：
-  - 远程 `management:begin` 且 `kind === 'install'`（首装与更新；控制端从已装详情发起的更新也走这个 kind）提交
-    成功时，Host 在安装记录里写可选字段 `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256, approval}`。
+  - 远程 `management:begin` 且 `kind === 'install'`（首装与更新；控制端从已装详情发起的更新也走这个 kind）**整次
+    安装成功收尾后**，Host 才在提交时写下的那条安装记录里补可选字段
+    `remoteOperationBinding: {operationId, controller, keyId, rawManifestSha256, approval}`。此后已没有能让回执变成
+    failed 的步骤，所以发起设备读到 `'self'` ⇒ 该操作的回执是 succeeded。
+    - 落位后的收尾步骤失败时回执为 failed，不补证据。
+    - 那条记录在此期间被改过就放弃，补写失败只记日志，结果都是 `'unattributed'`。
+    - 补写成功后，此后的只读市场请求不再并入补写前开始的在途读取，另起读取；带对账的快照不受影响。
+    - 账本的比较并写入（卸载、迁移、信任补写等）不把证据算进比较，避免恰在补写前捕获记录的写入永久比对失败。
     `controller` 是发起方设备身份（device-link 的 controllerDeviceId）用本机来源标识密钥、独立域名 HMAC 得到的不可逆
     标识，不存原始设备号；`keyId` 同来源标识。其它路径（电脑本机、后台自动更新、Agent、`install-file`、
-    `install-share`）不写，并且会整条重写记录，旧证据不残留。
+    `install-share`）不写，并且会整条重写记录。凡是整条复制旧记录的写回（包括旧版本客户端）即使把绑定带了过去，
+    也因绑定里的 `approval`（那次落位的批准令牌，每次落位新铸）只在那次落位仍在时成立。
   - 只在远程管理的 snapshot（含 catalog、recommendations）与 market-detail 响应里、只对发起那次操作的控制端给出，
     且要求记录为已安装、包摘要等于记录与磁盘上的包、keyId 等于当前密钥；证据按完整实例身份（`pluginId` + `ghostId` +
     `namespace`，缺省即根）关联，同一 `pluginId` 在另一个 namespace 的实例拿不到它。电脑本机界面与同账号的其它控制端看不到，
@@ -204,7 +211,8 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 形状 `^[A-Za-z0-9_-]{8,128}$`；不合形状的操作号照常执行，只是不留证据。操作号不是机密，但不记日志。
   - 持久化在账本里，Host 重启、原操作回执丢失后仍然可用。控制端设备身份在重连、App 重启、Host 重启后不变；
     App 重装或重新配对后身份变了，或密钥重建后，旧证据不再投影，控制端按未确认处理。
-  - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省，降级时保留或重写丢弃，结果都是缺省。
+  - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省。降级时旧版本有的写回保留绑定、
+    有的丢弃；升级回来后，保留的绑定只在那次落位仍在时成立，否则按未确认处理。
   - 实现：`plugin-market/service.ts` 的 `withInstalledOperationIds`、`remotePluginManagement.ts` 的 `withOperations`。
 - **当前安装的归属 `installedOperationAttribution`**（2026-11-26 新增，市场条目可选字段，取值 `'self' | 'unattributed'`）：
   - 来由：手机插件市场 #12684 的复审要求控制端能区分「确认是这次操作装的」「已变更或无法证实」「旧 Host 未提供
@@ -233,7 +241,12 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
       2. 快照里的实例仍是那次安装。
       3. 同一时刻读出、随后原样放进响应的 `ghosts` 里，该实例仍是那次安装（批准令牌与版本相同）。
     - 复核发现换装时整次重读一次，仍换装则降级；重读最多一次。
+    - 快照出口还比对市场部分与 `ghosts[]`：某条目对应的实例在列表里是新出现的或已不是那次安装（市场部分来自更早
+      开始、被共享的在途读取，比如装完立刻读），也整次重读一次。只做内存比对，不新增读取。
     - catalog、recommendations、market-detail 不含实例，同样复核，保证 `'self'` 指读取那一刻的当前安装。
+      - 只对本控制端的 `'self'` 候选按实例键读当前批准令牌与版本（`GhostManager.readInstalledInstanceApproval`：
+        注册表项、实例目录、批准记录），不做完整实例投影，不读安装来源与市场账本，也不读整份实例列表。
+      - 账本为整页在最后一个异步步骤后同步复核一次，与候选数无关；页面上没有带证据的条目时零额外读取。
     - 跨请求拼用（甲响应的归属配乙响应的实例）Host 无法单方面保证：条目上没有安装代次可供关联。
   - 条目上的 `releaseId`／`version` 永远是**目录当前发行**。已装版本在 snapshot 的 `ghosts[]`
     （`manifest.version`）里，条目上没有「已装发行」字段。核实不比较版本，操作绑定已钉住已装包。

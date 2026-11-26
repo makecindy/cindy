@@ -33,6 +33,8 @@ const runtime = vi.hoisted(() => ({
       | { state: 'invalid' };
   }>),
   install: vi.fn(),
+  /** 模拟包落位、账本写下之后的收尾步骤失败（生产里是绑定用量、确认新实例的 namespace）。 */
+  failAfterCommit: false,
   inspect: vi.fn(),
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
@@ -143,6 +145,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
       ),
       canonicalManifest: installed.manifest,
     });
+    if (runtime.failAfterCommit) throw new Error('post-commit step failed');
     return installed;
   },
   hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
@@ -161,6 +164,7 @@ import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-pr
 
 import {
   GHOST_ICON_MAX_BYTES,
+  ghostInstallApprovalToken,
   ghostManifestToLegacyV2DigestFormat,
   type GhostManifest,
 } from '../../../shared/ghost';
@@ -200,6 +204,7 @@ const APPROVED_INSTALL_TOKEN = 'approved:00000000-0000-4000-8000-000000000001';
 
 afterEach(() => {
   runtime.ghosts = [];
+  runtime.failAfterCommit = false;
   runtime.listSequence = null;
   runtime.install.mockReset();
   runtime.inspect.mockReset();
@@ -3132,17 +3137,28 @@ describe('installed operation attribution through remote management (V2.10)', ()
   function remoteManagement(service: PluginMarketService, options: {
     gate?: (read: 'snapshot' | 'catalog' | 'detail') => Promise<void>;
     projects?: () => Promise<never[]>;
+    instance?: (instanceKey: string) => undefined;
   } = {}) {
     const gated = async <V>(read: 'snapshot' | 'catalog' | 'detail', value: Promise<V>): Promise<V> => {
       const result = await value;
       await options.gate?.(read);
       return result;
     };
+    // Production list() scans every install on the main thread; instance() reads one. Count both.
+    const reads = { list: 0, instance: [] as string[] };
+    const projected = () => runtime.ghosts.map((ghost) => ({
+      ...ghost,
+      approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    })) as unknown as InstalledGhost[];
     const management = new RemotePluginManagement({
-      list: () => runtime.ghosts.map((ghost) => ({
-        ...ghost,
-        approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-      })) as unknown as InstalledGhost[],
+      list: () => { reads.list++; return projected(); },
+      instance: (instanceKey) => {
+        reads.instance.push(instanceKey);
+        if (options.instance) return options.instance(instanceKey);
+        const ghost = projected().find((candidate) => installedGhostStoragePart(candidate) === instanceKey);
+        return ghost ? { storagePart: instanceKey, approval: ghostInstallApprovalToken(ghost.approval), version: ghost.manifest.version }
+          : undefined;
+      },
       capture: () => () => true,
       captureReceipt: () => () => true,
       ...(options.projects ? { projects: { list: options.projects, disabled: () => [], setDisabled: () => {} } } : {}),
@@ -3190,7 +3206,7 @@ describe('installed operation attribution through remote management (V2.10)', ()
       }
       expect(receipt).toMatchObject({ phase: 'succeeded' });
     };
-    return { invoke, detail, seen, installRemotely };
+    return { invoke, detail, seen, installRemotely, reads };
   }
 
   /** 本地来源的自定义市场，`publish` 改目录当前版本；运行时装入的总是目录当时的版本。 */
@@ -3451,6 +3467,257 @@ describe('installed operation attribution through remote management (V2.10)', ()
         },
       });
       expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('does not pair the evidence with a snapshot instance replaced before the ledger was written', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== 'snapshot') return;
+          runtime.ghosts = runtime.ghosts.map((ghost) => ({
+            ...ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-0000000000b3' } }));
+        },
+      });
+      const response = await remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+      const item = itemOf((response.market as { items: Wire[] }).items, m.pluginId);
+      expect(pick(item, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect((response.ghosts as Array<{ approval: { revision: string } }>)[0]!.approval.revision)
+        .toBe('00000000-0000-4000-8000-0000000000b3');
+    });
+
+    /* 测试价值（PR #12731，调度 2026-11-26：读到 'self' ⇒ 回执是 succeeded；装完立刻读的反方向交错；官方市场条目的 namespace 形状）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 begin／answer／operation 回执结论、Host 重启后的 market-detail
+     *   归属；snapshot read:'installed' 的条目与 ghosts；服务端条目安装前后的 namespace 与归属。
+     * - 缺口：(1) 证据在包落位后的提交回调里写入，其后的收尾步骤失败时回执是 failed，回执过期后发起设备却读到 'self'；
+     *   (2) 市场部分来自提交前开始的读取时，装完立刻读的响应里实例已在、市场记录仍是未安装，原来不重读；
+     *   (3) 官方市场条目安装前不带 namespace、装后为 null，需要用真实入口确认归属。
+     * - 改前失败：(1)(2) 在 5c7575414a 上失败（读到 self；条目仍是 not-installed）；(3) 是覆盖性用例，不作为改前失败证据。
+     */
+    it('never shows self for an operation whose receipt failed after the package was placed', async () => {
+      const m = customMarket();
+      runtime.failAfterCommit = true;
+      const current = await m.remote.detail('phone-a', m.pluginId);
+      await m.remote.invoke('phone-a', 'begin', {
+        operationId: 'op-0000000000000001', kind: 'install', pluginId: m.pluginId,
+        expectedReleaseId: current.releaseId, expectedManifest: current.manifest,
+      });
+      let receipt: Wire = {};
+      for (let attempt = 0; attempt < 400; attempt++) {
+        receipt = await m.remote.invoke('phone-a', 'operation', { operationId: 'op-0000000000000001' });
+        if (receipt.phase === 'succeeded' || receipt.phase === 'failed') break;
+        if (receipt.phase === 'confirmation') {
+          await m.remote.invoke('phone-a', 'answer', {
+            operationId: 'op-0000000000000001', requestId: (receipt.consent as Wire).requestId, confirmed: true });
+          continue;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(receipt).toMatchObject({ phase: 'failed' });
+      // The package did land; once the receipt is gone the device must not read it as its own completed operation.
+      const restarted = remoteManagement(new PluginMarketService(m.h.api as unknown as PluginMarketApi, m.h.ledger, m.h.sourceStore));
+      await expect(restarted.invoke('phone-a', 'operation', { operationId: 'op-0000000000000001' }))
+        .rejects.toMatchObject({ code: 'NOT_FOUND' });
+      // Rule 4: the decision reads attribution and instance from one snapshot response.
+      const response = await restarted.invoke('phone-a', 'snapshot', { read: 'installed' });
+      expect(pick(itemOf((response.market as { items: Wire[] }).items, m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect((response.ghosts as Array<{ manifest: { id: string } }>).map((ghost) => ghost.manifest.id)).toContain('alpha');
+      expect(m.h.ledger.installationForGhost('alpha')).not.toHaveProperty('remoteOperationBinding');
+    });
+
+    it('re-reads a snapshot whose market part was read before an install that just completed', async () => {
+      const m = customMarket();
+      let marketReads = 0;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => {
+          if (read !== 'snapshot') return;
+          marketReads++;
+          // The market part of the first read predates the install, which completes before the response is built.
+          if (marketReads === 1) await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+        },
+      });
+      const response = await remote.invoke('phone-a', 'snapshot', { read: 'installed' });
+      expect(pick(itemOf((response.market as { items: Wire[] }).items, m.pluginId), EXIT_KEYS)).toEqual(SELF('op-0000000000000001'));
+      expect((response.ghosts as Array<{ manifest: { id: string } }>).map((ghost) => ghost.manifest.id)).toContain('alpha');
+      expect(marketReads).toBe(2);
+    });
+
+    it('attributes an official-market item that has no namespace before install and null after', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+      roots.push(root);
+      const h = harness([serverSummary()], []);
+      h.api.download.mockResolvedValue({
+        url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+        sha256: 'a'.repeat(64), sizeBytes: 42,
+      });
+      runtime.install.mockImplementation(async () => {
+        // A root install is placed with an explicit null namespace, as the production GhostManager reports it.
+        const ghost = { ...installedGhost(root, 'server-plugin'), namespace: null };
+        runtime.ghosts = [ghost];
+        return ghost;
+      });
+      const remote = remoteManagement(h.service);
+      const before = await remote.detail('phone-a', PLUGIN_ID);
+      expect(before.namespace).toBeUndefined();
+      await remote.installRemotely('phone-a', '3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58', PLUGIN_ID);
+      for (const item of [
+        await remote.detail('phone-a', PLUGIN_ID),
+        itemOf(((await remote.invoke('phone-a', 'snapshot', { read: 'installed' })).market as { items: Wire[] }).items, PLUGIN_ID),
+      ]) {
+        expect(JSON.stringify(pick(item, SAMPLE_KEYS))).toBe(
+          '{"pluginId":"caaaaaaaaaaaaaaaaaaaaaaaa","ghostId":"server-plugin","namespace":null,"releaseId":"release-1","version":"1.0.0","installState":"installed","sourceType":"server","installedOperationId":"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58","installedOperationAttribution":"self"}',
+        );
+      }
+      expect(pick(await remote.detail('phone-b', PLUGIN_ID), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    /* 测试价值（PR #12731 维护者复审 5c7575414a：账本读取不得随候选数增长）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 各出口一次请求里 PluginMarketLedger.read() 的调用次数（每次
+     *   都同步读取并合并三份账本文件），按 0 个候选（另一控制端）与 12 个候选（全部由本控制端装入）对比。
+     * - 缺口：按候选复核原来每个候选各读一次账本；替身计数看不到。按实例读取的生产路径另见 GhostManager.test.ts。
+     * - 改前失败：在 5c7575414a 上，候选路径走 findInstalledInstance，账本读取随候选数增长（生产接线下；这里替身
+     *   不复现该层，故本条断言的是服务层「整页至多多读一次」）。
+     */
+    it('reads the ledger at most once more per page, however many candidates it holds', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+      roots.push(root);
+      const ids = Array.from({ length: 12 }, (_, index) => `candidate-${index}`);
+      const dir = writeLocalMarket(root, 'team-lib', ids.map((id) => ({ rel: `plugins/${id}`, id })));
+      const h = harness([], [{ name: 'team-lib', dir }]);
+      runtime.install.mockImplementation(async (_file: string, options: { ghostId: string }) => {
+        const ghost = installedGhost(root, options.ghostId);
+        runtime.ghosts = [...runtime.ghosts.filter((entry) => entry.manifest.id !== options.ghostId), ghost];
+        return ghost;
+      });
+      const remote = remoteManagement(h.service);
+      for (const [index, id] of ids.entries()) {
+        await remote.installRemotely('phone-a', `op-00000000000001${String(index).padStart(2, '0')}`, customMarketPluginId('team-lib', id));
+      }
+      const read = vi.spyOn(PluginMarketLedger.prototype, 'read');
+      const count = async (peer: string, action: string, input: Record<string, unknown>) => {
+        read.mockClear();
+        await remote.invoke(peer, action, input);
+        return read.mock.calls.length;
+      };
+      try {
+        for (const [action, input] of [
+          ['snapshot', { read: 'catalog' }],
+          ['snapshot', { read: 'installed' }],
+          ['snapshot', {}],
+          ['market-detail', { pluginId: customMarketPluginId('team-lib', ids[0]!) }],
+        ] as const) {
+          const none = await count('phone-b', action, input);
+          const own = await count('phone-a', action, input);
+          expect(own - none).toBeLessThanOrEqual(1);
+        }
+        const page = await remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+        expect((page.items as Wire[]).filter((item) => item.installedOperationAttribution === 'self')).toHaveLength(12);
+      } finally {
+        read.mockRestore();
+      }
+    });
+
+    /* 测试价值（PR #12731 推送前自审）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 market-detail／read:'catalog'；市场读取次数、密钥目录是否被创建；
+     *   PluginMarketService.withInstalledOperationIds 在换号时的结果。
+     * - 缺口：读不到当前实例（注册表答不了）被当成换装，整次重读并重复服务端请求；没有任何候选时仍读写密钥文件；
+     *   换号发生在投影的 await 间隙会让整次读取抛错；旧版本客户端整条复制记录保留绑定后的投影未直接覆盖。
+     * - 改前失败：前两条在 0a4e2ba9f1 上失败（读两次、创建了密钥目录）；换号一条改前抛错；旧客户端一条改前即通过（覆盖既有保证）。
+     */
+    it('does not re-read when the current instance cannot be read, and degrades quietly', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      let detailReads = 0;
+      const remote = remoteManagement(m.h.service, {
+        gate: async (read) => { if (read === 'detail') detailReads++; },
+        instance: () => undefined,
+      });
+      expect(pick(await remote.detail('phone-a', m.pluginId), EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(detailReads).toBe(1);
+    });
+
+    it('reads no key file when nothing on the page can carry operation evidence', async () => {
+      const h = harness([serverSummary()], []);
+      const remote = remoteManagement(h.service);
+      const keyDir = path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR);
+      expect(fs.existsSync(keyDir)).toBe(false);
+      await remote.detail('phone-a', PLUGIN_ID);
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+      expect(fs.existsSync(keyDir)).toBe(false);
+    });
+
+    it('degrades instead of failing when the account changes during attribution', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      const item = await m.h.service.detail(m.pluginId);
+      const pending = m.h.service.withInstalledOperationIds([item], 'phone-a', { instance: () => undefined });
+      runtime.session = { ...runtime.session, generation: runtime.session.generation + 1 };
+      expect(pick((await pending)[0] as unknown as Wire, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+    });
+
+    it('stays correct when an older client copies the record and keeps the binding', async () => {
+      const m = customMarket();
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      // An older client rewrites the record by copying it (e.g. a reconnect), keeping the unknown field.
+      const record = m.h.ledger.installationForGhost('alpha')!;
+      m.h.ledger.upsertInstallation({ ...record, updatedAt: '2026-11-26T06:00:00.000Z' });
+      // Same placement still on disk: it is still the installation X placed.
+      expect(await m.remote.seen('phone-a', m.pluginId)).toEqual(SELF('op-0000000000000001'));
+      // The package is placed again (new approval revision) while the copied binding stays: never 'self'.
+      runtime.ghosts = runtime.ghosts.map((ghost) => ({
+        ...ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-0000000000c4' } }));
+      expect(await m.remote.seen('phone-a', m.pluginId)).toEqual(UNATTRIBUTED());
+    });
+
+    /* 测试价值（#12731 维护者复审 91359dd6f2：目录、推荐、详情不得新增主线程全量安装扫描）
+     * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 read:'catalog'（含下一页）、read:'recommendations'、
+     *   market-detail、snapshot；deps.list()（生产里在主线程同步扫描全部安装）与 deps.instance()（按实例读）的调用次数。
+     * - 缺口：91359dd6f2 为复核在这些出口兜底读整份列表，空页、无候选、未安装详情也从 0 次变成 1 次，翻页逐页执行。
+     * - 最小失败输入：空目录页、下一页、空推荐、未安装详情、他人绑定的已装目录页、一个本控制端候选的目录页。
+     * - 改前失败：在 91359dd6f2 上，除快照外各条都读了 1 次整份列表。
+     */
+    it('reads no installation list for catalog pages, recommendations or details, and one instance per own candidate', async () => {
+      const m = customMarket('team-lib', 'alpha');
+      writeLocalMarket(m.root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }, { rel: 'plugins/beta', id: 'beta' }]);
+      (m.h.api as unknown as { recommendations: () => Promise<{ plugins: VisiblePluginSummary[] }> }).recommendations =
+        vi.fn(async () => ({ plugins: [] }));
+      const remote = remoteManagement(m.h.service);
+      const reset = () => { remote.reads.list = 0; remote.reads.instance = []; };
+      const zero = { list: 0, instance: [] };
+
+      // Nothing installed: an empty page, the next page, empty recommendations, a detail.
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { query: 'no-such-plugin' } });
+      expect(remote.reads).toEqual(zero);
+      const first = await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 1 } });
+      expect(first.nextCursor).toEqual(expect.any(String));
+      await remote.invoke('phone-a', 'snapshot', { read: 'catalog', query: { limit: 1, cursor: first.nextCursor } });
+      expect(remote.reads).toEqual(zero);
+      expect(await remote.invoke('phone-a', 'snapshot', { read: 'recommendations' })).toEqual([]);
+      await remote.detail('phone-a', m.pluginId);
+      expect(remote.reads).toEqual(zero);
+
+      // Installed by phone-a: another controller's page has no candidate, so no reads at all.
+      await m.remote.installRemotely('phone-a', 'op-0000000000000001', m.pluginId);
+      reset();
+      const otherPage = await remote.invoke('phone-b', 'snapshot', { read: 'catalog' });
+      expect(pick((otherPage.items as Wire[]).find((item) => item.pluginId === m.pluginId)!, EXIT_KEYS)).toEqual(UNATTRIBUTED());
+      expect(remote.reads).toEqual(zero);
+      // phone-a's page has exactly one candidate: one instance read, never the whole list.
+      const ownPage = await remote.invoke('phone-a', 'snapshot', { read: 'catalog' });
+      expect(pick((ownPage.items as Wire[]).find((item) => item.pluginId === m.pluginId)!, EXIT_KEYS)).toEqual(SELF('op-0000000000000001'));
+      expect(remote.reads.list).toBe(0);
+      expect(remote.reads.instance).toHaveLength(1);
+      reset();
+      await remote.detail('phone-a', m.pluginId);
+      expect(remote.reads.list).toBe(0);
+      expect(remote.reads.instance).toHaveLength(1);
+
+      // Both snapshot exits return ghosts[]: exactly one list read each, shared with the attribution check.
+      for (const read of ['installed', undefined]) {
+        reset();
+        await remote.invoke('phone-a', 'snapshot', read ? { read } : {});
+        expect(remote.reads).toEqual({ list: 1, instance: [] });
+      }
     });
 
     it('keeps the evidence when nothing changed in between, and re-reads at most once while it keeps changing', async () => {

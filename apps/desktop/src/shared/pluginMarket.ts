@@ -338,6 +338,13 @@ export function isPluginMarketOperationId(value: unknown): value is string {
 }
 export type PluginMarketInstalledOperationAttribution = 'self' | 'unattributed';
 
+/** 契约 V2.10：归属复核需要的一个已装实例的当前事实（实例键、批准令牌、版本）。Main 内部使用，不上线。 */
+export interface InstalledInstanceFacts {
+  storagePart: string;
+  approval: string;
+  version: string;
+}
+
 /**
  * 远程管理响应里「当前安装归属」的唯一出口（契约 V2.10）。先去掉条目上已有的两个字段，再按结论重新给出，保证
  * `'self'` ⇔ 带 `installedOperationId`：
