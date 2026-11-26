@@ -2240,6 +2240,39 @@ describe('unified new-task permission across harnesses and plugin engines', () =
     expect(m.resolveBuiltinVendorPermissionMode('codex', m.getDraftPermissionPreference(m.getDraft()))).toBe('ask');
     expect(m.getDraft().permissionMode).toBe('acceptEdits');
   });
+
+  // Security regression (PR #12880 review): tightening root permissionMode in window B must also
+  // tighten window A's in-memory pluginEngine.permissionMode so A never submits stale bypassPermissions.
+  it('syncs pluginEngine.permissionMode when another window tightens root permissionMode', async () => {
+    const winA = await loadModule();
+    winA.setDraftPermissionMode('bypassPermissions');
+    expect(winA.applyPluginEngineDraftRoute({ providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon' })).toBe(true);
+    expect(winA.getDraft().pluginEngine?.permissionMode).toBe('bypassPermissions');
+
+    secondWindow.__reloadForTest();
+    secondWindow.setDraftPermissionMode('ask');
+    const updatedPayload = memStorage.getItem(winA.__STORAGE_KEY);
+    onStorage?.({
+      key: winA.__STORAGE_KEY,
+      newValue: updatedPayload,
+      storageArea: memStorage,
+    } as unknown as StorageEvent);
+
+    expect(winA.getDraft().permissionMode).toBe('ask');
+    expect(winA.getDraft().pluginEngine?.permissionMode).toBe('ask');
+
+    // sanitize also reconciles a persisted snapshot where pluginEngine still holds stale bypassPermissions.
+    const stored = JSON.parse(updatedPayload!);
+    const inconsistentPayload = JSON.stringify({
+      ...stored,
+      permissionMode: 'ask',
+      pluginEngine: { providerId: 'acp-plugin:agy:agy', modelId: 'gemini-4-neon', permissionMode: 'bypassPermissions' },
+    });
+    memStorage.setItem(winA.__STORAGE_KEY, inconsistentPayload);
+    const reloaded = await reloadModule();
+    expect(reloaded.getDraft().permissionMode).toBe('ask');
+    expect(reloaded.getDraft().pluginEngine?.permissionMode).toBe('ask');
+  });
 });
 
 // #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。

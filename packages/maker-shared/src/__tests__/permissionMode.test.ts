@@ -71,7 +71,11 @@ describe('cross-harness permission mode matching and resolution', () => {
     expect(resolvePermissionModeForOptions('acceptEdits', codexModes, 'ask')).toBe('ask');
     expect(resolvePermissionModeForOptions('auto', genericAcpModes, 'ask')).toBe('ask');
     expect(resolvePermissionModeForOptions('plan', codexModes, 'ask')).toBe('ask');
-    // Never silently widens to bypassPermissions when fallback is missing or unsupported.
+    // Never silently widens to bypassPermissions when fallback is missing, unsupported, or itself bypassPermissions.
     expect(resolvePermissionModeForOptions('auto', ['bypassPermissions', 'plan'], null)).toBe('plan');
+    expect(resolvePermissionModeForOptions('ask', ['bypassPermissions'], null)).toBe('ask');
+    expect(resolvePermissionModeForOptions('plan', ['default', 'bypassPermissions'], 'bypassPermissions')).toBe('default');
+    expect(resolvePermissionModeForOptions('auto', ['plan', 'bypassPermissions'], 'bypassPermissions')).toBe('plan');
+    expect(resolvePermissionModeForOptions('ask', [], 'bypassPermissions')).toBe('ask');
   });
 });

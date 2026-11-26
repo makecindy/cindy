@@ -59,12 +59,15 @@ export function resolvePermissionModeForOptions<T extends string>(
 ): T | SharedPermissionMode {
   const matched = matchSupportedPermissionMode(requested, supportedIds);
   if (matched !== null) return matched;
-  const fallbackMatch = matchSupportedPermissionMode(fallback, supportedIds);
-  if (fallbackMatch !== null) return fallbackMatch;
+  const fallbackMatch =
+    fallback === 'bypassPermissions'
+      ? null
+      : matchSupportedPermissionMode(fallback, supportedIds);
+  if (fallbackMatch !== null && fallbackMatch !== 'bypassPermissions') return fallbackMatch;
   const safeDefault = matchSupportedPermissionMode('ask', supportedIds);
   if (safeDefault !== null) return safeDefault;
   const firstNonBypass = supportedIds.find((id) => id !== 'bypassPermissions');
-  return firstNonBypass ?? supportedIds[0] ?? 'ask';
+  return firstNonBypass ?? 'ask';
 }
 
 /**

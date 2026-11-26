@@ -300,6 +300,18 @@ export function resolveBuiltinVendorPermissionMode(
   return resolvePermissionModeForOptions(preferred, options, 'ask') as PermissionMode;
 }
 
+/** 保持 pluginEngine.permissionMode 与根级统一权限同步，避免跨窗口/旧快照残留过期的完全访问。 */
+function syncPluginEnginePermission(
+  pluginEngine: PluginEngineSelection | null,
+  permissionMode: PermissionMode | null,
+): PluginEngineSelection | null {
+  if (!pluginEngine) return null;
+  const { permissionMode: _ignored, ...rest } = pluginEngine;
+  return permissionMode && isPluginEnginePermissionModeId(permissionMode)
+    ? { ...rest, permissionMode }
+    : rest;
+}
+
 /** 当前新建草稿跨引擎生效的权限偏好：显式选过的权限 > 设置里的新任务默认权限 > auto。 */
 export function getDraftPermissionPreference(
   draft: Pick<NewMakerDraft, 'permissionMode' | 'newChatDefaultPermissionMode'>,
@@ -578,6 +590,10 @@ function sanitize(raw: unknown): NewMakerDraft {
       };
     }
   }
+  const syncedPluginEngine =
+    permissionMode != null
+      ? syncPluginEnginePermission(sanitizedPluginEngine, permissionMode)
+      : sanitizedPluginEngine;
   return {
     vendor,
     workingDir,
@@ -606,7 +622,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     defaultTupleSelectionCustomized,
     pluginModel: sanitizePluginModel(r.pluginModel),
     modelGroup: sanitizeModelGroupSelection(r.modelGroup),
-    pluginEngine: sanitizedPluginEngine,
+    pluginEngine: syncedPluginEngine,
   };
 }
 
@@ -775,7 +791,20 @@ let preferenceSyncFallback: PreferenceSyncFallback = null;
  */
 function mergeStoredTuple(stored: StoredDefaultTuplePreference): NewMakerDraft {
   const following = persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) !== currentDraft.vendor;
-  return { ...currentDraft, ...stored, vendor: following ? currentDraft.vendor : stored.vendor };
+  const shouldSyncPluginPermission =
+    stored.permissionMode != null
+    || stored.permissionMode !== currentDraft.permissionMode
+    || stored.newChatDefaultPermissionMode !== currentDraft.newChatDefaultPermissionMode;
+  const pluginEngine =
+    currentDraft.pluginEngine && shouldSyncPluginPermission
+      ? syncPluginEnginePermission(currentDraft.pluginEngine, stored.permissionMode)
+      : currentDraft.pluginEngine;
+  return {
+    ...currentDraft,
+    ...stored,
+    vendor: following ? currentDraft.vendor : stored.vendor,
+    pluginEngine,
+  };
 }
 
 function rebaseStoredDefaultTuplePreference(): void {
@@ -1007,7 +1036,11 @@ export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): vo
       }
     }
   }
-  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor };
+  const pluginEngine =
+    currentDraft.permissionMode == null
+      ? syncPluginEnginePermission(currentDraft.pluginEngine, null)
+      : currentDraft.pluginEngine;
+  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor, pluginEngine };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
@@ -1028,12 +1061,7 @@ export function setDraftPermissionMode(mode: PermissionMode): void {
       permissionModeCustomized: true,
     };
   }
-  const pluginEngine = currentDraft.pluginEngine
-    ? {
-        ...currentDraft.pluginEngine,
-        ...(isPluginEnginePermissionModeId(mode) ? { permissionMode: mode } : {}),
-      }
-    : null;
+  const pluginEngine = syncPluginEnginePermission(currentDraft.pluginEngine, mode);
   currentDraft = {
     ...currentDraft,
     permissionMode: mode,
@@ -1233,10 +1261,11 @@ export function applyPluginEngineDraftRoute(route: {
   effort?: string;
 }): boolean {
   if (!pluginEngineKeyFromProviderId(route.providerId) || !route.modelId.trim()) return false;
+  rebaseStoredDefaultTuplePreference();
   const current = getDraft();
   const previous = current.pluginEngine;
   const effort = isPluginEngineEffort(route.effort) ? route.effort : previous?.effort;
-  const permissionMode = previous?.permissionMode ?? getDraftPermissionPreference(current);
+  const permissionMode = current.permissionMode ?? previous?.permissionMode ?? getDraftPermissionPreference(current);
   const leavesRemoteTask = !!current.deviceLinkDeviceId || !!current.remoteHostId;
   patchDraft({
     ...(current.vendor === 'orca' ? { vendor: 'cc' } : {}),
@@ -1442,10 +1471,9 @@ function patchVendorPrefsInternal(
       };
     }
   }
-  const nextPluginEngine =
-    explicitPermissionMode && currentDraft.pluginEngine && isPluginEnginePermissionModeId(explicitPermissionMode)
-      ? { ...currentDraft.pluginEngine, permissionMode: explicitPermissionMode }
-      : currentDraft.pluginEngine;
+  const nextPluginEngine = explicitPermissionMode
+    ? syncPluginEnginePermission(currentDraft.pluginEngine, explicitPermissionMode)
+    : currentDraft.pluginEngine;
   currentDraft = {
     ...currentDraft,
     vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,

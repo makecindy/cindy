@@ -1463,7 +1463,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               setRemoteDraftPluginEngine((prev) => {
                 const previous = prev?.deviceId === effectiveDeviceLinkDeviceId ? prev.selection : null;
                 const effort = selection.effort ?? previous?.effort;
-                const carriedPermission = previous?.permissionMode ?? remoteDraftPermissionForDevice ?? remoteDraftPermissionRef.current;
+                const carriedPermission = remoteDraftPermissionForDevice ?? remoteDraftPermissionRef.current ?? previous?.permissionMode;
                 return {
                   deviceId: effectiveDeviceLinkDeviceId,
                   selection: {
