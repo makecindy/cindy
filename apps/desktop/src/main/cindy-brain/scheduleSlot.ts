@@ -124,6 +124,11 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
     // utility 窗的统一约定:按 key 排除,不枚举取值(见上方第 2 条)。
     parsed.searchParams.has('view') ||
     parsed.searchParams.has('sidebarWindow') ||
+    // These renderer/index.tsx entries never mount MainLayout. In particular the
+    // prewarmed resource window may precede the visible main window in Electron.
+    ['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',
+      'regionScreenshot', 'regionScreenshotEditor', 'regionScreenshotPin', 'quotaTray']
+      .some(key => parsed.searchParams.get(key) === '1') ||
     // 会话副窗:挂完整壳、技术上接得住,但它不是用户建任务时看的那个窗口。
     // 取 === '1' 而不是 has():带 secondaryWindow=0 的主窗不该被误排除。
     parsed.searchParams.get('secondaryWindow') === '1'

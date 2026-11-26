@@ -249,6 +249,23 @@ describe('GhostScheduleSlot 推送内容', () => {
     expect(sendToMobile).not.toHaveBeenCalled();
   });
 
+  it('retains both the primary-computer binding and the approved no-model check', () => {
+    const ghost = scheduleGhost({ namespace: null, namespaceState: 'confirmed' });
+    ghost.manifest.deviceSync = true;
+    ghost.manifest.subscribe = { hooks: ['will-schedule-run'] };
+    ghost.approvedControlPoints = ['will-schedule-run'];
+    const sendToMobile = vi.fn(() => true);
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost, sendToMobile });
+    expect(slot.handleRequest('sched-ghost', {
+      ...validReq, primaryDeviceOnly: true, preRunCheck: true, mobilePageId: 'controller',
+    })).toEqual({ ok: true });
+    expect(pushes[0]).toMatchObject({
+      primaryHostKey: 'public/sched-ghost',
+      preRunPlugin: { pluginId: 'sched-ghost', onFailure: 'allow' },
+    });
+    expect(sendToMobile).not.toHaveBeenCalled();
+  });
+
   it('已确认 root 显式带上 namespace null', () => {
     const { slot, pushes } = makeSlot({
       getGhost: () => scheduleGhost({ namespace: null, namespaceState: 'confirmed' }),
@@ -408,6 +425,12 @@ describe('选窗回落:右侧栏弹出窗口聚焦时只能落到主窗口', () 
 });
 
 describe('isMainShellWindowUrl（投给哪个窗口的判据）', () => {
+  it.each(['cloudLoginWindow', 'recordingPreview', 'remoteDesktopViewer', 'resourceUsageWindow',
+    'regionScreenshot', 'regionScreenshotEditor', 'regionScreenshotPin', 'quotaTray'])(
+    'does not send a native draft into the %s renderer', key => {
+      expect(isMainShellWindowUrl(`http://localhost:5173/?${key}=1#/resource-usage-window`)).toBe(false);
+    },
+  );
   it.each([
     ['主窗口', 'file:///app/index.html#/cc-agent'],
     ['主窗口带其它 query', 'file:///app/index.html?foo=1#/cc-agent/scheduled'],
