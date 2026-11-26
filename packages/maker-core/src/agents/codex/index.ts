@@ -6278,6 +6278,8 @@ assertRouteCurrent();
       }
     };
     let registeredRootCodexThreadId: string | undefined;
+    // Captured here: the handle's own methods rebind `this` to the handle.
+    const closeCodexMcpSessionInstance = this.deps.closeCodexMcpSessionInstance;
     const unregisterCodexMcpContext = (threadId: string): void => {
       if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
@@ -15470,8 +15472,18 @@ assertRouteCurrent();
       },
 
       async close() {
-        await closeSessionHandle();
-        await retireSingleSessionHost();
+        try {
+          await closeSessionHandle();
+          await retireSingleSessionHost();
+        } finally {
+          // This memory instance is over (rebuilds mint a new id), so its bridge
+          // sessions have no future client. Remote, hosted and external-client
+          // sessions do not use the local bridge's instance URL.
+          if (opts.sessionInstanceId && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
+            try { closeCodexMcpSessionInstance?.(opts.sessionInstanceId); }
+            catch (e) { log.warn('closeCodexMcpSessionInstance threw', { error: String(e) }); }
+          }
+        }
       },
 
       events(): AsyncIterable<AgentEvent> {

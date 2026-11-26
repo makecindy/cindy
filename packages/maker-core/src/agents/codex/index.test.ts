@@ -6679,6 +6679,28 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
   });
 
+  // Host port contract: Codex never DELETEs its bridge MCP sessions, so a closed local
+  // session instance must hand its id to the host, which closes them
+  // (codexHttpBridge.closeSessionInstance has its own transport tests). Before this, the
+  // port did not exist and the production bridge grew ~300 → 712 sessions in a morning
+  // of group replies. Unit tier, fake app-server host.
+  it('releases the closed local session instance from the host MCP bridge', async () => {
+    const closeCodexMcpSessionInstance = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { closeCodexMcpSessionInstance }));
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-bridge-release',
+      sessionInstanceId: 'instance-bridge-release',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    expect(closeCodexMcpSessionInstance).not.toHaveBeenCalled();
+
+    await handle.close();
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledTimes(1);
+    expect(closeCodexMcpSessionInstance).toHaveBeenCalledWith('instance-bridge-release');
+  });
+
   it('keeps thread/start developerInstructions on the websocket provider and registers child route context', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(

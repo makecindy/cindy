@@ -1266,6 +1266,12 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /**
+   * Close every host bridge MCP session opened by one ended local Codex session instance.
+   * Codex does not DELETE its streamable-http sessions on exit, so without this they stay
+   * in the bridge table for the lifetime of the app. Local, synchronous, idempotent.
+   */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。

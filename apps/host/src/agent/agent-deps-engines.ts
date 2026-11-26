@@ -50,6 +50,7 @@ export const PORTS_ONLY_CODEX_READS = {
   resolveCodexThreadContextWindow: undefined,
   resolveCodexThreadStorage: undefined,
   unregisterCodexMcpThreadContext: undefined,
+  closeCodexMcpSessionInstance: undefined,
   withCodexMcpDiscoveryContext: undefined,
 } as const satisfies UnreadPorts;
 
