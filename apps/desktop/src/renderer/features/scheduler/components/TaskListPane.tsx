@@ -11,7 +11,10 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, ExternalLink, RefreshCw, SquarePen } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, ListChecks, RefreshCw, SquarePen, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Tip } from '@/components/ui/tooltip';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -38,6 +41,11 @@ interface Props {
   /** Cell 右键菜单的动作回调，转发给 TaskListCell。 */
   onTogglePause: (s: Schedule) => void | Promise<void>;
   onDelete: (s: Schedule) => void | Promise<void>;
+  /** 批量删除：传入多选的个人自动化；未传时不显示多选入口。 */
+  onBatchDelete?: (items: Schedule[]) => void | Promise<void>;
+  /** 由父级持有的多选状态；null 表示不在多选模式。 */
+  selection?: ReadonlySet<string> | null;
+  onSelectionChange?: (next: ReadonlySet<string> | null) => void;
   onRename?: (s: Schedule, newName: string) => void | Promise<void>;
   onPromoteToProject?: (s: Schedule) => void | Promise<void>;
   onEditProjectSchedule?: (s: Schedule) => void | Promise<void>;
@@ -72,6 +80,9 @@ export function TaskListPane({
   onStatusFilterChange,
   onTogglePause,
   onDelete,
+  onBatchDelete,
+  selection = null,
+  onSelectionChange,
   onRename,
   onPromoteToProject,
   onEditProjectSchedule,
@@ -104,6 +115,28 @@ export function TaskListPane({
           .map((run) => run.scheduleId),
       ),
     [runtimeSnapshot],
+  );
+  const selecting = selection !== null && !!onBatchDelete && !!onSelectionChange;
+  // 项目自动化由 schedules.json 管理，不参与批量删除。
+  const selectableIds = useMemo(
+    () => schedules.filter((s) => s.source !== 'project').map((s) => s.id),
+    [schedules],
+  );
+  const selectedSchedules = useMemo(
+    () => (selection ? schedules.filter((s) => selection.has(s.id) && s.source !== 'project') : []),
+    [schedules, selection],
+  );
+  const allSelected =
+    selectableIds.length > 0 && selectedSchedules.length === selectableIds.length;
+  const toggleSelected = useCallback(
+    (s: Schedule) => {
+      if (!selection || !onSelectionChange || s.source === 'project') return;
+      const next = new Set(selection);
+      if (next.has(s.id)) next.delete(s.id);
+      else next.add(s.id);
+      onSelectionChange(next);
+    },
+    [onSelectionChange, selection],
   );
   const groups = useMemo(() => {
     const grouped = new Map<string, Schedule[]>();
@@ -148,7 +181,27 @@ export function TaskListPane({
     >
       <div className="flex shrink-0 items-center justify-between px-2.5 pb-2 pt-3.5">
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
-        <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
+          {onBatchDelete && onSelectionChange && selectableIds.length > 0 && (
+            <Tip text={t('scheduler.list.batch.toggle')}>
+              <Button
+                variant="secondary"
+                tone="quiet"
+                size="xs"
+                aria-pressed={selecting}
+                aria-label={t('scheduler.list.batch.toggleAria')}
+                onClick={() => onSelectionChange(selecting ? null : new Set())}
+                className={cn(
+                  'w-6 px-0',
+                  selecting && '[--button-face-bg:var(--chat-input-chip-bg)] text-[var(--text-primary)]',
+                )}
+              >
+                <ListChecks size={14} strokeWidth={2} />
+              </Button>
+            </Tip>
+          )}
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-4">
         {groups.map((group) => {
@@ -228,12 +281,28 @@ export function TaskListPane({
               {!isCollapsed && (
                 <ul className="flex flex-col gap-1 pt-1 pl-4">
                   {group.schedules.map((s) => (
-                    <li key={s.id}>
+                    <li key={s.id} className={cn(selecting && 'flex items-center gap-1.5')}>
+                      {selecting && (
+                        <Tip
+                          text={s.source === 'project' ? t('scheduler.list.batch.projectHint') : null}
+                        >
+                          {/* 禁用的 input 不派发指针事件，Tip 挂在外层 span 上。 */}
+                          <span className="inline-flex shrink-0">
+                            <Checkbox
+                              checked={selection?.has(s.id) ?? false}
+                              disabled={s.source === 'project'}
+                              aria-label={t('scheduler.list.batch.itemAria', { name: s.name })}
+                              onChange={() => toggleSelected(s)}
+                            />
+                          </span>
+                        </Tip>
+                      )}
+                      <div className={cn(selecting && 'min-w-0 flex-1')}>
                       <TaskListCell
                         schedule={s}
-                        selected={s.id === selectedId}
+                        selected={selecting ? (selection?.has(s.id) ?? false) : s.id === selectedId}
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
-                        onSelect={onSelect}
+                        onSelect={selecting ? toggleSelected : onSelect}
                         onTogglePause={onTogglePause}
                         onDelete={s.source === 'project' ? undefined : onDelete}
                         onRename={s.source === 'project' ? undefined : onRename}
@@ -259,6 +328,7 @@ export function TaskListPane({
                         }
                         queuedForSession={queuedScheduleIds.has(s.id)}
                       />
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -267,6 +337,44 @@ export function TaskListPane({
           );
         })}
       </div>
+
+      {selecting && (
+        <div className="flex shrink-0 flex-col gap-1.5 border-t border-[var(--cmd-palette-border)] px-3 py-2">
+          {/* 两行：240px 窄面板下计数始终可见，按钮不越界。 */}
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="min-w-0 max-w-[50%] shrink truncate text-xs text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]"
+              onClick={() => onSelectionChange?.(allSelected ? new Set() : new Set(selectableIds))}
+            >
+              {allSelected ? t('scheduler.list.batch.clearAll') : t('scheduler.list.batch.selectAll')}
+            </button>
+            <span className="min-w-0 flex-1 text-right text-xs text-[var(--settings-section-desc)] [overflow-wrap:anywhere]">
+              {t('scheduler.list.batch.selectedCount', { count: selectedSchedules.length })}
+            </span>
+          </div>
+          <div className="flex min-w-0 items-center justify-end gap-1.5">
+            <Button
+              variant="secondary"
+              size="xs"
+              className="min-w-0 px-2.5"
+              onClick={() => onSelectionChange?.(null)}
+            >
+              <span className="truncate">{t('scheduler.list.batch.cancel')}</span>
+            </Button>
+            <Button
+              variant="cta"
+              size="xs"
+              className="min-w-0 px-2.5"
+              disabled={selectedSchedules.length === 0}
+              onClick={() => void onBatchDelete?.(selectedSchedules)}
+            >
+              <Trash2 size={12} strokeWidth={2} className="shrink-0" />
+              <span className="truncate">{t('scheduler.list.batch.delete')}</span>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Resize handle — 4px hit-area，hover 出 1px Stone 高亮线（与主侧边栏同款）。
           aside 自身的 border-r 已提供常态 1px Board 分隔线，handle 仅在 hover 时叠一根更深的线

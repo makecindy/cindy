@@ -18196,7 +18196,18 @@
         "demote": "移除并保留个人副本",
         "demoteSuccess": "已从项目移除，并保留为个人自动化"
       },
-      "resizeAria": "调整自动化列表宽度"
+      "resizeAria": "调整自动化列表宽度",
+      "batch": {
+        "toggle": "多选",
+        "toggleAria": "多选自动化",
+        "selectAll": "全选",
+        "clearAll": "清空",
+        "selectedCount": "已选 {{count}} 个",
+        "cancel": "取消",
+        "delete": "删除",
+        "itemAria": "选择「{{name}}」",
+        "projectHint": "项目自动化在 schedules.json 中管理"
+      }
     },
     "cell": {
       "subtitlePaused": "已暂停",
@@ -18766,7 +18777,8 @@
       "renameFailed": "重命名失败：{{error}}",
       "deleteFailed": "删除失败：{{error}}",
       "restartFailed": "重启失败：{{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。"
+      "pluginDraftIgnoredFormOpen": "「{{name}}」请你新建自动化，但当前有正在编辑的自动化表单。已保留你填写的内容；保存或关闭后请再点一次。",
+      "batchDeleted": "已删除 {{count}} 个自动化"
     },
     "deleteDialog": {
       "title": "删除自动化「{{name}}」？",
@@ -18774,6 +18786,8 @@
       "description": "删除后未来的触发会停止。请选择这个自动化已经生成的任务要如何处理。",
       "sessionCountPending": "正在统计已生成的任务…",
       "sessionCount": "已生成 {{count}} 个任务",
+      "sessionCountAtLeast": "至少已生成 {{count}} 个任务，部分无法统计",
+      "sessionCountUnknown": "无法统计已生成的任务数量",
       "inflightCount": "当前有 {{count}} 次执行正在进行，删除会立即停止它们",
       "optionAria": "选择已生成任务的处理方式",
       "option": {
@@ -18792,7 +18806,9 @@
       },
       "confirm": "确认删除自动化",
       "confirmDeleteSessions": "删除自动化和任务",
-      "sessionUpdatePartial": "自动化已删除，但 {{fail}} 个任务处理失败"
+      "sessionUpdatePartial": "自动化已删除，但 {{fail}} 个任务处理失败",
+      "batchTitle": "删除 {{count}} 个自动化？",
+      "batchPartial": "已删除 {{ok}} 个自动化，{{fail}} 个失败：{{error}}"
     },
     "confirm": {
       "delete": {

@@ -18196,7 +18196,18 @@
         "demote": "去而留私本",
         "demoteSuccess": "已去案之自運，留為私差"
       },
-      "resizeAria": "調差事錄之寬"
+      "resizeAria": "調差事錄之寬",
+      "batch": {
+        "toggle": "多擇",
+        "toggleAria": "多擇自動之務",
+        "selectAll": "盡擇",
+        "clearAll": "盡去",
+        "selectedCount": "已擇 {{count}}",
+        "cancel": "罷",
+        "delete": "刪",
+        "itemAria": "擇「{{name}}」",
+        "projectHint": "項目之自動，於 schedules.json 治之"
+      }
     },
     "cell": {
       "subtitlePaused": "已暫止",
@@ -18766,7 +18777,8 @@
       "renameFailed": "易名未成：{{error}}",
       "deleteFailed": "刪之未成：{{error}}",
       "restartFailed": "重啟未成：{{error}}",
-      "pluginDraftIgnoredFormOpen": "「{{name}}」請君立自運，然今有自運之表方修。君所填者已留；存之或闔之後，請再點一次。"
+      "pluginDraftIgnoredFormOpen": "「{{name}}」請君立自運，然今有自運之表方修。君所填者已留；存之或闔之後，請再點一次。",
+      "batchDeleted": "已刪 {{count}} 自動之務"
     },
     "deleteDialog": {
       "title": "刪自運「{{name}}」？",
@@ -18774,6 +18786,8 @@
       "description": "刪之則此後觸發皆止。請擇此自運已生之差事當如何處之。",
       "sessionCountPending": "方計已生之差事…",
       "sessionCount": "已關聯 {{count}} 差事",
+      "sessionCountAtLeast": "至少已關聯 {{count}} 差事，餘者未能計",
+      "sessionCountUnknown": "已生之差事，未能計其數",
       "inflightCount": "今有 {{count}} 次方行，刪之則即止",
       "optionAria": "擇已生差事之處置",
       "option": {
@@ -18792,7 +18806,9 @@
       },
       "confirm": "確刪自運",
       "confirmDeleteSessions": "刪自運與差事",
-      "sessionUpdatePartial": "自運已刪，然 {{fail}} 差事處置未成"
+      "sessionUpdatePartial": "自運已刪，然 {{fail}} 差事處置未成",
+      "batchTitle": "刪 {{count}} 自動之務乎？",
+      "batchPartial": "已刪 {{ok}}，{{fail}} 未成：{{error}}"
     },
     "confirm": {
       "delete": {

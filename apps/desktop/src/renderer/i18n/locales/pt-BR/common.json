@@ -18440,7 +18440,18 @@
         "demote": "Remover e manter cópia pessoal",
         "demoteSuccess": "Removido do projeto e mantido como pessoal"
       },
-      "resizeAria": "Redimensionar painel da lista de tarefas"
+      "resizeAria": "Redimensionar painel da lista de tarefas",
+      "batch": {
+        "toggle": "Seleção múltipla",
+        "toggleAria": "Selecionar várias automações",
+        "selectAll": "Selecionar tudo",
+        "clearAll": "Limpar",
+        "selectedCount": "{{count}} selecionadas",
+        "cancel": "Cancelar",
+        "delete": "Excluir",
+        "itemAria": "Selecionar {{name}}",
+        "projectHint": "Automações de projeto são gerenciadas em schedules.json"
+      }
     },
     "cell": {
       "subtitlePaused": "Em pausa",
@@ -19010,7 +19021,8 @@
       "renameFailed": "Falha ao renomear: {{error}}",
       "deleteFailed": "Falha ao excluir: {{error}}",
       "restartFailed": "Falha ao reiniciar: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\" pediu para criar uma automação, mas já há um formulário aberto. Suas edições foram mantidas — salve ou feche o formulário e acione a solicitação novamente."
+      "pluginDraftIgnoredFormOpen": "\"{{name}}\" pediu para criar uma automação, mas já há um formulário aberto. Suas edições foram mantidas — salve ou feche o formulário e acione a solicitação novamente.",
+      "batchDeleted": "{{count}} automações excluídas"
     },
     "deleteDialog": {
       "title": "Excluir a automação \"{{name}}\"?",
@@ -19018,6 +19030,8 @@
       "description": "Os acionamentos futuros serão interrompidos. Escolha o que fazer com as sessões já geradas por esta automação.",
       "sessionCountPending": "Contando sessões geradas…",
       "sessionCount": "{{count}} sessão(ões) gerada(s)",
+      "sessionCountAtLeast": "Pelo menos {{count}} sessão(ões) gerada(s); não foi possível contar algumas",
+      "sessionCountUnknown": "Não foi possível contar as sessões geradas",
       "inflightCount": "{{count}} execução(ões) em andamento serão interrompidas",
       "optionAria": "Escolha como tratar as sessões geradas",
       "option": {
@@ -19036,7 +19050,9 @@
       },
       "confirm": "Excluir automação",
       "confirmDeleteSessions": "Excluir automação e sessões",
-      "sessionUpdatePartial": "Automação excluída, mas não foi possível atualizar {{fail}} sessão(ões)"
+      "sessionUpdatePartial": "Automação excluída, mas não foi possível atualizar {{fail}} sessão(ões)",
+      "batchTitle": "Excluir {{count}} automações?",
+      "batchPartial": "{{ok}} automações excluídas; {{fail}} falharam: {{error}}"
     },
     "confirm": {
       "delete": {

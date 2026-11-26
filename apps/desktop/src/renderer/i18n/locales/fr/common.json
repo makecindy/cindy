@@ -18440,7 +18440,18 @@
         "demote": "Retirer et conserver une copie personnelle",
         "demoteSuccess": "Retirée du projet, conservée en version personnelle"
       },
-      "resizeAria": "Redimensionner le volet de la liste des tâches"
+      "resizeAria": "Redimensionner le volet de la liste des tâches",
+      "batch": {
+        "toggle": "Sélection multiple",
+        "toggleAria": "Sélectionner plusieurs automatisations",
+        "selectAll": "Tout sélectionner",
+        "clearAll": "Effacer",
+        "selectedCount": "{{count}} sélectionnée(s)",
+        "cancel": "Annuler",
+        "delete": "Supprimer",
+        "itemAria": "Sélectionner {{name}}",
+        "projectHint": "Les automatisations de projet sont gérées dans schedules.json"
+      }
     },
     "cell": {
       "subtitlePaused": "En pause",
@@ -19010,7 +19021,8 @@
       "renameFailed": "Échec du renommage : {{error}}",
       "deleteFailed": "Échec de la suppression : {{error}}",
       "restartFailed": "Échec du redémarrage : {{error}}",
-      "pluginDraftIgnoredFormOpen": "« {{name}} » a demandé à créer une automatisation, mais un formulaire est déjà ouvert. Vos modifications ont été conservées : enregistrez-le ou fermez-le, puis relancez la demande."
+      "pluginDraftIgnoredFormOpen": "« {{name}} » a demandé à créer une automatisation, mais un formulaire est déjà ouvert. Vos modifications ont été conservées : enregistrez-le ou fermez-le, puis relancez la demande.",
+      "batchDeleted": "{{count}} automatisations supprimées"
     },
     "deleteDialog": {
       "title": "Supprimer l'automatisation « {{name}} » ?",
@@ -19018,6 +19030,8 @@
       "description": "Les déclenchements futurs seront arrêtés. Choisissez quoi faire des sessions déjà générées par cette automatisation.",
       "sessionCountPending": "Décompte des sessions générées…",
       "sessionCount": "{{count}} session(s) générée(s)",
+      "sessionCountAtLeast": "Au moins {{count}} session(s) générée(s) ; certaines n’ont pas pu être comptées",
+      "sessionCountUnknown": "Impossible de compter les sessions générées",
       "inflightCount": "{{count}} exécution(s) actuellement en cours seront arrêtées",
       "optionAria": "Choisir comment traiter les sessions générées",
       "option": {
@@ -19036,7 +19050,9 @@
       },
       "confirm": "Supprimer l'automatisation",
       "confirmDeleteSessions": "Supprimer l'automatisation et les sessions",
-      "sessionUpdatePartial": "Automatisation supprimée, mais {{fail}} session(s) n'ont pas pu être mises à jour"
+      "sessionUpdatePartial": "Automatisation supprimée, mais {{fail}} session(s) n'ont pas pu être mises à jour",
+      "batchTitle": "Supprimer {{count}} automatisations ?",
+      "batchPartial": "{{ok}} automatisations supprimées, {{fail}} en échec : {{error}}"
     },
     "confirm": {
       "delete": {

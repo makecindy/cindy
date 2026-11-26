@@ -12,6 +12,33 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 
 const RUNS_PER_DELETE_PREVIEW_LIMIT = 10000;
+/** 预览逐项读取（listRuns / getInflightCount）的并发上限（engineering-conventions §8.4）。 */
+const PREVIEW_READ_CONCURRENCY = 4;
+
+/** 预览计数：failed>0 表示有项读取失败，known 只是下限，不得显示为完整计数。 */
+export interface GeneratedSessionCountPreview {
+  known: number;
+  failed: number;
+}
+
+/** 有界并发映射；isCancelled() 为真后不再发起新项。 */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+  isCancelled: () => boolean = () => false,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (!isCancelled() && next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 export type ScheduleGeneratedSessionDisposition = 'keep' | 'archive' | 'delete';
 
@@ -32,7 +59,7 @@ export interface DeleteScheduleTarget {
    *
    * 调用方未传入时,collectGeneratedSessionIds 会自取 schedule 记录兜底解析。
    */
-  targetSessionId?: string;
+  targetSessionId?: string | null;
 }
 
 export interface DeletedScheduleGeneratedSessionResult {
@@ -45,89 +72,146 @@ export interface DeletedScheduleGeneratedSessionResult {
 
 export interface UseDeleteScheduleWithSessionsOptions {
   onDeleted?: (result: DeletedScheduleGeneratedSessionResult) => void | Promise<void>;
+  /** 批量删除结束后调用一次（无论部分成功与否）。 */
+  onBatchFinished?: (deletedIds: readonly string[]) => void | Promise<void>;
 }
 
 export function useDeleteScheduleWithSessions(options: UseDeleteScheduleWithSessionsOptions = {}) {
   const { t } = useTranslation();
-  const { onDeleted } = options;
-  const [target, setTarget] = useState<DeleteScheduleTarget | null>(null);
+  const { onDeleted, onBatchFinished } = options;
+  const [targets, setTargets] = useState<readonly DeleteScheduleTarget[] | null>(null);
   const [disposition, setDisposition] = useState<ScheduleGeneratedSessionDisposition>('keep');
   const [loading, setLoading] = useState(false);
-  const [sessionCount, setSessionCount] = useState<number | null>(null);
+  const [sessionCount, setSessionCount] = useState<GeneratedSessionCountPreview | null>(null);
   const [inflightCount, setInflightCount] = useState<number | null>(null);
 
   const close = useCallback(() => {
     if (loading) return;
-    setTarget(null);
+    setTargets(null);
   }, [loading]);
 
-  const requestDeleteSchedule = useCallback((schedule: DeleteScheduleTarget) => {
+  const requestDeleteSchedules = useCallback((schedules: readonly DeleteScheduleTarget[]) => {
+    if (schedules.length === 0) return;
     setDisposition('keep');
     setSessionCount(null);
     setInflightCount(null);
-    setTarget(schedule);
+    setTargets([...schedules]);
   }, []);
 
+  const requestDeleteSchedule = useCallback(
+    (schedule: DeleteScheduleTarget) => requestDeleteSchedules([schedule]),
+    [requestDeleteSchedules],
+  );
+
   useEffect(() => {
-    if (!target) return;
+    if (!targets) return;
     let cancelled = false;
     void (async () => {
-      const [sessionIds, inflight] = await Promise.all([
-        collectGeneratedSessionIds(target),
-        window.electronAPI.maker.schedule.getInflightCount(target.id).catch(() => 0),
-      ]);
+      // 整批只解析一次手绑会话 id（调用方未传时最多一次 schedule.list()）。
+      const boundIds = await resolveBoundSessionIds(targets);
       if (cancelled) return;
-      setSessionCount(sessionIds.length);
-      setInflightCount(inflight);
+      const counts = await mapWithConcurrency(
+        targets,
+        PREVIEW_READ_CONCURRENCY,
+        async (target) => {
+          const [sessionIds, inflight] = await Promise.all([
+            boundIds.ok
+              ? collectGeneratedSessionIds(target, boundIds.map.get(target.id)).catch(() => null)
+              : Promise.resolve(null),
+            window.electronAPI.maker.schedule.getInflightCount(target.id).catch(() => 0),
+          ]);
+          return { sessions: sessionIds?.length ?? null, inflight };
+        },
+        () => cancelled,
+      );
+      if (cancelled) return;
+      setSessionCount({
+        known: counts.reduce((sum, c) => sum + (c.sessions ?? 0), 0),
+        failed: counts.filter((c) => c.sessions === null).length,
+      });
+      setInflightCount(counts.reduce((sum, c) => sum + c.inflight, 0));
     })();
     return () => {
       cancelled = true;
     };
-  }, [target]);
+  }, [targets]);
 
   const confirmDelete = useCallback(async () => {
-    if (!target || loading) return;
+    if (!targets || loading) return;
     setLoading(true);
+    const deletedIds: string[] = [];
+    let sessionOk = 0;
+    let sessionFail = 0;
+    let firstError: unknown = null;
+    let scheduleFail = 0;
     try {
-      const sessionIds = await collectGeneratedSessionIds(target);
-      await deleteScheduleRecord(target);
-      const failedSessionIds = await applyGeneratedSessionDisposition(sessionIds, disposition);
-      const failed = new Set(failedSessionIds);
-      const affectedSessionIds =
-        disposition === 'keep' ? [] : sessionIds.filter((sessionId) => !failed.has(sessionId));
-      await onDeleted?.({
-        target,
-        disposition,
-        sessionIds,
-        affectedSessionIds,
-        failedSessionIds,
-      });
-      setTarget(null);
-      if (failedSessionIds.length > 0) {
+      // 整批只解析一次手绑会话 id；解析失败时 bound=undefined 会让收集抛错，该项按失败处理，
+      // 绝不在不确定手绑会话的情况下处置（硬不变量）。
+      const boundIds = await resolveBoundSessionIds(targets);
+      // 逐个串行删除：每个自动化独立收集/排除手绑会话，单个失败不影响其余。
+      for (const target of targets) {
+        try {
+          if (!boundIds.ok) throw boundIds.error;
+          const sessionIds = await collectGeneratedSessionIds(target, boundIds.map.get(target.id));
+          await deleteScheduleRecord(target);
+          deletedIds.push(target.id);
+          const failedSessionIds = await applyGeneratedSessionDisposition(sessionIds, disposition);
+          const failed = new Set(failedSessionIds);
+          const affectedSessionIds =
+            disposition === 'keep' ? [] : sessionIds.filter((sessionId) => !failed.has(sessionId));
+          sessionFail += failedSessionIds.length;
+          sessionOk += sessionIds.length - failedSessionIds.length;
+          await onDeleted?.({
+            target,
+            disposition,
+            sessionIds,
+            affectedSessionIds,
+            failedSessionIds,
+          });
+        } catch (error) {
+          scheduleFail += 1;
+          firstError ??= error;
+        }
+      }
+      await onBatchFinished?.(deletedIds);
+      setTargets(null);
+      if (scheduleFail > 0) {
+        const message = firstError instanceof Error ? firstError.message : String(firstError);
         toast.error(
-          t('scheduler.deleteDialog.sessionUpdatePartial', {
-            ok: sessionIds.length - failedSessionIds.length,
-            fail: failedSessionIds.length,
-          }),
+          targets.length > 1
+            ? t('scheduler.deleteDialog.batchPartial', {
+                ok: deletedIds.length,
+                fail: scheduleFail,
+                error: message,
+              })
+            : t('scheduler.toast.deleteFailed', { error: message }),
+        );
+        // 已删除的自动化里仍可能有任务处置失败，不能被自动化失败掩盖。
+        if (sessionFail > 0) {
+          toast.error(
+            t('scheduler.deleteDialog.sessionUpdatePartial', { ok: sessionOk, fail: sessionFail }),
+          );
+        }
+      } else if (sessionFail > 0) {
+        toast.error(
+          t('scheduler.deleteDialog.sessionUpdatePartial', { ok: sessionOk, fail: sessionFail }),
         );
       } else {
-        toast.success(t('scheduler.toast.deleted'));
+        toast.success(
+          targets.length > 1
+            ? t('scheduler.toast.batchDeleted', { count: deletedIds.length })
+            : t('scheduler.toast.deleted'),
+        );
       }
-    } catch (error) {
-      toast.error(
-        t('scheduler.toast.deleteFailed', {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
     } finally {
       setLoading(false);
     }
-  }, [disposition, loading, onDeleted, target, t]);
+  }, [disposition, loading, onBatchFinished, onDeleted, targets, t]);
 
   const dialog = (
     <DeleteScheduleWithSessionsDialog
-      open={target !== null}
-      target={target}
+      open={targets !== null}
+      targets={targets}
       disposition={disposition}
       sessionCount={sessionCount}
       inflightCount={inflightCount}
@@ -138,27 +222,43 @@ export function useDeleteScheduleWithSessions(options: UseDeleteScheduleWithSess
     />
   );
 
-  return { requestDeleteSchedule, deleteScheduleDialog: dialog };
+  return { requestDeleteSchedule, requestDeleteSchedules, deleteScheduleDialog: dialog };
 }
 
-async function resolveBoundSessionId(target: DeleteScheduleTarget): Promise<string | undefined> {
-  // 调用方已显式传入手绑会话 id 时直接用;否则自取 schedule 记录兜底,
-  // 保证手绑的用户既有会话一定从处置集合里排除(硬不变量)。
-  if (target.targetSessionId !== undefined) return target.targetSessionId;
+type BoundSessionIds =
+  | { ok: true; map: ReadonlyMap<string, string | null> }
+  | { ok: false; error: unknown };
+
+async function resolveBoundSessionIds(
+  targets: readonly DeleteScheduleTarget[],
+): Promise<BoundSessionIds> {
+  // 调用方已显式传入手绑会话 id（含 null = 确认未手绑）时直接用;其余项整批只读一次
+  // schedule 列表兜底,保证手绑的用户既有会话一定从处置集合里排除(硬不变量)。
+  const map = new Map<string, string | null>();
+  const missing: DeleteScheduleTarget[] = [];
+  for (const target of targets) {
+    if (target.targetSessionId !== undefined) map.set(target.id, target.targetSessionId);
+    else missing.push(target);
+  }
+  if (missing.length === 0) return { ok: true, map };
   try {
-    const list = (await window.electronAPI.maker.schedule.list()) as Schedule[] | undefined;
-    return list?.find((s) => s?.id === target.id)?.targetSessionId;
-  } catch {
-    return undefined;
+    const list = ((await window.electronAPI.maker.schedule.list()) ?? []) as Schedule[];
+    const byId = new Map(list.filter(Boolean).map((s) => [s.id, s.targetSessionId ?? null]));
+    for (const target of missing) map.set(target.id, byId.get(target.id) ?? null);
+    return { ok: true, map };
+  } catch (error) {
+    return { ok: false, error };
   }
 }
 
-async function collectGeneratedSessionIds(target: DeleteScheduleTarget): Promise<string[]> {
+async function collectGeneratedSessionIds(
+  target: DeleteScheduleTarget,
+  boundSessionId: string | null | undefined,
+): Promise<string[]> {
   // 收集层单闸门:两来源(run 历史 ids + knownSessionIds)统一排除手绑的 boundSessionId
   // (schedule.targetSessionId)—— runner 心跳模式把它当每轮 run 的 sessionId 落进
   // schedule_runs,不过滤会误把用户既有会话算进处置集合被软删。与共享 helper、mobile
   // 同一 id 排除机制(共享层是纯工具拿不到 session 对象,亦走 id 排除保底)。
-  const boundSessionId = await resolveBoundSessionId(target);
   const ids = new Set<string>();
   const shouldKeep = (id: string | undefined): id is string =>
     !!id && id !== boundSessionId;
@@ -213,9 +313,9 @@ async function applyGeneratedSessionDisposition(
 
 interface DeleteScheduleWithSessionsDialogProps {
   open: boolean;
-  target: DeleteScheduleTarget | null;
+  targets: readonly DeleteScheduleTarget[] | null;
   disposition: ScheduleGeneratedSessionDisposition;
-  sessionCount: number | null;
+  sessionCount: GeneratedSessionCountPreview | null;
   inflightCount: number | null;
   loading: boolean;
   onDispositionChange: (value: ScheduleGeneratedSessionDisposition) => void;
@@ -225,7 +325,7 @@ interface DeleteScheduleWithSessionsDialogProps {
 
 function DeleteScheduleWithSessionsDialog({
   open,
-  target,
+  targets,
   disposition,
   sessionCount,
   inflightCount,
@@ -284,9 +384,11 @@ function DeleteScheduleWithSessionsDialog({
           }}
         >
           <AlertDialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
-            {target
-              ? t('scheduler.deleteDialog.title', { name: target.name })
-              : t('scheduler.deleteDialog.titleFallback')}
+            {targets && targets.length > 1
+              ? t('scheduler.deleteDialog.batchTitle', { count: targets.length })
+              : targets?.[0]
+                ? t('scheduler.deleteDialog.title', { name: targets[0].name })
+                : t('scheduler.deleteDialog.titleFallback')}
           </AlertDialog.Title>
           <AlertDialog.Description className="mt-2 text-sm leading-relaxed text-[var(--confirm-desc)]">
             {t('scheduler.deleteDialog.description')}
@@ -295,7 +397,11 @@ function DeleteScheduleWithSessionsDialog({
           <div className="mt-3 rounded-lg border border-[var(--cmd-palette-border)] px-3 py-2 text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
             {sessionCount === null
               ? t('scheduler.deleteDialog.sessionCountPending')
-              : t('scheduler.deleteDialog.sessionCount', { count: sessionCount })}
+              : sessionCount.failed === 0
+                ? t('scheduler.deleteDialog.sessionCount', { count: sessionCount.known })
+                : sessionCount.known > 0
+                  ? t('scheduler.deleteDialog.sessionCountAtLeast', { count: sessionCount.known })
+                  : t('scheduler.deleteDialog.sessionCountUnknown')}
             {inflightCount && inflightCount > 0
               ? ` · ${t('scheduler.deleteDialog.inflightCount', { count: inflightCount })}`
               : ''}

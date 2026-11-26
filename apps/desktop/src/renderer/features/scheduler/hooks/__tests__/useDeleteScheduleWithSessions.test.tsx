@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDeleteScheduleWithSessions } from '../useDeleteScheduleWithSessions';
 import { discardDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import * as sessionService from '@/lib/sessionService';
+import { toast } from '@/lib/toast';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/sessionService', () => ({ update: vi.fn() }));
@@ -65,6 +66,35 @@ describe('deleting automation with generated drafts', () => {
         disposition === 'archive' ? { status: 'archived', pinnedAt: null } : { status: 'deleted' });
     },
   );
+  // Review #12717: a schedule failure must not hide session failures in other deleted
+  // automations. Minimal input: 2 targets, first deletes but its archive fails, second's
+  // delete fails. Unit tier, real hook confirm path.
+  it('reports both schedule and session failures in a mixed batch', async () => {
+    deleteSchedule.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('gone'));
+    vi.mocked(sessionService.update).mockRejectedValueOnce(new Error('write failed'));
+    const { result } = renderHook(() => useDeleteScheduleWithSessions());
+    await act(async () => { result.current.requestDeleteSchedules([
+      { id: 'a', name: 'a', targetSessionId: null }, { id: 'b', name: 'b', targetSessionId: null },
+    ]); });
+    await act(async () => { result.current.deleteScheduleDialog.props.onDispositionChange('archive'); });
+    await act(async () => { await result.current.deleteScheduleDialog.props.onConfirm(); });
+    expect(toast.error).toHaveBeenCalledWith('scheduler.deleteDialog.batchPartial');
+    expect(toast.error).toHaveBeenCalledWith('scheduler.deleteDialog.sessionUpdatePartial');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+  // Review #12717: a failed run read must surface as unknown, not as a complete 0.
+  // One batch: list() read once, one listRuns failure -> failed count, not total.
+  it('preview keeps failed reads unknown and lists schedules once per batch', async () => {
+    const api = (window as unknown as { electronAPI: { maker: { schedule: Record<string, ReturnType<typeof vi.fn>> } } })
+      .electronAPI.maker.schedule;
+    api.listRuns.mockRejectedValueOnce(new Error('read failed'));
+    const { result } = renderHook(() => useDeleteScheduleWithSessions());
+    await act(async () => { result.current.requestDeleteSchedules([
+      { id: 'a', name: 'a' }, { id: 'b', name: 'b' }, { id: 'c', name: 'c' },
+    ]); });
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(result.current.deleteScheduleDialog.props.sessionCount).toEqual({ known: 2, failed: 1 });
+  });
   it('cancel leaves the automation and draft intact', async () => {
     saveDraft('generated', draft);
     const { result } = renderHook(() => useDeleteScheduleWithSessions());

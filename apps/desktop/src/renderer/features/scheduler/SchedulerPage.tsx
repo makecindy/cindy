@@ -109,9 +109,12 @@ export function SchedulerPage() {
   // （首张 run 自带 Running chip + 脉冲点），左侧 cell 不再叠加 running 态指示，所以这里不解构。
   const { schedules, runtimeSnapshot, loading, error, refresh } = useSchedules();
   const { confirm, confirmThree } = useConfirmDialog();
-  const { requestDeleteSchedule, deleteScheduleDialog } = useDeleteScheduleWithSessions({
-    onDeleted: () => refresh(),
-  });
+  const [batchSelection, setBatchSelection] = useState<ReadonlySet<string> | null>(null);
+  const { requestDeleteSchedule, requestDeleteSchedules, deleteScheduleDialog } =
+    useDeleteScheduleWithSessions({
+      onDeleted: () => refresh(),
+      onBatchFinished: () => setBatchSelection(null),
+    });
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -551,6 +554,25 @@ export function SchedulerPage() {
     [requestDeleteSchedule],
   );
 
+  const handleBatchDelete = useCallback(
+    (items: Schedule[]) => {
+      const targets = items
+        .filter((s) => s.source !== 'bot' && s.source !== 'project')
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          // 上面的 filter 已排除 bot / project。
+          source: s.source as 'user' | undefined,
+          workingDir: s.workingDir ?? undefined,
+          projectConfigId: s.projectConfigId ?? undefined,
+          // 列表里已有 schedule 记录：直接传手绑会话 id（null = 确认未手绑），免去逐项全量 list()。
+          targetSessionId: s.targetSessionId ?? null,
+        }));
+      requestDeleteSchedules(targets);
+    },
+    [requestDeleteSchedules],
+  );
+
   // EmptyState 只在「整库没有任务」时显示，避免 workingDir / status
   // 等用户主动筛选导致的空列表误触发 onboard CTA。
   const isEmpty = !loading && !error && schedules.length === 0;
@@ -617,6 +639,9 @@ export function SchedulerPage() {
               onStatusFilterChange={handleStatusFilterChange}
               onTogglePause={handleTogglePause}
               onDelete={handleDelete}
+              onBatchDelete={handleBatchDelete}
+              selection={batchSelection}
+              onSelectionChange={setBatchSelection}
               onRename={handleRename}
               onOpenProjectConfig={handleOpenProjectConfig}
               onReloadProject={handleReloadProject}
