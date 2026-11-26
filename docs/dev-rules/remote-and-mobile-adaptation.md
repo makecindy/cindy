@@ -7,6 +7,24 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 建连限流的服务端重试期限（2026-11-26，#13041）
+
+分享传输建连（`agentNetSharing.ts` 的 scoped 连接工厂申请租约）收到 429 时，`AgentNetSharingError`
+已把有效 `Retry-After` 解析为 `retryAt`，但 `DeviceLinkClient` 工厂失败后只走普通退避（1 秒起、30 秒封顶），
+期限内照样反复请求被限流的接口。现在工厂抛出的错误带 `retryAt`（Unix 毫秒）时，client 记下期限：
+退避等满期限再追加本档抖动；期限前的网络变化／前台恢复（含 `overrideCongestionCooldown`）、唤醒重建与
+stop/start 都在 `connect()` 入口统一推迟，不调用工厂，并同样交给 `scheduleReconnect` 排期、期限后追加本档抖动，
+同一期限的各端不会在期限那一刻齐步回来。期限按 `SERVER_RETRY_MAX_WAIT_MS`（10 分钟）封顶，防止异常的远期日期
+把连接永久挂起；收到时换算成墙钟与单调钟两个到期时刻，任一到点即解除，系统睡眠不会多等，系统时间回拨也不能把
+等待拉长到收到时的期限之外。没有 `retryAt` 的失败（含现场那次空 `retryAt` 的 429）保持原退避不变。
+
+故障半径三问：① 证据是这一条连接的工厂被服务端明确限流并给出期限，不涉及其它连接或对端；② 只推迟这一个
+`DeviceLinkClient` 的建连，主连接、其它 scoped 连接、已建立的会话与可靠层状态都不动，不新增重试或重放；期限只在
+没有 socket 时产生，推迟不会丢弃在线连接；③ `client.test.ts`「does not call the socket factory before a server
+retry deadline」按无期限／60 秒／超过上限／60 秒后系统时间回拨一小时四格驱动真实 client，期限内触发
+connectNow、restartConnection 与 stop/start 均不建连，期限刚过仍先等抖动，回拨后按收到时的期限建连；修复前
+三格有期限的用例失败。只改客户端，不改 wire、中继或服务端契约。
+
 ## 可靠窗口防积压：列表读单飞、增量基准保留与过期只读回包退役（2026-11-25）
 
 慢网或对端暂停确认时，单条对端的 64 帧可靠发送窗口不再被高频自动化推送与重复大列表回包联手堵死：
