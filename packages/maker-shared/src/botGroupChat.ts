@@ -52,7 +52,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -80,12 +80,17 @@ export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode
 export function readBotGroupAssistantNotice(message: {
   deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
   content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
-}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+}): { type: 'executor_unavailable'; requesterId: string | null; reason?: 'unbound' | 'offline' } | null {
   if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
   const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
-  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; reason?: unknown; requesterId?: unknown } : null;
   if (data?.type !== 'executor_unavailable') return null;
-  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+  return { type: 'executor_unavailable', ...(data.reason === 'unbound' || data.reason === 'offline' ? { reason: data.reason } : {}), requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+}
+
+export function groupAssistantNoticeCode(reason: 'unbound' | 'offline' | undefined): BotGroupCapabilityNoticeCode {
+  if (reason === 'unbound') return 'GROUP_ASSISTANT_DEVICE_REQUIRED';
+  return reason === 'offline' ? 'GROUP_ASSISTANT_DEVICE_OFFLINE' : 'GROUP_ASSISTANT_UNAVAILABLE';
 }
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
@@ -279,6 +284,7 @@ export interface BotGroupMessageView {
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
   runtimeFailureReason?: BotGroupRuntimeFailureReason;
   capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
+  canChooseAssistantDevice?: true;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */
@@ -697,6 +703,8 @@ export interface BotGroupSummary {
   supportsOwnBotRemoval?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  assistantDeviceId?: string | null;
+  assistantComputers?: Array<{ id: string; name: string }>;
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
   /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
@@ -993,6 +1001,7 @@ export type BotGroupRemoteActionId =
   | 'read'
   | 'set-assistant'
   | 'notifications'
+  | 'assistantDevice'
   | 'mask'
   | 'mask-mentions'
   | 'readers'
@@ -1184,6 +1193,7 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
+  | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }

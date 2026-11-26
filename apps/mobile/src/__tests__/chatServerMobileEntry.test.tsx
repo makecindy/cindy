@@ -596,6 +596,30 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
+// Direct mobile thread replies use the real outbox and HTTP serializer. A named
+// companion must be the sole recipient even when public Cindy wrote the root.
+it.each([false, true])('addresses a bot-authored thread with an explicit target=%s', async explicit => {
+  const author = '00000000-0000-4000-8000-000000000003';
+  const personal = '00000000-0000-4000-8000-000000000004';
+  const member = { id: author, kind: 'bot', state: 'joined', name: 'Cindy', role: 'member', ownerActorId: null };
+  const root = { id: self, seq: '1', authorId: author, author: { kind: 'bot', name: 'Cindy' },
+    content: [{ type: 'text', text: 'Topic' }], createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const members = [member, { ...member, id: personal, ownerActorId: self }];
+    if (path.endsWith('/snapshot')) return { room, members, messages: [root], cursor: '1' };
+    if (path.endsWith('/members')) return members;
+    if (path.includes('/messages?')) return [];
+    if (path.endsWith('/messages/' + self)) return root;
+    return original(path, options);
+  });
+  showChat = true; threadRootId = self; await render();
+  await act(async () => { await send({ clientId: 'thread-recipient', text: 'Please reply', mentions: { all: false, botIds: explicit ? [personal] : [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({
+    method: 'POST', body: expect.objectContaining({ threadRootId: self, mentions: [explicit ? personal : author] }),
+  }));
+});
+
 // Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
 // Topic attachment parity: existing media cases only covered the main timeline;
 // an attachment-only topic reply must retain its root in the eventual POST.

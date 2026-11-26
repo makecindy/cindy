@@ -950,9 +950,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const header = useMemo(() => {
     if (!headerGroup) return null;
     const shown = direct ? members.filter(member => !member.isSelf) : members;
-    const names = botGroupMemberNames(shown.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator);
-    // A group reads its size, not a roll call (owner request 2026-10-26); the names stay in the
-    // tooltip and the settings drawer. Live activity takes the line over while it lasts.
+    // On Windows the native tooltip can cover the conversation when the group has a long roster.
+    const showMemberNames = direct || window.electronAPI?.platform !== 'win32';
+    const names = showMemberNames
+      ? botGroupMemberNames(shown.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator)
+      : undefined;
+    // The header shows the group size or live activity. The settings drawer lists members.
     const summary = direct ? names : t('bots.groupChat.memberCount', { count: members.length });
     return (
       <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="flex h-full w-full min-w-0 items-center gap-2 pr-2">
@@ -1640,6 +1643,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 <BotGroupTimelineItem
+                  showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
                   continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}

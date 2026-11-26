@@ -224,6 +224,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     return () => { if (stopOwnerRef.current === stopOwner) stopOwnerRef.current = null; };
   }, [stopOwner]);
   const [settings, setSettings] = useState(false);
+  const openGroupSettings = useCallback(() => setSettings(true), []);
   const [threadsOpen, setThreadsOpen] = useState(false);
   const [threadListFilter, setThreadListFilter] = useState<BotGroupThreadFilter>('mine');
   const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
@@ -896,7 +897,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         <SessionQuickSendProvider value={!imageSelectionActive && !group.archived && !group.dissolvedAt && (chat.online || chat.canQueue) ? sendRichAnswer : null}>
         <BotGroupWorkArea enabled={!imageSelectionActive} onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onError={message => { if (message) Alert.alert(message); }}>
-        {workRows => <BotGroupTimeline workRows={imageSelectionActive ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        {workRows => <BotGroupTimeline onChooseComputer={openGroupSettings} workRows={imageSelectionActive ? undefined : workRows} onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
           onShare={chat.shareToMain ? shareToMain : undefined}
@@ -1169,7 +1170,7 @@ function BotGroupVirtualList({ data, renderItem, keyExtractor, header, footer, o
 
 export const BotGroupTimeline = memo(function BotGroupTimeline({
   group, workRows = [], deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
-  onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, active = true,
+  onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, onChooseComputer, active = true,
   onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
 }: {
   group: BotGroupRemoteChatData;
@@ -1194,6 +1195,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
   onOpenThread?: (message: BotGroupMessageView) => void;
+  onChooseComputer?: () => void;
   onOpenDiagram?: (source: string, message: BotGroupMessageView) => void;
   active?: boolean;
   threadRootId?: string;
@@ -1305,7 +1307,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         {!threadRootId && groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
         {firstNew !== undefined && index === firstNew && firstNew > firstReply ? <View style={styles.newReplyBoundary}><View style={styles.newReplyLine} /><Text style={styles.newReplyDivider}>{t('groupChat.thread.newRepliesDivider')}</Text></View> : null}
         <CompanionEntering id={key} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
-        <BotGroupTimelineItem groupId={group.id} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
+        <BotGroupTimelineItem onChooseComputer={group.assistantComputers && !group.assistantDeviceId ? onChooseComputer : undefined} groupId={group.id} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
         {onOpenThread && !message.threadRootId && !message.threadShare ?
           <BotGroupThreadEntry message={message} identityFor={identityFor} onPress={() => onOpenThread(message)} />
         : null}
@@ -1370,8 +1372,9 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
 
 function BotGroupTimelineItem({
   groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
-  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, interactive = true, active = true,
+  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, onChooseComputer, interactive = true, active = true,
 }: {
+  onChooseComputer?: () => void;
   groupId: string;
   onOpenDiagram?: (source: string) => void;
   interactive?: boolean;
@@ -1426,7 +1429,11 @@ function BotGroupTimelineItem({
   if (message.kind === 'plan-end') return <BotGroupPlanEndDivider stepCount={plan ? plan.steps.length : null} />;
   if (message.kind === 'notice' || (message.authorKind === 'system' && message.kind !== 'plan')) {
     const name = message.authorName.trim() || member?.name || '';
-    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Text style={styles.capabilityNotice} testID="botGroup.notice">{t(`groupChat.notice.capability.${message.capabilityNoticeCode}`, { name })}</Text>;
+    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <View>
+      <Text style={styles.capabilityNotice} testID="botGroup.notice">{t(`groupChat.notice.capability.${message.capabilityNoticeCode}`, { name })}</Text>
+      {message.canChooseAssistantDevice && onChooseComputer && interactive ? <MainWindowActionButton density="compact"
+        action={{ label: t('groupChat.groupSettings.chooseComputer'), onPress: onChooseComputer, testID: 'botGroup.notice.chooseComputer' }} /> : null}
+    </View>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return <BotGroupRuntimeFailureNotice key={message.id} code={message.runtimeFailureCode} reason={message.runtimeFailureReason} name={name} />;
     }

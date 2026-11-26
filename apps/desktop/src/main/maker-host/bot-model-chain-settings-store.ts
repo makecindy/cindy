@@ -22,7 +22,7 @@ import {
 } from './override-settings-file.js';
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
-import { readModelGroupsConfig } from '../model-groups/store.js';
+import { readModelGroupsConfig, readModelGroupsConfigForSelected } from '../model-groups/store.js';
 import { modelGroupsConfigForRemote, type ModelGroupsConfig } from '../../shared/modelGroups.js';
 
 import { inspectSettingsFile, isSettingsObject, validateOptionalSettingsFields } from './settings-inspection.js';
@@ -281,7 +281,7 @@ export function listBotModelGroupsForRemote(): ModelGroupsConfig {
  * 这台电脑上没有这个组时去掉组、按控制端带来的具体模型；组暂时用不了时保留原来的具体模型。
  */
 export async function fillBotModelGroupRoutes(chain: readonly BotModelRoute[]): Promise<BotModelRoute[]> {
-  const config = readModelGroupsConfig();
+  const config = readModelGroupsConfigForSelected();
   return Promise.all(chain.map(async (route) => {
     if (!route.modelGroup) return route;
     if (!config.routes.some((group) => group.id === route.modelGroup)) {

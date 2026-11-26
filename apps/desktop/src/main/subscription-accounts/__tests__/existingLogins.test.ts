@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 
 it('offers the verified external profile, skips removed and managed homes, and consumes the owner’s selection once', async () => {
-  h.pool = { accounts: [], strategy: 'least', dismissedLogins: [path.join(h.home, '.claude-work')] };
+  h.pool = { accounts: [], strategy: 'expiring', dismissedLogins: [path.join(h.home, '.claude-work')] };
   const session = existingLoginSession('anthropic');
   const candidates = await session.discover();
   expect(candidates.map(row => row.directory)).toEqual([path.join(h.home, '.claude-person')]);

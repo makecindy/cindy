@@ -656,6 +656,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
         pluginUi={pluginUi}
         message={message}
         continued={continued}
