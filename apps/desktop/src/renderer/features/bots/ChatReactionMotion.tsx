@@ -11,9 +11,8 @@ import './ChatReactionMotion.css';
 
 const strips: Record<string, string> = { '👍': thumbsUp, '❤️': heart, '😂': laugh, '🎉': party, '👀': eyes, '🙏': thanks };
 
-/** The picker and badge show the same first frame that the landing animation starts with. */
 export function ReactionGlyph({ emoji, play = false }: { emoji: string; play?: boolean }) {
-  const src = strips[emoji];
+  const src = window.electronAPI?.platform === 'darwin' ? undefined : strips[emoji];
   return <span aria-hidden className="chat-reaction-glyph" data-playing={play || undefined}>
     {!play && <span className={src ? 'invisible' : undefined}>{emoji}</span>}
     {src ? <span className="chat-reaction-strip" style={{ backgroundImage: `url(${src})` }} />
@@ -21,7 +20,16 @@ export function ReactionGlyph({ emoji, play = false }: { emoji: string; play?: b
   </span>;
 }
 
-export function ChatReactionMotion({ gesture, onFinish }: { gesture: ReactionGesture; onFinish: (gesture: ReactionGesture) => void }) {
+export function ReactionBadgeGlyph({ emoji, gesture, onFinish }: {
+  emoji: string; gesture?: ReactionGesture; onFinish?: (gesture: ReactionGesture) => void;
+}) {
+  return <span className="relative inline-flex">
+    <ReactionGlyph emoji={emoji} />
+    {gesture?.emoji === emoji && onFinish && <ChatReactionMotion gesture={gesture} onFinish={onFinish} />}
+  </span>;
+}
+
+function ChatReactionMotion({ gesture, onFinish }: { gesture: ReactionGesture; onFinish: (gesture: ReactionGesture) => void }) {
   const anchor = useRef<HTMLSpanElement>(null);
   const reduced = useReducedMotion();
   useLayoutEffect(() => {

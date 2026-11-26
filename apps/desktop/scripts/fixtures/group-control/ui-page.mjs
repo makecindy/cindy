@@ -254,9 +254,22 @@ export default {
       });
       const originalGap = await gapToPrevious();
       const choice = page.getByRole('button', { name: '❤️', exact: true });
+      const mac = ui.platform === 'darwin';
+      const quickGlyph = choice.locator('.chat-reaction-glyph');
+      assert.equal(await quickGlyph.locator('.chat-reaction-strip').count(), mac ? 0 : 1);
+      if (mac) assert.match(await quickGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
       await choice.click();
       const flight = row.locator('.chat-reaction-flight[data-from-picker]');
-      await flight.waitFor();
+      const effect = await flight.evaluate(el => {
+        const fixedGlyph = el.parentElement.previousElementSibling;
+        return {
+          animation: getComputedStyle(el.firstElementChild).animationName,
+          fixedGlyph: getComputedStyle(fixedGlyph).visibility,
+          distance: Math.hypot(...['--flight-x', '--flight-y'].map(v => parseFloat(getComputedStyle(el).getPropertyValue(v)))),
+        };
+      });
+      assert.ok(effect.distance > 1, 'the flight starts away from the badge');
+      if (mac) assert.deepEqual([effect.animation, effect.fixedGlyph], ['chat-reaction-bounce', 'hidden']);
       const anchor = row.locator('.chat-reaction-anchor');
       const rect = await anchor.boundingBox();
       assert.ok(rect?.width > 0 && rect.height > 0);
@@ -338,12 +351,24 @@ export default {
       const tea = picker.locator('[data-epr-part="emoji"]').filter({ hasText: '🧋' }).first();
       await tea.waitFor();
       assert.equal(await tea.evaluate(inkAlpha), 255);
+      if (ui.platform === 'darwin') {
+        const font = await tea.locator('.epr-emoji-native').evaluate(el => getComputedStyle(el).fontFamily);
+        assert.match(font, /^"Apple Color Emoji"/);
+      }
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
       await tea.click();
+      const flyingTea = corner.locator('.chat-reaction-flight[data-from-picker]');
+      assert.equal(await flyingTea.evaluate(el => el.parentElement.previousElementSibling.textContent), '🧋',
+        'a catalog choice lands on its own glyph in the multi-reaction badge');
+      await flyingTea.waitFor({ state: 'detached' });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
       await picker.waitFor({ state: 'hidden' });
       await second.hover();
       await page.waitForFunction(el => getComputedStyle(el).opacity === '0' && getComputedStyle(el).pointerEvents === 'none',
         await toolbar.elementHandle(), { timeout: 2000 });
-      assert.equal(await corner.locator('.chat-reaction-glyph').first().textContent(), '🧋', 'newest reaction leads the corner badge');
+      const latestGlyph = corner.locator('.chat-reaction-glyph').first();
+      assert.equal(await latestGlyph.textContent(), '🧋', 'newest reaction leads the corner badge');
+      if (ui.platform === 'darwin') assert.match(await latestGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
       await openOn(row);
       await picker.getByRole('button', { name: '🎉', exact: true }).click();
       await picker.waitFor({ state: 'hidden' });

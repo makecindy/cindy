@@ -1,7 +1,7 @@
 import { Plus, ChevronUp } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { useChatReactions } from './useChatReactions';
-import { ChatReactionMotion, ReactionGlyph } from './ChatReactionMotion';
+import { ReactionBadgeGlyph, ReactionGlyph } from './ChatReactionMotion';
 import { ChatReactionButton, type ReactorReads } from './ChatReactionButton';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -81,9 +81,9 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
       className={cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1')}>
       {stacked ? <ReactionDetailsPopover label={label} align={align} renderBadges={renderBadges}>
         <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
-          {reactions.slice(0, 2).map(r => <ReactionGlyph key={r.emoji} emoji={r.emoji} />)}
+          {reactions.slice(0, 2).map(r => <ReactionBadgeGlyph key={r.emoji} emoji={r.emoji}
+            gesture={gesture ?? undefined} onFinish={controls.finishGesture} />)}
           <span className="text-11 tabular-nums text-[var(--text-secondary)]">{total}</span>
-          {gesture && <ChatReactionMotion key={gesture.emoji} gesture={gesture} onFinish={controls.finishGesture} />}
         </button>
       </ReactionDetailsPopover> : renderBadges()}
     </div>

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { ReactionGlyph, ChatReactionMotion } from './ChatReactionMotion';
+import { ReactionBadgeGlyph } from './ChatReactionMotion';
 import type { ReactionGesture } from './useChatReactions';
 import { BotAvatar } from './BotAvatar';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../shared/botGroupChat';
@@ -90,10 +90,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       className={cn(showAvatars && !compact && 'pr-1', compact && cn('h-[22px] gap-0.5 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
-      <span className="relative inline-flex">
-        <ReactionGlyph emoji={reaction.emoji} />
-        {reaction.me && gesture && onFinishGesture && <ChatReactionMotion gesture={gesture} onFinish={onFinishGesture} />}
-      </span>
+      <ReactionBadgeGlyph emoji={reaction.emoji} gesture={reaction.me ? gesture : undefined} onFinish={onFinishGesture} />
       {showAvatars && !compact ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
         <span aria-hidden className="flex items-center -space-x-1.5" data-testid="reaction-avatars">

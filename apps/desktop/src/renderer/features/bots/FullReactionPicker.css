@@ -26,6 +26,10 @@
   --epr-category-label-text-color: var(--text-secondary);
 }
 
+[data-platform='darwin'] .chat-full-reaction-picker {
+  --epr-emoji-font-family: "Apple Color Emoji", sans-serif;
+}
+
 .chat-full-reaction-picker [data-epr-part='emoji'] {
   color: rgb(from var(--text-primary) r g b / 1);
 }

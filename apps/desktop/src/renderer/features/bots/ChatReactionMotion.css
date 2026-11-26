@@ -10,6 +10,14 @@
   color: rgb(from var(--text-primary) r g b / 1);
 }
 
+[data-platform='darwin'] .chat-reaction-glyph {
+  font-family: "Apple Color Emoji", sans-serif;
+}
+
+[data-platform='darwin'] .chat-reaction-glyph:has(+ .chat-reaction-anchor) {
+  visibility: hidden;
+}
+
 .chat-reaction-strip {
   position: absolute;
   inset: 0 auto auto 0;
@@ -49,12 +57,26 @@
   animation: chat-reaction-landing var(--motion-enter) var(--motion-ease-out) var(--chat-reaction-landing-delay, 0s) both;
 }
 
+[data-platform='darwin'] .chat-reaction-flight {
+  --flight-scale: 1.55;
+}
+
+[data-platform='darwin'] .chat-reaction-landing {
+  font-size: inherit;
+  animation-name: chat-reaction-bounce;
+}
+
+@keyframes chat-reaction-bounce {
+  0%, 100% { transform: scale(1); }
+  45% { transform: scale(1.22); }
+}
+
 .chat-reaction-glyph[data-playing] .chat-reaction-strip {
   animation: chat-reaction-frames var(--motion-enter) steps(29, end) var(--chat-reaction-landing-delay, 0s) both;
 }
 
 @keyframes chat-reaction-flight {
-  from { transform: translate(var(--flight-x, 0px), var(--flight-y, 0px)); }
+  from { transform: translate(var(--flight-x, 0px), var(--flight-y, 0px)) scale(var(--flight-scale, 1)); }
   52% { transform: translate(calc(var(--flight-x, 0px) * .45), calc(var(--flight-y, 0px) * .45 - 9px)); }
   to { transform: none; }
 }
