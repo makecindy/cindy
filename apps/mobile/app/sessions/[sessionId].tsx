@@ -11454,6 +11454,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                             不在这里,它们是消息流里的 pending_send 项。 */}
                         <InlineQueueSection
                           busy={queueBusy || historyRecoveryBusy}
+                          isRunning={remoteSessionRunning || isSessionStreaming}
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}

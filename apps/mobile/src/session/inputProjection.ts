@@ -70,6 +70,7 @@ export function buildQueueRowPresentation(
 export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   sessionId: '',
   pendingQueue: [],
+  steerUnsupported: false,
   steeringQueueClientIds: [],
   queuePaused: false,
   queueExpanded: false,
@@ -98,6 +99,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
   return {
     sessionId: readString(record?.sessionId) ?? fallbackSessionId,
     pendingQueue,
+    steerUnsupported: record?.steerUnsupported === true,
     steeringQueueClientIds: readStringArray(record?.steeringQueueClientIds),
     queuePaused: record?.queuePaused === true,
     queueExpanded: record?.queueExpanded === true,

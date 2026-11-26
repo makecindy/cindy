@@ -309,6 +309,8 @@ export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 's
 export interface InputProjection {
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
+  /** 当前会话的实时引擎不支持同轮插话（老被控端缺省 = 按支持处理）。 */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;

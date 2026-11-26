@@ -2658,6 +2658,12 @@ export interface AgentSessionHandle {
    * agent-level set. Built-in engines leave it undefined.
    */
   readonly negotiatedCapabilities?: Capabilities;
+  /**
+   * Subscribe to per-session negotiated capability changes (for example, an ACP
+   * engine revoking steering after returning method-not-found or updating config
+   * options). Returns an idempotent disposer.
+   */
+  onCapabilitiesChange?(listener: (capabilities: Capabilities) => void): () => void;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;

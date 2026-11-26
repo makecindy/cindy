@@ -1696,6 +1696,15 @@ export class AgentInputCoordinator {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
 
+  /**
+   * Re-emit the projection when a live session's runtime capability changes
+   * (for example, an ACP engine revoking same-turn steering after -32601),
+   * without touching queue persistence.
+   */
+  refreshProjection(sessionId: string): void {
+    this.deps.emitProjection(this.getProjection(sessionId));
+  }
+
   /** Retry a failed current snapshot without rewriting successful or unrestored queues. */
   retryQueueSnapshotPersistence(sessionId: string): void {
     this.maybePersistQueueSnapshot(sessionId);

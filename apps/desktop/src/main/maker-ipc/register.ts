@@ -6655,6 +6655,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(session.onEvent(emitWiredSessionEvent));
   registration.disposers.push(session.onRuntimeRecovery(emitWiredSessionEvent));
+  let lastSteerSupported = session.capabilities.sameTurnSteer.supported;
+  registration.disposers.push(
+    session.onCapabilitiesChange((capabilities) => {
+      const nextSteerSupported = capabilities.sameTurnSteer.supported;
+      if (nextSteerSupported === lastSteerSupported) return;
+      lastSteerSupported = nextSteerSupported;
+      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
+      if (sessionBindings.getSession(session.id) !== session) return;
+      agentInputCoordinatorHolder?.refreshProjection(session.id);
+    }),
+  );
   sessionBindings.attachStatusListener(registration);
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)

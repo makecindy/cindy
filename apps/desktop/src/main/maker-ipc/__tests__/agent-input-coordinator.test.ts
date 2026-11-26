@@ -8835,6 +8835,21 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
   });
 
+  it('re-emits steerUnsupported immediately via refreshProjection when capability is revoked mid-session', () => {
+    let supported = true;
+    const h = createHarness({ supportsSameTurnSteer: () => supported });
+    const sid = 'steer-revoked-mid-session';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued'));
+    expect(latestProjection(h.projections).steerUnsupported).toBeUndefined();
+
+    h.emitProjection.mockClear();
+    supported = false;
+    h.coordinator.refreshProjection(sid);
+    expect(h.emitProjection).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).steerUnsupported).toBe(true);
+  });
+
   it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
     const h = createHarness();
     const sid = 'group-steer-guard';
