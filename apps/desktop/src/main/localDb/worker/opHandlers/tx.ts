@@ -14,8 +14,8 @@ import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.j
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../../sessionDeleteTarget.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
-import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
-import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
+import { dbToMakerEngineKind } from '../../../../shared/agentKindConversion.js';
+import { parseProfileModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
 import { isSyntheticUserMessageContent } from '../../../../shared/interruptedTurn.js';
@@ -545,8 +545,8 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
           // A save must also fence a begin that read a null baseline, or begins
           // before the async profile refresh. This record is never restored:
           // only acceptance of this permanent choice may consume it.
-          const baseline = parseScheduledModelBaseline(target.baseline) ?? parseScheduledModelBaseline(JSON.stringify({
-            scopeId: `${target.id}:profile:${nextVersion}`, agentKind: dbToMakerAgentKind(target.agentKind),
+          const baseline = parseProfileModelBaseline(target.baseline) ?? parseProfileModelBaseline(JSON.stringify({
+            scopeId: `${target.id}:profile:${nextVersion}`, agentKind: dbToMakerEngineKind(target.agentKind),
             model: target.model, providerId: target.providerId, effort: target.effort,
             fastMode: fastModeFromStorage(target.fastMode),
           }));

@@ -64,7 +64,7 @@ import type {
 } from './agents/base-agent.js';
 import type { MemoryStatus, MemorySetResult, MemoryResetResult } from './types/memory.js';
 import type { ConsumeAccountRateLimitResetCreditParams } from './types/account-rate-limits.js';
-import type { SessionStorage, SessionMeta } from './interfaces/session-storage.js';
+import type { NativeSessionOwner, SessionStorage, SessionMeta } from './interfaces/session-storage.js';
 import type { Logger } from './interfaces/logger.js';
 import type { AuthLoginOptions } from './interfaces/auth-adapter.js';
 import type { MakerMemoryManager } from './memory/manager.js';
@@ -903,6 +903,16 @@ export class Maker {
     let codexThreadClaim: CodexThreadClaimLease | null = null;
     let handle: AgentSessionHandle;
     let agentStartAttempted = false;
+    const nativeOwner: NativeSessionOwner = {
+      agentKind: opts.agentKind, providerId: startOpts.providerId, sdkSessionId: startOpts.resumeSessionId,
+    };
+    const checkPluginOwner = (row: SessionMeta | null) => {
+      if (!row || (row.agentKind !== 'acp' && nativeOwner.agentKind !== 'acp')) return;
+      if (row.agentKind !== nativeOwner.agentKind || row.providerId !== nativeOwner.providerId
+        || (row.sdkSessionId ?? undefined) !== nativeOwner.sdkSessionId) {
+        throw new Error('Plugin session ownership changed during startup');
+      }
+    };
     // Local apps own their native history and require an explicit failed resume,
     // including failures discovered on first send. Visible tasks still use this
     // createSession path; never authorize a fresh conversation/replay for them.
@@ -910,10 +920,13 @@ export class Maker {
       startOpts[LOCAL_AGENT_CLIENT]
         ? async () => false
         : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-          ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+          ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId, nativeOwner)
           : undefined;
     try {
       signal?.throwIfAborted();
+      if (nativeOwner.agentKind !== 'acp' && nativeOwner.providerId?.startsWith('acp-plugin:')) {
+        throw new Error('A plugin provider requires its own engine');
+      }
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
@@ -1084,11 +1097,13 @@ export class Maker {
     try {
       existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
       signal?.throwIfAborted();
+      checkPluginOwner(existingRowBeforePersistence);
       if (existingRowBeforePersistence) {
+        if (opts.agentKind !== 'acp') nativeOwner.sdkSessionId = existingRowBeforePersistence.sdkSessionId;
         updatedSdkSessionId = handle.id !== '<pending>'
           && existingRowBeforePersistence.sdkSessionId !== handle.id;
         meta = updatedSdkSessionId
-          ? await this.storage.update(id, { sdkSessionId: handle.id })
+          ? await this.storage.update(id, { sdkSessionId: handle.id }, nativeOwner)
           : existingRowBeforePersistence;
       } else {
         meta = await this.storage.create({
@@ -1114,6 +1129,7 @@ export class Maker {
         });
         createdMetadata = true;
       }
+      nativeOwner.sdkSessionId = meta.sdkSessionId;
     } catch (error) {
       // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
       // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
@@ -1158,9 +1174,9 @@ export class Maker {
       if (existingRowBeforePersistence?.sdkSessionId) {
         await this.storage.update(id, {
           sdkSessionId: existingRowBeforePersistence.sdkSessionId,
-        });
+        }, nativeOwner);
       } else {
-        await this.storage.compareAndClearSdkSessionId(id, handle.id);
+        await this.storage.compareAndClearSdkSessionId(id, handle.id, nativeOwner);
       }
     };
     const rejectStaleLocalPiAfterPersistence = async (): Promise<never> => {
@@ -1301,14 +1317,14 @@ export class Maker {
             return;
           }
         }
-        void this.persistSdkSessionId(meta.id, evt.data, deferredSdkSessionCommit).catch((e) => {
+        void this.persistSdkSessionId(meta.id, evt.data, nativeOwner, deferredSdkSessionCommit).catch((e) => {
           this.logger.warn('failed to persist sdkSessionId', { error: String(e) });
         });
         return;
       }
       if (!deferredSdkSessionCommit) return;
       if (evt.type === 'done' && !isUnfinishedRemoteTurnEvent(evt)) {
-        void this.commitDeferredSdkSessionId(meta.id, deferredSdkSessionCommit).catch((e) => {
+        void this.commitDeferredSdkSessionId(meta.id, deferredSdkSessionCommit, nativeOwner).catch((e) => {
           this.logger.warn('failed to commit deferred sdkSessionId', { error: String(e) });
         });
       } else if (evt.type === 'done' || (isTerminalAgentErrorEvent(evt) && isUnfinishedRemoteTurnEvent(evt))) {
@@ -1372,17 +1388,20 @@ export class Maker {
   }
 
   /** 标记旧 vendor id 失效，并在所有已在途回填完成后执行 compare-and-clear。 */
-  private invalidateAndClearSdkSessionId(sessionId: string, expectedSdkSessionId: string): Promise<boolean> {
-    let invalidIds = this.invalidSdkSessionIds.get(sessionId);
-    if (!invalidIds) {
-      invalidIds = new Set<string>();
-      this.invalidSdkSessionIds.set(sessionId, invalidIds);
-    }
-    // 先标记再排 CAS：CAS 等待期间新到达的同 id 事件也必须在执行时被丢弃。
-    invalidIds.add(expectedSdkSessionId);
-    return this.enqueueSdkSessionPersistence(sessionId, () =>
-      this.storage.compareAndClearSdkSessionId(sessionId, expectedSdkSessionId),
-    );
+  private invalidateAndClearSdkSessionId(sessionId: string, expectedSdkSessionId: string, owner: NativeSessionOwner): Promise<boolean> {
+    return this.enqueueSdkSessionPersistence(sessionId, async () => {
+      const cleared = await this.storage.compareAndClearSdkSessionId(sessionId, expectedSdkSessionId, owner);
+      if (cleared) {
+        let invalidIds = this.invalidSdkSessionIds.get(sessionId);
+        if (!invalidIds) {
+          invalidIds = new Set();
+          this.invalidSdkSessionIds.set(sessionId, invalidIds);
+        }
+        invalidIds.add(expectedSdkSessionId);
+        owner.sdkSessionId = undefined;
+      }
+      return cleared;
+    });
   }
 
   /**
@@ -1393,6 +1412,7 @@ export class Maker {
   private persistSdkSessionId(
     sessionId: string,
     sdkSessionId: string,
+    owner: NativeSessionOwner,
     deferred?: DeferredSdkSessionCommit,
   ): Promise<void> {
     return this.enqueueSdkSessionPersistence(sessionId, async () => {
@@ -1415,18 +1435,20 @@ export class Maker {
         }
         deferred.pending = undefined;
       }
-      await this.storage.update(sessionId, { sdkSessionId });
+      await this.storage.update(sessionId, { sdkSessionId }, owner);
+      owner.sdkSessionId = sdkSessionId;
     });
   }
 
   /** 这一轮成功结束：把暂存的新 vendor id 写成持久编号（与 persistSdkSessionId 同一条队列，保序）。 */
-  private commitDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit): Promise<void> {
+  private commitDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit, owner: NativeSessionOwner): Promise<void> {
     return this.enqueueSdkSessionPersistence(sessionId, async () => {
       const sdkSessionId = deferred.pending;
       deferred.pending = undefined;
       if (!sdkSessionId) return;
       if (this.invalidSdkSessionIds.get(sessionId)?.has(sdkSessionId)) return;
-      await this.storage.update(sessionId, { sdkSessionId });
+      await this.storage.update(sessionId, { sdkSessionId }, owner);
+      owner.sdkSessionId = sdkSessionId;
     });
   }
 

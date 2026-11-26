@@ -245,6 +245,22 @@ test('session storage readback stays with the owner that accepted the write', as
 });
 
 
+// #13218: delayed callbacks from a previous engine share the local task id.
+test('native session writes and clears belong to the engine which opened the task', async t => {
+  const { sqlite, db } = sessionListDb(t);
+  const providerId = 'acp-plugin:example:engine';
+  sqlite.prepare("INSERT INTO sessions (id,agent_kind,provider_id,sdk_session_id) VALUES ('task','acp',?,'native')").run(providerId);
+  const storage = new OwnerSessionStorage({ db: () => ({ drizzle: db }) });
+  const writer = { agentKind: 'acp', providerId, sdkSessionId: 'native' };
+  for (const stale of [{ ...writer, agentKind: 'claude-code' }, { ...writer, providerId: 'acp-plugin:other:engine' }]) {
+    await assert.rejects(storage.update('task', { sdkSessionId: 'wrong' }, stale));
+    assert.equal(await storage.compareAndClearSdkSessionId('task', 'native', stale), false);
+  }
+  assert.equal((await storage.update('task', { sdkSessionId: 'rotated' }, writer)).sdkSessionId, 'rotated');
+  await assert.rejects(storage.update('task', { sdkSessionId: 'late' }, writer));
+  assert.equal((await storage.get('task')).sdkSessionId, 'rotated');
+});
+
 // Unit with real in-memory SQL: Host previously left the shared recovery ports
 // disconnected. A persisted user row crossing clear must disappear once, retain
 // retry identity, and release only its own media refs (or discard a schedule row).

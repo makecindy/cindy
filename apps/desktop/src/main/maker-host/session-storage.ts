@@ -30,16 +30,16 @@ export class DesktopSessionStorage extends OwnerSessionStorage {
     });
   }
 
-  override async update(id: string, patch: Parameters<OwnerSessionStorage['update']>[1]) {
+  override async update(id: string, patch: Parameters<OwnerSessionStorage['update']>[1], expected?: Parameters<OwnerSessionStorage['update']>[2]) {
     const cleanup = patch.sdkSessionId !== undefined ? captureNativeHistoryBackupCleanup(id) : undefined;
-    const result = await super.update(id, patch);
+    const result = await super.update(id, patch, expected);
     cleanup?.();
     return result;
   }
 
-  override async compareAndClearSdkSessionId(id: string, expectedSdkSessionId: string) {
+  override async compareAndClearSdkSessionId(id: string, expectedSdkSessionId: string, expected?: Parameters<OwnerSessionStorage['update']>[2]) {
     const cleanup = captureNativeHistoryBackupCleanup(id);
-    const cleared = await super.compareAndClearSdkSessionId(id, expectedSdkSessionId);
+    const cleared = await super.compareAndClearSdkSessionId(id, expectedSdkSessionId, expected);
     if (cleared) cleanup();
     return cleared;
   }

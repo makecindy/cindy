@@ -4598,6 +4598,25 @@ describe('Maker invalid-resume persistence bridge', () => {
     expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
   });
 
+  // #13218: profile selection can commit while the previous engine is still starting.
+  it('closes a late startup without replacing the newly selected plugin checkpoint', async () => {
+    const storage = createStorage();
+    const id = 'switching';
+    await storage.create({ id, agentKind: 'claude-code', workDir: '/repo', title: 'Test', model: 'old' });
+    const handle = createHandle({ id: 'late-id', agentKind: 'claude-code' });
+    const maker = new Maker({
+      agents: { 'claude-code': createAgent(async () => {
+        await storage.update(id, { agentKind: 'acp', providerId: 'acp-plugin:example:engine', sdkSessionId: 'plugin-id' });
+        return handle;
+      }, 'claude-code') },
+      storage, logger: createLogger(),
+    });
+    await expect(maker.createSession({ id, agentKind: 'claude-code', workingDir: '/repo', model: 'old' }))
+      .rejects.toThrow('ownership changed');
+    expect((await storage.get(id))?.sdkSessionId).toBe('plugin-id');
+    expect(maker.getSession(id)).toBeUndefined();
+  });
+
   // Unit regression for PR #11549. The actual Maker error path keeps the native
   // identity on resume failure so a later send cannot silently start a fresh conversation.
   it('keeps the native identity and returns the failure when a plugin resume is unavailable', async () => {

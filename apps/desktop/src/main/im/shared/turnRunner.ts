@@ -3294,7 +3294,8 @@ export function createTurnRunner(
           }
           return handleTurnErrorAsync(state, userId, event.data);
         case 'session_id':
-          return persistSdkSessionId(localSessionId, event.data);
+          // Maker owns native ID persistence for every transport.
+          return;
         case 'status':
           // 只记头部 tok/s; 由 activity ticker 带出, 不为速度读数单独刷卡片。
           turn.presenter.applyStatus(event);
@@ -4491,27 +4492,6 @@ export function createTurnRunner(
     } catch (err) {
       log.warn(
         `local markdown image materialization failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  async function persistSdkSessionId(localSessionId: string, data: unknown): Promise<void> {
-    const sdkSessionId =
-      data && typeof data === 'object' && 'sdkSessionId' in data
-        ? String((data as { sdkSessionId: unknown }).sdkSessionId)
-        : data && typeof data === 'string'
-          ? data
-          : '';
-    if (!sdkSessionId) return;
-    try {
-      const db = getDbClient().drizzle;
-      await db
-        .update(sessionsTable)
-        .set({ sdkSessionId, updatedAt: Date.now() })
-        .where(eq(sessionsTable.id, localSessionId));
-    } catch (err) {
-      log.warn(
-        `persistSdkSessionId failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

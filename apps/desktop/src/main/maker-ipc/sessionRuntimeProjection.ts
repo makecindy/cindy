@@ -14,7 +14,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, isPluginEngineKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
-import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
+import { parseProfileModelBaseline, parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
@@ -182,7 +182,7 @@ export function createUpdateScheduledPreference(ports: {
     const db = getDbClient().drizzle;
     const [row] = await db.select({ baseline: sessions.scheduledModelBaseline }).from(sessions)
       .where(eq(sessions.id, sessionId)).limit(1);
-    const baseline = parseScheduledModelBaseline(row?.baseline);
+    const baseline = patch ? parseScheduledModelBaseline(row?.baseline) : parseProfileModelBaseline(row?.baseline);
     if (expectedBaseline !== undefined && row?.baseline !== expectedBaseline) return false;
     if (!baseline) return true;
     const updated = await db.update(sessions).set({
