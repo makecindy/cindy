@@ -7,14 +7,24 @@
  * 查询走 `(created_at, id)` 索引的有界窗口（默认交给调用方传 ±5 分钟），不扫全表。
  */
 
-import { and, asc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
 import type { ToolMessageRow } from './attribution.js';
 
-/** 单个窗口最多取多少行（超出时按时间先后截断，并回报 `truncated`）。 */
+/** 单个窗口最多取多少行（超出时截断，并回报 `truncated`）。 */
 export const TOOL_MESSAGE_WINDOW_LIMIT = 300;
+
+export interface ToolMessageQueryOptions {
+  /** 覆盖默认上限（无锚点回溯时需要更宽的窗口）。 */
+  limit?: number;
+  /**
+   * 从窗口内最新的一行开始取。无定义时刻的来源（crontab）证据就在「首次看到它」
+   * 之前不久，从最新往里取才不会先被窗口里更早的历史占满上限。
+   */
+  newestFirst?: boolean;
+}
 
 export interface ToolMessageWindow {
   rows: ToolMessageRow[];
@@ -31,8 +41,9 @@ export interface ToolMessageWindow {
 export async function readToolMessages(
   fromMs: number,
   toMs: number,
-  limit = TOOL_MESSAGE_WINDOW_LIMIT,
+  options: ToolMessageQueryOptions = {},
 ): Promise<ToolMessageWindow> {
+  const limit = options.limit ?? TOOL_MESSAGE_WINDOW_LIMIT;
   const db = getDbClient().drizzle;
   const rows = await db
     .select({
@@ -58,7 +69,7 @@ export async function readToolMessages(
         )`,
       ),
     )
-    .orderBy(asc(messages.createdAt))
+    .orderBy(options.newestFirst ? desc(messages.createdAt) : asc(messages.createdAt))
     // 多取一行只为判断是否被截断，不把它当证据。
     .limit(limit + 1);
   return {

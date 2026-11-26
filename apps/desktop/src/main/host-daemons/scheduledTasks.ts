@@ -10,6 +10,8 @@
  */
 
 import { runWindowsScriptWorker } from '../process-monitor/windowsProcessScanWorkerClient.js';
+import type { HostDaemonState, HostDaemonTrigger } from '../../shared/hostDaemons.js';
+import type { HostDaemonAdapter, RawHostDaemon } from './target.js';
 
 /**
  * 每条任务输出一行 JSON。字段刻意保持扁平：
@@ -170,3 +172,57 @@ export async function runScheduledTask(id: string): Promise<void> {
   if (!script) throw new Error('scheduled task id is not runnable');
   await runWindowsScriptWorker(script, { timeoutMs: 15_000 });
 }
+
+/** Windows 的 `Ready` / `Running` / `Disabled` 三个原值之外都当读不到。 */
+export function toHostDaemonState(raw: string): HostDaemonState {
+  switch (raw.toLowerCase()) {
+    case 'running':
+      return 'running';
+    case 'disabled':
+      return 'disabled';
+    case 'ready':
+      return 'ready';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * 触发器折成界面上的四档：`BootTrigger` 才是开机，`LogonTrigger` 是登录。
+ * 其余（时间／每日／每周／闲置／注册时）一律算「按计划」。
+ */
+export function toHostDaemonTrigger(triggers: string): HostDaemonTrigger {
+  const classes = triggers.toLowerCase();
+  if (classes.includes('msft_taskboottrigger')) return 'startup';
+  if (classes.includes('msft_tasklogontrigger')) return 'logon';
+  if (classes.includes('msft_task')) return 'schedule';
+  return 'other';
+}
+
+/** 扫描结果 → 编排层用的归一化条目。 */
+export function toRawHostDaemon(task: RawScheduledTask): RawHostDaemon {
+  return {
+    id: task.id,
+    name: task.name,
+    kind: 'scheduled-task',
+    state: toHostDaemonState(task.state),
+    command: `${task.exec} ${task.args}`.trim(),
+    trigger: toHostDaemonTrigger(task.triggers),
+    definitionMtimeMs: task.definitionMtimeMs,
+    lastRunAtMs: task.lastRunAtMs,
+  };
+}
+
+/**
+ * Windows 上唯一的来源。id 就是任务路径（`\airlink-autopm`），所以前缀是反斜杠；
+ * 系统任务（`\Microsoft\...`）在扫描阶段已被排除，动作侧还会再挡一次。
+ */
+export const windowsScheduledTaskAdapter: HostDaemonAdapter = {
+  idPrefix: '\\',
+  async scan() {
+    return (await scanScheduledTasks()).map(toRawHostDaemon);
+  },
+  stop: stopScheduledTask,
+  run: runScheduledTask,
+  remove: deleteScheduledTask,
+};

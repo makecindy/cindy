@@ -3,7 +3,7 @@
  *
  * 授权边界与 process-monitor 一致：
  *  - 只对 Cindy 自有顶层 renderer 开放（`assertTrustedAppRendererEvent`）。
- *  - 停止/删除不信 renderer：重新扫描计划任务、重算归属，只有本功能登记过的条目
+ *  - 停止/删除不信 renderer：重新扫描本机常驻、重算归属，只有本功能登记过的条目
  *    才可操作；`\Microsoft\*` 永久拒绝。
  *  - 返回体里的启动命令含绝对路径（本清单的用途就是「脚本在哪、怎么恢复」），
  *    因此只本机、只可信 renderer、不进日志；远程会话没有这条 IPC。
@@ -36,7 +36,10 @@ function toIpcError(error: unknown): never {
   if (error instanceof HostDaemonActionError) {
     if (error.code === 'NOT_FOUND') throwIpcError('NOT_FOUND', 'host daemon not found');
     if (error.code === 'UNSUPPORTED') {
-      throwIpcError('PRECONDITION_FAILED', 'host daemons are Windows only');
+      throwIpcError('PRECONDITION_FAILED', 'host daemons are not available here');
+    }
+    if (error.code === 'NOT_STOPPABLE') {
+      throwIpcError('PRECONDITION_FAILED', 'host daemon cannot be stopped on its own');
     }
     throwIpcError('PRECONDITION_FAILED', 'host daemon is not owned by Cindy');
   }

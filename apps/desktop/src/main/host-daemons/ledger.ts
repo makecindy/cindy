@@ -9,6 +9,8 @@
  *    「删了任务也找得回来」的落点。
  *  - `misses`：某任务定义在某个 mtime 上追溯失败，就不再重复扫全库窗口；文件被
  *    改写（mtime 变化）后重新尝试。
+ *  - `firstSeen`：没有定义文件的来源（crontab 条目）第一次被扫描到的时刻，用作归属
+ *    回溯的锚点，否则每次扫描都会换一个锚点、归属记录永远对不上。
  */
 
 import fs from 'node:fs';
@@ -32,6 +34,7 @@ interface LedgerFile {
   version: 1;
   owners: Record<string, HostDaemonOwnerRecord>;
   misses: Record<string, number>;
+  firstSeen: Record<string, number>;
 }
 
 /**
@@ -40,7 +43,7 @@ interface LedgerFile {
  * 没有台账文件的账号里 —— 账号目录隔离挡不住这条内存路径。
  */
 function emptyLedger(): LedgerFile {
-  return { version: 1, owners: {}, misses: {} };
+  return { version: 1, owners: {}, misses: {}, firstSeen: {} };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,7 +86,14 @@ function parseLedger(raw: string): LedgerFile {
     }
   }
 
-  return { version: 1, owners, misses };
+  const firstSeen: Record<string, number> = {};
+  if (isRecord(parsed.firstSeen)) {
+    for (const [id, value] of Object.entries(parsed.firstSeen)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) firstSeen[id] = value;
+    }
+  }
+
+  return { version: 1, owners, misses, firstSeen };
 }
 
 export interface HostDaemonLedger {
@@ -93,6 +103,9 @@ export interface HostDaemonLedger {
   clearOwner(id: string): void;
   getMissMtime(id: string): number | null;
   setMissMtime(id: string, mtimeMs: number): void;
+  /** 无定义文件的来源：首次扫描到的时刻（归属回溯锚点）。 */
+  getFirstSeen(id: string): number | null;
+  setFirstSeen(id: string, atMs: number): void;
   save(): void;
 }
 
@@ -144,6 +157,13 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
     },
     setMissMtime(id, mtimeMs) {
       ensure().misses[id] = mtimeMs;
+      dirty = true;
+    },
+    getFirstSeen(id) {
+      return ensure().firstSeen[id] ?? null;
+    },
+    setFirstSeen(id, atMs) {
+      ensure().firstSeen[id] = atMs;
       dirty = true;
     },
     save() {

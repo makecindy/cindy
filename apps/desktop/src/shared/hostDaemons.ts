@@ -1,9 +1,10 @@
 /**
  * host-daemons —— 「本机常驻」页签的跨进程契约。
  *
- * 只覆盖 Cindy 会话有能力产出、且能证明归属的那一类系统常驻物：Windows 计划任务。
- * 与 `processMonitor` 的区别：那边是 OS 级进程与 Agent 进程树，这边是「脱离会话
- * 生命周期仍然自己跑」的东西 —— 删掉任务后仍然存在，所以必须能独立查看与清理。
+ * 只覆盖 Cindy 会话有能力产出、且能证明归属的那一类系统常驻物：Windows 计划任务、
+ * macOS LaunchAgents、Linux 用户级 systemd 单元与 crontab 条目。与 `processMonitor`
+ * 的区别：那边是 OS 级进程与 Agent 进程树，这边是「脱离会话生命周期仍然自己跑」
+ * 的东西 —— 删掉任务后仍然存在，所以必须能独立查看与清理。
  *
  * 归属口径（见 main/host-daemons/service.ts）：只有台账已登记，或能在任务创建时刻
  * 前后 5 分钟内找到「本机工具调用里出现过该任务名」的来源会话，才算 Cindy 产生的。
@@ -16,22 +17,27 @@
 
 /** renderer → main(invoke)：扫描并返回本机常驻快照。 */
 export const HOST_DAEMONS_LIST_CHANNEL = 'host-daemons:list';
-/** renderer → main(invoke)：停止一次计划任务运行（不动任务定义）。 */
+/** renderer → main(invoke)：停止一次运行（不动任务定义）。 */
 export const HOST_DAEMONS_STOP_CHANNEL = 'host-daemons:stop';
 /** renderer → main(invoke)：立即运行一次（停止之后要靠它把任务重新拉起来）。 */
 export const HOST_DAEMONS_RUN_CHANNEL = 'host-daemons:run';
-/** renderer → main(invoke)：从这台电脑删除计划任务。 */
+/** renderer → main(invoke)：从这台电脑删除常驻项。 */
 export const HOST_DAEMONS_DELETE_CHANNEL = 'host-daemons:delete';
 
-export type HostDaemonKind = 'scheduled-task';
+export type HostDaemonKind =
+  | 'scheduled-task'
+  | 'launch-agent'
+  | 'systemd-unit'
+  | 'cron-entry';
 
 export type HostDaemonState = 'running' | 'ready' | 'disabled' | 'unknown';
 
-/** 触发器粗粒度分类（界面只显示一句人话，不还原 Windows 的完整触发器模型）。 */
+/** 触发器粗粒度分类（界面只显示一句人话，不还原各平台完整的触发模型）。 */
 export type HostDaemonTrigger = 'logon' | 'startup' | 'schedule' | 'other';
 
 export interface HostDaemonEntry {
-  /** 计划任务唯一标识，形如 `\airlink-autopm` 或 `\folder\name`。 */
+  /** 唯一标识，各平台自带命名空间：`\airlink-autopm`、`launch-agent:com.x.y`、
+   * `systemd-user:backup.timer`、`cron-entry:<命令指纹>`。 */
   id: string;
   name: string;
   kind: HostDaemonKind;
@@ -47,7 +53,7 @@ export interface HostDaemonEntry {
 
 export interface HostDaemonsSnapshot {
   capturedAtMs: number;
-  /** false = 本平台暂不支持（当前仅 Windows 计划任务）。 */
+  /** false = 本平台没有可枚举的常驻项来源（见 main/host-daemons/target.ts）。 */
   supported: boolean;
   entries: HostDaemonEntry[];
   /**

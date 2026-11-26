@@ -1,6 +1,6 @@
 /**
  * HostDaemonsView —— 「本机常驻」清单：由 Cindy 任务创建、但脱离会话生命周期的
- * Windows 计划任务。
+ * 系统常驻项（Windows 计划任务 / macOS LaunchAgent / Linux systemd 单元、crontab）。
  *
  * 数据全部来自 main（扫描 + 归属判定 + 台账），这里只负责呈现与二次确认。
  * 列表里不会出现与本机任务无关的常驻项（例如用户自己装的 v2rayN）：main 只返回

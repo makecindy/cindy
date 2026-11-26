@@ -604,12 +604,7 @@ import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerHostDaemonsIpc } from './host-daemons/ipc.js';
 import { createHostDaemonLedger } from './host-daemons/ledger.js';
-import {
-  deleteScheduledTask,
-  runScheduledTask,
-  scanScheduledTasks,
-  stopScheduledTask,
-} from './host-daemons/scheduledTasks.js';
+import { createHostDaemonTarget } from './host-daemons/platformTarget.js';
 import { createHostDaemonsService, type HostDaemonsService } from './host-daemons/service.js';
 import { readToolMessages } from './host-daemons/toolHistory.js';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
@@ -2928,14 +2923,13 @@ let hostDaemonsService: HostDaemonsService | null = null;
 registerHostDaemonsIpc({
   getService: () => {
     hostDaemonsService ??= createHostDaemonsService({
-      scanTasks: scanScheduledTasks,
+      // 来源按平台装配：Windows 计划任务 / macOS LaunchAgents / Linux systemd 用户单元，
+      // 后两者都与用户自己的 crontab 并列。不支持的平台传 null，界面回「本机不支持」。
+      target: createHostDaemonTarget(process.platform),
       readToolMessages,
       // 台账按当前账号隔离：归属记录带会话标题，共享路径会让切号后的账号看到
       // 旧账号留下的标题与 id（路径随账号变化 → 切号即换目录）。
       ledger: createHostDaemonLedger(() => ownerScopedUserDataPath('host-daemons.v1.json')),
-      stopTask: stopScheduledTask,
-      runTask: runScheduledTask,
-      deleteTask: deleteScheduledTask,
       // 切号即作废在途追溯与本次清单：归属记录带会话标题，不能跨账号。
       // 边界进行中（拆运行时 / 换库）读写的账号可能不一致，同样整体作废。
       ownerScopeKey: activeOwnerScopeKey,

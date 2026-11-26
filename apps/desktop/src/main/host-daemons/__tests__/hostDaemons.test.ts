@@ -20,12 +20,22 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ToolMessageRow } from '../attribution.js';
 import { pickOwnerSession } from '../attribution.js';
 import { createHostDaemonLedger, type HostDaemonLedger, type HostDaemonOwnerRecord } from '../ledger.js';
-import { parseScheduledTaskScan, type RawScheduledTask } from '../scheduledTasks.js';
-import { HostDaemonActionError, createHostDaemonsService } from '../service.js';
+import {
+  parseScheduledTaskScan,
+  toRawHostDaemon,
+  type RawScheduledTask,
+} from '../scheduledTasks.js';
+import {
+  HostDaemonActionError,
+  createHostDaemonsService,
+  type HostDaemonsService,
+  type HostDaemonsServiceDeps,
+} from '../service.js';
 
 function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwnerRecord> } {
   const owners = new Map<string, HostDaemonOwnerRecord>();
   const misses = new Map<string, number>();
+  const firstSeen = new Map<string, number>();
   return {
     owners,
     getOwner: (id) => owners.get(id) ?? null,
@@ -33,8 +43,46 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
     clearOwner: (id) => void owners.delete(id),
     getMissMtime: (id) => misses.get(id) ?? null,
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
+    getFirstSeen: (id) => firstSeen.get(id) ?? null,
+    setFirstSeen: (id, mtimeMs) => void firstSeen.set(id, mtimeMs),
     save: () => {},
   };
+}
+
+
+/**
+ * 测试专用包装：把「Windows 扫描 + 三个动作」包成平台适配器，避免 16 个用例都手写
+ * 一遍 target。生产接线见 main/host-daemons/index.ts，不经过这里。
+ */
+function createTestService(init: {
+  scanTasks: () => Promise<RawScheduledTask[]> | RawScheduledTask[];
+  readToolMessages: HostDaemonsServiceDeps['readToolMessages'];
+  ledger?: HostDaemonLedger;
+  stopTask?: (id: string) => Promise<void> | void;
+  runTask?: (id: string) => Promise<void> | void;
+  deleteTask?: (id: string) => Promise<void> | void;
+  platform?: string;
+  now?: () => number;
+  ownerScopeKey?: () => string;
+  isOwnerBoundaryPending?: () => boolean;
+}): HostDaemonsService {
+  const target =
+    init.platform && init.platform !== 'win32'
+      ? null
+      : {
+          scan: async () => (await init.scanTasks()).map(toRawHostDaemon),
+          stop: async (id: string) => void (await init.stopTask?.(id)),
+          run: async (id: string) => void (await init.runTask?.(id)),
+          remove: async (id: string) => void (await init.deleteTask?.(id)),
+        };
+  return createHostDaemonsService({
+    target,
+    readToolMessages: init.readToolMessages,
+    ledger: init.ledger ?? memoryLedger(),
+    now: init.now,
+    ownerScopeKey: init.ownerScopeKey,
+    isOwnerBoundaryPending: init.isOwnerBoundaryPending,
+  });
 }
 
 /** 追溯窗口查询的替身：默认「读全了」。 */
@@ -155,7 +203,7 @@ describe('attribution window query', () => {
   it('does not cache a miss when the window was only partially read', async () => {
     const ledger = memoryLedger();
     const truncated = true;
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages: async () => windowOf([], truncated),
       ledger,
@@ -173,7 +221,7 @@ describe('attribution window query', () => {
 
   it('uses the whole window when it was read completely', async () => {
     const ledger = memoryLedger();
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages: async () => windowOf([], false),
       ledger,
@@ -200,7 +248,7 @@ describe('hostDaemons service', () => {
       task({ id: '\\v2rayNAutoRun', name: 'v2rayNAutoRun', exec: 'v2rayN.exe', args: '' }),
     ];
     let dbRows = traceRows;
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => scanned,
       readToolMessages: async () => windowOf(dbRows),
       ledger,
@@ -229,7 +277,7 @@ describe('hostDaemons service', () => {
 
     // 停止是可逆的一半：立即运行沿用同一条归属复核，并真的下发到系统。
     const ran: string[] = [];
-    const runnable = createHostDaemonsService({
+    const runnable = createTestService({
       scanTasks: async () => scanned,
       readToolMessages: async () => windowOf([]),
       ledger,
@@ -244,7 +292,7 @@ describe('hostDaemons service', () => {
   });
 
   it('refuses to stop or delete a task it did not attribute', async () => {
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task({ id: '\\v2rayNAutoRun', name: 'v2rayNAutoRun' })],
       readToolMessages: async () => windowOf([]),
       ledger: memoryLedger(),
@@ -285,17 +333,17 @@ describe('hostDaemons service', () => {
       now: () => clockMs,
     };
 
-    expect((await createHostDaemonsService(deps).list()).entries).toEqual([]);
+    expect((await createTestService(deps).list()).entries).toEqual([]);
     rows = [{ sessionId: 's1', title: '建任务', content: 'schtasks /create /tn fresh' }];
     clockMs = createdMs + 3 * 60_000;
-    expect((await createHostDaemonsService(deps).list()).entries.map((entry) => entry.name)).toEqual([
+    expect((await createTestService(deps).list()).entries.map((entry) => entry.name)).toEqual([
       'fresh',
     ]);
     expect(queries).toBe(2);
 
     // 已归属的条目不再查询（稳态零成本）。
     clockMs = createdMs + 30 * 60_000;
-    expect((await createHostDaemonsService(deps).list()).entries.map((entry) => entry.name)).toEqual([
+    expect((await createTestService(deps).list()).entries.map((entry) => entry.name)).toEqual([
       'fresh',
     ]);
     expect(queries).toBe(2);
@@ -304,7 +352,7 @@ describe('hostDaemons service', () => {
   it('stops re-querying an unattributed task once its window closed', async () => {
     const createdMs = 1_800_000_000_000;
     let queries = 0;
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task({ id: '\never', name: 'never', definitionMtimeMs: createdMs })],
       readToolMessages: async () => {
         queries += 1;
@@ -327,7 +375,7 @@ describe('hostDaemons service', () => {
   it('revokes ownership when the task definition changed', async () => {
     const ledger = memoryLedger();
     const replaced = task({ definitionMtimeMs: 1_793_000_000_001, exec: 'C:\\other\\new.exe', args: '' });
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [replaced],
       readToolMessages: async () => windowOf([]),
       ledger,
@@ -356,7 +404,7 @@ describe('hostDaemons service', () => {
   it('does not cache a miss when the attribution query fails', async () => {
     const ledger = memoryLedger();
     let fail = true;
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task({ definitionMtimeMs: 1_793_028_922_179 })],
       readToolMessages: async () => {
         if (fail) throw new Error('database is locked');
@@ -384,7 +432,7 @@ describe('hostDaemons service', () => {
   it('drops the ledger record after a successful delete', async () => {
     const ledger = memoryLedger();
     const deleted: string[] = [];
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages: async () =>
         windowOf([
@@ -406,7 +454,7 @@ describe('hostDaemons service', () => {
   });
 
   it('falls back to an unsupported snapshot off Windows', async () => {
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => {
         throw new Error('must not scan off Windows');
       },
@@ -425,7 +473,7 @@ describe('hostDaemons service', () => {
     // 归属记录带会话标题：切号瞬间读到的消息可能已属于另一个账号，结果不能落盘。
     let scope = 'account-a';
     const ledger = memoryLedger();
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages: async () => {
         scope = 'account-b';
@@ -451,7 +499,7 @@ describe('hostDaemons service', () => {
 
   it('drops the whole snapshot when the account switched during the scan', async () => {
     let scope = 'account-a';
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => {
         scope = 'account-b';
         return [task()];
@@ -478,7 +526,7 @@ describe('hostDaemons service', () => {
   it('does not persist attribution traced while the account changed', async () => {
     let scope = 'account-a';
     const ledger = memoryLedger();
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => {
         scope = 'account-b';
         return [task()];
@@ -510,7 +558,7 @@ describe('hostDaemons service', () => {
   it('treats an in-progress account boundary as a scope change', async () => {
     let pending = false;
     const ledger = memoryLedger();
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => {
         pending = true;
         return [task()];
@@ -549,7 +597,7 @@ describe('hostDaemons service', () => {
         { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
       ]);
     });
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages,
       ledger,
@@ -571,7 +619,7 @@ describe('hostDaemons service', () => {
   it('refuses to read tool history while the account boundary is in progress', async () => {
     const readToolMessages = vi.fn(async () => windowOf([]));
     const ledger = memoryLedger();
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [task()],
       readToolMessages,
       ledger,
@@ -598,7 +646,7 @@ describe('hostDaemons service', () => {
     let reads = 0;
     const ledger = memoryLedger();
     const setOwner = vi.spyOn(ledger, 'setOwner');
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => [
         task({ id: '\\first', name: 'first-task' }),
         task({ id: '\\second', name: 'second-task' }),
@@ -630,7 +678,7 @@ describe('hostDaemons service', () => {
     let scope = 'account-a';
     const ledger = memoryLedger();
     const stopTask = vi.fn(async () => {});
-    const service = createHostDaemonsService({
+    const service = createTestService({
       scanTasks: async () => {
         scope = 'account-b';
         return [task()];
