@@ -290,7 +290,8 @@ export function transactMobileAccountVault<T>(
     recoverInvalidForExplicitLogin?: boolean;
     /** Set by writes that install a session record: whether one existed before (see settleGroupDraftEpochs). */
     sessionRecordPresent?: boolean;
-    invalidateGroupDrafts?: readonly string[];
+    /** Accounts whose session this write ends without removing their last way to continue; may depend on the result. */
+    invalidateGroupDrafts?: readonly string[] | ((result: T) => readonly string[]);
   } = {},
 ): Promise<T> {
   return enqueueMobileVaultOperation(async () => {
@@ -314,7 +315,9 @@ export function transactMobileAccountVault<T>(
       before,
       after: vault,
       sessionRecordPresent: options.sessionRecordPresent,
-      invalidate: options.invalidateGroupDrafts,
+      invalidate: typeof options.invalidateGroupDrafts === 'function'
+        ? options.invalidateGroupDrafts(result)
+        : options.invalidateGroupDrafts,
     }));
     await writeMobileAccountVault(vault);
     try {
@@ -619,8 +622,13 @@ export async function removeMobileResourceSessionIfCurrent(input: {
   accountKey: string;
   expectedRefreshToken: string;
   validateBeforeWrite?: () => void;
+  /**
+   * The session ends here even if a passport still lists the account (a rejected refresh signs it out): void its
+   * group drafts in this same write, and only when this write removed it.
+   */
+  endsSession?: boolean;
 }): Promise<MobileResourceSessionRemovalResult> {
-  return mutateMobileAccountVault((vault) => {
+  return transactMobileAccountVault((vault) => {
     input.validateBeforeWrite?.();
     const current = vault.resources[input.accountKey];
     if (!current) return 'missing';
@@ -629,7 +637,9 @@ export async function removeMobileResourceSessionIfCurrent(input: {
     if (vault.activeAccountKey === input.accountKey) {
       vault.activeAccountKey = null;
     }
-    return 'removed';
+    return 'removed' as const;
+  }, () => undefined, {
+    invalidateGroupDrafts: (result) => input.endsSession && result === 'removed' ? [input.accountKey] : [],
   });
 }
 

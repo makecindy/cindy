@@ -380,8 +380,16 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       expect(await draftShownFor(otherKey)).toBe(`draft of ${otherKey}`);
     });
 
-    it('voids the rejected account on a cold-start refresh rejection without a cached user', async () => {
+    // Second review of the generation change: a passport still listing the rejected account kept its generation, and
+    // with no cached user the termination could not name it, so picking it again showed the old draft.
+    it.each([false, true])('voids the rejected account on a cold-start refresh rejection without a cached user (listed on a passport: %s)', async (listed) => {
       await signInWithSavedAccounts();
+      if (listed) {
+        const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+        vault.passports[passportVaultKey('cn', 'passport')] = { realm: 'cn', passportId: 'passport', accountRefreshToken: 'passport-refresh',
+          memberships: [{ ...membership, membershipId: membership.id }] };
+        native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+      }
       await act(async () => root.unmount());
       native.storage.delete(profileKey);
       setMobileAuthOwner(null);
@@ -392,6 +400,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       expect(auth.initialized && !auth.isAuthenticated).toBe(true);
       expect(currentKey in epochsNow()).toBe(false);
       expect(epochsNow()[otherKey]).toBe(epochOf(otherKey));
+      // Still listed on the passport, the account can be picked again; its old draft stays unreadable.
+      if (listed) expect(await draftShownFor(currentKey)).toBeNull();
     });
 
     // Maintainer decision on #13286: signing out keeps group drafts; the same account in the same realm gets its current

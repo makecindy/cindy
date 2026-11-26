@@ -139,7 +139,11 @@ export function sweepStaleBotGroupDrafts(): Promise<void> {
 export function useBotGroupDraftEpoch(accountKey: string | null | undefined): string | null {
   const [loaded, setLoaded] = useState<{ accountKey: string; epoch: string | null } | null>(null);
   useEffect(() => {
-    if (!accountKey || !epochSource) return;
+    // Signed out (or no source): forget the loaded generation, so signing back in never starts from a voided one.
+    if (!accountKey || !epochSource) {
+      setLoaded(null);
+      return;
+    }
     let live = true;
     void epochSource.ensure(accountKey, randomUUID).then((epoch) => {
       if (live) setLoaded({ accountKey, epoch });

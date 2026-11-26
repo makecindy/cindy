@@ -1878,6 +1878,28 @@ describe('group composer', () => {
     expect(h.storage.has(composerDraftTesting.storageKeyForSession(id))).toBe(false);
   });
 
+  // Second review of the generation change: the screen stays mounted while the same account signs out and back
+  // in with its generation voided in between; it must wait for the new generation, never reuse the voided one.
+  it('waits for a new draft generation after signing out and back in on a mounted screen', async () => {
+    const owner = accountVaultKey('global', 'owner');
+    await render(group({ openPlan: null }), 'ready', undefined, 'mac', 'g9');
+    const voided = draftEpochs.values.get(owner)!;
+    await act(async () => { setMobileAuthOwner(null); });
+    await endDraftSession(owner);
+    let release!: () => void;
+    draftEpochs.pending = new Promise(resolve => { release = resolve; });
+    await act(async () => { setMobileAuthOwner('owner', 'global'); });
+    await act(async () => { h.row.onChangeText('重新登录后打的字'); });
+    await act(async () => { release(); });
+    await act(async () => { await flushComposerDraftWrites(); });
+    const current = draftEpochs.values.get(owner)!;
+    expect(current).not.toBe(voided);
+    const stored = (epoch: string) => h.storage.get(composerDraftTesting.storageKeyForSession(
+      botGroupComposerDraftId({ accountKey: owner, epoch, deviceId: 'mac', groupId: 'g9' })!));
+    expect(stored(current)).toBe('重新登录后打的字');
+    expect(stored(voided)).toBeUndefined();
+  });
+
   // Both Chat Server entry paths must carry the selected original through the real composer.
   it.each([true, false])('sends a quote and retains it after failure (direct server %s)', async server => {
     h.chat.server = server;

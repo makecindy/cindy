@@ -175,6 +175,16 @@ describe('every account-record write', () => {
     expect(vaultWrites()).toBe(1);
   });
 
+  it('voids a rejected account still listed on a passport when its session ends there, and only if this write removed it', async () => {
+    seed();
+    await expect(removeMobileResourceSessionIfCurrent({ accountKey: A, expectedRefreshToken: 'rotated-elsewhere', endsSession: true })).resolves.toBe('stale');
+    expect(epochs()[A]).toBe('epoch-a');
+    await expect(removeMobileResourceSessionIfCurrent({ accountKey: A, expectedRefreshToken: 'a-refresh', endsSession: true })).resolves.toBe('removed');
+    expect(A in epochs()).toBe(false);
+    expect(epochs()[B]).toBe('epoch-b');
+    expect(invalidations).toEqual([[{ accountKey: A, epoch: 'epoch-a' }]]);
+  });
+
   it('keeps every generation through sign-out, so the same account gets its drafts back', async () => {
     seed();
     await clearMobileAccountVault();

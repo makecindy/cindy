@@ -1439,6 +1439,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   accountKey: rejectedAccountKey,
                   expectedRefreshToken:
                     activeResourceAtStart!.resource!.refreshToken,
+                  endsSession: true,
                   validateBeforeWrite: () => {
                     if (authGenerationRef.current !== generation) {
                       throw authCodeError('AUTH_FLOW_SUPERSEDED');
