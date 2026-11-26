@@ -26,6 +26,7 @@ import {
 } from "./durableOutboxDelivery";
 import {
   mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
   isDurableOutboxCreationHeld,
   discardOutboxUploads,
   cleanupOutboxResources,
@@ -53,6 +54,7 @@ import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveA
 import { cacheOutboxHistory } from "./outboxHistoryCache";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
+import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
 import type { DurableOutboxRecord } from "./durableOutbox";
 import {
   canConnectOutboxPeer,
@@ -107,6 +109,7 @@ export function MobileOutboxBridge() {
       invoke: (deviceId, channel, args, options) => latest.current.link.invoke(deviceId, channel, args, options),
       readSession: (record) => maker(record).getSession(record.item.sessionId),
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
+      canContinueInBackground: hasOutboxBackgroundSend,
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
@@ -293,6 +296,8 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
+      // A later projection can confirm delivery even if the enqueue reply was lost.
+      accepted: async (record) => { endOutboxBackgroundSend(record); },
       enqueue: async (r) => {
         const projection = await maker(r).input.enqueue(
           r.item.sessionId,
@@ -304,6 +309,7 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
+        endOutboxBackgroundSend(r);
         // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
         // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
         void unarchiveSessionAfterSend(
@@ -402,6 +408,18 @@ export function MobileOutboxBridge() {
       clearInterval(timer);
       appState.remove();
       messageLeases.dispose();
+    };
+  }, [accountId, owner]);
+  // Remember texts still on the way when the user leaves, including one saved
+  // just after Home from the editor's hidden snapshot.
+  useEffect(() => {
+    const sync = () => syncOutboxLeftInBackground(getCurrentMobileOutboxRecords(), AppState.currentState === "background");
+    sync();
+    const off = mobileDurableOutbox.subscribe(sync);
+    const appState = AppState.addEventListener("change", sync);
+    return () => {
+      off();
+      appState.remove();
     };
   }, [accountId, owner]);
   useEffect(() => {

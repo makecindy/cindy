@@ -6,6 +6,7 @@ import { followedGithubPrs, GITHUB_WATCH_SCHEDULE, matchingGithubPrs, type Githu
  */
 import { connectionBackoffDelayMs } from '@cindy/im/connection-retry';
 import {
+  isManagedWebhookSource,
   parseWebhookFormat,
   resolveScheduleWebhookFormat,
   type Schedule,
@@ -233,7 +234,8 @@ export class ScheduleWebhookRemote {
     const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
-      if (trigger?.source?.preset === 'github-app') continue;
+      // Managed sources (GitHub App, plugin events) have no per-task server address.
+      if (isManagedWebhookSource(trigger?.source)) continue;
       if (trigger) wanted.set(schedule.id, {
         identity: trigger.endpointId,
         events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),

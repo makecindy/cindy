@@ -112,6 +112,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
@@ -140,6 +141,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
 
@@ -150,6 +152,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
 
@@ -162,6 +165,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
   });
@@ -191,6 +195,7 @@ describe('newSessionPreferenceStore', () => {
       lastPermissionMode: 'ask',
       permissionModeByAgent: { 'claude-code': 'ask', codex: 'ask' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
 
@@ -211,6 +216,7 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: { codex: 'auto' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
     });
   });
@@ -237,21 +243,33 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: 'dialogue',
       permissionModeByAgent: {},
       workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'project' },
       remoteAgentByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
       workspaceKind: 'dialogue',
     });
     expect(JSON.parse(store.get(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: '/repo/fourth', devB: ' /other/app ' });
+    expect(JSON.parse(store.get(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: 'project', devB: 'project' });
+
+    // Switching one device explicitly to dialogue records that device without clearing another device's project.
+    await saveNewSessionPreferences({ workspaceKindForDevice: { deviceId: 'devB', workspaceKind: 'dialogue' } });
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({
+      workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
+    });
 
     // 落盘里的非法条目(非字符串 / 空)在读取时被清洗,旧存储没有该字段也不报错。
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: '/repo/ok', devB: 42, ' ': '/x', devC: '', devD: ' /keep me ' }));
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: 'project', devB: 'dialogue', devC: 'invalid', ' ': 'project' }));
     await expect(readNewSessionPreferences()).resolves.toMatchObject({
       workingDirByDevice: { devA: '/repo/ok', devD: ' /keep me ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
       remoteAgentByDevice: {},
     });
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
-    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {} });
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {}, workspaceKindByDevice: {} });
   });
 
   // 回归:新建页选了其他电脑 / 分享来的模型，下次打开就回到被控电脑默认。按(账号, 被控电脑, agent)记,
