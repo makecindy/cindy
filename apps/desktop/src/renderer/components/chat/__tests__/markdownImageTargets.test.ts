@@ -45,16 +45,22 @@ describe('extractRenderedMarkdownImageTargets', () => {
     ).toEqual([url, `${url}/after-inline-code`, `${url}/raw-img`]);
   });
 
-  it('counts a bare-space local image as rendered, as IM delivery does, but not inside code', () => {
-    // 2026-11-03: the chat showed only the tool-result card for this reply while IM sent raw text.
-    const local = '/Users/me/Library/Application Support/Cindy/generated_images/design.png';
+  it('finds a bare-space local image across emphasis nodes without scanning code or HTML', () => {
+    // Media storage rules, §多端与远程: actual chat display and delivery agree.
+    // Plain filenames never exercise the emphasis node embedded in this POSIX path.
+    const local = '/Users/me/Library/Application Support/Cindy/generated_images/_draft_.png';
+    const example = local.replace('_draft_', '_example_');
     expect(
       extractRenderedMarkdownImageTargets([
         `Design: ![Credits mockup](${local})`,
-        `\`![inline code](${local})\``,
+        `\`![inline code](${example})\``,
         '```',
-        `![fenced](${local})`,
+        `![fenced](${example})`,
         '```',
+        '',
+        '<div>',
+        `![raw HTML](${example})`,
+        '</div>',
       ].join('\n')),
     ).toEqual([local]);
   });

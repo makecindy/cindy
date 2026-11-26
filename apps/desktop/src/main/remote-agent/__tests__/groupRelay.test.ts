@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -68,6 +69,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   groupRelay?: RemoteAgentGroupRelayDeps;
   directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
   captureOwner?: () => unknown;
+  isOwnerCurrent?: (owner: unknown) => boolean;
   isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
   prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
   imageArtifacts?: Parameters<typeof createRemoteAgentHost>[0]['imageArtifacts'];
@@ -166,7 +168,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.reshare ? { reshare: options.reshare } : {}),
     ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
-    isOwnerCurrent: () => true,
+    isOwnerCurrent: options.isOwnerCurrent ?? (() => true),
     runsRoot: path.join(root, name),
   });
 }
@@ -1163,6 +1165,325 @@ describe('provider group relay for shared users', () => {
       host.dispose();
     }
   });
+
+  // Unit: real Host.handle(allocate) admission. Repeated identical allocation
+  // attempts used to fill the mutation budget behind a slow first attempt;
+  // revocation deduplication did not cover this path. No real model or timer.
+  it.each([false, true])('joins pending allocation retries without consuming other guests admission (failure=%s)', async failFirst => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other-guest');
+    const allocation = { deviceId: 'executor', generation: '11111111-1111-4111-8111-111111111111', leaseDurationMs: 60_000 };
+    let firstAttempt = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (controller === peer && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('authorization unavailable');
+      }
+      return allocation;
+    });
+    const host = fakeAgentHost('allocate-queue', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = Promise.allSettled([host.handle(peer, request)]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(peer, request)));
+      await expect(host.handle(other, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      release();
+      const results = [...await head, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      if (!failFirst) expect(results.every(result => result.status === 'fulfilled'
+        && JSON.stringify(result.value) === JSON.stringify({ ...allocation, directStatusBatch: true }))).toBe(true);
+      expect(allocate).toHaveBeenCalledTimes(2);
+      // Only in-flight work joins. A failure or an expired successful lease
+      // cannot be kept as an authorization/result cache.
+      await expect(host.handle(peer, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      expect(allocate).toHaveBeenCalledTimes(3);
+    } finally { release(); await head; await duplicates; await host.dispose(); }
+  });
+
+  it('does not join an allocation across changed arguments, a revocation or an account change', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let first = true;
+    let ownerScope = 'owner';
+    const host = fakeAgentHost('allocate-mutations', [], { trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      directGuestExecution: {
+        ownerScope: () => ownerScope,
+        allocate: async (_controller, request) => {
+          if (first) { first = false; enter(); await gate; }
+          order.push(`allocate:${request.model}`);
+          return null;
+        },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {}, forget: () => false,
+        delegate: async () => { order.push('revoke'); return false; },
+        sessionAllowed: () => true, sessionDelegated: () => true,
+      },
+    });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = host.handle(peer, request);
+    let waiting: Promise<unknown[]> | undefined;
+    try {
+      await entered;
+      waiting = Promise.all([
+        host.handle(peer, { ...request, model: 'other-model' }),
+        host.handle(peer, request),
+        host.handle(OWNER_DEVICE, { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member',
+          guestDeviceId: 'guest', providerId: 'provider', model: 'model', sessionId: 'task',
+          generation: '11111111-1111-4111-8111-111111111111' }),
+        host.handle(peer, request),
+      ]);
+      release(); await head; await waiting;
+      expect(order).toEqual(['allocate:model', 'allocate:other-model', 'allocate:model', 'revoke', 'allocate:model']);
+      // A new owner scope must execute independently. Work queued under the
+      // old account must fail its original owner check rather than lend an ACK.
+      first = true;
+      const old = Promise.allSettled([host.handle(peer, request)]);
+      ownerScope = 'another-owner';
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected' })]);
+    } finally { release(); await head; await waiting; await host.dispose(); }
+  });
+
+  // Host.handle unit: a stable account key does not imply a current app-session
+  // generation. Existing account-change tests changed the key, hiding stale joins.
+  it.each(['allocate', 'revoke', 'forget'] as const)('does not join a queued %s from an older owner generation', async kind => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    let generation = 1;
+    const mutate = vi.fn();
+    const host = fakeAgentHost(`generation-${kind}`, [], {
+      trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      captureOwner: () => ({ generation }),
+      isOwnerCurrent: captured => (captured as { generation: number }).generation === generation,
+      directGuestExecution: {
+        ownerScope: () => 'same-account',
+        allocate: async (_controller, request) => {
+          if (request.model === 'blocked') { enter(); await gate; }
+          else mutate();
+          return null;
+        },
+        delegate: async () => { mutate(); return false; },
+        forget: () => { mutate(); return false; },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const allocate = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const request = kind === 'allocate' ? allocate : kind === 'revoke'
+      ? { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        sessionId: 'task', providerId: 'provider', model: 'claude-opus', generation: '11111111-1111-4111-8111-111111111111' }
+      : { op: 'forget', directGuest: { shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    const controller = kind === 'allocate' ? peer : OWNER_DEVICE;
+    const head = host.handle(peer, { ...allocate, model: 'blocked' });
+    let old: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let current: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      old = Promise.allSettled([host.handle(controller, request)]);
+      generation += 1;
+      current = Promise.allSettled([host.handle(controller, request), host.handle(controller, request)]);
+      release(); await head;
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('direct guest account changed'),
+      }) })]);
+      expect((await current).map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(mutate).toHaveBeenCalledTimes(1);
+      // After actual settlement the result is not an authorization cache.
+      await host.handle(controller, request);
+      expect(mutate).toHaveBeenCalledTimes(2);
+    } finally { release(); await head; await old; await current; await host.abortAll(); await host.dispose(); }
+  });
+
+  // A direct open must reserve its mutation boundary before its first await,
+  // including real uploaded-payload decoding. Earlier tests only interposed
+  // already-queued mutations and missed allocation -> preparing open -> retry.
+  it.each(['inline', 'uploaded', 'invalid-upload'] as const)('reserves a preparing %s open before another allocation', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let allocations = 0;
+    const host = fakeAgentHost(`allocate-open-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async () => {
+        const attempt = ++allocations;
+        if (attempt === 1) { enter(); await gate; }
+        order.push(`allocate:${attempt}`);
+        return null;
+      },
+      acceptDelegated: async () => { order.push('open'); },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const input = openPayload('task');
+    const bytes = mode === 'invalid-upload' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from(JSON.stringify(input)));
+    if (mode !== 'inline') await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let opening: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let next: Promise<unknown> | undefined;
+    try {
+      await entered;
+      opening = Promise.allSettled([host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: mode === 'inline' ? { json: input } : { uploadId, chunks: 1, bytes: bytes.length } })]);
+      next = host.handle(peer, request);
+      release(); await head; await next;
+      const [opened] = await opening;
+      expect(opened.status).toBe(mode === 'invalid-upload' ? 'rejected' : 'fulfilled');
+      expect(order).toEqual(mode === 'invalid-upload' ? ['allocate:1', 'allocate:2'] : ['allocate:1', 'open', 'allocate:2']);
+    } finally { release(); await head; await next; await opening; await host.abortAll(); await host.dispose(); }
+  });
+
+  it('keeps a decoded relay open out of the direct allocation critical section', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const host = fakeAgentHost('allocate-relay-boundary', [], {
+      trust: () => 'guest',
+      resolveProvider: async () => { enter(); await gate; return 'shared-provider'; },
+      directGuestExecution: {
+        ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const opening = host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+      payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+    try {
+      await entered;
+      await expect(host.handle(peer, { op: 'allocate', sessionId: 'direct-task', agentKind: 'claude-code', model: 'claude-opus' })).resolves.toBeNull();
+    } finally { release(); await opening; await host.abortAll(); await host.dispose(); }
+  });
+
+  // Host.handle unit: completed preparation failures must not remain charged
+  // behind a slow mutation. The single-invalid-open case only checked order
+  // after releasing the head, missing exhausted admission for another guest.
+  it.each(['gzip', 'json'] as const)('retires failed %s preparations while a prior mutation is still running', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    const host = fakeAgentHost(`failed-preparation-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async controller => { if (controller === peer) { enter(); await gate; } return null; },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const bytes = mode === 'gzip' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from('{'));
+    try {
+      await entered;
+      for (let i = 0; i < 255; i++) {
+        await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+        await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+          payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      }
+      await expect(host.handle(other, request)).resolves.toBeNull();
+    } finally { release(); await head; await host.abortAll(); await host.dispose(); }
+  });
+
+  // Host.handle unit: the relay bypass remains usable at capacity, but is still
+  // an allocation boundary. Previously only the non-full bypass was covered.
+  it('fences allocation receipts when a relay open bypasses the full direct queue', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    let first = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (first) { first = false; enter(); await gate; }
+      else if (controller === other) await gate;
+      return null;
+    });
+    const host = fakeAgentHost('full-relay-boundary', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let fillers: Promise<unknown[]> | undefined;
+    let later: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      // The distinct operations are real admitted work, not duplicate waiters.
+      fillers = Promise.all(Array.from({ length: 255 }, (_, i) => host.handle(other, { ...request, sessionId: `queued-${i}` })));
+      const uploadId = '33333333-3333-4333-8333-333333333333';
+      const bytes = Buffer.from('invalid gzip');
+      await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+      // A refused reservation still owns observation of its late decode failure.
+      await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      await host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+      later = Promise.allSettled([host.handle(peer, request)]);
+      release(); await head; await fillers;
+      expect(await later).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('too many pending shared task operations'),
+      }) })]);
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(allocate).toHaveBeenCalledTimes(257);
+    } finally { release(); await head; await fillers; await later; await host.abortAll(); await host.dispose(); }
+  });
+
+  it.each(['direct-release', 'direct-switch', 'standby-prepare'] as const)(
+    'does not borrow an allocation receipt across a service-serialized %s', async op => {
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const peer = providerShareGuestPeer('share', 'member', 'guest');
+      let first = true;
+      const allocate = vi.fn(async () => { if (first) { first = false; enter(); await gate; } return null; });
+      const host = fakeAgentHost(`allocate-${op}`, [], { trust: () => 'guest', directGuestExecution: {
+        ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      } });
+      const request = { op: 'allocate', sessionId: '22222222-2222-4222-8222-222222222222', agentKind: 'codex', model: 'model' };
+      const head = host.handle(peer, request);
+      let waiting: Promise<unknown[]> | undefined;
+      try {
+        await entered;
+        waiting = Promise.all([
+          host.handle(peer, { ...request, op, generation: '11111111-1111-4111-8111-111111111111' }),
+          host.handle(peer, request),
+        ]);
+        release(); await head; await waiting;
+        expect(allocate).toHaveBeenCalledTimes(op === 'standby-prepare' ? 3 : 2);
+      } finally { release(); await head; await waiting; await host.dispose(); }
+    });
 
   // Unit, #12552: real Host.handle(delegate) queue admission. Existing forget
   // deduplication missed repeated revokes while native cleanup was pending;

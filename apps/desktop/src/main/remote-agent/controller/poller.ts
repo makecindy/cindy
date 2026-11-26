@@ -24,6 +24,8 @@ export type RemoteAgentInvoke = (args: unknown[], options?: { beforeDispatch?: (
 
 /** 对方不可达时持续重拉的最长时间。 */
 export const REMOTE_AGENT_READ_GIVE_UP_MS = 2 * 60_000;
+/** 对方仍在持续回传其它业务帧(慢网大回包堵住 poll)时,重拉的最长总上限。 */
+export const REMOTE_AGENT_CONGESTED_GIVE_UP_MS = 5 * 60_000;
 const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 5_000;
 /** 同时在途的 poll 上限：一个长等待 + 一个覆盖新任务的。 */
@@ -106,6 +108,7 @@ export class RemoteAgentPoller {
   /** 有任务还没被任何在途 poll 覆盖。 */
   private needFresh = false;
   private unreachableSince: number | null = null;
+  private congestedSince: number | null = null;
   private attempt = 0;
   private readonly recoveringAuthorization = new WeakSet<PolledRun>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +123,7 @@ export class RemoteAgentPoller {
     readonly invoke: RemoteAgentInvoke,
     private readonly log?: { warn(message: string, meta?: Record<string, unknown>): void },
     private readonly now: () => number = Date.now,
+    private readonly isPeerDelivering?: () => boolean,
   ) {}
 
   /** 开始拉取一个任务(游标从 0 开始)。 */
@@ -136,6 +140,7 @@ export class RemoteAgentPoller {
       if (this.retryTimer) clearTimeout(this.retryTimer);
       this.retryTimer = null;
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
     }
   }
@@ -216,6 +221,7 @@ export class RemoteAgentPoller {
         this.retryTimer = null;
       }
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
       const delivered = this.apply(wanted, result);
       if (!delivered && this.now() - startedAt < EMPTY_FAST_MS) this.emptyFastStreak += 1;
@@ -311,13 +317,21 @@ export class RemoteAgentPoller {
       this.ensureAfterReturn();
       return;
     }
-    // A restarting share can briefly look revoked while its route is being restored.
-    // Only an established outage gets this grace; never bypass the owner or reset its deadline.
+    // An unconfirmed share list can be the first sign of a temporary outage.
+    // Unlike an explicit denial, UNAVAILABLE alone may start the existing read grace.
+    // A restarting executor's ACCESS_REVOKED still needs an established outage;
+    // never bypass the owner or reset the original deadline.
     // remoteAgentInvoker may prefix a rejection with UNAVAILABLE while preserving
     // the authoritative transport code on the Error, so check both.
     const shareRefusal = (code: unknown) => code === 'ACCESS_REVOKED' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE';
-    const shareRefused = shareRefusal(remoteAgentErrorFrom(error).code) || shareRefusal((error as { code?: unknown })?.code);
-    if (shareRefused ? this.unreachableSince === null : !isRetryableLinkError(error)) {
+    const code = (error as { code?: unknown })?.code;
+    const reportedCode = remoteAgentErrorFrom(error).code;
+    const ownerRefused = code === 'REMOTE_DISABLED'
+      || /\[REMOTE_AGENT_PROVIDER_NOT_ALLOWED\]/.test(error instanceof Error ? error.message : String(error));
+    const shareRefused = shareRefusal(reportedCode) || shareRefusal(code);
+    const temporaryShareUnavailable = (reportedCode === 'REMOTE_AGENT_SHARE_UNAVAILABLE' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE')
+      && (code === undefined || code === 'IPC_ERROR' || code === 'REMOTE_AGENT_SHARE_UNAVAILABLE');
+    if (ownerRefused || (shareRefused ? this.unreachableSince === null && !temporaryShareUnavailable : !isRetryableLinkError(error))) {
       // 对方拒绝整个 poll(远程控制已关、版本不支持等)：涉及的任务都无法继续。
       const info = remoteAgentErrorFrom(error);
       for (const { runId } of wanted) {
@@ -327,9 +341,19 @@ export class RemoteAgentPoller {
       this.ensureAfterReturn();
       return;
     }
-    this.unreachableSince ??= this.now();
-    if (this.now() - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS) {
+    const now = this.now();
+    this.congestedSince ??= now;
+    if (!shareRefused && this.isPeerDelivering?.() === true) {
+      this.unreachableSince = now;
+    } else {
+      this.unreachableSince ??= now;
+    }
+    if (
+      now - this.unreachableSince > REMOTE_AGENT_READ_GIVE_UP_MS
+      || now - this.congestedSince > REMOTE_AGENT_CONGESTED_GIVE_UP_MS
+    ) {
       this.unreachableSince = null;
+      this.congestedSince = null;
       this.attempt = 0;
       // The outage deadline does not prove the peer is offline. Keep the final
       // timeout/backpressure/breaker cause for both live and persisted errors.
