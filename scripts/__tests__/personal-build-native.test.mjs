@@ -285,6 +285,32 @@ test('PlugInKit registration parses duplicates, unregisters retired extensions a
   '/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex',
  ]);
  assert.doesNotThrow(()=>reg.unregisterExtension('/tmp/already-gone.bundle/Contents/PlugIns/CindyAgentActivity.appex'));
+ // Failure in one OS registration subsystem must not skip the other (unregister, register, retire).
+ const partialLs=[], partialPk=[], partialStopped=[];
+ const partial=appRegistry(args=>{
+  partialLs.push(args);
+  if(args[0]==='-f')throw Error('lsregister register failed');
+ },{
+  runPlugin:args=>{
+   partialPk.push(args);
+   if(args[0]==='-r')throw Error('pluginkit timeout');
+  },
+  listExtensions:app=>[path.join(app,'Contents/PlugIns/CindyAgentActivity.appex')],
+  stopExtension:ext=>{partialStopped.push(ext);return [];},
+ });
+ assert.throws(()=>partial.unregister('/tmp/old.bundle'),/pluginkit timeout/);
+ assert.deepEqual(partialLs,[['-u','/tmp/old.bundle']]);
+ assert.deepEqual(partialStopped,['/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex']);
+ assert.throws(()=>partial.register('/tmp/Personal.app',{refreshExtensions:true}),/lsregister register failed/);
+ assert.deepEqual(partialPk,[
+  ['-r','/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex'],
+  ['-a','/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex'],
+ ]);
+ assert.deepEqual(partialStopped,[
+  '/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex',
+  '/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex',
+ ]);
+ assert.throws(()=>partial.retire('/tmp/old.bundle','/tmp/Personal.app'),/pluginkit timeout; lsregister register failed/);
  const killed=[];
  const pids=stopExtensionProcesses('/apps/.old/Contents/PlugIns/CindyAgentActivity.appex',{
   listProcesses:()=>[

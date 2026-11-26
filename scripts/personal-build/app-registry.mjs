@@ -64,31 +64,49 @@ function removePluginkitEntry(extensionPath, runPlugin) {
     if(!/no plugin at/i.test(detail))throw error;
   }
 }
+function runSteps(steps) {
+  const errors=[];
+  for(const step of steps) {
+    try { step(); } catch(error) { errors.push(error); }
+  }
+  if(errors.length===1)throw errors[0];
+  if(errors.length>1)throw Error(errors.map(error=>error?.message||String(error)).join('; '));
+}
 export function registeredApps(bundleId, run=execute) { return parseRegisteredApps(run(['-dump']),bundleId); }
 export function registeredExtensions(extensionId, run=executePluginkit) { return parseRegisteredExtensions(run(['-m','-v','-A','-D','-i',extensionId]),extensionId); }
 export function appRegistry(run=execute, {runPlugin=executePluginkit, listExtensions=appExtensions, stopExtension=stopExtensionProcesses}={}) {
-  const registerExtension=(ext,{refresh=false}={})=>{
-    runPlugin(['-a',ext]);
-    if(refresh)stopExtension(ext);
-  };
-  const unregisterExtension=ext=>{
-    removePluginkitEntry(ext,runPlugin);
-    stopExtension(ext);
-  };
+  const registerExtension=(ext,{refresh=false}={})=>runSteps([
+    ()=>runPlugin(['-a',ext]),
+    ...(refresh ? [()=>stopExtension(ext)] : []),
+  ]);
+  const unregisterExtension=ext=>runSteps([
+    ()=>removePluginkitEntry(ext,runPlugin),
+    ()=>stopExtension(ext),
+  ]);
   const register=(app,{refreshExtensions=false}={})=>{
-    run(['-f',app]);
-    for(const ext of listExtensions(app))registerExtension(ext,{refresh:refreshExtensions});
+    let extensions=[];
+    const steps=[()=>run(['-f',app])];
+    try { extensions=listExtensions(app); } catch(error) { steps.push(()=>{ throw error; }); }
+    for(const ext of extensions)steps.push(()=>registerExtension(ext,{refresh:refreshExtensions}));
+    runSteps(steps);
   };
   const unregister=app=>{
-    for(const ext of listExtensions(app))unregisterExtension(ext);
-    run(['-u',app]);
+    let extensions=[];
+    const steps=[];
+    try { extensions=listExtensions(app); } catch(error) { steps.push(()=>{ throw error; }); }
+    for(const ext of extensions)steps.push(()=>unregisterExtension(ext));
+    steps.push(()=>run(['-u',app]));
+    runSteps(steps);
   };
   return {
     register,
     unregister,
     registerExtension,
     unregisterExtension,
-    retire:(backup,app,{refreshExtensions=false}={})=>{unregister(backup);register(app,{refreshExtensions});},
+    retire:(backup,app,{refreshExtensions=false}={})=>runSteps([
+      ()=>unregister(backup),
+      ()=>register(app,{refreshExtensions}),
+    ]),
   };
 }
 /** Explicit repair only: inspect every duplicate before removing its registration. Never delete
