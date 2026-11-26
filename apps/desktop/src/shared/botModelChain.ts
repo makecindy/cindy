@@ -139,6 +139,18 @@ export function nextBotModelRoute(
   return null;
 }
 
+/** Local account placement applies only to built-in routes executed on this computer. */
+export function isBotFallbackRouteUsable(
+  candidate: BotModelRoute,
+  currentHarness: BotHarness,
+  sameHarnessOnly: boolean,
+  readMergedAccount: (providerId: string) => string | undefined,
+): boolean {
+  if (sameHarnessOnly) return candidate.harness !== 'acp' && candidate.harness === currentHarness;
+  return candidate.harness === 'acp' || !!candidate.agentDeviceId || !candidate.providerId
+    || !readMergedAccount(candidate.providerId);
+}
+
 /** The candidate and whether the companion has any alternative for this execution location. */
 export function selectBotFallbackRoute(
   chain: readonly BotModelRoute[],
@@ -147,12 +159,8 @@ export function selectBotFallbackRoute(
   remoteHostId: string | null | undefined,
   readMergedAccount: (providerId: string) => string | undefined,
 ) {
-  const usable = (candidate: BotModelRoute) => {
-    if (remoteHostId) return candidate.harness !== 'acp' && candidate.harness === current.harness;
-    // Placement belongs to this computer. A plugin or another device owns its provider namespace.
-    return candidate.harness === 'acp' || !!candidate.agentDeviceId || !candidate.providerId
-      || !readMergedAccount(candidate.providerId);
-  };
+  const usable = (candidate: BotModelRoute) =>
+    isBotFallbackRouteUsable(candidate, current.harness, !!remoteHostId, readMergedAccount);
   const route = nextBotModelRoute(chain, current, visited, usable);
   const currentIndex = botModelRouteIndex(chain, current);
   const routeLocked = !route && !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
