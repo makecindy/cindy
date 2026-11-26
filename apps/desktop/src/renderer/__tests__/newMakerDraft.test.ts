@@ -2106,11 +2106,16 @@ describe('Bot default model write-through', () => {
   }
   it('persists the same default used by new tasks and survives reloading', async () => {
     const { store, selection } = await setup();
+    store.patchDraft({ agentDeviceId: 'share:old', remoteModelChoice: {
+      deviceId: 'share:old', vendor: 'codex', model: 'luna', providerId: 'openai', effort: 'medium', fastMode: false,
+    } });
     expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    expect(store.getDraft().agentDeviceId).toBeNull();
     const reloaded = await reloadModule();
     reloaded.setNewMakerDraftOwner('bot-owner');
     expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
     expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().agentDeviceId).toBeNull();
     expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
   });
   it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
@@ -2127,6 +2132,22 @@ describe('Bot default model write-through', () => {
 
 // Agent 在同账号另一台电脑运行:任务、项目与命令仍在本机,只记下运行 Agent 的电脑。
 describe('newMakerDraft agent computer', () => {
+  // Standard: an unrelated write in a stale window must not route the next task to a previous share.
+  it('keeps the latest shared provider when another window changes the project', async () => {
+    const store = await loadModule();
+    const selectShare = (deviceId: string) => store.patchDraft({
+      agentDeviceId: deviceId, remoteModelChoice: {
+        deviceId, vendor: 'cc', model: 'chosen', providerId: 'source', effort: 'high', fastMode: false,
+      },
+    });
+    selectShare('share:first');
+    const stale = await openSecondWindow();
+    selectShare('share:second');
+    stale.patchDraft({ workingDir: '/project' });
+    expect((await reloadModule()).getDraft()).toMatchObject({
+      workingDir: '/project', agentDeviceId: 'share:second', remoteModelChoice: { deviceId: 'share:second' },
+    });
+  });
   it('keeps the agent computer across local folder changes and clears it for remote tasks', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({ agentDeviceId: ' dev-b ', agentDeviceName: 'Office Mac' });

@@ -1816,7 +1816,7 @@ it('applies a replacement for an unavailable saved model only to the current loc
   const switchVendor = vi.fn();
   const patchVendorPrefs = vi.fn();
   const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
-    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false,
+    localModelIssue: 'engine', localAlternate: null, usesDeviceCatalog: false, isDeviceLinkDraft: false,
     effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
     switchVendor, patchVendorPrefs,
   });
@@ -1832,17 +1832,18 @@ it('applies a replacement for an unavailable saved model only to the current loc
 });
 
 // Minimal input: a missing local engine and an alternate on another computer.
-it('keeps remote alternates temporary and applies the latest same-device selection to the holder', () => {
+it('remembers an explicit remote replacement and applies the latest same-device selection', () => {
   const setAlternateModel = vi.fn();
   const switchVendor = vi.fn();
-  const rememberAgentDeviceSelection = vi.fn();
+  const patchDraft = vi.fn();
   const setDlSel = vi.fn();
   const dlExplicitChoiceRef = { current: false };
   const dlSeedKeyRef = { current: null };
   const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
     localModelIssue: null, localAlternate: { agentDevice: { deviceId: 'other-computer' } }, usesDeviceCatalog: true,
     effectiveRemoteHostId: null, setAlternateModel, dataOwnerGeneration: 12, location: { key: 'draft-page' },
-    switchVendor, rememberAgentDeviceSelection, normalizeDbAgentKind, dbToMakerAgentKind,
+    switchVendor, patchDraft, normalizeDbAgentKind, dbToMakerAgentKind,
+    getDraft: () => ({}), setRemoteDraftPluginEngine: vi.fn(), setDraftFavoriteAnchor: vi.fn(), effectiveAgentDeviceId: undefined,
     setDlSel, dlExplicitChoiceRef, dlSeedKeyRef, dlRuntimeTouchedRef: { current: false },
     dlSeedCapabilitiesRef: { current: null }, isDeviceLinkDraft: false,
     modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: undefined },
@@ -1850,9 +1851,9 @@ it('keeps remote alternates temporary and applies the latest same-device selecti
   const agentDevice = { deviceId: 'other-computer', name: 'Other computer' };
   select({ vendor: 'pi', providerId: 'xd', modelId: 'auto', effort: 'high',
     fast: false, favoriteUid: null, agentDevice });
-  expect(setAlternateModel).toHaveBeenCalledWith(expect.objectContaining({ agentDevice, vendor: 'pi' }));
-  expect(rememberAgentDeviceSelection).toHaveBeenCalledWith('other-computer', 'pi', {
-    model: 'auto', providerId: 'xd', effort: 'high', fastMode: false,
+  expect(patchDraft).toHaveBeenCalledWith({
+    agentDeviceId: agentDevice.deviceId, agentDeviceName: agentDevice.name,
+    remoteModelChoice: { deviceId: agentDevice.deviceId, deviceName: agentDevice.name, vendor: 'pi', model: 'auto', providerId: 'xd', effort: 'high', fastMode: false },
   });
   select({ vendor: 'pi', providerId: 'xd', modelId: 'other-model', effort: 'medium',
     fast: true, favoriteUid: null, agentDevice });
@@ -1872,5 +1873,5 @@ it('keeps remote alternates temporary and applies the latest same-device selecti
   expect(setDlSel).toHaveBeenLastCalledWith(null);
   expect(dlSeedKeyRef.current).toBeNull();
   expect(dlExplicitChoiceRef.current).toBe(false);
-  expect(switchVendor).not.toHaveBeenCalled();
+  expect(switchVendor).toHaveBeenLastCalledWith('codex', { userSelected: true });
 });

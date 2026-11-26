@@ -9,6 +9,8 @@
  * 选择时一并带上那台电脑的这份记忆，切到别的模型时据此还原该模型的档位。
  */
 import { snapshotAgentDeviceModelMemory } from '@/state/agentDeviceModelMemory';
+import { getDraft } from '@/state/newMakerDraft';
+import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 
 import type { DeviceLinkDraftSelection, RemoteDraftDefaults } from './deviceLinkDraftDefaults';
 
@@ -38,7 +40,11 @@ export function rememberAgentDeviceSelection(
 }
 
 export function recallAgentDeviceSelection(deviceId: string, agentKind: string): RemoteDraftDefaults | null {
-  const last = memory.get(key(deviceId, agentKind));
+  const choice = getDraft().remoteModelChoice;
+  const saved = choice?.deviceId === deviceId && dbToMakerAgentKind(normalizeDbAgentKind(choice.vendor)) === agentKind
+    ? { model: choice.model, providerId: choice.providerId, effort: choice.effort, fastMode: choice.fastMode, modelChosenByUser: true }
+    : null;
+  const last = saved ?? memory.get(key(deviceId, agentKind));
   if (!last) return null;
   const providerModelMemory = snapshotAgentDeviceModelMemory(deviceId);
   return providerModelMemory ? { ...last, providerModelMemory } : last;

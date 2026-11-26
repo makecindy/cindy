@@ -139,6 +139,16 @@ export interface NewMakerDraft {
   agentDeviceId: string | null;
   /** agentDeviceId 那台电脑的友好名(展示用)。 */
   agentDeviceName: string | null;
+  /** Explicit model on another computer for a task created on this computer. */
+  remoteModelChoice?: {
+    deviceId: string;
+    deviceName?: string;
+    vendor: MakerVendor;
+    model: string;
+    providerId: string;
+    effort: Effort;
+    fastMode: boolean | 'ultrafast';
+  };
   /** 协同模式开关 + Worker 类型(草稿期持久化,Send 时由 enableOrca 消费)。 */
   collab: CollabDraft;
   /**
@@ -340,6 +350,15 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? r.remoteHostId.trim()
       : null;
   const lastByVendorRaw = (r.lastByVendor ?? {}) as Partial<NewMakerDraft['lastByVendor']>;
+  const choice = r.remoteModelChoice;
+  const remoteModelChoice = !remoteHostId && !r.deviceLinkDeviceId && choice &&
+    typeof choice.deviceId === 'string' && choice.deviceId.length > 0 &&
+    choice.deviceId === r.agentDeviceId && choice.vendor === vendor &&
+    typeof choice.model === 'string' && choice.model.length > 0 &&
+    typeof choice.providerId === 'string' && choice.providerId.length > 0 &&
+    typeof choice.effort === 'string' &&
+    (typeof choice.fastMode === 'boolean' || choice.fastMode === 'ultrafast')
+    ? choice : undefined;
   const fastModeByModelRaw =
     r.fastModeByModel && typeof r.fastModeByModel === 'object'
       ? (r.fastModeByModel as Record<string, unknown>)
@@ -523,8 +542,9 @@ function sanitize(raw: unknown): NewMakerDraft {
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
-    agentDeviceId: null,
-    agentDeviceName: null,
+    agentDeviceId: remoteModelChoice?.deviceId ?? null,
+    agentDeviceName: remoteModelChoice && typeof r.agentDeviceName === 'string' ? r.agentDeviceName : null,
+    remoteModelChoice,
     collab,
     // worktree 勾选记忆:系统默认 + 显式 override 合成。注意历史残留的
     // wtEnabled/wtName/wtSourceBranch/wtBaseRepo 根字段(2026-07 前的短暂持久化实验)
@@ -624,6 +644,7 @@ type StoredDefaultTuplePreference = Pick<
   | 'fastModeByModel'
   | 'effortByModel'
   | 'lastByVendor'
+  | 'remoteModelChoice'
   | 'modelChosenByVendor'
   | 'newChatDefaultPermissionMode'
   | 'defaultTupleCustomized'
@@ -636,6 +657,7 @@ function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePrefe
     fastModeByModel: draft.fastModeByModel,
     effortByModel: draft.effortByModel,
     lastByVendor: draft.lastByVendor,
+    remoteModelChoice: draft.remoteModelChoice,
     modelChosenByVendor: draft.modelChosenByVendor,
     newChatDefaultPermissionMode: draft.newChatDefaultPermissionMode ?? null,
     defaultTupleCustomized: draft.defaultTupleCustomized,
@@ -714,7 +736,12 @@ let preferenceSyncFallback: PreferenceSyncFallback = null;
  */
 function mergeStoredTuple(stored: StoredDefaultTuplePreference): NewMakerDraft {
   const following = persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) !== currentDraft.vendor;
-  return { ...currentDraft, ...stored, vendor: following ? currentDraft.vendor : stored.vendor };
+  const next = { ...currentDraft, ...stored, vendor: following ? currentDraft.vendor : stored.vendor };
+  if (!next.deviceLinkDeviceId && !next.remoteHostId && (currentDraft.remoteModelChoice || stored.remoteModelChoice)) {
+    next.agentDeviceId = stored.remoteModelChoice?.deviceId ?? null;
+    next.agentDeviceName = stored.remoteModelChoice?.deviceName ?? null;
+  }
+  return next;
 }
 
 function rebaseStoredDefaultTuplePreference(): void {
@@ -950,6 +977,7 @@ export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): vo
 }
 
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
+  rebaseStoredDefaultTuplePreference();
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
   // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
   // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
@@ -1007,6 +1035,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.agentDeviceId = null;
     next.agentDeviceName = null;
   }
+  if (next.remoteModelChoice?.deviceId !== next.agentDeviceId || next.deviceLinkDeviceId || next.remoteHostId) {
+    delete next.remoteModelChoice;
+  }
   // 换目标设备(含本机 ↔ 被控设备、被控设备 A ↔ B)→ 丢掉 Worker 富配置,只留
   // enabled + worker。model / providerId / effort / fast 都是**设备作用域**的:被控端
   // 装的模型目录、连的供应商都是它自己那一套,原样透传过去会撞被控端 main 的精确
@@ -1029,7 +1060,7 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
   currentDraft = next;
-  scheduleWrite({ preserveStoredWorktreePreference: true });
+  scheduleWrite({ preserveStoredWorktreePreference: true, preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1101,6 +1132,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const route = selection.route;
   const vendor = route.harness === 'claude' ? 'cc' : route.harness;
   const next: NewMakerDraft = { ...base, vendor,
+    remoteModelChoice: undefined, agentDeviceId: null, agentDeviceName: null,
     defaultTupleCustomized: true, defaultTupleSelectionCustomized: true,
     modelChosenByVendor: { ...base.modelChosenByVendor, [vendor]: true },
     lastByVendor: { ...base.lastByVendor, [vendor]: { ...base.lastByVendor[vendor],
@@ -1111,7 +1143,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   try {
     window.localStorage.setItem(storageKey(), JSON.stringify(next));
   } catch { return false; }
-  currentDraft = { ...currentDraft, ...defaultTuplePreferenceOf(next),
+  currentDraft = { ...mergeStoredTuple(defaultTuplePreferenceOf(next)), vendor,
     effortByModel: next.effortByModel, fastModeByModel: next.fastModeByModel };
   preferenceSyncFallback = null;
   emit();
