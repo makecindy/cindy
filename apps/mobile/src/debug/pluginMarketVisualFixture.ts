@@ -264,7 +264,8 @@ let holdInstalledReads = false;
 let legacyHost = false;
 /**
  * `goneUnread` checks: the receipt is gone and the mock computer cannot read its plugin market (its installed snapshot
- * has the instances, only the custom markets' records, and says the market is unavailable), so the facts settle nothing.
+ * has the instances, only the custom markets' records, and says the market is unavailable): the plugin is there with
+ * no record of it, which the phone settles as not attributable (②).
  */
 let catalogUnreadable = false;
 /** Demo plugins whose catalog moved on to its next release (`catalogAhead`). */

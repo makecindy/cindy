@@ -508,7 +508,6 @@
       "confirmation": "Waiting for confirmation",
       "checking": "Checking the result",
       "waiting": "Result unconfirmed. Check it again, or stop tracking.",
-      "recordMissing": "This plugin is on the computer, but its install record couldn’t be read, so the result can’t be confirmed yet. Check it again later, or stop tracking.",
       "offline": "“{{device}}” isn’t connected. Connect it to check the result.",
       "awaitingYou": "The computer is waiting for you to confirm",
       "unprovable": {

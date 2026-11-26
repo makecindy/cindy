@@ -508,7 +508,6 @@
       "confirmation": "等待確認",
       "checking": "正在核實結果",
       "waiting": "結果待確認。可以再核實一次，或不再追蹤。",
-      "recordMissing": "電腦上有這個插件，但讀不到它的安裝記錄，還不能確認結果。可以稍後再核實一次，或不再追蹤。",
       "offline": "「{{device}}」未連線，連線後才能核實結果。",
       "awaitingYou": "電腦正在等你確認",
       "unprovable": {
