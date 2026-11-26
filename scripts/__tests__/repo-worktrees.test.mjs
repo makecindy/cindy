@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildPrIndex, classifyWorktree, parseWorktreeStatus, selectPr } from '../repo-worktrees.mjs';
+import {
+  buildPrIndex, classifyWorktree, mergedPrCoversHead, parseWorktreeStatus, selectPr,
+} from '../repo-worktrees.mjs';
 
 // Regression: a new worktree starts at a commit already in main. Git ancestry
 // cannot establish that its owning task is finished or that removal is safe.
@@ -124,4 +126,22 @@ test('PR selection keeps open work first, then trusts the exact final commit ove
   assert.equal(pick([fork]), undefined);
   assert.equal(pick([fork], 'c'.repeat(40)), 30);
   assert.equal(pick([oldMerged], 'e'.repeat(40)), 10);
+});
+
+// PR #13182 review: a matching target branch name does not prove the merge is in the report's
+// base. A PR merged on GitHub but not yet fetched (or --base pointing at a stale local branch)
+// must not read as pr-merged. mergedPrCoversHead is the CLI's decision; ancestry is injected.
+test('a merged PR covers HEAD only once its merge commit is in the selected base', () => {
+  const head = 'a'.repeat(40);
+  const older = 'b'.repeat(40);
+  const merge = 'c'.repeat(40);
+  const pr = { state: 'MERGED', headRefOid: head, mergeCommit: { oid: merge } };
+  const ancestry = (...pairs) => (ancestor, descendant) => pairs.includes(`${ancestor}>${descendant}`);
+  const fetched = `${merge}>origin/main`;
+  const covers = (patch) => mergedPrCoversHead({ head, base: 'origin/main', pr, isAncestor: ancestry(fetched), ...patch });
+  assert.equal(covers({}), true);
+  assert.equal(covers({ isAncestor: ancestry() }), false);
+  assert.equal(covers({ head: older, isAncestor: ancestry(fetched, `${older}>${head}`) }), true);
+  assert.equal(covers({ head: 'd'.repeat(40) }), false);
+  assert.equal(covers({ pr: { ...pr, mergeCommit: null }, isAncestor: () => true }), false);
 });

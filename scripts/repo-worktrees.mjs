@@ -28,8 +28,9 @@ const HELP = `pnpm repo:worktrees — 只读巡检本仓库全部 git worktree,�
   main clean                   main 基线现场
 
 说明:本脚本纯只读、不删除任何东西;PR 状态来自 gh CLI(未登录时该列为 "-")。
-squash 合入后分支提交不在基线历史里,base 列显示 pr-merged:表示 HEAD 被一个已合入基线
-分支的 PR 覆盖(HEAD 等于或早于该 PR 的最终提交)。PR 先按分支名与最终提交匹配,
+squash 合入后分支提交不在基线历史里,base 列显示 pr-merged:表示 HEAD 被一个合入提交已在
+本地基线里的 PR 覆盖(HEAD 等于或早于该 PR 的最终提交;基线未 fetch 到该合入时不显示)。
+PR 先按分支名与最终提交匹配,
 都没匹配上的分支再按 HEAD 提交批量搜索一次。
 报告不查询 Cindy 活跃任务,不判定任何工作区可删除。清理前仍须核对任务归属、
 PR 终态、未推送修改与保留标记,并走现有 cleanup planner。
@@ -118,7 +119,7 @@ function fetchPrRows(root, state) {
   }
 }
 
-const PR_FIELDS = 'headRefName,headRefOid,baseRefName,number,state,isDraft,title,url,isCrossRepository';
+const PR_FIELDS = 'headRefName,headRefOid,mergeCommit,number,state,isDraft,title,url,isCrossRepository';
 
 // 同一个键对应多条 PR 时:OPEN 优先,其次 number 取大。不依赖 gh 返回顺序的 Map
 // 覆盖语义——open PR 被旧 closed PR 顶掉会让在途 worktree 被误标成可清理。
@@ -165,7 +166,7 @@ function searchPrsByHead(root, heads) {
   if (!heads.length) return [];
   const slug = tryExec('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { cwd: root });
   if (!slug || !/^[\w.-]+\/[\w.-]+$/.test(slug)) return [];
-  const fields = 'number state isDraft title url isCrossRepository headRefName headRefOid baseRefName';
+  const fields = 'number state isDraft title url isCrossRepository headRefName headRefOid mergeCommit { oid }';
   const found = [];
   for (let start = 0; start < heads.length; start += 20) {
     const chunk = heads.slice(start, start + 20);
@@ -187,11 +188,16 @@ function searchPrsByHead(root, heads) {
   return found;
 }
 
-/** HEAD 是否被一个已合入基线分支的 PR 覆盖:等于该 PR 的最终提交,或是它的祖先。 */
-function mergedPrCoversHead(path, head, pr, baseBranch) {
-  if (pr?.state !== 'MERGED' || !pr.headRefOid || !baseBranch || pr.baseRefName !== baseBranch) return false;
-  // PR 最终提交不在本地时 --is-ancestor 失败,按未覆盖处理。
-  return pr.headRefOid === head || commandOk('git', ['-C', path, 'merge-base', '--is-ancestor', 'HEAD', pr.headRefOid]);
+/**
+ * HEAD 是否被一个已进入所选基线的 PR 覆盖:PR 的合入提交是基线的祖先,且 HEAD 等于该 PR 的
+ * 最终提交或是它的祖先。只看目标分支名不够——PR 刚在 GitHub 合入而本地基线还没 fetch、或
+ * --base 指向落后的本地分支时,内容并不在这份报告的基线里。isAncestor(a, b) 回答 a 是否为
+ * b 的祖先;提交不在本地时为 false,按未覆盖处理。
+ */
+export function mergedPrCoversHead({ head, base, pr, isAncestor }) {
+  const mergeCommit = pr?.mergeCommit?.oid;
+  if (pr?.state !== 'MERGED' || !pr.headRefOid || !mergeCommit || !isAncestor(mergeCommit, base)) return false;
+  return pr.headRefOid === head || isAncestor(head, pr.headRefOid);
 }
 
 function countStatus(path) {
@@ -309,10 +315,6 @@ export function main() {
   }
 
   const prRows = loadPrIndex(root);
-  // PR 的 baseRefName 是分支名;基线是 origin/main 这类 ref 时换算成 main,基线是 SHA 时为空,
-  // 此时不认定任何 PR 已合入基线。
-  const baseRef = tryGit(['rev-parse', '--symbolic-full-name', base], { cwd: root }) ?? '';
-  const baseBranch = baseRef.replace(/^refs\/remotes\/[^/]+\/|^refs\/heads\//, '');
   const worktrees = parseWorktrees(git(['worktree', 'list', '--porcelain']));
   const rawRows = worktrees.map((worktree) => {
     const branch = tryGit(['-C', worktree.path, 'symbolic-ref', '--short', '-q', 'HEAD']) ?? 'DETACHED';
@@ -359,7 +361,13 @@ export function main() {
 
   const rows = rawRows.map(({ fullHead, ...row }) => {
     const pr = selectPr({ branch: row.branch, head: fullHead, index }) ?? null;
-    const mergedByPr = !row.inBase && mergedPrCoversHead(row.path, fullHead, pr, baseBranch);
+    const mergedByPr = !row.inBase && mergedPrCoversHead({
+      head: fullHead,
+      base,
+      pr,
+      isAncestor: (ancestor, descendant) =>
+        commandOk('git', ['-C', row.path, 'merge-base', '--is-ancestor', ancestor, descendant]),
+    });
     const full = { ...row, pr, mergedByPr };
     return { ...full, classification: classifyWorktree(full) };
   });
