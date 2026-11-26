@@ -110,3 +110,12 @@ it('keeps only a teammate\'s own conversations and project tasks with the teamma
     teammate: isTeammateOwnInboxTask({ source: 'desktop', workingDir: '/Users/me/code/app' }) }, now)).toBe('inbox');
 });
 
+
+// Unit regression: both inboxes must drop the read, idle pin and surface its next result.
+it('keeps idle read pins out of Pending until they need attention again', () => {
+  const pin = { status: 'active', pinnedAt: '2026-11-25T00:00:00Z' };
+  const idle = { waiting: false, running: false, unread: false };
+  expect(taskInboxSection(pin, idle, 0)).toBeNull();
+  expect(taskInboxSection(pin, { ...idle, unread: true }, 0)).toBe('inbox');
+  expect(taskInboxSection(pin, { ...idle, waiting: true }, 0)).toBe('inbox');
+});

@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
 import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
+import type { PeerUpdateConfirmTarget } from './peerAppUpdate';
 import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
@@ -119,6 +120,8 @@ export interface RemoteConnectionTopologyProps {
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
   /** 手动切换本机到指定设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
   onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
+  /** 点击版本号旁更新图标：由外层弹出二次确认再触发目标（或本机）内置更新。 */
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }
 
 /**
@@ -328,6 +331,7 @@ export function RemoteConnectionTopology({
   switches,
   onSwitch,
   onPathPreferenceChange,
+  onUpdate,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
@@ -614,6 +618,7 @@ export function RemoteConnectionTopology({
               switchEntry={switchEntry}
               onSwitch={onSwitch}
               onPathPreferenceChange={onPathPreferenceChange}
+              onUpdate={onUpdate}
             />
           </PopoverContent>
         </Popover>,
@@ -674,6 +679,7 @@ export function RemoteConnectionTopology({
             linkStatus={linkStatus}
             issue={issue}
             standby={standby}
+            onUpdate={onUpdate}
           />
         </PopoverContent>
       </Popover>
