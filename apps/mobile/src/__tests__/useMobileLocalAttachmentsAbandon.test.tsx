@@ -499,3 +499,18 @@ it('reports an interrupted peer upload with user-facing copy instead of the inte
   expect(harness.latest().pendingUploads).toHaveLength(1);
   expect(harness.latest().pendingUploads[0].failed).toBe(true);
 });
+
+// 取不到 token 时上传管线自己已经抛了「登录已过期,请重新登录后再上传附件」。这条文案
+// 必须原样到界面:换成通用的「操作没完成」会让用户以为等等再试就好,而实际需要重新登录。
+it('keeps the pipeline sign-in prompt instead of collapsing it to generic copy', async () => {
+  const harness = mount('session-a');
+  act(() => harness.latest().enqueueUploads([{
+    kind: 'file', uri: 'file:///share/report.pdf', name: 'report.pdf', size: 1000,
+  }], { token: Promise.resolve(null) }));
+  await act(async () => { await harness.latest().waitForPendingUploads(); });
+  const signInPrompt = i18n.t('composer.upload.sessionExpiredFile');
+  expect(signInPrompt).not.toBe(i18n.t('deviceLink.remoteError.unclassified'));
+  expect(harness.options.onError).toHaveBeenCalledWith(
+    signInPrompt, { uploadLocalId: expect.any(String) },
+  );
+});

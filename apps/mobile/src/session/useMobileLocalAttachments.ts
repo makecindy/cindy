@@ -21,7 +21,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { retainComposerAttachmentFile } from './durableOutboxFiles';
 import * as ImagePicker from 'expo-image-picker';
-import { formatRemoteError, humanizeRemoteError } from '@/device-link/remoteStatus';
+import { formatRemoteError } from '@/device-link/remoteStatus';
 import { i18n } from '@/i18n';
 import { attachmentUploadFailureKey } from '@/session/attachmentUploadFailure';
 import { pickDeferredLibraryPhotos } from '@/session/deferredPhotoLibrary';
@@ -356,12 +356,14 @@ export function useMobileLocalAttachments(
         optionsRef.current.attachmentScopeKey !== candidateScopeKey
         || candidate.attachmentScopeGeneration !== attachmentScopeGenerationRef.current
       )) return;
-      // 传输层抛的是内部码(FILE_PEER_*):先换成「中断 / 超时 / 电脑不可达」这类人话,
-      // 其余错误走 humanizeRemoteError 的通用映射(仍把原文附在句尾便于反馈排查)。
+      // 只把传输层的内部码(FILE_PEER_*)换成「中断 / 超时 / 电脑不可达」人话。
+      // 其余错误一律保留上传管线自己的文案(取不到 token 的「登录已过期,请重新登录」、
+      // 预处理超时等已经是翻译好的具体提示):交给 humanizeRemoteError 会把它们全部
+      // 压成通用的「操作没完成,请稍后重试」,用户就不知道需要重新登录。
       // 文案用 i18n 实例取,不用 render 期的 t:这个回调是 memo 闭包,语言切过后要取新值。
       const failureKey = attachmentUploadFailureKey(err);
       optionsRef.current.onError(
-        failureKey ? i18n.t(failureKey) : humanizeRemoteError(err),
+        failureKey ? i18n.t(failureKey) : formatRemoteError(err),
         { uploadLocalId: localId },
       );
     },
