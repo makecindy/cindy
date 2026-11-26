@@ -176,9 +176,9 @@ interface ForkTimelineMessage {
 }
 
 interface ParsedAgentSwitchBoundary {
-  fromAgentKind: DbAgentKind;
+  fromAgentKind: ForkEngineKind;
   fromAgentDeviceId?: string | null;
-  toAgentKind?: DbAgentKind;
+  toAgentKind?: ForkEngineKind;
   fromModel: string | null;
   fromProviderId?: string | null;
   toProviderId?: string | null;
@@ -346,11 +346,15 @@ function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | 
     if (
       parsed.fromAgentKind !== 'cc' &&
       parsed.fromAgentKind !== 'codex' &&
-      parsed.fromAgentKind !== 'pi'
+      parsed.fromAgentKind !== 'pi' &&
+      parsed.fromAgentKind !== 'acp'
     )
       return null;
     const toAgentKind =
-      parsed.toAgentKind === 'cc' || parsed.toAgentKind === 'codex' || parsed.toAgentKind === 'pi'
+      parsed.toAgentKind === 'cc' ||
+      parsed.toAgentKind === 'codex' ||
+      parsed.toAgentKind === 'pi' ||
+      parsed.toAgentKind === 'acp'
         ? parsed.toAgentKind
         : undefined;
     return {
@@ -536,9 +540,9 @@ async function resolveForkNativeSource(
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
     }
     // Harness 切换边界可能没有留下可恢复的原生会话编号，例如旧版本
-    // 创建的边界、会话迁移或引擎从未真正启动的片段。可见消息仍然是完整的，
-    // 这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
-    if (!parsed.fromSdkSessionId) {
+    // 创建的边界、会话迁移或引擎从未真正启动的片段；ACP 插件引擎也无原生分叉。
+    // 可见消息仍然是完整的，这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
+    if (!parsed.fromSdkSessionId || parsed.fromAgentKind === 'acp') {
       const model = parsed.fromModel ?? source.model;
       let providerId: string | null;
       if (Object.hasOwn(parsed, 'fromProviderId')) {
@@ -562,7 +566,7 @@ async function resolveForkNativeSource(
           Object.hasOwn(previousBoundary, 'toProviderId')
         ) {
           providerId = previousBoundary.toProviderId ?? null;
-        } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+        } else if (parsed.fromAgentKind === forkEngineKind(source.agentKind)) {
           providerId = source.providerId;
         } else if (parsed.fromAgentKind === 'codex') {
           providerId = inferProviderIdForModel(model, 'codex');
@@ -669,6 +673,20 @@ async function resolveForkNativeSource(
   }
   if (!source.sdkSessionId) {
     throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
+  }
+  if (source.agentKind === 'acp') {
+    // ACP plugin engines have no native fork primitive; copy the visible prefix
+    // and seed a handoff rebuild so the child opens a fresh native ACP session.
+    return {
+      agentKind: 'acp',
+      agentDeviceId,
+      sdkSessionId: null,
+      model: source.model,
+      providerId: source.providerId,
+      nextSwitch: null,
+      reuseVendorSession: false,
+      rebuildReason: 'native-session-recovery',
+    };
   }
   return {
     agentKind: normalizeDbAgentKind(source.agentKind),
@@ -1112,8 +1130,8 @@ export async function forkSessionAtMessage(
   const isCodex = forkSource.agentKind === 'codex';
   // pi 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按 sdkSessionId
   // 数边界后的 user turn(引擎无关),pi 的 forkSdkSession 按 tailTurnsToDrop rewind
-  // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
-  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
+  // 到目标 user 消息。acp 走交接重建、无 Claude transcript 锚点，同样跳过 Claude 专用分支。
+  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi' || forkSource.agentKind === 'acp';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
   let forkAtTimestampMs: number | undefined;
@@ -1366,10 +1384,11 @@ export async function forkSessionAtMessage(
       agentKind: forkSource.agentKind,
       model: forkSource.model,
       providerId: forkSource.providerId,
-      // Plugin engines report no context window: the handoff uses the default budget.
-      targetContextWindow: pluginEngineFork ? null : await resolveDesktopHandoffWindow(newSessionId, {
-        ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
-      }),
+      targetContextWindow: pluginEngineFork
+        ? (source.contextWindow && source.contextWindow > 0 ? source.contextWindow : null)
+        : await resolveDesktopHandoffWindow(newSessionId, {
+            ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+          }),
       reason: forkSource.rebuildReason,
     });
   }
@@ -1386,10 +1405,6 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     .limit(1);
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
-  }
-  if (source.agentKind === 'acp') {
-    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
-    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
   }
 
   assertCindyMakeSessionAvailable(source.source);

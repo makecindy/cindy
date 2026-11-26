@@ -32,7 +32,7 @@ export const providersSettings = defineSettings({
       'subscriptionAccounts.add',
       'subscriptionAccounts.existing.connect',
       'subscriptionAccounts.existing.choose',
-      'subscriptionAccounts.strategy',
+      'modelGroups.auto.adjust',
       'settings.providers.detail.sameAccountConnections',
       'settings.providers.detail.sameAccountConnectionsHint',
     ],
@@ -86,7 +86,7 @@ export const providersSettings = defineSettings({
       'providerGroup.section.title',
       'settings.providers.detail.runLocation.label',
     ],
-    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
+    aliases: ['供应商分享', '电脑组', '供应商组', 'computer group', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
   },
   modelCompaction: {
     id: 'model-compaction',
@@ -117,6 +117,7 @@ export const providersSettings = defineSettings({
       'settings.providers.remote.rowLabel',
       'settings.providers.models.advanced.defaultEffort',
       'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.antigravityHydrogenDescription',
       'settings.providers.models.advanced.providerLabel',
     ],
     aliases: [

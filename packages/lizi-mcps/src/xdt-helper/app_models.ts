@@ -77,7 +77,8 @@ export const appProviderChange = z.discriminatedUnion('action', [
       accountId: id.optional(), loginKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).optional(),
       methodId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional(),
       target: accountProviderId.nullable().optional(),
-      strategy: z.enum(['least', 'round', 'order', 'weight', 'usage']).optional(),
+      // Same strategies as smart routes; the four former names are still accepted and converted on the computer.
+      strategy: z.enum(['expiring', 'order', 'rotate', 'weighted', 'drain', 'headroom', 'least', 'round', 'weight', 'usage']).optional(),
       paused: z.boolean().optional(), limit: z.number().int().min(1).max(16).nullable().optional(), weight: z.number().int().min(1).max(100).optional(),
     }) }),
 ]);

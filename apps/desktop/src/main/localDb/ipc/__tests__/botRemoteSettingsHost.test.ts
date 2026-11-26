@@ -98,6 +98,28 @@ it('lists the implemented operations and refuses unknown ones', async () => {
   expect(deps.readProfile).not.toHaveBeenCalled();
 });
 
+// cindy-bots-runtime.md「伙伴只用一个模型」: another computer edits this computer's buddy default; an older
+// controller may still send backups, which are validated but not kept. An older host has no such op.
+it('saves the buddy default from another computer as a single route and exposes the groups to pick from', async () => {
+  const route = (model: string) => ({ harness: 'codex', providerId: 'openai', model });
+  const setDefaultModelChain = vi.fn(async (chain: unknown[], assertCurrent: () => void) => { assertCurrent(); return chain; });
+  const groups = { version: 1, routes: [{ id: 'g1', name: 'Daily' }] };
+  const { call } = setup({ deps: { setDefaultModelChain, defaultModelGroups: () => groups } as never });
+  expect(await call('caps', undefined, null)).toMatchObject({ ok: true, value: { ops: expect.arrayContaining(['models.setDefault']) } });
+  expect(await call('models.default', undefined, null)).toMatchObject({ ok: true, value: { modelChain: [], modelGroups: groups } });
+
+  const saved = await call('models.setDefault', { modelChain: JSON.stringify([route('a'), route('b')]) }, null);
+  expect(saved).toMatchObject({ ok: true, value: { modelChain: [expect.objectContaining({ model: 'a' })] } });
+  expect(setDefaultModelChain.mock.calls[0][0]).toHaveLength(1);
+
+  // One invalid backup rejects the whole request before anything is written.
+  setDefaultModelChain.mockClear();
+  expect(await call('models.setDefault', { modelChain: [route('a'), { harness: 'nope', model: 'x' }] }, null))
+    .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(await call('models.setDefault', { modelChain: '{' }, null)).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(setDefaultModelChain).not.toHaveBeenCalled();
+});
+
 it('does not run anything for a controller that lost authorization or for a hidden teammate', async () => {
   const revoked = setup({ allowed: false });
   expect(await revoked.call('profile.update', { patch: { name: 'x' } })).toMatchObject({ ok: false, code: 'PRECONDITION_FAILED' });

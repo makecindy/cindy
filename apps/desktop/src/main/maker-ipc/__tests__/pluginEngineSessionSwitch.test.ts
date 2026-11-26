@@ -184,6 +184,37 @@ describe('switching a task onto a plugin engine', () => {
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 
+  // #13003: scheduledModelScope temporarily switches a standalone scheduler-created
+  // task (e.g. a PR opened inside an Antigravity automation run) to an explicit PR
+  // follow-up model and restores its original plugin engine before the next send.
+  it('allows main-internal scheduledModelSwitch to switch and restore a scheduler-created plugin task', async () => {
+    const schedulerRow = makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null });
+    const { deps } = makeDeps(schedulerRow);
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+    }));
+
+    Object.assign(schedulerRow, { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', sdkSessionId: 'sdk-codex' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
+    }));
+
+    // Staging or non-configStaged calls cannot misuse scheduledModelSwitch.
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: false, configStaged: true, scheduledModelSwitch: true,
+    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+  });
+
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
     const { deps, pendingSwitches } = makeDeps(makeRow());
     const staged = await performSessionAgentSwitch(deps, {
