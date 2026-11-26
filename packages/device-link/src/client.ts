@@ -6672,8 +6672,13 @@ export class DeviceLinkClient {
     peer.retryTimer = setInterval(
       () => {
         this.retryPending(dst, { ignoreInterval: false });
+        // A short pass can send a small item, then leave an atomic result for
+        // the next pass. It still needs a first write, rather than an ACK or
+        // the normal retransmission timer, even though its last gate changed.
+        const burstDrainPending = burstDrain && [...peer.pending.values()].some(p => !p.sent
+          && (p.lastBlockedBy === 'relay-burst' || p.lastBlockedBy === 'pass-budget'));
         if (((fasterForRestart && !this.isRelaySendPaced())
-          || (burstDrain && ![...peer.pending.values()].some(p => !p.sent && p.lastBlockedBy === 'relay-burst'))) && peer.retryTimer) {
+          || (burstDrain && !burstDrainPending)) && peer.retryTimer) {
           clearInterval(peer.retryTimer);
           peer.retryTimer = null;
           this.ensureRetryTimer(dst);

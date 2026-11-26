@@ -1587,6 +1587,34 @@ describe('DeviceLinkClient', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
+  // PR #13033 review regression: sendInvokeResult must keep draining unsent
+  // results after the first short pass spends its per-peer allowance. Existing
+  // multi-peer cases did not put a small result before a >8-frame result on
+  // one peer with no ACK. Unit tier; one full socket burst and two results.
+  it('keeps a burst-held atomic result on the short drain after a small result', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const linked = establishInboundReliableLink(h, 'stream-dev-b');
+      await vi.advanceTimersByTimeAsync(0); await linked;
+      const ws = h.current(); ws.sent.length = 0;
+      for (let i = 0; i < 64; i++) h.client.sendPush('legacy', 'burst-event', i);
+      h.client.sendInvokeResult('dev-b', 'small-first', { ok: true, result: 'small' });
+      h.client.sendInvokeResult('dev-b', 'atomic-next', { ok: true, result: 'x'.repeat(1024 * 1024) });
+      expect(ws.sent.some(e => e.dst === 'dev-b')).toBe(false);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(ws.sent.filter(e => e.id === 'small-first')).toHaveLength(1);
+      expect(ws.sent.some(e => e.id === 'atomic-next')).toBe(false);
+      await vi.advanceTimersByTimeAsync(25);
+      const frames = ws.sent.filter(e => e.id === 'atomic-next');
+      expect(frames.length).toBeGreaterThan(8);
+      expect(frames).toHaveLength(parseTransportPayload(frames[0].payload)!.meta.segment!.total);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ws.sent.filter(e => e.id === 'atomic-next')).toHaveLength(frames.length);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   // The atomic head may exceed its peer's fair share, but cannot borrow past
   // the socket cap. A small neighbor and a direct channel must still progress.
   it('shares short bursts with atomic heads without throttling a direct peer', async () => {
