@@ -1,5 +1,14 @@
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineEffort,
+  pluginEngineKeyFromProviderId,
+  type PluginEnginePermissionModeId,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
 import {
   budgetModelRequiresApiKey,
   budgetModelRequiresApiKeyMessage,
@@ -26,9 +35,18 @@ export interface SendToSessionExecutionConfig {
   providerId?: string | null;
 }
 
+export interface SendToSessionCreateConfig {
+  agentKind: EngineKind;
+  model: string;
+  effort?: Effort;
+  fastMode: boolean | 'ultrafast';
+  providerId?: string | null;
+  permissionMode?: PluginEnginePermissionModeId;
+}
+
 export interface SendToSessionExecutionOverrides {
   providerId?: string;
-  agentKind?: AgentKind;
+  agentKind?: EngineKind;
   model?: string;
   effort?: Effort;
   fastMode?: boolean | 'ultrafast';
@@ -44,6 +62,10 @@ export type SendToSessionExecutionConfigResult =
         | 'PROVIDER_ROUTE_UNAVAILABLE';
       message: string;
     };
+
+export type SendToSessionCreateConfigResult =
+  | { ok: true; config: SendToSessionCreateConfig }
+  | Extract<SendToSessionExecutionConfigResult, { ok: false }>;
 
 function normalizeEffort(params: {
   model: ModelCapabilities;
@@ -159,12 +181,14 @@ function routeProviderFor(params: {
  */
 export function resolveSendToSessionExecutionConfig(params: {
   source: SendToSessionExecutionConfig;
-  overrides: SendToSessionExecutionOverrides;
+  overrides: Omit<SendToSessionExecutionOverrides, 'agentKind'> & { agentKind?: AgentKind };
   availableModels: readonly ModelCapabilities[];
   providerRouting: OrcaWorkerProviderRoutingContext;
   hasCindyAiApiKey: boolean;
   /** 新任务的 Agent 换了电脑：来源的 provider 不在那台，按目标电脑重新解析；缺模型算没有路由。 */
   locationChanged?: boolean;
+  /** 来源是插件引擎、目标切回内置引擎：强制按新路由解析，不沿用旧来源 providerId。 */
+  forceRouteChanged?: boolean;
 }): SendToSessionExecutionConfigResult {
   const { source, overrides } = params;
   const agentKind = overrides.agentKind ?? source.agentKind;
@@ -182,6 +206,7 @@ export function resolveSendToSessionExecutionConfig(params: {
   }
 
   const routeChanged = params.locationChanged === true
+    || params.forceRouteChanged === true
     || agentKind !== source.agentKind
     || model !== source.model
     || (overrides.providerId !== undefined && overrides.providerId !== source.providerId);
@@ -276,17 +301,199 @@ export interface SendToSessionRoutingSnapshot {
 }
 
 export type SendToSessionCreateRouteResult =
-  | { ok: true; agentDeviceId: string | null; config: SendToSessionExecutionConfig }
+  | { ok: true; agentDeviceId: string | null; config: SendToSessionCreateConfig }
   | Extract<SendToSessionExecutionConfigResult, { ok: false }>;
+
+/**
+ * 解析普通任务(send_to_session create)选择插件引擎(agent_kind="acp")时的执行配置。
+ * 校验引擎是否可用/未停用、模型未被关闭且与目录匹配、显式 effort 在该模型可选档位内、
+ * 不允许开启 Fast，并把权限档收窄到目标引擎支持的档位。不静默换模型或降级档位。
+ */
+export function resolveSendToSessionPluginEngineConfig(params: {
+  source: {
+    agentKind: EngineKind;
+    model: string;
+    effort?: Effort;
+    providerId?: string | null;
+    permissionMode?: string | null;
+  };
+  overrides: SendToSessionExecutionOverrides;
+  engines: readonly PluginEngineView[];
+  agentDeviceId: string | null;
+  locationChanged: boolean;
+}): SendToSessionCreateConfigResult {
+  const { source, overrides, engines, agentDeviceId, locationChanged } = params;
+  if (overrides.fastMode) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: 'fast mode is not supported by plugin engine (acp)',
+    };
+  }
+
+  let providerId: string;
+  if (overrides.providerId !== undefined) {
+    const trimmed = overrides.providerId.trim();
+    if (!pluginEngineKeyFromProviderId(trimmed)) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message:
+          `provider_id "${overrides.providerId}" is not a valid plugin engine id; `
+          + 'pass plugin_engines[].provider_id (acp-plugin:...) from list_available_models',
+      };
+    }
+    providerId = trimmed;
+  } else if (source.agentKind === 'acp' && pluginEngineKeyFromProviderId(source.providerId)) {
+    providerId = source.providerId!;
+  } else {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message:
+        'agent_kind "acp" requires provider_id (acp-plugin:...) from list_available_models plugin_engines',
+    };
+  }
+
+  const key = pluginEngineKeyFromProviderId(providerId)!;
+  const engine = engines.find((item) => item.key === key);
+  if (!engine) {
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: agentDeviceId
+        ? `目标位置 "${agentDeviceId}" 当前未开放插件引擎 "${providerId}"。如要使用本机插件引擎，请传 provider_device_id="local"。`
+        : `插件引擎 "${providerId}" 不可用（对应插件未安装、已停用或已卸载）。`,
+    };
+  }
+  if (engine.suspended) {
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: `${engine.name} 已在「设置 → 模型供应商」中停用。启用后才能用它运行任务。`,
+    };
+  }
+  if (engine.availability.state === 'unavailable') {
+    const hint = engine.availability.message?.trim();
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`,
+    };
+  }
+
+  const sameEngine = source.agentKind === 'acp' && source.providerId === providerId && !locationChanged;
+  let model: string;
+  if (overrides.model !== undefined) {
+    if (!overrides.model.trim()) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: 'model must not be empty',
+      };
+    }
+    model = overrides.model;
+  } else {
+    model = sameEngine && source.model.trim() ? source.model : PLUGIN_ENGINE_DEFAULT_MODEL;
+  }
+
+  if (engine.disabledModels?.some((item) => item.id === model)) {
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: `${engine.name} 的这个模型已在「设置 → 模型供应商」中关闭。请重新选择模型。`,
+    };
+  }
+  const validModels = [
+    ...(engine.defaultModelAllowed === false ? [] : [PLUGIN_ENGINE_DEFAULT_MODEL]),
+    ...engine.models.map((item) => item.id),
+  ];
+  if (model === PLUGIN_ENGINE_DEFAULT_MODEL && engine.defaultModelAllowed === false) {
+    return {
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message:
+        `${engine.name} 当前没有开放默认模型（有模型已关闭或受限），请明确指定可用模型。`
+        + `valid: ${validModels.join(', ') || 'none'}`,
+    };
+  }
+  const listedModel = engine.models.find((item) => item.id === model);
+  if (model !== PLUGIN_ENGINE_DEFAULT_MODEL && !listedModel) {
+    if (engine.defaultModelAllowed === false) {
+      return {
+        ok: false,
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+        message: `${engine.name} 当前没有开放这个模型。valid: ${validModels.join(', ') || 'none'}`,
+      };
+    }
+    if (engine.models.length > 0 || overrides.model !== undefined) {
+      return {
+        ok: false,
+        errorCode: locationChanged ? 'PROVIDER_ROUTE_UNAVAILABLE' : 'INVALID_ARGS',
+        message:
+          `model "${model}" not available for plugin engine "${engine.name}" (${providerId})`
+          + `${locationChanged ? ' on the selected agent_device_id' : ''}. `
+          + `valid: ${validModels.join(', ') || 'none'}`,
+      };
+    }
+  }
+
+  const offered = listedModel?.efforts ?? [];
+  const saved = engine.modelEfforts?.[model];
+  let effort: Effort | undefined;
+  if (overrides.effort !== undefined) {
+    if (!isPluginEngineEffort(overrides.effort) || !offered.includes(overrides.effort)) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message:
+          `effort "${overrides.effort}" not supported by model "${model}". `
+          + `valid: ${offered.join(', ') || 'none'}`,
+      };
+    }
+    effort = overrides.effort;
+  } else {
+    const sameModel = sameEngine && model === source.model;
+    if (sameModel && isPluginEngineEffort(source.effort) && offered.includes(source.effort)) {
+      effort = source.effort;
+    } else if (saved && offered.includes(saved)) {
+      effort = saved;
+    }
+  }
+
+  let permissionMode: PluginEnginePermissionModeId | undefined;
+  if (source.permissionMode) {
+    permissionMode = engine.permissionModes.length > 0
+      ? (resolvePermissionModeForOptions(
+          source.permissionMode,
+          engine.permissionModes.map((mode) => mode.id),
+          engine.defaultPermissionMode,
+        ) as PluginEnginePermissionModeId)
+      : (source.permissionMode === 'bypassPermissions' ? 'bypassPermissions' : 'ask');
+  }
+
+  return {
+    ok: true,
+    config: {
+      agentKind: 'acp',
+      model,
+      effort,
+      fastMode: false,
+      providerId,
+      ...(permissionMode ? { permissionMode } : {}),
+    },
+  };
+}
 
 /**
  * send_to_session create 的 Agent 位置与执行配置。不指定位置时继承来源(`inherited`)；
  * 指定的位置与来源不同时，按那台电脑(或本机)的供应商重新解析模型与来源，继承来源的模型 id，
  * 那里没有就返回 PROVIDER_ROUTE_UNAVAILABLE，不换模型。位置和执行配置都没变时原样返回来源配置。
+ * 支持内置引擎(claude-code / codex / pi)与插件引擎(acp，本机或远程/分享)。
  */
 export async function resolveSendToSessionCreateRoute(
   params: {
-    source: SendToSessionExecutionConfig;
+    source: SendToSessionCreateConfig;
     /** 来源任务的 Agent 所在电脑；null = 本机。SSH 来源也传 null。 */
     sourceAgentDeviceId: string | null;
     sourceIsSsh: boolean;
@@ -298,6 +505,8 @@ export async function resolveSendToSessionCreateRoute(
     isSelfDeviceId: (deviceId: string) => boolean;
     readLocalRouting: (agentKind: AgentKind) => Promise<SendToSessionRoutingSnapshot>;
     readDeviceRouting: (deviceId: string, agentKind: AgentKind) => Promise<SendToSessionRoutingSnapshot>;
+    readLocalPluginEngines?: () => readonly PluginEngineView[];
+    readDevicePluginEngines?: (deviceId: string) => Promise<readonly PluginEngineView[]>;
   },
 ): Promise<SendToSessionCreateRouteResult> {
   const location = resolveRequestedAgentDeviceId({
@@ -328,17 +537,89 @@ export async function resolveSendToSessionCreateRoute(
   }
   const locationChanged = agentDeviceId !== params.sourceAgentDeviceId;
   const overrides = params.overrides ?? {};
-  if (overrides.providerId !== undefined && (agentDeviceId !== null || params.sourceIsSsh)) {
-    return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接。' };
-  }
   const hasOverrides = overrides.agentKind !== undefined
     || overrides.model !== undefined
     || overrides.providerId !== undefined
     || overrides.effort !== undefined
     || overrides.fastMode !== undefined;
+  const targetAgentKind: EngineKind = overrides.agentKind ?? params.source.agentKind;
+
+  if (targetAgentKind === 'acp') {
+    if (params.sourceIsSsh) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: '插件引擎不能在 SSH 工作区里运行。',
+      };
+    }
+    if (agentDeviceId && (isSharedTaskPeer(agentDeviceId) || Boolean(parseProviderSharePeer(agentDeviceId)))) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: '无效的插件引擎运行位置。',
+      };
+    }
+    // 继承远程插件引擎来源且未修改任何配置时，不额外发网络探测，沿用既有打开路径。
+    if (!locationChanged && !hasOverrides && agentDeviceId !== null) {
+      return { ok: true, agentDeviceId, config: { ...params.source, fastMode: false } };
+    }
+    let engines: readonly PluginEngineView[];
+    if (agentDeviceId === null) {
+      if (!deps.readLocalPluginEngines) {
+        if (!locationChanged && !hasOverrides) {
+          return { ok: true, agentDeviceId, config: { ...params.source, fastMode: false } };
+        }
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+          message: 'plugin engines are unavailable in this host',
+        };
+      }
+      engines = deps.readLocalPluginEngines();
+    } else {
+      if (!deps.readDevicePluginEngines) {
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+          message: `cannot read plugin engines of agent_device_id "${agentDeviceId}"`,
+        };
+      }
+      try {
+        engines = await deps.readDevicePluginEngines(agentDeviceId);
+      } catch (err) {
+        if (!locationChanged && params.source.agentKind === 'acp') throw err;
+        return {
+          ok: false,
+          errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+          message:
+            `cannot read plugin engines of agent_device_id "${agentDeviceId}" `
+            + `(offline, remote control off, or share unavailable): ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+    const resolved = resolveSendToSessionPluginEngineConfig({
+      source: params.source,
+      overrides,
+      engines,
+      agentDeviceId,
+      locationChanged,
+    });
+    return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config } : resolved;
+  }
+
+  if (overrides.providerId !== undefined && pluginEngineKeyFromProviderId(overrides.providerId)) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+      message: `provider_id "${overrides.providerId}" 是插件引擎，使用它时请同时传 agent_kind="acp"。`,
+    };
+  }
+  if (overrides.providerId !== undefined && (agentDeviceId !== null || params.sourceIsSsh)) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接。' };
+  }
   if (!locationChanged && !hasOverrides) return { ok: true, agentDeviceId, config: params.source };
 
-  const agentKind = overrides.agentKind ?? params.source.agentKind;
+  const agentKind: AgentKind = targetAgentKind;
   let routing: SendToSessionRoutingSnapshot;
   if (agentDeviceId === null) {
     routing = await deps.readLocalRouting(agentKind);
@@ -357,11 +638,28 @@ export async function resolveSendToSessionCreateRoute(
       };
     }
   }
+  const fromPluginEngine = params.source.agentKind === 'acp';
+  const builtInSource: SendToSessionExecutionConfig = fromPluginEngine
+    ? {
+        agentKind,
+        model: overrides.model ?? '',
+        effort: undefined,
+        fastMode: false,
+        providerId: undefined,
+      }
+    : {
+        agentKind: params.source.agentKind as AgentKind,
+        model: params.source.model,
+        effort: params.source.effort,
+        fastMode: params.source.fastMode,
+        providerId: params.source.providerId,
+      };
   const resolved = resolveSendToSessionExecutionConfig({
-    source: params.source,
-    overrides,
+    source: builtInSource,
+    overrides: { ...overrides, agentKind },
     ...routing,
     locationChanged,
+    forceRouteChanged: fromPluginEngine,
   });
   return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config } : resolved;
 }

@@ -1,10 +1,13 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { providerShareGuestPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { PluginEngineView } from '../../../shared/pluginEngines';
 import type { OrcaWorkerProviderRoutingContext } from '../orcaWorkerCreationService';
 import {
   resolveSendToSessionCreateRoute,
   resolveSendToSessionExecutionConfig,
+  resolveSendToSessionPluginEngineConfig,
   type SendToSessionRoutingSnapshot,
 } from '../sendToSessionExecutionConfig';
 
@@ -604,5 +607,328 @@ describe('resolveSendToSessionCreateRoute', () => {
       source: fableSource(), sourceAgentDeviceId: 'device-a', sourceIsSsh: false,
       overrides: { effort: 'high' },
     }, deps)).rejects.toThrow('device offline');
+  });
+
+  // 2026-11-27: standalone task creation (send_to_session) supports plugin engines (agent_kind="acp").
+  // Covers built-in → local/remote plugin engine, plugin engine → same/other plugin engine,
+  // plugin engine → built-in (requiring explicit route re-resolution), strict effort/model/Fast/disabled checks,
+  // and permission-mode normalization for engines that declare their own modes.
+  describe('plugin engines (agent_kind="acp")', () => {
+    const AGY_PROVIDER = 'acp-plugin:antigravity:antigravity';
+    const DSH_PROVIDER = 'acp-plugin:_ns__local__dsh-acp:dsh';
+    const agyEngine = (patch: Partial<PluginEngineView> = {}): PluginEngineView => ({
+      key: 'antigravity:antigravity',
+      providerId: AGY_PROVIDER,
+      ghostId: 'antigravity',
+      harnessId: 'antigravity',
+      name: 'Antigravity',
+      availability: { state: 'available' },
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+        { id: 'gemini-no-levels', displayName: 'No Levels' },
+      ],
+      permissionModes: [
+        { id: 'default', displayName: 'Default' },
+        { id: 'acceptEdits', displayName: 'Accept edits' },
+        { id: 'auto', displayName: 'Auto' },
+        { id: 'plan', displayName: 'Plan' },
+        { id: 'bypassPermissions', displayName: 'Full access' },
+      ],
+      defaultPermissionMode: 'default',
+      ...patch,
+    });
+    const dshEngine = (patch: Partial<PluginEngineView> = {}): PluginEngineView => ({
+      key: '_ns__local__dsh-acp:dsh',
+      providerId: DSH_PROVIDER,
+      ghostId: '_ns__local__dsh-acp',
+      harnessId: 'dsh',
+      name: 'DeepSeek Harness',
+      availability: { state: 'available' },
+      models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high', 'max'] }],
+      permissionModes: [
+        { id: 'ask', displayName: 'Ask' },
+        { id: 'bypassPermissions', displayName: 'Full access' },
+      ],
+      defaultPermissionMode: 'ask',
+      ...patch,
+    });
+
+    const pluginDeps = (opts: {
+      local?: PluginEngineView[];
+      remote?: () => Promise<PluginEngineView[]>;
+    } = {}) => ({
+      ...routingDeps(),
+      readLocalPluginEngines: vi.fn(() => opts.local ?? [agyEngine(), dshEngine()]),
+      readDevicePluginEngines: vi.fn(opts.remote ?? (async () => [agyEngine()])),
+    });
+
+    it('resolves built-in → local plugin engine with explicit model & effort and clears inherited Fast', async () => {
+      const deps = pluginDeps();
+      const result = await resolveSendToSessionCreateRoute({
+        source: { ...sourceFor('codex'), fastMode: true, permissionMode: 'ask' },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: {
+          agentKind: 'acp',
+          providerId: AGY_PROVIDER,
+          model: 'gemini-4-neon',
+          effort: 'xhigh',
+        },
+      }, deps);
+      expect(result).toEqual({
+        ok: true,
+        agentDeviceId: null,
+        config: {
+          agentKind: 'acp',
+          providerId: AGY_PROVIDER,
+          model: 'gemini-4-neon',
+          effort: 'xhigh',
+          fastMode: false,
+          permissionMode: 'default',
+        },
+      });
+      expect(deps.readLocalRouting).not.toHaveBeenCalled();
+    });
+
+    it('defaults model to "default" when switching from built-in to acp without specifying model, and uses saved effort', async () => {
+      const deps = pluginDeps({
+        local: [agyEngine({ modelEfforts: { 'gemini-4-neon': 'xhigh' } })],
+      });
+      const defaultModel = await resolveSendToSessionCreateRoute({
+        source: fableSource(),
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'acp', providerId: AGY_PROVIDER },
+      }, deps);
+      expect(defaultModel).toMatchObject({
+        ok: true,
+        config: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'default', effort: undefined, fastMode: false },
+      });
+
+      const savedEffort = await resolveSendToSessionCreateRoute({
+        source: fableSource(),
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+      }, deps);
+      expect(savedEffort).toMatchObject({
+        ok: true,
+        config: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'xhigh', fastMode: false },
+      });
+    });
+
+    it('allows a plugin-engine source to change model/effort on the same engine or switch to another engine', async () => {
+      const deps = pluginDeps();
+      const acpSource = {
+        agentKind: 'acp' as const,
+        providerId: AGY_PROVIDER,
+        model: 'gemini-4-neon',
+        effort: 'medium' as const,
+        fastMode: false as const,
+        permissionMode: 'bypassPermissions' as const,
+      };
+      // Same plugin engine, overriding only effort (no need to re-specify agent_kind or provider_id).
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { effort: 'xhigh' },
+      }, deps)).toMatchObject({
+        ok: true,
+        config: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'xhigh', permissionMode: 'bypassPermissions' },
+      });
+      // Switch to a different plugin engine; narrows unsupported 'acceptEdits' to 'ask'.
+      expect(await resolveSendToSessionCreateRoute({
+        source: { ...acpSource, permissionMode: 'acceptEdits' as const },
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'acp', providerId: DSH_PROVIDER, model: 'deepseek-v4', effort: 'max' },
+      }, deps)).toMatchObject({
+        ok: true,
+        config: { agentKind: 'acp', providerId: DSH_PROVIDER, model: 'deepseek-v4', effort: 'max', permissionMode: 'ask' },
+      });
+    });
+
+    it('switches from a plugin engine to a built-in engine and preserves explicit-route providers (BYOM)', async () => {
+      const deps = pluginDeps();
+      const routing = providerRouting({ pi: 'local-pi' });
+      routing.availability.pi.push({
+        id: 'local-pi',
+        name: 'Local Pi',
+        models: ['pi-model'],
+        fastModels: ['pi-model'],
+        effortMetaByModel: { 'pi-model': { efforts: ['high', 'max'], defaultEffort: 'max' } },
+        requiresExplicitRoute: true,
+      });
+      deps.readLocalRouting.mockResolvedValueOnce({
+        availableModels: available('pi'),
+        providerRouting: routing,
+        hasCindyAiApiKey: true,
+      });
+      const acpSource = {
+        agentKind: 'acp' as const,
+        providerId: AGY_PROVIDER,
+        model: 'gemini-4-neon',
+        effort: 'xhigh' as const,
+        fastMode: false as const,
+      };
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'pi', model: 'pi-model', effort: 'max' },
+      }, deps)).toEqual({
+        ok: true,
+        agentDeviceId: null,
+        config: { agentKind: 'pi', model: 'pi-model', effort: 'max', fastMode: false, providerId: 'local-pi' },
+      });
+      // Switching to built-in without specifying model fails closed rather than inheriting plugin model.
+      expect(await resolveSendToSessionCreateRoute({
+        source: acpSource,
+        sourceAgentDeviceId: null,
+        sourceIsSsh: false,
+        overrides: { agentKind: 'codex' },
+      }, deps)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    });
+
+    it('resolves remote computer and shared plugin engines via provider_device_id', async () => {
+      for (const targetLocation of ['device-b', 'share:s1'] as const) {
+        const deps = pluginDeps();
+        const result = await resolveSendToSessionCreateRoute({
+          source: fableSource(),
+          sourceAgentDeviceId: null,
+          sourceIsSsh: false,
+          requestedAgentDeviceId: targetLocation,
+          overrides: {
+            agentKind: 'acp',
+            providerId: AGY_PROVIDER,
+            model: 'gemini-4-neon',
+            effort: 'xhigh',
+          },
+        }, deps);
+        expect(result).toMatchObject({
+          ok: true,
+          agentDeviceId: targetLocation,
+          config: { agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'xhigh', fastMode: false },
+        });
+        expect(deps.readDevicePluginEngines).toHaveBeenCalledWith(targetLocation);
+        expect(deps.readLocalPluginEngines).not.toHaveBeenCalled();
+      }
+    });
+
+    it.each([
+      {
+        name: 'missing provider_id when switching from built-in',
+        overrides: { agentKind: 'acp' as const, model: 'gemini-4-neon' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'non-acp provider_id with agent_kind=acp',
+        overrides: { agentKind: 'acp' as const, providerId: 'anthropic', model: 'gemini-4-neon' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'acp provider_id without agent_kind=acp from built-in source',
+        overrides: { providerId: AGY_PROVIDER },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'explicit fast=true on plugin engine',
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon', fastMode: true },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'unsupported effort level (ultra) on plugin engine model',
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon', effort: 'ultra' as const },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'effort on model without levels',
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-no-levels', effort: 'high' as const },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'unknown model id',
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'neon-typo' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'engine not installed / removed',
+        overrides: { agentKind: 'acp' as const, providerId: 'acp-plugin:missing:eng', model: 'default' },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+      {
+        name: 'engine suspended in Settings',
+        local: [agyEngine({ suspended: true })],
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+      {
+        name: 'engine unavailable',
+        local: [agyEngine({ availability: { state: 'unavailable', message: 'CLI missing' } })],
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+      {
+        name: 'model disabled in Settings',
+        local: [agyEngine({
+          models: [{ id: 'gemini-no-levels', displayName: 'No Levels' }],
+          disabledModels: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+          defaultModelAllowed: false,
+        })],
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+      {
+        name: 'default model disallowed when some models are off/restricted',
+        local: [agyEngine({ defaultModelAllowed: false })],
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+      {
+        name: 'SSH source requesting plugin engine',
+        sourceIsSsh: true,
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'raw shared-task peer location',
+        requestedAgentDeviceId: sharedTaskGuestPeer('t1', 'm1', 'd1'),
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'raw provider-share wire peer location',
+        requestedAgentDeviceId: providerShareGuestPeer('s1', 'm1', 'd1'),
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'INVALID_ARGS',
+      },
+      {
+        name: 'remote computer unreachable',
+        requestedAgentDeviceId: 'device-b',
+        remote: async () => { throw new Error('offline'); },
+        overrides: { agentKind: 'acp' as const, providerId: AGY_PROVIDER, model: 'gemini-4-neon' },
+        errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      },
+    ])('rejects $name with $errorCode', async ({ local, remote, sourceIsSsh, requestedAgentDeviceId, overrides, errorCode }) => {
+      const result = await resolveSendToSessionCreateRoute({
+        source: fableSource(),
+        sourceAgentDeviceId: null,
+        sourceIsSsh: sourceIsSsh ?? false,
+        ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
+        overrides,
+      }, pluginDeps({ local, remote }));
+      expect(result).toMatchObject({ ok: false, errorCode });
+    });
+
+    it('rejects empty/whitespace model in direct plugin-engine helper', () => {
+      expect(resolveSendToSessionPluginEngineConfig({
+        source: fableSource(),
+        overrides: { agentKind: 'acp', providerId: AGY_PROVIDER, model: '   ' },
+        engines: [agyEngine()],
+        agentDeviceId: null,
+        locationChanged: false,
+      })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    });
   });
 });

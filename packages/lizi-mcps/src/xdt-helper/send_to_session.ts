@@ -33,8 +33,8 @@ export type SendToSessionCallback = (params: {
   workingDir?: string;
   /** Omitted inherits source membership; null explicitly creates a projectless task. */
   projectDir?: string | null;
-  /** create 模式可选:显式目标 Agent；缺省继承 dispatcher。jump 忽略。 */
-  agentKind?: ControlWorkerAgent;
+  /** create 模式可选:显式目标 Agent；缺省继承 dispatcher。acp = 插件引擎(需配 provider_id)。jump 忽略。 */
+  agentKind?: ControlWorkerEngine;
   /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
   model?: string;
   providerId?: string;
@@ -50,7 +50,7 @@ export type SendToSessionCallback = (params: {
       targetDeviceId?: string;
       responsibilityRecorded?: false;
       targetSessionId: string;
-      /** 'acp' only for collaboration-internal deliveries to a plugin-engine Worker. */
+      /** 'acp' for plugin-engine standalone tasks and plugin-engine Workers. */
       agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
@@ -102,7 +102,7 @@ export type SendToRemoteSessionCallback = (params: {
 }) => Promise<
   ControlResult<
     {
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -147,7 +147,7 @@ const describeSendToSession = (supportsRemote: boolean) => [
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
-  "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
+  "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi / acp；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改内置 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。acp = 插件提供的执行引擎(取 list_available_models 的 plugin_engines)：provider_id 传该项 provider_id(形如 acp-plugin:…；来源本身已是插件引擎且未换引擎时可省)，model 传其 models[].id(省略或 default = 由引擎自选；有模型关闭或受限时须明确传模型 id)，effort 按该模型的 efforts 校验，不支持 fast。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
   "",
   "【provider_device_id(旧名 agent_device_id，仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商：取 list_available_models 的 locations[].provider_device_id；\"local\" 或本机设备 id 表示本机。本机缺省继承当前任务的位置；远程创建缺省使用目标电脑本机供应商，local 也相对目标电脑。本机创建时位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
   "",
@@ -227,7 +227,7 @@ export function registerSendToSessionTool(
         '仅 create：任务、目录和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；省略或 local 为当前宿主。远程项目/目录按目标电脑解析；未选项目不继承本机路径，未选模型用目标默认。已有任务使用 target_session_id，不同时传 device。',
       ),
       provider_id: z.string().trim().min(1).optional().describe(
-        "仅本机新建任务可选：从 list_available_models 对应模型的 providers 选取本机连接 ID。省略沿用原选路；jump 忽略。",
+        '仅 create 模式可选：内置引擎用于本机新建任务，从 list_available_models 对应模型的 providers 选取本机连接 ID；插件引擎(agent_kind="acp")必传(来源本身已是插件引擎且未换引擎时可省)，取 list_available_models 的 plugin_engines[].provider_id(形如 acp-plugin:…)，支持本机、远程任务电脑(device)及远程/分享供应商(provider_device_id)。省略沿用原选路；jump 忽略。',
       ),
       provider_device_id: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：模型供应商所在电脑，取 list_available_models 的 locations；local 表示任务所在电脑。与 device（任务和文件位置）独立。旧名 agent_device_id 兼容保留，同时填写必须一致。',
@@ -271,10 +271,10 @@ export function registerSendToSessionTool(
         "仅 create：字符串选择目标电脑 list_projects 中已有的可见项目；null 明确不绑项目。本机省略时继承来源归属；来源不绑项目或远程创建时，按目标 working_dir 匹配已有项目，否则不绑项目。隐藏、未登记或归属不明确时拒绝。jump 忽略。",
       ),
       agent_kind: z
-        .enum(["claude-code", "codex", "pi"])
+        .enum(["claude-code", "codex", "pi", "acp"])
         .optional()
         .describe(
-          "仅 create 模式可选:目标 Agent/harness。本机缺省继承 dispatcher，远程采用目标默认；jump 模式忽略。",
+          '仅 create 模式可选:目标 Agent/harness(acp = 插件提供的执行引擎，取 list_available_models 的 plugin_engines，须配 provider_id)。本机缺省继承 dispatcher，远程采用目标默认；jump 模式忽略。',
         ),
       model: z
         .string()

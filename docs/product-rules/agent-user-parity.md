@@ -127,7 +127,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
-| 任务 | 新建普通任务时选择本机供应商连接（`send_to_session` create 的可选 `provider_id`，取 `list_available_models` 对应模型的 `providers[].provider_id`） | 有。指定连接从首轮生效，省略时沿用原选路。连接不可用或不提供所选模型时返回 `PROVIDER_ROUTE_UNAVAILABLE` | 跨电脑创建、使用远程供应商或从 SSH 任务创建时，显式指定连接返回 `INVALID_ARGS` |
+| 任务 | 新建普通任务时选择供应商连接或插件引擎（`send_to_session` create 的可选 `provider_id` 与 `agent_kind="acp"`；内置引擎取 `list_available_models` 对应模型的 `providers[].provider_id`，插件引擎取 `plugin_engines[].provider_id`） | 有。指定连接或插件引擎从首轮生效，省略时沿用原选路。连接或插件引擎不可用、模型关闭／不在目录、或显式 `effort` 不支持时在创建任务与 worktree 前拒绝（`PROVIDER_ROUTE_UNAVAILABLE` / `INVALID_ARGS`） | 内置引擎的 `provider_id` 仍仅支持本机连接（跨电脑／远程供应商／SSH 返回 `INVALID_ARGS`）；插件引擎（`agent_kind="acp"` + `provider_id="acp-plugin:..."`）支持本机、远程／分享供应商（`provider_device_id`）与跨电脑新建（`device`，经 `ordinaryCreatePluginEngine: 1` 协商，旧端或 Node Host 返回不支持；SSH 不支持） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
 | 任务     | 置顶 / 取消置顶（`pin_sessions` / `unpin_sessions`）；列表和摘要查回 `pinned` | 有（保留已有置顶顺序） | 有（每批限一台电脑，沿用任务权限及远控授权） |
 | 任务     | 稍后处理（指定时间 / 无限期）与提前取回，与收件箱同一字段和唤回规则（`snooze_sessions`，与归档同在 control 类） | 有（2026-11-22） | 有（2026-11-22，既有 patch-meta，按顺序写，结果不明不重发） |
@@ -221,9 +221,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
   （`resolveSendToSessionCreateRoute`）。
-- 新建任务的本机供应商连接由 `packages/lizi-mcps/src/xdt-helper/list_available_models.ts` 列出，
-  `send_to_session.ts` 接收可选的 `provider_id`。`apps/desktop/src/main/mcp-integrations/mcp-providers.ts`
-  在转发到其他电脑前检查该参数，本机创建由上述 `resolveSendToSessionCreateRoute` 校验连接和模型。
+- 新建任务的供应商连接与插件引擎由 `packages/lizi-mcps/src/xdt-helper/list_available_models.ts` 列出（内置 `providers` 与插件引擎 `plugin_engines`），
+  `send_to_session.ts` 接收 `agent_kind`（含 `"acp"`）与 `provider_id`。`apps/desktop/src/main/mcp-integrations/mcp-providers.ts`
+  在转发到其他电脑前检查该参数（内置 `provider_id` 仅限本机，插件引擎须为 `acp-plugin:…` 且不支持 `fast`），本机创建由 `resolveSendToSessionCreateRoute`、跨电脑创建由 `remoteSessionCreation.ts` 校验引擎、连接、模型与推理强度。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。

@@ -275,7 +275,13 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
 - `maker:generate-title` / `maker:auto-title` 的 `agentKind` 接受 `acp`（只用辅助模型）。旧被控端拒绝，标题保持占位。
 - `session_goals.agent_kind`、目标状态的 `agentKind` 可为 `acp`（列无 CHECK 约束，只放宽 TS 枚举，无需迁移）。旧版读到 `acp`
   目标时不恢复该任务（与旧版行为一致），不会在内置引擎上运行。
-- send_to_session、/learn 不新增字段或 channel。自建中转无需改动。
+- /learn 不新增字段或 channel。自建中转无需改动。
+
+## 独立任务新建支持插件引擎（2026-11-27）
+
+- **Agent 工具**：`send_to_session`（create 模式）的 `agent_kind` 新增取值 `acp`，配合 `provider_id`（`acp-plugin:<插件>:<引擎>`，取自 `list_available_models` 的 `plugin_engines[].provider_id`；来源本身已是插件引擎且未换引擎时可省）、`model`（省略或 `default` 由引擎自选；有模型关闭或受限时不可用 `default`）与 `effort`（按该模型的 `efforts` 严格校验，不支持 `fast`）。支持本机插件引擎、同账号其他电脑与已收到插件引擎分享（`provider_device_id` / 兼容旧名 `agent_device_id`），以及在同账号另一台电脑上新建插件引擎任务（`device`）。`list_available_models` 的 `agent` 枚举同步追加 `acp`，并在查询远程电脑或插件引擎分享位置时返回其开放的 `plugin_engines`（不向内置供应商分享发插件引擎目录请求）；向另一台电脑查询 `agent: 'acp'` 时经既有 `maker:orca:remote-worker:models` 省略 `agent` 参数并在本机裁剪，不向旧电脑发未知枚举值。
+- **跨电脑新建协议（`maker:session:handoff`）**：`task-action-capability` 探测回包追加可选能力位 `ordinaryCreatePluginEngine: 1`（仅 Desktop 声明，Node Host 不声明）；`remoteSessionCreationSchema` 的 `agentKind` 新增取值 `acp`、追加可选字段 `providerId`（仅 `agentKind === 'acp'` 时出现，内置引擎新建载荷与回执操作串字节不变）。发送端在发起带 `agentKind: 'acp'` 或 `providerId` 的远程新建前复核 `ordinaryCreatePluginEngine === 1`，旧版电脑或 Node Host 缺少该位时在发送前以 `REMOTE_UNSUPPORTED` 拒绝，不创建任务。发送端对 `maker:session:handoff` 成功回包的 `agentKind` 校验同步接受 `acp`（覆盖跨电脑新建与既有插件引擎任务的 jump 投递）。不新增 channel、allowlist、relay 帧或服务端字段，官方与自建中转按既有 invoke 帧透明转发，无需同步修改。
+- **实现与回归**：`packages/lizi-mcps/src/xdt-helper/{send_to_session,list_available_models}.ts`、`packages/device-link/src/orcaRemoteWorker.ts`、`apps/desktop/src/shared/remoteSessionCreation.ts`、`apps/desktop/src/main/maker-ipc/{sendToSessionExecutionConfig,remoteSessionCreation,sessionHandoffCore,register}.ts`、`apps/desktop/src/main/mcp-integrations/{sessionHandoffRemote,mcp-providers}.ts`、`apps/host/src/agent/session-handoff.ts`；回归见 `sendToSessionTool.test.ts`、`listAvailableModelsTool.test.ts`、`sendToSessionExecutionConfig.test.ts`、`sendToSessionLazyResumePermission.test.ts`、`sessionHandoffIpc.test.ts`、`sessionHandoffRemote.test.ts` 与 host `device-link.test.mjs`。
 
 ## 每轮权限闸（2026-11-25）
 
