@@ -166,7 +166,6 @@ export function PluginModelPickerPopover({
         align="start"
         sideOffset={4}
         collisionPadding={8}
-        style={{ zIndex: 10000 }}
         className="flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)] p-0"
       >
         <ModelRouteSelectorContent
@@ -179,7 +178,6 @@ export function PluginModelPickerPopover({
           effort={(route?.effort ?? '') as Effort}
           fastMode={route?.fastMode ?? false}
           unifiedAgents={agents}
-          overlayContentClassName="z-[10001]"
           onModelChange={() => false}
           onEffortChange={(effort) => {
             if (draft.current) update({ ...draft.current, effort });
@@ -274,7 +272,6 @@ export function PluginModelPickerDialog({
             effort={(route?.effort ?? '') as Effort}
             fastMode={route?.fastMode ?? false}
             unifiedAgents={agents}
-            overlayContentClassName="z-[10001]"
             onModelChange={() => false}
             onEffortChange={(effort) => {
               setRoute((r) => (r ? { ...r, effort } : r));

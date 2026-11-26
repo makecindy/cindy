@@ -26,8 +26,11 @@ void mountPage({
       Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
         ...src,
         set(this: HTMLIFrameElement, value: string) {
-          if (value === 'cindy-mcp-app://fixture/sandbox') {
+          if (value.split('?')[0] === 'cindy-mcp-app://fixture/sandbox') {
             Object.defineProperty(HTMLIFrameElement.prototype, 'src', src);
+            // The Chromium fixture has a blank guest and no Electron custom origin.
+            this.addEventListener('load', () => { this.contentWindow!.postMessage = () => {}; },
+              { capture: true, once: true });
           } else {
             src.set!.call(this, value);
           }

@@ -2,12 +2,12 @@ import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline
 import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
 import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 
 interface RuntimeRoute {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
@@ -91,6 +91,13 @@ export function createBotModelRouteApplier(deps: {
   onApplied(sessionId: string): Promise<void>;
 }) {
   return async (sessionId: string, route: RuntimeRoute, current: RuntimeRoute, options?: RouteApplyOptions): Promise<RuntimeRoute> => {
+    // A same-plugin model change on the same location goes directly to ACP. Keep the saved choice pending until that prompt is finished.
+    if (current.agentKind === 'acp' && route.agentKind === 'acp'
+      && current.providerId === route.providerId
+      && (current.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
+      && !deps.isIdle(sessionId)) {
+      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+    }
     const resolved = await deps.stage(sessionId, route, current) ?? route;
     if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.

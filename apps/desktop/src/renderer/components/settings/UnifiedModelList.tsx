@@ -26,7 +26,7 @@ import { modelManagementState } from './modelManagementState';
  * 同一模式下同一轴的控件形态唯一 —— 这是本组件的硬约束(v4 交互稿定稿延续)。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
+import { providersSettings } from './ProvidersSection.settings-search';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -46,6 +47,8 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import {
   litWholeMarks,
@@ -73,6 +76,7 @@ import { LocalPackagingTag } from './LocalPackagingTag';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
 import { getProviderModelEffort, getProviderModelFast, getProviderModelThinking, useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
+import { useModelSettingsSource } from './modelSettingsSource';
 import {
   groupModelsForManagement,
   MANAGEMENT_KIND_ORDER,
@@ -328,11 +332,12 @@ function rowEnabled(
   row: UnionModelRow,
   agent: AgentKind,
   userProvider: boolean,
+  enabled: typeof isModelEnabled = isModelEnabled,
 ): boolean | null {
   const m = row.byAgent[agent];
   if (!m) return null;
   if (isAgentSelectableModel(m, { userProvider }) || rowHasVisibilitySwitch(row, userProvider)) {
-    return isModelEnabled(agent, providerId, m);
+    return enabled(agent, providerId, m);
   }
   return null;
 }
@@ -410,8 +415,13 @@ export function modelVisibilityTargets(
 }
 
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
-function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
-  return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
+function rowAnyEnabled(
+  providerId: string,
+  row: UnionModelRow,
+  userProvider: boolean,
+  enabled: typeof isModelEnabled = isModelEnabled,
+): boolean {
+  return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider, enabled) === true);
 }
 
 /** 该行全部 avail agent 的真实目录 id(桥接投影两端 id 不同,写停用要两端一起写)。 */
@@ -468,6 +478,7 @@ export function UnifiedModelList({
   provider,
   onRefresh,
   onAddSpeechModels,
+  onAddRealtimeModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -476,11 +487,13 @@ export function UnifiedModelList({
   compact,
   focusModelId,
   focusAgent,
+  visibilityControls = true,
 }: {
   provider: ProviderView;
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
   onAddSpeechModels?: () => void;
+  onAddRealtimeModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -495,8 +508,12 @@ export function UnifiedModelList({
   /** Settings deep link target: reveal, focus, and scroll this model row into view. */
   focusModelId?: string;
   focusAgent?: AgentKind;
+  /** Which models are offered is left to the caller: no count, hint, bulk menu or row switches. */
+  visibilityControls?: boolean;
 }) {
   const { t } = useTranslation();
+  /** Another device's model settings (cloud instance page); null for this device. */
+  const source = useModelSettingsSource();
   const { confirm } = useConfirmDialog();
   const [query, setQuery] = useState('');
   const [managementView, setManagementView] = useState<ManagementView>('brand');
@@ -514,14 +531,14 @@ export function UnifiedModelList({
   };
   /** 类型筛选(全部 / 对话 / 图像 / 视频…):只有该来源真存在多类时才渲染整条。 */
   const [kindFilter, setKindFilter] = useState<ModelCategory | 'chat' | 'all'>('all');
+  // The detail is keyed by provider. Reconnecting effects after sharing keeps its
+  // filters and drawer; only a new catalog snapshot supersedes optimistic changes.
+  const previousProvider = useRef(provider);
   useEffect(() => {
-    setPendingDisabled({});
-    setAdvancedRow(null);
-    setAdvancedOpen(false);
-    setKindFilter('all');
-  }, [provider.id]);
-  useEffect(() => {
-    setPendingDisabled({});
+    if (previousProvider.current !== provider) {
+      previousProvider.current = provider;
+      setPendingDisabled({});
+    }
   }, [provider]);
 
   // 报价快照:与模型选择器同两份来源(XD 实付价 / 非 XD 参考价),派生逻辑共用
@@ -611,21 +628,35 @@ export function UnifiedModelList({
   }, []);
   // 订阅可见性 version:开关变更后 counts memo 必须重算(否则「全部开启/关闭」
   // 按钮方向与计数陈旧)。行内开关读取不 memo,天然新鲜;只有 counts 依赖它。
-  const visibilityVersion = useModelVisibilityVersion();
-  const aliasEngineVersion = useModelEnginePrefsVersion();
-  const aliasMemoryVersion = useProviderModelMemoryVersion();
+  const localVisibilityVersion = useModelVisibilityVersion();
+  const visibilityVersion = source ? source.visibilityVersion : localVisibilityVersion;
+  const aliasEngineVersion = useModelEnginePrefsVersion(!source);
+  const aliasMemoryVersion = useProviderModelMemoryVersion(!source);
+  const isEnabled = source?.isModelEnabled ?? isModelEnabled;
+  const writeModelDisable = useCallback(
+    (input: Parameters<Window['electronAPI']['maker']['setModelDisable']>[0]) =>
+      source ? source.setModelDisable(input) : window.electronAPI.maker.setModelDisable(input),
+    [source],
+  );
+  const localModels = provider.id === MANAGED_OLLAMA_PROVIDER_ID && !source;
 
   const selectionAvailable = provider.connected && !provider.suspended;
   const multiAgent = provider.agents.length > 1;
-  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => ({
+  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => source ? {
+    // The instance reports visibility and effort; engine, thinking and Fast stay with its own panel.
+    customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
+      const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+    effort: source.getEffort(agent, provider.id, modelId),
+    visible: isEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  } : ({
     engine: getModelEngineOverride(provider.id, modelId),
     customThinking: getProviderModelThinking(agent, provider.id, modelId) !== undefined,
     customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
       const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
     effort: getProviderModelEffort(agent, provider.id, modelId),
     fast: getProviderModelFast(agent, provider.id, modelId),
-    visible: isModelEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
-  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf]);
+    visible: isEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf, source, isEnabled]);
   const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id ||
     row.aliasRows?.some((member) => member.id === advancedRow?.id)) ?? advancedRow;
 
@@ -638,11 +669,11 @@ export function UnifiedModelList({
       modelManagementState(provider, {
         ids: rowModelIds(row),
         capability: isCapabilityRow(row, provider.source === 'user'),
-        savedSelected: rowAnyEnabled(provider.id, row, provider.source === 'user'),
+        savedSelected: rowAnyEnabled(provider.id, row, provider.source === 'user', isEnabled),
         disabled: rowDisabledEffective(row),
         paymentRequired: isRowPaymentRequired(row),
       }),
-    [provider, rowDisabledEffective, visibilityVersion],
+    [provider, rowDisabledEffective, visibilityVersion, isEnabled],
   );
   const focusedRow = useMemo(() => {
     if (!focusModelId) return null;
@@ -671,18 +702,30 @@ export function UnifiedModelList({
     [unionRows, rowDisabledEffective],
   );
 
+  /**
+   * 一行能否从停用恢复。对话模型看聊天连接(未连接时启用没有意义,保持原规则)。
+   * 功能型模型走各自的媒体通道,与聊天登录无关:只配了图片 API 密钥、没登录聊天订阅时
+   * `provider.connected` 为假,但图片照常可用 —— 沿用聊天连接会让它关掉后再也打不开。
+   * 被停用的模型不在就绪清单里,读不到它自己的通道状态;恢复只是撤掉用户自己加的限制,
+   * 不授予任何调用,所以只要供应商没有被整体停用就允许。
+   */
+  const canReenableRow = useCallback(
+    (row: UnionModelRow) =>
+      isCapabilityRow(row, provider.source === 'user') ? !provider.suspended : selectionAvailable,
+    [provider.source, provider.suspended, selectionAvailable],
+  );
+
   /** 写停用轴:乐观覆盖 + IPC;失败回滚并提示(错误 = 发生了什么 + 下一步)。 */
   const setRowDisabled = useCallback(
     (row: UnionModelRow, disabled: boolean) => {
-      if (!disabled && !selectionAvailable) return Promise.resolve(false);
+      if (!disabled && !canReenableRow(row)) return Promise.resolve(false);
       setPendingDisabled((prev) => ({ ...prev, [row.id]: disabled }));
-      return window.electronAPI.maker
-        .setModelDisable({
-          kind: 'model',
-          providerId: provider.id,
-          modelIds: rowModelIds(row),
-          disabled,
-        })
+      return writeModelDisable({
+        kind: 'model',
+        providerId: provider.id,
+        modelIds: rowModelIds(row),
+        disabled,
+      })
         .then(() => true)
         .catch(() => {
           setPendingDisabled((prev) => {
@@ -699,7 +742,7 @@ export function UnifiedModelList({
           return false;
         });
     },
-    [provider.id, selectionAvailable, t],
+    [provider.id, canReenableRow, t, writeModelDisable],
   );
 
   const deleteInstalledModel = useCallback(
@@ -742,19 +785,25 @@ export function UnifiedModelList({
       for (const r of rows) next[r.id] = false;
       return next;
     });
-    void window.electronAPI.maker
-      .setModelDisable({ kind: 'reset', providerId: provider.id })
-      .catch(() => {
-        setPendingDisabled((prev) => {
-          const next = { ...prev };
-          for (const r of rows) {
-            if (next[r.id] === false) delete next[r.id];
-          }
-          return next;
-        });
-        toast.error(t('settings.providers.models.accessWriteFailed'));
+    void writeModelDisable({ kind: 'reset', providerId: provider.id }).catch(() => {
+      setPendingDisabled((prev) => {
+        const next = { ...prev };
+        for (const r of rows) {
+          if (next[r.id] === false) delete next[r.id];
+        }
+        return next;
       });
-  }, [hasLockedDisabledRow, unionRows, pendingDisabled, provider.id, selectionAvailable, t]);
+      toast.error(t('settings.providers.models.accessWriteFailed'));
+    });
+  }, [
+    hasLockedDisabledRow,
+    unionRows,
+    pendingDisabled,
+    provider.id,
+    selectionAvailable,
+    t,
+    writeModelDisable,
+  ]);
 
   /**
    * 该来源真实存在的**输出类型**:对话 + 各能力类型(图像 / 视频 / 语音…)。
@@ -798,8 +847,11 @@ export function UnifiedModelList({
             ),
           )
         : searched;
-    const active = matched.filter((r) => !rowDisabledEffective(r));
-    const disabled = matched.filter((r) => rowDisabledEffective(r));
+    // 功能型模型(图片 / 视频 / 语音 / 向量…)不进模型选择器,所以没有「隐藏」可言:
+    // 它们只有一个「启用」开关(停用轴),关掉后留在原来的类型分组里,不沉到底部两区。
+    const capabilityRow = (r: UnionModelRow) => isCapabilityRow(r, provider.source === 'user');
+    const active = matched.filter((r) => capabilityRow(r) || !rowDisabledEffective(r));
+    const disabled = matched.filter((r) => !capabilityRow(r) && rowDisabledEffective(r));
     /**
      * 未启用(显示轴关闭)的对话行沉到列表底部,与「已停用」并列成区。
      *
@@ -807,11 +859,11 @@ export function UnifiedModelList({
      * 里会把开着的那几个冲淡 —— 用户来这一页最常做的两件事是「看我开了哪些」和
      * 「再开一个」,前者需要开着的集中在上面。
      *
-     * 三种行不沉:
-     *   - **没有显示开关的能力行**(音频/向量)不参与这个判定;
+     * 两种行不沉:
+     *   - **功能型模型**只有启用开关,不参与显示轴(见上);
      *   - **付费锁定行**的开关本就不可动,沉底只会让用户以为是自己关的;
      */
-    const sinkHidden = (r: UnionModelRow) => rowState(r).hidden;
+    const sinkHidden = (r: UnionModelRow) => !capabilityRow(r) && rowState(r).hidden;
     const hidden = active.filter(sinkHidden);
     const shown = active.filter((r) => !sinkHidden(r));
     const repByRow = new Map<string, UnionModelRow>();
@@ -865,10 +917,27 @@ export function UnifiedModelList({
   }, [focusedRow, groups, hiddenRows, rowDisabledEffective]);
   const showGroupHeaders = groups.length > 1;
   const showSearch = unionRows.length > 8;
+  // 「已停用」区只列对话模型;功能型模型的停用就写在它自己的开关上。供应商视图给的
+  // override 总数含后者,扣掉后剩下的才是这个区(含指向已下架模型的陈旧条目)要负责的。
+  const disabledGroupOverrideCount = useMemo(() => {
+    const capabilityIds = new Set<string>();
+    const collect = (row: UnionModelRow) => {
+      if (row.aliasRows) return row.aliasRows.forEach(collect);
+      for (const agent of row.avail) {
+        const model = row.byAgent[agent];
+        if (model?.disabled === true) capabilityIds.add(model.id);
+      }
+    };
+    for (const row of unionRows) {
+      if (isCapabilityRow(row, provider.source === 'user')) collect(row);
+    }
+    return Math.max(0, (provider.disableOverrideCount ?? 0) - capabilityIds.size);
+  }, [unionRows, provider.disableOverrideCount, provider.source]);
 
+  // 批量「全部显示 / 全部隐藏」只作用于对话模型:功能型模型不在选择器里,它们的开关是启用。
   const selectableRows = unionRows.filter(
     (row) =>
-      rowHasVisibilitySwitch(row, provider.source === 'user') &&
+      !isCapabilityRow(row, provider.source === 'user') &&
       !isRowPaymentRequired(row) &&
       !rowDisabledEffective(row),
   );
@@ -905,13 +974,52 @@ export function UnifiedModelList({
       ) {
         return;
       }
-      const next = !rowAnyEnabled(provider.id, row, userProvider);
+      const next = !rowAnyEnabled(provider.id, row, userProvider, isEnabled);
       const targets = modelVisibilityTargets(provider, row, next);
-      if ((await setModelVisibilities(provider.id, targets, next)) === false) {
+      const write = source?.setModelVisibilities ?? setModelVisibilities;
+      if ((await write(provider.id, targets, next)) === false) {
         showVisibilityWriteFailure();
       }
     },
-    [provider, rowState, showVisibilityWriteFailure],
+    [provider, rowState, showVisibilityWriteFailure, isEnabled, source],
+  );
+
+  /**
+   * 功能型模型的单一「启用」开关。
+   *
+   * 读:没被停用,且没有被旧版的显示开关关掉(图片 / 视频 / 语音合成等曾复用显示轴,
+   * 那时「未显示」的效果就是功能里用不了 —— 升级后它们照旧显示为关,不悄悄变成可用)。
+   * 写:关 = 停用(准入轴,main 侧所有功能清单都认);开 = 取消停用,并把旧的显示开关
+   * 一并拨回开。此后这类模型只剩停用轴一处真源。
+   */
+  const capabilityRowOn = useCallback(
+    (row: UnionModelRow): boolean => {
+      const userProvider = provider.source === 'user';
+      if (rowDisabledEffective(row)) return false;
+      return rowHasVisibilitySwitch(row, userProvider)
+        ? rowAnyEnabled(provider.id, row, userProvider, isEnabled)
+        : true;
+    },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是 modelVisibilityPrefs 的外部刷新信号。
+    [provider.id, provider.source, rowDisabledEffective, visibilityVersion, isEnabled],
+  );
+  const toggleCapabilityRow = useCallback(
+    async (row: UnionModelRow) => {
+      const userProvider = provider.source === 'user';
+      if (capabilityRowOn(row)) {
+        await setRowDisabled(row, true);
+        return;
+      }
+      if (rowDisabledEffective(row) && !(await setRowDisabled(row, false))) return;
+      if (rowHasVisibilitySwitch(row, userProvider) && !rowAnyEnabled(provider.id, row, userProvider, isEnabled)) {
+        const targets = modelVisibilityTargets(provider, row, true);
+        const write = source?.setModelVisibilities ?? setModelVisibilities;
+        if ((await write(provider.id, targets, true)) === false) {
+          showVisibilityWriteFailure();
+        }
+      }
+    },
+    [capabilityRowOn, provider, rowDisabledEffective, setRowDisabled, showVisibilityWriteFailure, isEnabled, source],
   );
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
@@ -920,13 +1028,15 @@ export function UnifiedModelList({
     if (!visibilityWriteAvailable) return;
     const next = action === 'show';
     const rows = next
-      ? writableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
+      ? writableRows.filter(
+          (row) => !rowAnyEnabled(provider.id, row, provider.source === 'user', isEnabled),
+        )
       : writableRows;
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
-        ? await resetModelVisibilities(provider.id, targets)
-        : await setModelVisibilities(provider.id, targets, next);
+        ? await (source?.resetModelVisibilities ?? resetModelVisibilities)(provider.id, targets)
+        : await (source?.setModelVisibilities ?? setModelVisibilities)(provider.id, targets, next);
     if (!success) showVisibilityWriteFailure();
   };
 
@@ -939,23 +1049,45 @@ export function UnifiedModelList({
    */
   const rowAdvancedButton = (row: UnionModelRow) => (
     <Tip text={t('settings.providers.models.advanced.open')}>
-      <button
+      <Button
+        data-settings-search-action="Open advanced settings for this model"
         type="button"
+        variant="secondary"
+        tone="quiet"
+        size="xs"
         aria-label={t('settings.providers.models.advanced.openAria', {
           name: localizedModelName(row.name, t),
         })}
         onClick={() => openAdvanced(row)}
-        className={cn(
-          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
-          'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
-          advancedOpen && advancedRow?.id === row.id && 'opacity-100',
-        )}
+        className="w-6 px-0"
         style={{ color: 'var(--text-tertiary)' }}
       >
         <SlidersHorizontal size={14} />
-      </button>
+      </Button>
     </Tip>
   );
+
+  const renderModelName = (row: UnionModelRow, color: string) => {
+    const rep = row.byAgent[row.avail[0]]!;
+    const absentFromAllRoutes = provider.source === 'user' && provider.auth.method === 'apiKey' &&
+      (row.aliasRows ?? [row]).every(member => member.avail.every(agent =>
+        member.byAgent[agent]?.userModelConfig?.missingUpstream === true,
+      ));
+    const name = (
+      <span className="min-w-0 truncate text-14 font-medium" style={{ color }}>
+        {localizedModelName(rep.name, t)}
+      </span>
+    );
+    if (!absentFromAllRoutes) return name;
+    return (
+      <span className="flex min-w-0 flex-col">
+        {name}
+        <span className="break-words text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.withdrawn.rowStatus')}
+        </span>
+      </span>
+    );
+  };
 
   /**
    * 一行模型的渲染。抽成函数是因为它现在有**两个调用点**:厂商分组里,以及底部
@@ -970,7 +1102,7 @@ export function UnifiedModelList({
     const brand = modelBrand(rep);
     const explicitIcon = resolveModelIconKind(rep.icon);
     const logoKind =
-      explicitIcon === 'claude'
+      isProviderConnectionIcon(provider.logoKind) ? provider.logoKind : explicitIcon === 'claude'
         ? 'anthropic'
         : explicitIcon === 'codex'
           ? 'openai'
@@ -978,6 +1110,8 @@ export function UnifiedModelList({
             ? 'cindy'
             : brand?.logoKind;
     const paymentRequired = isRowPaymentRequired(row);
+    const capabilityOn = capability && capabilityRowOn(row);
+    const capabilityOff = capability && !capabilityOn && !paymentRequired;
     // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
     // 能力模型行不标(它们本来就不参与 agent 维度)。
     const missingAgents = provider.agents.filter((agent) => !row.avail.includes(agent));
@@ -995,42 +1129,41 @@ export function UnifiedModelList({
         data-deep-link-target={focusedRow?.id === row.id ? 'true' : undefined}
         className={cn(
           focusedRow?.id === row.id && 'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
-          'group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          !state.ready && 'opacity-55',
+          'group flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+          // 被用户关掉的功能型模型不整行压暗:行名已用三级文字色表达「关」,开关要保持可点的观感。
+          !state.ready && !capabilityOff && 'opacity-55',
         )}
       >
         <span
           className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--text-secondary)]"
           aria-hidden="true"
         >
-          {logoKind || !brand ? (
-            <ProviderLogoMark
-              providerId={provider.id}
-              routing={provider.routing}
-              logoKind={logoKind ?? provider.logoKind}
-              size={19}
-            />
-          ) : (
+          {isProviderConnectionImage(provider.customIcon) ? (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>{null}</CustomProviderIcon>
+          ) : logoKind ? (
+            <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={logoKind} size={19} />
+          ) : brand ? (
             <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>
+          ) : (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>
+              <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={19} />
+            </CustomProviderIcon>
           )}
         </span>
-        <span
-          className="min-w-0 truncate text-14 font-medium"
-          style={{
-            color:
-              state.ready && (capability || anyOn)
-                ? 'var(--settings-section-title)'
-                : 'var(--text-tertiary)',
-          }}
-        >
-          {localizedModelName(rep.name, t)}
-        </span>
+        {renderModelName(row, (capability ? capabilityOn && state.ready : state.ready && anyOn)
+          ? 'var(--settings-section-title)' : 'var(--text-tertiary)')}
         {/* 价格档与折扣紧跟模型名(不单独成列):这一列不是用来纵向比价的,
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
         {(() => {
-          // Mixed-unit quotes are shown in the existing model details only.
-          if (rep.displayPricing && rep.currency) return null;
+          // 对话模型仍需保留 token 价格档与折扣表达。displayPricing 对媒体模型
+          // 可能使用张、秒等单位，不能把那类报价强行压成通用 token 档位。
+          if (
+            rep.displayPricing &&
+            rep.currency &&
+            !isAgentSelectableModel(rep, { userProvider: provider.source === 'user' })
+          )
+            return null;
           const display = rowPriceDisplay(row);
           if (!display) return null;
           if (display.kind === 'free') {
@@ -1048,10 +1181,11 @@ export function UnifiedModelList({
             />
           );
         })()}
-        {provider.id === MANAGED_OLLAMA_PROVIDER_ID && <LocalPackagingTag libraryName={row.id} />}
+        {localModels && <LocalPackagingTag libraryName={row.id} />}
         {capNote && (
           <Tip text={capNote}>
             <button
+              data-settings-search-action="Open model capability information"
               type="button"
               aria-label={capNote}
               onClick={() => openAdvanced(row)}
@@ -1085,12 +1219,24 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频、决策/重排复用显示轴。 */}
-        {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
-          <span className="w-9 shrink-0" />
-        )}
-        {rowHasVisibilitySwitch(row, provider.source === 'user') && (
+        {/* 功能型模型:单一「启用」开关(停用轴)。开着的随时能关;被停用的随时能恢复
+            (见 canReenableRow,不看聊天登录);被旧显示开关关掉的要等它的媒体通道就绪。 */}
+        {!visibilityControls ? null : capability ? (
           <Switch
+            data-capability-enable-switch
+            data-setting-id={providersSettings.providers.id}
+            disabled={
+              paymentRequired ||
+              (!capabilityOn &&
+                (!canReenableRow(row) || (!rowDisabledEffective(row) && !state.canSelect)))
+            }
+            checked={capabilityOn}
+            onCheckedChange={() => void toggleCapabilityRow(row)}
+            aria-label={localizedModelName(rep.name, t)}
+          />
+        ) : (
+          <Switch
+            data-setting-id={providersSettings.providers.id}
             disabled={!state.canSelect}
             checked={anyOn}
             onCheckedChange={() => toggleRow(row)}
@@ -1110,10 +1256,12 @@ export function UnifiedModelList({
     <div className={'flex flex-col'}>
       {/* 第一行说明模型选择与管理，第二行仅筛选当前列表。排列和批量配置在菜单里
           明确分组，任何筛选或排列操作都不写入模型开关。 */}
+      {/* 壁纸 / 桌面透明时工具行未吸顶就透出卡片的半透明底，吸顶后才铺回卡片底色
+          （wallpaper-sticky-header，见 globals.css）。 */}
       {!compactEmpty && (
         <div
           data-testid="provider-model-toolbar"
-          className="sticky top-0 z-10 flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
+          className="wallpaper-sticky-header sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">
@@ -1121,20 +1269,25 @@ export function UnifiedModelList({
                 <span className="text-13 font-medium text-[var(--text-primary)]">
                   {t('settings.providers.models.manage.title')}
                 </span>
-                <span className="text-11 text-[var(--text-tertiary)]">
-                  {t('settings.providers.models.manage.selected', { count: selectedCount })}
-                </span>
-              </div>
-              <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                {t(
-                  selectionAvailable
-                    ? 'settings.providers.models.manage.hint'
-                    : 'settings.providers.models.manage.connectionRequired',
+                {visibilityControls && (
+                  <span className="text-11 text-[var(--text-tertiary)]">
+                    {t('settings.providers.models.manage.selected', { count: selectedCount })}
+                  </span>
                 )}
-              </p>
+              </div>
+              {visibilityControls && (
+                <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
+                  {t(
+                    selectionAvailable
+                      ? 'settings.providers.models.manage.hint'
+                      : 'settings.providers.models.manage.connectionRequired',
+                  )}
+                </p>
+              )}
             </div>
             {onRefresh && (
               <button
+                data-settings-search-action="Refresh the provider model catalog"
                 type="button"
                 onClick={onRefresh}
                 disabled={refreshing || refreshDisabled}
@@ -1166,15 +1319,18 @@ export function UnifiedModelList({
                 ]}
               />
             )}
-            {(unionRows.length > 0 || onAddSpeechModels) && (
+            {visibilityControls && (unionRows.length > 0 || onAddSpeechModels || onAddRealtimeModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
+                  <Button data-settings-search-action="Open the model management menu" variant="secondary" size="sm" compact type="button" className="shrink-0">
                     {t('settings.providers.models.manage.menu')}
                     <ChevronDown size={12} aria-hidden />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {onAddRealtimeModels && <DropdownMenuItem onSelect={onAddRealtimeModels}>
+                    {t('bots.voiceMode.realtime.add')}
+                  </DropdownMenuItem>}
                   {onAddSpeechModels && (
                     <DropdownMenuItem onSelect={onAddSpeechModels}>
                       {t('settings.providers.speechSetup.add')}
@@ -1216,6 +1372,7 @@ export function UnifiedModelList({
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               {showKindFilter && (
                 <SegmentedControl
+                  data-settings-search-action="Filter the model list by capability"
                   aria-label={t('settings.providers.models.kindFilter.aria')}
                   value={kindFilter}
                   onValueChange={setKindFilter}
@@ -1239,19 +1396,14 @@ export function UnifiedModelList({
               {showSearch && (
                 /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让 chip 组被 overflow-hidden 裁掉(PR #1102 review)。 */
-                <div
-                  className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
-                  style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    border: '1px solid var(--border-default)',
-                  }}
-                >
+                <div className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3">
                   <Search
                     size={14}
                     className="shrink-0"
                     style={{ color: 'var(--text-tertiary)' }}
                   />
                   <input
+                    data-settings-search-action="Search the provider model list"
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -1297,6 +1449,7 @@ export function UnifiedModelList({
                 <div key={g.key} className="flex flex-col">
                   {showGroupHeaders && (
                     <button
+                      data-settings-search-action="Expand or collapse the model category"
                       type="button"
                       onClick={() => toggleCollapsed(g.key)}
                       aria-expanded={!collapsed}
@@ -1330,9 +1483,9 @@ export function UnifiedModelList({
                     </button>
                   )}
                   {/* 能力模型组:不进对话选择器;图像/视频开关控制对应功能清单。 */}
-                  {wholeGroupCapability && !collapsed && (
+                  {visibilityControls && wholeGroupCapability && !collapsed && (
                     <span
-                      className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}
+                      className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-6')}
                       style={{ color: 'var(--text-tertiary)' }}
                     >
                       {t('settings.providers.models.capabilityGroupHint')}
@@ -1371,13 +1524,14 @@ export function UnifiedModelList({
               下架模型的陈旧条目 —— 逐行启用清不掉它们;configuration-and-overrides.md §4)。
               渲染条件独立于当前渲染行:只剩陈旧条目(disabledRows 为空)或搜索过滤后
               无匹配行时,恢复入口都不能消失(PR #744 review 第二十六轮)。 */}
-          {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) &&
+          {(disabledRows.length > 0 || disabledGroupOverrideCount > 0) &&
             (() => {
               const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
               return (
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2 pb-0.5">
                     <button
+                      data-settings-search-action="Expand or collapse disabled models"
                       type="button"
                       onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
                       aria-expanded={!collapsed}
@@ -1406,11 +1560,12 @@ export function UnifiedModelList({
                           让「还有 N 条停用配置」可感知。 */}
                         {disabledRows.length > 0
                           ? disabledRows.length
-                          : (provider.disableOverrideCount ?? 0)}
+                          : disabledGroupOverrideCount}
                       </span>
                     </button>
                     {!hasLockedDisabledRow && (
                       <Button
+                        data-setting-id={providersSettings.providers.id}
                         variant="secondary"
                         size="xxs"
                         compact
@@ -1436,17 +1591,12 @@ export function UnifiedModelList({
                           tabIndex={focusedRow?.id === row.id ? -1 : undefined}
                           data-deep-link-target={focusedRow?.id === row.id ? 'true' : undefined}
                           className={cn(
-                            'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-[7px]',
+                            'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5',
                             focusedRow?.id === row.id &&
                               'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
                           )}
                         >
-                          <span
-                            className="min-w-0 truncate text-14 font-medium"
-                            style={{ color: 'var(--text-disabled)' }}
-                          >
-                            {localizedModelName(rep.name, t)}
-                          </span>
+                          {renderModelName(row, 'var(--text-disabled)')}
                           {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
                           <span
                             className="shrink-0 text-12"
@@ -1468,6 +1618,7 @@ export function UnifiedModelList({
                           )}
                           {!paymentRequired && (
                             <Button
+                              data-setting-id={providersSettings.providers.id}
                               variant="secondary"
                               size="xs"
                               compact
@@ -1479,8 +1630,9 @@ export function UnifiedModelList({
                               {t('settings.providers.models.enableModel')}
                             </Button>
                           )}
-                          {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                          {localModels && (
                             <Button
+                              data-settings-search-action="Delete the installed local model"
                               variant="secondary"
                               size="xs"
                               tone="danger"
@@ -1511,12 +1663,13 @@ export function UnifiedModelList({
         }}
         pricePresentationOf={pricePresentationOf}
         disabled={currentAdvancedRow ? rowDisabledEffective(currentAdvancedRow) : false}
+        canEnable={currentAdvancedRow ? canReenableRow(currentAdvancedRow) : true}
         paymentRequired={currentAdvancedRow ? isRowPaymentRequired(currentAdvancedRow) : false}
         onDisable={async (row) => {
           // 抽屉里的停用/启用与列表行同一条写入路径(乐观覆盖 + IPC),不另开一套。
           if (await setRowDisabled(row, !rowDisabledEffective(row))) setAdvancedOpen(false);
         }}
-        {...(provider.id === MANAGED_OLLAMA_PROVIDER_ID
+        {...(localModels
           ? {
               onDeleteLocal: (row: UnionModelRow) => {
                 setAdvancedOpen(false);

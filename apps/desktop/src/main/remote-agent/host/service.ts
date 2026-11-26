@@ -16,7 +16,11 @@ import fsp from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { isProviderSharePeer, parseProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_KINDS, REMOTE_AGENT_PLUGIN_ENGINE_KIND, type RemoteAgentRequest } from '@cindy/device-link';
-import { isPluginEngineOfferedRemotely } from '../../maker-host/pluginEngineRemoteUse.js';
+import {
+  isPluginEngineModelTurnedOff,
+  isPluginEngineOfferedRemotely,
+  isPluginEngineOfferedToGuests,
+} from '../../maker-host/pluginEngineRemoteUse.js';
 import type { Maker, StartSessionOptions } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 
@@ -28,7 +32,7 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { withProviderShareGuestAccessSnapshot, getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { admitAgentNetProviderStandby, applyProviderShareDelegation, beginAgentNetStandbyTurn, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, releaseUnusedAgentNetStandby, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { agentNetSharingRoute } from '../../device-link/agentNetSharing.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
@@ -1008,11 +1012,27 @@ export function installRemoteAgentHost(options: {
         return false;
       }
     },
-    // 插件提供的引擎：只给同账号的电脑(分享的受邀者一律不提供)，用引擎自己的登录直连厂商，
-    // 没有 Cindy 的供应商路由、模型范围与速度策略。
+    // 插件提供的引擎：给同账号电脑和声明了 guestWorkspace 的直连分享受邀者使用，用引擎自己的登录直连厂商。
     pluginEngines: {
-      isOffered: (providerId, controller) => !isProviderSharePeer(controller) && isControllerAuthorized(controller)
-        && isPluginEngineOfferedRemotely(providerId),
+      canUse: (controller) => {
+        if (!isProviderSharePeer(controller)) return isControllerAuthorized(controller);
+        const access = ownedProviderShareGuestAccess(controller);
+        return !!access && isControllerAuthorized(controller) && isPluginEngineOfferedToGuests(access.providerId);
+      },
+      isOffered: (providerId, controller, model) => {
+        if (!isControllerAuthorized(controller)) return false;
+        // A model the user turned off here (Settings → Model providers) is off for everyone.
+        if (isPluginEngineModelTurnedOff(providerId, model)) return false;
+        if (isProviderSharePeer(controller)) {
+          const access = ownedProviderShareGuestAccess(controller);
+          return !!access
+            && access.providerId === providerId
+            && isPluginEngineOfferedToGuests(providerId)
+            && (model === undefined || remoteModelAccess.allows(providerId, model, access.memberId));
+        }
+        return isPluginEngineOfferedRemotely(providerId)
+          && (model === undefined || remoteModelAccess.allows(providerId, model));
+      },
       start: (input) => options.getMaker().startHostedAgentSession(REMOTE_AGENT_PLUGIN_ENGINE_KIND,
         hostedStartOptions(input)),
     },
@@ -1030,6 +1050,7 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    withPollAuthorizationSnapshot: withProviderShareGuestAccessSnapshot,
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
@@ -1123,7 +1144,7 @@ export function installRemoteAgentHost(options: {
           void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
             sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
             .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
-        } else if (authority && sessionId) {
+        } else if (authority && sessionId && sample.kind !== REMOTE_AGENT_PLUGIN_ENGINE_KIND) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {
@@ -1263,6 +1284,7 @@ export function installRemoteAgentHost(options: {
           : retained ? { agentDeviceId: old.executorDeviceId, providerId: old.providerId,
           memberKey: old.memberKey, sameAccount: true }
           : await groupRelay.plan({ kind: request.agentKind, model: request.model,
+            direct: true,
             providerId: access.providerId,
             exclude: request.op === 'standby-prepare' ? new Set(group!.members.filter(member =>
               member.kind !== 'device' || member.agentDeviceId === request.excludeExecutorDeviceId).map(member => member.key))
@@ -1776,7 +1798,7 @@ export function disposeRemoteAgentHost(): void {
   if (host) hostDisposal = Promise.all([hostDisposal, host.dispose()]).then(() => undefined);
   host = null;
   clearProviderShareDelegations();
-  void flushProviderShareUsage();
+  void flushProviderShareUsage().catch(() => log.warn('Provider share usage checkpoint failed during teardown'));
 }
 
 function flushProviderShareUsage(): Promise<void> {

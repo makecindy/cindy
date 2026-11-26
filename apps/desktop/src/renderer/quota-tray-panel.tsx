@@ -6,7 +6,7 @@ import type { MenubarView } from '../shared/menubarQuota';
 import { QUOTA_PANEL_DESIGN } from '../shared/quotaPanelDesign';
 import type { QuotaTrayBridge } from '../shared/quotaTray';
 import { Chart, Logo, Manage, Detail, Usage, money, relative } from './quota-tray-pages';
-import { CountUp, Tube } from './quota-tray-tube';
+import { CountUp, SourceValue, Tube } from './quota-tray-tube';
 import './styles/quota-tray.css';
 
 declare global { interface Window { quotaTray: QuotaTrayBridge } }
@@ -56,7 +56,13 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     const timer = setTimeout(() => setLeaving(null), PAGE_SLIDE_MS);
     return () => clearTimeout(timer);
   }, [leaving, page]);
-  const measure = () => window.quotaTray.resize((inner.current?.offsetHeight ?? 0) + (header.current?.offsetHeight ?? 0) + (footer.current?.offsetHeight ?? 0));
+  // Ask for whole pixels at or above the exact content height. `offsetHeight` rounds each part to
+  // the nearest pixel, so a request could fall a fraction short: the overflow showed a scrollbar,
+  // which on Windows and Linux narrows the page, wraps a line more, asks for more, hides the
+  // scrollbar again and asks for less, so the card jumped up and down nonstop (2026-11-26). The
+  // parts have no vertical transforms (pages only slide sideways), so their boxes are their layout.
+  const measure = () => window.quotaTray.resize(Math.ceil([inner.current, header.current, footer.current]
+    .reduce((height, element) => height + (element?.getBoundingClientRect().height ?? 0), 0)));
   useLayoutEffect(() => {
     // Each page is its own element, so the observer follows the page on screen.
     const observer = new ResizeObserver(measure);
@@ -91,12 +97,13 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     return () => window.removeEventListener('keydown', key);
   }, []);
   const rows = tab === 'tabUsage' ? view.tasks.map(row => ({
-    ...row, preview: [row.idleStatus, row.meta].filter(Boolean).join(' · '), time: money(view, row.value), pulse: false,
+    ...row, preview: [row.idleStatus, row.meta].filter(Boolean).join(' · '), time: money(view, row.value, view.taskMoneySymbol), pulse: false,
   })) : (tab === 'tabUnread' ? unread : ongoing).map(row => ({
     ...row, preview: row.status ? row.status + ' · ' + row.preview : row.preview,
     time: relative(view, row.lastActivityAtMs, now), pulse: row.phase === 'running',
   }));
   const daily = view.usage.scopes[view.settings.scope].daily.slice(-30);
+  const measured = view.sources.filter(source => source.fill !== null);
   const style = Object.fromEntries(Object.entries(design.colors).map(([name, pair]) => ['--' + name, `light-dark(${pair[0]}, ${pair[1]})`])) as CSSProperties;
   const tubeHeight = short ? design.metrics.tubeShort : design.metrics.tubeTall;
   Object.assign(style, { '--tube-height': tubeHeight + 'px',
@@ -108,9 +115,9 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     <div className="headline"><h1>{view.gate ? s.gateTitle : view.headlinePrimary}</h1>
       <p className="secondary" data-alert={!view.gate && view.headlineAlert}>{view.gate ? s.gateBody : view.headlineSecondary}</p></div>
     {!view.gate && <>
-      <section className="sources">{view.sources.filter(source => source.fill !== null).map((source, index) =>
+      <section className="sources" data-dense={measured.length > 6}>{measured.map((source, index) =>
         <button key={source.id} className="source" style={{ animationDelay: (index * 60) + 'ms' }} aria-label={source.accessibilityLabel} onClick={() => go('detail:' + source.id)}>
-          <b className="metric">{source.value ? <CountUp text={source.value} locale={view.locale} visible={!hidden} delay={index * 0.06}/> : source.valueLabel}<small>{source.valueUnit}</small></b>
+          <SourceValue source={source} locale={view.locale} visible={!hidden} delay={index * 0.06}/>
           <Tube fill={source.fill ?? 0} index={index} active={source.active} visible={!hidden} height={tubeHeight} emphasized={source.emphasized} level={source.level}/>
           <Logo svg={source.logoSvg}/><span>{source.name}</span><small data-level={source.whenLevel}>{source.when}</small>
         </button>)}</section>
@@ -123,7 +130,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
         }}>{s[key]}{count > 0 && <small>{count}</small>}</button>;
       })}</nav>
       {tab === 'tabUsage' && <div className="section-caption task-summary"><small>{view.taskSummary}</small>
-        <b className="metric">{money(view, view.tasks.reduce((total, row) => total + row.value, 0))}</b></div>}
+        <b className="metric">{money(view, view.tasks.reduce((total, row) => total + row.value, 0), view.taskMoneySymbol)}</b></div>}
       <section className="rows">{(expanded ? rows : rows.slice(0, limit)).map(row =>
         <button key={row.sessionId} className="task-row" onClick={() => window.quotaTray.openSession(row.sessionId)}>
           <span className="task-icon" data-running={row.pulse}><Logo svg={row.logoSvg}/></span>

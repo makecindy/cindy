@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
+import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
 import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
@@ -10,9 +12,11 @@ import {
   type OutboxStorage,
 } from "../session/durableOutbox";
 import {
+  bindOutboxProjection,
   createDurableOutboxDelivery,
   type DeliveryProjection,
 } from "../session/durableOutboxDelivery";
+import { remoteSessionStore } from "../session/remoteSessionStore";
 import type { QueuedRemoteMessage, RemoteMessage } from "../session/types";
 import { appendOptimisticUserMessage, projectOptimisticUserMessages, type OptimisticUserMessage } from '../session/optimisticUserMessages';
 
@@ -171,7 +175,7 @@ async function setup(storage = disk()) {
     enqueue: vi.fn(async (_r: DurableOutboxRecord) => projection()),
     cancel: vi.fn(async () => true),
     history: vi.fn(async () => false),
-    applyProjection: vi.fn(),
+    bindProjection: () => () => {},
     cleanup: vi.fn(async () => {}),
     discardUploads: vi.fn(),
     retryable: () => true,
@@ -820,6 +824,51 @@ describe("durable mobile outbox ownership", () => {
 });
 
 describe("app-owned delivery and reconciliation", () => {
+  // #4841 (unit): unlike the generic retry fixtures, use the Mobile API error
+  // from a DNS failure during attachment presign and see whether the same item can send.
+  it('keeps an unsent item queued when Android DNS blocks attachment presign', async () => {
+    const { store, deps } = await setup();
+    const offline = new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname');
+    const fetch = vi.fn()
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline)
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        putUrl: 'https://upload.example.invalid/object', key: 'object', expiresAt: '2099-01-01T00:00:00Z',
+      })));
+    vi.stubGlobal('fetch', fetch);
+    vi.useFakeTimers();
+    const uploadFile = vi.fn().mockResolvedValue({ status: 200 });
+    const runner = createDurableOutboxDelivery({
+      ...deps,
+      upload: (_record, candidate) => uploadMobileAttachmentFromFile(candidate, 'file:///unit.txt', {
+        token: null, deps: { uploadFile, readFileChunk: async () => 'eA==' },
+      }),
+      retryable: isAutoRecoveringRemoteError,
+      describe: formatRemoteError,
+    });
+    try {
+      const record = message();
+      await store.add({ ...record, item: { ...record.item, attachmentSlots: [null] },
+        uploads: [{ slot: 0, kind: 'file', fileName: 'unit.txt', name: 'unit.txt', size: 1 }] });
+      const attempt = runner.run();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await attempt;
+      expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued' });
+      expect(deps.enqueue).not.toHaveBeenCalled();
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      runner.wake();
+      await runner.run();
+      expect(uploadFile).toHaveBeenCalledOnce();
+      expect(deps.enqueue).toHaveBeenCalledOnce();
+      expect(deps.enqueue.mock.calls[0]?.[0].item.clientId).toBe('id-1');
+    } finally {
+      runner.stop();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['legacy', 'legacy-prepared'] as const)('keeps %s enqueue success uncertain across restart until history confirms it', async (host) => {
     const first = await setup();
     const legacy = { pendingQueue: [] } as unknown as DeliveryProjection;
@@ -1267,6 +1316,46 @@ describe('known projection first send', () => {
     });
   });
 
+  it('reads the live boundary when a newly composed message is ahead of the cache', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), clearBoundaryMs: 9 });
+    deps.projection.mockResolvedValue({ ...projection(), clearBoundaryMs: 9 });
+
+    await createDurableOutboxDelivery({ ...deps, knownProjection: known }).run();
+
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(deps.enqueue).toHaveBeenCalledOnce();
+    expect(deps.enqueue.mock.calls[0]?.[0].clearBoundaryMs).toBe(9);
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' });
+  });
+
+  it('preserves the send boundary when the desktop clears before enqueue', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), clearBoundaryMs: 5 });
+    const cleared = new Error('REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=5; currentClearBoundaryMs=9');
+    deps.enqueue.mockRejectedValueOnce(cleared);
+    deps.projection.mockResolvedValue({ ...projection(), clearBoundaryMs: 9 });
+
+    const settled = deferred<DurableOutboxRecord>();
+    const unsubscribe = store.subscribe(() => {
+      const record = store.getSnapshot()[0];
+      if (record?.state === 'failed' || record?.state === 'host-owned') settled.resolve(record);
+    });
+    try {
+      await createDurableOutboxDelivery({
+        ...deps, knownProjection: known, staleClearBoundary: (error) => error === cleared,
+      }).run();
+
+      expect(await settled.promise).toMatchObject({
+        state: 'failed', clearBoundaryMs: 5, enqueueStarted: false, error: deps.clearedMessage,
+      });
+      expect(deps.projection).toHaveBeenCalledOnce();
+      expect(deps.enqueue).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('asks the host once after it refuses a stale known clear boundary', async () => {
     const { store, deps } = await setup();
     await store.add(message());
@@ -1282,6 +1371,106 @@ describe('known projection first send', () => {
     expect(deps.projection).toHaveBeenCalledOnce();
     expect(deps.enqueue.mock.calls[1]?.[0]).toMatchObject({ clearBoundaryMs: 9, enqueueStarted: true });
     await vi.waitFor(() => expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' }));
+  });
+});
+
+describe('outbox projection authority', () => {
+  const bindProjection = (record: DurableOutboxRecord) =>
+    bindOutboxProjection(remoteSessionStore, record.item.sessionId, () => 0);
+
+  it('applies the enqueue response after the preflight projection advances authority', async () => {
+    const { store, deps } = await setup();
+    await store.add(message());
+    remoteSessionStore.clear();
+    try {
+      deps.enqueue.mockResolvedValue({ ...projection(), queuePaused: true });
+      await createDurableOutboxDelivery({ ...deps, bindProjection }).run();
+
+      expect(remoteSessionStore.getInputProjection('session-a').queuePaused).toBe(true);
+      expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' });
+    } finally {
+      remoteSessionStore.clear();
+    }
+  });
+
+  it('keeps host acceptance but discards the previous connection snapshot after reconnect', async () => {
+    const { store, deps } = await setup();
+    await store.add(message());
+    remoteSessionStore.clear();
+    const appliedEpochs: number[] = [];
+    let epoch = 0;
+    deps.enqueue.mockImplementation(async () => {
+      epoch = 1;
+      return { ...projection(), queuePaused: true };
+    });
+    try {
+      await createDurableOutboxDelivery({
+        ...deps,
+        bindProjection(record) {
+          const apply = bindOutboxProjection(remoteSessionStore, record.item.sessionId, () => epoch);
+          return (snapshot) => {
+            const appliedEpoch = apply(snapshot);
+            if (appliedEpoch !== undefined) appliedEpochs.push(appliedEpoch);
+          };
+        },
+      }).run();
+
+      expect(appliedEpochs).toEqual([0]);
+      expect(remoteSessionStore.getInputProjection('session-a').queuePaused).toBe(false);
+      expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' });
+    } finally {
+      remoteSessionStore.clear();
+    }
+  });
+
+  it('discards a late reconciliation after a newer push and a concurrent read for the same task', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message('old'), state: 'host-owned', retrySafe: true });
+    await store.add(message('new'));
+    remoteSessionStore.clear();
+    const oldStarted = deferred<void>();
+    const newStarted = deferred<void>();
+    const oldProjection = deferred<DeliveryProjection>();
+    const newProjection = deferred<DeliveryProjection>();
+    const oldReconciled = deferred<void>();
+    const allowNewProjection = deferred<void>();
+    deps.projection.mockImplementation((record) => {
+      if (record.item.clientId === 'old') {
+        oldStarted.resolve();
+        return oldProjection.promise;
+      }
+      newStarted.resolve();
+      return newProjection.promise;
+    });
+    deps.history.mockImplementation(async () => {
+      oldReconciled.resolve();
+      return false;
+    });
+    const delivery = createDurableOutboxDelivery({
+      ...deps,
+      bindProjection,
+      sessionPolicy: async (record) => {
+        if (record.item.clientId === 'new') await allowNewProjection.promise;
+        return 'deliver';
+      },
+    });
+    const run = delivery.run();
+    try {
+      await oldStarted.promise;
+      remoteSessionStore.setInputProjection('session-a', projection());
+      allowNewProjection.resolve();
+      await newStarted.promise;
+      oldProjection.resolve({ ...projection('old', 'pending'), queuePaused: true });
+      await oldReconciled.promise;
+
+      expect(remoteSessionStore.getInputProjection('session-a').queuePaused).toBe(false);
+    } finally {
+      allowNewProjection.resolve();
+      oldProjection.resolve(projection('old', 'pending'));
+      newProjection.resolve(projection('new'));
+      await run;
+      remoteSessionStore.clear();
+    }
   });
 });
 

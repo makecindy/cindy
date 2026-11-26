@@ -53,7 +53,7 @@ import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } fro
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
-  type AutoReviewHistoryMessage,
+  type AutoReviewHistory,
 } from '../maker-ipc/autoReviewUserIntent.js';
 import type {
   Maker,
@@ -97,12 +97,14 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
+import { SnapshotDispatchIntentDeadlineError } from '../utils/operationBudget.js';
 
 
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
@@ -123,6 +125,7 @@ import {
   takeUnattendedPlanReviewDeclines,
 } from '../mcp-integrations/unattendedTurn.js';
 import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
+import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 
 
 const ALLOWED_EFFORT = new Set<string>([
@@ -192,11 +195,36 @@ export const QUEUED_DISPATCH_SUSPEND_GAP_MS = 30_000;
 const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
 
 /**
- * Plugin engines (docs/plans/acp-plugin-bridge.md) run only as a new task each run on this
- * computer (phase 2). A bound plugin-engine target is still refused at fire entry; the narrowing
- * below keeps every built-in-only step refusing a plugin engine, never treating it as built-in.
+ * Plugin engines (docs/plans/acp-plugin-bridge.md) run a schedule either as a new task each run
+ * on this computer, or as a message in a linked plugin-engine task (see boundPluginEngineRefusal).
+ * The narrowing below keeps every built-in-only step refusing a plugin engine, never treating it
+ * as built-in.
  */
 const SCHEDULED_TASKS_FEATURE = 'Scheduled tasks';
+
+/**
+ * A schedule linked to a plugin-engine task runs as a message in that task, the way the user's
+ * own follow-up would: on the task's engine and model, on this computer, through the task's input
+ * queue. Returns the refusal for every other shape. Fast mode is not a plugin-engine setting and
+ * a saved standard-speed value is not a model choice.
+ */
+function boundPluginEngineRefusal(
+  schedule: Schedule,
+  target: { remoteHostId?: string | null; agentDeviceId?: string | null } | null,
+): PluginEngineUnsupportedError | null {
+  let reason: string | null = null;
+  if (schedule.source === 'bot') {
+    reason = 'Teammate routines cannot run on a plugin engine yet.';
+  } else if (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort) {
+    reason = 'An automation linked to a plugin engine task uses the task\'s own model; remove the model choice from the automation.';
+  } else if (target?.remoteHostId || target?.agentDeviceId) {
+    reason = 'The linked task must run on this computer.';
+  }
+  if (!reason) return null;
+  const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+  refusal.message += `. ${reason}`;
+  return refusal;
+}
 
 /** Refuses only the plugin engine; every other value is returned unchanged. */
 function scheduledBuiltinAgentKind(kind: EngineKind): AgentKind;
@@ -296,11 +324,12 @@ export interface SchedulerQueueDeps {
    * active-turn recovery、清会话等),不探测的话 run 会永久挂在等待派发上。
    */
   isPromptTracked(sessionId: string, clientId: string): boolean;
-  /** 普通聊天自动续跑是否已接管当前 scheduler run。 */
+  /** 当前 scheduler run 是否由自动续跑接管。 */
   isAutoResumePending?: (sessionId: string, runId: string) => boolean;
+  isSharedReconnectPending?: (sessionId: string, runId: string) => boolean;
   /** 已接管的续跑最终仍失败（含补发未 dispatch / Stop / clear）。 */
   onAutoResumeFailed?: (
-    sessionId: string, runId: string, listener: (error?: string) => void,
+    sessionId: string, runId: string, listener: (error?: string, stopped?: true) => void,
     quotaWait?: { start(): void; resume(): boolean },
   ) => () => void;
   /** Schedule pause/delete：撤销仍属于该 run 的退避或派发前隐藏续跑。 */
@@ -309,6 +338,11 @@ export interface SchedulerQueueDeps {
 
 export interface MakerScheduleRunnerDeps {
   projectForNewTask?: ScheduleProjectLookup;
+  /**
+   * 模型组(model-groups.md §6.3)：模式跟着任务走。这次要新建任务时按模式选来源，把凭据随建任务参数交出去，
+   * 选路记账与说明由任务层在第一轮派发时做；发到已有任务时不经这里，那个任务按它自己的模式走。
+   */
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare' | 'canRoute' | 'exists'>;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -318,9 +352,11 @@ export interface MakerScheduleRunnerDeps {
   logger: Logger;
   /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
   diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
-  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
+  resolveInheritedModel?: (schedule: Schedule) => Promise<Partial<Schedule> | null>;
   /** Saved quota waits deduplicate by schedule even when each fire creates a new task. */
   findUsageLimitWait?: (scheduleId: string) => Promise<string | null>;
   /**
@@ -516,6 +552,7 @@ interface TurnCompletionWaiterOptions {
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
   /** Coordinator queue path has authoritative per-turn origins; direct fallback keeps legacy compatibility. */
   requireTurnOrigin?: boolean;
+  skipStoppedDispatch?: boolean;
   /**
    * Turn-scoped marks that must stop applying the moment this turn ends — not
    * when the fire settles. The session accepts a user message again at `done`,
@@ -596,6 +633,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.scheduler = scheduler;
   }
 
+  /** 这次运行会不会新建任务：没有目标任务，或目标任务已删除(持续任务会重建)。其余都发到那个任务。 */
+  private async startsNewTask(schedule: Schedule): Promise<boolean> {
+    const targetId = schedule.targetSessionId?.trim();
+    if (!targetId) return true;
+    const target = await this.runtime.getSessionRowSnapshot(targetId).catch(() => null);
+    return !target || target.status === 'deleted';
+  }
+
   /** Validate an explicit saved choice without switching or waking its target.
    * Names, timing and other unrelated edits must still work while a source is offline.
    * Legacy model-only overrides keep their existing follow-task semantics.
@@ -609,6 +654,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 插件引擎在保存时就确认本机此刻提供它(停用 / 卸载 / 不可用都明确拒绝)。
       this.admitScheduledPluginEngine(schedule);
       return;
+    }
+    // 选着模式时新建任务由模式选来源，存下的具体模型只是兜底：模式此刻能选出可用来源就放行(只看不提交)，
+    // 选不出来才要求兜底模型可用。
+    const groupId = schedule.modelGroup?.trim();
+    if (groupId && schedule.agentKind !== 'acp' && this.deps.modelGroupStart) {
+      const usable = await this.deps.modelGroupStart.canRoute(groupId, { localOnly: !!schedule.primaryHostKey?.trim() })
+        .catch(() => false);
+      if (usable) return;
     }
     const target = schedule.targetSessionId
       ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId) : null;
@@ -660,7 +713,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /** 插件引擎自动任务的准入(见 deps.admitPluginEngine)；不可用时抛错，本次运行或保存明确失败。 */
   private admitScheduledPluginEngine(schedule: Schedule): { model: string; effort: string } {
     if (!this.deps.admitPluginEngine || schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp'
-      || schedule.targetSessionId || schedule.persistentSession || schedule.useWorktree
+      || schedule.targetSessionId || schedule.persistentSession
       || schedule.agentDeviceId || schedule.modelAgentDeviceId || schedule.executionMode === 'script') {
       throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
     }
@@ -670,6 +723,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
         model: schedule.model?.trim() || 'default',
         effort: schedule.effort ?? null,
       });
+    } catch (error) {
+      throw new Error(`schedule route unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * A run in a linked plugin-engine task is a new paid turn: admit the task's current engine and
+   * model by the same rule as a new task (engine provided and available, model not turned off).
+   * Only checks; the task keeps its own model selection.
+   */
+  private admitBoundPluginEngine(route: { providerId: string | null; model?: string; effort?: string | null }): void {
+    if (!this.deps.admitPluginEngine) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    try {
+      this.deps.admitPluginEngine({ providerId: route.providerId, model: route.model?.trim() || 'default', effort: route.effort ?? null });
     } catch (error) {
       throw new Error(`schedule route unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1008,6 +1075,40 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
     }
     const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
+    // 模型组：只有这次要新建任务时按模式选(续跑、发到还在的任务都按那个任务自己的模式走)；
+    // 脚本与插件引擎任务不按模式选。只在本机运行的自动化只在本机的来源里选。
+    const groupId = schedule.modelGroup?.trim();
+    const groupApplies = !!groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
+      && schedule.agentKind !== 'acp' && !!this.deps.modelGroupStart;
+    const startsNewTask = groupApplies && await this.startsNewTask(schedule);
+    if (groupApplies && !startsNewTask && await this.deps.modelGroupStart!.exists(groupId!).catch(() => false)) {
+      // 发到还在的任务：按那个任务自己的模式走，沿用它当前的来源(与续跑同一做法)。存下的具体模型只是新建任务
+      // 选不出来时的兜底，不能当成这次的指定模型把任务换回去。模式已删除时照旧按存下的具体模型运行。
+      schedule = { ...schedule, model: undefined, providerId: undefined, effort: undefined,
+        fastMode: undefined, modelAgentKind: undefined, modelAgentDeviceId: undefined };
+    }
+    if (groupApplies && startsNewTask) {
+      const prepared = await this.deps.modelGroupStart!.prepare(groupId!, {
+        keptModelName: schedule.model?.trim() || schedule.modelAgentKind || schedule.agentKind,
+        localOnly: !!schedule.primaryHostKey?.trim(),
+      }).catch((error: unknown) => {
+        this.deps.logger.warn?.('[runner] model group pick failed; using the saved model', {
+          scheduleId: schedule.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+      throwIfFireAborted(ctx.signal, 'runner entry');
+      if (prepared?.route) {
+        const { route } = prepared;
+        schedule = { ...schedule, fastMode: false,
+          modelAgentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+          model: route.model, providerId: route.providerId, effort: route.effort,
+          // '' = 本机：选中的来源在哪台，新任务就在哪台运行。
+          modelAgentDeviceId: route.agentDeviceId ?? '' };
+      }
+      if (prepared) holder.modelGroupStart = prepared.token;
+    }
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
@@ -1089,9 +1190,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
       }
-      // A plugin-engine target is refused before hooks, restore or any engine switch.
-      if (target && isPluginEngineKind(target.agentKind)) {
-        const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+      // An unsupported plugin-engine target is refused before hooks, restore or any engine switch.
+      const refusal = target && isPluginEngineKind(target.agentKind)
+        ? boundPluginEngineRefusal(schedule, target) : null;
+      if (refusal) {
         await this.notifyFailureSilent(schedule, ctx, refusal.message);
         throw refusal;
       }
@@ -1209,6 +1311,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
       });
     }
 
+    if (!ctx.resumeSessionId && !schedule.model?.trim()) {
+      const inherited = await this.deps.resolveInheritedModel?.(schedule);
+      ctx.assertFireContext?.();
+      throwIfFireAborted(ctx.signal, 'inherited model resolution');
+      if (inherited) schedule = { ...schedule, ...inherited };
+    }
+
     // isHeartbeat / sessionId 在 persistentSession 自我续命分支里可能被翻回新建路径，
     // 所以这里用 let，下面的 archived 兜底里会显式重置。
     let isHeartbeat = !!schedule.targetSessionId;
@@ -1259,7 +1368,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
           : undefined;
       if (selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
-        return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+        // 目标会话正忙。引擎会重试的行(recurring && active && !manual)按原语义顺延;
+        // 不能顺延的行(一次性 / manual / 已 expired)不能失败 —— 失败会把这次触发
+        // 变成「十几毫秒就记 failed、schedule 直接 expired、提示词从未派发」的
+        // 一次性自动化(#12544)。这类行保留本轮继续往下走:任务切换租约在会话正忙
+        // 时按设计拒绝抢占当前回合(抛 ScheduledModelSelectionBusyError),随后由
+        // B1.5 的排队窗口接手 —— 会话空闲后由排队派发应用本轮的来源/模型/强度。
+        if (this.canDefer(schedule, ctx)) {
+          return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+        }
       }
       if (selection && !this.deps.acquirePendingAgentSwitch) {
         throw new Error('Scheduled model selection is not available');
@@ -1277,10 +1394,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
           resolvedSelection = lease.selection;
         }
       } catch (error) {
-        if (error instanceof ScheduledModelSelectionBusyError) {
+        if (!(error instanceof ScheduledModelSelectionBusyError)) throw error;
+        // 会话正忙 → 任务切换流程按设计不抢占当前回合(绑定自动化遇忙顺延的规则,
+        // docs/product-rules/model-selector-unified.md)。能顺延的行按原语义顺延;
+        // 不能顺延的行保留本轮,交给 B1.5 的排队窗口(#12544):提示词留在会话队列里,
+        // 会话空闲后由排队派发在取得发送锁时应用本轮的来源/模型/强度。
+        // 注意:此刻本轮的显式选择**还没落到会话上**(没有租约、没有 resolvedSelection)。
+        // 后续只能「重新取租约」(会话已经空闲)或「走排队窗口」—— 不能带着一份未应用的
+        // 选择掉进直发路径,那会把本轮发到绑定会话当前的引擎/模型上,而不是本轮选的那套
+        // 路由(见下方「重取租约」分支)。
+        if (this.canDefer(schedule, ctx)) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
-        throw error;
       }
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const [meta, row] = await Promise.all([
@@ -1335,8 +1460,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       } else {
         // The fire-entry row check covers ordinary targets; this covers the rest
-        // (e.g. a Bot routine) before the task's engine feeds any routing below.
-        if (meta?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+        // (e.g. a Bot routine, or a task switched engines meanwhile) before the
+        // task's engine feeds any routing below.
+        const pluginEngineTarget = meta?.agentKind === 'acp' || isPluginEngineKind(row.agentKind);
+        if (pluginEngineTarget) {
+          const refusal = boundPluginEngineRefusal(schedule, row)
+            ?? (resolvedSelection ? new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE) : null);
+          if (refusal) {
+            await this.notifyFailureSilent(schedule, ctx, refusal.message);
+            throw refusal;
+          }
+        }
         if (resolvedSelection) {
           schedule = {
             ...schedule,
@@ -1369,6 +1503,29 @@ export class MakerScheduleRunner implements ScheduleRunner {
           holder.releaseAgentSwitchLock = undefined;
           return this.deferFire(schedule, sessionId, 'user-active');
         }
+        // A plugin-engine task takes the run as an ordinary queued message, busy or idle:
+        // the task's own send path starts its engine, and dispatch rechecks the route.
+        if (pluginEngineTarget) {
+          holder.releaseAgentSwitchLock?.();
+          holder.releaseAgentSwitchLock = undefined;
+          if (!this.deps.schedulerQueue) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+          try {
+            this.admitBoundPluginEngine({ providerId: row.providerId ?? null, model: meta?.model, effort: meta?.effort });
+          } catch (error) {
+            // The engine's ordinary failure path records the run without notifying; use the runner's outlet.
+            await this.notifyFailureSilent(schedule, ctx, error instanceof Error ? error.message : String(error));
+            throw error;
+          }
+          if (this.deps.schedulerQueue.hasQueuedPrompt(sessionId, schedule.id)) {
+            return await this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
+          }
+          return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, {
+            agentKind: 'acp',
+            model: meta?.model,
+            effort: meta?.effort,
+            providerId: row.providerId ?? null,
+          }, { enqueuePrompt });
+        }
         // B1.5 撞忙排队(替代旧的"盲发 → SESSION_RUNNING → 顺延"路径):会话忙
         // (turn 运行中 / 队列有积压)时把心跳作为排队消息入 coordinator 队列 ——
         // 用户在会话里看得见、可删除,turn 结束后按序自动派发,不打断在跑的任务
@@ -1378,6 +1535,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 用户空闲再说。桥未注入(测试/启动早期)时走原直发路径,行为不变。
         if (this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
           if (selection) {
+            // 显式模型选择的撞忙处理:
+            // - 引擎会重试的行(recurring && active && !manual)按原语义顺延;
+            // - 不能顺延的行(一次性 / manual / 已 expired)保留本轮,走现有排队窗口
+            //   (30 分钟):提示词留在会话队列里(用户可见可删),会话空闲后由排队
+            //   派发在取得发送锁时应用本轮的来源/模型/强度,恰好投递一次;窗口内
+            //   一直忙则记 skipped / QUEUE_WAIT_TIMEOUT(提示词未派发),运行历史
+            //   指向「立即运行」补跑 —— 不迟发、不静默丢触发(#12544)。
+            //   跨引擎 / 远程位置的显式选择排队路径应用不了(只有任务切换流程能),
+            //   那种情况维持原语义:可见失败。
+            if (!this.canDefer(schedule, ctx)) {
+              const queuedBaseline = this.queuedExplicitRouteBaseline(
+                schedule, selection, resolvedSelection, meta, row, sessionId,
+              );
+              if (queuedBaseline) {
+                holder.releaseAgentSwitchLock?.();
+                holder.releaseAgentSwitchLock = undefined;
+                return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, queuedBaseline, {
+                  enqueuePrompt,
+                });
+              }
+            }
             holder.releaseAgentSwitchLock?.();
             holder.releaseAgentSwitchLock = undefined;
             return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
@@ -1416,6 +1594,49 @@ export class MakerScheduleRunner implements ScheduleRunner {
             providerId: row?.providerId ?? null,
           }, { enqueuePrompt });
         }
+        // 租约因会话繁忙被拒后,会话可能在等待期间空闲下来 —— 这时本轮的显式选择还没
+        // 落到会话上,不能带着「未应用的选择」掉进直发路径:那样会用绑定会话当前的
+        // 引擎 + 本轮选的模型去发(cross-Harness 的显式选择尤其危险 —— 会用错引擎)。
+        // 重新取一次租约:拿到就按本轮路由直发(与直发路径同口径);又忙就仍走排队窗口。
+        if (selection && !resolvedSelection) {
+          let reacquired: ScheduledModelSelection | undefined;
+          try {
+            const lease = await this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection);
+            holder.releaseAgentSwitchLock = typeof lease === 'function' ? lease : lease?.release;
+            if (!lease || typeof lease === 'function') {
+              throw new Error('Scheduled model selection was not resolved');
+            }
+            reacquired = lease.selection;
+          } catch (error) {
+            if (!(error instanceof ScheduledModelSelectionBusyError)) throw error;
+          }
+          if (reacquired) {
+            resolvedSelection = reacquired;
+            schedule = {
+              ...schedule,
+              agentKind: resolvedSelection.agentKind,
+              model: resolvedSelection.model,
+              providerId: resolvedSelection.providerId ?? undefined,
+              effort: resolvedSelection.effort ?? undefined,
+              fastMode: resolvedSelection.fastMode,
+            };
+          } else {
+            // 还是忙 → 排队窗口(桥未注入时没有窗口可排,只能可见失败)。
+            const queuedBaseline = this.deps.schedulerQueue
+              ? this.queuedExplicitRouteBaseline(schedule, selection, undefined, meta, row, sessionId)
+              : null;
+            if (queuedBaseline) {
+              holder.releaseAgentSwitchLock?.();
+              holder.releaseAgentSwitchLock = undefined;
+              return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, queuedBaseline, {
+                enqueuePrompt,
+              });
+            }
+            holder.releaseAgentSwitchLock?.();
+            holder.releaseAgentSwitchLock = undefined;
+            return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+          }
+        }
         if (!resolvedSelection && hasScheduledModelOverride(schedule)) {
           await this.deps.prepareModelPreferences?.(sessionId, true);
         }
@@ -1423,7 +1644,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatWorkingDir = meta?.workDir;
         heartbeatModel = meta?.model;
         heartbeatEffort = meta?.effort;
-        heartbeatAgentKind = meta?.agentKind;
+        // Plugin-engine tasks returned through their queue above.
+        heartbeatAgentKind = scheduledBuiltinAgentKind(meta?.agentKind);
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
         // A resumed/rebuilt task keeps its current location, including relocation
@@ -1680,6 +1902,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TOCTOU 窗口(判定后、createSession 前 session 恰好关闭)只会把 fresh spawn 误判
     // 成复用 → set 失败时多跳过一次落库 → 下次 fire 重试, 方向保守无害。
     let reusedLiveSession = this.deps.maker.isSessionAlive(sessionId);
+    let preflightProviderId: string | null = null;
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
       if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
@@ -1692,6 +1915,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId ??
         materializedDefaultProviderId ??
         currentProviderId;
+      preflightProviderId = nextProviderId;
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
             agentKind: liveSession.agentKind,
@@ -1857,6 +2081,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // Explicit null means Cindy's default route for Pi.
       providerId: createProviderId,
       vendorOptions: { source: 'scheduler' as const },
+      ...(holder.modelGroupStart ? { modelGroupStart: holder.modelGroupStart } : {}),
     };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
@@ -1938,24 +2163,83 @@ export class MakerScheduleRunner implements ScheduleRunner {
           await session.setModel(model);
         }
       } catch (err) {
-        if (reusedLiveSession) modelSwitchApplied = false;
         if (isModelSwitchRebuildRequiredError(err)) {
-          // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
-          // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
-          throw new Error(
-            `schedule model switch requires rebuilding the session before dispatch (model "${model}")`,
+          const unsafeResume = new Error(
+            `schedule model switch requires rebuilding the session before dispatch (model "${model}")` +
+            (!schedule.recurring ? '. The prompt was not sent. Use Run now to retry the automation.' : ''),
             { cause: err },
           );
-        }
-        if (mustSyncReusedPiRoute) {
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (
+            !reusedLiveSession ||
+            !holder.releaseAgentSwitchLock ||
+            preflightProviderId !== createSessionOpts.providerId ||
+            session.agentKind !== 'codex' ||
+            !resumeSessionId ||
+            session.sdkSessionId !== resumeSessionId ||
+            agentDeviceId ||
+            session.agentDeviceId ||
+            session.remoteHostId ||
+            this.deps.maker.getSession(sessionId) !== session
+          ) {
+            throw unsafeResume;
+          }
+          // setModel refused before send. Keep the same send lease and native thread
+          // through one cold resume. Never retry from the dispatch/completion path.
+          try {
+            const { closedSessionIds } = await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+            if (!closedSessionIds.includes(sessionId)) throw unsafeResume;
+          } catch (closeError) {
+            if (closeError instanceof CredentialModeSwitchBusyError)
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            throw closeError;
+          }
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (this.deps.maker.getSession(sessionId)) throw unsafeResume;
+          const resumedOpts = { ...createSessionOpts };
+          const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
+          try {
+            holder.assertOwner?.();
+            throwIfFireAborted(ctx.signal, 'model switch rebuild');
+            if (
+              resumed === session ||
+              resumed.id !== sessionId ||
+              resumed.sdkSessionId !== resumeSessionId ||
+              resumed.agentKind !== 'codex' ||
+              resumed.model !== model ||
+              resumed.agentDeviceId ||
+              resumed.remoteHostId ||
+              resumedOpts.providerId !== createSessionOpts.providerId ||
+              this.deps.maker.getSession(sessionId) !== resumed
+            ) throw unsafeResume;
+          } catch (error) {
+            if (resumed !== session && resumed.id === sessionId && this.deps.maker.getSession(sessionId) === resumed) {
+              await withRehydrateCloseSuppressed(sessionId, () =>
+                this.deps.maker.closeSessionIfCurrent(resumed, 'runtime-refresh', { afterCurrentTurn: true }),
+              );
+            }
+            throw error;
+          }
+          session = resumed;
+          reusedLiveSession = false;
+        } else if (mustSyncReusedPiRoute) {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
           // 不能沿用 Claude/Codex 的 non-fatal 模型切换降级。
           throw new Error(
             `schedule Pi route sync failed before dispatch (model "${model}", provider "${reusedPiRouteProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
             { cause: err },
           );
+        } else {
+          if (reusedLiveSession) modelSwitchApplied = false;
+          this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
         }
-        this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
       }
     }
     // runtimeModel:本次实际会运行的模型 —— effort 必须按它 clamp。**复用会话一律以 live
@@ -2576,7 +2860,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'session-running');
       }
-      sendError = formatSchedulerSendError(sendContext, normalized.reason);
+      // The host supplies a fixed diagnostic for this proven pre-dispatch failure.
+      sendError = err instanceof SnapshotDispatchIntentDeadlineError
+        ? err.message
+        : formatSchedulerSendError(sendContext, normalized.reason);
       this.deps.logger.warn?.('[runner] session send failed before dispatch', {
         ...sendLogBase,
         source: normalized.source,
@@ -2692,6 +2979,77 @@ export class MakerScheduleRunner implements ScheduleRunner {
     return reconciled;
   }
 
+  /**
+   * 本轮显式路由能不能交给排队派发在派发时刻应用;能就返回排队派发要的路由基线,
+   * 不能就返回 null(调用方维持原语义:可见失败)。
+   *
+   * 两种情形:
+   * - 租约已经拿到(resolvedSelection 有值):路由已由任务切换流程应用到会话,排队
+   *   派发在派发时刻核对路由没被改即可(现有 resolvedSelection 围栏)。
+   * - 租约没拿到(会话正忙时任务切换流程按设计拒绝抢占当前回合):本轮显式配置改由
+   *   排队派发在派发时刻热同步(来源/模型/强度/Fast)—— 与直发路径同口径。
+   *   但排队派发不做跨引擎切换、不做远程位置路由,那两件事只有任务切换流程做得了:
+   *   显式 Harness 与绑定会话当前 Harness 不一致、或选了远程位置时不排队。
+   */
+  private queuedExplicitRouteBaseline(
+    schedule: Schedule,
+    selection: ScheduledModelSelection,
+    resolvedSelection: ScheduledModelSelection | undefined,
+    meta: { agentKind?: EngineKind; model?: string; effort?: string; fastMode?: boolean | 'ultrafast' } | null,
+    row: { providerId?: string | null; agentDeviceId?: string | null; remoteHostId?: string | null } | null,
+    sessionId: string,
+  ): {
+    model?: string;
+    agentKind?: EngineKind;
+    effort?: string;
+    fastMode?: boolean | 'ultrafast';
+    explicitFastMode?: boolean | 'ultrafast';
+    /**
+     * 本轮显式选择的路由承诺(租约没拿到时由排队派发在派发时刻落实并核对):
+     * 引擎 + 本机位置 + 模型 + 来源。派发时刻必须仍然成立,否则排队窗口会把
+     * 提示词发到本轮没选的位置/路由上(例如等待期间用户把会话迁到了另一台电脑)。
+     */
+    explicitRoute?: { agentKind: EngineKind; model: string; providerId: string | null };
+    resolvedSelection?: ScheduledModelSelection;
+    providerId: string | null;
+  } | null {
+    const live = this.deps.maker.getSession(sessionId);
+    const baseline = {
+      agentKind: meta?.agentKind ?? live?.agentKind,
+      model: meta?.model,
+      effort: meta?.effort,
+      fastMode: meta?.fastMode,
+      providerId: row?.providerId ?? null,
+    };
+    // 租约已应用本轮路由:排队派发照常带 resolvedSelection(派发时刻核对围栏)。
+    if (resolvedSelection) return { ...baseline, resolvedSelection };
+    const liveAgentKind = live?.agentKind ?? meta?.agentKind;
+    const localLocation = !selection.agentDeviceId
+      && !live?.agentDeviceId && !live?.remoteHostId
+      && !row?.agentDeviceId && !row?.remoteHostId;
+    if (!localLocation) return null;
+    if (!liveAgentKind || liveAgentKind !== selection.agentKind) return null;
+    const explicitModel = schedule.model?.trim() ? schedule.model : '';
+    const explicitProviderId = schedule.providerId?.trim() || null;
+    return {
+      ...baseline,
+      // 本轮显式配置:排队派发在派发时刻按它热同步会话的来源/模型/强度/Fast。
+      model: explicitModel || baseline.model,
+      effort: schedule.effort ?? undefined,
+      providerId: explicitProviderId || row?.providerId || null,
+      // Fast 的归一化与构造 selection 时同口径(标准速度 = false):留空**不是**「不变」,
+      // 而是「标准速度」—— 直发路径的 selection.fastMode 也是这么算的。写成 undefined
+      // 会让排队窗口既关不掉会话原有的 Fast,又把本轮的标准速度悄悄丢掉。
+      explicitFastMode: schedule.fastMode === 'ultrafast' ? 'ultrafast' : schedule.fastMode === true,
+      // 本轮显式选择的路由承诺:派发时刻必须仍然成立(引擎 + 本机位置 + 模型 + 来源)。
+      explicitRoute: {
+        agentKind: selection.agentKind,
+        model: explicitModel,
+        providerId: explicitProviderId,
+      },
+    };
+  }
+
   private async fireHeartbeatViaQueue(
     schedule: Schedule,
     ctx: FireContext,
@@ -2703,6 +3061,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
+      /** 本轮显式选择的路由承诺(租约没拿到时由排队派发在派发时刻落实并核对)。 */
+      explicitRoute?: { agentKind: EngineKind; model: string; providerId: string | null };
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
@@ -2747,6 +3109,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
+      /** 本轮显式选择的路由承诺(租约没拿到时由排队派发在派发时刻落实并核对)。 */
+      explicitRoute?: { agentKind: EngineKind; model: string; providerId: string | null };
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
@@ -2884,16 +3250,25 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
+        const preparingSession = this.deps.maker.getSession(sessionId);
+        // provider-thread-relink can leave no live instance between close and
+        // replacement. Let the accepted boundary validate the replacement,
+        // while still rejecting an actually changed route when an instance is
+        // available here.
+        this.assertQueuedModelSelection(preparingSession, routingBaseline.resolvedSelection, true);
+        this.assertQueuedExplicitRoute(preparingSession, routingBaseline.explicitRoute, true);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
-          const override = hasScheduledModelOverride(schedule);
-          await this.deps.prepareModelPreferences(sessionId, override);
+          // A plugin-engine task keeps its own model; it has no scheduled model scope.
+          if ((this.deps.maker.getSession(sessionId)?.agentKind ?? routingBaseline.agentKind) !== 'acp') {
+            await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
+          }
           // Preparation may settle a newer owner choice even when this run
           // overrides only effort/Fast. Refresh inherited axes at dispatch;
           // explicit schedule axes and resolved-selection fences still win.
+          // A task that moved to a plugin engine meanwhile is checked at dispatch.
           const meta = await this.deps.maker.getSessionMeta(sessionId);
           routingBaseline = {
-            ...routingBaseline, model: meta?.model, agentKind: scheduledBuiltinAgentKind(meta?.agentKind),
+            ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
             effort: meta?.effort, fastMode: schedule.fastMode ?? meta?.fastMode,
             providerId: getSessionProvider(sessionId) ?? null,
           };
@@ -2908,6 +3283,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failDispatch(error instanceof Error ? error : new Error(String(error)));
       },
       onAccepted: async (queuedPermissions) => {
+        const acceptingReplacement = waiterSlot.current !== null;
         dispatched = true;
         // Queue admission happens while another (possibly user-driven)
         // Desktop turn still owns the session. Only the accepted scheduler
@@ -3071,17 +3447,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
           blockAcceptedDispatch(live, 'routine revision changed');
           return;
         }
-        if (live) {
+        if (!waiterSlot.current) {
+          // A shared reconnect revalidates acceptance on the replacement.
+          // The existing waiter follows Maker lifecycle events for this run.
           waiterSlot.current = this.createTurnCompletionWaiter(live, {
             onProgress: ctx.onProgress,
             onQueueWaitStart: ctx.onQueueWaitStart,
             endQueueWait: ctx.endQueueWait,
             origin,
             requireTurnOrigin: true,
+            skipStoppedDispatch: schedule.source !== 'bot',
             onTurnSettled: () => holder.releaseUnattendedTurn?.(),
           });
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
+        if (acceptingReplacement) return;
         ctx.onTurnActive?.(sessionId);
         this.runtime.noteSilentStopUserSend(sessionId);
         options?.onAccepted?.();
@@ -3278,7 +3658,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 排队超时 / 拿不到执行槽都不是"这轮失败了",是"这轮没轮到" —— 与撞忙顺延
       // 同语义:撤销预插的 running run、不通知不亮红点,下次到点重新排队(会话届时
       // 若空闲就直发,槽位届时也可能腾出来)。
-      // 不能顺延的(一次性 / manual / 已 paused)退回可见失败,否则任务静默消失。
+      // 不可顺延的排队超时保留 skipped 记录和未派发原因；槽位异常仍可见失败。
       if (err instanceof ScheduledDispatchStoppedError) {
         waiterSlot.current?.stopListening();
         return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
@@ -3296,9 +3676,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         return this.deferFire(schedule, sessionId, 'routine-dispatch-invalidated');
       }
+      if (err instanceof QueuedRouteDisabledError) {
+        // Refused before vendor dispatch (route or engine turned off, plugin-engine task no longer
+        // qualifies). A visible failure the user configured notifications for; the engine's
+        // ordinary failure path records it without notifying.
+        await this.notifyFailureSilent(schedule, ctx, err.message, holder.preRunHookResult);
+        throw err;
+      }
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
         if (this.canDefer(schedule, ctx)) {
           return this.deferFire(schedule, sessionId, 'queue-wait-timeout');
+        }
+        if (err instanceof QueuedDispatchTimeoutError) {
+          // The prompt never reached the Agent. Keep the bounded wait's reason in
+          // history instead of reporting a model/turn failure; Run now can recover it.
+          return { sessionId, skipped: true, resultText: `[QUEUE_WAIT_TIMEOUT] ${err.message}` };
         }
         const errMsg = formatSchedulerSendError(
           buildSchedulerSendContext(schedule, ctx, sessionId),
@@ -3367,13 +3759,35 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedModelSelection(
     live: ReturnType<Maker['getSession']>,
     selection: ScheduledModelSelection | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!selection) return;
     // Provider/model IDs are only unique within an Agent location. Check the
     // actual runtime at both queue boundaries, after pending user switches.
-    if (!live || live.agentKind !== selection.agentKind ||
+    if ((!live && !allowRebuildingSession) || (live && (live.agentKind !== selection.agentKind ||
       (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
+      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId))) {
+      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
+  }
+
+  /**
+   * 本轮显式选择的「引擎 + 本机位置」围栏(租约没拿到、改走排队窗口时用)。
+   *
+   * 排队窗口最长 30 分钟,期间用户可能把会话迁到另一台电脑或换成别的引擎 ——
+   * 那样排队派发会用新的 live 把提示词发到**本轮没选的位置/引擎**上。围栏在排队
+   * 窗口的两条边界(准备 onPreparing / 受理 onAccepted)各核对一次:不成立就不许派发,
+   * 由排队派发在 vendor dispatch 之前收口成可见失败(与租约路径的 resolvedSelection
+   * 围栏同语义)。
+   */
+  private assertQueuedExplicitRoute(
+    live: ReturnType<Maker['getSession']>,
+    route: { agentKind: EngineKind; model: string; providerId: string | null } | undefined,
+    allowRebuildingSession = false,
+  ): void {
+    if (!route) return;
+    if ((!live && !allowRebuildingSession) || (live &&
+      (live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
@@ -3443,11 +3857,33 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
+      /** 本轮显式选择的路由承诺(租约没拿到时由排队派发在派发时刻落实并核对)。 */
+      explicitRoute?: { agentKind: EngineKind; model: string; providerId: string | null };
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
+    if (schedule.targetSessionId && (baseline.agentKind === 'acp' || live.agentKind === 'acp')) {
+      // A linked plugin-engine task runs this message on its own engine and model,
+      // which its send path just started; recheck that it still qualifies and that the
+      // engine and model are still allowed (they may have been turned off while queued).
+      const refusal = live.agentKind === 'acp'
+        ? boundPluginEngineRefusal(schedule, live)
+        : new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+      if (refusal) throw new QueuedRouteDisabledError(refusal.message);
+      // The saved task row is the fallback when the in-memory provider store has no entry.
+      const providerId = getSessionProvider(live.id)
+        ?? (await this.runtime.getSessionRowSnapshot(live.id))?.providerId ?? baseline.providerId;
+      try {
+        this.admitBoundPluginEngine({ providerId, model: live.model ?? baseline.model, effort: baseline.effort });
+      } catch (error) {
+        throw new QueuedRouteDisabledError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
     if (baseline.agentKind === 'acp' || live.agentKind === 'acp') {
       // A fresh plugin task already started on its native route. Recheck it
       // under the send lock in case the engine was disabled while queued.
@@ -3465,6 +3901,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return;
     }
     this.assertQueuedModelSelection(live, baseline.resolvedSelection);
+    this.assertQueuedExplicitRoute(live, baseline.explicitRoute);
+    const explicitRoute = baseline.explicitRoute;
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =
       explicitModel ??
@@ -3507,6 +3945,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         targetModel !== resolvedSelection.model ||
         nextProviderId !== resolvedSelection.providerId)
     ) {
+      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+    }
+    // 本轮显式选了来源时,落地来源必须还是它(被停用改道也不例外 —— 与租约路径的
+    // resolvedSelection 围栏同口径):否则本轮会经一个用户没选的来源扣费。
+    if (explicitRoute?.providerId && nextProviderId !== explicitRoute.providerId) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
     if (
@@ -3554,7 +3997,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
       })
     ) {
-      if (resolvedSelection) {
+      if (resolvedSelection || explicitRoute) {
         throw new QueuedRouteDisabledError(
           'Scheduled model route requires rebuilding before queued dispatch',
         );
@@ -3638,6 +4081,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
             { cause: err },
           );
         }
+        // 本轮显式选了模型:应用不上就不许照旧路由发出去(否则用户选的本轮模型被
+        // 悄悄换成会话当前模型)—— 与租约路径的 resolvedSelection 围栏同语义。
+        if (explicitRoute) {
+          throw new QueuedRouteDisabledError('Scheduled model selection could not be applied', {
+            cause: err,
+          });
+        }
         this.deps.logger.warn?.('[runner] queued heartbeat setModel failed (non-fatal)', err);
       }
     }
@@ -3679,6 +4129,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         'Scheduled model selection did not reach the queued session',
       );
     }
+    // 租约没拿到时的同一道围栏:本轮显式选的模型必须真的在跑(应用失败回退
+    // live.model 时同样不算数)—— 否则本轮会拿用户没选的模型去跑。
+    if (explicitRoute && runtimeModel !== explicitRoute.model) {
+      throw new QueuedRouteDisabledError(
+        'Scheduled model selection did not reach the queued session',
+      );
+    }
     const reconciledEffort = resolvedSelection
       ? (resolvedSelection.effort ?? undefined)
       : this.reconcileEffortForModel(live.agentKind, runtimeModel, schedule.effort, schedule.id);
@@ -3694,7 +4151,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         await live.setEffort(reconciledEffort as Effort);
       } catch (err) {
         effortApplied = false;
-        if (resolvedSelection)
+        if (resolvedSelection || explicitRoute)
           throw new QueuedRouteDisabledError('Scheduled effort selection could not be applied', {
             cause: err,
           });
@@ -3704,10 +4161,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (resolvedSelection && effortApplied) {
       setSessionEffort(live.id, resolvedSelection.effort);
     }
-    if (resolvedSelection && live.agentKind === 'codex') {
+    // 显式 Fast:租约解析出的选择优先;租约没拿到(会话正忙,本轮改走排队窗口,
+    // 路由由排队派发在派发时刻热同步)时用本轮显式配置的 Fast —— 与直发路径同口径,
+    // 别让排队窗口把 Fast 丢掉。**false(标准速度)也要显式下发**:本轮留空不是
+    // 「不变」而是「标准速度」(与构造 selection.fastMode 同口径)—— 不下发就会按会话
+    // 原有的 Fast 跑,成本与行为都跟配置对不上。
+    const queuedFastMode = resolvedSelection ? resolvedSelection.fastMode : baseline.explicitFastMode;
+    let fastModeApplied = true;
+    if (queuedFastMode !== undefined && live.agentKind === 'codex') {
       try {
-        await live.setFastMode(resolvedSelection.fastMode);
+        await live.setFastMode(queuedFastMode);
       } catch (err) {
+        fastModeApplied = false;
+        // 本轮显式配了速度,应用不上就不许照旧速度发出去(与租约路径同语义)。
         throw new QueuedRouteDisabledError('Scheduled Fast selection could not be applied', {
           cause: err,
         });
@@ -3719,7 +4185,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       setSessionProvider(live.id, applyProviderId);
     }
     if (live.agentKind === 'pi') {
-      setSessionFastMode(live.id, baseline.fastMode ?? false);
+      // Pi 的 Fast 走进程态 store(不是 vendor setFastMode):本轮显式配了速度就用它,
+      // 没配才沿用会话当前值(与直发路径同口径)。
+      setSessionFastMode(live.id, baseline.explicitFastMode ?? baseline.fastMode ?? false);
     }
     if (
       resolvedSelection ||
@@ -3735,7 +4203,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           permissionMode: null,
           model: modelChanged && modelApplied ? targetModel : undefined,
           effort: effortChanged && effortApplied ? reconciledEffort : undefined,
-          fastMode: resolvedSelection?.fastMode,
+          // 只回填**真的生效**的 Fast:应用失败时运行态还是旧值,回填新值会让落库的
+          // 任务信息与运行态对不上。
+          fastMode: resolvedSelection?.fastMode ?? (fastModeApplied ? baseline.explicitFastMode : undefined),
           providerId: applyProviderId ?? undefined,
         },
         this.deps.logger,
@@ -3935,6 +4405,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
       const isCurrentAutoResumePending = (): boolean =>
         this.deps.schedulerQueue?.isAutoResumePending?.(sessionId, options.origin.runId) === true;
+      const isSharedReconnectPending = (): boolean =>
+        this.deps.schedulerQueue?.isSharedReconnectPending?.(sessionId, options.origin.runId) === true;
       const clearSessionListeners = (): void => {
         pendingContinuationUnsub?.();
         pendingContinuationUnsub = undefined;
@@ -3994,10 +4466,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       ): void => {
         if (owner !== currentSession) return;
         if (status !== 'closed' && status !== 'error') return;
-        if (isCurrentAutoResumePending()) {
-          // AutoResumeBookkeeping owns the retry decision. A dead provider instance is
-          // therefore not the logical run terminal: detach from it and wait for Maker's
-          // existing same-id lazy rebuild. No second recovery state or timer lives here.
+        if (isCurrentAutoResumePending() || isSharedReconnectPending()) {
+          // Let the send transaction settle a shared reconnect if either
+          // instance closes before the replacement send resolves.
           clearSessionListeners();
           this.deps.logger.info?.(
             '[runner] scheduler session instance ended during auto-resume; waiting for replacement',
@@ -4071,6 +4542,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           return;
         }
         if (ev.type === 'done') {
+          if (owner === initialSession && isSharedReconnectPending()) return;
           if (ignorePairedInterruptedDone) {
             ignorePairedInterruptedDone = false;
             clearInterruptedDoneTimer();
@@ -4160,6 +4632,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
+          if (owner === initialSession && isSharedReconnectPending()) return;
           const error = extractErr(ev.data);
           lastTerminalError = error;
           ignorePairedInterruptedDone = true;
@@ -4173,8 +4646,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // listener 全跑完再问 bridge，避免订阅注册顺序把已接管的错误抢先判失败。
           queueMicrotask(() => {
             if (settled) return;
-            const claimed = isCurrentAutoResumePending();
-            if (!claimed) fail(new Error(error));
+            if (owner === initialSession && isSharedReconnectPending()) {
+              ignorePairedInterruptedDone = false;
+              clearInterruptedDoneTimer();
+              return;
+            }
+            if (!isCurrentAutoResumePending()) fail(new Error(error));
           });
         }
       };
@@ -4196,7 +4673,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             event.type !== 'session:created' ||
             event.session.id !== sessionId ||
-            !isCurrentAutoResumePending()
+            !(isCurrentAutoResumePending() || isSharedReconnectPending())
           ) {
             return;
           }
@@ -4206,7 +4683,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        (error) => {
+        (error, stopped) => {
+          if (stopped && options.skipStoppedDispatch) {
+            fail(new ScheduledDispatchStoppedError('Scheduled turn stopped before vendor dispatch'));
+            return;
+          }
           // A recovery callback can report a newer pre-dispatch failure. If it
           // has no detail, keep the latest terminal error owned by this run.
           fail(new Error(formatAutoResumeFailure(error || lastTerminalError)));
@@ -4368,6 +4849,7 @@ function extractErr(data: unknown): string {
  * after a delete/pause won the race.
  */
 type FireAbortStage =
+  | 'inherited model resolution'
   | 'runner entry'
   | 'quota wait check'
   | 'queue snapshot restore'
@@ -4375,6 +4857,7 @@ type FireAbortStage =
   | 'session creation'
   | 'agent turn dispatch'
   | 'credential switch setup'
+  | 'model switch rebuild'
   | 'credential mode switch';
 
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
@@ -4390,6 +4873,8 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   assertOwner?: () => void;
+  /** 这次新建任务按模式选来源时的凭据，随建任务参数交给 bootstrapSession(model-groups/sessionStart.ts)。 */
+  modelGroupStart?: string;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

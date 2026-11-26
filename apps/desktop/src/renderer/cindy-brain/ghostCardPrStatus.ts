@@ -13,8 +13,9 @@
  * 整个任务关联的 PR 都确认已合并时才露出；快照、未知状态和关闭未合并均不算完成。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
-import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
+import { cardPrLinkKey, cardPrSlotKey, prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
 import type { PrStatusResult } from '@/lib/gitContext.types';
+import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import type { GhostCardTaskAutoArchiveState } from './ghostCardTaskArchive';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
@@ -22,16 +23,11 @@ const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
 const SLOT_ATTR_RE = / data-ghost-(?:pr-status|pr-open-only|task-archive)="([^"]+)"/;
 const OPEN_ONLY_SELECTOR = '[data-ghost-pr-open-only]';
 const TASK_ARCHIVE_SELECTOR = 'button[data-ghost-task-archive]';
-const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
-
 type Tone = PrStatusItemTone;
 type Label = (key: string, options?: Record<string, unknown>) => string;
 
 /** 状态位的值 → prStatusKey 形式(owner/repo 小写)。不合格返回 null。 */
-export function prStatusSlotKey(value: string): string | null {
-  const m = SLOT_VALUE_RE.exec(value.trim());
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
-}
+export const prStatusSlotKey = cardPrSlotKey;
 
 /** 从净化后的卡片 html 里取第一个状态位或 open-only 标记的 key(订阅用;都没有返回 null)。 */
 export function readPrStatusSlotKey(html: string): string | null {
@@ -51,7 +47,7 @@ const CHECK_ITEMS = {
 } as const satisfies Partial<Record<PrStatusItemKey, { label: string; icon: LucideIcon; color?: string }>>;
 
 // 状态位多在 effect 里随状态刷新重填,那时同步渲染不会完成,所以图标在模块加载时备好。
-preloadAppIconMarkup(Object.values(CHECK_ITEMS).map((item) => item.icon));
+preloadAppIconMarkup([...Object.values(CHECK_ITEMS).map((item) => item.icon), PR_STATUS_ICON.merged, PR_STATUS_ICON.closed]);
 
 type Item =
   | { kind: 'check'; key: keyof typeof CHECK_ITEMS; count: number; label: string }
@@ -91,6 +87,46 @@ function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | 
       if (saved.value) el.style.setProperty('display', saved.value, saved.priority);
       else el.style.removeProperty('display');
     }
+  }
+}
+
+// Published GitHub cards have a decorative tile before the linked PR title, but
+// no slot on the tile itself. Keep the saved tile intact for fallback.
+const tileSnapshots = new WeakMap<HTMLElement, { original: HTMLElement; state: 'merged' | 'closed' }>();
+
+function fillPrHeaderTiles(doc: Document, lookup: (key: string) => PrStatusResult | undefined): void {
+  for (const card of doc.querySelectorAll('div[data-ghost-width="full"]')) {
+    const header = card.firstElementChild;
+    const tile = header?.querySelector<HTMLElement>(':scope > div:first-child');
+    if (!tile) continue;
+    const snapshot = tileSnapshots.get(tile);
+    if (!snapshot && (tile.style.display !== 'grid' || tile.childElementCount !== 1 ||
+      !tile.firstElementChild?.matches('span') || tile.textContent?.trim() || tile.querySelector(':not(span), [data-ghost-action]'))) continue;
+
+    const title = tile.nextElementSibling?.querySelector('[data-ghost-copy-link], a[data-ghost-link], a[href]');
+    const url = title?.getAttribute('data-ghost-copy-link') ?? title?.getAttribute('data-ghost-link') ?? title?.getAttribute('href');
+    const key = url && cardPrLinkKey(url);
+    if (!key) continue;
+    const marker = card.querySelector('[data-ghost-pr-status], [data-ghost-task-archive], [data-ghost-pr-open-only]');
+    if (prStatusSlotKey(marker?.getAttribute('data-ghost-pr-status') ?? marker?.getAttribute('data-ghost-task-archive') ??
+      marker?.getAttribute('data-ghost-pr-open-only') ?? '') !== key) continue;
+
+    const status = lookup(key);
+    if (!status?.ok || (status.status !== 'merged' && status.status !== 'closed')) {
+      if (snapshot) tile.replaceWith(snapshot.original);
+      continue;
+    }
+    if (snapshot?.state === status.status) continue;
+    const liveTile = tile.cloneNode(false) as HTMLElement;
+    const color = PR_STATUS_COLOR[status.status];
+    liveTile.style.color = color;
+    liveTile.style.background = `color-mix(in srgb, ${color} 16%, transparent)`;
+    const glyph = doc.createElement('span');
+    glyph.style.cssText = 'display:block;width:16px;height:16px';
+    glyph.innerHTML = appIconMarkup(PR_STATUS_ICON[status.status]);
+    liveTile.append(glyph);
+    tileSnapshots.set(liveTile, { original: snapshot?.original ?? tile, state: status.status });
+    tile.replaceWith(liveTile);
   }
 }
 
@@ -158,6 +194,7 @@ export function fillGhostCardPrStatus(
   t: Label,
   taskEligible = false,
 ): boolean {
+  fillPrHeaderTiles(doc, lookup);
   applyOpenOnly(doc, lookup);
   const autoArchive = applyTaskArchive(doc, lookup, taskEligible, t);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
@@ -189,10 +226,10 @@ export function fillGhostCardPrStatus(
         count.textContent = String(item.count);
         el.append(icon, count, doc.createTextNode(item.label));
       } else {
-        // 未解决评论用标题栏的强调色;可以合并 / 已合并用成功色;冲突用错误色;其余次要文字色。
+        // 未解决评论用标题栏的强调色;可以合并用成功色,已合并与标题栏同色;冲突用错误色;其余次要文字色。
         const color = item.key === 'threadsOpen' ? 'var(--status-bar-accent)'
           : item.tone === 'bad' ? 'var(--error-fg)'
-            : item.key === 'mergeReady' || item.key === 'merged' ? 'var(--status-success)' : '';
+            : item.key === 'merged' ? PR_STATUS_COLOR.merged : item.key === 'mergeReady' ? 'var(--status-success)' : '';
         if (color) el.style.color = color;
         el.textContent = item.label;
       }

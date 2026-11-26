@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { gzip } from 'node:zlib';
 
 import {
+  DeviceLinkError,
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
@@ -34,7 +35,7 @@ import {
 } from '@cindy/device-link';
 
 import { LineSplitter } from '../eventLog';
-import { remoteAgentStartupTiming } from '../startupTiming';
+import { openPayloadFieldBytes, remoteAgentStartupTiming, type StartupPayloadStats } from '../startupTiming';
 import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
 import { isDeliveryBackpressure, RemoteAgentDeliveryGate } from './deliveryPressure';
 
@@ -115,6 +116,7 @@ export interface RemoteAgentRunHandlers {
   onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  onSend?(): void;
   recoverAuthorization?(): Promise<void>;
 }
 
@@ -171,8 +173,13 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
-  async payload(value: unknown, uploadId = this.newId(), requireActive?: () => void,
-    invoke: RemoteAgentInvoke = this.invoke): Promise<RemoteAgentPayload> {
+  async payload(
+    value: unknown,
+    uploadId = this.newId(),
+    requireActive?: () => void,
+    invoke: RemoteAgentInvoke = this.invoke,
+    onPrepared?: (size: { uploadBytes: number; chunks: number }) => void,
+  ): Promise<RemoteAgentPayload> {
     const requireOpen = () => {
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       requireActive?.();
@@ -180,7 +187,9 @@ export class RemoteAgentRunClient implements PolledRun {
     requireOpen();
     const text = JSON.stringify(value ?? null);
     if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS && Buffer.byteLength(text, 'utf8') <= INLINE_PAYLOAD_BYTES) {
-      return { json: JSON.parse(text) as unknown };
+      const json: unknown = JSON.parse(text);
+      onPrepared?.({ uploadBytes: 0, chunks: 0 });
+      return { json };
     }
     const gz = await gzipAsync(Buffer.from(text, 'utf8'));
     requireOpen();
@@ -190,6 +199,7 @@ export class RemoteAgentRunClient implements PolledRun {
     const chunkBytes = Math.min(REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
       Math.max(PREFERRED_UPLOAD_CHUNK_BYTES, Math.ceil(gz.length / REMOTE_AGENT_MAX_UPLOAD_CHUNKS)));
     const chunks = Math.max(1, Math.ceil(gz.length / chunkBytes));
+    onPrepared?.({ uploadBytes: gz.length, chunks });
     await this.uploadChunks(chunks, (index) => gz.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64'),
       uploadId, requireOpen, invoke);
     // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
@@ -269,8 +279,13 @@ export class RemoteAgentRunClient implements PolledRun {
       runId: this.runId,
     });
     let status: 'ok' | 'failed' = 'failed';
+    let payloadStats: StartupPayloadStats | undefined;
     try {
-      const payload = await timing.measure('payload-upload', () => this.payload(openPayload, this.newId(), requireActive));
+      const payload = await timing.measure('payload-upload', () =>
+        this.payload(openPayload, this.newId(), requireActive, this.invoke, (size) => {
+          payloadStats = size;
+        }),
+      );
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       requireActive?.();
       const started = new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -297,7 +312,10 @@ export class RemoteAgentRunClient implements PolledRun {
       status = 'ok';
       return result;
     } finally {
-      timing.finish(status);
+      const diagnostics = this.log?.debug
+        ? { ...payloadStats, fieldBytes: openPayloadFieldBytes(openPayload) }
+        : undefined;
+      timing.finish(status, undefined, diagnostics);
     }
   }
 
@@ -307,7 +325,7 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 预先分配的 callId(需要先把回调登记到 callId 上时用)。 */
-  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal): Promise<unknown> {
+  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal, onDispatch?: () => void): Promise<unknown> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on the other computer.');
     if (method === 'abort' || method === 'requestGracefulStop') this.sendGeneration += 1;
     const generation = this.sendGeneration;
@@ -328,7 +346,14 @@ export class RemoteAgentRunClient implements PolledRun {
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();
-      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { beforeDispatch: requireActive });
+      const delivery = this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], {
+        beforeDispatch: () => {
+          requireActive();
+          onDispatch?.();
+        },
+      });
+      if (method === 'send') this.handlers.onSend?.();
+      await delivery;
     } catch (error) {
       this.pendingCalls.delete(callId);
       throw error;
@@ -574,12 +599,18 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
   const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
   const displayCode = remoteAgentLinkGuidanceCode(causeCode);
   const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
-  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  const keepRemoteError = ((code === 'ACCESS_REVOKED' || code === 'REMOTE_DISABLED')
+    && envelopeCode?.startsWith('REMOTE_AGENT_SHARE_') === true)
+    || (!displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message));
   // The requested route may be a share/group rather than a resolved computer.
   // Report only this known reference and channel, not a guessed name or status.
   const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
-  const wrapped = new Error(keepRemoteError
-    ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`);
+  const wrapped = new Error(
+    keepRemoteError ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`,
+    // The local transport can attest that this request never reached a socket.
+    // A remote error envelope cannot supply that evidence.
+    error instanceof DeviceLinkError && error.inFlight === false ? { cause: error } : undefined,
+  );
   return typeof code === 'string' ? Object.assign(wrapped, { code }) : wrapped;
 }
 

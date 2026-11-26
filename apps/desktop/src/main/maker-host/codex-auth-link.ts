@@ -273,7 +273,7 @@ export async function recoverCodexAuth(
  * No asynchronous work separates the identity check from unlink. Independent files and
  * symlinks are preserved, including a native credential that already rotated away.
  */
-function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
+export function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
   try {
     if (codexAuthPathsShareEntry(systemAuth, myAuth)) return false;
     const local = fs.lstatSync(myAuth, { bigint: true });

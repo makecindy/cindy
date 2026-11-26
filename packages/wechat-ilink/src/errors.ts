@@ -8,6 +8,7 @@ export type WechatIlinkErrorCode =
   | "HTTP_ERROR"
   | "NETWORK_ERROR"
   | "PROTOCOL_ERROR"
+  | "SEND_REJECTED"
   | "TIMEOUT"
   | "UNSUPPORTED";
 
@@ -17,11 +18,15 @@ export class WechatIlinkError extends Error {
     readonly code: WechatIlinkErrorCode,
     message: string,
     readonly retryable: boolean,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; ret?: number },
   ) {
     super(message, options);
+    this.ret = options?.ret;
     this.name = "WechatIlinkError";
   }
+
+  /** Numeric service response code, when iLink returned one. */
+  readonly ret?: number;
 }
 
 export function asWechatIlinkError(error: unknown): WechatIlinkError {

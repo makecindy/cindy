@@ -2,7 +2,9 @@
   "picker": {
     "shareName": "Compartilhado por {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Compartilhamento indisponível"
+    "unavailable": "Compartilhamento indisponível",
+    "offline": "{{name}} · Offline no momento",
+    "offlineNote": "O computador da pessoa está offline. Você poderá usá-lo novamente quando ele voltar a ficar online."
   },
   "link": {
     "title": "Compartilhamento de provedores",

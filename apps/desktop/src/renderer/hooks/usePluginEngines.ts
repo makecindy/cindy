@@ -15,13 +15,16 @@ import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { extractIpcError } from '@/utils/ipcError';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -34,7 +37,7 @@ const NO_ENGINES: readonly PluginEngineView[] = Object.freeze([]);
 
 interface PluginEnginesApi {
   listPluginEngines?: () => Promise<PluginEngineView[]>;
-  refreshPluginEngines?: () => Promise<void>;
+  refreshPluginEngines?: (targetGhostId?: string) => Promise<void>;
   onPluginEnginesChanged?: (cb: (engines: PluginEngineView[]) => void) => () => void;
 }
 
@@ -47,8 +50,8 @@ function pluginEnginesApi(): PluginEnginesApi | null {
  * like the provider model refresh at the same moment. Main applies a per-plugin cooldown; new
  * models arrive through the change push. Fire-and-forget.
  */
-export function requestPluginEnginesRefresh(): void {
-  void pluginEnginesApi()?.refreshPluginEngines?.().catch((err: unknown) => log.warn('plugin engine refresh failed', err));
+export function requestPluginEnginesRefresh(targetGhostId?: string): void {
+  void pluginEnginesApi()?.refreshPluginEngines?.(targetGhostId).catch((err: unknown) => log.warn('plugin engine refresh failed', err));
 }
 
 let engines: readonly PluginEngineView[] = NO_ENGINES;
@@ -69,7 +72,10 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
     !!engine && typeof engine === 'object'
     && typeof (engine as PluginEngineView).providerId === 'string'
     && typeof (engine as PluginEngineView).name === 'string'
-    && Array.isArray((engine as PluginEngineView).models));
+    && Array.isArray((engine as PluginEngineView).models))
+    .map((engine) => isAntigravityEngine(engine)
+      ? { ...engine, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }
+      : engine);
 }
 
 function attach(): void {
@@ -123,15 +129,23 @@ export function usePluginEngines(enabled = true): readonly PluginEngineView[] {
 interface DeviceCatalogue {
   read(): Promise<void>;
   ensureLoaded(): void;
+  retainPicker(): () => void;
+  refreshForPicker(): void;
   prefetch(): Promise<void>;
   markStale(): void;
   evict(): void;
   hasPrefetchSubscribers(): boolean;
+  hasLoadedConsumers(): boolean;
   subscribe(listener: () => void, prefetchOnReconnect?: boolean): () => void;
   snapshot(): readonly PluginEngineView[] | null;
 }
 
 let deviceCatalogues = new WeakMap<DataOwnerGeneration, Map<string, DeviceCatalogue>>();
+const activeRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
+
+/** Cooldown and follow-up read when a picker asks another computer's engine plugins to republish models. */
+export const DEVICE_PLUGIN_ENGINES_REFRESH_MS = 60_000;
+export const DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS = 2_500;
 
 function sameEngineViews(
   a: readonly PluginEngineView[] | null,
@@ -141,8 +155,11 @@ function sameEngineViews(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function isUnsupportedRemoteListError(error: unknown): boolean {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+function isUnsupportedRemoteListError(error: unknown, deviceId: string): boolean {
+  const code = extractIpcError(error)?.code;
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  // A task computer that cannot read plugin engines for its sources yet refuses the read itself.
+  if (code === 'INVALID_PARAMS' && parseModelCatalogKey(deviceId)) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
   return message.includes('CHANNEL_NOT_ALLOWED');
 }
@@ -163,18 +180,67 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
   let current: readonly PluginEngineView[] | null = null;
   let pending: Promise<void> | undefined;
   let deviceGeneration = 0;
+  let pickerUsers = 0;
+  let pickerGeneration = 0;
   let lastReadAt = 0;
   let lastFailedAt = 0;
+  let lastRefreshAt = 0;
+  let refreshRereadDueAt = 0;
+  let refreshRereadTimer: ReturnType<typeof setTimeout> | undefined;
   let unsupported = false;
+  const clearRefreshTimer = () => {
+    if (refreshRereadTimer === undefined) return;
+    clearTimeout(refreshRereadTimer);
+    activeRefreshTimers.delete(refreshRereadTimer);
+    refreshRereadTimer = undefined;
+  };
+  const scheduleRefreshReread = () => {
+    if (
+      refreshRereadDueAt <= 0
+      || pickerUsers === 0
+      || unsupported
+      || !isDataOwnerGenerationCurrent(owner)
+    ) {
+      return;
+    }
+    clearRefreshTimer();
+    const remaining = refreshRereadDueAt - Date.now();
+    if (remaining <= 0) {
+      refreshRereadDueAt = 0;
+      void catalogue.read();
+      return;
+    }
+    const scheduledGeneration = deviceGeneration;
+    const timer = setTimeout(() => {
+      activeRefreshTimers.delete(timer);
+      if (refreshRereadTimer === timer) refreshRereadTimer = undefined;
+      if (
+        !isDataOwnerGenerationCurrent(owner)
+        || scheduledGeneration !== deviceGeneration
+        || pickerUsers === 0
+        || refreshRereadDueAt <= 0
+      ) {
+        return;
+      }
+      refreshRereadDueAt = 0;
+      void catalogue.read();
+    }, remaining);
+    (timer as unknown as { unref?: () => void })?.unref?.();
+    refreshRereadTimer = timer;
+    activeRefreshTimers.add(timer);
+  };
   const subscribers = new Map<() => void, boolean>();
   const catalogue: DeviceCatalogue = {
     read() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
       if (pending) return pending;
       const readGeneration = deviceGeneration;
+      const readStartedAt = Date.now();
+      const link = window.electronAPI?.deviceLink;
       const run = Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
-          ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration && link
+          // A source read through the task computer (remote control) is keyed by modelCatalogKey.
+          ? invokeModelCatalog(link, deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
@@ -184,6 +250,10 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
           lastReadAt = Date.now();
           lastFailedAt = 0;
           unsupported = false;
+          if (refreshRereadDueAt > 0 && readStartedAt >= refreshRereadDueAt) {
+            refreshRereadDueAt = 0;
+            clearRefreshTimer();
+          }
           retainReportingPluginEngines(owner, deviceId, next);
           if (sameEngineViews(current, next)) return;
           current = next;
@@ -192,7 +262,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch((error: unknown) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
-          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          if (isUnsupportedRemoteListError(error, deviceId)) unsupported = true;
           else lastFailedAt = Date.now();
         })
         .finally(() => {
@@ -209,6 +279,63 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (lastFailedAt > 0 && Date.now() - lastFailedAt < DEVICE_PLUGIN_ENGINES_REREAD_MS) return;
       void catalogue.read();
     },
+    retainPicker() {
+      const becameActive = pickerUsers === 0;
+      pickerUsers += 1;
+      if (becameActive && refreshRereadDueAt > 0) {
+        scheduleRefreshReread();
+      }
+      return () => {
+        pickerUsers = Math.max(0, pickerUsers - 1);
+        if (pickerUsers === 0) {
+          pickerGeneration += 1;
+          clearRefreshTimer();
+        }
+      };
+    },
+    refreshForPicker() {
+      if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId) || unsupported || pickerUsers === 0) {
+        return;
+      }
+      const refreshGeneration = deviceGeneration;
+      const activePickerGeneration = pickerGeneration;
+      const isPickerActive = () =>
+        isDataOwnerGenerationCurrent(owner)
+        && refreshGeneration === deviceGeneration
+        && pickerUsers > 0
+        && activePickerGeneration === pickerGeneration;
+      const now = Date.now();
+      const owedRereadReady = refreshRereadDueAt > 0 && now >= refreshRereadDueAt;
+      if (owedRereadReady) {
+        refreshRereadDueAt = 0;
+        clearRefreshTimer();
+      }
+      const freshEnough =
+        !owedRereadReady
+        && current !== null
+        && lastReadAt > 0
+        && now - lastReadAt < DEVICE_PLUGIN_ENGINES_REREAD_MS;
+      const ensureCurrent = freshEnough ? Promise.resolve() : catalogue.read();
+      void ensureCurrent.then(() => {
+        if (!isPickerActive() || !(current?.length)) return;
+        const afterRead = Date.now();
+        if (lastRefreshAt > 0 && afterRead - lastRefreshAt < DEVICE_PLUGIN_ENGINES_REFRESH_MS) {
+          if (refreshRereadDueAt > 0) scheduleRefreshReread();
+          return;
+        }
+        const invoke = window.electronAPI?.deviceLink?.invoke;
+        if (!invoke) return;
+        lastRefreshAt = afterRead;
+        clearRefreshTimer();
+        void Promise.resolve(invoke(deviceId, PLUGIN_ENGINES_INVOKE.REFRESH, []))
+          .then(() => {
+            if (!isDataOwnerGenerationCurrent(owner) || refreshGeneration !== deviceGeneration) return;
+            refreshRereadDueAt = Date.now() + DEVICE_PLUGIN_ENGINES_REFRESH_REREAD_MS;
+            scheduleRefreshReread();
+          })
+          .catch(() => undefined);
+      });
+    },
     prefetch() {
       if (!isDataOwnerGenerationCurrent(owner) || isSharedTaskPeer(deviceId)) return Promise.resolve();
       if (pending) return pending;
@@ -220,15 +347,23 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       return catalogue.read();
     },
     markStale() {
+      clearRefreshTimer();
+      pickerReadAt.delete(catalogue);
+      refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
+      lastRefreshAt = 0;
       unsupported = false;
     },
     evict() {
       deviceGeneration += 1;
       pending = undefined;
+      clearRefreshTimer();
+      pickerReadAt.delete(catalogue);
+      refreshRereadDueAt = 0;
       lastReadAt = 0;
       lastFailedAt = 0;
+      lastRefreshAt = 0;
       unsupported = false;
       retainReportingPluginEngines(owner, deviceId, []);
       if (current !== null) {
@@ -238,6 +373,9 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
     },
     hasPrefetchSubscribers() {
       return Array.from(subscribers.values()).includes(true);
+    },
+    hasLoadedConsumers() {
+      return catalogue.hasPrefetchSubscribers() || (subscribers.size > 0 && current !== null);
     },
     subscribe(listener, prefetchOnReconnect = true) {
       subscribers.set(listener, prefetchOnReconnect);
@@ -256,6 +394,11 @@ export function hasRemotePluginEngineSubscribers(deviceId: string): boolean {
   return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasPrefetchSubscribers() ?? false;
 }
 
+/** Whether mounted UI (including an open picker that already loaded this catalogue) is consuming this device's engines. */
+export function hasRemotePluginEngineInterest(deviceId: string): boolean {
+  return existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.hasLoadedConsumers() ?? false;
+}
+
 /** One coalesced background catalogue read for a remote computer (used on bootstrap/reconnect). */
 export function prefetchRemotePluginEngines(deviceId: string): Promise<void> {
   if (!deviceId || isSharedTaskPeer(deviceId)) return Promise.resolve();
@@ -272,27 +415,54 @@ export function evictRemotePluginEngines(deviceId: string): void {
   existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
+/** Drop data and in-flight reads routed through this task computer. */
+export function evictControlledPluginEngines(taskDeviceId: string): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) catalogue.evict();
+  }
+}
+
+/** Only active task headers reload after the host confirms which sources are still available. */
+export function refreshControlledPluginEngines(taskDeviceId: string, sourceIds: ReadonlySet<string>): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    const route = parseModelCatalogKey(key);
+    if (route?.taskDeviceId === taskDeviceId && sourceIds.has(route.agentDeviceId)
+      && catalogue.hasPrefetchSubscribers()) catalogue.ensureLoaded();
+  }
+}
+
 function unreadSnapshot(): null {
   return null;
 }
 
-/** Reads on entry/reconnect when requested. The picker can also re-read on open. */
-export function useRemotePluginEngines(deviceId?: string, readOnEntry = false): {
+/** Reads on entry/reconnect when requested. `'once'` reuses an existing catalogue; `refresh` asks plugins to republish models. */
+export function useRemotePluginEngines(
+  deviceId?: string,
+  readOnEntry: boolean | 'once' = false,
+  active = true,
+): {
   engines: readonly PluginEngineView[] | null;
   read: () => void;
+  refresh: () => void;
 } {
   const owner = getDataOwnerGeneration();
   const catalogue = useMemo(() => deviceId ? deviceCatalogue(owner, deviceId) : null, [owner, deviceId]);
   const read = useCallback(() => { void catalogue?.read(); }, [catalogue]);
+  const refresh = useCallback(() => { catalogue?.refreshForPicker(); }, [catalogue]);
+  useEffect(() => (catalogue && active ? catalogue.retainPicker() : undefined), [catalogue, active]);
   useEffect(() => {
-    if (readOnEntry) read();
-  }, [readOnEntry, read]);
+    if (!active) return;
+    if (readOnEntry === true) read();
+    else if (readOnEntry === 'once') catalogue?.ensureLoaded();
+  }, [active, readOnEntry, read, catalogue]);
   const remoteEngines = useSyncExternalStore(
     catalogue?.subscribe ?? subscribeDisabled,
     catalogue?.snapshot ?? unreadSnapshot,
     unreadSnapshot,
   );
-  return { engines: remoteEngines, read };
+  return { engines: remoteEngines, read, refresh };
 }
 
 /**
@@ -309,7 +479,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
  * `null` = that computer has not answered yet (or could not be reached).
  */
-export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+export function useDevicesPluginEngines(deviceIds: readonly string[], prefetchOnReconnect = false): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
   read: (deviceId?: string) => void;
 } {
@@ -330,12 +500,12 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
-    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
+    // Picker candidates read on demand. A visible settings list can also recover on reconnect.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, prefetchOnReconnect));
     return () => {
       for (const off of offs) off();
     };
-  }, [sources]);
+  }, [sources, prefetchOnReconnect]);
   // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
   const cache = useRef<{
     sources: typeof sources;
@@ -416,6 +586,8 @@ export function usePluginEngineIdentity(
 export function resetPluginEnginesStoreForTests(): void {
   detachPush?.();
   detachPush = null;
+  for (const timer of activeRefreshTimers) clearTimeout(timer);
+  activeRefreshTimers.clear();
   listeners.clear();
   generation = 0;
   engines = NO_ENGINES;

@@ -61,3 +61,18 @@ export async function restoreCodexModelSnapshot(
     || !Array.isArray(saved.entries) || saved.entries.length > 1000) return;
   return { models: mapCodexModelsToCatalog({ models: saved.entries }), confirmedAt: saved.confirmedAt };
 }
+
+/**
+ * The account a slot's saved list was confirmed for, for display while its account cannot be read
+ * after a restart. A sign-out clears the file, so presence is last-known sign-in evidence only.
+ */
+export async function readSavedCodexModelAccount(slot: string): Promise<string | undefined> {
+  let raw: string;
+  try { raw = await readFile(snapshotPath(slot), 'utf8'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const accountKey = JSON.parse(raw)?.accountKey;
+  return typeof accountKey === 'string' && accountKey ? accountKey : undefined;
+}

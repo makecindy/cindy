@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BotProfile } from '../botStore';
 import {
   botEntryTarget,
+  botOpenRoute,
   BotCanonicalSessionCreateTimeoutError,
   createBotCanonicalSessionWithRetry,
   isRetryableBotCanonicalSessionCreateError,
@@ -31,6 +32,27 @@ describe('botEntryTarget', () => {
   it('excludes archived and deleting teammates even if remembered or built-in', () => {
     expect(botEntryTarget([profile('archived', { status: 'archived' }), profile('cindy', { status: 'deleting', templateId: 'cindy' })], 'cindy')).toBeNull();
     expect(botEntryTarget([])).toBeNull();
+  });
+});
+
+// Sidebar opens used to always pass through /bots/:botId (spinner + session read)
+// before the chat. Only a healthy main chat may skip it; every case the Bot page
+// validates or repairs (cindy-bots-runtime §3.1) must keep going there.
+describe('botOpenRoute', () => {
+  const main = (status: 'active' | 'archived' | 'deleted') => ({ id: 'main', kind: 'chat', role: 'canonical', status, title: '', updatedAt: 1 });
+  const bot = (extra: Partial<BotProfile> = {}) =>
+    ({ id: 'bot-1', name: 'B', status: 'active', canonicalSessionId: 'main', sessions: [main('active')], ...extra }) as BotProfile;
+  it('opens a healthy main chat directly, marked as a direct entry', () => {
+    expect(botOpenRoute(bot())).toEqual({ to: '/bots/bot-1/session/main', state: { botDirectEntry: true } });
+  });
+  it.each([
+    ['no main chat link', bot({ sessions: [] })],
+    ['an archived main chat', bot({ sessions: [main('archived')] as BotProfile['sessions'] })],
+    ['a deleted main chat', bot({ sessions: [main('deleted')] as BotProfile['sessions'] })],
+    ['a paused profile', bot({ status: 'paused' })],
+    ['a pending invitation without a main chat pointer', bot({ canonicalSessionId: undefined, invitation: { stage: 'welcome' } as BotProfile['invitation'] })],
+  ])('keeps the Bot page hand-off for %s', (_case, input) => {
+    expect(botOpenRoute(input)).toEqual({ to: '/bots/bot-1' });
   });
 });
 
@@ -158,9 +180,9 @@ describe('Bot task route recovery', () => {
   // Retryable load failures are exercised through the rendered BotSessionView
   // in botIslandVisibility.test.tsx. Valid stale URLs may redirect to their task.
 
+  // Roster-fed @ candidates and the unread boundary are exercised through the rendered
+  // BotSessionView (botSessionPresentation / botSessionRead), without a second `bots.list`.
   it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
-    expect(source).toContain('window.electronAPI.localDb.bots.list(');
-    expect(source).toContain('lastReadAtByBotId: { [botId]: lastReadAt }');
     expect(source).toContain('botMentions={mentions}');
     expect(source).toContain('botIdentity={chatIdentity ?? gate.identity}');
     // The live identity is wrapped with canonicalChat so only the main private chat offers add-to-group.

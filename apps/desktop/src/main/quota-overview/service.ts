@@ -17,6 +17,7 @@
  */
 
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
+import { PLUGIN_USAGE_READ_INTERVAL_MS, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type {
   MobileCodexRateLimitsResult,
   MobileUsageWidgetSnapshotResult,
@@ -48,7 +49,9 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { readPluginHarnessUsage } from '../cindy-brain/pluginHarnesses.js';
+import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
+import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { getSessionProvider, hasSessionProvider } from '../maker-host/session-provider-store.js';
 import {
   readClaudeSubscriptionUsageSnapshotForDeviceLink,
@@ -138,6 +141,7 @@ export interface QuotaOverviewBuild {
 type BuildListener = (build: QuotaOverviewBuild) => void;
 
 interface UsageCacheEntry {
+  currency?: 'CNY' | 'USD';
   /** Data owner the history belongs to; a read that outlives an account switch is dropped. */
   ownerId: string | null;
   payload: UsageHistoryPayload;
@@ -179,6 +183,8 @@ export class QuotaOverviewService {
   private remoteSeen: TimedCache<Map<string, RemoteSeen>> | null = null;
   private readonly remoteInFlight = new OwnedInFlight<MenubarSubscriptionInput[]>();
   private readonly resets = new Map<string, TimedCache<MenubarResetCredits | null>>();
+  private readonly pluginUsage = new Map<string, TimedCache<GhostHarnessUsage | null>>();
+  private readonly pluginUsageInFlight = new Map<string, OwnedInFlight<GhostHarnessUsage | null>>();
   /** Received shares' quotas, read only through each share's own authorization. */
   private sharedReader: SharedQuotaReader | null = null;
   /** The reader's latest result and the owner generation it was read for. */
@@ -349,6 +355,10 @@ export class QuotaOverviewService {
         this.accountsRevision += 1;
         this.scheduleRebuild();
       }),
+      onPluginEnginesChanged(() => {
+        this.pluginUsage.clear();
+        this.scheduleRebuild();
+      }),
       observeClaudeAccountUsage(() => {
         if (!this.balanceAccountKey()?.startsWith('quota:')) return;
         this.balance = null;
@@ -364,6 +374,7 @@ export class QuotaOverviewService {
           this.remote = null;
           this.remoteSeen = null;
           this.resets.clear();
+          this.pluginUsage.clear();
         }
         this.scheduleRebuild();
       }),
@@ -421,6 +432,8 @@ export class QuotaOverviewService {
     this.usageCache.clear();
     this.remote = null;
     this.resets.clear();
+    this.pluginUsage.clear();
+    this.pluginUsageInFlight.clear();
   }
 
   /**
@@ -509,17 +522,27 @@ export class QuotaOverviewService {
     }
   }
 
+  private usageCurrency() {
+    const currency = this.currentSettings.currency;
+    return currency === 'auto' ? undefined : currency;
+  }
+
   private async collectAndPublish(nowMs: number, force: boolean, markStale: () => void): Promise<void> {
     const generation = getActiveAppSession().generation;
     const accountsRevision = this.accountsRevision;
+    const currency = this.usageCurrency();
     const quotaRevision = readClaudeAccountUsageRevision();
     let stale = false;
     const collected = await collectMenubarInputs({
       nowMs,
+      now: Date.now,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+      listPluginEngines: () => listPluginEngineViews(),
+      readPluginEngineUsage: (key) => this.readPluginUsage(key, force, nowMs),
       readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
+      readZhipu: (providerId) => readZhipuCodingPlanAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),
@@ -527,7 +550,7 @@ export class QuotaOverviewService {
       readRemoteSubscriptions: () => this.readRemote(force, nowMs),
       readBalance: () => this.readBalance(force, nowMs),
       readUsage: async (scope: MenubarUsageScope) => {
-        const payload = await this.readUsage(scope, force, nowMs);
+        const payload = await this.readUsage(scope, force, nowMs, currency);
         if (payload.stale) {
           stale = true;
           markStale();
@@ -554,7 +577,7 @@ export class QuotaOverviewService {
     // An owner switch that started during the reads makes them the old owner's data.
     const after = getActiveAppSession();
     if (!this.started || isAppSessionBoundaryPending() || after.generation !== generation) return;
-    if (readClaudeAccountUsageRevision() !== quotaRevision || this.accountsRevision !== accountsRevision) {
+    if (currency !== this.usageCurrency() || readClaudeAccountUsageRevision() !== quotaRevision || this.accountsRevision !== accountsRevision) {
       this.scheduleRebuild(0);
       return;
     }
@@ -568,7 +591,7 @@ export class QuotaOverviewService {
     const input: MenubarBuildInput = {
       nowMs,
       locale,
-      moneySymbol: currentLedgerCurrency() === 'CNY' ? '¥' : '$',
+      moneySymbol: (collected.usage.scopes[this.currentSettings.scope].currency ?? this.usageCurrency() ?? currentLedgerCurrency()) === 'CNY' ? '¥' : '$',
       settings: this.currentSettings,
       // Shares have no disclosed account identity, so they are never merged with other accounts.
       sources: gate ? collected.sources : [...collected.sources, ...this.sharedSources(t)],
@@ -592,14 +615,15 @@ export class QuotaOverviewService {
   }
 
   /** Cached usage history; a stale payload is re-read on the next build. */
-  private async readUsage(scope: MenubarUsageScope, force: boolean, nowMs: number): Promise<UsageHistoryPayload> {
+  private async readUsage(scope: MenubarUsageScope, force: boolean, nowMs: number, currency?: 'CNY' | 'USD'): Promise<UsageHistoryPayload> {
     const ownerId = getActiveAppSession().dataOwnerId;
     const entry = this.usageCache.get(scope);
-    const cached = entry?.ownerId === ownerId ? entry : null;
+    const cached = entry?.ownerId === ownerId && entry.currency === currency ? entry : null;
     const maxAge = this.interactive ? USAGE_FRESH_WHILE_OPEN_MS : USAGE_FRESH_WHILE_CLOSED_MS;
     if (cached && !force && !cached.payload.stale && nowMs - cached.readAtMs < maxAge) return cached.payload;
     const read = this.usageChain.then(() =>
       readUsageHistory({
+        currency,
         days: MENUBAR_USAGE_DAYS,
         modelDays: MENUBAR_USAGE_DAYS,
         device: scope,
@@ -609,7 +633,7 @@ export class QuotaOverviewService {
     );
     this.usageChain = read.catch(() => undefined);
     const payload = await read;
-    if (getActiveAppSession().dataOwnerId === ownerId) this.usageCache.set(scope, { ownerId, payload, readAtMs: Date.now() });
+    if (getActiveAppSession().dataOwnerId === ownerId) this.usageCache.set(scope, { ownerId, currency, payload, readAtMs: Date.now() });
     return payload;
   }
 
@@ -673,6 +697,32 @@ export class QuotaOverviewService {
       log.info('quota codex resets unavailable', { providerId, error: errorMessage(error) });
       // Do not retry on every rebuild; the next window of the cadence tries again.
       this.resets.set(providerId, { ownerId, value: cached?.value ?? null, readAtMs: Date.now() });
+      return cached?.value ?? null;
+    }
+  }
+
+  /** One plugin engine's account usage, cached per owner and bypassed on explicit refresh. */
+  private async readPluginUsage(key: string, force: boolean, nowMs: number): Promise<GhostHarnessUsage | null> {
+    const ownerId = getActiveAppSession().dataOwnerId;
+    const entry = this.pluginUsage.get(key);
+    const cached = entry?.ownerId === ownerId ? entry : null;
+    const maxAge = this.interactive ? PLUGIN_USAGE_READ_INTERVAL_MS : BALANCE_FRESH_WHILE_CLOSED_MS;
+    if (cached && !force && nowMs - cached.readAtMs < maxAge) return cached.value;
+    let inFlight = this.pluginUsageInFlight.get(key);
+    if (!inFlight) {
+      inFlight = new OwnedInFlight<GhostHarnessUsage | null>();
+      this.pluginUsageInFlight.set(key, inFlight);
+    }
+    const readOwner = `${ownerId ?? ''}:${force ? 'force' : 'cached'}`;
+    try {
+      const value = await inFlight.run(readOwner, () => readPluginHarnessUsage(key));
+      if (getActiveAppSession().dataOwnerId !== ownerId) return null;
+      this.pluginUsage.set(key, { ownerId, value, readAtMs: Date.now() });
+      return value;
+    } catch (error) {
+      log.info('quota plugin usage unavailable', { key, error: errorMessage(error) });
+      if (getActiveAppSession().dataOwnerId !== ownerId) return null;
+      this.pluginUsage.set(key, { ownerId, value: cached?.value ?? null, readAtMs: Date.now() });
       return cached?.value ?? null;
     }
   }
