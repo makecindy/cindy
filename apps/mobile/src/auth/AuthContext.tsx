@@ -129,6 +129,7 @@ import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
+import { clearBotGroupComposerDrafts } from '@/session/botGroupComposerDraft';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
@@ -3040,6 +3041,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
+    // 群聊输入框草稿是这个账号写下的文字，退出时随账号数据一起清。
+    await clearBotGroupComposerDrafts().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
     await clearCanaryChannel().catch(() => undefined);

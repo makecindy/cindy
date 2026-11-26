@@ -136,6 +136,29 @@ export async function clearComposerDrafts(): Promise<void> {
   await AsyncStorage.multiRemove(ownedKeys).catch(() => undefined);
 }
 
+/** Clears every draft whose id starts with `idPrefix`, in memory and on disk; other drafts stay. */
+export async function clearComposerDraftsWithPrefix(idPrefix: string): Promise<void> {
+  if (!idPrefix) return;
+  const ids = new Set([...drafts.keys(), ...documentDrafts.keys(), ...pendingPersistTimers.keys(), ...pendingDocumentPersistTimers.keys()]);
+  for (const id of ids) {
+    if (!id.startsWith(idPrefix)) continue;
+    cancelPendingPersist(id);
+    cancelPendingDocumentPersist(id);
+    drafts.delete(id);
+    documentDrafts.delete(id);
+    clearedDrafts.add(id);
+    clearedDocumentDrafts.add(id);
+  }
+  await drainPendingStorageOperations();
+  const encodedPrefix = encodeURIComponent(idPrefix);
+  const keys = await AsyncStorage.getAllKeys().catch(() => [] as readonly string[]);
+  const ownedKeys = keys.filter((key) => (
+    key.startsWith(`${STORAGE_KEY_PREFIX}.${encodedPrefix}`) || key.startsWith(`${DOCUMENT_STORAGE_KEY_PREFIX}.${encodedPrefix}`)
+  ));
+  if (ownedKeys.length === 0) return;
+  await AsyncStorage.multiRemove(ownedKeys);
+}
+
 export async function flushComposerDraftWrites(sessionId?: string): Promise<void> {
   const normalizedSessionId = sessionId === undefined ? undefined : normalizeSessionId(sessionId);
   if (sessionId !== undefined && !normalizedSessionId) return;

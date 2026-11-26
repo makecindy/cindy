@@ -284,6 +284,26 @@ describe('composerDraftStore', () => {
     expect(store.get(key)).toBeUndefined();
   });
 
+  // Unit regression: signing out clears group chat drafts. Pending and stored group drafts must go,
+  // including one only on disk from an earlier launch, while task drafts stay untouched.
+  it('clears only drafts under a prefix, in memory, pending and on disk', async () => {
+    vi.useFakeTimers();
+    const { __testing, clearComposerDraftsWithPrefix, flushComposerDraftWrites, readComposerDraft, readComposerDraftSync, saveComposerDraft } = await import('@/session/composerDraftStore');
+    saveComposerDraft('s1', 'task draft');
+    saveComposerDraft('bot-group:a:mac:g1:', 'stored group draft');
+    await flushComposerDraftWrites();
+    saveComposerDraft('bot-group:a:mac:g2:', 'pending group draft');
+    store.set(__testing.storageKeyForSession('bot-group:a:mac:g3:'), 'earlier launch');
+
+    await clearComposerDraftsWithPrefix('bot-group:');
+    await vi.advanceTimersByTimeAsync(__testing.persistDebounceMs);
+
+    expect([...store.keys()]).toEqual([__testing.storageKeyForSession('s1')]);
+    expect(readComposerDraftSync('bot-group:a:mac:g1:')).toBeNull();
+    expect(await readComposerDraft('bot-group:a:mac:g3:')).toBeNull();
+    expect(readComposerDraftSync('s1')).toBe('task draft');
+  });
+
   it('orders a new persistent write after an in-flight clear', async () => {
     const asyncStorage = (await import('@react-native-async-storage/async-storage')).default;
     const {
