@@ -3,6 +3,8 @@ import {
   PeerRecoveryScheduler,
   DeviceLinkError,
   PROTOCOL_VERSION,
+  SSH_ACCESS_CHANNEL,
+  SSH_ACCESS_EXAMPLES,
   type Envelope,
   type InvokePayload,
   type LinkOpenPayload,
@@ -78,6 +80,10 @@ export function createHost(client: DeviceLinkClient) {
         break;
       case "local-db:sessions:list":
         result = [{ id: SESSION_ID, title: "Fixture" }];
+        break;
+      // A target's SSH access status, from the examples shared by both ends (packages/device-link/src/sshAccess.ts).
+      case SSH_ACCESS_CHANNEL:
+        result = SSH_ACCESS_EXAMPLES.status.valid[0].input;
         break;
       case "fixture:held": {
         const { src, id } = env;
