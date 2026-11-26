@@ -95,6 +95,14 @@ export function ErrorMessageCard({
     t(reason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
   // 历史错误行与实时横幅同一口径：上游 5xx（无正文）时点名状态，不落到通用兜底。
   const upstreamStatusError = parseUpstreamStatusError(decoded);
+  // #12970 review: 「未发送」必须压过上游状态码。Pi 历史读取被拒时上游可能返回
+  // 502/529，先命中状态文案会让历史行只说「回复未完成」，丢掉消息根本没发出去这个
+  // 事实。与 ErrorBanner 的 piRetryHistoryKey 分支同一优先级。
+  const piRetryHistoryKey =
+    i18nKey === 'chat.errorBanner.piRetryHistoryUnavailable'
+    || i18nKey === 'chat.errorBanner.piRetryHistoryTooLarge'
+      ? i18nKey
+      : undefined;
   const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
     ? t('chat.errorBanner.requestFormatError')
     : isStreamInterrupted
@@ -102,6 +110,7 @@ export function ErrorMessageCard({
       : isGatewayProxyTokenInvalid
         ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
         : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? (piRetryHistoryKey ? t(piRetryHistoryKey) : undefined)
           ?? (upstreamStatusError
             ? t('chat.errorBanner.upstreamStatusError', { status: upstreamStatusError.status })
             : undefined)

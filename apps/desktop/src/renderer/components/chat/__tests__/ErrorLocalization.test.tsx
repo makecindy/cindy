@@ -142,6 +142,27 @@ it.each(['live', 'history'] as const)('explains a refused Pi history read in %s'
   expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
 });
 
+// #12970, unit: the refused-history-read cause must outrank every broad status
+// matcher. 502/503/504 read as network-unreachable and 529 as overloaded, so a
+// banner that let them win would hide that the message was never sent at all.
+// Minimal failure input: the same synthesized message with a non-550 status.
+it.each(['502', '503', '504', '529', '500', '413'] as const)(
+  'keeps a refused Pi history read ahead of the %s status matchers',
+  async surface => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+    const message = `provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] Your message was not sent. Pi could not read the history needed to send it (status ${surface}). You can retry, or continue in a new task.`;
+    const retry = vi.fn();
+    render(<I18nextProvider i18n={i18n}>{surface === 'history'
+      ? <ErrorMessageCard message={message} />
+      : <ErrorBanner error={message} agentKind="pi" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+    expect(screen.getByText(zhCN.chat.errorBanner.piRetryHistoryUnavailable)).toBeTruthy();
+    expect(screen.queryByText(zhCN.chat.errorBanner.networkUnreachable)).toBeNull();
+    expect(screen.queryByText(zhCN.chat.errorBanner.overloadBusy)).toBeNull();
+    expect(screen.queryByText(/上游返回/)).toBeNull();
+  },
+);
+
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
 it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {
