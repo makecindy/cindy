@@ -474,6 +474,7 @@
     "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
     "alreadyInstalled": "This computer already has this plugin installed.",
     "unconfirmedMismatch": "Couldn’t confirm the result of this installation. The plugin with the same ID on this computer may come from a local file, another version or another source. Check it on the computer.",
+    "unconfirmedLegacy": "Couldn’t confirm the result of this install: the computer’s Cindy version is too old to confirm it. Check on the computer, or look in Installed.",
     "sourceUnverified": "This computer didn’t share the repository for this custom marketplace, so it can’t be installed from your phone. Update Cindy on that computer and refresh this marketplace first; if that doesn’t help, install on the computer.",
     "sourceUnverifiedShort": "Repository info missing, so it can’t be installed from your phone",
     "sourceChanged": "This marketplace’s source just changed. Choose the plugin to install again.",
@@ -528,9 +529,9 @@
       "untracked": "No longer tracked",
       "ended": "Finished",
       "readingBack": "Done. Checking the plugin on the computer…",
-      "changedSince": "Done, but this plugin has changed on the computer since.",
+      "unconfirmed": "Done, but the plugin on the computer has changed since, or it can’t be confirmed that it’s from this install.",
+      "legacyHost": "Done, but the computer’s Cindy version is too old to confirm it. Open it from Installed.",
       "goneSince": "Done, but this plugin isn’t on the computer now.",
-      "unproven": "Done, but the computer gave no evidence that the plugin there now is the one from this install, so it can’t be opened from here.",
       "succeededUnread": "Done, but the plugins on the computer couldn’t be read.",
       "uninstalled": "Uninstalled"
     },
@@ -539,6 +540,7 @@
     "decide": "View and decide",
     "decideBlocked": "Another operation on this computer isn’t finished. Decide once it is.",
     "readAgain": "Read again",
+    "showInstalled": "Go to Installed",
     "openUnavailable": "“{{device}}” is no longer in this account’s computers, so it can’t be opened from here."
   }
 }

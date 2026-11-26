@@ -9,7 +9,7 @@ import { pluginConsentPresentation } from "@/plugins/pluginConsentPresentation";
 import { usePluginManagement, __retainedForTests } from "@/plugins/usePluginManagement";
 import { __testing as slotTesting, pluginManagementSlotFor } from "@/plugins/pluginManagementSlot";
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
-import { HOST_INSTALL_SITUATIONS, hostInstallFacts, type HostInstallSituation } from "./hostPluginInstallFacts";
+import { CONTRACT_SAMPLES, HOST_INSTALL_SITUATIONS, hostInstallFacts, secondShapes, type HostInstallSituation } from "./hostPluginInstallFacts";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
@@ -1609,7 +1609,7 @@ describe("page slot release paths", () => {
       ["otherControllerReinstall", "plugins.market.unconfirmedMismatch", false],
       ["otherControllerUpdate", "plugins.market.unconfirmedMismatch", false],
       ["bindingLost", "plugins.market.unconfirmedMismatch", false],
-      ["olderHost", "plugins.market.unconfirmedMismatch", false],
+      ["olderHost", "plugins.market.unconfirmedLegacy", false],
       ["uninstalled", "plugins.market.unconfirmedNotInstalled", false],
     ] as const)("update, then the computer: %s", async (situation, text, opens) => {
       const { s } = await gone("update", (s, operationId) => s.become(situation, operationId));
@@ -1662,8 +1662,9 @@ describe("page slot release paths", () => {
   // instance gone closes the detail. Minimal failing input on 5983ba71dd: the catalog's next release said "changed".
   // Tier: unit/jsdom.
   it.each([
-    ["own", null], ["catalogAdvanced", null], ["localReinstall", "plugins.checks.result.unproven"],
-    ["otherControllerReinstall", "plugins.checks.result.unproven"], ["otherControllerUpdate", "plugins.checks.result.changedSince"],
+    ["own", null], ["catalogAdvanced", null], ["localReinstall", "plugins.checks.result.unconfirmed"],
+    ["otherControllerReinstall", "plugins.checks.result.unconfirmed"], ["otherControllerUpdate", "plugins.checks.result.unconfirmed"],
+    ["olderHost", "plugins.checks.result.legacyHost"],
   ] as const)("after an update succeeds on its detail, the computer then: %s", async (situation, said) => {
     const s = await updateScreen({ begin: (request) => { s.become(situation, request.input.operationId); return receiptOf(request, "succeeded"); } });
     fixture.alert.mockClear();
@@ -1672,11 +1673,13 @@ describe("page slot release paths", () => {
     expect(told.map((call) => call[1])).toEqual(said ? [said] : []);
     expect(fixture.props.get("header")).toBeDefined();
   });
-  it("after an update succeeds on its detail and the computer still has the old version: says it changed", async () => {
-    const s = await updateScreen({ begin: (request) => receiptOf(request, "succeeded") });
+  it("after an update succeeds on its detail and the computer still has the old version: says it cannot confirm", async () => {
+    // The old install is nobody's here: a V2.10 computer says `'unattributed'` for it.
+    const s = await updateScreen({ begin: (request) => { Object.assign(s.market, { installedOperationAttribution: "unattributed" });
+      return receiptOf(request, "succeeded"); } });
     fixture.alert.mockClear();
     await s.update();
-    expect(fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.changedSince")).toHaveLength(1);
+    expect(fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.unconfirmed")).toHaveLength(1);
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -2657,7 +2660,7 @@ it("installs from the market through the existing consent sheet and opens the ne
         if (request.input?.read === "capabilities") return { catalogPaging: true };
         if (request.input?.read === "catalog") return marketPage([item]);
         // Once installed, the computer's record of it carries this phone's operation id (hostPluginInstallFacts.ts).
-        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation" }] : [],
+        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
           unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
           ghosts: installed ? [{ instanceKey: "_root__demo", namespace: null, manifest, enabled: true,
             approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
@@ -2705,7 +2708,7 @@ it("installs from a custom Git market with the Host's manifest check and opens t
       case "management:snapshot":
         if (request.input?.read === "capabilities") return { catalogPaging: true };
         if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Demo Git Market"] };
-        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation" }] : [],
+        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
           unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
           ghosts: installed ? [{ instanceKey: "_root__repo-tools", namespace: null, manifest, enabled: true,
             approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
@@ -2740,12 +2743,21 @@ const hostError = (code: string) => new Error(`[${code}] Plugin management reque
 const demoGhost = { instanceKey: "_root__demo", namespace: null, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" },
   enabled: true, approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
 /**
+ * What a computer adds to its record of an installed plugin for this phone (contract V2.10, hostPluginInstallFacts.ts):
+ * this phone's operation (`'self'` with its id), anyone else's install (`'unattributed'`), or, from an older computer,
+ * nothing. Nothing either for a plugin that is not installed.
+ */
+function attributed(installed: boolean, own?: string, olderHost = false) {
+  if (!installed || olderHost) return {};
+  return own ? { installedOperationId: own, installedOperationAttribution: "self" } : { installedOperationAttribution: "unattributed" };
+}
+/**
  * The computer's installed snapshot as it answers this phone (dispatcher R-3): once this phone's install of Demo is there,
  * the snapshot's market records include Demo's, with this phone's operation id (contract V2.9; see
  * hostPluginInstallFacts.ts). `record` replaces that record (another situation's shape).
  */
 const managementSnapshot = (installed: boolean, record?: unknown) => ({ version: 1, ghosts: installed ? [demoGhost] : [],
-  market: { items: installed ? [record ?? { ...marketItem("demo", "Demo"), installState: "installed", installedOperationId: "screen-operation" }] : [],
+  market: { items: installed ? [record ?? { ...marketItem("demo", "Demo"), installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
     unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
 it("keeps the shown market rows when the same page is pulled to refresh", async () => {
   const item = marketItem("demo", "Demo");
@@ -2826,7 +2838,7 @@ describe("market install recovery", () => {
   const item = marketItem("demo", "Demo");
   // `installedBy`: the operation id the Host recorded with the installed package (contract V2.9), shown to this device.
   function installWire(options: { begin?: () => unknown; answer?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean;
-    installedBy?: () => string | undefined }) {
+    installedBy?: () => string | undefined; olderHost?: boolean }) {
     return marketWire((request) => {
       switch (request.actionId) {
         case "management:snapshot":
@@ -2836,7 +2848,7 @@ describe("market install recovery", () => {
         case "management:market-detail":
           // Like the Host: installState comes from the market-source record of this exact plugin.
           return options.detail ? options.detail() : { ...item, installState: options.installed?.() ? "installed" : "not-installed",
-            ...(options.installedBy?.() ? { installedOperationId: options.installedBy() } : {}),
+            ...attributed(!!options.installed?.(), options.installedBy?.(), options.olderHost),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return options.begin!();
         case "management:answer": return options.answer!();
@@ -2891,7 +2903,7 @@ describe("market install recovery", () => {
               const items = scope === "custom" || scope === "all" ? (world.installed && world.hide === "excludeInstalled" ? [] : [custom]) : [official];
               return { ...marketPage(items), customSourceNames: ["Demo Git Market"] };
             }
-            return { version: 1, market: { items: world.installed ? [{ ...custom, installState: "installed", installedOperationId: "screen-operation" }] : [],
+            return { version: 1, market: { items: world.installed ? [{ ...custom, installState: "installed", installedOperationId: "screen-operation", installedOperationAttribution: "self" }] : [],
               unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }, ghosts: world.installed ? [ghost] : [] };
           }
           case "management:market-detail": return { ...custom, manifest };
@@ -3042,7 +3054,7 @@ describe("market install recovery", () => {
           case "management:market-detail": if (world.facts) return { ...(world.facts.record as object),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: (world.facts.record as { version: string }).version } };
             return { ...item, installState: world.installed ? "installed" : "not-installed",
-            ...(world.installedBy ? { installedOperationId: world.installedBy } : {}), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+            ...attributed(world.installed, world.installedBy), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
           case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");    // written; the reply is lost
           case "management:answer": return world.answer ? world.answer() : receipt("running");
           case "management:operation": return world.operation();
@@ -3264,9 +3276,9 @@ describe("market install recovery", () => {
       target: { ...item, installState: "installed" } as any, instance: demoGhost as any, next: { releaseId: "demo@2", version: "2" } });
     const afterFinal: Record<HostInstallSituation, string | null> = {
       own: null, catalogAdvanced: null,
-      localReinstall: "plugins.checks.result.unproven", otherControllerReinstall: "plugins.checks.result.unproven",
-      bindingLost: "plugins.checks.result.unproven", olderHost: "plugins.checks.result.unproven",
-      otherControllerUpdate: "plugins.checks.result.changedSince", uninstalled: "plugins.checks.result.goneSince",
+      localReinstall: "plugins.checks.result.unconfirmed", otherControllerReinstall: "plugins.checks.result.unconfirmed",
+      bindingLost: "plugins.checks.result.unconfirmed", olderHost: "plugins.checks.result.legacyHost",
+      otherControllerUpdate: "plugins.checks.result.unconfirmed", uninstalled: "plugins.checks.result.goneSince",
     };
     it.each(HOST_INSTALL_SITUATIONS)("succeeded, then the computer: %s", async (situation) => {
       const world: World = { operation: () => receipt("running"), installed: false };
@@ -3282,9 +3294,40 @@ describe("market install recovery", () => {
     // As the computer answers (dispatcher R-3): an older package of the same plugin installed over it rewrites the record
     // (no evidence for this phone, the record an older release on this route); the root instance gone with one of the same
     // name in another namespace leaves the root record not installed.
+    // Contract V2.10's samples ② and ③ (their evidence fields byte for byte, on this test's plugin) and every shape it
+    // lists under ②, after a final receipt and after it is gone: never Open; ② "changed or cannot be confirmed", ③ "older
+    // computer, open it from Installed" (with the way there). Sample ① is the `catalogAdvanced` row above (its shape on
+    // this test's plugin; the samples' operation id is not this phone's). Tier: unit/jsdom.
+    const evidenceOf = (sample: Record<string, unknown>) => Object.fromEntries(Object.entries(sample)
+      .filter(([key]) => key === "installState" || key === "installedOperationId" || key === "installedOperationAttribution"));
+    it.each([
+      ["sample ②", evidenceOf(CONTRACT_SAMPLES.unattributed), "plugins.checks.result.unconfirmed", "plugins.market.unconfirmedMismatch"],
+      ["sample ③", evidenceOf(CONTRACT_SAMPLES.olderHost), "plugins.checks.result.legacyHost", "plugins.market.unconfirmedLegacy"],
+      ...secondShapes("screen-operation").map(([name, fields]) => [`② ${name}`, { installState: "update-available", ...fields },
+        "plugins.checks.result.unconfirmed", "plugins.market.unconfirmedMismatch"] as const),
+    ] as const)("succeeded or receipt gone, the computer's record is %s: no Open", async (_name, fields, afterFinal, afterGone) => {
+      for (const receiptGone of [false, true]) {
+        __retainedForTests.clear(); slotTesting.reset();
+        const world: World = { operation: () => receipt("running"), installed: false };
+        const requests = await toPanel(world);
+        world.operation = receiptGone ? () => { throw hostError("NOT_FOUND"); } : () => receipt("succeeded");
+        world.facts = { ghosts: [demoGhost], record: { ...item, ...fields } };
+        await verifyFrom(requests);
+        expect(status()).toContain(receiptGone ? afterGone : afterFinal);
+        expect(byId("plugins.checks.open")).toBeNull();
+        if (!receiptGone && afterFinal === "plugins.checks.result.legacyHost") {
+          // The way there: the installed segment (never a particular instance).
+          await click("plugins.checks.showInstalled");
+          expect(byId("plugins.checks")).toBeNull();
+          expect(fixture.props.get("segment").value).toBe("installed");
+        }
+        await act(async () => root.render(createElement("div")));
+        await settle(6);
+      }
+    });
     it.each([
       ["only an older version with the same id", { ghosts: [{ ...demoGhost, manifest: { ...demoGhost.manifest, version: "0" } }],
-        record: { ...item, installState: "update-available" } }, "plugins.checks.result.changedSince"],
+        record: { ...item, installState: "update-available", installedOperationAttribution: "unattributed" } }, "plugins.checks.result.unconfirmed"],
       ["the same name in another namespace", { ghosts: [{ ...demoGhost, instanceKey: "team__demo", namespace: "team" }],
         record: { ...item, installState: "not-installed" } }, "plugins.checks.result.goneSince"],
     ] as const)("succeeded, but %s: no Open, says why", async (_name, facts, said) => {
@@ -3299,7 +3342,7 @@ describe("market install recovery", () => {
     const afterGone: Record<HostInstallSituation, [string, boolean]> = {
       own: ["plugins.checks.result.installed", true], catalogAdvanced: ["plugins.checks.result.installed", true],
       localReinstall: ["plugins.market.unconfirmedMismatch", false], otherControllerReinstall: ["plugins.market.unconfirmedMismatch", false],
-      bindingLost: ["plugins.market.unconfirmedMismatch", false], olderHost: ["plugins.market.unconfirmedMismatch", false],
+      bindingLost: ["plugins.market.unconfirmedMismatch", false], olderHost: ["plugins.market.unconfirmedLegacy", false],
       otherControllerUpdate: ["plugins.market.unconfirmedMismatch", false], uninstalled: ["plugins.market.unconfirmedNotInstalled", false],
     };
     it.each(HOST_INSTALL_SITUATIONS)("NOT_FOUND, then the computer: %s: settles from its facts, writes nothing", async (situation) => {
@@ -3420,8 +3463,8 @@ describe("market install recovery", () => {
   it.each([
     ["installed on the computer", true, null, "screen-operation"],
     ["not on the computer", false, "plugins.market.unconfirmedNotInstalled", "screen-operation"],
-    // Contract V2.9: Allow was written, but the computer or another controller installed this release since: the computer
-    // then leaves the evidence out for this phone (dispatcher R-3: its actual answer, not another id).
+    // Allow was written, but the computer or another controller installed this release since: the computer then says
+    // `'unattributed'` to this phone (contract V2.10; dispatcher R-3: its actual answer, not another id).
     ["installed on the computer by another install", true, "plugins.market.unconfirmedMismatch", undefined],
   ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey, installedBy) => {
     let installed = false;
@@ -3453,11 +3496,11 @@ describe("market install recovery", () => {
   // installed by another operation stays unconfirmed. Minimal failing input: written Allow → offline → timeout →
   // receipt gone → reconnect. Tier: unit (jsdom, in-memory Host).
   it.each([
-    ["this attempt's operation installed it", "screen-operation", true],
-    // The computer or another controller installed the same release: the computer leaves the field out for this phone.
-    ["another install put the same release there (the field left out)", undefined, false],
-    ["the Host gives no operation evidence (older Host)", undefined, false],
-  ] as const)("checks a written Allow after offline, timeout and an expired receipt: %s", async (_name, installedBy, confirmed) => {
+    ["this attempt's operation installed it", "screen-operation", true, false],
+    // The computer or another controller installed the same release: V2.10 says `'unattributed'` to this phone.
+    ["another install put the same release there ('unattributed')", undefined, false, false],
+    ["the Host gives no operation evidence (older Host)", undefined, false, true],
+  ] as const)("checks a written Allow after offline, timeout and an expired receipt: %s", async (_name, installedBy, confirmed, olderHost) => {
     let installed = false, receiptGone = false, releaseReply!: () => void;
     const reply = new Promise<void>((resolve) => { releaseReply = resolve; });
     const requests = installWire({
@@ -3467,6 +3510,7 @@ describe("market install recovery", () => {
       operation: () => { if (receiptGone) throw hostError("NOT_FOUND"); return { operationId: "screen-operation", phase: "running" }; },
       installed: () => installed,
       installedBy: () => installed ? installedBy : undefined,
+      olderHost,
     });
     await openMarket();
     await act(async () => shownMarket().install(shownMarket().items[0]));
@@ -3486,7 +3530,8 @@ describe("market install recovery", () => {
     expect(opened).toBe(confirmed);
     // Unconfirmed: the row keeps the note and the market is released (confirmed opens the installed detail instead).
     if (!confirmed) {
-      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+      // An older computer (no evidence fields, V2.10 ③) says so; anything else not this operation's is ②.
+      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: olderHost ? "plugins.market.unconfirmedLegacy" : "plugins.market.unconfirmedMismatch" });
       expect(shownMarket()).toMatchObject({ installBusy: false });
     }
     // Only looked up: never a second begin or answer.
@@ -3504,7 +3549,9 @@ describe("market install recovery", () => {
       begin: () => { sameIdOnComputer = true; throw new Error("[TIMEOUT] remote invoke timed out"); },
       operation: () => { throw hostError("NOT_FOUND"); },
       installed: () => sameIdOnComputer,
+      // A record on this route (another release) is attributed to nobody here; a conflict carries no marker (V2.10).
       detail: () => ({ ...item, installState: sameIdOnComputer ? installState : "not-installed",
+        ...(sameIdOnComputer && installState === "update-available" ? { installedOperationAttribution: "unattributed" } : {}),
         releaseId: sameIdOnComputer ? releaseId : item.releaseId,
         manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } }),
     });
@@ -3531,10 +3578,10 @@ describe("market install recovery", () => {
   const sourceA = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
   it.each([
     // Another install (the computer's or another controller's, e.g. from a same-name source): the field is left out.
-    ["another install put the same id and release there (e.g. from a same-name source)", undefined, "unconfirmed"],
-    ["the computer gives no operation evidence (older Host)", undefined, "unconfirmed"],
-    ["this attempt's operation installed it", "screen-operation", "installed"],
-  ])("confirms a lost-receipt custom-market install only from the Host's operation evidence: %s", async (_name, installedOperationId, expected) => {
+    ["another install put the same id and release there (e.g. from a same-name source)", undefined, "unconfirmed", false],
+    ["the computer gives no operation evidence (older Host)", undefined, "unconfirmed", true],
+    ["this attempt's operation installed it", "screen-operation", "installed", false],
+  ])("confirms a lost-receipt custom-market install only from the Host's operation evidence: %s", async (_name, installedOperationId, expected, olderHost) => {
     const { publisherKind: _server, ...base } = marketItem("demo", "Demo");
     const item = { ...base, pluginId: "custom:Team/demo", sourceType: "git-market", sourceMarketName: "Team", sourceIdentity: sourceA };
     let installed = false, receiptGone = false;
@@ -3547,7 +3594,7 @@ describe("market install recovery", () => {
         case "management:market-detail":
           return { ...item, installState: installed ? "installed" : "not-installed",
             ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
-            ...(installed && installedOperationId ? { installedOperationId } : {}),
+            ...attributed(installed, installedOperationId, olderHost),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
           requestId: "consent", initiator: "user", origin: "custom-market", originLabel: "Team", originSource: sourceA,
@@ -3576,7 +3623,7 @@ describe("market install recovery", () => {
     else {
       expect(opened).toBe(false);
       expect(shownMarket()).toMatchObject({ installBusy: false });
-      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.unconfirmedMismatch" });
+      expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: olderHost ? "plugins.market.unconfirmedLegacy" : "plugins.market.unconfirmedMismatch" });
     }
     expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   });
@@ -3592,7 +3639,7 @@ describe("market install recovery", () => {
           if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Team"] };
           return managementSnapshot(installed);
         case "management:market-detail":
-          return { ...item, installState: installed ? "installed" : "not-installed", ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
+          return { ...item, installState: installed ? "installed" : "not-installed", ...attributed(installed), ...(installed ? { installedSourceId: sourceA.sourceId } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin": installed = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -3630,7 +3677,7 @@ describe("market install recovery", () => {
           if (request.input?.read === "catalog") return { ...marketPage(onComputer ? [] : [shown]), customSourceNames: custom ? ["Team"] : [] };
           return managementSnapshot(onComputer);
         case "management:market-detail":
-          return { ...shown, installState: onComputer ? "installed" : "not-installed",
+          return { ...shown, installState: onComputer ? "installed" : "not-installed", ...attributed(onComputer),
             ...(custom && onComputer ? { installedSourceId: folderB.sourceId } : {}),
             manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
         case "management:begin":
@@ -4231,7 +4278,7 @@ describe("market read fences and lost-receipt facts", () => {
     let holdDetail = false, installed = false, details = 0;
     queuedWire((request) => {
       if (request.input?.read === "capabilities") return { catalogPaging: true };
-      if (request.actionId === "management:market-detail") return { ...item, installState: installed ? "installed" : "not-installed", manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+      if (request.actionId === "management:market-detail") return { ...item, installState: installed ? "installed" : "not-installed", ...attributed(installed), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
       // The read-back after the install fails, so there is no instance to open (the case with no instanceKey).
       if (request.actionId === "management:snapshot" && request.input?.read === "installed") {
         if (installed) throw new Error("[TIMEOUT] read-back timed out");
@@ -4424,7 +4471,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(verifying);
-        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", ...(verifying ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: verifying ? "installed" : "not-installed", ...(verifying ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": verifying = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -4466,7 +4513,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           // A answers with the state at the time it was sent (before the instance appeared).
           return managementSnapshot(instancePresent && !(request as any).sentBeforeInstance);
-        case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", ...(instancePresent ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: instancePresent ? "installed" : "not-installed", ...(instancePresent ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -4508,7 +4555,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "catalog") return marketPage([item]);
           // A and B answer without the plugin; C answers with it installed.
           return managementSnapshot((request as any).read === "C");
-        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -4559,7 +4606,7 @@ describe("market read fences and lost-receipt facts", () => {
           if (request.input?.read === "capabilities") return { catalogPaging: true };
           if (request.input?.read === "catalog") return marketPage([item]);
           return managementSnapshot(began && present);
-        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+        case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
         case "management:begin": return demoConsent(request);
         case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
         case "management:operation": throw hostError("NOT_FOUND");
@@ -4616,7 +4663,7 @@ describe("market read fences and lost-receipt facts", () => {
             if (label === "B") bReturned = true;
             return managementSnapshot(began && (label === "A" ? true : label === "B" || bReturned ? bPresent : true));
           }
-          case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+          case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
           case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
           case "management:operation": throw hostError("NOT_FOUND");
@@ -4699,7 +4746,7 @@ describe("market read fences and lost-receipt facts", () => {
                 if (read) { read.returned = true; return managementSnapshot(began && read.present); }
                 return managementSnapshot(began && truth());
               }
-              case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+              case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
               case "management:begin": return demoConsent(request);
               case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
               case "management:operation": throw hostError("NOT_FOUND");
@@ -4790,7 +4837,7 @@ describe("market read fences and lost-receipt facts", () => {
               if (request.input?.read === "capabilities") return { catalogPaging: true };
               if (request.input?.read === "catalog") return marketPage([item]);
               return managementSnapshot(began && (round < 2 || presentInRound2));
-            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+            case "management:market-detail": return { ...item, installState: began ? "installed" : "not-installed", ...(began ? { installedOperationId: "screen-operation", installedOperationAttribution: "self" } : {}), manifest: demoManifest };
             case "management:begin": return demoConsent(request);
             case "management:answer": began = true; throw new Error("[TIMEOUT] remote invoke timed out");
             case "management:operation": throw hostError("NOT_FOUND");
@@ -4874,7 +4921,7 @@ describe("market read fences and lost-receipt facts", () => {
             if (request.input?.read === "catalog") return marketPage([item]);
             return managementSnapshot(present);
           case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed",
-            ...(ours ? { installedOperationId: "screen-operation" } : {}), manifest: demoManifest };
+            ...attributed(present, ours ? "screen-operation" : undefined), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
           case "management:answer": present = true; ours = true; throw new Error("[TIMEOUT] remote invoke timed out");
           case "management:operation":
@@ -4917,7 +4964,7 @@ describe("market read fences and lost-receipt facts", () => {
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage([item]);
             return managementSnapshot(present);
-          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", manifest: demoManifest };
+          case "management:market-detail": return { ...item, installState: present ? "installed" : "not-installed", ...attributed(present), manifest: demoManifest };
           case "management:begin": return demoConsent(request);
           case "management:answer": throw new Error("answer must not be sent");
           case "management:operation":

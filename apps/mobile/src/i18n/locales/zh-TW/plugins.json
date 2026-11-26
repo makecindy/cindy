@@ -474,6 +474,7 @@
     "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
     "alreadyInstalled": "這台電腦已經安裝了這個插件。",
     "unconfirmedMismatch": "未能確認這次安裝的結果；這台電腦上同標識的插件可能來自本機檔案、其他版本或其他來源，請在電腦上核對。",
+    "unconfirmedLegacy": "沒能確認這次安裝的結果：電腦端的 Cindy 版本較舊，無法核實。請在電腦上核對，或在「已安裝」裡查看。",
     "sourceUnverified": "這台電腦沒有提供這個自訂市場的儲存庫資訊，無法從手機安裝。請先在那台電腦上更新 Cindy 並重新整理這個市場；若仍不行，請直接在電腦上安裝。",
     "sourceUnverifiedShort": "缺少儲存庫資訊，無法從手機安裝",
     "sourceChanged": "這個市場的來源剛剛有變化，請重新選擇要安裝的插件。",
@@ -528,9 +529,9 @@
       "untracked": "已不再追蹤",
       "ended": "已結束",
       "readingBack": "已完成，正在確認電腦上的插件…",
-      "changedSince": "已完成，但電腦上這個插件之後又有變化。",
+      "unconfirmed": "已完成，但電腦上的這個插件之後有變更，或無法核實是這次安裝的。",
+      "legacyHost": "已完成，但電腦端的 Cindy 版本較舊，無法核實。請在「已安裝」裡打開。",
       "goneSince": "已完成，但電腦上現在沒有這個插件。",
-      "unproven": "已完成，但電腦沒有給出現在裝著的就是這次安裝的依據，無法從這裡打開。",
       "succeededUnread": "已完成，但沒能讀取電腦上的插件。",
       "uninstalled": "已解除安裝"
     },
@@ -539,6 +540,7 @@
     "decide": "查看並決定",
     "decideBlocked": "這台電腦上另一項操作還沒結束，結束後再決定。",
     "readAgain": "重新讀取",
+    "showInstalled": "前往已安裝",
     "openUnavailable": "「{{device}}」已不在這個帳號的電腦清單裡，無法從這裡開啟。"
   }
 }

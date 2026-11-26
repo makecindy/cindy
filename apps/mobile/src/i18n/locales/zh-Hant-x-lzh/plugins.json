@@ -474,6 +474,7 @@
     "unconfirmedNotInstalled": "此番納器之果未能確認；今此機未有此法器。",
     "alreadyInstalled": "此機已納此法器。",
     "unconfirmedMismatch": "此番納器之果未能確認；此機同名之法器或出自本地之卷、他版或他源，請就機核之。",
+    "unconfirmedLegacy": "未能確此番所裝之果：彼機之 Cindy 版舊，不能驗之。請於彼機核之，或於「已納」中觀之。",
     "sourceUnverified": "此機未示此自訂之坊之庫，不能自手機納之。請先於彼機更新 Cindy 並刷新此坊；若仍不可，請逕於電腦納之。",
     "sourceUnverifiedShort": "缺庫之訊，不能自手機納之",
     "sourceChanged": "此坊之源方易，請復擇所欲納之法器。",
@@ -528,9 +529,9 @@
       "untracked": "已不復隨之",
       "ended": "已終",
       "readingBack": "已成，方核彼機之法器…",
-      "changedSince": "已成，然彼機此法器其後又有所易。",
+      "unconfirmed": "已成，然彼機此法器其後有易，或不能驗其為此番所裝。",
+      "legacyHost": "已成，然彼機之 Cindy 版舊，不能驗之。請於「已納」中啟之。",
       "goneSince": "已成，然彼機今無此法器。",
-      "unproven": "已成，然彼機未示今所存者即此番所裝，不能於此啟之。",
       "succeededUnread": "已成，然未能讀彼機之法器。",
       "uninstalled": "已卸"
     },
@@ -539,6 +540,7 @@
     "decide": "觀而決之",
     "decideBlocked": "此機另有一事未竟，竟後再決。",
     "readAgain": "復讀",
+    "showInstalled": "往已納",
     "openUnavailable": "「{{device}}」已不在此號之機列，不能自此啟之。"
   }
 }

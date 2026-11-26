@@ -13,36 +13,31 @@ export interface FinishedPluginOperation {
 }
 
 /**
- * Why a finished operation offers no "Open" (the success, when there was one, stays): `gone`, the instance is not on
- * the computer now; `changed`, the plugin there now is another version, or the computer says it is not this
- * operation's; `unproven`, the computer gives no evidence that it is (see `pluginInstallEvidence`).
+ * Why a finished operation offers no "Open" (the success, when there was one, stays a past result): `gone`, no instance
+ * of it on the computer now (not installed, a conflict, or not in the installed snapshot); `unconfirmed`, the computer
+ * cannot attribute the instance there now to this operation (V2.10 ②); `legacy`, an older computer gives no evidence
+ * (③: the person opens it from the installed list).
  */
-export type PluginOperationNotOpened = "gone" | "changed" | "unproven";
+export type PluginOperationNotOpened = "gone" | "unconfirmed" | "legacy";
 export type PluginOperationOpens = { open: true; instanceKey: string } | { open: false; reason: PluginOperationNotOpened };
 /** What the list of checks and the installed detail say for each reason (plugins.json, 12 languages). */
 export const PLUGIN_NOT_OPENED_TEXT: Record<PluginOperationNotOpened, string> = {
   gone: "plugins.checks.result.goneSince",
-  changed: "plugins.checks.result.changedSince",
-  unproven: "plugins.checks.result.unproven",
+  unconfirmed: "plugins.checks.result.unconfirmed",
+  legacy: "plugins.checks.result.legacyHost",
 };
-type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "namespace" | "installedOperationId">;
+type MarketRecord = Pick<ManagedMarketItem, "pluginId" | "ghostId" | "namespace" | "installState" | "installedOperationId" | "installedOperationAttribution">;
 
 /**
  * Whether a finished install, update or page approval offers "Open" for an instance, and which (dispatcher O-2, R-1,
- * R-2). The one decision for every place that opens one after an operation: the list of checks (after a final receipt,
- * and after the receipt was gone), the market row that started an install, and the installed detail after an update.
- * It reads only what the computer has now; a success receipt is a past result and never makes an instance openable.
- * The caller has already fenced the account and the computer (the facts were read for this account from that computer).
- * Install and update, all of:
- * - the instance: an install, the market plugin it installed (its id and namespace; one of the same name in another
- *   namespace is not it); an update, the instance it started from (same instance key);
- * - the installed package: the instance's version (from the installed snapshot, the package on disk) is the version this
- *   operation installed. The market record's catalog fields (`releaseId`, `version`, `installState`) describe the
- *   catalog's current release, which may have moved on (`update-available`) with this install still in place, so they
- *   are not compared;
- * - the evidence: the computer's record of this plugin names this operation (`own`). `not-own` and `unavailable` do not
- *   open (`unavailable` stays closed until contract V2.10 says how an older computer is told apart).
- * Page approval: the instance it started from, with its pages approved now.
+ * R-2; contract V2.10). The one decision for every place that opens one after an operation: the list of checks (after
+ * a final receipt, and after the receipt was gone), the market row that started an install, and the installed detail
+ * after an update. It reads only the newest facts read from the computer: a success receipt is a past result and never
+ * makes an instance openable, however recent. The caller has already fenced the account and the computer.
+ * Install and update: the computer's record of this plugin (same market id; `pluginInstallEvidence`) is ① for this
+ * operation and the attempt's instance (ghostId, namespace), and that instance is in the installed snapshot (an update:
+ * the instance it started from). The record's catalog `releaseId` / `version` are not compared, nor versions at all: ①
+ * pins the installed package. Page approval: the instance it started from, its pages approved now.
  */
 export function pluginOperationOpens(operation: FinishedPluginOperation, facts: {
   ghosts: readonly ManagedPlugin[];
@@ -52,18 +47,19 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   if (operation.entry === "page-approval") {
     const instance = facts.ghosts.find((ghost) => ghost.instanceKey === operation.who.instanceKey);
     if (!instance) return { open: false, reason: "gone" };
-    return instance.uiCapabilityApproved === true ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "changed" };
+    return instance.uiCapabilityApproved === true ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "unconfirmed" };
   }
   const item = operation.detail;
   if ((operation.entry !== "market-install" && operation.entry !== "update") || !item) return { open: false, reason: "gone" };
+  const records: readonly MarketRecord[] = !facts.market ? [] : Array.isArray(facts.market) ? facts.market : [facts.market as MarketRecord];
+  // Only the records of this attempt's market id; of several, the one for its namespace.
+  const same = records.filter((entry) => entry.pluginId === item.pluginId);
+  const record = same.find((entry) => (entry.namespace ?? null) === (item.namespace ?? null)) ?? same[0];
+  const evidence = pluginInstallEvidence(record, { operationId: operation.operationId, ghostId: item.ghostId, namespace: item.namespace });
+  // A conflict: a package of the same id from elsewhere is there (not this attempt's instance, but not "gone" either).
+  if (evidence === "none") return { open: false, reason: record?.installState === "conflict" ? "unconfirmed" : "gone" };
+  if (evidence !== "confirmed") return { open: false, reason: evidence };
   const instance = facts.ghosts.find((ghost) => marketItemMatchesPlugin(item, ghost)
     && (operation.entry !== "update" || ghost.instanceKey === operation.who.instanceKey));
-  if (!instance) return { open: false, reason: "gone" };
-  if (instance.manifest.version !== item.version) return { open: false, reason: "changed" };
-  const records: readonly MarketRecord[] = !facts.market ? [] : Array.isArray(facts.market) ? facts.market : [facts.market as MarketRecord];
-  // The record of this plugin's instance: the same market id and namespace (the computer keys its evidence by both).
-  const record = records.find((entry) => entry.pluginId === item.pluginId && (entry.namespace ?? null) === (item.namespace ?? null));
-  const evidence = pluginInstallEvidence(record, operation.operationId);
-  if (evidence === "own") return { open: true, instanceKey: instance.instanceKey };
-  return { open: false, reason: evidence === "not-own" ? "changed" : "unproven" };
+  return instance ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "gone" };
 }

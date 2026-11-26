@@ -31,7 +31,7 @@ const KIND: Record<PluginSlotEntry, string> = {
  * the computer no longer has and that nothing on the computer can prove (`unprovable`: an uninstall, a page approval)
  * shows what the computer has now and offers only "Stop tracking": checking again could not settle it.
  */
-export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenInstalled }: {
+export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenInstalled, onShowInstalled }: {
   visible: boolean;
   lines: PluginOperationLine[];
   conclusions: PluginCheckConclusion[];
@@ -42,6 +42,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   onDecide(operationId: string): boolean;
   onClose(): void;
   onOpenInstalled(who: PluginSlotHolder, instanceKey: string): void;
+  /** "Go to Installed": closes the list and shows the installed segment (an older computer's result, V2.10 ③). */
+  onShowInstalled(): void;
 }) {
   const { t } = useTranslation(), styles = useThemedStyles(makeStyles), { colors } = useTheme();
   const listArea = useScrollOverflow();
@@ -72,11 +74,12 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
    * computer found the instance (only then "Open", and only on a computer still listed), is still reading, did not find
    * it, or failed to read ("Read again"); an uninstall has nothing to open.
    */
-  const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; openUnavailable?: boolean } => {
+  const ended = (line: PluginOperationLine): { text: string; open?: string; readAgain?: string; openUnavailable?: boolean; showInstalled?: boolean } => {
     const conclusion = line.check ? conclusions.find((item) => item.operationId === line.check!.operationId) : undefined;
     if (!conclusion) return { text: t(line.check ? "plugins.checks.result.untracked" : "plugins.checks.result.ended") };
     if (conclusion.result === "notInstalled") return { text: t("plugins.market.unconfirmedNotInstalled") };
     if (conclusion.result === "mismatch") return { text: t("plugins.market.unconfirmedMismatch") };
+    if (conclusion.result === "legacy") return { text: t("plugins.market.unconfirmedLegacy"), showInstalled: true };
     if (conclusion.result !== "succeeded" && conclusion.result !== "installed") return { text: t("plugins.checks.result." + conclusion.result) };
     if (conclusion.entry === "uninstall") return { text: t("plugins.checks.result.uninstalled") };
     const done = t("plugins.checks.result." + conclusion.result);
@@ -86,7 +89,9 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
           : { text: done, openUnavailable: true };
       case "pending": return { text: t("plugins.checks.result.readingBack") };
       // The success stands as a past result; the computer's facts now do not name this operation's instance.
-      case "gone": case "changed": case "unproven": return { text: t(PLUGIN_NOT_OPENED_TEXT[conclusion.readback]) };
+      case "gone": case "unconfirmed": return { text: t(PLUGIN_NOT_OPENED_TEXT[conclusion.readback]) };
+      // An older computer gives no evidence (V2.10 ③): the person opens it from the installed list.
+      case "legacy": return { text: t(PLUGIN_NOT_OPENED_TEXT.legacy), showInstalled: true };
       case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId };
       default: return { text: done };
     }
@@ -140,6 +145,14 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
                       ? <Text testID="plugins.checks.decideBlocked" style={styles.status}>{t("plugins.checks.decideBlocked")}</Text> : null}
                     <Text style={styles.hint}>{t("plugins.checks.stopHint")}</Text>
                   </>
+                ) : over?.showInstalled ? (
+                  // Only the installed list (its segment), never a particular instance: nothing proves which one it is.
+                  <View style={styles.actions}>
+                    <Pressable testID="plugins.checks.showInstalled" accessibilityRole="button" onPress={onShowInstalled}
+                      style={styles.button}>
+                      <Text style={styles.label}>{t("plugins.checks.showInstalled")}</Text>
+                    </Pressable>
+                  </View>
                 ) : over?.open || over?.readAgain ? (
                   <View style={styles.actions}>
                     {over.open ? (

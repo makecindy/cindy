@@ -476,6 +476,7 @@
     "unconfirmedNotInstalled": "No se pudo confirmar el resultado de esta instalación. El complemento no está en este ordenador ahora mismo.",
     "alreadyInstalled": "Este complemento ya está instalado en este ordenador.",
     "unconfirmedMismatch": "No se pudo confirmar el resultado de esta instalación. El complemento con el mismo identificador en este ordenador puede venir de un archivo local, de otra versión o de otro origen. Compruébalo en el ordenador.",
+    "unconfirmedLegacy": "No se pudo confirmar el resultado de esta instalación: la versión de Cindy del ordenador es demasiado antigua para confirmarlo. Compruébalo en el ordenador o en Instalados.",
     "sourceUnverified": "Este ordenador no ha indicado el repositorio de este mercado personalizado, así que no se puede instalar desde el teléfono. Primero actualiza Cindy en ese ordenador y actualiza este mercado; si sigue sin funcionar, instala directamente en el ordenador.",
     "sourceUnverifiedShort": "Falta el repositorio; no se puede instalar desde el teléfono",
     "sourceChanged": "El origen de este mercado acaba de cambiar. Vuelve a elegir el complemento que quieres instalar.",
@@ -530,9 +531,9 @@
       "untracked": "Ya no se sigue",
       "ended": "Terminado",
       "readingBack": "Hecho. Comprobando el complemento en el ordenador…",
-      "changedSince": "Hecho, pero este complemento ha cambiado en el ordenador desde entonces.",
+      "unconfirmed": "Hecho, pero el complemento del ordenador ha cambiado desde entonces, o no se puede confirmar que sea de esta instalación.",
+      "legacyHost": "Hecho, pero la versión de Cindy del ordenador es demasiado antigua para confirmarlo. Ábrelo desde Instalados.",
       "goneSince": "Hecho, pero este complemento ya no está en el ordenador.",
-      "unproven": "Hecho, pero el ordenador no ha confirmado que el complemento que tiene ahora sea el de esta instalación, así que no se puede abrir desde aquí.",
       "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
       "uninstalled": "Desinstalado"
     },
@@ -541,6 +542,7 @@
     "decide": "Ver y decidir",
     "decideBlocked": "Otra operación en este ordenador no ha terminado. Decide cuando termine.",
     "readAgain": "Volver a leer",
+    "showInstalled": "Ir a Instalados",
     "openUnavailable": "«{{device}}» ya no está entre los ordenadores de esta cuenta, así que no se puede abrir desde aquí."
   }
 }

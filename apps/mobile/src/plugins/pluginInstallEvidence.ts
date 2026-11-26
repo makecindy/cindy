@@ -1,22 +1,27 @@
 import type { ManagedMarketItem } from "./pluginManagementTypes";
 
 /**
- * What the computer says about whose operation installed the plugin that is there now (dispatcher R-1), read in this one
- * place from a market record the computer returned with its installed facts (snapshot item or market detail):
- * - `own`: the record names this operation (contract V2.9 `installedOperationId`, given only to the controller that ran
- *   that install, only while that very package is installed: the computer checks the package digest bound to it).
- * - `not-own`: the computer says the plugin there now is not this operation's.
- * - `unavailable`: the record gives no evidence either way.
- *
- * Today the wire cannot say `not-own` when the plugin was installed by someone else: the computer leaves the field out
- * (computer's own install or update, another controller's, background update, a lost binding) exactly as an older
- * computer that never gives it. Only another id of this same phone is visible. Contract V2.10 (front PR #12731) adds the
- * markers; only this function changes then.
+ * Whose install the computer says is there now, read in this one place from a market record it returned (snapshot
+ * item or market detail), by contract V2.10 (front PR #12731; it replaces V2.9's controller rule):
+ * - `confirmed` (①): `installed` / `update-available`, attributed `'self'` with this operation's id, and (when the
+ *   attempt knows its instance) the same ghostId and namespace. The computer then guarantees the installed record is the
+ *   one this operation committed and nothing installed another package since; no version comparison is needed.
+ * - `unconfirmed` (②): `installed` / `update-available` with a marker that is not ①: `'unattributed'` (the computer,
+ *   another controller, a lost binding or key), `'self'` with another id or none usable, any other value, an id without a
+ *   marker (the parser reads those last two as `'unknown'`).
+ * - `legacy` (③): `installed` / `update-available` with neither field: an older computer that gives no evidence.
+ * - `none`: no record of the plugin, or `not-installed` / `conflict`: no instance of this attempt there now.
+ * The record's `releaseId` / `version` are the catalog's current release and are never compared (V2.10).
  */
-export type PluginInstallEvidence = "own" | "not-own" | "unavailable";
-export function pluginInstallEvidence(record: Pick<ManagedMarketItem, "installedOperationId"> | null | undefined,
-  operationId: string): PluginInstallEvidence {
-  const id = record?.installedOperationId;
-  if (id === undefined) return "unavailable";
-  return id === operationId ? "own" : "not-own";
+export type PluginInstallEvidence = "confirmed" | "unconfirmed" | "legacy" | "none";
+export function pluginInstallEvidence(
+  record: Pick<ManagedMarketItem, "installState" | "installedOperationId" | "installedOperationAttribution" | "ghostId" | "namespace"> | null | undefined,
+  attempt: { operationId: string; ghostId?: string; namespace?: string | null },
+): PluginInstallEvidence {
+  if (!record || (record.installState !== "installed" && record.installState !== "update-available")) return "none";
+  const marker = record.installedOperationAttribution;
+  if (marker === undefined && record.installedOperationId === undefined) return "legacy";
+  const sameInstance = attempt.ghostId === undefined
+    || (record.ghostId === attempt.ghostId && (record.namespace ?? null) === (attempt.namespace ?? null));
+  return marker === "self" && record.installedOperationId === attempt.operationId && sameInstance ? "confirmed" : "unconfirmed";
 }

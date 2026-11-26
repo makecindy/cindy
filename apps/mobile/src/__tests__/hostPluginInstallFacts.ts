@@ -1,27 +1,27 @@
 /**
  * What a computer (Host) actually answers about an installed plugin after a phone's install or update, per situation
- * (dispatcher R-3). Tests use these shapes instead of convenient values the Host never sends.
+ * (dispatcher R-3, contract V2.10). Tests use these shapes instead of convenient values the Host never sends.
  *
- * Derived from the Host's own projection and its tests, at the front PR's head merged here:
- * - catalog / detail `installState` (apps/desktop/src/main/plugin-market/service.ts, custom markets ~L3150-3165, server
- *   market alike): `installed` when the installation record's release equals the catalog's current release,
- *   `update-available` when the record is on this route but an older release, `not-installed` without an install;
- *   `releaseId` / `version` are always the catalog's current release, never the installed one (no installed-release
- *   field exists on the item);
- * - `installedOperationId` (service.ts `withInstalledOperationIds` ~L3685-3732, contract V2.9): added only for the
- *   controller that ran that remote install, only for `installed` / `update-available`, only while the record's binding
- *   (operation id, controller tag, key id, package digest) matches the package on disk; any other install (computer's
- *   own, another controller's, background update) rewrites the record: the field is then absent for this phone. An
- *   older computer never sends it. Asserted by service-custom-sources.test.ts "records which remote operation installed a
- *   custom-market plugin and shows it only to that controller" (phone-a sees `op-…1`, desktop-b sees nothing; after
- *   desktop-b's update phone-a sees nothing; after a local update nobody does) and "records the remote operation for a
- *   server-market install as well";
- * - installed snapshot `ghosts[i].manifest` is the installed package (its version is the installed version).
- *
- * Situations that look the same on the wire today (V2.9): `localReinstall`, `otherControllerReinstall`, `bindingLost`,
- * `olderHost`. Contract V2.10 (front PR) will tell them apart; its sample responses join here then.
+ * - `CONTRACT_SAMPLES`: the three `management:market-detail` results of contract V2.10 (catalog at 2.1.0, the computer
+ *   on 2.0.0), copied byte for byte from the contract text; the Host asserts the same bytes
+ *   (service-custom-sources.test.ts "produces the contract samples byte for byte"). ① this phone's install, ② after the
+ *   computer or another controller installed it again, ③ an older computer.
+ * - `hostInstallFacts`: the same rules applied to this test file's own items (the Host's catalog projection, service.ts
+ *   ~L3150-3165: `installState` from the installation record's release against the catalog's current one; `releaseId` /
+ *   `version` always the catalog's; the attribution projection: `'self'` with the operation id only for the controller
+ *   that ran that remote install while its binding holds, `'unattributed'` for every other `installed` /
+ *   `update-available` record, neither field for `not-installed` / `conflict` or from an older computer).
+ * - `secondShapes`: the five shapes contract V2.10 lists under ② (not proven).
  */
 import type { ManagedMarketItem, ManagedPlugin } from "@/plugins/pluginManagementTypes";
+
+export const CONTRACT_SAMPLES = {
+  own: JSON.parse("{\"pluginId\":\"custom:Acme%20Team%20Plugins/weather-chip\",\"ghostId\":\"weather-chip\",\"namespace\":null,\"releaseId\":\"custom:Acme%20Team%20Plugins:weather-chip:2.1.0\",\"version\":\"2.1.0\",\"installState\":\"update-available\",\"sourceType\":\"local-market\",\"installedOperationId\":\"3f9c2a7e-5b1d-4c8e-9a6f-0d2b7e4c1a58\",\"installedOperationAttribution\":\"self\"}"),
+  unattributed: JSON.parse("{\"pluginId\":\"custom:Acme%20Team%20Plugins/weather-chip\",\"ghostId\":\"weather-chip\",\"namespace\":null,\"releaseId\":\"custom:Acme%20Team%20Plugins:weather-chip:2.1.0\",\"version\":\"2.1.0\",\"installState\":\"update-available\",\"sourceType\":\"local-market\",\"installedOperationAttribution\":\"unattributed\"}"),
+  olderHost: JSON.parse("{\"pluginId\":\"custom:Acme%20Team%20Plugins/weather-chip\",\"ghostId\":\"weather-chip\",\"namespace\":null,\"releaseId\":\"custom:Acme%20Team%20Plugins:weather-chip:2.1.0\",\"version\":\"2.1.0\",\"installState\":\"update-available\",\"sourceType\":\"local-market\"}"),
+} as const;
+/** The operation id in sample ①. */
+export const CONTRACT_SAMPLE_OPERATION_ID: string = CONTRACT_SAMPLES.own.installedOperationId;
 
 export type HostInstallSituation =
   | "own" | "localReinstall" | "otherControllerReinstall" | "otherControllerUpdate" | "uninstalled"
@@ -38,23 +38,38 @@ export function hostInstallFacts<I extends ManagedMarketItem, G extends ManagedP
   { ghosts: G[]; record: I } {
   const at = (version: string): G => ({ ...instance, manifest: { ...instance.manifest, version } });
   const record = (fields: Partial<ManagedMarketItem>): I => {
-    const { installedOperationId: _dropped, ...rest } = target;
+    const { installedOperationId: _id, installedOperationAttribution: _marker, ...rest } = target;
     return { ...rest, ...fields } as I;
   };
+  const own = { installedOperationId: operationId, installedOperationAttribution: "self" as const };
+  const unattributed = { installedOperationAttribution: "unattributed" as const };
   switch (situation) {
     // This phone's install is still the one there.
-    case "own": return { ghosts: [at(target.version)], record: record({ installState: "installed", installedOperationId: operationId }) };
-    // The computer (or a background update) or another controller installed the same release again: the record is
-    // rewritten, its evidence is not this phone's; a lost binding (key rotated, package digest changed) and an older
-    // computer look the same.
-    case "localReinstall": case "otherControllerReinstall": case "bindingLost": case "olderHost":
-      return { ghosts: [at(target.version)], record: record({ installState: "installed" }) };
+    case "own": return { ghosts: [at(target.version)], record: record({ installState: "installed", ...own }) };
+    // The computer (or a background update) or another controller installed the same release again, or the binding was
+    // lost (key rotated, package digest changed): the computer cannot attribute it to this phone.
+    case "localReinstall": case "otherControllerReinstall": case "bindingLost":
+      return { ghosts: [at(target.version)], record: record({ installState: "installed", ...unattributed }) };
+    // An older computer (no V2.10, no V2.9): neither field.
+    case "olderHost": return { ghosts: [at(target.version)], record: record({ installState: "installed" }) };
     // Another controller updated it to the catalog's next release (the catalog moved there too).
     case "otherControllerUpdate":
-      return { ghosts: [at(next.version)], record: record({ ...next, installState: "installed" }) };
+      return { ghosts: [at(next.version)], record: record({ ...next, installState: "installed", ...unattributed }) };
     case "uninstalled": return { ghosts: [], record: record({ installState: "not-installed", enabled: null }) };
-    // Only the catalog published its next release; this phone's install is untouched.
+    // Only the catalog published its next release; this phone's install is untouched (contract sample ①).
     case "catalogAdvanced":
-      return { ghosts: [at(target.version)], record: record({ ...next, installState: "update-available", installedOperationId: operationId }) };
+      return { ghosts: [at(target.version)], record: record({ ...next, installState: "update-available", ...own }) };
   }
+}
+
+/** The shapes contract V2.10 lists under ② (not proven), as the computer could send them for `operationId`. */
+export function secondShapes(operationId: string): Array<[string, Record<string, unknown>]> {
+  return [
+    ["'unattributed'", { installedOperationAttribution: "unattributed" }],
+    ["'self' with another operation id", { installedOperationAttribution: "self", installedOperationId: "4b1d2c3e-0000-4000-8000-000000000002" }],
+    ["an unknown value", { installedOperationAttribution: "someone-else" }],
+    ["'self' without an id", { installedOperationAttribution: "self" }],
+    ["'self' with an id of another shape", { installedOperationAttribution: "self", installedOperationId: "bad id!" }],
+    ["an id without a marker", { installedOperationId: operationId }],
+  ];
 }

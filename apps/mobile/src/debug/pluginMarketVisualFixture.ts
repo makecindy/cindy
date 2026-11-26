@@ -24,10 +24,11 @@ const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavaila
  * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on). After a success, as the computer
  * answers in each situation (dispatcher R-4): `reinstalled`, the computer installed the same version again itself (no
  * evidence for this phone); `uninstalledAfter`, the plugin was uninstalled; `catalogAhead`, only the catalog published
- * its next release (this install stays, `update-available`, still this phone's evidence).
+ * its next release (this install stays, `update-available`, still this phone's evidence); `legacyHost`, the computer
+ * answers from then on as an older one (no attribution fields, V2.10 ③).
  */
 export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone"
-  | "reinstalled" | "uninstalledAfter" | "catalogAhead";
+  | "reinstalled" | "uninstalledAfter" | "catalogAhead" | "legacyHost";
 const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
@@ -234,13 +235,15 @@ const CUSTOM_SOURCE_NAMES = [CUSTOM_MARKET, LEGACY_MARKET, LONG_MARKET, FOLDER_M
 const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string; operationId?: string }>();
 /** `readingBack` checks: the computer's installed reads stay out until the next seed. */
 let holdInstalledReads = false;
+/** `legacyHost` checks: the mock computer answers as an older one (no attribution fields at all). */
+let legacyHost = false;
 /** Demo plugins whose catalog moved on to its next release (`catalogAhead`). */
 const catalogAhead = new Set<string>();
 const NEXT_RELEASE = "1.5.0";
 export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
 /** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
 export function resetPluginMarketVisualComputer() {
-  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; failInstalledRead = false;
+  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; failInstalledRead = false;
   failInstalledReadOnCommit = false; seedInstalled();
 }
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
@@ -273,8 +276,11 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     ...(entry && !server && !demo.legacySource
       ? { installedSourceId: demo.sourceMoved ? "DemoOldMarketSource001" : marketSource(demo).sourceId } : {}),
     ...(entry && entry.version !== RELEASE ? { updateRequiresConsent: true as const } : {}),
-    // Only the phone that started that install is told (contract V2.9); the mock computer has just this phone.
-    ...(entry?.operationId ? { installedOperationId: entry.operationId } : {}),
+    // Contract V2.10: an install of this item is attributed to this phone's operation (`'self'` with its id; the mock
+    // computer has just this phone) or not (`'unattributed'`); an older computer (`legacyHost`) sends neither field.
+    ...(entry && !demo.conflict && !legacyHost ? entry.operationId
+      ? { installedOperationId: entry.operationId, installedOperationAttribution: "self" as const }
+      : { installedOperationAttribution: "unattributed" as const } : {}),
   };
 }
 const manifest = (demo: DemoPlugin, version = RELEASE) => ({
@@ -382,6 +388,7 @@ function receipt(operationId: string) {
   if (script?.behavior === "reinstalled") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE });
   if (script?.behavior === "uninstalledAfter") installed.delete(instanceKey(demo.ghostId));
   if (script?.behavior === "catalogAhead") catalogAhead.add(demo.ghostId);
+  if (script?.behavior === "legacyHost") legacyHost = true;
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };
 }

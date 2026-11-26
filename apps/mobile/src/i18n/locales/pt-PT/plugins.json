@@ -476,6 +476,7 @@
     "unconfirmedNotInstalled": "Não foi possível confirmar o resultado desta instalação. O plugin não está neste computador de momento.",
     "alreadyInstalled": "Este plugin já está instalado neste computador.",
     "unconfirmedMismatch": "Não foi possível confirmar o resultado desta instalação. O plugin com o mesmo identificador neste computador pode vir de um ficheiro local, de outra versão ou de outra origem. Verifique no computador.",
+    "unconfirmedLegacy": "Não foi possível confirmar o resultado desta instalação: a versão do Cindy no computador é demasiado antiga para isso. Verifique no computador ou em Instalados.",
     "sourceUnverified": "Este computador não indicou o repositório deste mercado personalizado, por isso não é possível instalar a partir do telemóvel. Primeiro atualize a Cindy nesse computador e atualize este mercado; se não resolver, instale diretamente a partir do computador.",
     "sourceUnverifiedShort": "Falta o repositório; não é possível instalar a partir do telemóvel",
     "sourceChanged": "A origem deste mercado acabou de mudar. Escolha novamente o plugin a instalar.",
@@ -530,9 +531,9 @@
       "untracked": "Já não é acompanhado",
       "ended": "Terminado",
       "readingBack": "Concluído. A verificar o plugin no computador…",
-      "changedSince": "Concluído, mas este plugin mudou no computador desde então.",
+      "unconfirmed": "Concluído, mas o plugin no computador mudou desde então, ou não é possível confirmar que é desta instalação.",
+      "legacyHost": "Concluído, mas a versão do Cindy no computador é demasiado antiga para o confirmar. Abra-o em Instalados.",
       "goneSince": "Concluído, mas este plugin já não está no computador.",
-      "unproven": "Concluído, mas o computador não confirmou que o plugin instalado agora é o desta instalação, pelo que não pode ser aberto a partir daqui.",
       "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
       "uninstalled": "Desinstalado"
     },
@@ -541,6 +542,7 @@
     "decide": "Ver e decidir",
     "decideBlocked": "Outra operação neste computador ainda não terminou. Decida quando terminar.",
     "readAgain": "Ler novamente",
+    "showInstalled": "Ir para Instalados",
     "openUnavailable": "«{{device}}» já não está entre os computadores desta conta, por isso não pode ser aberto a partir daqui."
   }
 }

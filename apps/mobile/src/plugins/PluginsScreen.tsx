@@ -1416,7 +1416,9 @@ function PluginDirectory() {
       ) : null}
       <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
         canOpen={knownTarget} onDecide={decide}
-        onClose={() => setChecksOpen(false)} onOpenInstalled={openInstalled} />
+        onClose={() => setChecksOpen(false)} onOpenInstalled={openInstalled}
+        // An older computer's result (V2.10 ③): the installed list, where the person opens the plugin themselves.
+        onShowInstalled={() => { setChecksOpen(false); if (market.detail) market.closeDetail(); setSegment("installed"); }} />
       <View style={styles.layout}>
         {wide || (!selected && !marketDetail) ? directory : null}
         {wide || selected || marketDetail ? (

@@ -476,6 +476,7 @@
     "unconfirmedNotInstalled": "Impossible de confirmer le résultat de cette installation. Le plugin n’est pas présent sur cet ordinateur pour le moment.",
     "alreadyInstalled": "Ce plugin est déjà installé sur cet ordinateur.",
     "unconfirmedMismatch": "Impossible de confirmer le résultat de cette installation. Le plugin portant le même identifiant sur cet ordinateur peut provenir d’un fichier local, d’une autre version ou d’une autre source. Vérifiez-le sur l’ordinateur.",
+    "unconfirmedLegacy": "Impossible de confirmer le résultat de cette installation : la version de Cindy sur l’ordinateur est trop ancienne pour cela. Vérifiez sur l’ordinateur ou dans Installés.",
     "sourceUnverified": "Cet ordinateur n’a pas indiqué le dépôt de ce marketplace personnalisé : l’installation depuis le téléphone n’est pas possible. Mettez d’abord Cindy à jour sur cet ordinateur et actualisez ce marketplace ; si cela ne suffit pas, installez directement depuis l’ordinateur.",
     "sourceUnverifiedShort": "Dépôt non indiqué : installation impossible depuis le téléphone",
     "sourceChanged": "La source de ce marketplace vient de changer. Choisissez à nouveau le plugin à installer.",
@@ -530,9 +531,9 @@
       "untracked": "Plus suivi",
       "ended": "Terminé",
       "readingBack": "Terminé. Vérification du plugin sur l’ordinateur…",
-      "changedSince": "Terminé, mais ce plugin a changé sur l’ordinateur depuis.",
+      "unconfirmed": "Réussi, mais le plugin sur l’ordinateur a changé depuis, ou il est impossible de confirmer qu’il provient de cette installation.",
+      "legacyHost": "Réussi, mais la version de Cindy sur l’ordinateur est trop ancienne pour le confirmer. Ouvrez-le depuis Installés.",
       "goneSince": "Terminé, mais ce plugin n’est plus sur l’ordinateur.",
-      "unproven": "Terminé, mais l’ordinateur n’a pas confirmé que le plugin présent est celui de cette installation : il ne peut pas être ouvert d’ici.",
       "succeededUnread": "Terminé, mais les plugins de l’ordinateur n’ont pas pu être lus.",
       "uninstalled": "Désinstallé"
     },
@@ -541,6 +542,7 @@
     "decide": "Voir et décider",
     "decideBlocked": "Une autre opération sur cet ordinateur n’est pas terminée. Décidez une fois qu’elle l’est.",
     "readAgain": "Relire",
+    "showInstalled": "Aller à Installés",
     "openUnavailable": "« {{device}} » ne fait plus partie des ordinateurs de ce compte et ne peut pas être ouvert d’ici."
   }
 }

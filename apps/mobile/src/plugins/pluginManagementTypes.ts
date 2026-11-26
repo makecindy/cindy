@@ -55,6 +55,23 @@ export interface ManagedMarketItem {
    * that a lost-receipt install is this attempt's result.
    */
   installedOperationId?: string;
+  /**
+   * Contract V2.10: whether the computer attributes the instance installed now to this controller's remote operation
+   * (`'self'`, always with `installedOperationId`) or not (`'unattributed'`); given for `installed` / `update-available`
+   * by computers that know it, never by older ones. `'unknown'` is the phone's own value for one that was sent but cannot
+   * be used (another value, or an operation id sent without a marker): it is never read as "older computer".
+   */
+  installedOperationAttribution?: 'self' | 'unattributed' | 'unknown';
+}
+/**
+ * The V2.10 marker as received: kept when it is one of the two values; any other value sent, or an operation id sent
+ * without one, becomes `'unknown'` (proven by nothing, but not the older computer's "no fields at all").
+ */
+export function receivedInstallAttribution(raw: Record<string, unknown>): ManagedMarketItem['installedOperationAttribution'] {
+  const value = raw.installedOperationAttribution;
+  if (value === 'self' || value === 'unattributed') return value;
+  if (value !== undefined || raw.installedOperationId !== undefined) return 'unknown';
+  return undefined;
 }
 /**
  * Host-generated, credential-free source of a custom market: the repository actually fetched from (host/owner/repo,
@@ -212,7 +229,10 @@ function safeMarketItem<T extends ManagedMarketItem>(v: T): T {
   // Additive identity: an unusable value is dropped, which makes any source check fail closed.
   if (safe.sourceIdentity !== undefined && !isPluginMarketSourceIdentity(safe.sourceIdentity)) delete safe.sourceIdentity;
   if (safe.installedSourceId !== undefined && !isPluginMarketSourceId(safe.installedSourceId)) delete safe.installedSourceId;
-  // Additive evidence (V2.9): a value of another shape counts as absent, so the result stays unconfirmed.
+  // Additive evidence (V2.9, V2.10): the marker as received (see receivedInstallAttribution); an id of another shape is
+  // dropped, so a `'self'` without a usable id proves nothing.
+  const attribution = receivedInstallAttribution(safe as unknown as Record<string, unknown>);
+  if (attribution) safe.installedOperationAttribution = attribution; else delete safe.installedOperationAttribution;
   if (safe.installedOperationId !== undefined && !isPluginOperationEvidenceId(safe.installedOperationId)) delete safe.installedOperationId;
   return safe;
 }

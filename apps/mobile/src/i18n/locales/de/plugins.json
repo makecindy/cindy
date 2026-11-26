@@ -474,6 +474,7 @@
     "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
     "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert.",
     "unconfirmedMismatch": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin mit derselben Kennung auf diesem Computer stammt möglicherweise aus einer lokalen Datei, einer anderen Version oder einer anderen Quelle. Bitte prüfe es auf dem Computer.",
+    "unconfirmedLegacy": "Das Ergebnis dieser Installation ließ sich nicht bestätigen: Die Cindy-Version auf dem Computer ist zu alt dafür. Prüfe es am Computer oder unter „Installiert“.",
     "sourceUnverified": "Dieser Computer hat das Repository dieses benutzerdefinierten Marktplatzes nicht angegeben. Installieren vom Handy ist daher nicht möglich. Aktualisiere zuerst Cindy auf diesem Computer und dann den Marktplatz; hilft das nicht, installiere direkt am Computer.",
     "sourceUnverifiedShort": "Kein Repository angegeben – am Computer installieren",
     "sourceChanged": "Die Quelle dieses Marktplatzes hat sich gerade geändert. Wähle das Plugin erneut aus.",
@@ -528,9 +529,9 @@
       "untracked": "Wird nicht mehr verfolgt",
       "ended": "Beendet",
       "readingBack": "Erledigt. Das Plugin auf dem Computer wird geprüft…",
-      "changedSince": "Erledigt, aber dieses Plugin hat sich seitdem auf dem Computer geändert.",
+      "unconfirmed": "Erledigt, aber das Plugin auf dem Computer hat sich seitdem geändert, oder es lässt sich nicht bestätigen, dass es aus dieser Installation stammt.",
+      "legacyHost": "Erledigt, aber die Cindy-Version auf dem Computer ist zu alt, um das zu bestätigen. Öffne es unter „Installiert“.",
       "goneSince": "Erledigt, aber dieses Plugin ist jetzt nicht auf dem Computer.",
-      "unproven": "Erledigt, aber der Computer hat nicht belegt, dass das Plugin dort jetzt aus dieser Installation stammt. Es lässt sich hier nicht öffnen.",
       "succeededUnread": "Erledigt, aber die Plugins auf dem Computer konnten nicht gelesen werden.",
       "uninstalled": "Deinstalliert"
     },
@@ -539,6 +540,7 @@
     "decide": "Ansehen und entscheiden",
     "decideBlocked": "Ein anderer Vorgang auf diesem Computer ist nicht abgeschlossen. Entscheide danach.",
     "readAgain": "Erneut lesen",
+    "showInstalled": "Zu „Installiert“",
     "openUnavailable": "„{{device}}“ gehört nicht mehr zu den Computern dieses Kontos und kann hier nicht geöffnet werden."
   }
 }

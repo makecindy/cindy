@@ -110,13 +110,15 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
   const ended = () => __retainedForTests.conclusions().map((c) => [c.entry, c.result, c.readback]);
   it.each([
     ["readingBack", () => expect(ended()).toEqual([["market-install", "succeeded", "pending"]])],
-    ["changed", () => expect(ended()).toEqual([["market-install", "succeeded", "changed"]])],
+    // An older package of the same plugin over it: the computer cannot attribute it to this phone (V2.10 ②).
+    ["changed", () => expect(ended()).toEqual([["market-install", "succeeded", "unconfirmed"]])],
     ["uninstalled", () => expect(ended()).toEqual([["uninstall", "succeeded", "none"]])],
     ["updateGone", () => expect(ended()).toEqual([["update", "installed", "verified"]])],
     ["unprovableUninstall", () => expect(__retainedForTests.checks().map((c) => [c.entry, c.unprovable])).toEqual([["uninstall", { present: true }]])],
     // Dispatcher R-4: a success, then the computer answers as it does when it reinstalled the same version itself, when
     // the plugin was uninstalled, and when only its catalog moved on (still this install: Open).
-    ["reinstalled", () => expect(ended()).toEqual([["market-install", "succeeded", "unproven"]])],
+    ["reinstalled", () => expect(ended()).toEqual([["market-install", "succeeded", "unconfirmed"]])],
+    ["legacyHost", () => expect(ended()).toEqual([["market-install", "succeeded", "legacy"]])],
     ["goneSince", () => expect(ended()).toEqual([["market-install", "succeeded", "gone"]])],
     ["catalogAhead", () => expect(ended()).toEqual([["market-install", "succeeded", "verified"]])],
   ] as const)("%s, after the list opened", async (state, assert) => {
@@ -164,6 +166,11 @@ describe("the mock computer speaks the protocol in every market scenario", () =>
       expect(detail.pluginId).toBe(pluginId);
       if (detail.sourceType !== "server" && !/Legacy/.test(detail.name)) expect(isPluginMarketSourceIdentity(detail.sourceIdentity), pluginId).toBe(true);
       if (detail.installedSourceId !== undefined) expect(detail.installedSourceId, pluginId).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      // Contract V2.10: installed / update-available always carry the marker, 'self' exactly with an operation id; nothing
+      // else carries either field.
+      const installedNow = detail.installState === "installed" || detail.installState === "update-available";
+      expect(detail.installedOperationAttribution, pluginId).toBe(installedNow ? detail.installedOperationId ? "self" : "unattributed" : undefined);
+      if (!installedNow) expect(detail.installedOperationId, pluginId).toBeUndefined();
     }
     // Every consent the mock computer asks for is a valid receipt, and (except the older Host's) one the phone can allow
     // for exactly what was chosen: the same plugin, version, kind and source.

@@ -14,9 +14,9 @@ import type { PluginSlotEntry } from "@/plugins/pluginManagementSlot";
  */
 export type VisualCheckState = "running" | "waiting" | "offline" | "awaitingYou" | "succeeded" | "unread" | "failed" | "untracked" | "many"
   | "readingBack" | "changed" | "uninstalled" | "decideBlocked" | "unprovableUninstall" | "updateGone"
-  | "reinstalled" | "goneSince" | "catalogAhead";
+  | "reinstalled" | "goneSince" | "catalogAhead" | "legacyHost";
 export const VISUAL_CHECK_STATES: VisualCheckState[] = ["running", "waiting", "offline", "awaitingYou", "succeeded", "unread", "failed", "untracked", "many",
-  "readingBack", "changed", "uninstalled", "decideBlocked", "unprovableUninstall", "updateGone", "reinstalled", "goneSince", "catalogAhead"];
+  "readingBack", "changed", "uninstalled", "decideBlocked", "unprovableUninstall", "updateGone", "reinstalled", "goneSince", "catalogAhead", "legacyHost"];
 /** A computer that is not in the account's list: its pending check shows as offline. */
 const AWAY_DEVICE = { deviceId: "cindy-visual-mock-away", deviceName: "CINDY Away Mock Mac" };
 /** The online mock computer (visualMock's VISUAL_MOCK_DEVICE_ID; not imported, so this module stays out of its imports). */
@@ -99,7 +99,8 @@ export async function seedPluginChecksForVisualMock(state: string): Promise<(() 
     case "untracked": { const c = await one("waiting"); return () => { c?.untrack(); }; }
     default: {
       const behavior: Record<string, VisualCheckBehavior> = { awaitingYou: "consent", succeeded: "succeeded", unread: "unread", failed: "failed",
-        readingBack: "readingBack", changed: "changed", reinstalled: "reinstalled", goneSince: "uninstalledAfter", catalogAhead: "catalogAhead" };
+        readingBack: "readingBack", changed: "changed", reinstalled: "reinstalled", goneSince: "uninstalledAfter", catalogAhead: "catalogAhead",
+        legacyHost: "legacyHost" };
       const c = await one(behavior[state]);
       return () => { void c?.reconcile(); };
     }

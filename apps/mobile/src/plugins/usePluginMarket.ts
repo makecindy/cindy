@@ -647,6 +647,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       const { deviceId: on, pluginId } = conclusion.who;
       const note = conclusion.result === "notInstalled" ? "plugins.market.unconfirmedNotInstalled"
         : conclusion.result === "mismatch" ? "plugins.market.unconfirmedMismatch"
+        : conclusion.result === "legacy" ? "plugins.market.unconfirmedLegacy"
           : conclusion.result === "failed" ? pluginMarketErrorKey(conclusion.errorCode) : undefined;
       if (note) setRowErrors((current) => ({ ...current, [errorKey(on, pluginId)]: note }));
       else if (conclusion.result === "succeeded" || conclusion.result === "installed") invalidateComputer(on, pluginId);

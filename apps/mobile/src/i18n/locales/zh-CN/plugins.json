@@ -474,6 +474,7 @@
     "unconfirmedNotInstalled": "没能确认这次安装的结果；目前这台电脑上没有这个插件。",
     "alreadyInstalled": "这台电脑已经安装了这个插件。",
     "unconfirmedMismatch": "没能确认这次安装的结果；这台电脑上同标识的插件可能来自本地文件、其他版本或其他来源，请在电脑上核对。",
+    "unconfirmedLegacy": "没能确认这次安装的结果：电脑端的 Cindy 版本较旧，无法核实。请在电脑上核对，或在「已安装」里查看。",
     "sourceUnverified": "这台电脑没有提供这个自定义市场的仓库信息，不能从手机安装。请先在那台电脑上更新 Cindy 并刷新这个市场；若仍不行，请直接在电脑上安装。",
     "sourceUnverifiedShort": "缺少仓库信息，不能从手机安装",
     "sourceChanged": "这个市场的来源刚刚有变化，请重新选择要安装的插件。",
@@ -528,9 +529,9 @@
       "untracked": "已不再跟踪",
       "ended": "已结束",
       "readingBack": "已完成，正在确认电脑上的插件…",
-      "changedSince": "已完成，但电脑上这个插件之后又有变化。",
+      "unconfirmed": "已完成，但电脑上的这个插件之后有变更，或无法核实是这次安装的。",
+      "legacyHost": "已完成，但电脑端的 Cindy 版本较旧，无法核实。请在「已安装」里打开。",
       "goneSince": "已完成，但电脑上现在没有这个插件。",
-      "unproven": "已完成，但电脑没有给出现在装着的就是这次安装的依据，不能从这里打开。",
       "succeededUnread": "已完成，但没能读取电脑上的插件。",
       "uninstalled": "已卸载"
     },
@@ -539,6 +540,7 @@
     "decide": "查看并决定",
     "decideBlocked": "这台电脑上另一项操作还没结束，结束后再决定。",
     "readAgain": "重新读取",
+    "showInstalled": "去已安装",
     "openUnavailable": "「{{device}}」已不在这个账号的电脑列表里，不能从这里打开。"
   }
 }

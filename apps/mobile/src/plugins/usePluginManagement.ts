@@ -60,15 +60,20 @@ export interface PluginCheckConclusion {
   entry: PluginSlotEntry;
   who: PluginSlotHolder;
   /** Final receipt, or (installs and updates whose receipt is gone) the verdict from the computer's facts. */
-  result: "succeeded" | "failed" | "cancelled" | "installed" | "notInstalled" | "mismatch";
+  /**
+   * Final receipt, or (installs and updates whose receipt is gone, contract V2.10) the verdict from the computer's
+   * facts: `installed` (①), `mismatch` (② not attributable to this operation), `legacy` (③ an older computer without
+   * evidence), `notInstalled` (no instance): only `installed` is a result; the others leave it unconfirmed.
+   */
+  result: "succeeded" | "failed" | "cancelled" | "installed" | "notInstalled" | "mismatch" | "legacy";
   errorCode?: string | null;
   /**
    * `pending`: the read is out; `verified`: the computer's facts name this operation's instance now (`instanceKey`,
-   * `pluginOperationOpens`); `gone`, `changed`, `unproven`: they do not (no instance now; another version or not this
-   * operation's; no evidence either way), so nothing opens and the success stays a past result; `failed`: it did not
-   * come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
+   * `pluginOperationOpens`, V2.10 ①); `gone`, `unconfirmed`, `legacy`: they do not (no instance now; not attributable to
+   * this operation; an older computer without evidence), so nothing opens and the success stays a past result;
+   * `failed`: it did not come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
    */
-  readback: "pending" | "verified" | "gone" | "changed" | "unproven" | "failed" | "none";
+  readback: "pending" | "verified" | "gone" | "unconfirmed" | "legacy" | "failed" | "none";
   /** The instance found by that read (never the instance the operation started from: an uninstall has none). */
   instanceKey?: string;
   /** Its own view was showing it and handled the result already (only the list of checks still tells it). */
@@ -223,7 +228,7 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
   const controller = entry.controller;
   const valid = () => !entry.dead && isMobileAuthOwnerCurrent(entry.owner) && controller.currentMissingReceiptFacts() === facts
     && controller.getState().operationId === check.operationId;
-  const settle = (result: "installed" | "notInstalled" | "mismatch", instanceKey?: string) => {
+  const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
     if (!valid() || !controller.untrack()) return;
     // The instance comes from the facts read after NOT_FOUND and the market's own record of this operation: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
@@ -236,9 +241,11 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
   try {
     const market = await createPluginManagementClient({ invoke: entry.invoke, deviceId: check.who.deviceId, isCurrent: valid })
       .detail(item.pluginId);
-    // The same decision as after a final receipt: the instance, its installed package and the computer's evidence.
+    // The same decision as after a final receipt (V2.10): only ① makes it this operation's result; ②, ③ and no
+    // instance leave it unconfirmed (without a receipt, ② does not even show the operation succeeded).
     const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market });
-    if (opens.open) settle("installed", opens.instanceKey); else settle("mismatch");
+    if (opens.open) settle("installed", opens.instanceKey);
+    else settle(opens.reason === "legacy" ? "legacy" : opens.reason === "gone" ? "notInstalled" : "mismatch");
   } catch { /* Market facts not read: still unconfirmed; "Check result" verifies again. */ }
 }
 /** After each change of an entry's controller: the list at the top, a market install's facts, a final result. */
