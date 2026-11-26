@@ -24,9 +24,12 @@ import {
   AUTO_AUXILIARY_MODEL_CHAIN,
   AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS,
 } from '../../../shared/auxiliaryModelChain';
-import type { AuxiliaryModelSettingsState } from '../../../shared/auxiliaryModelSettings';
+import type {
+  AuxiliaryModelOption,
+  AuxiliaryModelSettingsState,
+  AuxiliaryModelSettingsTestResult,
+} from '../../../shared/auxiliaryModelSettings';
 import { useAuxiliaryRouteHealth } from '@/hooks/useAuxiliaryRouteHealth';
-import type { AuxiliaryModelSettingsTestResult } from '../../../shared/auxiliaryModelSettings';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { AuxiliaryModelHealthNotice } from './AuxiliaryModelHealthNotice';
@@ -36,6 +39,9 @@ const log = createLogger('AuxiliaryModelSection');
 
 const SLOT_I18N = ['preferred', 'fallback1', 'fallback2'] as const;
 type AuxiliaryModelMode = 'automatic' | 'custom';
+type AuxiliaryTestFailure = Extract<AuxiliaryModelSettingsTestResult, { ok: false }>;
+/** Saved, failed, failed its test, or dropped because the account changed meanwhile. */
+type AuxiliarySaveOutcome = boolean | AuxiliaryTestFailure | 'stale';
 
 export function AuxiliaryModelSection() {
   const settingsRevision = useAppSettingsRevision('auxiliary-models');
@@ -45,12 +51,9 @@ export function AuxiliaryModelSection() {
   const cindyAiProvider = providers.find((provider) => provider.id === 'xd');
   const cindyAiName = cindyAiProvider ? providerDisplayName(cindyAiProvider, t) : null;
   const [settings, setSettings] = useState<AuxiliaryModelSettingsState | null>(null);
-  const [draftModels, setDraftModels] = useState<string[] | null>(null);
   const [pending, setPending] = useState(false);
-  const [saveState, setSaveState] = useState<'idle' | 'testing' | 'success' | 'failed' | 'restoring' | 'restored' | 'restoreFailed'>('idle');
   const [drafting, setDrafting] = useState(false);
-  const healthSnapshots = useAuxiliaryRouteHealth();
-  const [failedTest, setFailedTest] = useState<Extract<AuxiliaryModelSettingsTestResult, { ok: false }> | null>(null);
+  const routeHealth = useAuxiliaryRouteHealth();
   const pendingRef = useRef(false);
   const modelVisibilityVersion = useModelVisibilityVersion();
   const health = useAuxiliaryModelHealth();
@@ -73,33 +76,22 @@ export function AuxiliaryModelSection() {
   }, [settingsRevision]);
 
   const persistModels = useCallback(
-    async (models: string[]): Promise<boolean> => {
-      if (pendingRef.current) return false;
+    async (models: string[]): Promise<AuxiliarySaveOutcome> => {
+      if (pendingRef.current) return 'stale';
       pendingRef.current = true;
       setPending(true);
-      setSaveState(models.length ? 'testing' : 'restoring');
-      setFailedTest(null);
       const owner = getDataOwnerGeneration();
       try {
         const next = await window.electronAPI.maker.auxiliaryModelSettingsSet({ models });
-        if (!isDataOwnerGenerationCurrent(owner)) return false;
-        if ('ok' in next) {
-          setFailedTest(next);
-          setSaveState('failed');
-          return false;
-        }
+        if (!isDataOwnerGenerationCurrent(owner)) return 'stale';
+        if ('ok' in next) return next;
         setSettings(next);
-        setDraftModels(null);
-        setSaveState(models.length ? 'success' : 'restored');
-        setDrafting(false);
         return true;
       } catch {
-        if (!isDataOwnerGenerationCurrent(owner)) return false;
-        setSaveState(models.length ? 'failed' : 'restoreFailed');
+        if (!isDataOwnerGenerationCurrent(owner)) return 'stale';
         log.warn('auxiliaryModelSettingsSet failed');
         return false;
       } finally {
-        if (!isDataOwnerGenerationCurrent(owner)) setSaveState('idle');
         pendingRef.current = false;
         setPending(false);
       }
@@ -133,14 +125,94 @@ export function AuxiliaryModelSection() {
 
   if (!settings) return null;
 
-  const models = Array.isArray(settings.models) ? settings.models : [];
+  return (
+    <AuxiliaryModelSectionView
+      models={settings.models}
+      options={options}
+      pending={pending}
+      signInHint={authMode !== 'cloud'}
+      drafting={drafting}
+      setDrafting={setDrafting}
+      persistModels={persistModels}
+      health={health}
+      routeHealth={routeHealth}
+    />
+  );
+}
+
+export interface AuxiliaryModelSectionViewProps {
+  /** Persisted custom chain; empty = follow the automatic chain. */
+  models: readonly string[];
+  /** Slot catalog with availability already resolved by the owner (local: model visibility prefs). */
+  options: readonly AuxiliaryModelOption[];
+  pending: boolean;
+  /** No Cindy AI routes (local / signed-out): show the sign-in hint and do not seed them into a draft. */
+  signInHint: boolean;
+  /** First-time Custom is a draft only, cleared by a successful save. */
+  drafting: boolean;
+  setDrafting: (drafting: boolean) => void;
+  persistModels: (models: string[]) => Promise<AuxiliarySaveOutcome>;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+  /** Recent auxiliary failures of this computer; absent for another computer's settings. */
+  health?: ReturnType<typeof useAuxiliaryModelHealth>;
+  routeHealth?: ReturnType<typeof useAuxiliaryRouteHealth>;
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function AuxiliaryModelSectionView({
+  models: savedModels,
+  options,
+  pending,
+  signInHint,
+  drafting,
+  setDrafting,
+  persistModels,
+  headingStatus,
+  health,
+  routeHealth: healthSnapshots = [],
+}: AuxiliaryModelSectionViewProps) {
+  const { t } = useTranslation();
+  const [draftModels, setDraftModels] = useState<readonly string[] | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'testing' | 'success' | 'failed' | 'restoring' | 'restored' | 'restoreFailed'>('idle');
+  const [failedTest, setFailedTest] = useState<AuxiliaryTestFailure | null>(null);
+  const savingRef = useRef(false);
+  const save = async (next: readonly string[]): Promise<void> => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaveState(next.length ? 'testing' : 'restoring');
+    setFailedTest(null);
+    try {
+      const outcome = await persistModels([...next]);
+      if (outcome === 'stale') setSaveState('idle');
+      else if (outcome === true) {
+        setDraftModels(null);
+        setSaveState(next.length ? 'success' : 'restored');
+        setDrafting(false);
+      } else if (outcome === false) setSaveState(next.length ? 'failed' : 'restoreFailed');
+      else {
+        setFailedTest(outcome);
+        setSaveState('failed');
+      }
+    } finally {
+      savingRef.current = false;
+    }
+  };
+  // 智能路由的几项：合并整个供应商的写成「Anthropic · 路由（2 个来源）」，与选模型面板同一写法；自己排的归在「智能路由」下。
+  const pickerOptions = useMemo(() => options.map((option) => (option.route
+    ? { ...option, group: option.route.kind === 'merged'
+      ? t('modelGroups.picker.mergedLabel', { name: option.route.name, count: option.route.members })
+      : t('modelGroups.title'),
+    ...(option.route.name ? {} : { modelName: t('settings.auxiliaryModels.missingRoute') }) }
+    : option)), [options, t]);
+  const models = Array.isArray(savedModels) ? savedModels : [];
   const customized = models.length > 0;
   const showCustom = customized || drafting;
   // Keep the default/override split intact: first-time Custom is only a draft.
   // Local and signed-out sessions cannot use Cindy AI routes, so do not seed
   // those unavailable catalog pins into a draft that the user cannot select.
   const automaticDraftModels =
-    authMode === 'cloud'
+    !signInHint
       ? AUTO_AUXILIARY_MODEL_CHAIN.filter((ref) =>
           options.some((option) => option.id === ref && option.available),
         )
@@ -168,7 +240,7 @@ export function AuxiliaryModelSection() {
       setDrafting(false);
       return;
     }
-    void persistModels([]);
+    void save([]);
   };
 
   const applySlot = (index: number, pin: string | null): void | boolean | Promise<boolean> => {
@@ -206,7 +278,7 @@ export function AuxiliaryModelSection() {
   const failed = saveState === 'failed' || saveState === 'restoreFailed';
   const failedSlot = failedTest && SLOT_I18N[activeModels.indexOf(failedTest.model)];
   const failedModel = failedTest && localizedModelName(
-    options.find(option => option.id === failedTest.model)?.modelName ?? failedTest.model, t,
+    pickerOptions.find(option => option.id === failedTest.model)?.modelName ?? failedTest.model, t,
   );
   const providerMessage = failedTest?.upstreamMessage;
   const foldDetails = providerMessage && (providerMessage.length > 200 || providerMessage.split('\n').length > 3);
@@ -218,6 +290,7 @@ export function AuxiliaryModelSection() {
     <SettingsSection
       title={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
       description={t(personalizationDetailsSettings.auxiliaryModelsTitle.descriptionKey)}
+      action={headingStatus}
     >
       <SettingsCard>
         <SettingsRow wrap
@@ -235,7 +308,7 @@ export function AuxiliaryModelSection() {
                       setDrafting(false);
                       return;
                     }
-                    void persistModels([]);
+                    void save([]);
                   }}
                 />
               ) : null}
@@ -246,7 +319,7 @@ export function AuxiliaryModelSection() {
                   type="button"
                   data-settings-search-action="Test and save the selected auxiliary models"
                   disabled={pending || (!hasDraftChanges && !needsRetest && saveState !== 'failed')}
-                  onClick={() => void persistModels(activeModels)}
+                  onClick={() => void save(activeModels)}
                 >
                   {pending
                     ? t(`settings.auxiliaryModels.${statusKey}`)
@@ -316,7 +389,7 @@ export function AuxiliaryModelSection() {
               const selectedByOtherSlot = new Set(
                 activeModels.filter((entry, slotIndex) => slotIndex !== index && entry),
               );
-              const slotOptions = options.filter(
+              const slotOptions = pickerOptions.filter(
                 (option) => option.id === pin || !selectedByOtherSlot.has(option.id),
               );
               return (
@@ -352,7 +425,7 @@ export function AuxiliaryModelSection() {
             })}
 
             <p className={cn('px-4 pb-4', SETTINGS_HINT)}>
-              {authMode !== 'cloud' ? (
+              {signInHint ? (
                 <span className="mb-1 block text-[var(--text-tertiary)]">
                   {t('settings.auxiliaryModels.signInHint')}
                 </span>
@@ -365,7 +438,7 @@ export function AuxiliaryModelSection() {
             <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
               {automaticChain}
             </p>
-            {authMode !== 'cloud' ? (
+            {signInHint ? (
               <p className="mt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
                 {t('settings.auxiliaryModels.signInHint')}
               </p>

@@ -201,8 +201,7 @@ async function fetchRemoteDefaultBranch(
   return fetched;
 }
 
-/** Desktop creation refreshes only the selected origin default; never redirects
- * an explicit choice to upstream or a newly renamed remote default. */
+/** Refresh a selected full origin default ref. Other refs are left to the caller. */
 export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
@@ -219,7 +218,6 @@ export async function refreshSelectedDefaultSource(
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
   } catch {
-    // A failed local probe also retains the source already selected by the user.
     log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
   }
 }

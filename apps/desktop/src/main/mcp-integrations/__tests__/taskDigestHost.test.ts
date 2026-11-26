@@ -21,6 +21,13 @@ vi.mock('../remoteChatHistory.js', () => ({ readChatHistoryMessages: async () =>
 import { createTaskDigestReader } from '../taskDigest.js';
 import { createDesktopTaskDigestDeps, type DesktopTaskDigestHost } from '../taskDigestHost.js';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';
+import { createInputEnqueueHarness, createInputStopHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { resolveSessionQueueCounts } from '../../maker-ipc/sessionQueueInspection.js';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
+import { registerGetTaskDigestTool } from '../../../../../../packages/lizi-mcps/src/xdt-helper/get_task_digest.js';
+import type { XdtHelperHistoryDeps } from '../../../../../../packages/lizi-mcps/src/xdt-helper/_history_types.js';
+import type { WatchedSession } from '../../../shared/botAutonomy.js';
 
 const row = { title: 'synthetic task', status: 'active', source: 'desktop', agentKind: 'pi', model: 'model', providerId: 'gateway', clearedAt: null, activeTurnStartedAt: 100 };
 function setup(phase = 'error', errorStatus: number | null = 502) {
@@ -32,9 +39,90 @@ function setup(phase = 'error', errorStatus: number | null = 502) {
     readRuntimeFacts: vi.fn(async () => ({ live: null, closed: null, terminalError: errorStatus === null ? null : { errorStatus, sdkError: `HTTP ${errorStatus}: upstream unavailable` } })),
   };
   const deps = createDesktopTaskDigestDeps(host);
-  return { host, read: createTaskDigestReader(deps) };
+  return { host, deps, read: createTaskDigestReader(deps) };
 }
 beforeEach(() => { state.rows = [{ ...row }]; state.stored.mockReset().mockResolvedValue(null); });
+
+// #13146, unit: the tool JSON must preserve a plugin engine from host data,
+// including the task row when no built-in profile exists. Failed ACP tasks must
+// skip built-in suggestions. The existing host tests only exercised Pi rows.
+describe('desktop task digest route identity', () => {
+  it.each([
+    { variant: 'no profile', harness: 'acp', phase: 'running' },
+    { variant: 'runtime throws', harness: 'acp', phase: 'idle' },
+    { variant: 'ACP profile', harness: 'acp', phase: 'running' },
+    { variant: 'errored', harness: 'acp', phase: 'errored' },
+    { variant: 'usage-limit', harness: 'acp', phase: 'usage-limit' },
+    { variant: 'remote ACP row', harness: 'acp', phase: 'running' },
+    { variant: 'legacy ACP row without provider', harness: 'acp', phase: 'running' },
+    { variant: 'legacy remote row', harness: null, phase: 'running' },
+    { variant: 'Pi profile', harness: 'pi', phase: 'running' },
+    { variant: 'Claude Code profile', harness: 'claude-code', phase: 'running' },
+    { variant: 'Codex profile', harness: 'codex', phase: 'running' },
+  ] as const)('projects $variant as JSON with the expected route', async ({ variant, harness, phase }) => {
+    const { host, deps } = setup('running');
+    const sessionId = 'synthetic-task';
+    const pluginProviderId = 'acp-plugin:fixture:sample';
+    const agentKind = harness ?? undefined;
+    const legacy = variant === 'legacy remote row' || variant === 'legacy ACP row without provider';
+    const providerId = legacy ? undefined : harness === 'acp' ? pluginProviderId : 'gateway';
+    const profile = { agentKind, model: 'fixture-model', providerId };
+    const hasProfile = variant === 'ACP profile' || (harness !== 'acp' && harness !== null);
+    const taskRow = { ...row, ...profile, ...(hasProfile && { model: 'stored-model' }) };
+    state.rows = [taskRow];
+    const remote = variant === 'remote ACP row' || legacy;
+    const key = remote ? `fixture-device::${sessionId}` : sessionId;
+    if (remote) {
+      vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+        ok: true,
+        result: channel === 'local-db:sessions:get' ? taskRow :
+          channel === 'maker:list-active' ? (legacy ? [{ sessionId, isTurnRunning: true }] :
+            { format: 'active-sessions-v2', sessions: [{ sessionId, isTurnRunning: true }] }) : [],
+      }));
+    } else if (variant === 'runtime throws') {
+      vi.mocked(host.getSessionRuntime).mockRejectedValue(new Error('no built-in runtime profile'));
+    } else {
+      vi.mocked(host.getSessionRuntime).mockResolvedValue({
+        ok: true,
+        runtime: {
+          phase: phase === 'errored' ? 'error' : 'running',
+          ...(hasProfile && { effectiveProfile: profile }),
+        },
+      });
+    }
+    if (phase === 'usage-limit') {
+      const watched: WatchedSession = {
+        sessionId, deviceId: null, deviceName: null, online: true, title: row.title, workingDir: null,
+        phase, phaseSince: 100, lastActivityAt: 100, startedAt: null,
+        pendingQuestion: null, error: 'fixture usage limit', errorReason: null,
+        creatorBotId: null, followerBotId: null, source: 'user',
+      };
+      deps.watched = () => watched;
+    }
+    const suggestRoute = vi.spyOn(deps.local, 'suggestRoute');
+    const registry = new XdtHelperToolRegistry();
+    const unexpectedHistoryRead = async () => { throw new Error('Unexpected history read'); };
+    registerGetTaskDigestTool(registry, {
+      history: {
+        listWorkdirs: unexpectedHistoryRead,
+        listSessions: unexpectedHistoryRead,
+        getMessages: unexpectedHistoryRead,
+        searchChatHistory: unexpectedHistoryRead,
+        taskDigest: createTaskDigestReader(deps),
+        resolveSessionScope: async () => ({ ok: true, sessionIds: [key] }),
+      },
+      getSessionContext: () => ({ sessionId: 'fixture-caller', agentKind: 'codex', workingDir: '/synthetic' }),
+    });
+    const block = (await registry.call('get_task_digest', { session_id: key })).content[0];
+    if (block.type !== 'text') throw new Error('Expected digest JSON');
+    expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(2048);
+    expect(JSON.parse(block.text)).toMatchObject({
+      ok: true, session_id: key, phase, suggested_route: null,
+      current_route: harness === null ? null : { harness, provider_id: providerId ?? null, model: profile.model },
+    });
+    expect(suggestRoute).not.toHaveBeenCalled();
+  });
+});
 
 describe('desktop task digest error sources', () => {
   it.each([502, 403])('returns HTTP %s from runtime even without a caller or watcher', async (status) => {
@@ -117,5 +205,92 @@ describe('desktop task digest error sources', () => {
       channel === DL_HISTORY_MESSAGES_CHANNEL ? { items: [{ sessionId: variant === 'wrong-session' ? 'other' : 'task', role: 'error', content: { message: 'HTTP 403', dismissed: variant === 'dismissed' }, createdAt: 101 }], terminal: variant === 'missing-marker' ? null : { status: 'error', createdAt: 101 } } : [],
     }));
     expect(await read({ sessionId: 'laptop::task' })).toMatchObject({ ok: true, digest: { error: null } });
+  });
+});
+
+
+// #10900, unit: desktop enqueue and explicit Stop IPC handlers feed the real
+// coordinator and registered digest tool. Queue-only tests cannot catch a
+// lost pause bit in the read-only JSON for a stopped task with one queued input.
+it('reports the pause of a stopped ordinary task in its registered digest', async () => {
+  const sessionId = 'ordinary-task';
+  const callerId = 'same-account-observer';
+  let running = true;
+  const send = vi.fn(async () => { throw new Error('Unexpected synthetic dispatch'); });
+  const save = vi.fn();
+  const load = vi.fn(async () => []);
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: send,
+    steerToAgent: async () => {},
+    abortSession: async () => { running = false; },
+    isTurnRunning: () => running,
+    hasPendingInteraction: () => false,
+    getAgentKind: () => 'codex',
+    getSdkSessionId: async () => undefined,
+    emitProjection: vi.fn(),
+    loadQueueSnapshot: load,
+    persistQueueSnapshot: save,
+  });
+  const { host } = setup();
+  host.readLocalQueuePaused = id => coordinator.getQueuePausedIfRestored(id);
+  host.getSessionRuntime = async () => ({ ok: true, runtime: { phase: running ? 'running' : 'completed' } });
+  host.listSessionQueuedCounts = async ids => ({ ok: true, counts: await resolveSessionQueueCounts(ids, {
+    getLiveQueue: id => coordinator.getQueueInspectionIfRestored(id),
+    loadPersistedCounts: async () => ({}),
+  }) });
+  const registry = new XdtHelperToolRegistry();
+  registerGetTaskDigestTool(registry, {
+    history: {
+      taskDigest: createTaskDigestReader(createDesktopTaskDigestDeps(host)),
+      resolveSessionScope: async ({ callerSessionId }) => ({
+        ok: true, sessionIds: callerSessionId === callerId ? [sessionId] : [],
+      }),
+    } as XdtHelperHistoryDeps,
+    getSessionContext: () => ({ sessionId: callerId, agentKind: 'codex', workingDir: '/synthetic' }),
+  });
+  const digest = async () => {
+    const block = (await registry.call('get_task_digest', { session_id: sessionId })).content[0];
+    if (block.type !== 'text') throw new Error('Expected digest JSON');
+    return JSON.parse(block.text);
+  };
+  const readDigestWithProjection = async (phase: string, queuedCount: number, queuePaused: boolean) => {
+    const projection = coordinator.getProjection(sessionId);
+    const calls = [send, save, load].map(fn => fn.mock.calls.length);
+    const result = await digest();
+    console.info('digest evidence', { phase: result.phase, queuedCount: result.queued_count,
+      canonicalQueuePaused: projection.queuePaused, digestQueuePaused: result.queue_paused });
+    expect(result).toMatchObject({ ok: true, phase, queued_count: queuedCount });
+    // Reading the second snapshot advances its wire sequence once. The digest
+    // between the two reads must leave every queue field and the clock alone.
+    expect(coordinator.getProjection(sessionId)).toEqual({
+      ...projection,
+      queueSnapshot: { ...projection.queueSnapshot, sequence: projection.queueSnapshot!.sequence + 1 },
+    });
+    expect([send, save, load].map(fn => fn.mock.calls.length)).toEqual(calls);
+    expect(projection.queuePaused).toBe(queuePaused);
+    return result.queue_paused;
+  };
+
+  expect(await digest()).not.toHaveProperty('queue_paused');
+  const { enqueue } = createInputEnqueueHarness(coordinator, { remote: false });
+  const text = 'Synthetic pending input';
+  const createOpts = {
+    agentKind: 'codex' as const, workingDir: '/synthetic', model: 'model', effort: 'medium',
+    permissionMode: 'default' as const, userPrompt: '', makerMemoryEnabled: true,
+  };
+  await enqueue({}, sessionId, {
+    ...createOpts, clientId: 'pending-input', text, persistedContent: text, createOpts,
+    chatMessage: { clientId: 'pending-input', role: 'user', content: text, isStreaming: false, createdAt: new Date(0).toISOString() },
+  });
+  const duringTurn = await readDigestWithProjection('running', 1, false);
+
+  await createInputStopHarness(coordinator, { remote: false })(sessionId, { keepQueue: true, pauseQueue: true });
+  const stopped = await readDigestWithProjection('finished', 1, true);
+  coordinator.resume(sessionId);
+  const resumed = await readDigestWithProjection('finished', 1, false);
+  await createInputStopHarness(coordinator, { remote: false })(sessionId);
+  const empty = await readDigestWithProjection('finished', 0, false);
+  expect({ duringTurn, stopped, resumed, empty }).toEqual({
+    duringTurn: false, stopped: true, resumed: false, empty: false,
   });
 });

@@ -198,16 +198,16 @@ describe('native bar trailing reserve beside the Duo status area', () => {
       insets: { top: 82, left: 0, right: 0, bottom: 34 },
       regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 669 - statusX, height: 82 }] });
     const title = (statusX: number, detailsOnly = false) => sessionNavigationTitleMaxWidth({ barWidth: 669,
-      sessionList: true, detailsOnly, statusRowReserve: sharedStatusRowTrailingReserve(duo(statusX), 82) });
-    // Back and the task list end 116pt in; the capsule is three 44pt targets ending at the status area.
-    const gap = (statusX: number, actions = 3) => statusX - 116 - navigationChrome.target * actions;
+      additionalListButton: false, detailsOnly, statusRowReserve: sharedStatusRowTrailingReserve(duo(statusX), 82) });
+    // The single leading task-list button ends 64pt in; the capsule is three 44pt targets ending at the status area.
+    const gap = (statusX: number, actions = 3) => statusX - 64 - navigationChrome.target * actions;
     expect(title(443)).toBeGreaterThan(navigationChrome.target * 2);
     expect(title(443)).toBeLessThanOrEqual(gap(443));
     expect(title(535)).toBeGreaterThan(title(443));
     expect(title(535)).toBeLessThanOrEqual(gap(535));
     expect(title(443, true)).toBeLessThanOrEqual(gap(443, 1));
     // An ordinary phone bar sits below the status area and keeps its previous budget.
-    expect(sessionNavigationTitleMaxWidth({ barWidth: 402, sessionList: false, detailsOnly: false })).toBe(170);
+    expect(sessionNavigationTitleMaxWidth({ barWidth: 402, additionalListButton: false, detailsOnly: false })).toBe(170);
   });
 
 });

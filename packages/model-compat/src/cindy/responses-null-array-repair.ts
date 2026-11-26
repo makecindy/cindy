@@ -132,10 +132,51 @@ const MAX_PENDING_FRAME_BYTES = 16 * 1024 * 1024;
 /** One SSE event boundary: a line break (LF or CRLF) followed by an empty line. */
 const FRAME_BOUNDARY = /\r?\n\r?\n/;
 
-/** SSE frame rewriter; frames that need no repair are re-emitted byte for byte. */
+/** SSE frame rewriter; unrelated frames are re-emitted byte for byte. */
 export class ResponsesNullArrayRepairTransform extends Transform {
   private readonly decoder = new TextDecoder();
   private pending = "";
+  private sawOrphanText = false;
+  private diagnoseOrphanText: boolean;
+
+  constructor(diagnoseOrphanText = false) {
+    super();
+    this.diagnoseOrphanText = diagnoseOrphanText;
+  }
+
+  private diagnoseTerminal(event: unknown): JsonObject | null {
+    if (!this.diagnoseOrphanText) return null;
+    if (isObject(event) && event.type === "response.output_text.delta") {
+      if (typeof event.delta === "string" && event.delta.length > 0 &&
+          typeof event.item_id === "string" && event.item_id) {
+        this.sawOrphanText = true;
+      }
+      return null;
+    }
+    // An item frame (including done-only), another output family, or an
+    // unrecognized frame makes output loss ambiguous. Leave it to Codex.
+    if (isObject(event) &&
+        (event.type === "response.created" || event.type === "response.in_progress")) return null;
+    this.diagnoseOrphanText = false;
+    if (!this.sawOrphanText || !isObject(event) || event.type !== "response.completed" ||
+        !isObject(event.response) || event.response.status !== "completed" ||
+        event.response.end_turn === false ||
+        typeof event.response.id !== "string" || !event.response.id ||
+        [event.output, event.response.output].some(
+          (output) => output !== undefined && (!Array.isArray(output) || output.length > 0),
+        )) return null;
+    // Codex treats response.incomplete as terminal. A generic response.failed
+    // provider error can be retried by the native streaming client.
+    return {
+      ...event,
+      type: "response.incomplete",
+      response: {
+        ...event.response,
+        status: "incomplete",
+        incomplete_details: { reason: "output_text_delta_without_item" },
+      },
+    };
+  }
 
   private rewriteFrame(frame: string, delimiter: string): string {
     const lines = frame.split(/\r?\n/);
@@ -148,13 +189,16 @@ export class ResponsesNullArrayRepairTransform extends Transform {
     try {
       event = JSON.parse(data);
     } catch {
+      this.diagnoseOrphanText = false;
       return frame + delimiter;
     }
-    const repaired = repairResponsesEventNullArrays(event);
+    const diagnosis = this.diagnoseTerminal(event);
+    const repaired = diagnosis ?? repairResponsesEventNullArrays(event);
     if (!repaired) return frame + delimiter;
     let firstData = true;
     // Preserve id/retry/comments/extension lines and their original line endings.
     // Empty later data lines add only trailing JSON whitespace to the SSE data.
+    if (diagnosis) frame = frame.replace(/^event:[^\r\n]*/gm, "event: response.incomplete");
     return frame.replace(/^data:[^\r\n]*/gm, () => {
       if (!firstData) return "data:";
       firstData = false;
@@ -186,6 +230,7 @@ export class ResponsesNullArrayRepairTransform extends Transform {
     this.pending += this.decoder.decode(chunk, { stream: true });
     this.drainFrames();
     if (Buffer.byteLength(this.pending, "utf8") > MAX_PENDING_FRAME_BYTES) {
+      this.diagnoseOrphanText = false;
       this.push(this.pending);
       this.pending = "";
     }
@@ -203,12 +248,14 @@ export class ResponsesNullArrayRepairTransform extends Transform {
 
 /**
  * Builds the repair transform for one upstream response, or null when the body is not a plain
- * (uncompressed) SSE stream. Non-SSE and compressed bodies are left untouched rather than
+ * (uncompressed) SSE stream. Local Codex Responses routes can also opt into the
+ * orphan-text diagnostic. Non-SSE and compressed bodies are left untouched rather than
  * rejected: the repair is best effort and must not change how such responses are delivered.
  */
 export function createResponsesNullArrayRepairTransform(response: {
   contentType: string;
   contentEncoding: string;
+  diagnoseOrphanText?: boolean;
 }): Transform | null {
   const encoding = response.contentEncoding.trim().toLowerCase();
   if (encoding && encoding !== "identity") return null;
@@ -216,7 +263,7 @@ export function createResponsesNullArrayRepairTransform(response: {
     !response.contentType.trim().toLowerCase().startsWith("text/event-stream")
   )
     return null;
-  return new ResponsesNullArrayRepairTransform();
+  return new ResponsesNullArrayRepairTransform(response.diagnoseOrphanText);
 }
 
 /**

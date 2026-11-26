@@ -92,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Provider Group · {{count}} computer",
-    "groupBadge_other": "Provider Group · {{count}} computers",
+    "groupBadge_one": "Computer Group · {{count}} computer",
+    "groupBadge_other": "Computer Group · {{count}} computers",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Try again.",
@@ -157,7 +157,6 @@
     "genericName": "Plugin engine",
     "defaultModel": "Default model",
     "unavailable": "{{engine}} is unavailable",
-    "unavailableWithHint": "{{engine}} is unavailable: {{hint}}",
-    "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send."
+    "unavailableWithHint": "{{engine}} is unavailable: {{hint}}"
   }
 }

@@ -1,4 +1,4 @@
-/** Events a plugin may publish; saving a matching Routine remains a separate user action. */
+/** Events a plugin may publish; choosing them as an automation trigger remains a separate user action. */
 export interface GhostRoutineEvents {
   events: Array<{ type: string; name: string; fields: string[] }>;
 }

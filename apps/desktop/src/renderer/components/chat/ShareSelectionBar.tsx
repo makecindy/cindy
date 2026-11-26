@@ -22,11 +22,10 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { blobToDataUrl } from '@/lib/annotationBurnIn';
-import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { copyPngBlobToClipboard } from '@/lib/rasterizeToImage';
 import {
@@ -41,6 +40,7 @@ import { cn } from '@/lib/utils';
 import { useBrandLogo } from '@/hooks/useBrandLogo';
 import shareCharacterSrc from '@/assets/cindy-share-character.jpg';
 import { shareSelectionStore, useShareSelectionCount } from './shareSelectionStore';
+import { CheckCircleMark } from '@/components/ui/checkbox';
 
 const log = createLogger('ShareSelectionBar');
 
@@ -176,7 +176,8 @@ export function ShareSelectionBar({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
-      if (isEditableKeyboardTarget(e.target)) return;
+      // 勾选消息后焦点停在原生勾选框上；它只要空格，Esc / ⌘A 仍归分享栏。
+      if (editableTargetConsumesKey(e.target, e.key)) return;
       if (busy) return;
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -222,16 +223,7 @@ export function ShareSelectionBar({
           'hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-50',
         )}
       >
-        <span
-          className={cn(
-            'flex h-4 w-4 items-center justify-center rounded-full border transition-colors',
-            allSelected
-              ? 'border-[var(--accent-cta-bg-pure)] bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-              : 'border-[var(--text-tertiary)] bg-transparent',
-          )}
-        >
-          {allSelected ? <Check size={11} strokeWidth={2.5} aria-hidden /> : null}
-        </span>
+        <CheckCircleMark checked={allSelected} size={16} />
         <span>{t('chat.shareImage.selectAll')}</span>
       </button>
 

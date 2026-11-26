@@ -80,6 +80,7 @@ import { SessionRenameInput } from '../SessionRenameInput';
 import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntentsStore';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -93,6 +94,7 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useSidebarIssueConfirm } from './useSidebarIssueConfirm';
 import { Tip } from '@/components/ui/tooltip';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -191,8 +193,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
+  const pendingIssueConfirm = useSidebarIssueConfirm(
+    session.deviceLinkDeviceId || session.remoteHostId || navigationOnly ? undefined : session.id,
+  );
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
+    pendingIssueConfirm,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
@@ -248,7 +254,18 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
+  const offlineInboxIntent = useOfflineInboxIntent(session.deviceLinkDeviceId, session.id);
+  const canOfflineInboxQueue =
+    inboxMode &&
+    !navigationOnly &&
+    Boolean(session.deviceLinkDeviceId) &&
+    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '') &&
+    isRemoteSessionWriteBlocked(session);
+  const canUndoOfflineComplete =
+    isArchived && canOfflineInboxQueue && offlineInboxIntent?.kind === 'complete';
   const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canInboxComplete =
+    inboxMode && !navigationOnly && !isArchived && !isEmpty && (!remoteWritesBlocked || canOfflineInboxQueue);
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
   // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
   const bodyPreview = resolveSessionCardBody({
@@ -489,12 +506,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     onAction(session.id, 'archive');
   }, [remoteWritesBlocked, session.id, onAction, t]);
   const handleUnarchiveSelect = useCallback(() => {
-    if (remoteWritesBlocked) {
+    if (remoteWritesBlocked && !canUndoOfflineComplete) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     onAction(session.id, 'unarchive');
-  }, [remoteWritesBlocked, session.id, onAction, t]);
+  }, [canUndoOfflineComplete, remoteWritesBlocked, session.id, onAction, t]);
   const handleDeleteSelect = useCallback(() => {
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
@@ -876,6 +893,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 isActive={isActive}
                 isArchived={isArchived}
                 canQuickArchive={canQuickArchive}
+                canInboxComplete={canInboxComplete}
+                canSnoozeOverride={canOfflineInboxQueue}
                 archivePending={archivePending}
                 setArchivePending={beginArchivePending}
                 confirmPillRef={confirmPillRef}
@@ -887,10 +906,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 }}
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
                 onComplete={() => {
-                  prefetchRemovalPreflight();
+                  if (!canOfflineInboxQueue) prefetchRemovalPreflight();
                   onAction(session.id, 'complete');
                 }}
-                canUnarchive={!remoteWritesBlocked}
+                canUnarchive={!remoteWritesBlocked || canUndoOfflineComplete}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
                 ordinalBadgeLabel={ordinalBadgeLabel}
@@ -1231,6 +1250,8 @@ function TimeActionsSlot({
   isActive,
   isArchived,
   canQuickArchive,
+  canInboxComplete = false,
+  canSnoozeOverride = false,
   canUnarchive,
   archivePending,
   setArchivePending,
@@ -1253,6 +1274,8 @@ function TimeActionsSlot({
   isActive: boolean;
   isArchived: boolean;
   canQuickArchive: boolean;
+  canInboxComplete?: boolean;
+  canSnoozeOverride?: boolean;
   canUnarchive: boolean;
   archivePending: boolean;
   setArchivePending: (v: boolean) => void;
@@ -1270,7 +1293,7 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
+  const canSnooze = inboxMode && !isArchived && (canUnarchive || canSnoozeOverride) && !!snoozeAction;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1346,7 +1369,7 @@ function TimeActionsSlot({
               )}
             >
               {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
-              {(isArchived && canUnarchive) || canQuickArchive ? (
+              {(isArchived && canUnarchive) || canInboxComplete || canQuickArchive ? (
                 <span className="size-5 shrink-0" />
               ) : null}
             </div>
@@ -1386,7 +1409,7 @@ function TimeActionsSlot({
                 >
                   <Undo size={14} strokeWidth={2} />
                 </CardAction>
-              ) : canQuickArchive && inboxMode ? (
+              ) : canInboxComplete && inboxMode ? (
                 <CardAction
                   variant="list"
                   isActive={isActive}

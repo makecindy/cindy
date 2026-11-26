@@ -379,7 +379,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     resolveProviderGroupTarget: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
+    cancelPendingRemoteStart: undefined,
     // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
+    canSwitchCompletedAutomationSession: undefined,
     admitPluginEngineTarget: undefined,
     admitRemotePluginEngineTarget: undefined,
     describePluginEngine: undefined,
@@ -731,6 +733,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   }));
   const updateSavedScheduledAxis = createUpdateSavedScheduledAxis(explicitPorts<Parameters<typeof createUpdateSavedScheduledAxis>[0]>({
     readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService: providerService,
+    admitPluginEngineTarget: undefined,
+    admitRemotePluginEngineTarget: undefined,
   }));
   const recoverRemoteRuntimeAxisPersistence = createRecoverRemoteRuntimeAxisPersistence(explicitPorts<Parameters<typeof createRecoverRemoteRuntimeAxisPersistence>[0]>({
     maker: axisMaker, broadcastSessionRuntimeProjection, log: deps.log,

@@ -97,7 +97,7 @@ const names = {
 const press = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
 function setup(horizontal: boolean) {
   let task = 'A';
-  let available = true, detailsOnly = false, filesDisabled = false, live = false, list = true;
+  let available = true, detailsOnly = false, filesDisabled = false, live = false, list = true, portrait = false;
   let title = 'Task', notice: string | null = null, tag = 'Tag', pinned = false, syncing = false, rename = true;
   const actions: string[] = [];
   const page = () => {
@@ -108,7 +108,7 @@ function setup(horizontal: boolean) {
     const props = { available, detailsOnly, filesDisabled,
       screen: live ? { label: 'Live screen', onPress: action('live') } : undefined,
       onFiles: action('files'), onDetails: action('details'), onDesktop: action('desktop') };
-    return horizontal ? <SessionStackHeader {...props} titleMaxWidth={240} title={title}
+    return horizontal ? <SessionStackHeader listOnly={portrait && list} {...props} titleMaxWidth={240} title={title}
       tags={[{ id: 'tag', name: tag, color: 'red', favoriteOrder: null, revision: 1 }]}
       notice={notice} pinned={pinned} syncing={syncing} syncingImmediately={false}
       onTagsPress={action('tags')} onTitleDoubleTap={rename ? action('rename') : undefined}
@@ -117,10 +117,10 @@ function setup(horizontal: boolean) {
   };
   const view = render(<Navigator page={page} />);
   return { actions, view, refresh() { view.rerender(<Navigator page={page} />); },
-    change(next: Partial<{ task: string; available: boolean; detailsOnly: boolean; filesDisabled: boolean; live: boolean; list: boolean;
+    change(next: Partial<{ task: string; available: boolean; detailsOnly: boolean; filesDisabled: boolean; live: boolean; list: boolean; portrait: boolean;
       title: string; notice: string | null; tag: string; pinned: boolean; syncing: boolean; rename: boolean }>) {
       task = next.task ?? task; available = next.available ?? available; detailsOnly = next.detailsOnly ?? detailsOnly;
-      filesDisabled = next.filesDisabled ?? filesDisabled; live = next.live ?? live; list = next.list ?? list;
+      filesDisabled = next.filesDisabled ?? filesDisabled; live = next.live ?? live; list = next.list ?? list; portrait = next.portrait ?? portrait;
       title = next.title ?? title; notice = next.notice === undefined ? notice : next.notice;
       tag = next.tag ?? tag; pinned = next.pinned ?? pinned; syncing = next.syncing ?? syncing; rename = next.rename ?? rename;
       this.refresh();
@@ -162,6 +162,20 @@ it.each([false, true])('updates disabled, live-screen and worker actions in the 
   press(names.details);
   page.change({ detailsOnly: false, live: false, filesDisabled: false }); press(names.files);
   expect(page.actions).toEqual(['A:details', 'B:live', 'C:live', 'C:details', 'C:files']);
+});
+
+// Unit: rotate an open drawer-capable task and then narrow its window. The
+// registered leading controls must update in place and call the current task.
+it('shows only the sidebar button in drawer portrait and restores Back when resized', () => {
+  const page = setup(true);
+  page.change({ portrait: true, task: 'B' });
+  expect(screen.queryByRole('button', { name: names.back })).toBeNull();
+  expect(screen.getByRole('button', { name: names.list }).getAttribute('data-icon')).toBe('sidebar.left');
+  press(names.list);
+  page.change({ list: false });
+  expect(screen.queryByRole('button', { name: names.list })).toBeNull();
+  press(names.back);
+  expect(page.actions).toEqual(['B:list', 'B:back']);
 });
 
 it('refreshes title, tags, status, theme and language while removing optional actions', () => {

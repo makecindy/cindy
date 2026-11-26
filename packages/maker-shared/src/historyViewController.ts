@@ -195,6 +195,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
   }
 
+  /**
+   * Update a detached retained view with a newer prefetched snapshot in place so
+   * reopening does not drop back to an empty controller and wait for disk IO.
+   */
+  applyPrefetchedSnapshot(snapshot: HistoryViewSnapshot<T>): void {
+    if (this.active || !snapshot.ready || isHistoryViewUnavailable(this.state.error)) return;
+    this.cacheGeneration++;
+    const previous = new Map(this.state.items.map((item) => [item.key, item]));
+    const items = snapshot.items.map((item) => {
+      const cached = previous.get(item.key);
+      return cached && JSON.stringify(cached) === JSON.stringify(item) ? cached : item;
+    });
+    const stableItems = items.length === this.state.items.length
+      && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+    const presentKeys = new Set(historyWorkSummaries(stableItems).map((summary) => summary.key));
+    for (const key of this.detailRuns.keys()) {
+      if (!presentKeys.has(key)) this.detailRuns.delete(key);
+    }
+    this.publish({
+      items: stableItems,
+      details: snapshot.details,
+      expanded: snapshot.expanded,
+      nextCursor: snapshot.nextCursor,
+      hasMore: snapshot.hasMore,
+      ready: true,
+      loading: false,
+      error: null,
+      stale: true,
+      readReceipt: snapshot.readReceipt,
+    }, 'cache');
+  }
+
   refresh(older = false, fresh = false): Promise<void> {
     // Keep the existing raw fallback until an explicit reset; a later latest
     // page must not re-enable projection after an oversized older-page read.
@@ -319,22 +351,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   }
 
   setExpanded(key: string, expanded: boolean): void {
-    if (this.state.expanded.has(key) === expanded) return;
-    const next = new Set(this.state.expanded);
-    if (expanded) next.add(key); else next.delete(key);
-    let details = this.state.details;
     if (!expanded) {
-      this.detailRuns.delete(key);
-      details = this.trimCollapsedDetails(next);
-      const detail = details.get(key);
-      // Cancellation invalidates late replies, so they cannot clear this flag.
-      // Stop the indicator now while retaining any warm body for reopening.
-      if (detail?.loading) details = new Map(details).set(key, { ...detail, loading: false });
+      this.collapseDetails([key]);
+      return;
     }
-    this.publish({ expanded: next, details });
+    if (this.state.expanded.has(key)) return;
+    this.publish({ expanded: new Set(this.state.expanded).add(key) });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
-    if (expanded && summary) void this.loadDetails(summary);
+    if (summary) void this.loadDetails(summary);
+  }
+
+  private collapseDetails(keys: readonly string[]): void {
+    const collapsed = keys.filter(key => this.state.expanded.has(key));
+    if (!collapsed.length) return;
+
+    const next = new Set(this.state.expanded);
+    for (const key of collapsed) {
+      next.delete(key);
+      this.detailRuns.delete(key);
+    }
+    // Apply the warm-cache budget to the final collapsed set, after cancelling
+    // all of its pending reads so they cannot pin a body or publish a late reply.
+    const trimmed = this.trimCollapsedDetails(next);
+    let settled: Map<string, HistoryWorkDetailState<T>> | undefined;
+    for (const key of collapsed) {
+      const detail = trimmed.get(key);
+      if (detail?.loading) {
+        (settled ??= new Map(trimmed)).set(key, { ...detail, loading: false });
+      }
+    }
+    this.publish({ expanded: next, details: settled ?? trimmed });
+    this.sendIntent();
   }
 
   private trimCollapsedDetails(expanded: ReadonlySet<string>, items = this.state.items) {
@@ -369,6 +417,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     return () => {
       if (released) return;
       released = true;
+      const collapsed: string[] = [];
       for (const key of keys) {
         const holds = (this.expandedHolds.get(key) ?? 1) - 1;
         if (holds > 0) {
@@ -376,8 +425,9 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           continue;
         }
         this.expandedHolds.delete(key);
-        this.setExpanded(key, false);
+        collapsed.push(key);
       }
+      this.collapseDetails(collapsed);
     };
   }
 

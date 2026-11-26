@@ -14,7 +14,7 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
@@ -342,6 +342,22 @@ function renderPanel(
     }),
   );
 }
+
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
 
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
@@ -1126,6 +1142,7 @@ describe('模型浮层上下文按目录来源隔离', () => {
   const localProviders = providersRef.providers;
   const getModelContextLimit = vi.fn();
   beforeEach(() => {
+    setDataOwnerGeneration('test-owner');
     getModelContextLimit.mockReset().mockResolvedValue({
       limit: 123_000, isCustomized: true,
       codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
@@ -1161,6 +1178,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
     }));
   });
   afterEach(() => {
+    cleanup();
+    setDataOwnerGeneration(null);
     remoteProvidersRef.providers = [];
     vi.unstubAllGlobals();
   });
@@ -4922,13 +4941,13 @@ describe('teammate settings selected location catalog', () => {
     workerCapabilities.byAgent = {};
   });
 
-  it.each(['primary', 'backup'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+  // 伙伴只用一个模型(2026-11-26)：原先也测备用位置，备用取消后只剩主模型这一处。
+  it('shows shared-only Gemini and Terra in the model picker', async () => {
     for (const model of models) {
       const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
         effort: 'high', fastMode: false, agentDeviceId: share };
-      const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
-      const view = render(<BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
-      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
+      const view = render(<BotModelChainEditor value={[route]} onChange={vi.fn()} />);
+      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[0]!;
       expect(picker.textContent).toContain(model.name);
       expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');
       expect(picker.getAttribute('title')).toContain(model.name);
@@ -5070,21 +5089,17 @@ describe('Teammate settings with the real model picker', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  // PR #11683 review r4641455507, unit, real editor + picker: a backup added on another computer starts without a
-  // model and is only submitted once it has one; choosing a group there must still reach the form (the host replaces
-  // the placeholder source on save). Minimal input: Add backup, then pick a host group.
-  it('submits a backup model group added for a remote companion', async () => {
-    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+  // PR #11683 review r4641455507, unit, real editor + picker: a companion on another computer with no model yet
+  // (backups were removed 2026-11-26; this was first written for a new backup) must still reach the form when a host
+  // group is chosen — the host replaces the placeholder source on save. Minimal input: empty chain, pick a host group.
+  it('submits a host model group chosen for a remote companion that has no model yet', async () => {
     vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve: vi.fn() } });
     const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const, effort: 'low',
       candidates: [{ agentKind: 'codex' as const, providerId: 'host-openai', model: 'gpt-6', off: true },
         { agentKind: 'codex' as const, providerId: 'host-xd', model: 'gpt-5.6' }] }] };
     const change = vi.fn();
-    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
-    const add = screen.getAllByRole('button').find((button) => /添加备用模型|Add fallback|bots\.modelChain\.add/.test(button.textContent ?? ''))!;
-    await act(async () => fireEvent.click(add));
-    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
-    fireEvent.click(pickers[pickers.length - 1]!);
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
     const rail = await waitFor(() => {
       const item = document.querySelector('[data-rail-item="model-groups"]');
       if (!item) throw new Error('model groups rail not shown');
@@ -5092,7 +5107,7 @@ describe('Teammate settings with the real model picker', () => {
     });
     await act(async () => fireEvent.click(rail));
     await act(async () => fireEvent.click(screen.getByText('Host group')));
-    expect(change).toHaveBeenLastCalledWith([route, expect.objectContaining({
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({
       harness: 'codex', providerId: 'host-xd', model: 'gpt-5.6', effort: 'low', modelGroup: 'host-grp' })]);
   });
 
@@ -5232,16 +5247,15 @@ describe('Teammate settings with the real model picker', () => {
   });
 });
 
-it('teammate fallback exposes supported Harness choices and preserves the primary route', async () => {
-  const primary = { harness: 'claude' as const, providerId: 'anthropic', model: 'claude-opus-5', effort: 'medium', fastMode: false };
+// 原为备用模型的 Harness 选择；伙伴只用一个模型(2026-11-26)后改测这唯一的模型。
+it('teammate model exposes supported Harness choices', async () => {
   const change = vi.fn();
   function Editor() {
-    const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([primary, { ...primary, harness: 'codex', providerId: 'xd', model: 'gpt-5.5' }]);
+    const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([{ harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'medium', fastMode: false }]);
     return <BotModelChainEditor value={routes} onChange={(next) => { change(next); setRoutes(next); }} />;
   }
   const view = render(<Editor />);
-  const fallbacks = view.getByTestId('bot-model-fallbacks');
-  fireEvent.click(fallbacks.querySelector('button[aria-haspopup="listbox"]')!);
+  fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
   await screen.findByRole('listbox');
   const flyout = await openRowFlyout('GPT-5.6');
   const cc = flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement;
@@ -5249,7 +5263,7 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
   expect(cc).toBeTruthy(); expect(codex).toBeTruthy();
   await act(async () => { fireEvent.click(cc); });
   await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
-  expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
+  expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
 });
 
 describe('harness configuration keeps the model menu open', () => {

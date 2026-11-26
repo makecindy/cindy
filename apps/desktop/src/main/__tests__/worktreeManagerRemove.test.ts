@@ -14,7 +14,7 @@ vi.mock('../worktree/runtimeLeases', () => ({
  *   - dirty → stash 失败保留 / 成功后继续删
  *   - clean 无引用 → git remove + store.del
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import os from 'node:os';
@@ -359,6 +359,10 @@ describe('removeWorktreeForSession', () => {
   });
 
   it.each(['discard', 'cancel'])('%s waits for an in-flight create before deciding the record is absent', async (operation) => {
+    // The race starts inside repository discovery, which requires an existing cwd.
+    const fixture = fsSync.mkdtempSync(path.join(os.tmpdir(), 'cindy-create-race-'));
+    onTestFinished(() => fsSync.rmSync(fixture, { recursive: true, force: true }));
+    const baseRepo = fsSync.realpathSync(fixture);
     let releaseGitProbe!: () => void;
     gitExecMock.mockImplementationOnce(
       () =>
@@ -373,7 +377,7 @@ describe('removeWorktreeForSession', () => {
     const recoveryKey = 'recovery-key-123456';
     const create = manager.createWorktree({
       sessionId: 's1',
-      baseRepo: BASE_REPO,
+      baseRepo,
       name: 'recovery-race',
       sourceBranch: 'main',
       recoveryKey,
@@ -381,7 +385,7 @@ describe('removeWorktreeForSession', () => {
     await vi.waitFor(() => {
       expect(gitExecMock).toHaveBeenCalledWith(
         ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-        BASE_REPO,
+        baseRepo,
         { avoidMacGitInstallPrompt: true, timeoutMs: 10_000, deadlineAtMs: 10_000 },
       );
     });

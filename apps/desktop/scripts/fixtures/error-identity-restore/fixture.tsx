@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
+import { SystemCard } from '../../../src/renderer/components/chat/SystemCard';
 import { ErrorBanner } from '../../../src/renderer/components/chat/ErrorBanner';
 import { getLiveErrorMessageClientId, makerChatStore, type ChatMessage } from '../../../src/renderer/lib/makerChatStore';
 import { findErrorTailMessage } from '../../../src/renderer/lib/errorTailMessage';
@@ -123,7 +124,14 @@ void mountPage({
       auth: { onStateChanged: subscription('authStateChanged') },
     },
   }),
-  render: (context) => context.data.terminal
+  render: (context) => context.data.autoResume
+    ? <div className="p-4" data-ui-page-subject data-testid="auto-resume">
+        <SystemCard cardType="auto-resume-pending" data={{
+          reason: 'codex_reconnect_stalled', error: 'Last reconnect attempt: 3/5. Pending tools: 1.',
+          attempt: 1, maxAttempts: 5, sessionTotal: 1,
+        }} />
+      </div>
+    : context.data.terminal
     ? <TerminalTask mode={context.data.mode as 'tail' | 'live' | 'readonly' | 'standalone' | 'pending' | undefined} />
     : <Subject />,
 });

@@ -15,6 +15,7 @@ const VALID_MANIFEST = {
   chatApiBaseUrl: 'https://chat.example.com',
   deviceLinkApiBaseUrl: 'https://device-link.example.com',
   agentNetApiBaseUrl: 'https://agent-net.example.com',
+  cloudInstanceApiBaseUrl: 'https://cloud-instance.example.com',
   oauthBrokerApiBaseUrl: 'https://oauth.example.com',
   ossApiBaseUrl: 'https://oss.example.com',
   heartbeatUrl: 'https://heartbeat.example.com',
@@ -76,6 +77,27 @@ describe('parseClientEndpointManifest(字段可按 region 缺省)', () => {
     expect(
       parseClientEndpointManifest(JSON.stringify({ ...VALID_MANIFEST, ...patch }), options),
     ).toEqual({ ok: false, reason });
+  });
+
+  it('旧云清单不含快照接收端时保持可启动，不推导其它业务地址', () => {
+    const { cloudInstanceApiBaseUrl: _unused, ...legacy } = VALID_MANIFEST;
+    expect(parseClientEndpointManifest(JSON.stringify(legacy))).toMatchObject({
+      ok: true, endpoints: { cloudInstanceApiBaseUrl: '' },
+    });
+  });
+
+  it.each([
+    ['http://cloud.example.invalid', 'invalid-protocol'],
+    ['https://user:pass@cloud.example.invalid', 'credentials-in-url'],
+    ['file:///tmp/cloud', 'invalid-protocol'],
+    ['https://cloud.example.invalid/?query=value', 'invalid-field'],
+    ['https://cloud.example.invalid/#fragment', 'invalid-field'],
+    ['https://cloud.example.invalid/?', 'invalid-field'],
+    ['https://cloud.example.invalid/#', 'invalid-field'],
+  ])('快照接收端拒绝不安全地址 %s', (value, reason) => {
+    expect(parseClientEndpointManifest(JSON.stringify({
+      ...VALID_MANIFEST, cloudInstanceApiBaseUrl: value,
+    }))).toEqual({ ok: false, reason: `${reason}:cloudInstanceApiBaseUrl` });
   });
 
   it('忽略旧跨区字段，区域路由不依赖远端清单', () => {
@@ -256,6 +278,12 @@ describe('allowHttp 宽松模式(仅 dev 本地文件路径)', () => {
         { allowHttp: true },
       ),
     ).toEqual({ ok: false, reason: 'credentials-in-url:authApiBaseUrl' });
+  });
+
+  it('快照接收端不接受 allowHttp 的开发例外', () => {
+    expect(parseClientEndpointManifest(JSON.stringify({
+      ...VALID_MANIFEST, cloudInstanceApiBaseUrl: 'http://localhost:12345',
+    }), { allowHttp: true })).toEqual({ ok: false, reason: 'invalid-protocol:cloudInstanceApiBaseUrl' });
   });
 
   it('allowHttp:true 仍拒绝非 http/https 协议(如 file:)', () => {

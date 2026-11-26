@@ -97,7 +97,7 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
-import { quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
 import { imText } from '../im/shared/imText.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -140,6 +140,7 @@ export interface HookSessionRunner {
     workingDir: string | null;
     usable: boolean;
     resumableArchive?: boolean;
+    companionOwned?: boolean;
   } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
@@ -216,6 +217,8 @@ export interface HookRunRequest {
    * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
    */
   isCancelRequested?: () => boolean;
+  /** 用户喊停或账号切换边界触发时立即 abort，供 runner 中断退避等待而不必等完延迟。 */
+  cancelSignal?: AbortSignal;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -329,6 +332,8 @@ export interface HookRunOutcome {
   status: 'ok' | 'error';
   finalText: string;
   errorMessage: string | null;
+  /** Structured maker-core error reason (internal logging/diagnostics only; never sent over wire). */
+  errorReason?: string | null;
   durationMs: number;
   /** 出站附件(agent 产图/产文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
   attachments?: TaskAttachment[];
@@ -543,10 +548,54 @@ export interface HookDispatcher {
  */
 export const HOOK_ROUTE_UNAVAILABLE_PREFIX = 'hook session route unavailable:';
 
-function hookFailureReasonForLog(errorMessage: string | null | undefined): string {
+/**
+ * 白名单化的结构化失败 reason，允许原样进主日志（不含用户内容、路径或上游原文）。
+ * 少量别名在此归一，避免同一故障拆成多个日志标签。
+ */
+const HOOK_LOGGABLE_ERROR_REASONS: ReadonlyMap<string, string> = new Map([
+  ['upstream-overload', 'upstream-overload'],
+  ['UPSTREAM_OVERLOADED', 'upstream-overload'],
+  ['codex_reconnect_stalled', 'codex_reconnect_stalled'],
+  ['upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['bridge_upstream_response_idle_timeout', 'upstream_response_idle_timeout'],
+  ['turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['bridge_turn_no_event_timeout', 'turn_no_event_timeout'],
+  ['provider_quota_limit', 'provider-quota-exhausted'],
+  ['output-limit', 'output-limit'],
+  ['context-overflow', 'context-overflow'],
+  ['codex_history_oversized', 'codex_history_oversized'],
+  ['tool_use_loop_detected', 'tool_use_loop_detected'],
+  ['empty-response', 'empty-response'],
+  ['turn-failed', 'turn-failed'],
+  ['silent-stop-exhausted', 'silent-stop-exhausted'],
+  ['user_model_access_denied', 'user_model_access_denied'],
+  ['provider_safety_refusal', 'provider_safety_refusal'],
+  ['remote_agent_lost', 'remote_agent_lost'],
+  ['remote_agent_closed', 'remote_agent_closed'],
+  ['app-server-force-retired', 'app-server-force-retired'],
+]);
+
+const CODEX_RECONNECT_STALLED_MESSAGE_RE =
+  /\bcodex_reconnect_stalled\b|model connection has been retrying for \d+s without making progress/i;
+const UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE =
+  /upstream response has been silent for \d+s/i;
+
+function hookFailureReasonForLog(
+  errorMessage: string | null | undefined,
+  errorReason?: string | null,
+): string {
+  const mappedReason = typeof errorReason === 'string'
+    ? HOOK_LOGGABLE_ERROR_REASONS.get(errorReason)
+    : undefined;
+  if (mappedReason) return mappedReason;
   const message = errorMessage ?? '';
   // 额度说明里带供应商名与上游原文, 日志只记类别。
   if (message.startsWith(quotaFailureNoticePrefix())) return 'provider-quota-exhausted';
+  if (message === imText('imBot.text.shared.retry.overloadFailed') || overloadFailureNotice(message) !== null) {
+    return 'upstream-overload';
+  }
+  if (CODEX_RECONNECT_STALLED_MESSAGE_RE.test(message)) return 'codex_reconnect_stalled';
+  if (UPSTREAM_IDLE_TIMEOUT_MESSAGE_RE.test(message)) return 'upstream_response_idle_timeout';
   if (!message.startsWith(HOOK_ROUTE_UNAVAILABLE_PREFIX)) return 'unclassified';
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
@@ -906,7 +955,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
   const runningByRequest = new Map<string, {
-    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; relayInFlight?: boolean;
+    sessionId: string; connectionId: string; observing?: boolean; relayAbort?: AbortController; cancelAbort?: AbortController; relayInFlight?: boolean;
   }>();
   /**
    * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
@@ -1907,7 +1956,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
     const runningEntry = {
-      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), relayInFlight: false,
+      sessionId, connectionId: task.connectionId, observing: true, relayAbort: new AbortController(), cancelAbort: new AbortController(), relayInFlight: false,
     };
     runningByRequest.set(requestKey, runningEntry);
     const messageLifecycle = telegramLegacyLifecycle(
@@ -2052,6 +2101,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           ...xVideoRelayOption(task, runningEntry),
           // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
           isCancelRequested: () => cancelRequested.has(requestKey),
+          cancelSignal: runningEntry.cancelAbort.signal,
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
@@ -2128,7 +2178,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (isError) {
       // 失败原因原先只进 request ledger, 主日志里只有 dispatch / delivered 两行(issue #5912)。
       log.warn(
-        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage)}`,
+        `hook task ${task.requestId} failed: im=${task.run.source?.im ?? 'none'} via=${runnerThrew ? 'throw' : 'outcome'} reason=${hookFailureReasonForLog(outcome.errorMessage, outcome.errorReason)}`,
       );
     }
     let turnEnd: TurnEndPayload = {
@@ -2450,7 +2500,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
       return withSessionRouteLock(sessionId, async () => {
         const info = await runner.inspect(sessionId, canRestoreIn);
-        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        if (info?.companionOwned || !info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
         await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
         return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
       });
@@ -2465,6 +2515,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (payload.sessionId !== null) {
       const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
        * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
@@ -2644,6 +2695,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(bound);
       /**
        * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
@@ -3163,7 +3215,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       // ack 的待补发与可回落表随账号走 —— 换账号后它们指向的连接与消息都不再
       // 属于当前主人, 留着既补不出去也是一份只涨不落的内存。
       ackReactions.reset();
@@ -3239,6 +3294,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           return (
             info.usable === true &&
+            (!info.companionOwned || companionTargets.has(sessionId)) &&
             info.workingDir !== null &&
             dirStillAllowed(connectionId, info.workingDir, sessionId)
           );
@@ -3348,6 +3404,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             if (
               isCurrentGeneration(admittedGeneration) &&
               info?.usable === true &&
+              (!info.companionOwned || companionTargets.has(previous)) &&
               info.workingDir !== null &&
               dirStillAllowed(connectionId, info.workingDir, previous)
             ) {
@@ -3450,6 +3507,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         const sessionId = runningEntry.sessionId;
         cancelRequested.add(requestKey);
         runningEntry.relayAbort?.abort();
+        runningEntry.cancelAbort?.abort();
         log.info(`hook task ${requestId} cancel requested (stopping session ${sessionId})`);
         // 渠道里的 /stop 是用户明确喊停: 与桌面 Stop 同一套清理, 不只是 abort ——
         // 否则已排期的自动续跑会在喊停后原地复活, 进行中的 Goal 也会接着跑。
@@ -3516,7 +3574,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       latestPromptBySession.clear();
       serverFeatures.clear();
       xMediaRelay.failAll();
-      for (const entry of runningByRequest.values()) entry.relayAbort?.abort();
+      for (const entry of runningByRequest.values()) {
+        entry.relayAbort?.abort();
+        entry.cancelAbort?.abort();
+      }
       sendFns.clear();
       pendingTurnEnds.clear();
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);

@@ -1,19 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DownloadMeter } from '@/components/ui/download-meter';
-import { initialDownloadProgress, type DownloadProgress } from '../../shared/downloadProgress';
+import { isDownloadProgressActive } from '../../shared/downloadProgress';
 import { Button } from '@/components/ui/button';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
-  isDataOwnerPushStampCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { extractIpcError } from '@/utils/ipcError';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import type { InstalledGhost } from '../../shared/ghost';
 import type { GithubPluginReleaseResult } from '../../shared/githubPluginRelease';
-import { checkGithubRelease, recordGithubReleaseUpdateReply } from '@/features/plugin/lib/githubReleaseUpdates';
+import { checkGithubRelease, runGithubReleaseUpdate } from '@/features/plugin/lib/githubReleaseUpdates';
+import { githubUpdateKey } from '@/features/plugin/lib/updateAllModel';
+import {
+  beginPluginInstallProgress,
+  endPluginInstallProgress,
+  succeedPluginInstallProgress,
+  usePluginInstallProgress,
+} from '@/features/plugin/lib/pluginInstallProgress';
 
 type ReleaseAction = 'check' | 'update' | 'sign-in';
 
@@ -21,22 +27,17 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
   const { t } = useTranslation();
   const [result, setResult] = useState<GithubPluginReleaseResult>();
   const [busy, setBusy] = useState<ReleaseAction>();
-  const [progress, setProgress] = useState<DownloadProgress>();
   const mounted = useRef(false);
   const running = useRef(false);
   const checkedOnOpen = useRef(false);
   const instanceId = installedGhostStoragePart(ghost);
   const installedVersion = ghost.manifest.version;
+  const progressKey = githubUpdateKey(instanceId);
+  const progress = usePluginInstallProgress(progressKey)?.download;
+  const updating = !!progress && isDownloadProgressActive(progress.phase);
   useEffect(() => {
     mounted.current = true;
-    const unsubscribe = window.electronAPI.ghosts.onGithubReleaseProgress?.((event, ownerStamp) => {
-      if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
-      if (event.instanceId === instanceId) setProgress(event.progress);
-    });
-    return () => {
-      mounted.current = false;
-      unsubscribe?.();
-    };
+    return () => { mounted.current = false; };
   }, [instanceId]);
   const [failed, setFailed] = useState(false);
   const release = result && 'release' in result ? result.release : undefined;
@@ -44,23 +45,31 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
   const remoteVersion = result?.status === 'updated' ? result.version : release?.version;
 
   const run = useCallback(async (action: ReleaseAction, assetId?: number) => {
-    if (running.current) return;
+    if (running.current || updating || (action === 'update' && assetId === undefined)) return;
     running.current = true;
     const owner = getDataOwnerGeneration();
     const isCurrent = () => mounted.current && isDataOwnerGenerationCurrent(owner);
     setBusy(action);
-    if (action === 'update') setProgress(initialDownloadProgress('preparing'));
     setFailed(false);
     const target = { instanceId, repository, installedVersion };
     try {
       // Opening or clicking "check" always reads fresh; a rapid reopen shares the pending read, and
       // the answer also updates the Plugin page banner.
-      const reply = action === 'check'
-        ? await checkGithubRelease(target, { force: true })
-        : await window.electronAPI.ghosts.githubRelease(action, instanceId, assetId);
-      if (action === 'update') {
-        const offered = release?.assetId === assetId ? release : undefined;
-        recordGithubReleaseUpdateReply(owner, target, reply, offered);
+      let reply: GithubPluginReleaseResult | boolean;
+      if (action === 'update' && assetId !== undefined) {
+        beginPluginInstallProgress(progressKey);
+        try {
+          reply = await runGithubReleaseUpdate({ target, assetId, progressKey });
+          if (isDataOwnerGenerationCurrent(owner) && reply.status === 'updated') {
+            succeedPluginInstallProgress(progressKey);
+          }
+        } finally {
+          if (isDataOwnerGenerationCurrent(owner)) endPluginInstallProgress(progressKey);
+        }
+      } else if (action === 'check') {
+        reply = await checkGithubRelease(target, { force: true });
+      } else {
+        reply = await window.electronAPI.ghosts.githubRelease('sign-in', instanceId);
       }
       if (!isCurrent()) return;
       if (typeof reply !== 'boolean') setResult(reply);
@@ -71,12 +80,12 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
       running.current = false;
       if (mounted.current) setBusy(undefined);
     }
-  }, [instanceId, installedVersion, release, repository]);
+  }, [instanceId, installedVersion, progressKey, repository, updating]);
 
   useEffect(() => {
     let windowHidden = isWindowHidden();
     const checkWhenVisible = () => {
-      if (checkedOnOpen.current || windowHidden || document.visibilityState === 'hidden') return;
+      if (checkedOnOpen.current || updating || windowHidden || document.visibilityState === 'hidden') return;
       checkedOnOpen.current = true;
       void run('check');
     };
@@ -90,9 +99,10 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
       document.removeEventListener('visibilitychange', checkWhenVisible);
       unsubscribe?.();
     };
-  }, [run]);
+  }, [run, updating]);
 
-  const label = failed ? t('settings.ghosts.detail.githubRelease.unavailable')
+  const label = updating ? t('settings.ghosts.detail.githubRelease.updating')
+    : failed ? t('settings.ghosts.detail.githubRelease.unavailable')
     : busy === 'check' ? t('settings.ghosts.detail.githubRelease.checking')
     : busy === 'update' ? t('settings.ghosts.detail.githubRelease.updating')
     : result && t(`settings.ghosts.detail.githubRelease.${result.status}`);
@@ -108,15 +118,15 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
         <p role="status" className="text-12 text-[var(--text-secondary)] empty:hidden">{label}</p>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" size="sm" disabled={!!busy} onClick={() => void run('check')}>{t('settings.ghosts.detail.githubRelease.check')}</Button>
+        <Button variant="secondary" size="sm" disabled={!!busy || updating} onClick={() => void run('check')}>{t('settings.ghosts.detail.githubRelease.check')}</Button>
         {result?.status === 'available' && (
-          <Button variant="secondary" size="sm" disabled={!!busy} onClick={() => void run('update', release?.assetId)}>{t('settings.ghosts.detail.githubRelease.update')}</Button>
+          <Button variant="secondary" size="sm" disabled={!!busy || updating} onClick={() => void run('update', release?.assetId)}>{t('settings.ghosts.detail.githubRelease.update')}</Button>
         )}
         {(result?.status === 'sign-in' || result?.status === 'forbidden') && (
-          <Button variant="secondary" size="sm" disabled={!!busy} onClick={() => void run('sign-in')}>{t('settings.ghosts.detail.githubRelease.connect')}</Button>
+          <Button variant="secondary" size="sm" disabled={!!busy || updating} onClick={() => void run('sign-in')}>{t('settings.ghosts.detail.githubRelease.connect')}</Button>
         )}
       </div>
-      {busy === 'update' && progress && (
+      {updating && progress && (
         <div className="basis-full">
           <DownloadMeter label={t('settings.ghosts.detail.githubRelease.title')} progress={progress} />
         </div>
