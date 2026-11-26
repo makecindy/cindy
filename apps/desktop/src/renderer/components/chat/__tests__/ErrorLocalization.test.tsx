@@ -42,14 +42,17 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
-// #12924, unit: the live and historical notices distinguish the observed
-// empty HTTP 550 from ordinary failures, while preserving the dispatch refusal.
+// #12924, unit: the live and historical notices name an upstream 5xx status —
+// the exact empty HTTP 550 and any other message naming "550 status code" get
+// the same upstream-status notice (#12970) — while the dispatch refusal keeps
+// its own "not sent" text.
+const upstream550 = zhCN.chat.errorBanner.upstreamStatusError.replace('{{status}}', '550');
 it.each([
-  ['550 status code (no body)', '模型服务返回 HTTP 550（无响应内容）'],
-  ['ordinary failure mentioning 550 status code (no body)', zhCN.chat.errorBanner.replyFailed],
+  ['550 status code (no body)', upstream550],
+  ['ordinary failure mentioning 550 status code (no body)', upstream550],
   ['provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: SEND/task/send',
     zhCN.chat.errorBanner.messageNotSent],
-])('localizes the exact empty upstream 550 without changing other errors (%s)', async (message, expected) => {
+])('names the upstream 5xx status and keeps the dispatch refusal (%s)', async (message, expected) => {
   const i18n = createInstance();
   await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
   const { rerender } = render(<I18nextProvider i18n={i18n}>
