@@ -271,8 +271,12 @@ let catalogUnreadable = false;
 const catalogAhead = new Set<string>();
 const NEXT_RELEASE = "1.5.0";
 export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
-/** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
+/**
+ * DEV: the mock computer back to its first state (each `checks=` seed starts from it), also out of a `market=` scenario
+ * sent before (`hold`, `unreadResult`, `readbackFailed` would otherwise decide how the seed's operation ends).
+ */
 export function resetPluginMarketVisualComputer() {
+  scenario = "normal"; failedReads = 0; failedDetailReads.clear();
   installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; legacyHost = false; catalogUnreadable = false; failInstalledRead = false;
   failInstalledReadOnCommit = false; failReadsAfterCommit = 0; seedInstalled();
 }

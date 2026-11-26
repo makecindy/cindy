@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  AppState,
   BackHandler,
   Image,
   Pressable,
@@ -92,7 +91,7 @@ import {
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
-import { pluginConclusionListed, pluginConclusionSettled, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { pluginConclusionListed, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
@@ -119,7 +118,7 @@ function PluginDirectory() {
     checks?: string;
   }>();
   const previewSelection = useRef<string | undefined>(undefined);
-  const { invoke, connectionEpoch, onRemoteResourceChanged } = useDeviceLink();
+  const { invoke, connectionEpoch } = useDeviceLink();
   const { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -235,12 +234,6 @@ function PluginDirectory() {
     name: name ?? resolveRemoteText(row.item.display.title, i18n.language),
     deviceId: row.host.deviceId, deviceName: row.host.deviceName, instanceKey: row.item.ref.id, rowKey: row.key,
     ...(row.key === selected?.row.key && managed ? { ghostId: managed.manifest.id } : {}) });
-  // The app is in the foreground (the route stays focused in the background): nothing counts as seen while it is not.
-  const [foreground, setForeground] = useState(AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (next) => setForeground(next === "active"));
-    return () => subscription.remove();
-  }, []);
   // Market browsing and installs live in usePluginMarket; this screen only routes views. An install that ends never
   // moves this page: its result is listed at the top (see the notice below).
   const market = usePluginMarket({
@@ -434,12 +427,9 @@ function PluginDirectory() {
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
-    // This read is issued after every result proven so far: the detail it brings reflects them (see `reflects`).
-    for (const conclusion of provenResults()) {
-      if (!reflects.current.detail.has(conclusion.operationId)) reflects.current.detail.set(conclusion.operationId, detail);
-      // Another detail: its controller reads the computer as it is attached.
-      if (row.key !== selected?.row.key) reflects.current.snapshot.add(conclusion.operationId);
-    }
+    // Reading an instance's detail (the person opened it, or the page brings the one it shows up to date) shows what a
+    // result proven for that very instance left: such a result counts as seen from here on.
+    seenOnDetail(row);
     market.closeDetail();
     setSelected((current) =>
       current?.row.key === row.key ? { ...current, row } : { row },
@@ -674,11 +664,6 @@ function PluginDirectory() {
   const checks = usePluginPendingChecks(targetOnline, focused, targets.map((candidate) => candidate.deviceId));
   const conclusions = usePluginCheckConclusions();
   const [checksOpen, setChecksOpen] = useState(false);
-  // How many times each computer said its plugins changed: what the list of checks shows as proven is read again then.
-  const [pluginChanges, setPluginChanges] = useState<Readonly<Record<string, number>>>({});
-  useEffect(() => onRemoteResourceChanged((changedOn, payload) => {
-    if (payload.collectionId === "plugins") setPluginChanges((current) => ({ ...current, [changedOn]: (current[changedOn] ?? 0) + 1 }));
-  }), [onRemoteResourceChanged]);
   const operationLines: PluginOperationLine[] = [
     ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
     ...holders.filter((token) => !checks.some((check) => samePluginSlotHolder(check.who, token.who)))
@@ -1138,14 +1123,23 @@ function PluginDirectory() {
       : []),
   ];
   /**
-   * Which proven results what is on screen already reflects, so each is read for at most once and never again after the
-   * person's own press read it: `detail`, the detail resource (a read of it was issued after the result was proven;
-   * the value is the resource shown before that read, so the result counts as seen only on a newer one); `snapshot`,
-   * the controller's snapshot (the menu: its own read after the operation landed, or the controller was attached later).
+   * Operations whose detail was read again on its own read after the result: seen as soon as the result is proven,
+   * whichever comes first (here when it already is; the effect on `conclusions` below when it is proven later).
    */
-  const reflects = useRef({ detail: new Map<string, RemoteResource | undefined>(), snapshot: new Set<string>() });
-  const provenResults = () => conclusions.filter((conclusion) => conclusion.readback === "verified"
-    && (conclusion.result === "succeeded" || conclusion.result === "installed"));
+  const broughtUpToDate = useRef(new Set<string>());
+  const detailUpToDateFor = (operationId: string) => {
+    broughtUpToDate.current.add(operationId);
+    const proven = conclusions.find((conclusion) => conclusion.operationId === operationId);
+    if (proven && !proven.told && proven.readback === "verified") tellPluginConclusion(operationId);
+  };
+  const seenOnDetail = (row: HostedRemoteCollectionItem) => {
+    for (const conclusion of conclusions) {
+      if (conclusion.told || conclusion.readback !== "verified" || (conclusion.result !== "succeeded" && conclusion.result !== "installed")) continue;
+      // The instance it is about: the one an update or approval started from; for an install, the one its read proved.
+      const about = conclusion.entry === "update" || conclusion.entry === "page-approval" ? conclusion.who.instanceKey : conclusion.instanceKey;
+      if (conclusion.who.deviceId === row.host.deviceId && about === row.item.ref.id) tellPluginConclusion(conclusion.operationId);
+    }
+  };
   const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
     owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
   useEffect(() => {
@@ -1162,14 +1156,19 @@ function PluginDirectory() {
     // The detail on screen is brought up to date once, on the controller's snapshot read after the result (its
     // `finalReadback`, settled where a snapshot is published): the instance shown is read again, or the detail closes
     // when it is gone (an uninstall). Only this detail's display: what an update or a page approval concluded (proven
-    // as this operation's, or why not) is the list's one read of the success, shown by the effect below. While the
-    // snapshot read is out nothing happens; a failed one leaves the detail as it is.
+    // as this operation's, or why not) is the list's one read of the success. While the snapshot read is out nothing
+    // happens; a failed one leaves the detail as it is (as before this operation; the result is listed at the top).
     const done = completedOperation.current!;
     if (done.settled || state.finalReadback !== "read") return;
     done.settled = true;
-    reflects.current.snapshot.add(done.operationId);
     const { row, generation, owner } = done;
-    if (!row || liveManagement.current !== controller || generation !== detailGeneration.current || !isMobileAuthOwnerCurrent(owner)) return;
+    if (!row || liveManagement.current !== controller || !isMobileAuthOwnerCurrent(owner)) return;
+    if (generation !== detailGeneration.current) {
+      // Details were read since the result was known (the person, a reconnect). When the same detail is still the one
+      // selected, that read was this one: nothing more to read.
+      if (selected?.row.key === row.key) detailUpToDateFor(done.operationId);
+      return;
+    }
     const refreshed = controller.getState();
     if (!refreshed.online) return;
     const snapshot = refreshed.snapshot;
@@ -1177,54 +1176,29 @@ function PluginDirectory() {
       (item) => item.instanceKey === row.item.ref.id,
     );
     // Read again only while this detail is what is shown: from the plugin's own page (the person went back to it
-    // meanwhile) nothing is put over it; the detail is read again when it is shown again (the effect below).
+    // meanwhile) nothing is put over it; its details button reads the detail when it is shown again.
     if (viewed) {
-      if (!selected?.surface || detailOpen) { reflects.current.detail.set(done.operationId, detail); void showDetail(row); }
+      if (!selected?.surface || detailOpen) { detailUpToDateFor(done.operationId); void showDetail(row); }
     } else if (snapshot) {
       detailGeneration.current += 1;
       setSelected(undefined);
       setDetail(undefined);
     }
   }, [management.state?.outcome, management.state?.operationId, management.state?.finalReadback]);
-  // A success proven by its read counts as seen while the installed detail of that very instance is what the person is
-  // looking at: this page focused and the app in the foreground, the detail itself on screen (not the plugin's own
-  // page, readme or settings), read after the result was proven, and neither the list of checks nor a consent sheet
-  // over it (this detail's, a check's, a market install's). Nothing is opened, replaced or prompted by this. A detail
-  // that does not reflect a proven update or page approval yet is read again first, once, the same row (its own read
-  // after the operation did not land, the operation was proven from the facts after its receipt was gone, or the
-  // detail was not shown then), so it never shows the old state under a result that says done; a read the person's own
-  // press issued after the result was proven is that read. Anything not proven (another install since, an older
-  // computer, no instance now, not confirmed after its receipt was gone) is never marked here: it stays listed until
-  // the person reads how it ended in the list of checks.
-  const detailOnScreen = !!selected && (!selected.surface || detailOpen) && !readmeOpen && !settingsOpen
-    && !checksOpen && !deciding && management.state?.outcome !== "confirmation" && !market.confirmation;
-  const detailShown = detailOnScreen && focused && foreground;
+  // When a result counts as seen without the list of checks: only a success proven by its read (never one that is not
+  // proven: another install since, an older computer, no instance now, not confirmed after its receipt was gone), and
+  // only through the installed detail of that very instance: the page issues a read of that detail while the result is
+  // already proven (`seenOnDetail`, called by every such read: the person opened the detail, pressed its details
+  // button or "Open plugin", or the page reads the one it shows again), or the detail an operation was started from was
+  // brought up to date by its own read after the result (above) and the result is proven after that (here). Nothing is
+  // opened, replaced or prompted for it, and the page keeps no other account of what a detail reflects: a detail left
+  // as it was (its read after the operation did not land) stays so until it is read again, with the result listed.
   useEffect(() => {
-    if (!selected || !detailShown) return;
-    for (const conclusion of provenResults()) {
-      // The instance it is about: the one an update or approval started from; for an install, the one its read proved.
-      const about = conclusion.entry === "update" || conclusion.entry === "page-approval" ? conclusion.who.instanceKey : conclusion.instanceKey;
-      if (conclusion.who.deviceId !== selected.row.host.deviceId || about !== selected.row.item.ref.id) continue;
-      const { detail: read, snapshot } = reflects.current, operationId = conclusion.operationId;
-      if (conclusion.entry !== "market-install") {
-        // Not while this detail's own switch is being written (its own read follows that write).
-        if (toggleToken.current) continue;
-        if (!snapshot.has(operationId)) {
-          snapshot.add(operationId);
-          if (management.controller === liveManagement.current) void management.controller?.refresh();
-        }
-        if (!read.has(operationId)) {
-          // (The detail's own read after this operation, if it still lands, has nothing left to do.)
-          if (completedOperation.current?.operationId === operationId) completedOperation.current.settled = true;
-          void showDetail(selected.row);
-          continue;
-        }
-      }
-      // Seen once a detail read after it was proven is there to be looked at.
-      if (!conclusion.told && detail && detail !== read.get(operationId) && !detailLoading && !detailFailed) tellPluginConclusion(operationId);
+    for (const conclusion of conclusions) {
+      if (!conclusion.told && conclusion.readback === "verified" && broughtUpToDate.current.has(conclusion.operationId))
+        tellPluginConclusion(conclusion.operationId);
     }
-  // (`detail` itself: a read that starts and lands within one commit still shows a newly read detail.)
-  }, [conclusions, selected?.row.key, detailShown, detail, detailLoading, detailFailed]);
+  }, [conclusions]);
   const failedOperationNotice = useRef<string | undefined>(undefined);
   useEffect(() => {
     const state = management.state;
@@ -1492,7 +1466,7 @@ function PluginDirectory() {
         />
       ) : null}
       <PluginPendingChecksSheet visible={checksOpen} lines={operationLines} conclusions={conclusions} isOnline={targetOnline}
-        canOpen={knownTarget} watching={focused && foreground} changes={pluginChanges} onDecide={decide}
+        canOpen={knownTarget} onDecide={decide}
         onClose={() => setChecksOpen(false)} onOpenChecked={openChecked}
         // An older computer's result (V2.10 ③): the installed list, where the person opens the plugin themselves.
         onShowInstalled={showInstalledOf} />

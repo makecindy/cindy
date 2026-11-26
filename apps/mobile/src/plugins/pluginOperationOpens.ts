@@ -80,8 +80,8 @@ export function pluginOperationOpens(operation: FinishedPluginOperation, facts: 
   const identity = record && record.namespace !== undefined ? record : item;
   // The instance of exactly that namespace first; an instance without one (an older layout, matched by its key) only
   // when there is none.
-  const instance = facts.ghosts.find((ghost) => ghost.manifest.id === identity.ghostId && identity.namespace !== undefined
-      && ghost.namespace !== undefined && ghost.namespace === identity.namespace && started(ghost))
+  const instance = facts.ghosts.find((ghost) => ghost.manifest.id === identity.ghostId
+      && ghost.namespace !== undefined && ghost.namespace === (identity.namespace ?? null) && started(ghost))
     ?? facts.ghosts.find((ghost) => marketItemMatchesPlugin(identity, ghost) && started(ghost));
   return instance ? { open: true, instanceKey: instance.instanceKey } : { open: false, reason: "gone" };
 }

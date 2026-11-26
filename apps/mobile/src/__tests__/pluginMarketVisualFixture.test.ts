@@ -184,6 +184,19 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
       installed: installed && [installed.installState, installed.installedOperationAttribution] })
       .toEqual({ unavailableReason: null, serverRecords: true, installed: ["installed", "self"] });
   });
+  // Pre-push review, round 7: a `market=` scenario sent before (it decides how an install's commit ends) stayed armed
+  // for the next `checks=` seed, which then did not reach the state its row of ui-mock-data.md names. Minimal failing
+  // input on f8d1f490c4: the three rows after the control. Tier: unit.
+  it.each([["control: ", "normal"], ["", "readbackFailed"], ["", "unreadResult"], ["", "hold"]] as const)(
+    "%smarket=%s, then checks=succeeded: done, with its instance read", async (_control, scenario) => {
+      expect(setPluginMarketVisualScenario(scenario, true)).toBe(true);
+      const after = await seedPluginChecksForVisualMock("succeeded");
+      await flush();
+      after!();
+      await flush();
+      expect({ ended: __retainedForTests.conclusions().map((c) => [c.result, c.readback]), checks: __retainedForTests.checks().length })
+        .toEqual({ ended: [["succeeded", "verified"]], checks: 0 });
+    });
   // Two operations at once, for the notice at the top: both proven ("2 … have a result"), or one proven beside one still
   // waiting to be checked ("2 … need a look").
   it.each([

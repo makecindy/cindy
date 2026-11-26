@@ -38,8 +38,6 @@ interface ManagementEntry {
   stopWatching?: () => void;
   /** The missing-receipt facts a market install's result is being settled from (each set settled once). */
   settling?: unknown;
-  /** Stops waiting for a write still on its way when the facts could not settle the operation yet (`settleFromFacts`). */
-  settleLater?: () => void;
   /** Runs the detached review again (after a sheet showing this entry closed). */
   review?: () => void;
   /** The pending check this entry last had (its final result is told once, see `conclude`). */
@@ -383,20 +381,11 @@ function settleFromFacts(entry: ManagementEntry, facts: NonNullable<PluginManage
     && controller.getState().operationId === check.operationId;
   const settle = (result: "installed" | "notInstalled" | "mismatch" | "legacy", instanceKey?: string) => {
     if (!valid()) return;
-    // A write of this operation is still on its way (the reply to begin or to Allow has not come): not let go yet.
-    // These facts settle it once that write is over. The controller tells its subscribers then, also when the end of
-    // the write changes nothing in its state (a begin whose reply is lost after the connection moved on).
-    if (!controller.untrack()) {
-      if (entry.settling === facts) entry.settling = undefined;
-      entry.settleLater ??= controller.subscribe(() => {
-        // Only once nothing is on its way any more (it then lets go, or the facts are no longer the ones to settle from).
-        if (!controller.idle()) return;
-        entry.settleLater?.();
-        entry.settleLater = undefined;
-        watch(entry);
-      });
-      return;
-    }
+    // A write of this operation is still on its way (the reply to begin or to Allow has not come): not let go yet,
+    // and nothing is decided before that write's own result has been handled (a reply that arrives is the operation's
+    // receipt; one known not to have been written is a plain failure). Only when its reply is lost do these facts
+    // settle it: the controller publishes again then (also when that changes nothing in its state), which comes back here.
+    if (!controller.untrack()) { if (entry.settling === facts) entry.settling = undefined; return; }
     // The instance and the market's record of this operation come from the same response read after NOT_FOUND: verified.
     conclude(entry, { operationId: check.operationId, entry: check.entry, who: check.who, result,
       readback: result === "installed" && instanceKey ? "verified" : "none", instanceKey: result === "installed" ? instanceKey : undefined });
@@ -445,8 +434,6 @@ function letGo(scope: string, entry: ManagementEntry) {
   if (retained.get(scope) === entry) retained.delete(scope);
   entry.stopWatching?.();
   entry.stopWatching = undefined;
-  entry.settleLater?.();
-  entry.settleLater = undefined;
   entry.dead = true;
   entries.delete(entry);
   entry.controller.dispose();

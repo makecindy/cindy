@@ -156,6 +156,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   };
   const autoPick = onlineId(remembered) ? remembered : targets.find((host) => isOnline(host))?.deviceId;
   useEffect(() => { if (!visible) setPinned(undefined); }, [visible]);
+  const visibleNow = useRef(visible);
+  visibleNow.current = visible;
   useEffect(() => { if (visible && preferenceRead && !has(pinned) && autoPick) setPinned(autoPick); }, [visible, preferenceRead, pinned, autoPick, targets]);
   const automatic = has(pinned) ? pinned! : autoPick ?? (has(remembered) ? remembered! : targets[0]?.deviceId);
   const explicit = install ? install.target.deviceId : has(choice) ? choice! : has(installedDeviceId) ? installedDeviceId : undefined;
@@ -502,11 +504,11 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (installRef.current?.id !== attempt.id) return;
     setInstall(null);
     installRef.current = null;
-    // The market stays on the computer the attempt was on (it was held there while it ran): that computer becomes this
-    // visit's automatic pick, so the list does not move to another computer the moment the attempt ends. It is no
-    // explicit choice: one the person made (in the market, or a specific computer in the Installed tab) still wins,
-    // and the next visit picks again.
-    setPinned(attempt.target.deviceId);
+    // The market on screen stays on the computer the attempt was on (it was held there while it ran): that computer
+    // becomes this visit's automatic pick, so the list does not move to another computer the moment the attempt ends.
+    // It is no explicit choice: one the person made (in the market, or a specific computer in the Installed tab) still
+    // wins. Only while the market is shown: an attempt that ends elsewhere leaves the next visit to pick again.
+    if (visibleNow.current) setPinned(attempt.target.deviceId);
     slot.release(attempt.token);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, [slot]);

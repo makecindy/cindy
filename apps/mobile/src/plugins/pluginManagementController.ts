@@ -544,7 +544,13 @@ export function createPluginManagementController(client: PluginManagementClient,
         conclude(holder, { outcome: 'failed', errorCode: pluginManagementErrorCode(error) });
         return;
       }
-      if (!current(token) || (began && !undecided(operationId))) { drop(holder); return; }
+      if (!current(token) || (began && !undecided(operationId))) {
+        drop(holder);
+        // The write is over and changed nothing here (its reply was lost after the connection moved on): said again, so
+        // whoever waited for the write to end looks now (a result to settle from the computer's facts, "Stop tracking").
+        if (began && !disposed) publish({});
+        return;
+      }
       const unknown = began && !notWritten(error);
       release(holder, { outcome: unknown ? 'unknown' : 'failed', errorCode: pluginManagementErrorCode(error) });
     }

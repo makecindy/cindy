@@ -27,7 +27,6 @@ const KIND: Record<PluginSlotEntry, string> = {
   enable: "enable", "task-settings": "taskSettings",
 };
 
-const NO_CHANGES: Readonly<Record<string, number>> = {};
 /**
  * The page's unfinished operations (maintainer review 18:45), drawn from what each one kept (plugin, computer, entry,
  * operation), never from the directory or the market list: an item a filter, a later page or the installed filter
@@ -37,17 +36,13 @@ const NO_CHANGES: Readonly<Record<string, number>> = {};
  * the computer no longer has and that nothing on the computer can prove (`unprovable`: an uninstall, a page approval)
  * shows what the computer has now and offers only "Stop tracking": checking again could not settle it.
  */
-export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, watching = true, changes = NO_CHANGES, onDecide, onClose, onOpenChecked, onShowInstalled }: {
+export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline, canOpen, onDecide, onClose, onOpenChecked, onShowInstalled }: {
   visible: boolean;
   lines: PluginOperationLine[];
   conclusions: PluginCheckConclusion[];
   isOnline(deviceId: string): boolean;
   /** The computer is still listed for this account (only there can an instance be opened). */
   canOpen(deviceId: string): boolean;
-  /** The page is focused and the app in the foreground (while it is not, nobody watches what the list shows). */
-  watching?: boolean;
-  /** Per computer, how many times it said its plugins changed (a count that only grows). */
-  changes?: Readonly<Record<string, number>>;
   /** "View and decide": opens the consent once its operation holds the computer's slot; false when it cannot. */
   onDecide(operationId: string): boolean;
   onClose(): void;
@@ -66,34 +61,26 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   // Only what is still settled then counts (`tellPluginConclusion`): one being read again, or that could not be read
   // after all, stays listed.
   const settledSeen = useRef(new Set<string>());
-  // "Open plugin" opens at once what its line shows, so what a line shows as proven must be what the computer said
-  // while this list was watching (a success is a past result: the plugin may have been replaced since). A success is
-  // read again, once each time, before its line offers "Open plugin": when it was proven before the list was opened,
-  // and whenever the list could have missed a change since its last read (its computer was not connected, the page
-  // was not in front or the app not in the foreground, or the computer said its plugins changed). The read goes out
-  // once the computer can be read and the page is in front; a read of it still out is waited for first.
+  // "Open plugin" opens at once what its line shows. A success is a past result (the plugin may have been replaced
+  // since), so one proven before the list was opened is read again, once, as the list opens (or as soon as its computer
+  // can be read), and its line has no "Open plugin" until that read is back. One proven while the list is open was read
+  // just now. After that the list does not follow the computer: what changes there while the list stays open shows the
+  // next time it is opened.
   const provenBefore = useRef<Set<string> | undefined>(undefined);
-  const changesSeen = useRef(changes);
-  const open = (item: PluginCheckConclusion) => !item.told && (item.result === "succeeded" || item.result === "installed")
-    && item.entry !== "uninstall" && (item.readback === "verified" || item.readback === "pending");
+  const proven = (item: PluginCheckConclusion) => item.readback === "verified" && !item.told
+    && (item.result === "succeeded" || item.result === "installed") && item.entry !== "uninstall";
   const readable = (deviceId: string) => canOpen(deviceId) && isOnline(deviceId);
   if (!visible) provenBefore.current = undefined;
-  else {
-    provenBefore.current ??= new Set(conclusions.filter((item) => open(item) && item.readback === "verified").map((item) => item.operationId));
-    for (const item of conclusions) {
-      const deviceId = item.who.deviceId;
-      if (open(item) && (!watching || !readable(deviceId) || (changes[deviceId] ?? 0) !== (changesSeen.current[deviceId] ?? 0)))
-        provenBefore.current.add(item.operationId);
-    }
-  }
-  changesSeen.current = changes;
+  else provenBefore.current ??= new Set(conclusions.filter(proven).map((item) => item.operationId));
   useEffect(() => {
     for (const operationId of [...(provenBefore.current ?? [])]) {
       const conclusion = conclusions.find((item) => item.operationId === operationId);
-      if (!conclusion || !open(conclusion)) { provenBefore.current!.delete(operationId); continue; }
-      if (conclusion.readback === "pending" || !watching || !readable(conclusion.who.deviceId)) continue;
+      if (!conclusion || !proven(conclusion)) { provenBefore.current!.delete(operationId); continue; }
+      if (!readable(conclusion.who.deviceId)) continue;
       provenBefore.current!.delete(operationId);
-      void retryPluginCheckReadback(operationId);
+      // After this commit's effects: the page says whether the computer can be reached in its own effect, which runs
+      // after this one. A read issued before that would count as issued while unreachable and, failing, be read twice.
+      queueMicrotask(() => { void retryPluginCheckReadback(operationId); });
     }
   });
   if (!visible) seen.current.clear();
