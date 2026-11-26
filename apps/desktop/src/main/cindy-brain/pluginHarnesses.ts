@@ -37,6 +37,12 @@ import { AgentStartupStoppedError } from '@cindy/maker-core';
 
 import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import {
+  ADAPTIVE_QUOTA_TIERS,
+  nextExponentialBackoffMs,
+  shouldRefreshAdaptiveQuota,
+  type AdaptiveQuotaRefreshTiming,
+} from '../usage/adaptiveQuotaRefresh.js';
 import type { NodeWorkerProcess } from './nodeRuntimeBroker.js';
 
 /** Worker methods the Host calls for engine accounts (plugin-harnesses.md 引擎账号). */
@@ -144,11 +150,25 @@ export interface PluginHarnessRegistryDeps {
    * Null while no account scope is active; spawning on an account then fails.
    */
   accountRoot?(ghostId: string, harnessId: string): string | null;
+  /** Current owner scope key for isolating host-cached plugin usage across account switches. */
+  ownerScopeKey?(): string;
+  /** Clock injection (defaults to Date.now). */
+  now?(): number;
+  /** Override adaptive usage caching/throttling timing (tests). */
+  usageTiming?: Partial<AdaptiveQuotaRefreshTiming>;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
 
+export interface PluginHarnessUsageReadOptions {
+  reportWorkerFailure?: boolean;
+  /** Explicit user-initiated refresh: bypasses adaptive active/idle TTL after a short manual cooldown. */
+  force?: boolean;
+}
+
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
-  readUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null>;
+  readUsage(key: string, accountDir?: string, options?: PluginHarnessUsageReadOptions): Promise<GhostHarnessUsage | null>;
+  /** Records real task/turn activity for a plugin engine (optionally scoped to an account dir). */
+  recordActivity(key: string, accountDir?: string): void;
   /** The plugin's view of one account (no `accountDir` = the agent's original login). */
   readAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null>;
   /**
@@ -214,16 +234,119 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
   return result;
 }
 
+const MAX_USAGE_CACHE_ENTRIES = 128;
+const PLUGIN_USAGE_MANUAL_COOLDOWN_MAX_MS = 15_000;
+const CLOCK_BACKWARD_TOLERANCE_MS = 60_000;
+
+interface UsageCacheEntry {
+  hasValue: boolean;
+  value: GhostHarnessUsage | null;
+  lastRefreshAt: number;
+  lastAttemptAt: number;
+  activitySeq: number;
+  refreshedActivitySeq: number;
+  backoffMs: number;
+  backoffUntil: number;
+  workerFailure: boolean;
+}
+
+type UsageFlightOutcome =
+  | { kind: 'value'; value: GhostHarnessUsage | null }
+  | { kind: 'worker-failure'; fallbackValue: GhostHarnessUsage | null };
+
+function usageCacheKey(key: string, accountDir?: string): string {
+  return `${key}\0${accountDir ? path.resolve(accountDir) : ''}`;
+}
+
+function harnessUsageResetTimesMs(usage: GhostHarnessUsage | null | undefined): number[] {
+  if (!usage?.windows?.length) return [];
+  const out: number[] = [];
+  for (const window of usage.windows) {
+    if (typeof window.resetsAt === 'number' && Number.isFinite(window.resetsAt) && window.resetsAt > 0) {
+      out.push(window.resetsAt);
+    }
+  }
+  return out;
+}
+
 /** 生产与测试共用的注册表实现;生产单例见 getPluginHarnessRegistry。 */
 export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): ReconcilablePluginHarnessRegistry {
   const listeners = new Set<(list: PluginHarness[]) => void>();
   let current: PluginHarness[] | null = null;
   // 基线是空列表:首次重算就有引擎时,先订阅的引擎侧也能收到通知。
   let fingerprint = '[]';
+  const nowFn = () => (deps.now ? deps.now() : Date.now());
+  const timing: AdaptiveQuotaRefreshTiming = {
+    ...ADAPTIVE_QUOTA_TIERS.pluginHarness,
+    ...deps.usageTiming,
+  };
+  const manualCooldownMs = Math.min(PLUGIN_USAGE_MANUAL_COOLDOWN_MAX_MS, timing.activeThrottleMs);
+  const usageCache = new Map<string, UsageCacheEntry>();
+  const usageInFlight = new Map<string, Promise<UsageFlightOutcome>>();
+  let usageOwnerScope = deps.ownerScopeKey?.() ?? '';
+
+  const syncUsageOwnerScope = (): string => {
+    const scope = deps.ownerScopeKey?.() ?? '';
+    if (scope !== usageOwnerScope) {
+      usageOwnerScope = scope;
+      usageCache.clear();
+      usageInFlight.clear();
+    }
+    return scope;
+  };
+  const getOrCreateUsageEntry = (cacheKey: string): UsageCacheEntry => {
+    const existing = usageCache.get(cacheKey);
+    if (existing) {
+      usageCache.delete(cacheKey);
+      usageCache.set(cacheKey, existing);
+      return existing;
+    }
+    const created: UsageCacheEntry = {
+      hasValue: false,
+      value: null,
+      lastRefreshAt: 0,
+      lastAttemptAt: 0,
+      activitySeq: 0,
+      refreshedActivitySeq: 0,
+      backoffMs: 0,
+      backoffUntil: 0,
+      workerFailure: false,
+    };
+    usageCache.set(cacheKey, created);
+    if (usageCache.size > MAX_USAGE_CACHE_ENTRIES) {
+      const oldest = usageCache.keys().next().value;
+      if (oldest !== undefined) usageCache.delete(oldest);
+    }
+    return created;
+  };
+  const evictUsageByEngineKey = (key: string): void => {
+    const prefix = `${key}\0`;
+    for (const cacheKey of [...usageCache.keys()]) {
+      if (cacheKey.startsWith(prefix)) usageCache.delete(cacheKey);
+    }
+    for (const cacheKey of [...usageInFlight.keys()]) {
+      if (cacheKey.startsWith(prefix)) usageInFlight.delete(cacheKey);
+    }
+  };
   const compute = (ghosts?: InstalledGhost[]): PluginHarness[] => projectHarnesses(deps, ghosts ?? deps.listGhosts());
   const snapshot = (list: PluginHarness[]) => list.map((item) => ({ ...item, availability: { ...item.availability } }));
   const reconcile = (ghosts?: InstalledGhost[]): PluginHarness[] => {
+    const previous = current;
     const next = compute(ghosts);
+    if (previous) {
+      const nextByKey = new Map(next.map((item) => [item.key, item]));
+      for (const prev of previous) {
+        const after = nextByKey.get(prev.key);
+        if (
+          !after
+          || after.reportsUsage !== prev.reportsUsage
+          || after.availability.state !== prev.availability.state
+          || after.availability.version !== prev.availability.version
+        ) {
+          evictUsageByEngineKey(prev.key);
+        }
+      }
+    }
     const nextFingerprint = JSON.stringify(next);
     const changed = nextFingerprint !== fingerprint;
     current = next;
@@ -266,19 +389,111 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
+    recordActivity(key, accountDir) {
+      if (!key) return;
+      syncUsageOwnerScope();
+      const entry = getOrCreateUsageEntry(usageCacheKey(key, accountDir));
+      entry.activitySeq += 1;
+    },
     async readUsage(key, accountDir, options) {
       const read = deps.readUsage;
       if (!read) return null;
+      const scope = syncUsageOwnerScope();
       const find = () => findLive(key, (item) => !!item.reportsUsage
         && (accountDir === undefined || (!!item.accounts?.methods.length && isAccountDir(item, accountDir))));
       const harness = find();
-      if (!harness) return null;
-      const raw = await (accountDir === undefined ? read(harness.ghostId, harness.harnessId) : read(harness.ghostId, harness.harnessId, accountDir));
-      if (!find()) return null;
-      if (raw === PLUGIN_USAGE_WORKER_FAILURE && options?.reportWorkerFailure) {
-        throw new Error('Plugin usage worker unavailable');
+      const cacheKey = usageCacheKey(key, accountDir);
+      if (!harness) {
+        usageCache.delete(cacheKey);
+        return null;
       }
-      return parseGhostHarnessUsage(raw) ?? null;
+
+      const existingFlight = usageInFlight.get(cacheKey);
+      if (existingFlight) {
+        const outcome = await existingFlight;
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) return null;
+        if (outcome.kind === 'worker-failure') {
+          if (options?.reportWorkerFailure) throw new Error('Plugin usage worker unavailable');
+          return outcome.fallbackValue;
+        }
+        return outcome.value;
+      }
+
+      const entry = usageCache.get(cacheKey);
+      const now = nowFn();
+      const shouldRefresh = options?.force === true
+        ? !entry
+          || entry.lastAttemptAt <= 0
+          || entry.lastAttemptAt > now + CLOCK_BACKWARD_TOLERANCE_MS
+          || now - entry.lastAttemptAt >= manualCooldownMs
+        : shouldRefreshAdaptiveQuota({
+            now,
+            lastRefreshAt: entry?.lastRefreshAt ?? 0,
+            hasActivitySinceRefresh: (entry?.activitySeq ?? 0) > (entry?.refreshedActivitySeq ?? 0),
+            resetsAtMs: harnessUsageResetTimesMs(entry?.value),
+            backoffUntil: entry?.backoffUntil,
+            timing,
+          });
+      if (!shouldRefresh && entry) {
+        if (entry.workerFailure && options?.reportWorkerFailure) {
+          throw new Error('Plugin usage worker unavailable');
+        }
+        return entry.value;
+      }
+
+      const target = getOrCreateUsageEntry(cacheKey);
+      const attemptSeq = target.activitySeq;
+      const flight: Promise<UsageFlightOutcome> = (async () => {
+        const raw = await (accountDir === undefined
+          ? read(harness.ghostId, harness.harnessId)
+          : read(harness.ghostId, harness.harnessId, accountDir));
+        const settledAt = nowFn();
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) {
+          usageCache.delete(cacheKey);
+          return { kind: 'value', value: null };
+        }
+        if (raw === PLUGIN_USAGE_WORKER_FAILURE) {
+          target.lastAttemptAt = settledAt;
+          target.workerFailure = true;
+          target.backoffMs = nextExponentialBackoffMs(target.backoffMs, timing);
+          target.backoffUntil = settledAt + target.backoffMs;
+          if (target.backoffMs === 0) target.lastRefreshAt = settledAt;
+          return { kind: 'worker-failure', fallbackValue: target.value };
+        }
+        const parsed = parseGhostHarnessUsage(raw) ?? null;
+        target.hasValue = true;
+        target.value = parsed;
+        target.workerFailure = false;
+        target.lastRefreshAt = settledAt;
+        target.lastAttemptAt = settledAt;
+        target.refreshedActivitySeq = Math.max(target.refreshedActivitySeq, attemptSeq);
+        target.backoffMs = 0;
+        target.backoffUntil = 0;
+        return { kind: 'value', value: parsed };
+      })();
+      usageInFlight.set(cacheKey, flight);
+      try {
+        const outcome = await flight;
+        if ((deps.ownerScopeKey?.() ?? '') !== scope || !find()) return null;
+        if (outcome.kind === 'worker-failure') {
+          if (options?.reportWorkerFailure) throw new Error('Plugin usage worker unavailable');
+          return outcome.fallbackValue;
+        }
+        return outcome.value;
+      } catch (err) {
+        if (err instanceof Error && err.message === 'Plugin usage worker unavailable') throw err;
+        const failedAt = nowFn();
+        if ((deps.ownerScopeKey?.() ?? '') === scope) {
+          target.lastAttemptAt = failedAt;
+          target.workerFailure = true;
+          target.backoffMs = nextExponentialBackoffMs(target.backoffMs, timing);
+          target.backoffUntil = failedAt + target.backoffMs;
+          if (target.backoffMs === 0) target.lastRefreshAt = failedAt;
+        }
+        throw err;
+      } finally {
+        if (usageInFlight.get(cacheKey) === flight) usageInFlight.delete(cacheKey);
+      }
     },
     async readAccountStatus(key, accountDir) {
       const call = deps.callAccount;
@@ -307,6 +522,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         harnessId: harness.harnessId, ...(accountDir !== undefined ? { accountDir } : {}), methodId,
         ...(secret !== undefined ? { secret } : {}),
       }, PLUGIN_HARNESS_ACCOUNT_LOGIN_TIMING);
+      usageCache.delete(usageCacheKey(key, accountDir));
       return parseGhostHarnessAccountLoginResult(raw);
     },
     async cancelAccountLogin(key, accountDir) {
@@ -357,6 +573,8 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
     },
     invalidate() {
       current = null;
+      usageCache.clear();
+      usageInFlight.clear();
     },
   };
 }
@@ -381,6 +599,8 @@ const registry = createPluginHarnessRegistry({
     : registryDeps.readUsage?.(ghostId, harnessId, accountDir)),
   callAccount: async (ghostId, method, params, timing) => registryDeps.callAccount?.(ghostId, method, params, timing),
   accountRoot: (ghostId, harnessId) => registryDeps.accountRoot?.(ghostId, harnessId) ?? null,
+  ownerScopeKey: () => registryDeps.ownerScopeKey?.() ?? '',
+  now: () => (registryDeps.now ? registryDeps.now() : Date.now()),
   log: { warn: (message, meta) => registryDeps.log?.warn(message, meta) },
 });
 
@@ -398,8 +618,16 @@ export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
 }
 
-export function readPluginHarnessUsage(key: string, accountDir?: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null> {
+export function readPluginHarnessUsage(
+  key: string,
+  accountDir?: string,
+  options?: PluginHarnessUsageReadOptions,
+): Promise<GhostHarnessUsage | null> {
   return registry.readUsage(key, accountDir, options);
+}
+
+export function recordPluginHarnessActivity(key: string, accountDir?: string): void {
+  registry.recordActivity(key, accountDir);
 }
 
 export function readPluginHarnessAccountStatus(key: string, accountDir?: string): Promise<GhostHarnessAccountStatus | null> {

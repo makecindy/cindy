@@ -143,12 +143,15 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
 });
 
 /**
- * Claude turn done 后的订阅余量刷新钩子 (register.ts 消费) —— fire-and-forget,
- * 节流 / 429 退避在 reader 内部。未连订阅时 no-op。
+ * Claude turn done / 面板轮询后的订阅余量刷新钩子 (register.ts / quota-overview 消费) ——
+ * fire-and-forget, 活跃度自适应节流 / 退避在 reader 内部。未连订阅时 no-op。
  */
-export function triggerClaudeSubscriptionUsageRefresh(providerId?: string): void {
-  if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId); return; }
-  claudeSubscriptionUsageReader.triggerRefresh();
+export function triggerClaudeSubscriptionUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' },
+): void {
+  if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId, options); return; }
+  claudeSubscriptionUsageReader.triggerRefresh({ activity: (options?.source ?? 'turn') === 'turn' });
 }
 
 /**
@@ -196,10 +199,13 @@ const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
   },
 });
 
-/** SuperGrok 周用量:turn-done 钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
-export function triggerXaiSubscriptionUsageRefresh(providerId?: string): void {
-  if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId); return; }
-  xaiSubscriptionUsageReader.triggerRefresh();
+/** SuperGrok 周用量:turn-done / 面板轮询钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
+export function triggerXaiSubscriptionUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' },
+): void {
+  if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId, options); return; }
+  xaiSubscriptionUsageReader.triggerRefresh({ activity: (options?.source ?? 'turn') === 'turn' });
 }
 
 /**
@@ -240,7 +246,10 @@ function normalizeCodexResetProvider(providerId?: string): string | undefined {
 }
 let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
-export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string, options?: { fresh?: boolean }) {
+export function readCodexAccountUsageSnapshotWithWebRefresh(
+  requestedProviderId?: string,
+  options?: { fresh?: boolean; activity?: boolean },
+) {
   const providerId = normalizeCodexUsageProvider(requestedProviderId);
   const scope = activeOwnerScopeKey();
   if (scope !== codexReadersOwner) { codexUsageReaders.clear(); codexReadersOwner = scope; }
@@ -272,12 +281,16 @@ export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?
 
 /**
  * 触发 ChatGPT 订阅额度(wham/usage)后台刷新 —— 复用带 web-refresh 的 reader:拉到新快照即
- * recordSnapshot → 广播 usage:codex-account-changed(reader 内部 10s 节流 + in-flight 去重)。
- * 供 claude-code 框架下 `chatgpt/` bridge 轮结束后调用,让底部 chip 的 ChatGPT 额度实时更新
- * (bridge 轮不产生 codex account_usage 事件,需主动触发)。fire-and-forget。
+ * recordSnapshot → 广播 usage:codex-account-changed(reader 内部活跃度自适应节流 + in-flight 去重)。
+ * 供 claude-code / pi 订阅轮结束后调用 (`source: 'turn'`)，以及菜单栏/概览轮询 (`source: 'poll'`)。
+ * fire-and-forget。
  */
-export function triggerCodexAccountUsageRefresh(providerId?: string): void {
-  void readCodexAccountUsageSnapshotWithWebRefresh(providerId).catch(() => {
+export function triggerCodexAccountUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' },
+): void {
+  const activity = (options?.source ?? 'turn') === 'turn';
+  void readCodexAccountUsageSnapshotWithWebRefresh(providerId, activity ? { activity: true } : undefined).catch(() => {
     /* best-effort: 失败保留上一次快照, 不影响 turn 收尾 */
   });
 }
@@ -508,6 +521,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     if (!hasClaudeNativeLogin()) return;
     const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
     if (!snapshot) return;
+    claudeSubscriptionUsageReader.markActivity();
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
     const planTier = peekClaudeCliLoginStatus()?.planTier;

@@ -9,6 +9,13 @@
  */
 
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
+import {
+  ADAPTIVE_QUOTA_TIERS,
+  epochSecondsToMs,
+  nextExponentialBackoffMs,
+  shouldRefreshAdaptiveQuota,
+  type AdaptiveQuotaRefreshTiming,
+} from './adaptiveQuotaRefresh.js';
 
 export interface XaiSubscriptionCredentialInfo {
   accessToken: string;
@@ -30,17 +37,40 @@ interface XaiSubscriptionUsageRefreshDeps {
 
 interface XaiSubscriptionUsageRefreshOptions {
   throttleMs?: number;
+  idleThrottleMs?: number;
+  resetMinIntervalMs?: number;
   rateLimitBackoffInitialMs?: number;
   rateLimitBackoffMaxMs?: number;
 }
 
-const DEFAULT_THROTTLE_MS = 60_000;
-const DEFAULT_BACKOFF_INITIAL_MS = 5 * 60_000;
-const DEFAULT_BACKOFF_MAX_MS = 30 * 60_000;
+function xaiResetTimesMs(snapshot: XaiSubscriptionUsageSnapshot | null | undefined): number[] {
+  const resetAt = epochSecondsToMs(snapshot?.resetsAt);
+  return resetAt !== null ? [resetAt] : [];
+}
+
+function resolveTiming(options: XaiSubscriptionUsageRefreshOptions): AdaptiveQuotaRefreshTiming {
+  const tier = ADAPTIVE_QUOTA_TIERS.xaiSubscription;
+  if (options.throttleMs !== undefined) {
+    return {
+      activeThrottleMs: options.throttleMs,
+      idleThrottleMs: options.idleThrottleMs ?? options.throttleMs,
+      resetMinIntervalMs: options.resetMinIntervalMs ?? options.throttleMs,
+      failureBackoffInitialMs: options.rateLimitBackoffInitialMs ?? tier.failureBackoffInitialMs,
+      failureBackoffMaxMs: options.rateLimitBackoffMaxMs ?? tier.failureBackoffMaxMs,
+    };
+  }
+  return {
+    activeThrottleMs: tier.activeThrottleMs,
+    idleThrottleMs: options.idleThrottleMs ?? tier.idleThrottleMs,
+    resetMinIntervalMs: options.resetMinIntervalMs ?? tier.resetMinIntervalMs,
+    failureBackoffInitialMs: options.rateLimitBackoffInitialMs ?? tier.failureBackoffInitialMs,
+    failureBackoffMaxMs: options.rateLimitBackoffMaxMs ?? tier.failureBackoffMaxMs,
+  };
+}
 
 export interface XaiSubscriptionUsageReader {
   read(): Promise<XaiSubscriptionUsageSnapshot | null>;
-  triggerRefresh(): void;
+  triggerRefresh(options?: { activity?: boolean }): void;
   syncForCredentialChange(): Promise<void>;
 }
 
@@ -48,9 +78,7 @@ export function createXaiSubscriptionUsageReader(
   deps: XaiSubscriptionUsageRefreshDeps,
   options: XaiSubscriptionUsageRefreshOptions = {},
 ): XaiSubscriptionUsageReader {
-  const throttleMs = options.throttleMs ?? DEFAULT_THROTTLE_MS;
-  const backoffInitialMs = options.rateLimitBackoffInitialMs ?? DEFAULT_BACKOFF_INITIAL_MS;
-  const backoffMaxMs = options.rateLimitBackoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
+  const timing = resolveTiming(options);
 
   let inFlight: Promise<void> | null = null;
   let inFlightToken: string | null = null;
@@ -58,6 +86,9 @@ export function createXaiSubscriptionUsageReader(
   // 只记「需要再跑一次」,不存 token。排空时重读当前凭证,迟到的旧 token 盖不掉新号。
   let queuedReplay = false;
   let lastRefreshAt = 0;
+  let activitySeq = 0;
+  let refreshedActivitySeq = 0;
+  let lastKnownResetsAtMs: number[] = [];
   let backoffMs = 0;
   let backoffUntil = 0;
   let hadCredentials = false;
@@ -78,6 +109,9 @@ export function createXaiSubscriptionUsageReader(
     queuedReplay = false;
     if (opts.resetThrottle) {
       lastRefreshAt = 0;
+      activitySeq = 0;
+      refreshedActivitySeq = 0;
+      lastKnownResetsAtMs = [];
       backoffMs = 0;
       backoffUntil = 0;
     }
@@ -95,6 +129,7 @@ export function createXaiSubscriptionUsageReader(
   async function runRefresh(
     credentials: XaiSubscriptionCredentialInfo,
     generation: number,
+    attemptSeq: number,
   ): Promise<void> {
     try {
       const result = await deps.fetchSnapshot(credentials);
@@ -104,6 +139,8 @@ export function createXaiSubscriptionUsageReader(
       if (result === 'empty') {
         await deps.clearSnapshot();
         markAttemptSettled();
+        refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
+        lastKnownResetsAtMs = [];
         backoffMs = 0;
         backoffUntil = 0;
         return;
@@ -114,6 +151,8 @@ export function createXaiSubscriptionUsageReader(
       }
       await deps.recordSnapshot(result);
       markAttemptSettled();
+      refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
+      lastKnownResetsAtMs = xaiResetTimesMs(result);
       backoffMs = 0;
       backoffUntil = 0;
     } catch (err) {
@@ -121,14 +160,14 @@ export function createXaiSubscriptionUsageReader(
       if (deps.isUnauthorizedError(err)) {
         await clearCachedSnapshot({ resetThrottle: false });
         lastRefreshAt = deps.now();
+        refreshedActivitySeq = Math.max(refreshedActivitySeq, attemptSeq);
+        lastKnownResetsAtMs = [];
         return;
       }
       if (deps.isRateLimitedError(err)) {
-        markAttemptSettled();
-        backoffMs = backoffMs > 0
-          ? Math.min(backoffMs * 2, backoffMaxMs)
-          : backoffInitialMs;
+        backoffMs = nextExponentialBackoffMs(backoffMs, timing);
         backoffUntil = deps.now() + backoffMs;
+        if (backoffMs === 0) markAttemptSettled();
         deps.onRefreshError(err);
         return;
       }
@@ -139,7 +178,7 @@ export function createXaiSubscriptionUsageReader(
 
   function startRefresh(
     credentials: XaiSubscriptionCredentialInfo,
-    opts?: { bypassThrottle?: boolean },
+    opts?: { bypassThrottle?: boolean; resetsAtMs?: number[] },
   ): void {
     const now = deps.now();
     if (inFlight) {
@@ -151,15 +190,23 @@ export function createXaiSubscriptionUsageReader(
       queuedReplay = true;
       return;
     }
-    if (!opts?.bypassThrottle) {
-      if (now < backoffUntil) return;
-      if (lastRefreshAt > 0 && now - lastRefreshAt < throttleMs) return;
+    const resetsAtMs = opts?.resetsAtMs && opts.resetsAtMs.length > 0 ? opts.resetsAtMs : lastKnownResetsAtMs;
+    if (!opts?.bypassThrottle && !shouldRefreshAdaptiveQuota({
+      now,
+      lastRefreshAt,
+      hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+      resetsAtMs,
+      backoffUntil,
+      timing,
+    })) {
+      return;
     }
+    const attemptSeq = activitySeq;
     const generation = refreshGeneration;
     const startedToken = credentials.accessToken;
     inFlightToken = startedToken;
     inFlightGeneration = generation;
-    const pending = runRefresh(credentials, generation).finally(() => {
+    const pending = runRefresh(credentials, generation, attemptSeq).finally(() => {
       if (inFlight === pending) {
         inFlight = null;
         inFlightToken = null;
@@ -182,7 +229,7 @@ export function createXaiSubscriptionUsageReader(
     async read(): Promise<XaiSubscriptionUsageSnapshot | null> {
       const credentials = await readCredentialsSafe();
       if (!credentials) {
-        noCredentialsUntil = deps.now() + throttleMs;
+        noCredentialsUntil = deps.now() + timing.activeThrottleMs;
         if (hadCredentials) {
           hadCredentials = false;
           await clearCachedSnapshot({ resetThrottle: true });
@@ -192,20 +239,29 @@ export function createXaiSubscriptionUsageReader(
       noCredentialsUntil = 0;
       hadCredentials = true;
       const cached = await deps.readCachedSnapshot();
-      startRefresh(credentials);
+      startRefresh(credentials, { resetsAtMs: xaiResetTimesMs(cached) });
       return cached;
     },
 
-    triggerRefresh(): void {
+    triggerRefresh(opts): void {
+      if (opts?.activity !== false) {
+        activitySeq += 1;
+      }
       const now = deps.now();
       if (inFlight) return;
-      if (now < backoffUntil) return;
       if (now < noCredentialsUntil) return;
-      if (lastRefreshAt > 0 && now - lastRefreshAt < throttleMs) return;
+      if (!shouldRefreshAdaptiveQuota({
+        now,
+        lastRefreshAt,
+        hasActivitySinceRefresh: activitySeq > refreshedActivitySeq,
+        resetsAtMs: lastKnownResetsAtMs,
+        backoffUntil,
+        timing,
+      })) return;
       void (async () => {
         const credentials = await readCredentialsSafe();
         if (!credentials) {
-          noCredentialsUntil = deps.now() + throttleMs;
+          noCredentialsUntil = deps.now() + timing.activeThrottleMs;
           return;
         }
         noCredentialsUntil = 0;
@@ -220,7 +276,7 @@ export function createXaiSubscriptionUsageReader(
       await clearCachedSnapshot({ resetThrottle: true });
       const credentials = await readCredentialsSafe();
       if (!credentials) {
-        noCredentialsUntil = deps.now() + throttleMs;
+        noCredentialsUntil = deps.now() + timing.activeThrottleMs;
         return;
       }
       noCredentialsUntil = 0;
