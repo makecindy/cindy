@@ -1,6 +1,7 @@
 import { projectKeyForDeepLink } from '../../../shared/projectKeys';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
+import { rememberDeviceTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { InboxUnreadReporter, useTaskListMode } from '@/hooks/useTaskListMode';
 import {
@@ -2849,6 +2850,14 @@ function ExpandedView({
           prefetchDeviceGitSafetySettings(targetDeviceId),
         ]);
       }
+      rememberDeviceTaskWorkspace(
+        getDataOwnerGeneration().dataOwnerId,
+        project.deviceLinkDeviceId ?? null,
+        {
+          remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,
+          workingDir: project.workingDir,
+        },
+      );
       patchNewMakerDraft({
         workingDir: project.workingDir,
         remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,

@@ -73,8 +73,17 @@ import {
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
-import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { requestPluginEnginesRefresh, useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { deviceDisplayName } from '@/lib/deviceName';
+import {
+  remotePluginEngineChoices,
+  resolveActivePluginEngine,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+  type PluginEngineSource,
+} from '@/lib/pluginEngineSelection';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -312,24 +321,77 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只给每次新建任务、在本机运行的 Agent 自动任务：绑定 / 持续会话、
-  // 脚本、伙伴例行任务与项目自动化(随代码提交给所有成员，插件只装在这台电脑上)都不提供。
-  const pluginEnginesAllowed = runMode === 'fresh' && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
+  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
+  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
-  const pluginEngineUnavailable = !!pluginEngineChoice && !resolveActivePluginEngine(pluginEngineList, pluginEngineChoice);
+  const pluginRouteDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: pluginEngineChoice?.deviceId ?? selectedAgentDeviceId,
+  });
+  const remotePluginSources = useMemo<readonly PluginEngineSource[]>(
+    () => (!pluginEnginesAllowed || form.primaryHostKey
+      ? []
+      : (pluginRouteDevices.devices ?? []).map(({ deviceId, name }) => ({ deviceId, name }))),
+    [pluginEnginesAllowed, form.primaryHostKey, pluginRouteDevices.devices],
+  );
+  const remotePluginDeviceIds = useMemo(
+    () => remotePluginSources.map((device) => device.deviceId),
+    [remotePluginSources],
+  );
+  const { catalogues: remotePluginCatalogues, read: readRemotePluginCatalogues } = useDevicesPluginEngines(remotePluginDeviceIds);
+  const activeRemotePluginDeviceId = pluginEngineChoice?.deviceId ?? null;
+  const activeRemotePluginDeviceListed = !!activeRemotePluginDeviceId
+    && remotePluginDeviceIds.includes(activeRemotePluginDeviceId);
+  useEffect(() => {
+    if (open && activeRemotePluginDeviceListed && activeRemotePluginDeviceId) {
+      readRemotePluginCatalogues(activeRemotePluginDeviceId);
+    }
+  }, [open, activeRemotePluginDeviceListed, activeRemotePluginDeviceId, readRemotePluginCatalogues]);
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    const remote = remotePluginEngineChoices(remotePluginSources, remotePluginCatalogues, deviceDisplayName, pluginEngineList);
+    return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
+  }, [pluginEngineList, remotePluginSources, remotePluginCatalogues]);
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readRemotePluginCatalogues();
+  }, [readRemotePluginCatalogues]);
+  // 远程电脑列表尚未读回(null)时不误报不可用，保存时由主进程实时准入裁决。
+  const remotePluginCatalogueUnknown = !!activeRemotePluginDeviceId
+    && (remotePluginCatalogues.get(activeRemotePluginDeviceId) ?? null) === null;
+  const pluginEngineUnavailable = !!pluginEngineChoice
+    && !remotePluginCatalogueUnknown
+    && !resolveActivePluginEngine(pluginEngineChoices, pluginEngineChoice);
   const schedulePluginEngines = useMemo(
-    () => pluginEnginesAllowed && pluginEngineList.length
+    () => pluginEnginesAllowed && (pluginEngineChoices.length > 0 || remotePluginDeviceIds.length > 0 || !!pluginEngineChoice)
       ? {
-          engines: pluginEngineList,
+          engines: pluginEngineChoices,
           active: pluginEngineChoice,
+          readCatalogue: readPluginEngineCatalogues,
           onSelect: (selection: PluginEngineSelection) => {
-            const effort = selection.effort ?? pluginEngineChoice?.effort;
-            selectPluginEngine({ providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) });
+            const sameChoice = selection.providerId === pluginEngineChoice?.providerId
+              && (selection.deviceId ?? null) === (pluginEngineChoice?.deviceId ?? null);
+            const effort = selection.effort ?? (sameChoice ? pluginEngineChoice?.effort : undefined);
+            selectPluginEngine({
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+              ...(effort ? { effort } : {}),
+            });
           },
         }
       : undefined,
-    [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
+    [
+      pluginEnginesAllowed,
+      pluginEngineChoices,
+      remotePluginDeviceIds.length,
+      pluginEngineChoice,
+      readPluginEngineCatalogues,
+      selectPluginEngine,
+    ],
   );
   // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
   const modelGroupsAllowed = !isScriptMode;
@@ -1098,7 +1160,9 @@ export function ScheduleFormDialog({
                                       null,
                                       boundSessionReference?.agentKind === 'cc'
                                         ? 'claude-code'
-                                        : boundSessionReference?.agentKind,
+                                        : isPluginEngineKind(boundSessionReference?.agentKind)
+                                          ? undefined
+                                          : boundSessionReference?.agentKind,
                                     )
                                   }
                                   agentKind={form.agentKind}
@@ -1124,7 +1188,7 @@ export function ScheduleFormDialog({
                               </div>
                             </div>
                           </div>
-                          {isBound && form.model.trim() !== '' && (
+                          {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
                             </p>
