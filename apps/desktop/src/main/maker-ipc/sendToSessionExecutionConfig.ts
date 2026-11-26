@@ -27,7 +27,6 @@ export interface SendToSessionExecutionConfig {
 }
 
 export interface SendToSessionExecutionOverrides {
-  providerId?: string;
   agentKind?: AgentKind;
   model?: string;
   effort?: Effort;
@@ -98,7 +97,6 @@ function routeProviderFor(params: {
   agentKind: AgentKind;
   model: string;
   sourceProviderId?: string | null;
-  requestedProviderId?: string;
   routeChanged: boolean;
   providerRouting: OrcaWorkerProviderRoutingContext;
 }):
@@ -121,18 +119,17 @@ function routeProviderFor(params: {
     return { ok: false, message: providerRouteUnavailableMessage(agentKind, model) };
   }
 
-  const selectedId = params.requestedProviderId ?? (routeChanged ? undefined : sourceProviderId);
-  if (selectedId) {
-    const selected = offering.find((provider) => provider.id === selectedId);
-    if (!selected) {
+  if (!routeChanged && sourceProviderId) {
+    const inherited = offering.find((provider) => provider.id === sourceProviderId);
+    if (!inherited) {
       return {
         ok: false,
         message:
-          `供应商 "${selectedId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
+          `供应商 "${sourceProviderId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
           + '请在「设置 → 模型供应商」检查连接与模型配置后重试。',
       };
     }
-    return { ok: true, provider: selected, providerId: selectedId };
+    return { ok: true, provider: inherited, providerId: sourceProviderId };
   }
 
   const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(agentKind, model);
@@ -183,11 +180,10 @@ export function resolveSendToSessionExecutionConfig(params: {
 
   const routeChanged = params.locationChanged === true
     || agentKind !== source.agentKind
-    || model !== source.model
-    || (overrides.providerId !== undefined && overrides.providerId !== source.providerId);
-  const budgetRouteProviderId = overrides.providerId ?? (!routeChanged && source.providerId
+    || model !== source.model;
+  const budgetRouteProviderId = !routeChanged && source.providerId
     ? source.providerId
-    : params.providerRouting.resolveDefaultProviderIdForModel(agentKind, model));
+    : params.providerRouting.resolveDefaultProviderIdForModel(agentKind, model);
   if (
     budgetModelRequiresApiKey(agentKind, model, params.hasCindyAiApiKey)
     && (budgetRouteProviderId === null || budgetRouteProviderId === 'xd')
@@ -203,7 +199,6 @@ export function resolveSendToSessionExecutionConfig(params: {
     agentKind,
     model,
     sourceProviderId: source.providerId,
-    requestedProviderId: overrides.providerId,
     routeChanged,
     providerRouting: params.providerRouting,
   });
@@ -253,9 +248,21 @@ export function resolveSendToSessionExecutionConfig(params: {
     ?? (source.fastMode === 'ultrafast'
       ? (supportsFast && supportsUltrafast ? source.fastMode : false)
       : routeChanged ? (supportsFast ? source.fastMode : false) : source.fastMode);
-  const effort = overrides.effort !== undefined || routeChanged
-    ? normalizedEffort.effort
-    : source.effort;
+  // 返回**规范化后**的档位: 没有显式 override、也没有换路由时, `source.effort` 仍可能是当前
+  // 模型不接受的旧值(模型/目录变过、或配置漂移), normalizeEffort 已把这种情况降级成合法档位
+  // 或省略; 原样返回旧值等于把不兼容的档位继续发给引擎(#11976)。
+  //
+  // 例外: 能力**未知**(声明了 effortsUnknown、档位表为空)时不代表「不支持」—— 这时保留继承值,
+  // 交给引擎裁决; 否则同模型同来源的子任务会丢掉用户已选的档位。
+  // 同路由、且调用方没有显式 override 时, 有两种情形要保留**原始继承值**而不是规范化结果:
+  //  1) 能力未知(`effortsUnknown`): 未知不代表不支持, 交给引擎裁决;
+  //  2) 来源本来就没选档位(`source.effort === undefined`): 不能因为模型有 defaultEffort 就把
+  //     「未选择」静默变成显式档位 —— 那会改变推理强度与成本。
+  // 其余情形(能力已声明且继承值不合法 / 换了路由)一律用规范化结果, 避免把不兼容档位发给上游。
+  const capabilityUnknown = effortCapabilities.effortsUnknown === true;
+  const keepInherited = !routeChanged && overrides.effort === undefined
+    && (source.effort === undefined || capabilityUnknown);
+  const effort = keepInherited ? source.effort : normalizedEffort.effort;
 
   return {
     ok: true,
@@ -328,12 +335,8 @@ export async function resolveSendToSessionCreateRoute(
   }
   const locationChanged = agentDeviceId !== params.sourceAgentDeviceId;
   const overrides = params.overrides ?? {};
-  if (overrides.providerId !== undefined && (agentDeviceId !== null || params.sourceIsSsh)) {
-    return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持本机供应商连接。' };
-  }
   const hasOverrides = overrides.agentKind !== undefined
     || overrides.model !== undefined
-    || overrides.providerId !== undefined
     || overrides.effort !== undefined
     || overrides.fastMode !== undefined;
   if (!locationChanged && !hasOverrides) return { ok: true, agentDeviceId, config: params.source };

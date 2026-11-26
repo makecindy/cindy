@@ -486,31 +486,6 @@ describe('resolveSendToSessionCreateRoute', () => {
     readDeviceRouting: vi.fn((_deviceId: string, _agentKind: AgentKind) => device()),
   });
 
-  // #12060, unit: with two connections for one model the initial task config
-  // must select the requested connection, even when the model was inherited.
-  it('pins the initial config to an available local connection without fallback', async () => {
-    const deps = routingDeps();
-    const snapshot = await deps.readLocalRouting('claude-code');
-    const catalog = snapshot.providerRouting.availability;
-    const second = { id: 'second', name: 'Secondary', models: ['claude-fable-5'] };
-    deps.readLocalRouting.mockResolvedValue({ ...snapshot, providerRouting: {
-      ...snapshot.providerRouting, availability: { ...catalog, 'claude-code': [...catalog['claude-code'], second] },
-    } });
-    const request = { source: fableSource(), sourceAgentDeviceId: null, sourceIsSsh: false };
-    const overrides = { providerId: second.id };
-    expect(await resolveSendToSessionCreateRoute(request, deps))
-      .toMatchObject({ ok: true, config: { providerId: 'anthropic' } });
-    expect(await resolveSendToSessionCreateRoute({ ...request, overrides }, deps))
-      .toMatchObject({ ok: true, config: { providerId: second.id } });
-    for (const invalid of [{ providerId: 'offline' }, { ...overrides, model: 'claude-opus-fast' }]) {
-      expect(await resolveSendToSessionCreateRoute({ ...request, overrides: invalid }, deps))
-        .toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
-    }
-    expect(await resolveSendToSessionCreateRoute({ ...request, sourceAgentDeviceId: 'device-b', overrides }, deps))
-      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(deps.readDeviceRouting).not.toHaveBeenCalled();
-  });
-
   it('SC1: 指定另一台电脑 → 位置为那台，沿用来源模型 id，来源按那台的供应商解析', async () => {
     const deps = routingDeps();
     const result = await resolveSendToSessionCreateRoute({
@@ -604,5 +579,100 @@ describe('resolveSendToSessionCreateRoute', () => {
       source: fableSource(), sourceAgentDeviceId: 'device-a', sourceIsSsh: false,
       overrides: { effort: 'high' },
     }, deps)).rejects.toThrow('device offline');
+  });
+});
+
+describe('继承档位不被模型接受时返回规范化结果（#11976）', () => {
+  it('没有 override、路由没变、但 source.effort 已不兼容 → 返回降级后的档位而不是旧值', () => {
+    // 会话继承来的 high 对 gpt-5.6-sol 合法；换成只支持 low 的模型快照来模拟「模型变过」。
+    // 路由快照里的 effort meta 优先于目录能力；模型只接受 low，会话继承的 high 已失效。
+    const onlyLowRouting: OrcaWorkerProviderRoutingContext = {
+      availability: {
+        'claude-code': [], pi: [],
+        codex: [{
+          id: 'openai',
+          name: 'OpenAI',
+          models: ['gpt-5.6-sol'],
+          fastModels: ['gpt-5.6-sol'],
+          effortMetaByModel: { 'gpt-5.6-sol': { efforts: ['low'], defaultEffort: 'low' } },
+        }],
+      },
+      resolveDefaultProviderIdForModel: () => 'openai',
+    };
+    const result = resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'codex', model: 'gpt-5.6-sol', effort: 'high', fastMode: false, providerId: 'openai' },
+      overrides: {},
+      availableModels: [{ id: 'gpt-5.6-sol', efforts: ['low'], defaultEffort: 'low' }],
+      providerRouting: onlyLowRouting,
+      hasCindyAiApiKey: true,
+    });
+    expect(result.ok).toBe(true);
+    // 关键断言：返回值不能仍是不兼容的 high。
+    expect(result.ok && result.config.effort).toBe('low');
+  });
+
+  it('能力未知(effortsUnknown)时保留继承的档位，不因空档位表清空', () => {
+    // 自定义来源只填了 id/name，目录与路由快照都没有档位声明：未知 ≠ 不支持。
+    const unknownRouting: OrcaWorkerProviderRoutingContext = {
+      availability: {
+        'claude-code': [], pi: [],
+        codex: [{
+          id: 'openai',
+          name: 'OpenAI',
+          models: ['gpt-5.6-sol'],
+          fastModels: [],
+          effortMetaByModel: { 'gpt-5.6-sol': { efforts: [], defaultEffort: 'medium', effortsUnknown: true } },
+        }],
+      },
+      resolveDefaultProviderIdForModel: () => 'openai',
+    };
+    const result = resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'codex', model: 'gpt-5.6-sol', effort: 'medium', fastMode: false, providerId: 'openai' },
+      overrides: {},
+      availableModels: [{ id: 'gpt-5.6-sol', efforts: [], effortsUnknown: true }],
+      providerRouting: unknownRouting,
+      hasCindyAiApiKey: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.effort).toBe('medium');
+  });
+
+  it('来源本来没选档位时，不把目录默认档变成显式子任务档位', () => {
+    const result = resolveSendToSessionExecutionConfig({
+      // 模型有 defaultEffort='xhigh'，但来源任务从未显式选过档位。
+      source: { agentKind: 'codex', model: 'gpt-5.6-sol', effort: undefined, fastMode: false, providerId: 'openai' },
+      overrides: { fastMode: false },
+      availableModels: available('codex'),
+      providerRouting: providerRouting(),
+      hasCindyAiApiKey: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.effort).toBeUndefined();
+  });
+
+  it('换了模型时即使目标能力未知，也不继承旧任务的档位', () => {
+    const unknownRouting: OrcaWorkerProviderRoutingContext = {
+      availability: {
+        'claude-code': [], pi: [],
+        codex: [{
+          id: 'openai',
+          name: 'OpenAI',
+          models: ['gpt-5.6-sol'],
+          fastModels: [],
+          effortMetaByModel: { 'gpt-5.6-sol': { efforts: [], defaultEffort: 'medium', effortsUnknown: true } },
+        }],
+      },
+      resolveDefaultProviderIdForModel: () => 'openai',
+    };
+    const result = resolveSendToSessionExecutionConfig({
+      // 来源是 claude-code 的任务，目标是 codex 的未知能力模型：跨路由不继承档位。
+      source: { agentKind: 'claude-code', model: 'claude-fable-5', effort: 'high', fastMode: false, providerId: 'anthropic' },
+      overrides: { agentKind: 'codex', model: 'gpt-5.6-sol' },
+      availableModels: [{ id: 'gpt-5.6-sol', efforts: [], effortsUnknown: true }],
+      providerRouting: unknownRouting,
+      hasCindyAiApiKey: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.effort).toBeUndefined();
   });
 });
