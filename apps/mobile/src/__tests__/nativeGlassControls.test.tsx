@@ -84,7 +84,9 @@ vi.mock("@/session/ComposerNativeSection", () => ({
 vi.mock("@/session/newSessionMessages", () => ({ newSessionText: (key: string) => key }));
 vi.mock("@/components/AppText", () => ({ Text: ({ children }: any) => <span>{children}</span> }));
 vi.mock("react-native", () => ({
-  View: ({ children, style }: any) => <div data-rn-style={JSON.stringify(style)}>{children}</div>,
+  View: ({ children, style, pointerEvents }: any) => (
+    <div data-rn-style={JSON.stringify(style)} data-pointer-events={pointerEvents}>{children}</div>
+  ),
   Image: () => null,
 }));
 vi.mock("lucide-react-native", () => {
@@ -197,8 +199,10 @@ function mount(children: ReactNode) {
   return host;
 }
 
+// attachment-preview.md: the title slot passes touches to the canvas and caps
+// the glass at 560 pt. The native layout props are the contract at this boundary.
 it.each(["clip.mp4", "Antigravity-English-UI-Cindy-Animated-Product-Walkthrough.mp4"])(
-  "bounds the video title host between the actions and exposes the full name for %s",
+  "bounds the noninteractive preview title between the actions and exposes the full name for %s",
   (name) => {
     const close = vi.fn();
     const fileInfo = vi.fn();
@@ -217,12 +221,18 @@ it.each(["clip.mp4", "Antigravity-English-UI-Cindy-Animated-Product-Walkthrough.
     const titleHost = title.closest("[data-host-layout]")!;
     const closeHost = closeButton.closest("[data-host-layout]")!;
     const menuHost = menu.closest("[data-host-layout]")!;
-    const row = titleHost.parentElement!;
+    const titleSlot = titleHost.parentElement!;
+    const row = titleSlot.parentElement!;
     const hostLayout = (node: Element) => JSON.parse(node.getAttribute("data-host-layout")!);
 
-    expect(Array.from(row.children)).toEqual([closeHost, titleHost, menuHost]);
+    expect(closeHost.nextElementSibling).toBe(titleSlot);
+    expect(titleSlot.nextElementSibling).toBe(menuHost);
     expect(JSON.parse(row.getAttribute("data-rn-style")!)).toMatchObject({ flexDirection: "row", gap: 8 });
-    expect(hostLayout(titleHost)).toEqual({ style: { flex: 1, minWidth: 0, height: 44 } });
+    expect(titleSlot.getAttribute("data-pointer-events")).toBe("none");
+    expect(JSON.parse(titleSlot.getAttribute("data-rn-style")!)).toMatchObject({
+      flex: 1, minWidth: 0, alignItems: "center",
+    });
+    expect(hostLayout(titleHost)).toEqual({ style: { width: "100%", maxWidth: 560, height: 44 } });
     expect(hostLayout(closeHost).style).toEqual({ width: 44, height: 44 });
     expect(hostLayout(menuHost).style).toEqual({ width: 44, height: 44 });
     expect(title.textContent).toBe(name);
