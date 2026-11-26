@@ -616,6 +616,13 @@ export interface BotGroupRoundView {
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 
+export function chatGroupNotificationMode(
+  room: { default_notification_scope?: 'all' | 'mentions' },
+  read?: { muted?: boolean; notification_scope?: 'all' | 'mentions' | null },
+): ChatGroupNotificationMode {
+  return read?.muted ? 'none' : read?.notification_scope ?? room.default_notification_scope ?? 'all';
+}
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
