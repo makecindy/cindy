@@ -169,6 +169,35 @@ describe('claude-session-background-activity', () => {
       setPluginEngineBackgroundWorkListener((id, active, options) => island.push([id, active, options.turnStarting]));
     });
 
+    // #13004 (unit): observePluginEngineEvent 接到补全的常驻命令输入后，两轮结束都应保持空闲。
+    // 相邻用例仅覆盖普通工具的完成与超时，没有覆盖未返回结果的服务与真正工作并存。
+    it.each([
+      { IsDaemon: true, CommandLine: 'custom-server' },
+      { CommandLine: 'pnpm dev' },
+    ])('常驻服务不跨回合占用运行状态，仍接收后台结果 %o', (input) => {
+      const sid = 'service';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('dev'));
+      observePluginEngineEvent(sid, {
+        type: 'tool_use', data: { toolUseId: 'dev', input, acpKind: 'execute', acpInputPatch: true },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      expect(island).toEqual([]);
+
+      observePluginEngineEvent(sid, {
+        type: 'tool_use', data: { toolUseId: 'build', acpKind: 'execute', input: { command: 'pnpm build' } },
+        turnScope: 'background',
+      });
+      observePluginEngineEvent(sid, toolResult('dev', 'background'));
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      observePluginEngineEvent(sid, toolResult('build', 'background'));
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
     it('回合结束仍有未完成的工具调用立即点亮,结果到达后按静默窗熄灭;没有回合外工作不触发', () => {
       noteClaudeSessionTurnState('quiet', true);
       observePluginEngineEvent('quiet', toolUse('read'));

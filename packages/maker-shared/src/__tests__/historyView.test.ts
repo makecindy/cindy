@@ -44,8 +44,10 @@ describe('history reading projection', () => {
     const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
       .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
     expect(visibleIds(projectHistoryView(rows, false, true))).toContain('2');
-    const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
-    expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
+    // Reusing a row object across calls must still recheck its current body:
+    // per-projection reuse must not become an object-identity cache across reads.
+    rows[2].content = body('xdt_card_ix');
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
   });
   // Unit regression: two 16-character bodies that collide under a single 32-bit
   // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
@@ -255,7 +257,7 @@ describe('automatic process detail reading', () => {
   });
 });
 
-import { HistoryViewController } from '../historyViewController.js';
+import { HistoryViewController, type HistoryViewSnapshot } from '../historyViewController.js';
 import { renderHistoryView } from '../historyViewRender.js';
 
 it('does not bind subagent detail fetching to a desktop summary-only enclosing group', async () => {
@@ -1263,4 +1265,37 @@ it.each(['initial', 'older', 'refresh'])('uses existing raw fallback after a bud
   view.reset(); await view.refresh();
   expect(view.getSnapshot().ready).toBe(true);
   view.setActive(false);
+});
+
+// 测试价值：验证 detached HistoryViewController.applyPrefetchedSnapshot 原地更新并保留未变 item 引用，
+// 且在 active 或 unavailable 降级态下不覆写；覆盖缺口：此前无原地更新 detached view 路径，tier unit。
+it('updates a detached controller in place on prefetch while preserving unchanged item references and active/fallback guards', async () => {
+  const first = row(1, 'user', 'first');
+  const second = row(2, 'assistant', 'second');
+  const view = new HistoryViewController<HistoryMessageSource>({
+    page: async () => ({ version: 1, items: projectHistoryView([first], false), hasMore: false, nextCursor: null }),
+    details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+    expanded: async () => undefined,
+  });
+  await view.refresh();
+  const initialFirstItem = view.getSnapshot().items[0];
+  const prefetched: HistoryViewSnapshot<HistoryMessageSource> = {
+    items: projectHistoryView([first, second], false),
+    details: new Map(),
+    expanded: new Set(),
+    hasMore: false,
+    nextCursor: null,
+    ready: true,
+    loading: false,
+    error: null,
+  };
+  // Active views ignore detached prefetch updates.
+  view.applyPrefetchedSnapshot(prefetched);
+  expect(view.getSnapshot().items).toHaveLength(1);
+  // Detached views update synchronously in place and preserve unchanged item identities.
+  view.setActive(false);
+  view.applyPrefetchedSnapshot(prefetched);
+  expect(view.getSnapshot()).toMatchObject({ ready: true, stale: true, loading: false, error: null });
+  expect(view.getSnapshot().items).toHaveLength(2);
+  expect(view.getSnapshot().items[0]).toBe(initialFirstItem);
 });

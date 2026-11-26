@@ -7,6 +7,24 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 建连限流的服务端重试期限（2026-11-26，#13041）
+
+分享传输建连（`agentNetSharing.ts` 的 scoped 连接工厂申请租约）收到 429 时，`AgentNetSharingError`
+已把有效 `Retry-After` 解析为 `retryAt`，但 `DeviceLinkClient` 工厂失败后只走普通退避（1 秒起、30 秒封顶），
+期限内照样反复请求被限流的接口。现在工厂抛出的错误带 `retryAt`（Unix 毫秒）时，client 记下期限：
+退避等满期限再追加本档抖动；期限前的网络变化／前台恢复（含 `overrideCongestionCooldown`）、唤醒重建与
+stop/start 都在 `connect()` 入口统一推迟，不调用工厂，并同样交给 `scheduleReconnect` 排期、期限后追加本档抖动，
+同一期限的各端不会在期限那一刻齐步回来。期限按 `SERVER_RETRY_MAX_WAIT_MS`（10 分钟）封顶，防止异常的远期日期
+把连接永久挂起；收到时换算成墙钟与单调钟两个到期时刻，任一到点即解除，系统睡眠不会多等，系统时间回拨也不能把
+等待拉长到收到时的期限之外。没有 `retryAt` 的失败（含现场那次空 `retryAt` 的 429）保持原退避不变。
+
+故障半径三问：① 证据是这一条连接的工厂被服务端明确限流并给出期限，不涉及其它连接或对端；② 只推迟这一个
+`DeviceLinkClient` 的建连，主连接、其它 scoped 连接、已建立的会话与可靠层状态都不动，不新增重试或重放；期限只在
+没有 socket 时产生，推迟不会丢弃在线连接；③ `client.test.ts`「does not call the socket factory before a server
+retry deadline」按无期限／60 秒／超过上限／60 秒后系统时间回拨一小时四格驱动真实 client，期限内触发
+connectNow、restartConnection 与 stop/start 均不建连，期限刚过仍先等抖动，回拨后按收到时的期限建连；修复前
+三格有期限的用例失败。只改客户端，不改 wire、中继或服务端契约。
+
 ## 可靠窗口防积压：列表读单飞、增量基准保留与过期只读回包退役（2026-11-25）
 
 慢网或对端暂停确认时，单条对端的 64 帧可靠发送窗口不再被高频自动化推送与重复大列表回包联手堵死：
@@ -182,6 +200,14 @@ Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进�
 占满普通请求名额；两种传输使用同一判据。实际目录响应与权限检查不变，前台模型／上下文操作和
 导航读取仍走原有普通名额，不因目录预读借用交互预留容量。
 
+供应商组的显式 `view.display` 设置展示、`manage-share/quota-account` 和分享专用
+`provider-share:insights:v1` 同样使用上述后台配额；实时选机视图、`pick`、租约与授权写入保持原优先级。
+同一物理电脑的同账号、共享任务和供应商分享 peer 共用既有调度容量；任务仍按真实 run 生命周期计数，
+RPC 准入不计模型任务席位。调度中保留完整 peer 身份，取消只移除该作用域的未派发请求，在途请求结算前不释放容量，
+不跨分享合并结果或权限。传统 Device Link 和 Agent-Net 共用此判据，无 wire 或 relay 行为变化。
+分享展示收到背压、无响应、断连和超时时分别保留对应错误，不将这些故障改报权限拒绝；明确拒绝仍按原授权边界处理。
+回归见 `client.test.ts`、`invokeScheduler.test.ts` 与 `providerShareManagement.test.ts`。
+
 远程发送在 Device Link 真正派发前复核任务生命周期、取消信号和 Stop 代次，取消后不迟到投递旧消息。
 此检查使用本地 `beforeDispatch` 回调，两种传输均在出队后、创建请求前执行；同区和跨区分享都透传。
 它不在回包后执行，已发送的输入保留真实结果，不能因随后取消而误报未发送。账号／授权的 `preSend`
@@ -214,6 +240,20 @@ Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进�
 故障半径：① 只追加 debug／info 日志，不改变结果发送、丢弃、重试或断链恢复；② 日志只含
 截短的请求 id 与设备引用，不含参数或结果内容；③ 慢阈值沿用既有 `slow execution`，不新增高频
 日志。自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`。
+
+### 手机新建任务首条消息的分段计时（2026-11-26）
+
+用户反馈手机新任务点发送后二三十秒才发出去，现有日志只有 `maker:create-session` 的总时长，
+分不清卡在建链、查模型、电脑建会话还是交出首条消息。两端各补一条分段计时，只记录、不改行为：
+
+- 手机：`new-session` 的 `creation timing`（`session/newSessionCreationTiming.ts`），
+  每次管线收口写一条，含点发送到管线开始的 `prepareMs`、各阶段 `stagesMs`、失败那一步的
+  `restMs` 与首条消息 clientId 末 8 位。发件箱路径交出后，送达电脑的耗时看同一 clientId 的
+  `send accepted`。只进用户开启的本机诊断录制。
+- 电脑：`session-start-timing` 的 `session start timing`（`maker-ipc/sessionStartTiming.ts`），
+  `bootstrapSession` 每次结束写一条，分供应商组选电脑、等账号模型目录、目录授权、Agent 启动等
+  阶段。该 scope 已精确加入上传白名单，只有固定阶段名、Agent 种类枚举与毫秒数。Codex 内部
+  app-server 启动与 `thread/start` 的拆分仍看本机任务日志的 `startSession` 与 `thread/start ok`。
 
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
@@ -688,7 +728,64 @@ WebSocket 及满尺寸探针防放大/防重放，`packages/agent-net-native/src
 
 还没解决的：限速线路上每 MiB 的 CPU 仍是 Device Link 的约 3 倍。一半是每一阵开头那一个往返里看时间，另一半是每个包都要在 JS 里
 走一轮（加密、发包、核心的十几次调用）。前者在 Windows 上要有比系统节拍细的计时器，后者要把收发包放到原生线程里，JS 只读写流，
-和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。
+和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。2026-11-23 起两者都由下一节的原生引擎解决。
+
+### 电脑端 Agent-Net 跑在原生引擎上（2026-11-23）
+
+Desktop 的 Agent-Net worker 有原生模块时，传输跑在手机同一个 Rust 引擎上（`packages/agent-net-native/node`，Node-API 模块）：
+收包、回确认、重传、按节奏发包都在引擎自己的线程里，不经 Main，也不经 worker 的 JS；引擎有东西给 JS 读时往 worker 监听的本机回环
+UDP 端口发一个字节叫醒它（最多一个在路上），数据连续进来时 JS 读完后 1 毫秒内到的合成一次读，空闲后的第一个包照旧马上叫醒。
+`NativeTransport`（手机在用的同一个传输层）在 worker 里驱动它（`socket.ts` 的 `native`），会话层、Device Link 帧和 Main 侧都不变。
+模块由打包时按目标平台从源码构建、放在 worker 包旁边（`forge.config.ts` 的 `stageAgentNetNative`；Windows 打包本来就要 Cargo，
+构建失败即打包失败，其它平台没有 Rust 时不带它）；开发时用 `node packages/agent-net-native/node/build.mjs` 生成。
+没有模块、加载失败、或引擎给出的传输公钥和这台设备的不一致（`AGENT_NET_NATIVE_IDENTITY_MISMATCH`）时照旧用 WASM，
+日志记 `agent-net native engine unavailable (<原因>); the transport runs on WASM`，正常时记 `agent-net transport runs on the native engine`。
+线上协议、中转与对端都不变：新旧版本、原生与 WASM 两端任意组合互通（`nodeNative.integration.test.ts` 直连与只经中转各一遍）。
+Node Host 仍用 WASM。
+
+切换前补上了原生路径比 WASM 路径少的几项，否则电脑端会退步：
+- **中转 UDP「只通登记、不通数据」时退回 WebSocket**、走 UDP 时的往返与停用原因（[协议记录](protocol-compatibility/agent-net-udp-relay.md)末段，
+  引擎能力位 `relay-udp-health`）；UDP 收发字节照旧进 UDP 流量表（`udpTraffic`）。
+- 名册上限 512 → 4096：超过时原生传输整个关掉，WASM 没有这个上限。
+- 引擎收走排队字节就告诉 socket（`onDrain`），和 WASM 一样；原来只在单条连接从 128 KB 以上落下时才报，几条连接加起来超过
+  128 KB 时 Main 要等每秒一次的状态才发下一大帧。
+- **Windows 上的短等待。** `WSAPoll` 的超时跟系统节拍走，1 毫秒的等待实际 15.5 毫秒，按节奏发包的引擎在 12.5 MB/s、往返 32 毫秒的
+  线路上比 WASM 慢 15–20%。现在套接字到包时置一个事件，再配一个高精度计时器，两个一起等（`packages/agent-net-native/src/wait.rs`），
+  1 毫秒的等待 1.57 毫秒，不改整个进程的计时器精度。只影响 Windows，手机不受影响。
+- 身份：电脑端有的身份是存下来的私钥、不是从种子派生的，引擎可以直接收这两把私钥（`create` 的 `keys`），worker 本来就持有它们。
+- **直连与中转的选路**（#12175：自动／直连／中转、双路往返）。选路的判断从 `transport.ts` 搬进不依赖 Node 的 `pathRouter.ts`，
+  WASM 与原生两种传输共用；引擎加了只测速不换路的 `measure`、`preferRelay` 和 `poll` 里的 `probeRtts`（能力位 `path-routing`）。
+  两端的偏好照旧经控制流同步（`{"pathPreference":…,"autoRelay":…}`），原生与 WASM 两端互相跟随（`nodeNative.integration.test.ts`
+  「switches a live peer between direct and relay from either side …」）。手机随新安装包同样跟随电脑端设的偏好、自动模式同样生效；
+  旧安装包不报 `path-routing`，照旧每 10 秒探测候选地址，不读这条消息，和以前一样。
+- **透明代理的 Fake-IP 避让**（#12175）：引擎自己用系统 DNS 解析 STUN 与中转 UDP 的主机名，开着 Clash／Surge 这类代理时会拿到
+  198.18.0.0/15。电脑端先用 `resolveUdpHost` 解析好再把地址交给引擎（`TransportOptions.resolveUdpServer`），每 5 分钟和每次换网
+  重新解析，变了就让引擎改到新地址；解析不出来时把主机名照旧交给引擎。手机不传它，行为不变。
+
+查到并修掉的两个崩溃：Node 在最后一个加载原生模块的 worker 结束时卸载模块，而模块起的线程（收发线程最多再等 250 毫秒、中转与 STUN
+的域名解析要等 DNS）还会回到已卸载的代码，整个进程崩溃（Electron 42，退出码 139，压测两轮之间必现）；模块现在把自己钉在进程里
+（`pin_module`）。原来用 Node-API 的 thread-safe function 叫醒 JS，Electron 结束 worker 时它被释放、收发线程再调用就崩，
+所以改成上面的回环 UDP：收发线程从不调用 Node。
+
+故障半径三问（中转 UDP 退回）：① 证据是这条中转会话上本机自己的收发——经 UDP 发出数据后 4 秒没有任何经中转的数据报进来且一直在重发、
+发往走中转对端的请求 60 秒内超时两次、中转连接上 5 秒里重传占发出的四分之一以上——与其它会话、其它对端无关；② 只切换这条会话的
+数据报走哪条路，不关 WebSocket、不复位对端、不清队列，冷却 30 秒、5 分钟、30 分钟后再试，停用期间登记每 15 秒一次；③ `udp_paths.rs`
+的 `tests` 逐条覆盖（含单个纯确认不触发、两次超时隔一分钟不算、连接关闭计数变小时从头算），`nativeTransport.test.ts` 覆盖 JS 怎么读、
+怎么报，`nodeNative.integration.test.ts` 用真实中转确认路由报 UDP 与往返；这些用例去掉对应实现时都失败。
+引擎启动失败只影响这一次打开：退回 WASM，账号、名册与重连节奏不变。
+
+实测（Windows，Electron 42 跑 `bulk-transfer.ts --modes worker-session --runs 2`，20 MiB、512 KiB 一块、4 块在途、边传边发小请求；
+每 MiB 的 CPU 是两台设备、Main 与两个 worker 合计；`--native <模块>` 跑原生引擎）：
+
+| 线路 | WASM | 原生引擎 |
+|---|---|---|
+| 不限速 | 40–46 MB/s，37–49 毫秒，小请求 6–14 毫秒 | 54–58 MB/s，12–26 毫秒，2–5 毫秒 |
+| 家宽 12.5 MB/s、往返 32 毫秒 | 11.9–12.4 MB/s，70–82 毫秒 | 13.9 MB/s，45–50 毫秒 |
+| 跨地区 6.25 MB/s、往返 200 毫秒 | 3.2–4.1 MB/s，89–134 毫秒 | 3.3–4.3 MB/s，51–61 毫秒 |
+
+只看引擎（两端各一个线程、回环 UDP、不经 JS）：每 MiB 7.5 毫秒对 WASM 的 15–21 毫秒，回环 260 MB/s 对 70–88 MB/s。
+每到一个包都把所有连接的状态拼成 JSON 一度吃掉了这些节省：引擎现在先用核心的 `has_unread` / `has_accepted` 和状态摘要判断有没有
+东西给 JS，没有就不拼（家宽 43–49 → 27–43 毫秒，跨地区 47–54 → 29–34 毫秒，只看引擎）。
 
 ### Agent-Net 会话层上的控制链路（跟着「Agent-Net (Beta)」开关）
 
@@ -861,6 +958,26 @@ Agent-Net 时（开关开着，或路由只走 Agent-Net）：这时业务拿到
 出错不关别的对端的会话，也不关主连接与分享连接。
 
 ### 共享连接静默与请求隔离
+
+正常状态的共享 WebSocket 同样按物理数据帧限制突发：`DeviceLinkClient` 的首发、ACK 后排空、
+定时 drain／重传、直连回退和裸回包逃生共用每 25ms 滚动区间最多 64 帧的预算，按活跃 relay peer
+公平分配。同一轮同步执行也最多写出 64 帧；同步生产者即使运行超过 25ms，也须先让出事件循环
+才恢复这一轮额度，预算复位与连接停止时清理唯一的让出计时器。原子分片可超过单 peer 份额，
+但不能借未来信用突破连接预算；计量保守延续至最后一片
+真实写入后，失败未写出的片退回预算。等待继续使用原有有界 pending 和 retry timer，只有尚未写出的
+突发等待项才临时加快 drain，不增加重试次数或延长已写请求的截止时间。没有可靠 pending 的旧版
+数据路径达到预算时返回既有 `BACKPRESSURE`；已保留可靠副本的裸回包仍保留原副本。
+认证完成后因数据预算尚未写出的旧版帧保留在原认证队列，由原有计时器继续排空；仍复核原请求
+期限、取消与签名身份，队列后方的控制帧可以继续写出。ACK、认证、建链、心跳和直连协商信令
+不受数据预算阻塞，直连数据及 Agent-Net 的逐 peer 可靠虚拟 socket 不占该物理 relay 信用。
+1013／重启后的低速恢复预算继续独立生效，不把正常吞吐永久限制在 8 帧／250ms。
+
+这是本机写出节奏，理论数据帧上限为每秒 2,560 帧，不是服务端确认或端到端 credit：网络缓冲仍可
+合并多个短区间，控制帧也占服务端队列，持续慢授权仍可能触发 1013。不得据此承诺消除任意服务端
+积压。wire、能力和签名不变，自建中转既有 kind／dst 转发直接兼容，无需升级。
+回归见 `packages/device-link/src/__tests__/client.test.ts` 与
+`scripts/device-link/reconnect.test.ts`：9 peer ×16 条小消息在修前一次写出 144 帧，真实回环
+合包触及 128 帧入口硬边界；修后分段交付、原连接保留，另覆盖原子大包、小 peer、直连及取消。
 
 2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接
 静默时复用现有有界网络探测，不直接累加某台电脑的熔断失败。任一 peer 的有效回包
@@ -1082,15 +1199,21 @@ mDNS 名，解析要靠双方都能收发组播；跨网段、组播被过滤或
   地址时，ICE 仍能由对端打通：控制通道一直能直连，只公布 mDNS 名的文件通道不能。Info.plist
   缺 `NSLocalNetworkUsageDescription` 时系统不弹授权、直接拒绝；正式包由 `forge.config.ts`
   声明，个人版由 `scripts/personal-build/native-capabilities.mjs` 写入运行时，改动后要用
-  更新过的构建工具重新生成运行时才生效。
-- **应用内检测与提醒（2026-11-22）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
+  更新过的构建工具重新生成运行时才生效。此外，同版本 Electron 主二进制原厂共享同一个 Mach-O
+  `LC_UUID`，macOS 27.3 实测（2026-11-26）与开发态 `Electron.app` 或其他 Electron 应用撞
+  `LC_UUID` 时，`nehelper` 会静默继承拒绝、不弹系统授权框也不把 Cindy 列进系统设置；两处
+  构建入口都在签名前通过 [`scripts/macos-macho-uuid.mjs`](../../scripts/macos-macho-uuid.mjs)
+  按 `(bundleId, electronVersion)` 为主二进制写入确定且唯一的 `LC_UUID`。
+- **应用内检测与提醒（2026-11-22，2026-11-26 改进）。** Apple 没有本地网络许可的查询接口，也区分不了「未询问」
   与「已拒绝」。Main 的 [`local-network/access.ts`](../../apps/desktop/src/main/local-network/access.ts)
   向物理网卡的默认网关（默认路由在 VPN 上时取 `route -n get -ifscope <en*> default`）发一次
   TCP/53 连接：立即 `EHOSTUNREACH` 判为 `denied`，连通、拒绝或超时判为 `granted`，没有局域网网关
-  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测本身也是未决定的 App 触发系统询问的
-  方式；系统已有决定（含缺 `NSLocalNetworkUsageDescription` 时被静默拒绝的旧安装）就不会再询问，
-  所以「去授权」在约 1.2 秒后仍被拒时打开「系统设置 › 隐私与安全性 › 本地网络」，并在 3 分钟内
-  每 2 秒复查一次。由拒绝变为允许时，Device Link 调用与网卡变化相同的 `notifyNetworkChanged()` /
+  判为 `unknown`，界面在 `unknown` 时什么都不显示。这次探测在 App 处于前台时也是未决定的 App 触发
+  系统询问的方式（后台时 `nehelper` 会跳过弹窗）；为避免把刚弹出的原生授权框顶掉，点击「开启」先将
+  窗口拉回前台触发探测并在 3 分钟内每 2 秒复查，不再在 1.2 秒后强跳系统设置。若系统已有决定（不会再弹
+  原框），界面给出「打开系统设置」（二次点击支持「在新窗口打开」避开卡页）与「在访达中显示当前 App」
+  入口，便于在「隐私与安全性 › 本地网络」打开或通过 `+` 添加。由拒绝变为允许时，Device Link 调用与
+  网卡变化相同的 `notifyNetworkChanged()` /
   `agentNetNetworkChanged()`，立即重试直连，不需要重启。缺许可时 LAN 信标收发都被拦住，「对端是否
   在同一局域网」无从观察，所以侧边栏只在两种可观察的代价出现时提醒
   （[`local-network/reminder.ts`](../../apps/desktop/src/main/local-network/reminder.ts)）：用户刚打开
@@ -1272,6 +1395,10 @@ preparing，本机 Session 可正常关闭，下一条显式消息按原生会�
    打开或连回 Agent 前的只读 `caps` 查询复用共享瞬态重试策略（最多 6 次），等待启动建连或拥堵冷却
    结束；授权拒绝、旧端不支持等非瞬态错误立即结束。只重读这台电脑的能力，不重建 link、不重启 relay，
    不重放 `open`、上传或发送。回归见 `remote-agent/__tests__/connectionPool.test.ts`。其余 op 不自动重放。
+   已发送的 `call` 有两条独立的回传路径：请求回执和现有轮询里的 `result(callId)`。请求回执超时时，
+   控制端采用同一 run、同一 callId 已收到的执行结果；结果尚未到达时再等最多 30 秒。到期仍无结果就保留
+   原超时错误。整个核对过程复用现有轮询，其他任务的游标与重试预算照常。回归见
+   [runClientReply.test.ts](../../apps/desktop/src/main/remote-agent/__tests__/runClientReply.test.ts)。
    设备熔断的 `DEVICE_UNRESPONSIVE` 也属于瞬态错误：`poll` 保留原游标与原两分钟窗口，
    等底层既有单飞探测恢复；注销 run 取消后续重试。共享判据同时让 `reply` / `push` 在原有
    交付次数上限内重试，复用原 requestId／载荷或 seq／帧，不重新执行工具或重放 `open` / `call`。

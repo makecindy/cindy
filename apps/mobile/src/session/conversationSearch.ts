@@ -7,6 +7,9 @@
 import { isSharedTaskPeer, type SharedTaskListItem } from '@cindy/device-link';
 import { ownsSharedHomeSession } from './sharedHomeGroup';
 import {
+  enforceExplicitConversationSearchResponse,
+  matchExplicitConversationSearchText,
+  parseConversationSearchQuery,
   conversationSearchResultKey,
   createConversationSearchSessionFilter,
   emptyConversationSearchResponse,
@@ -156,7 +159,7 @@ function mergeDevicePages(
   const present = pages.filter((page): page is ConversationSearchResponse => page != null);
   // Updated hosts match aliases before limiting indexed results. Supplement the
   // cache for older/offline hosts, retaining the same visible device/project scope.
-  if (deps.projectAliases?.size) {
+  if (deps.projectAliases?.size && !parseConversationSearchQuery(query).explicit) {
     // Cache ranks are not comparable to host ranks. Never replace an existing
     // hit (and its message location/metadata) with an alias-only cache projection.
     const existingKeys = new Set(present.flatMap((page) => page.results.map(conversationSearchResultKey)));
@@ -217,7 +220,7 @@ function finalizeRemotePage(
   request: ConversationSearchRequest,
 ): ConversationSearchResponse {
   return filterResultsByRequestFilters(
-    stampRemoteSearchResponse(response, {
+    stampRemoteSearchResponse(enforceExplicitConversationSearchResponse(response, request), {
       deviceId: origin.deviceId,
       deviceName: origin.deviceName,
     }),
@@ -259,7 +262,7 @@ export function searchCachedDeviceSessions(
       results: hits,
       vectorUsed: false,
       vectorSkipReason: null,
-      poolCapped: false,
+      poolCapped: parseConversationSearchQuery(request.query).explicit,
     },
     request,
   );
@@ -271,6 +274,13 @@ function cachedConversationSearchMatch(
   unnamedLabel?: string,
   projectAlias?: string,
 ): { matchKind: 'title' | 'content' | 'both' } | null {
+  const parsed = parseConversationSearchQuery(query);
+  if (parsed.explicit) {
+    const titleHit = !!matchExplicitConversationSearchText(remoteSessionDisplayTitle(session, unnamedLabel), parsed);
+    const contentHit = !!matchExplicitConversationSearchText(sessionRowMessagePreview(session) ?? '', parsed);
+    if (!titleHit && !contentHit) return null;
+    return { matchKind: titleHit && contentHit ? 'both' : titleHit ? 'title' : 'content' };
+  }
   const titleHit = remoteSessionDisplayTitle(session, unnamedLabel).toLowerCase().includes(query)
     || projectAlias?.toLowerCase().includes(query) === true;
   const contentHit = (sessionRowMessagePreview(session) ?? '').toLowerCase().includes(query);

@@ -129,6 +129,33 @@ function firstLine(text: string): string {
   return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
+// Node prints an uncaught exception as "<file>:<line>", the source line and a caret
+// before the error itself, so the first line of a crashed check (for example a
+// deleted script: "node:internal/modules/cjs/loader:1520") names Node internals.
+const NODE_CRASH_LOCATION = /^(?:node:|file:|\/|[A-Za-z]:[\\/]).*:\d+$/;
+const NODE_ERROR_LINE = /^(?:Uncaught )?(?:[A-Z][\w$]*)?(?:Error|Exception)(?: \[[\w-]+\])?: \S/;
+
+/** 前置检查失败时 stderr 里最能说明原因的一行。 */
+function stderrFailureReason(stderr: string, truncated: boolean): string {
+  const text = stderr.trim();
+  if (!truncated && text.startsWith('{')) {
+    try {
+      const payload = JSON.parse(text) as { error?: { message?: unknown } };
+      const message = payload.error?.message;
+      if (typeof message === 'string') {
+        const summary = message.replace(/\s+/g, ' ').trim();
+        if (summary) return firstLine(summary);
+      }
+    } catch {
+      // Fall back to the original stderr summary if the output is malformed.
+    }
+  }
+  const rawHead = text.split(/\r?\n/, 1)[0] ?? '';
+  if (!NODE_CRASH_LOCATION.test(rawHead)) return firstLine(text);
+  const errorLine = text.split(/\r?\n/).find(line => NODE_ERROR_LINE.test(line));
+  return firstLine(errorLine ?? rawHead);
+}
+
 /** POSIX 下 spawn(shell:true) 实际使用的解释器;语法预检必须用同一个。 */
 const POSIX_SHELL = '/bin/sh';
 const SYNTAX_CHECK_TIMEOUT_MS = 5_000;
@@ -388,9 +415,8 @@ export function formatPreRunHookFailure(result: PreRunHookResult): string {
   }
   if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
   if (result.error) return `pre-run hook failed: ${result.error}`;
-  // The script's own first stderr line is usually the actual cause ("gh not found",
-  // "not authenticated"); a bare exit code leaves the user nothing to act on.
+  // Use the script's own stderr to give the user a reason alongside the exit code.
   // Bounded like script-mode failures, which already carry their stderr tail.
-  const reason = firstLine(result.stderr.trim());
+  const reason = stderrFailureReason(result.stderr, result.stderrTruncated);
   return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}${reason ? `: ${reason}` : ''}`;
 }

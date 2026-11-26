@@ -1,5 +1,5 @@
 import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
-import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
+import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions, type WebContents } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
@@ -30,7 +30,20 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import {
+  buildSessionDeepLink,
+  focusAppWindow,
+  openMainWindowChatMessage,
+  openMainWindowSession,
+  sendWindowDeepLink,
+} from '../deepLink.js';
+import {
+  findSecondaryWindowForGroupChat,
+  findSecondaryWindowForSession,
+  isSecondaryAppWindow,
+  queueSecondaryWindowBootGroupNavigation,
+  updateSecondaryWindowVisibleSessions,
+} from '../secondaryWindowRegistry.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
@@ -122,6 +135,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
+  buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
@@ -474,7 +488,13 @@ export class AgentIslandService {
    * 控件」的入口用(群专线、只读历史、不可用的委派任务):renderer 在目标地址真正提交后
    * 带上这次的点击编号调 consumeIslandEntryAlert,编号与卡片身份都一致才按 explicit 处置。
    */
-  private islandEntryAlert: { sessionId: string; entryId: string; stamp: string; until: number } | null = null;
+  private islandEntryAlert: {
+    sessionId: string;
+    entryId: string;
+    stamp: string;
+    until: number;
+    targetWebContents: WebContents | null;
+  } | null = null;
   private islandEntrySequence = 0;
   private readonly userPromptRollbackTokens = new Map<string, {
     state: AgentIslandUserPromptRollbackToken;
@@ -689,6 +709,9 @@ export class AgentIslandService {
         return { ok: true };
       }
       const nextSessionId = parseVisibleSessionPayload(sessionId);
+      if (isSecondaryAppWindow(sourceWindow)) {
+        updateSecondaryWindowVisibleSessions(sourceWindow, nextSessionId);
+      }
       if (!sourceWindow.isFocused() && !isAgentIslandPendingFocusAck(this.state, nextSessionId)) {
         return { ok: true };
       }
@@ -710,9 +733,12 @@ export class AgentIslandService {
 
     ipcMain.handle(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL, (event, rawSessionId: unknown, rawEntryId: unknown) => {
       assertTrustedAppRendererEvent(event);
-      // 导航只发生在主窗;副窗也挂 MainLayout 级组件,不能替主窗处置提醒。
+      // 只有本次灵动岛点击命中的主窗或副窗才能处置对应提醒，其它窗口不得代为消费。
       const mainWindow = this.deps.getMainWindow();
-      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== event.sender) {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      const isMainSender = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents === event.sender);
+      const isSecondarySender = isSecondaryAppWindow(senderWindow);
+      if (!isMainSender && !isSecondarySender) {
         return { ok: true, consumed: false };
       }
       const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
@@ -722,7 +748,7 @@ export class AgentIslandService {
       if (typeof rawEntryId !== 'string' || !rawEntryId || rawEntryId.length > MAX_ISLAND_ENTRY_ID_LENGTH) {
         throwIpcError('INVALID_PARAMS', 'entryId is invalid');
       }
-      return { ok: true, consumed: this.consumeIslandEntryAlert(sessionId, rawEntryId) };
+      return { ok: true, consumed: this.consumeIslandEntryAlert(sessionId, rawEntryId, Date.now(), event.sender) };
     });
 
     ipcMain.handle(AGENT_ISLAND_SET_ENABLED_CHANNEL, (_event, enabled: unknown) => {
@@ -882,8 +908,6 @@ export class AgentIslandService {
    * is on; it has no error presentation.
    */
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
-    // Keep the OS notification when this event has no enabled Cindy sound.
-    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
     if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
@@ -942,7 +966,7 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
+    // ownsTaskAlert covers the visible island and Live Activity; only unhandled events reach the OS.
     for (const event of result.events) {
       if (this.ownsTaskAlert(event.kind)) continue;
       try {
@@ -2122,7 +2146,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2133,6 +2157,11 @@ export class AgentIslandService {
 
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
+  }
+
+  /** This computer's share of the island counts; the phone island adds these per computer. */
+  getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -3132,13 +3161,64 @@ export class AgentIslandService {
       // Navigation never acknowledges a group: reading the destination updates the server read position.
       requestAgentIslandManualCollapse(this.state, Date.now());
       this.publish();
+      const secondaryGroup = findSecondaryWindowForGroupChat({ groupId: group.input.groupId });
+      if (secondaryGroup) {
+        this.raiseWindowIfNeeded(secondaryGroup.window);
+        const payload = {
+          type: 'chat-message' as const,
+          groupId: group.input.groupId,
+          messageId: group.input.messageId,
+          ...(group.input.threadRootId ? { threadRootId: group.input.threadRootId } : {}),
+        };
+        if (secondaryGroup.isBooting) {
+          queueSecondaryWindowBootGroupNavigation(
+            secondaryGroup.window,
+            { groupId: group.input.groupId },
+            (win) => {
+              sendWindowDeepLink(win, payload);
+            },
+          );
+        } else {
+          sendWindowDeepLink(secondaryGroup.window, payload);
+        }
+        return;
+      }
       openMainWindowChatMessage(group.input.groupId, group.input.messageId, group.input.threadRootId);
       return;
     }
     const now = Date.now();
-    const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now);
+    const companionEntry = this.companionChats.get(nextSessionId);
     const deviceId = this.state.sessions.get(nextSessionId)?.sourceDeviceId
-      ?? this.companionChats.get(nextSessionId)?.input.deviceId;
+      ?? companionEntry?.input.deviceId;
+    const secondarySession = findSecondaryWindowForSession({
+      sessionId: nextSessionId,
+      deviceId,
+      companion: companionEntry
+        ? { botId: companionEntry.input.botId, deviceId: companionEntry.input.deviceId }
+        : null,
+    });
+    if (secondarySession) {
+      const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now, secondarySession.window.webContents);
+      const target = { ...(islandEntryId ? { islandEntryId } : {}), ...(deviceId ? { deviceId } : {}) };
+      this.playConfiguredSound('select', now);
+      const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
+      if (focusChanged) this.publish();
+      this.raiseWindowIfNeeded(secondarySession.window);
+      if (secondarySession.matchKind === 'navigate') {
+        sendWindowDeepLink(secondarySession.window, {
+          type: 'session',
+          id: nextSessionId,
+          ...target,
+        });
+      }
+      return;
+    }
+    const mainWindow = this.deps.getMainWindow();
+    const islandEntryId = this.recordIslandEntryAlert(
+      nextSessionId,
+      now,
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+    );
     const target = { ...(islandEntryId ? { islandEntryId } : {}), ...(deviceId ? { deviceId } : {}) };
     this.playConfiguredSound('select', now);
     if (this.state.appFocused && this.state.visibleSessionIds.has(nextSessionId)) {
@@ -3156,6 +3236,16 @@ export class AgentIslandService {
     // renderer reloads and restores macOS app focus. A one-shot notification
     // sent during loading is lost before MainLayout can acknowledge the task.
     openMainWindowSession(nextSessionId, Object.keys(target).length ? target : undefined);
+  }
+
+  private raiseWindowIfNeeded(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    const alreadyFrontAndFocused =
+      win.isFocused() &&
+      (typeof win.isVisible !== 'function' || win.isVisible()) &&
+      (typeof win.isMinimized !== 'function' || !win.isMinimized());
+    if (alreadyFrontAndFocused) return;
+    focusAppWindow(win);
   }
 
   private readonly completionActionsPending = new Set<string>();
@@ -3234,14 +3324,24 @@ export class AgentIslandService {
   }
 
   /** 记下这次点击并取代之前的任何一次;被点的卡不是未读完成 / 报错时不留可处置记录。 */
-  private recordIslandEntryAlert(sessionId: string, now: number): string | null {
+  private recordIslandEntryAlert(
+    sessionId: string,
+    now: number,
+    targetWebContents: WebContents | null = null,
+  ): string | null {
     const stamp = readAgentIslandUnreadTerminalStamp(this.state, sessionId);
     if (!stamp) {
       this.islandEntryAlert = null;
       return null;
     }
     const entryId = String(++this.islandEntrySequence);
-    this.islandEntryAlert = { sessionId, entryId, stamp, until: now + ISLAND_ENTRY_ALERT_TTL_MS };
+    this.islandEntryAlert = {
+      sessionId,
+      entryId,
+      stamp,
+      until: now + ISLAND_ENTRY_ALERT_TTL_MS,
+      targetWebContents,
+    };
     return entryId;
   }
 
@@ -3252,9 +3352,15 @@ export class AgentIslandService {
    * 收掉,重打点也唤不回这张卡;按 cindy-bots-runtime.md 6.2 的合同,任务记录、失败状态与
    * 错误行都不动 —— 错误尾行派生的侧栏红点在报错被横幅 / 重试真正处理前仍会如实出现。
    */
-  consumeIslandEntryAlert(sessionId: string, entryId: string, now = Date.now()): boolean {
+  consumeIslandEntryAlert(
+    sessionId: string,
+    entryId: string,
+    now = Date.now(),
+    sender?: WebContents,
+  ): boolean {
     const entry = this.islandEntryAlert;
     if (!entry || entry.sessionId !== sessionId || entry.entryId !== entryId) return false;
+    if (sender && entry.targetWebContents && entry.targetWebContents !== sender) return false;
     this.islandEntryAlert = null;
     if (entry.until <= now) return false;
     if (readAgentIslandUnreadTerminalStamp(this.state, sessionId) !== entry.stamp) return false;

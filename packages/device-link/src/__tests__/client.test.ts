@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SERVER_RETRY_MAX_WAIT_MS, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -15,6 +15,7 @@ import {
   SHARED_TASK_RELAY_CAPABILITY,
   type Envelope,
   type InvokePayload,
+  type InvokeResultPayload,
   type LinkAcceptPayload,
 } from '../protocol.js';
 import {
@@ -209,6 +210,53 @@ describe('host transport policy', () => {
 });
 
 describe('outbound invoke admission', () => {
+  // Unit: group settings and authorized share insights previously filled all 12
+  // ordinary slots. Exercise actual wire admission, including two scoped shares;
+  // task preparation/poll and Stop must still dispatch without a display reply.
+  it('keeps group and shared quota displays behind task traffic on the same physical host', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const pending: Promise<unknown>[] = [];
+    const peers = ['dev-b', providerShareHostPeer('share-a', 'dev-b'), providerShareHostPeer('share-b', 'dev-b')];
+    const displays: { peer: string; payload: InvokePayload }[] = [
+      { peer: peers[0], payload: { channel: 'provider-group:remote', args: [{ action: 'view', providerId: 'openai', display: 'roster' }] } },
+      { peer: peers[1], payload: { channel: 'provider-share:insights:v1', args: [{ version: 1, includeUsage: false }] } },
+      { peer: peers[2], payload: { channel: 'provider-share:insights:v1', args: [{ version: 1, includeUsage: true }] } },
+      { peer: peers[0], payload: { channel: 'provider-group:remote', args: [{ action: 'manage-share', command: { action: 'quota-account', providerId: 'openai' } }] } },
+    ];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack(['provider-share-v1']);
+      for (let n = 0; n < 12; n++) {
+        const display = displays[n % displays.length];
+        pending.push(h.client.invoke(display.peer, display.payload, 30_000).catch(e => e));
+      }
+      const task = h.client.invoke('dev-b', { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'poll', runs: [{ runId: 'run', cursor: 0 }] }] });
+      const stop = h.client.invoke(peers[1], { channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'call', runId: 'run', method: 'abort' }] });
+      pending.push(task.catch(e => e), stop.catch(e => e));
+      await vi.advanceTimersByTimeAsync(0);
+      const frames = h.current().sent.filter(frame => frame.kind === 'invoke');
+      expect(frames.filter(frame => (frame.payload as InvokePayload).channel !== REMOTE_AGENT_CHANNEL)).toHaveLength(4);
+      const taskFrames = frames.filter(frame => (frame.payload as InvokePayload).channel === REMOTE_AGENT_CHANNEL);
+      expect(taskFrames).toHaveLength(2);
+      const answer = (frame: Envelope, result: unknown) => h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: frame.id, src: frame.dst, dst: 'dev-self',
+        ...(frame.providerShare ? { providerShare: { ...frame.providerShare, source: { role: 'host' }, target: { role: 'guest', memberId: 'member' } } } : {}),
+        payload: { ok: true, result } });
+      for (const frame of taskFrames) answer(frame, {});
+      await expect(Promise.all([task, stop])).resolves.toEqual([{ ok: true, result: {} }, { ok: true, result: {} }]);
+      // Simulate slow management replies: task/Stop already completed before
+      // advancing the wire by 10s. Then drain all 12 reads in bounded batches.
+      const answered = new Set(taskFrames.map(frame => frame.id));
+      for (let batch = 0; batch < 3; batch++) {
+        await vi.advanceTimersByTimeAsync(batch === 0 ? 10_000 : 0);
+        const ready = h.current().sent.filter(frame => frame.kind === 'invoke' && !answered.has(frame.id));
+        expect(ready).toHaveLength(4);
+        for (const frame of ready) { answered.add(frame.id); answer(frame, { display: 'x'.repeat(80_000) }); }
+      }
+      expect((await Promise.all(pending)).every(result => (result as InvokeResultPayload).ok)).toBe(true);
+      expect(h.current().sent.filter(frame => frame.kind === 'invoke')).toHaveLength(14);
+    } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
+  });
+
   // Unit regression #11345: catalog/capability preloads still occupied all 12
   // ordinary slots after controls gained headroom. Hold 12 metadata replies at
   // the real client boundary: navigation/model writes must still reach the wire,
@@ -668,6 +716,41 @@ describe('outbound invoke admission', () => {
  * 最小失败输入:未签名 / 他人密钥签名 / 签名后改内容 / 原样重放的同一条 push。
  */
 describe('self-hosted relay device signatures', () => {
+  // Legacy results already accepted into the bounded auth queue cannot vanish
+  // when authentication releases >64 frames. Retain their original identity and
+  // lifecycle while the existing authentication timer drains the remainder.
+  it.each(['drain', 'identity', 'stop'] as const)('keeps burst-held authentication results safe on %s', async mode => {
+    vi.useFakeTimers();
+    let ready = false;
+    let session = {};
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, requestTimeoutMs: 30_000 },
+      frameAuth: () => ({ sign: () => ({ signature: 'unit' }), verify: () => true,
+        peerChallenge: { session, state: () => ready ? 'ready' : 'needed' } }) });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const ws = h.current();
+      const results = () => ws.sent.filter(e => e.id?.startsWith('auth-') && e.kind === 'invoke-result');
+      for (let i = 0; i < 180; i++) h.client.sendInvokeResult('legacy', `auth-${i}`, { ok: true, result: i });
+      const command = h.client.invoke('legacy', { channel: 'maker:send', args: ['auth-never-execute'] }, 50).catch(error => error);
+      const opening = h.client.openLink('legacy', { controllerName: 'test', protocolVersion: 1, appVersion: '1' }, 30_000).catch(error => error);
+      void opening;
+      expect(results()).toHaveLength(0);
+      ready = true;
+      ws.push({ v: 1, kind: 'push', id: 'auth-response', src: 'legacy', payload: { channel: RELAY_AUTH_CHANNEL, payload: { type: 'response' } } });
+      expect(results()).toHaveLength(64);
+      expect(ws.sent.some(e => e.kind === 'link-open')).toBe(true);
+      if (mode === 'identity') session = {};
+      if (mode === 'stop') h.client.stop();
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(await command).toMatchObject({ inFlight: false });
+      expect(ws.sent.some(e => e.kind === 'invoke' && JSON.stringify(e.payload).includes('auth-never-execute'))).toBe(false);
+      expect(results()).toHaveLength(mode === 'drain' ? 180 : 64);
+      expect(new Set(results().map(e => e.id)).size).toBe(results().length);
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(results()).toHaveLength(mode === 'drain' ? 180 : 64);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   function signingPeers(ids: string[]) {
     const owner = createRelaySigningKey(nodeRelayAuthCrypto);
     const keys = new Map(ids.map(id => [id, createRelaySigningKey(nodeRelayAuthCrypto)]));
@@ -1450,6 +1533,188 @@ function makeRelayClient(
 }
 
 describe('DeviceLinkClient', () => {
+  // Test value: normal-state sendPush/sendInvokeResult share one physical socket.
+  // Existing 1013/byte-pressure tests never exercise nine healthy peers' 16-frame
+  // receive windows together (144 small frames, even with bufferedAmount=0).
+  // Unit tier, fake time; asserts physical writes, fairness and eventual delivery.
+  it.each([{ writeCost: 0, underlay: false }, { writeCost: 1, underlay: false }, { writeCost: 0, underlay: true }])(
+    'bounds a healthy relay burst (writeCost=$writeCost, reliableUnderlay=$underlay)', async ({ writeCost, underlay }) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ reliablePeerTransport: () => underlay,
+      timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const peers = Array.from({ length: 9 }, (_, i) => `burst-${i}`);
+      for (const peer of peers) {
+        const linked = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+      }
+      const ws = h.current(); ws.sent.length = 0;
+      let physicalCost = 0;
+      const send = ws.send.bind(ws);
+      ws.send = text => { send(text); physicalCost += writeCost; };
+      const readClock = (h.client as unknown as { monotonicNow(): number }).monotonicNow.bind(h.client);
+      vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => readClock() + 24 + physicalCost);
+      for (let i = 0; i < 16; i++) for (const peer of peers) {
+        if (i % 2) h.client.sendInvokeResult(peer, `${peer}-${i}`, { ok: true, result: i });
+        else h.client.sendPush(peer, 'burst-event', i);
+      }
+      expect(ws.sent.length).toBeLessThanOrEqual(underlay ? 144 : 64);
+      if (underlay) expect(ws.sent).toHaveLength(144);
+      // Nine peers' fair shares can leave one spare frame; fill that credit
+      // through the legacy path so both paths share the same rolling cap.
+      if (writeCost === 0 && !underlay) {
+        for (let i = ws.sent.length; i < 64; i++) h.client.sendPush('legacy', 'burst-event', i);
+        expect(ws.sent).toHaveLength(64);
+        await vi.advanceTimersByTimeAsync(2);
+        // Crossing a wall-clock bucket boundary must not grant a second burst.
+        expect(() => h.client.sendPush('legacy', 'burst-event', 1)).toThrow(/burst budget/);
+      }
+      // ACK control must still physically leave a full data budget.
+      ws.push(encodeReliableFrames({ v: 1, kind: 'push', src: peers[0], payload: { channel: 'unit', payload: 1 } }, `stream-${peers[0]}`, 1)[0]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ws.sent.some(e => parseTransportAck(e))).toBe(true);
+      await vi.advanceTimersByTimeAsync(200);
+      const data = ws.sent.filter(e => parseTransportPayload(e.payload));
+      expect(data).toHaveLength(144);
+      for (const peer of peers) expect(data.filter(e => e.dst === peer)).toHaveLength(16);
+      expect(new Set(data.map(e => `${e.dst}:${parseTransportPayload(e.payload)!.meta.seq}`)).size).toBe(144);
+      expect(ws.closed).toBeNull();
+      h.client.stop();
+      const writes = ws.sent.length;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(ws.sent).toHaveLength(writes);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // PR #13033 review regression: sendInvokeResult must keep draining unsent
+  // results after the first short pass spends its per-peer allowance. Existing
+  // multi-peer cases did not put a small result before a >8-frame result on
+  // one peer with no ACK. Unit tier; one full socket burst and two results.
+  it('keeps a burst-held atomic result on the short drain after a small result', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const linked = establishInboundReliableLink(h, 'stream-dev-b');
+      await vi.advanceTimersByTimeAsync(0); await linked;
+      const ws = h.current(); ws.sent.length = 0;
+      for (let i = 0; i < 64; i++) h.client.sendPush('legacy', 'burst-event', i);
+      h.client.sendInvokeResult('dev-b', 'small-first', { ok: true, result: 'small' });
+      h.client.sendInvokeResult('dev-b', 'atomic-next', { ok: true, result: 'x'.repeat(1024 * 1024) });
+      expect(ws.sent.some(e => e.dst === 'dev-b')).toBe(false);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(ws.sent.filter(e => e.id === 'small-first')).toHaveLength(1);
+      expect(ws.sent.some(e => e.id === 'atomic-next')).toBe(false);
+      await vi.advanceTimersByTimeAsync(25);
+      const frames = ws.sent.filter(e => e.id === 'atomic-next');
+      expect(frames.length).toBeGreaterThan(8);
+      expect(frames).toHaveLength(parseTransportPayload(frames[0].payload)!.meta.segment!.total);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ws.sent.filter(e => e.id === 'atomic-next')).toHaveLength(frames.length);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // The atomic head may exceed its peer's fair share, but cannot borrow past
+  // the socket cap. A small neighbor and a direct channel must still progress.
+  it('shares short bursts with atomic heads without throttling a direct peer', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (const peer of ['large', 'small', 'direct']) {
+        const opening = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await opening;
+      }
+      const ws = h.current(); ws.sent.length = 0;
+      const text = 'x'.repeat(4 * 1024 * 1024 - 1024);
+      for (let i = 0; i < 3; i++) h.client.sendInvokeResult('large', `large-${i}`, { ok: true, result: text });
+      expect(ws.sent.length).toBeLessThanOrEqual(64);
+      const direct = vi.fn();
+      h.client.attachDirectPath('direct', { send: direct, close() {} });
+      h.client.sendPush('direct', 'burst-event', 'direct now');
+      expect(direct).toHaveBeenCalledTimes(1);
+      h.client.sendInvokeResult('small', 'small-result', { ok: true, result: 'small' });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(ws.sent.some(e => e.id === 'small-result')).toBe(true);
+      const groups = ['large-0', 'large-1', 'large-2'].map(id => ws.sent.filter(e => e.id === id));
+      for (const frames of groups) {
+        expect(frames).toHaveLength(parseTransportPayload(frames[0].payload)!.meta.segment!.total);
+        expect(frames.map(e => parseTransportPayload(e.payload)!.meta.segment!.index))
+          .toEqual(Array.from({ length: frames.length }, (_, i) => i));
+      }
+      expect(ws.closed).toBeNull();
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // A burst-held command has never executed. Closing its link must retire it,
+  // and a socket write failure must refund the reserved atomic frame credits.
+  it('retires burst-held writes and refunds a failed physical write', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (const peer of ['a', 'b', 'c', 'd', 'cancelled']) {
+        const opening = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await opening;
+      }
+      const ws = h.current(); ws.sent.length = 0;
+      const send = ws.send.bind(ws);
+      ws.send = () => { throw new Error('write failed'); };
+      expect(() => h.client.sendPush('a', 'burst-event', 'failed')).toThrow('write failed');
+      ws.send = send;
+      for (let i = 0; i < 16; i++) for (const peer of ['a', 'b', 'c', 'd']) h.client.sendPush(peer, 'burst-event', i);
+      expect(ws.sent).toHaveLength(64);
+      const request = h.client.invoke('cancelled', { channel: 'maker:send', args: ['never execute'] }, 12_000).catch(error => error);
+      expect(ws.sent.some(e => e.kind === 'invoke')).toBe(false);
+      h.client.closeLink('cancelled', 'user');
+      expect(await request).toMatchObject({ inFlight: false });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ws.sent.some(e => e.kind === 'invoke' && JSON.stringify(e.payload).includes('never execute'))).toBe(false);
+      expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Two small peers running before every drain used to spend the credit an
+  // atomic head needs. Exercise the live pending-derived head reservation,
+  // including a 33-fragment UTF-8 payload near the existing 4MiB limit.
+  it('delivers an atomic head when small peers always consume returning credit first', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000, transportRetryIntervalMs: 60_000 } });
+    let now = 0;
+    vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (const peer of ['small-a', 'small-b', 'large']) {
+        const opening = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await opening;
+      }
+      const ws = h.current(); ws.sent.length = 0;
+      const writes: Array<{ at: number; env: Envelope }> = [];
+      const send = ws.send.bind(ws);
+      ws.send = text => {
+        send(text);
+        const env = JSON.parse(text) as Envelope;
+        writes.push({ at: now, env });
+        const meta = env.dst?.startsWith('small-') ? parseTransportPayload(env.payload)?.meta : undefined;
+        if (meta) void Promise.resolve().then(() => ws.push({ v: 1, kind: 'push', src: env.dst, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        } }));
+      };
+      for (let i = 0; i < 64; i++) h.client.sendPush('legacy', 'burst-event', i);
+      h.client.sendInvokeResult('large', 'atomic', { ok: true, result: '中'.repeat(Math.floor((4 * 1024 * 1024 - 32) / 3)) });
+      for (const peer of ['small-a', 'small-b']) for (let i = 0; i < 21; i++) h.client.sendPush(peer, 'burst-event', i);
+      for (let window = 0; window < 5; window++) {
+        now += 25;
+        for (const peer of ['small-a', 'small-b']) for (let i = 0; i < 21; i++) h.client.sendPush(peer, 'burst-event', i);
+        await vi.advanceTimersByTimeAsync(25);
+      }
+      expect(ws.sent.filter(e => e.id === 'atomic')).toHaveLength(33);
+      for (const peer of ['small-a', 'small-b']) expect(writes.filter(w => w.env.dst === peer).length).toBeGreaterThan(21);
+      for (const write of writes) expect(writes.filter(w => w.at >= write.at && w.at < write.at + 25).length).toBeLessThanOrEqual(64);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   // Unit: sendInvokeResult must reach the caller when live replies fill a ready
   // window whose head was retransmitted without ACK. Existing recovery tests
   // cover link-down or discardable pushes, not this ready/live-only deadlock.
@@ -2967,16 +3232,24 @@ describe('DeviceLinkClient', () => {
       };
       const ids = Array.from({ length: 80 }, (_, i) => `executor-${i}`);
       for (const id of ids) await open(id);
+      const send = socket.send.bind(socket);
+      socket.send = text => {
+        send(text);
+        const env = JSON.parse(text) as Envelope;
+        const meta = env.dst === 'controller-a' ? parseTransportPayload(env.payload)?.meta : undefined;
+        // Model the healthy peer's ACK after the physical write, even if the
+        // shared burst gate delays it behind the 80 outbound peers.
+        if (meta) void Promise.resolve().then(() => socket.push({ v: 1, kind: 'push', src: 'controller-a', payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq },
+        } }));
+      };
       const requests = ids.map(id => h.client.invoke(id, { channel: 'maker:remote-agent:v1', args: [] }, 60_000));
       for (const request of requests) void request.catch(() => {});
-      const frames = ids.map(id => socket.sent.find(e => e.kind === 'invoke' && e.dst === id)!);
       const healthy = h.client.invoke('controller-a', { channel: 'local-db:sessions:list', args: [] }, 60_000);
       void healthy.catch(() => {});
-      const healthyFrame = socket.sent.at(-1)!;
-      const healthyMeta = parseTransportPayload(healthyFrame.payload)!.meta;
-      socket.push({ v: 1, kind: 'push', src: 'controller-a', payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-        payload: { streamId: healthyMeta.streamId, ackSeq: healthyMeta.seq } } });
       await vi.advanceTimersByTimeAsync(100);
+      const frames = ids.map(id => socket.sent.find(e => e.kind === 'invoke' && e.dst === id)!);
+      const healthyFrame = socket.sent.find(e => e.kind === 'invoke' && e.dst === 'controller-a')!;
       expect(new Set(resets)).toEqual(new Set(ids));
       expect(resets).toHaveLength(80);
       expect(socket.terminated).toBe(false);
@@ -2989,7 +3262,8 @@ describe('DeviceLinkClient', () => {
         await open(id);
         const original = frames[index];
         const meta = parseTransportPayload(original.payload)!.meta;
-        expect(socket.sent.slice(before).some(e => e.id === original.id && parseTransportPayload(e.payload)?.meta.seq === meta.seq)).toBe(true);
+        await vi.waitFor(() => expect(socket.sent.slice(before).some(e => e.id === original.id
+          && parseTransportPayload(e.payload)?.meta.seq === meta.seq)).toBe(true), { interval: 1 });
         socket.push({ v: 1, kind: 'push', src: id, payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
           payload: { streamId: meta.streamId, ackSeq: meta.seq } } });
         socket.push({ v: 1, kind: 'invoke-result', src: id, id: original.id, payload: { ok: true, result: id } });
@@ -5708,8 +5982,8 @@ describe('DeviceLinkClient', () => {
     expect(() => h.client.sendInvokeResult('dev-b', 'r2', { ok: true, result: [] })).toThrow(
       expect.objectContaining({ code: 'BACKPRESSURE' }),
     );
-    // Drain the admitted prefixes; the queued result must eventually emerge
-    // without waiting for a retry timer or crossing the live invoke.
+    // Drain the admitted prefixes; the queued result emerges through ACKs and
+    // the short burst drain, without a 60s retransmission or crossing the invoke.
     for (let i = 0; i < 8; i++) {
       const last = h.current().sent.filter(e => parseTransportPayload(e.payload)).at(-1)!;
       const meta = parseTransportPayload(last.payload)!.meta;
@@ -5718,6 +5992,7 @@ describe('DeviceLinkClient', () => {
         payload: { streamId: meta.streamId, ackSeq: meta.seq },
       } });
     }
+    await vi.waitFor(() => expect(h.current().sent.find(e => e.id === 'queued-result')).toBeDefined());
     const resultFrame = h.current().sent.find(e => e.id === 'queued-result')!;
     expect(parseTransportPayload(resultFrame.payload)!.meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
     h.client.stop();
@@ -6092,12 +6367,16 @@ describe('DeviceLinkClient', () => {
 
   it('健康可靠链路在 ACK 后释放路由历史，不会把 1024 个成功 ID 变成永久配额', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    let now = 0;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
     h.client.start();
     await tick();
     h.current().ack();
     await establishInboundReliableLink(h, 'route-history-release');
 
     for (let index = 0; index < 1_025; index += 1) {
+      now++; // Sustained 1,000 frames/s, rather than an unbounded synchronous burst.
+      if (index % 50 === 0) await tick();
       const requestId = `route-history-success-${index}`;
       h.client.sendInvokeResult('dev-b', requestId, { ok: true, result: index });
       const frame = h.current().sent.filter((env) => (
@@ -6125,22 +6404,26 @@ describe('DeviceLinkClient', () => {
       });
     }).not.toThrow();
     h.client.stop();
+    clock.mockRestore();
   });
 
   it('健康 best-effort 链路持续发送超过 1024 个唯一 ID 也不会永久停发', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    let now = 0;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
     h.client.start();
     await tick();
     h.current().ack();
 
-    expect(() => {
-      for (let index = 0; index < 1_025; index += 1) {
-        h.client.sendPush('dev-b', 'maker:event', { index });
-      }
-    }).not.toThrow();
+    for (let index = 0; index < 1_025; index += 1) {
+      now++; // Sustained traffic still releases route history after every write.
+      if (index % 50 === 0) await tick();
+      h.client.sendPush('dev-b', 'maker:event', { index });
+    }
     expect(h.current().sent.filter((env) => env.kind === 'push' && env.dst === 'dev-b'))
       .toHaveLength(1_025);
     h.client.stop();
+    clock.mockRestore();
   });
 
   it('新代重放已 ACK 后迟到的旧代 DEVICE_OFFLINE 仍不拆当前 link', async () => {
@@ -8329,11 +8612,17 @@ describe('DeviceLinkClient', () => {
         pingIntervalMs: 60_000, stalledLinkPendingMaxAgeMs: 60_000,
       } });
       h.client.start();
+      let now = 100;
+      let clock: ReturnType<typeof vi.spyOn> | undefined;
       try {
         await makeLinkDownPeer(h);
+        clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
         for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
           h.client.sendInvokeResult('ctrl-1', `retained-${i}`, { ok: true, result: i });
         }
+        expect(() => h.client.sendInvokeResult('ctrl-1', 'overflow-result', { ok: true, result: 42 })).toThrow(/burst budget/);
+        now += 25;
+        await tick();
         expect(() => h.client.sendInvokeResult('ctrl-1', 'overflow-result', { ok: true, result: 42 })).not.toThrow();
         const direct = h.current().sent.find(env => env.id === 'overflow-result');
         expect(direct?.payload).toEqual({ ok: true, result: 42 });
@@ -8341,6 +8630,7 @@ describe('DeviceLinkClient', () => {
         expect(() => h.client.sendPush('ctrl-1', 'non-discardable-event', {})).toThrow(/buffer is full/);
       } finally {
         h.client.stop();
+        clock?.mockRestore();
       }
     });
 
@@ -9279,7 +9569,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
-  it('admits an atomic maximum-size reply after draining without pacing a fast empty socket', async () => {
+  it('admits atomic maximum-size replies and resumes small traffic in the next short burst', async () => {
     vi.useFakeTimers();
     const debug = vi.fn();
     const h = makeHarness({ timing: { pingIntervalMs: 600_000 },
@@ -9315,6 +9605,9 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       expect(socket.sent.length - beforeLarge).toBe(large.length);
       const before = socket.sent.length;
       for (let i = 0; i < 10; i++) h.client.sendInvokeResult('a', `fast-${i}`, { ok: true, result: 'ok' });
+      expect(socket.sent.length - before).toBe(0);
+      now += 25;
+      await vi.advanceTimersByTimeAsync(50);
       expect(socket.sent.length - before).toBe(10);
       expect(socket.closed).toBeNull();
     } finally { h.client.stop(); clock.mockRestore(); vi.useRealTimers(); }
@@ -12522,6 +12815,65 @@ it.each(['socket close', 'factory refusal'])('stops automatic reconnect after de
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();
   h.client.stop();
+});
+
+// #13041：分享传输建连收到 429 时，连接工厂抛出带 retryAt 的错误(AgentNetSharingError 解析的
+// Retry-After)。修复前 client 只按 1 秒起的普通退避重试，期限内照样反复请求被限流的接口。
+// 最小失败输入：工厂第一次抛 { retryAt: now + 60s },期限内触发网络变化、唤醒与 stop/start;
+// 或收到期限后系统时间回拨一小时(2026-11-26 review:期限前的入口曾在期限那一刻齐步建连，
+// 回拨曾把等待拉长到时间追上旧期限)。
+// 不变量：期限前任何入口都不调用工厂，期限刚到也先等本档抖动；没有期限时保持原退避；异常的
+// 超长期限按上限封顶；系统时间回拨不把等待拉长到收到时的期限之外。
+// tier：unit，假计时器(vitest 默认含 performance,单调钟随之推进),无真实等待。
+it.each([
+  { label: 'no server deadline', retryAfterMs: null, earliestMs: 0, rollbackMs: 0 },
+  { label: 'Retry-After 60s', retryAfterMs: 60_000, earliestMs: 60_000, rollbackMs: 0 },
+  { label: 'Retry-After beyond the cap', retryAfterMs: 2 * 60 * 60_000, earliestMs: SERVER_RETRY_MAX_WAIT_MS, rollbackMs: 0 },
+  { label: 'Retry-After 60s, clock rolled back 1h', retryAfterMs: 60_000, earliestMs: 60_000, rollbackMs: 60 * 60_000 },
+])('does not call the socket factory before a server retry deadline ($label)', async ({ retryAfterMs, earliestMs, rollbackMs }) => {
+  vi.useFakeTimers();
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+  let attempts = 0;
+  const h = makeHarness({
+    // 假 socket 不回 pong；心跳拉长到用例之外，只看建连节奏。
+    timing: { reconnectBaseMs: 1_000, reconnectMaxMs: 30_000, pingIntervalMs: 60 * 60_000 },
+    beforeSocket: () => {
+      attempts++;
+      if (attempts > 1) return;
+      throw Object.assign(new Error('TOO_MANY_REQUESTS'), {
+        status: 429,
+        retryAt: retryAfterMs === null ? undefined : Date.now() + retryAfterMs,
+      });
+    },
+  });
+  try {
+    h.client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(1);
+    if (rollbackMs > 0) vi.setSystemTime(Date.now() - rollbackMs);
+    if (earliestMs > 0) {
+      await vi.advanceTimersByTimeAsync(earliestMs - 1_000);
+      h.client.connectNow('foreground', { overrideCongestionCooldown: true });
+      h.client.restartConnection('system-resume');
+      h.client.stop();
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(attempts).toBe(1);
+      expect(h.client.getStatus()).toBe('connecting');
+      // 期限刚过：推迟后的重连仍追加本档抖动(首档 ≥0.7 秒),不在期限那一刻建连。
+      await vi.advanceTimersByTimeAsync(600);
+      expect(attempts).toBe(1);
+    }
+    // 期限(或无期限时的首档退避)过后正常建连上线。
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(attempts).toBe(2);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+  } finally {
+    h.client.stop();
+    random.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 /**

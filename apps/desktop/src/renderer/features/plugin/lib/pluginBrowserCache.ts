@@ -5,9 +5,23 @@ import { publicPublisherFilter, type PublicPublisherFilter } from './pluginMarke
 export const PLUGIN_PAGE_SIZE = 10;
 export const PLUGIN_CATALOG_REFRESH_MS = 30_000;
 export const PLUGIN_CACHED_PAGES = 6;
-// Both publisher tabs browse the same public page. The catalog accepts up to 100 summaries.
+export const PLUGIN_VISIBLE_CACHED_PAGES = 30;
+
+export function trimPluginPages<T>(pages: Map<number, T>, limit: number, range?: { first: number; last: number }) {
+  if (pages.size <= limit) return;
+  const keys = [...pages.keys()];
+  if (range) {
+    const distance = (index: number) => Math.max(range.first - index, index - range.last, 0);
+    // Match the rebuild policy: drop the earlier insertion first on ties.
+    keys.reverse().sort((a, b) => distance(a) - distance(b));
+  } else {
+    keys.reverse();
+  }
+  for (const key of keys.slice(limit)) pages.delete(key);
+}
+// Browse All with the same bounded batch as the publisher tabs; searches stay compact.
 export function pluginCatalogPageLimit(scope: string, query: string) {
-  return scope === 'public' && !query.trim() ? 100 : PLUGIN_PAGE_SIZE;
+  return (scope === 'public' || scope === 'all') && !query.trim() ? 100 : PLUGIN_PAGE_SIZE;
 }
 export function pluginPageSize(items: readonly PluginMarketItem[]) {
   const size = { all: items.length, official: 0, community: 0 };
@@ -23,6 +37,7 @@ export interface PluginBrowserCache {
   variants?: Map<string, PluginBrowserCache>;
   countsKey: string;
   pages: Map<number, PluginMarketItem[]>;
+  pageByPlugin?: Map<string, number>;
   cursors: Map<number, string | null>;
   sizes: Map<number, ReturnType<typeof pluginPageSize>>;
   last: number;
@@ -30,6 +45,7 @@ export interface PluginBrowserCache {
   counts: PluginMarketCounts | null;
   metadata: PluginMarketPage | null;
   error: number | null;
+  restartAt?: number;
   grid: PluginGridCache;
   gridPublisher?: PublicPublisherFilter;
   groups: Map<number, string>;
@@ -39,7 +55,7 @@ export interface PluginBrowserCache {
   refreshedRevision?: string;
   firstPageFlight?: Promise<PluginMarketPage>;
   countsFlight?: Promise<PluginMarketPage>;
-  refresh?: (options?: { force?: boolean; renewIcons?: boolean }) => Promise<void>;
+  refresh?: (options?: { force?: boolean; renewIcons?: boolean; retry?: boolean }) => Promise<void>;
 }
 export function emptyPluginBrowserCache(key = '', countsKey = ''): PluginBrowserCache {
   return { key, countsKey, pages: new Map(), cursors: new Map([[0, null]]), sizes: new Map(), last: 0,

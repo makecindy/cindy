@@ -92,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供應商組 · {{count}} 台電腦",
-    "groupBadge_other": "供應商組 · {{count}} 台電腦",
+    "groupBadge_one": "電腦組 · {{count}} 台電腦",
+    "groupBadge_other": "電腦組 · {{count}} 台電腦",
     "harness": "Harness",
     "restoreRecommended": "恢復推薦",
     "saveFailed": "無法儲存，請重試。",
@@ -157,7 +157,6 @@
     "genericName": "插件引擎",
     "defaultModel": "預設模型",
     "unavailable": "{{engine}} 暫時無法使用",
-    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暫不支援在 worktree 中新建任務，請取消勾選 worktree 後再傳送"
+    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}"
   }
 }

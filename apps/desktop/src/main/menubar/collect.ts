@@ -26,7 +26,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { isPluginEngineKind, type PluginEngineView } from '../../shared/pluginEngines.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
@@ -160,7 +160,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         return accounts;
       }
     }
-    const kind = providerWeeklyQuotaSource(provider);
+    const kind = providerUsageReaderSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
@@ -223,16 +223,17 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
       : task);
   const consuming = consumingSourceIds(tasks, providers, pluginEngines);
   const collectedAt = deps.now?.() ?? deps.nowMs;
+  const currentRemote = remote.map(source => source.family === 'zhipu'
+    ? currentZhipuQuota(source, collectedAt) : source);
   for (const source of sources) {
     // A GLM window may have reset while another provider or task was still loading.
     if (source.kind === 'subscription' && source.family === 'zhipu') {
-      source.windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > collectedAt);
-      if (!source.windows.length) source.updatedAtMs = null;
+      Object.assign(source, currentZhipuQuota(source, collectedAt));
     }
     if (consuming.has(source.id) && !(source.kind === 'subscription' && source.pooled)) source.consuming = true;
   }
   const distinct = distinctLocalSubscriptions(sources);
-  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, remote));
+  sources.splice(0, sources.length, ...distinct, ...distinctRemoteSubscriptions(distinct, currentRemote));
 
   let updatedAtMs: number | null = null;
   for (const source of sources) {
@@ -906,7 +907,12 @@ export function opencodeGoSource(provider: ProviderView, result: ProviderAccount
   };
 }
 
-function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
+function currentZhipuQuota(source: MenubarSubscriptionInput, now: number): MenubarSubscriptionInput {
+  const windows = source.windows.filter(window => window.resetsAtMs === null || window.resetsAtMs > now);
+  return { ...source, windows, updatedAtMs: windows.length ? source.updatedAtMs : null };
+}
+
+export function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult | null): MenubarSubscriptionInput {
   const snapshot = result?.status === 'ready' && !result.stale
     && result.snapshot.kind === 'zhipu-coding-plan-quota' && !result.snapshot.noPlan ? result.snapshot : null;
   const windows: MenubarWindowInput[] = [];

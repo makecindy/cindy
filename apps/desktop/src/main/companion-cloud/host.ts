@@ -18,12 +18,10 @@ import { botProfileVersions, botProfiles, botSessionLinks, messages, sessions } 
 import { parseBlobUrl, resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead } from '../cindy-media/ledger.js';
 import { taskImageRoots } from '../cindy-media/taskImageDelivery.js';
-import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
 import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
-import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
@@ -34,6 +32,7 @@ import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
+import { assertWorkspaceMoveReady } from '../workspace-migration/service.js';
 import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -88,6 +87,7 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     .leftJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
     .where(eq(botProfiles.id, botId)).limit(1);
   if (!row) return [];
+  await assertWorkspaceMoveReady(userDataDir, botId);
   // Strict: an unreadable SOUL/USER/prompt file aborts the cycle instead of uploading it as empty.
   const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
   // Which preset it was made from: every computer can then tell the copies of Cindy apart from a
@@ -133,6 +133,9 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const isProject = projectMode;
     values.push(...await readProjectValues(botId, { ...companionProjectIo(), projectDir: async () => isProject ? workspace : null }, selfDeviceId));
   }
+  // Readers may return empty on ENOENT. A lost volume during the read must not
+  // turn the snapshot into deletion requests for this companion's cloud data.
+  await assertWorkspaceMoveReady(userDataDir, botId);
   return values;
 }
 
@@ -270,18 +273,14 @@ function createMaterializer(input: {
       }
     },
     applyCapabilities: async (botId, value, fence) => {
-      // Only the same provider + model that this computer can use is kept (no credential travels);
-      // otherwise the companion follows this computer's default model.
-      const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
-        .filter((route): route is BotModelRoute => route !== null);
-      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      // The companion follows this computer's default model (companionCapabilitiesPatch).
       fence.assertCurrent();
-      const patch = companionCapabilitiesPatch(value, { chain });
+      const patch = companionCapabilitiesPatch(value);
       if (Object.keys(patch).length || value.gender) {
         await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
       }
+      // No 'model' notice any more: the companion is not losing a model it could have kept, it follows the default.
       const notices: CompanionArrivalNotice[] = [];
-      if (value.modelChain && chain.length < value.modelChain.length) notices.push('model');
       return notices;
     },
     writeSystemPrompt: async (botId, text, fence) => {
@@ -471,9 +470,14 @@ export function createCompanionCloudHost(input: {
         `${createHash('sha256').update(`${endpoint}\n${humanActorId}`).digest('hex')}.json`),
       current, log: input.log,
     }),
-    readValues: async (botId, scope) => scope === 'skills'
-      ? (await listBotSkillSourcesForBot(botId)).map(skillSourceValue)
-      : readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    readValues: async (botId, scope) => {
+      if (scope !== 'skills') return readCompanionValues(botId, input.selfDeviceId?.() ?? null);
+      const userDataDir = ownerScopedUserDataPath();
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      const skills = await listBotSkillSourcesForBot(botId);
+      await assertWorkspaceMoveReady(userDataDir, botId);
+      return skills.map(skillSourceValue);
+    },
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();

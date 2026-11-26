@@ -8,6 +8,7 @@ import {
 import type { InvokePayload } from './protocol.js';
 import { REMOTE_AGENT_CHANNEL, isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
 import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePeer.js';
+import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
@@ -32,6 +33,11 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'git-context:mr-status',
   'maker:schedule:list-sidebar-index-runs',
   'maker:usage:device-rows',
+  'maker:usage:zhipu-coding-plan',
+  // Authorized display-only quota/history; never starts a model task.
+  'provider-share:insights:v1',
+  // A guest moving a Device Link share to Agent-Net in the background; nobody waits on it.
+  'provider-share:agent-net-link:v1',
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
   'maker:session-background-activity',
   'maker:session-background-tasks:list',
@@ -43,8 +49,16 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:session:prewarm',
 ]);
 
-export function isBackgroundInvoke(channel: string): boolean {
-  return BACKGROUND_INVOKE_CHANNELS.has(channel);
+export function isBackgroundInvoke(channel: string, args?: readonly unknown[]): boolean {
+  if (BACKGROUND_INVOKE_CHANNELS.has(channel)) return true;
+  if (channel !== PROVIDER_GROUP_REMOTE_CHANNEL) return false;
+  const request = args?.[0];
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+  const row = request as { action?: unknown; display?: unknown; command?: { action?: unknown } };
+  // Live routing views, pick, leases, permission decisions and writes retain
+  // their existing priority. Only explicit settings/display reads can wait.
+  return (row.action === 'view' && row.display !== undefined)
+    || (row.action === 'manage-share' && row.command?.action === 'quota-account');
 }
 
 /**
@@ -94,7 +108,7 @@ export type InvokePriority = 'interactive' | 'foreground' | 'background';
 /** A caller's background hint never demotes an interactive write. */
 export function resolveInvokePriority(channel: string, backgroundHint?: boolean, args?: readonly unknown[]): InvokePriority {
   if (isInteractiveInvoke(channel, args)) return 'interactive';
-  return (backgroundHint ?? isBackgroundInvoke(channel)) ? 'background' : 'foreground';
+  return (backgroundHint ?? isBackgroundInvoke(channel, args)) ? 'background' : 'foreground';
 }
 
 /** Control traffic must not wait behind business operations to maintain a link/lease. */

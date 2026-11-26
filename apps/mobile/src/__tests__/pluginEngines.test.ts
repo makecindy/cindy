@@ -30,6 +30,8 @@ import {
   normalizePluginEngines,
   pluginEngineExecutionDeviceId,
   pluginEngineSessionCapabilities,
+  resolveMobilePluginEngineFavorite,
+  matchesPluginEngineFavoriteQuery,
   setCachedPluginEngines,
   type MobilePluginEngine,
 } from '@/session/pluginEngines';
@@ -241,6 +243,15 @@ describe('creating a task on a plugin engine', () => {
     expect(opts).not.toHaveProperty('agentDeviceId');
   });
 
+  // 桌面对插件引擎隐藏额外目录、引擎也不接受；手机此前仍把记住的额外目录带进创建。最小失败输入：extraDirs=['/docs']。
+  it('does not send extra directories the engine cannot use', () => {
+    const opts = buildRemoteCreateSessionOptions(applyPluginEnginePick({ ...draft, extraDirs: ['/docs'] }, {
+      providerId: DSH, model: 'deepseek-v4', effort: '', permissionMode: 'default',
+    }));
+    expect(opts).not.toHaveProperty('extraDirs');
+    expect(buildRemoteCreateSessionOptions({ ...draft, extraDirs: ['/docs'] })).toMatchObject({ extraDirs: ['/docs'] });
+  });
+
   it('leaves the built-in options untouched when no engine is picked', () => {
     expect(buildRemoteCreateSessionOptions(applyPluginEnginePick(draft, null))).toMatchObject({
       agentKind: 'claude-code', providerId: 'xd', model: 'claude-fable-5', fastMode: true, agentDeviceId: 'mac-mini',
@@ -351,5 +362,53 @@ describe('a task running on a plugin engine', () => {
     });
 
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
+  });
+
+  // 生产入口：resolveMobilePluginEngineFavorite + matchesPluginEngineFavoriteQuery。
+  // 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」— 已隐藏但可用的引擎照常解析收藏，
+  // 不可用引擎、被关闭模型与 defaultModelAllowed=false 不解析也不删原收藏。
+  // 覆盖缺口：此前手机端无插件引擎收藏解析逻辑。最小失败输入与 tier：unit，传入 hidden/unavailable/defaultModelAllowed=false。
+  it('resolves plugin engine favorites including hidden engines while rejecting unavailable or disallowed models', () => {
+    const [hidden] = normalizePluginEngines([{ ...desktopView, hidden: true }]) as [MobilePluginEngine];
+    const [unavailable] = normalizePluginEngines([{
+      ...desktopView,
+      providerId: 'acp-plugin:_ns__local__agy:agy',
+      name: 'Antigravity',
+      availability: { state: 'unavailable', message: 'Install agy' },
+    }]) as [MobilePluginEngine];
+    const [noDefault] = normalizePluginEngines([{
+      ...desktopView,
+      providerId: 'acp-plugin:nodefault:cli',
+      name: 'NoDefault',
+      defaultModelAllowed: false,
+    }]) as [MobilePluginEngine];
+
+    const fav = {
+      uid: 'fav-1',
+      providerId: hidden.providerId,
+      modelId: 'deepseek-v4',
+      agent: 'claude-code' as const,
+      effort: 'max',
+      fast: false,
+    };
+    const resolved = resolveMobilePluginEngineFavorite(fav, [hidden, unavailable, noDefault], labels);
+    expect(resolved).toMatchObject({
+      key: 'fav-1',
+      providerId: hidden.providerId,
+      modelId: 'deepseek-v4',
+      title: 'DeepSeek-V4-Pro',
+      subtitle: 'DeepSeek Harness',
+      effort: 'max',
+      effortLabel: 'level:max',
+      selected: false,
+      disabled: false,
+      favorite: fav,
+    });
+    expect(matchesPluginEngineFavoriteQuery(resolved!, 'deepseek')).toBe(true);
+    expect(matchesPluginEngineFavoriteQuery(resolved!, 'nonexistent')).toBe(false);
+    // Unavailable engine, missing model, and closed default do not resolve.
+    expect(resolveMobilePluginEngineFavorite({ ...fav, providerId: unavailable.providerId }, [hidden, unavailable], labels)).toBeNull();
+    expect(resolveMobilePluginEngineFavorite({ ...fav, modelId: 'removed' }, [hidden], labels)).toBeNull();
+    expect(resolveMobilePluginEngineFavorite({ ...fav, providerId: noDefault.providerId, modelId: 'default' }, [noDefault], labels)).toBeNull();
   });
 });
