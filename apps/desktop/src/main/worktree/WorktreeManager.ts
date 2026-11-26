@@ -67,6 +67,7 @@ import {
   getManagedWorktreeBasePath,
   MANAGED_WORKTREE_DIR_NAME,
 } from '../../shared/managedWorktreePaths';
+import type { PrecreatedWorktreePreserveReason } from '../../shared/remotePrecreatedWorktreeLedger.js';
 
 const log = createLogger('WorktreeManager');
 
@@ -348,9 +349,65 @@ async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
 
 const createWorktreeQueues = new Map<string, Promise<void>>();
 const precreatedWorktreeOperationQueues = new Map<string, Promise<void>>();
+interface ActivePrecreatedCreate {
+  controller: AbortController;
+  recoveryKey?: string;
+}
+const activePrecreatedCreates = new Map<string, ActivePrecreatedCreate>();
+/** Bounded wait (< 60s device-link discard timeout) so a stuck create returns in-progress instead of timing out as offline. */
+const PRECREATED_QUEUE_WAIT_MS = 40_000;
+/** Wait briefly for Desktop's staged background checkout to release its lease before discarding. */
+const PRECREATED_CHECKOUT_WAIT_MS = 15_000;
 const MIN_RECOVERY_KEY_LENGTH = 16;
 const MAX_RECOVERY_KEY_LENGTH = 256;
 const RECOVERY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+async function awaitBounded(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  try {
+    await Promise.race([
+      promise.catch(() => undefined).then(() => { settled = true; }),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    return settled;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function abortMatchingActivePrecreatedCreate(
+  sessionId: string,
+  locator: { recoveryKey?: string },
+): void {
+  const active = activePrecreatedCreates.get(sessionId);
+  if (!active) return;
+  if (locator.recoveryKey !== undefined && active.recoveryKey !== locator.recoveryKey) return;
+  active.controller.abort();
+}
+
+function throwIfCreateAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error('Worktree creation aborted');
+  }
+}
+
+async function isWorktreeDirectoryAbsentOnDisk(...candidates: Array<string | undefined>): Promise<boolean> {
+  const unique = [...new Set(candidates.filter((p): p is string => typeof p === 'string' && p.length > 0))];
+  if (unique.length === 0) return false;
+  for (const candidate of unique) {
+    try {
+      await fs.lstat(candidate);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+  }
+  return true;
+}
 
 async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>): Promise<T> {
   const key = path.resolve(baseRepo);
@@ -384,7 +441,14 @@ async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>
 async function withPrecreatedWorktreeOperationQueue<T>(
   sessionId: string,
   fn: () => Promise<T>,
+  options?: { waitMs?: number; onWaitTimeout?: () => T },
 ): Promise<T> {
+  if (options?.waitMs !== undefined && options.onWaitTimeout) {
+    const inFlight = precreatedWorktreeOperationQueues.get(sessionId);
+    if (inFlight && !(await awaitBounded(inFlight, options.waitMs))) {
+      return options.onWaitTimeout();
+    }
+  }
   const previous = precreatedWorktreeOperationQueues.get(sessionId) ?? Promise.resolve();
   let releaseCurrent!: () => void;
   const current = new Promise<void>((resolve) => {
@@ -554,8 +618,10 @@ const STAGE_CHECKOUT_PATHS = [
 async function stageCheckout(
   worktreePath: string,
   onCheckoutChildSpawn?: (pid: number) => void,
+  signal?: AbortSignal,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
+  throwIfCreateAborted(signal);
 
   // 1. 找出白名单中实际存在于 HEAD 的路径(没的就跳过, 避免 git checkout 报错)。
   //    必须在 **worktree** 里解析 HEAD(= 新分支/sourceBranch 的树),不能用
@@ -567,13 +633,14 @@ async function stageCheckout(
     const { stdout } = await gitExec(
       ['ls-tree', '--name-only', 'HEAD', '--', ...STAGE_CHECKOUT_PATHS],
       worktreePath,
-      { onSpawn: onCheckoutChildSpawn },
+      { onSpawn: onCheckoutChildSpawn, ...(signal ? { signal } : {}) },
     );
     existingPaths = stdout
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean);
   } catch (err) {
+    throwIfCreateAborted(signal);
     // ls-tree 失败极罕见(空仓库才会), 直接跳过 stageCheckout
     log.warn(
       `[stageCheckout] ls-tree failed for ${worktreePath}, skipping selective checkout:`,
@@ -581,6 +648,7 @@ async function stageCheckout(
     );
   }
 
+  throwIfCreateAborted(signal);
   // 新 worktree 还没有子模块的 gitdir。两个阶段都只检出父仓库，避免继承的
   // submodule.recurse 在 Git 写完索引前中断 checkout。
   // 2. 选择性 checkout 白名单文件(同步, 用户可见)
@@ -589,12 +657,13 @@ async function stageCheckout(
       await gitExec(
         ['checkout', '--no-recurse-submodules', 'HEAD', '--', ...existingPaths],
         worktreePath,
-        { onSpawn: onCheckoutChildSpawn },
+        { onSpawn: onCheckoutChildSpawn, ...(signal ? { signal } : {}) },
       );
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
       );
     } catch (err) {
+      throwIfCreateAborted(signal);
       log.warn(
         `[stageCheckout] selective checkout failed for ${worktreePath}:`,
         err instanceof Error ? err.message : String(err),
@@ -602,6 +671,7 @@ async function stageCheckout(
     }
   }
 
+  throwIfCreateAborted(signal);
   // 3. 后台跑全 checkout: 排除已 checkout 的目录避免重复 / 覆盖
   //    (单文件如 CLAUDE.md 即使重复 checkout 也无害, 不需要 exclude)
   //    LC_ALL=C 让 git 报错文案一致, 便于解析。
@@ -855,17 +925,37 @@ export interface CreateWorktreeOptions {
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   options?.assertWriteAllowed?.();
+  const controller = new AbortController();
+  const normalizedRecoveryKey = typeof req.recoveryKey === 'string' && req.recoveryKey.trim()
+    ? req.recoveryKey.trim()
+    : undefined;
+  const activeEntry: ActivePrecreatedCreate = {
+    controller,
+    ...(normalizedRecoveryKey ? { recoveryKey: normalizedRecoveryKey } : {}),
+  };
+  activePrecreatedCreates.set(req.sessionId, activeEntry);
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req, options);
+    return createWorktreeInner(req, options, controller.signal);
   });
-  return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
+  try {
+    return await withPrecreatedWorktreeOperationQueue(req.sessionId, create);
+  } finally {
+    if (activePrecreatedCreates.get(req.sessionId) === activeEntry) {
+      activePrecreatedCreates.delete(req.sessionId);
+    }
+  }
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(
+  req: CreateWorktreeReq,
+  options?: CreateWorktreeOptions,
+  signal?: AbortSignal,
+): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
+    throwIfCreateAborted(signal);
     // 0. 防御性校验显式 worktree name(IPC 不可信, 调试 / 未来扩展 / 误用
     //    都可能传入非法值)。只有空白名是生成请求；包括 auto-* 在内的合法非空名
     //    都按显式名称保留。
@@ -982,6 +1072,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     // 4. mkdirp parent
     return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
       options?.assertCurrent?.();
+      throwIfCreateAborted(signal);
       await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
@@ -994,10 +1085,12 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       //    完整目录, 不带 --no-checkout(带上会退回普通 worktree), 失败原样返回不改用 git 重试。
       const branch = getBranchName(name);
       const useMultibox = await timed('detect multibox', () => shouldUseMultibox(baseRepo));
+      throwIfCreateAborted(signal);
+      const createGitOpts = signal ? { signal } : undefined;
       if (useMultibox) {
         try {
           const added = await timed('git multibox add', () =>
-            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo));
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo, createGitOpts));
           logMultiboxAddResult(worktreePath, added.stdout);
         } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
@@ -1005,13 +1098,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       } else {
         const addArgs = buildWorktreeAddArgs(branch, worktreePath, sourceBranch);
         try {
-          await timed('git worktree add', () => gitExec(addArgs, baseRepo));
+          await timed('git worktree add', () => gitExec(addArgs, baseRepo, createGitOpts));
         } catch (err) {
           if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
             // 启用 core.longpaths 后重试一次
             try {
               await gitExec(['config', '--global', 'core.longpaths', 'true']);
-              await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
+              await timed('git worktree add retry', () => gitExec(addArgs, baseRepo, createGitOpts));
             } catch (retryErr) {
               return { ok: false, error: classifyError(classifyAny(retryErr)) };
             }
@@ -1021,6 +1114,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         }
       }
       snap.worktreeAdded = { path: worktreePath, baseRepo, multibox: useMultibox };
+      throwIfCreateAborted(signal);
 
       // Built-in task startup still gets the staged fast path. Callers that need
       // the complete tree can check it out once, without the selective pass or
@@ -1034,25 +1128,24 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
             await timed('full checkout', () => gitExec(
               ['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'],
               worktreePath,
-              { onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid) },
+              { onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid), ...(signal ? { signal } : {}) },
             ));
           } else {
             const stageRes = await timed('stage checkout', () => stageCheckout(
               worktreePath,
               (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+              signal,
             ));
             bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
             snap.backgroundCheckout = bgPromise;
-            if (options?.trackBackgroundCheckout) {
-              const settled = bgPromise.catch(() => undefined);
-              backgroundCheckouts.set(req.sessionId, settled);
-              void settled.finally(() => {
-                if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
-              });
-            }
+            const settled = bgPromise.catch(() => undefined);
+            backgroundCheckouts.set(req.sessionId, settled);
+            void settled.finally(() => {
+              if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
+            });
           }
         } catch (err) {
-          if (options?.awaitFullCheckout) throw err;
+          if (options?.awaitFullCheckout || signal?.aborted) throw err;
           // Preserve the staged path's existing fail-soft behavior.
           log.warn(
             `[worktree] stageCheckout failed for ${worktreePath}:`,
@@ -1069,6 +1162,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // inherited/relative settings); writing it here changes every checkout.
 
       // 6. copy .claude / .sivi(目录不存在则跳过)
+      throwIfCreateAborted(signal);
       try {
         await timed('copy .claude/.sivi', () => copyClaudeSiviDirs(baseRepo, worktreePath));
       } catch (err) {
@@ -1082,6 +1176,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 7. include patterns
       //    Multibox 已按 .worktreeinclude 克隆过同一批文件(同盘为 reflink); 只补缺,
       //    不用整份复制覆盖它们。
+      throwIfCreateAborted(signal);
       try {
         const results = await timed('apply include file', () => (useMultibox
           ? applyWorktreeIncludeFile(baseRepo, worktreePath, { overwriteExisting: false })
@@ -1104,6 +1199,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
+        throwIfCreateAborted(signal);
         options?.assertWriteAllowed?.();
         worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
         options?.assertCurrent?.();
@@ -1128,6 +1224,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       await timed('persist metadata', () => store.set(req.sessionId, meta, async () => {
         // The registry lock wait is async too: recheck after acquiring it,
         // immediately before the synchronous read/modify/write.
+        throwIfCreateAborted(signal);
         options?.assertWriteAllowed?.();
         worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
         options?.assertCurrent?.();
@@ -1241,16 +1338,43 @@ export async function removeWorktreeForSession(
   }
 }
 
+async function removePrecreatedWorktreeWithReason(
+  sessionId: string,
+  options: RemoveWorktreeOptions,
+): Promise<PrecreatedWorktreePreserveReason | null> {
+  let preserveReason: PrecreatedWorktreePreserveReason | null = null;
+  const previous = removeWorktreeQueues.get(sessionId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const meta = store.get(sessionId);
+      if (meta) {
+        preserveReason = await withWorktreeResourceLock(meta.path, () =>
+          removeWorktreeForSessionInner(sessionId, options),
+        );
+      }
+    });
+  removeWorktreeQueues.set(sessionId, run);
+  try {
+    await run;
+  } finally {
+    if (removeWorktreeQueues.get(sessionId) === run) {
+      removeWorktreeQueues.delete(sessionId);
+    }
+  }
+  return preserveReason;
+}
+
 async function removeWorktreeForSessionInner(
   sessionId: string,
   options: RemoveWorktreeOptions,
-): Promise<void> {
+): Promise<PrecreatedWorktreePreserveReason | null> {
   let meta = store.get(sessionId);
-  if (!meta) return;
-  if (meta.pendingSessionTransfer) return;
+  if (!meta) return null;
+  if (meta.pendingSessionTransfer) return 'pending-transfer';
   if (meta.quarantinePath && !isExpectedQuarantinePath(meta, meta.quarantinePath)) {
     log.warn(`[worktree] preserved worktree at ${meta.path}: invalid persisted quarantine path`);
-    return;
+    return 'invalid-quarantine';
   }
   const hadPersistedQuarantine = Boolean(meta.quarantinePath);
   // A crash can happen after the quarantine marker is persisted but before Git moves
@@ -1267,7 +1391,7 @@ async function removeWorktreeForSessionInner(
           `[worktree] failed to clear stale quarantine marker for ${meta.path}:`,
           err instanceof Error ? err.message : String(err),
         );
-        return;
+        return 'quarantine-failed';
       }
       meta = repaired;
     }
@@ -1280,7 +1404,7 @@ async function removeWorktreeForSessionInner(
   const guardedPaths = [...new Set([meta.path, worktreePath])];
   if (guardedPaths.some((candidate) => hasKeepSentinel(candidate))) {
     log.info(`[worktree] preserved worktree at ${worktreePath}: has ${'.worktree-keep'} sentinel`);
-    return;
+    return 'keep-sentinel';
   }
 
   // live-ref 守卫: worktree 路径仍被其它会话的 workingDir / worktreePath 指向时不删。
@@ -1310,7 +1434,7 @@ async function removeWorktreeForSessionInner(
     log.info(
       `[worktree] preserved worktree at ${worktreePath}: still referenced by another live session`,
     );
-    return;
+    return 'live-reference';
   }
 
   // Store 只持久化创建时的托管分支；若用户/Agent 后来切到其它分支或 detached
@@ -1321,21 +1445,33 @@ async function removeWorktreeForSessionInner(
       `[worktree] preserved worktree at ${worktreePath}: registered branch ${meta.branch} ` +
         `is not a managed branch for ${meta.name}`,
     );
-    return;
+    return 'branch-mismatch';
   }
   const attachedBranch = await readAttachedWorktreeBranch(worktreePath);
   if (!attachedBranch) {
+    // 若预创建目录已从磁盘彻底消失（ENOENT），不能因读不到 HEAD 分支而永久保留脏元数据，
+    // 否则远程控制端账本会被这条无效条目锁死 30 天。
+    if (removalOptions.preserveDirty && (await isWorktreeDirectoryAbsentOnDisk(worktreePath, meta.path))) {
+      if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) {
+        return 'claimed';
+      }
+      await gitExec(['worktree', 'prune'], meta.baseRepo).catch(() => undefined);
+      await removeWorktreeSafeDirectory(meta.baseRepo, meta.path, meta.quarantinePath);
+      await store.del(sessionId);
+      log.info(`[worktree] pruned stale metadata for missing pre-created worktree at ${worktreePath}`);
+      return null;
+    }
     log.warn(
       `[worktree] preserved worktree at ${worktreePath}: cannot confirm an attached HEAD branch`,
     );
-    return;
+    return 'branch-mismatch';
   }
   if (attachedBranch !== meta.branch) {
     log.warn(
       `[worktree] preserved worktree at ${worktreePath}: HEAD branch ${attachedBranch} ` +
         `does not match registered branch ${meta.branch}`,
     );
-    return;
+    return 'branch-mismatch';
   }
 
   let changedIncludeFiles: Awaited<ReturnType<typeof listChangedWorktreeIncludeFiles>>;
@@ -1346,19 +1482,23 @@ async function removeWorktreeForSessionInner(
       `[worktree] preserve worktree at ${worktreePath}: include-file dirty check failed`,
       err instanceof Error ? err.message : String(err),
     );
-    return;
+    return 'include-files-changed';
   }
   if (changedIncludeFiles.length > 0) {
     log.warn(
       `[worktree] preserved worktree at ${worktreePath}: changed included local files`,
       changedIncludeFiles.slice(0, 10).map((f) => `${f.relpath}:${f.reason}`),
     );
-    return;
+    return 'include-files-changed';
   }
 
-  if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) return;
+  if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) return 'claimed';
 
-  if (removalOptions.preserveDirty) {
+  // Multibox 仓库在创建时会从 base 克隆引擎缓存（可能数万忽略文件，见 rollbackPartialCreate），
+  // 跳过逐文件 ignored 比对，避免既误拦又在 60s 回收窗口内超时；git/multibox remove 仍不带 -f。
+  const useMultibox = await shouldUseMultibox(meta.baseRepo);
+
+  if (removalOptions.preserveDirty && !useMultibox) {
     let ignoredFiles: string[];
     try {
       ignoredFiles = await listNonReproducibleIgnoredFiles(meta.baseRepo, worktreePath);
@@ -1367,22 +1507,22 @@ async function removeWorktreeForSessionInner(
         `[worktree] preserve worktree at ${worktreePath}: ignored-file check failed`,
         err instanceof Error ? err.message : String(err),
       );
-      return;
+      return 'ignored-files';
     }
     if (ignoredFiles.length > 0) {
       log.warn(
         `[worktree] preserved worktree at ${worktreePath}: non-reproducible ignored files`,
         ignoredFiles.slice(0, 10),
       );
-      return;
+      return 'ignored-files';
     }
     // ignored-file 对比可能读盘；完成后再核对一次 ownership，避免检查期间晚到的
     // maker:create-session 已认领目录却仍继续删除。
-    if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) return;
+    if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) return 'claimed';
   }
 
-  const finishRemoval = async (): Promise<void> => {
-    if (!(await canRemoveWorktree(removalOptions, activeWorktreePath(meta), sessionId))) return;
+  const finishRemoval = async (): Promise<PrecreatedWorktreePreserveReason | null> => {
+    if (!(await canRemoveWorktree(removalOptions, activeWorktreePath(meta), sessionId))) return 'claimed';
 
     let removalPath = activeWorktreePath(meta);
     let quarantinePath: string | null = meta.quarantinePath ?? null;
@@ -1456,38 +1596,40 @@ async function removeWorktreeForSessionInner(
           err instanceof Error ? err.message : String(err),
         );
         await restoreQuarantine();
-        return;
+        return 'quarantine-failed';
       }
 
       // The move updates Git's worktree metadata, so both the final ownership
       // check and ignored-file scan can use the quarantined path.
       if (!(await canRemoveWorktree(removalOptions, removalPath, sessionId))) {
         await restoreQuarantine();
-        return;
+        return 'claimed';
       }
 
-      let ignoredFiles: string[];
-      try {
-        ignoredFiles = await listNonReproducibleIgnoredFiles(meta.baseRepo, removalPath);
-      } catch (err) {
-        log.warn(
-          `[worktree] preserve worktree at ${removalPath}: ignored-file check failed`,
-          err instanceof Error ? err.message : String(err),
-        );
-        await restoreQuarantine();
-        return;
-      }
-      if (ignoredFiles.length > 0) {
-        log.warn(
-          `[worktree] preserved worktree at ${removalPath}: non-reproducible ignored files`,
-          ignoredFiles.slice(0, 10),
-        );
-        await restoreQuarantine();
-        return;
-      }
-      if (!(await canRemoveWorktree(removalOptions, removalPath, sessionId))) {
-        await restoreQuarantine();
-        return;
+      if (!useMultibox) {
+        let ignoredFiles: string[];
+        try {
+          ignoredFiles = await listNonReproducibleIgnoredFiles(meta.baseRepo, removalPath);
+        } catch (err) {
+          log.warn(
+            `[worktree] preserve worktree at ${removalPath}: ignored-file check failed`,
+            err instanceof Error ? err.message : String(err),
+          );
+          await restoreQuarantine();
+          return 'ignored-files';
+        }
+        if (ignoredFiles.length > 0) {
+          log.warn(
+            `[worktree] preserved worktree at ${removalPath}: non-reproducible ignored files`,
+            ignoredFiles.slice(0, 10),
+          );
+          await restoreQuarantine();
+          return 'ignored-files';
+        }
+        if (!(await canRemoveWorktree(removalOptions, removalPath, sessionId))) {
+          await restoreQuarantine();
+          return 'claimed';
+        }
       }
     }
 
@@ -1496,12 +1638,12 @@ async function removeWorktreeForSessionInner(
         `[worktree] preserved worktree at ${removalPath}: another session referenced it before removal`,
       );
       await restorePreservedWorktree();
-      return;
+      return 'live-reference';
     }
 
     try {
       // Multibox remove keeps the same dirty check without -f; --wait makes the lstat below meaningful.
-      const removeArgs = await shouldUseMultibox(meta.baseRepo)
+      const removeArgs = useMultibox
         ? buildMultiboxRemoveArgs(removalPath)
         : ['worktree', 'remove', removalPath];
       await gitExec(removeArgs, meta.baseRepo);
@@ -1509,29 +1651,30 @@ async function removeWorktreeForSessionInner(
       // A precreated compensation may never bypass Git's final dirty check.
       log.warn('[worktree] pre-created removal failed; preserving', error instanceof Error ? error.message : String(error));
       await restoreQuarantine();
-      return;
+      return 'remove-failed';
     }
     try {
       await fs.lstat(removalPath);
-      return;
+      return 'remove-failed';
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'remove-failed';
     }
     await removeWorktreeSafeDirectory(meta.baseRepo, meta.path, meta.quarantinePath, removalPath);
     await store.del(sessionId);
+    return null;
   };
 
   if (await isWorktreeDirty(worktreePath)) {
     log.info(`[worktree] pre-created worktree at ${worktreePath} has uncommitted changes; preserving`);
-    return;
+    return 'dirty';
   }
-  await finishRemoval();
+  return finishRemoval();
 }
 
 export type DiscardPrecreatedWorktreeResult =
   | { status: 'absent' }
   | { status: 'path-mismatch' }
-  | { status: 'preserved' }
+  | { status: 'preserved'; reason?: PrecreatedWorktreePreserveReason }
   | { status: 'discarded'; branchDeleted: boolean };
 
 /** Caller holds the session-create lock. Seal before deleting so a late create
@@ -1540,26 +1683,43 @@ export type DiscardPrecreatedWorktreeResult =
 export async function cancelPrecreatedWorktree(
   sessionId: string,
   locator: { path?: string; recoveryKey?: string },
-  options: Pick<RemoveWorktreeOptions, 'canRemove'>,
+  options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'>,
 ): Promise<DiscardPrecreatedWorktreeResult> {
-  return withPrecreatedWorktreeOperationQueue(sessionId, async () => {
-    const meta = store.get(sessionId);
-    if (meta && (locator.recoveryKey !== undefined
-      ? meta.recoveryKey !== locator.recoveryKey
-      : !locator.path || (path.resolve(meta.path) !== path.resolve(locator.path)
-        && (!meta.quarantinePath || path.resolve(meta.quarantinePath) !== path.resolve(locator.path))))) {
-      return { status: 'path-mismatch' };
+  const active = activePrecreatedCreates.get(sessionId);
+  if (active && (locator.recoveryKey === undefined || active.recoveryKey === locator.recoveryKey)) {
+    if (!options.canRemove || !(await options.canRemove())) {
+      return { status: 'preserved', reason: 'claimed' };
     }
-    if (meta?.ephemeral) return { status: 'preserved' };
-    if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
     worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
-    return meta
-      ? discardPrecreatedWorktree(sessionId, meta.path, {
-        ...options,
-        reclaimOrphanedRuntimeLeases: true,
-      })
-      : { status: 'absent' };
-  });
+    abortMatchingActivePrecreatedCreate(sessionId, locator);
+  }
+  return withPrecreatedWorktreeOperationQueue(
+    sessionId,
+    async () => {
+      const meta = store.get(sessionId);
+      if (meta && (locator.recoveryKey !== undefined
+        ? meta.recoveryKey !== locator.recoveryKey
+        : !locator.path || (path.resolve(meta.path) !== path.resolve(locator.path)
+          && (!meta.quarantinePath || path.resolve(meta.quarantinePath) !== path.resolve(locator.path))))) {
+        return { status: 'path-mismatch' };
+      }
+      if (meta?.ephemeral) return { status: 'preserved', reason: 'ephemeral' };
+      if (!options.canRemove || !(await options.canRemove())) {
+        return { status: 'preserved', reason: 'claimed' };
+      }
+      worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
+      return meta
+        ? discardPrecreatedWorktree(sessionId, meta.path, {
+          ...options,
+          reclaimOrphanedRuntimeLeases: true,
+        })
+        : { status: 'absent' };
+    },
+    {
+      waitMs: PRECREATED_QUEUE_WAIT_MS,
+      onWaitTimeout: () => ({ status: 'preserved', reason: 'in-progress' }),
+    },
+  );
 }
 export function assertPrecreatedSessionNotCancelled(sessionId: string): void {
   worktreeManagerPorts().assertPrecreatedSessionNotCancelled(sessionId);
@@ -1575,14 +1735,30 @@ export async function discardPrecreatedWorktreeByRecoveryKey(
   recoveryKey: string,
   options: Pick<RemoveWorktreeOptions, 'canRemove' | 'reclaimOrphanedRuntimeLeases'> = {},
 ): Promise<DiscardPrecreatedWorktreeResult> {
-  return withPrecreatedWorktreeOperationQueue(sessionId, async () => {
-    const meta = store.get(sessionId);
-    if (!meta) return { status: 'absent' };
-    if (!meta.recoveryKey || meta.recoveryKey !== recoveryKey) {
-      return { status: 'path-mismatch' };
+  const active = activePrecreatedCreates.get(sessionId);
+  if (active && active.recoveryKey === recoveryKey) {
+    if (!options.canRemove || (await options.canRemove())) {
+      abortMatchingActivePrecreatedCreate(sessionId, { recoveryKey });
     }
-    return discardPrecreatedWorktree(sessionId, meta.path, options);
-  });
+  }
+  return withPrecreatedWorktreeOperationQueue(
+    sessionId,
+    async () => {
+      const meta = store.get(sessionId);
+      if (!meta) return { status: 'absent' };
+      if (!meta.recoveryKey || meta.recoveryKey !== recoveryKey) {
+        return { status: 'path-mismatch' };
+      }
+      return discardPrecreatedWorktree(sessionId, meta.path, {
+        ...options,
+        reclaimOrphanedRuntimeLeases: options.reclaimOrphanedRuntimeLeases ?? true,
+      });
+    },
+    {
+      waitMs: PRECREATED_QUEUE_WAIT_MS,
+      onWaitTimeout: () => ({ status: 'preserved', reason: 'in-progress' }),
+    },
+  );
 }
 
 /**
@@ -1609,13 +1785,23 @@ export async function discardPrecreatedWorktree(
   if (!matchesRegisteredPath) {
     return { status: 'path-mismatch' };
   }
-  if (meta.ephemeral) return { status: 'preserved' };
+  if (meta.ephemeral) return { status: 'preserved', reason: 'ephemeral' };
 
-  await removeWorktreeForSession(sessionId, {
+  const activeCheckout = backgroundCheckouts.get(sessionId);
+  if (activeCheckout && !(await awaitBounded(activeCheckout, PRECREATED_CHECKOUT_WAIT_MS))) {
+    return { status: 'preserved', reason: 'in-progress' };
+  }
+
+  const preserveReason = await removePrecreatedWorktreeWithReason(sessionId, {
     ...options,
     preserveDirty: true,
   });
-  if (store.get(sessionId)) return { status: 'preserved' };
+  if (store.get(sessionId)) {
+    return {
+      status: 'preserved',
+      ...(preserveReason ? { reason: preserveReason } : {}),
+    };
+  }
 
   // 目录成功移除后再读分支，封住用户在 dirty check 与 worktree remove 之间刚完成
   // commit 的窗口。store 元数据损坏时也绝不删除非本记录自动推导出的分支。

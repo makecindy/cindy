@@ -11,7 +11,15 @@ import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
-import { parseRemoteWorktreeCreateResult, precreateRemoteDraftWorktree, RemotePrecreatedWorktreeOwnerChangedError, isRemotePrecreatedWorktreeOwnerChangedError, __testing as precreatedWorktreeTesting } from '../remotePrecreatedWorktree';
+import {
+  classifyRemoteWorktreeDiscardFailure,
+  getRemoteWorktreeCleanupPendingMessage,
+  parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
+  RemotePrecreatedWorktreeOwnerChangedError,
+  isRemotePrecreatedWorktreeOwnerChangedError,
+  __testing as precreatedWorktreeTesting,
+} from '../remotePrecreatedWorktree';
 import { prepareLocalGoalWorktree } from '../localGoalWorktree';
 import { create as createSessionViaIpc } from '@/lib/sessionService';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -453,6 +461,8 @@ async function submit(options: {
     dispatchDeferredUiAssignment: async () => {},
     isRemotePrecreatedWorktreeOwnerChangedError,
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
+    classifyRemoteWorktreeDiscardFailure,
+    getRemoteWorktreeCleanupPendingMessage,
     // The real two-step precreation, over an in-memory cleanup ledger.
     precreateRemoteDraftWorktree, makeRemoteWorktreeProgress: () => ({ start: noop, named: noop, end: noop }),
     showWorktreeError: (error: unknown) => errors.push(error),
