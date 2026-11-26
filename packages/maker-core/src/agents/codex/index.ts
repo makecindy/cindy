@@ -7443,6 +7443,7 @@ assertRouteCurrent();
     let expectedMcpNeedsRecheck = false;
     let mcpRecoveryAttempts = 0;
     let mcpRecoveryNotBefore = 0;
+    let orcaProbeNotBefore = 0;
     let mcpRecoveryAbort: AbortController | undefined;
     let mcpRecoveryPending: Promise<void> | null = null;
     let reportedHelperState: string | undefined;
@@ -7459,11 +7460,11 @@ assertRouteCurrent();
       if (!expected.length) return null;
       return Object.fromEntries(Object.entries(config).filter(([key]) => expected.some(name => key.startsWith(`mcp_servers.${name}.`))));
     };
-    const readExpectedMcpTools = async (config: Record<string, unknown>) => {
+    const readExpectedMcpTools = async (config: Record<string, unknown>, respectOrcaBackoff = false) => {
       const expected = expectedGatewayNames.filter(name => Object.keys(config).some(key => key.startsWith(`mcp_servers.${name}.`)));
       const deadline = Date.now() + 5_000;
       const reports = await Promise.all(expected.map(async name => [name,
-        await readCodexThreadMcpServerTools(
+        respectOrcaBackoff && name === 'cindy_orca' && Date.now() < orcaProbeNotBefore ? undefined : await readCodexThreadMcpServerTools(
           (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, name, deadline - Date.now(),
         ).catch(() => undefined),
       ] as const));
@@ -8305,15 +8306,18 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           let reports;
           try {
-            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!), recoverySignal);
+            reports = await awaitCodexRouteSelection(readExpectedMcpTools(expectedRuntimeMcpConfig()!, true), recoverySignal);
           } catch { assertRecoveryCurrent(); return; }
           assertRecoveryCurrent();
           await reportExpectedRuntimeMcpAvailability(reports, recoverySignal);
           assertRecoveryCurrent();
           if (![...reports.values()].some(report => report?.state === 'failed')) {
+            if (reports.has('cindy_orca') && !reports.get('cindy_orca') && Date.now() >= orcaProbeNotBefore) {
+              orcaProbeNotBefore = Date.now() + 30_000;
+            }
             const onlyOrcaNeedsRecheck = reports.has('cindy_orca') && !reports.get('cindy_orca')
               && [...reports].every(([name, report]) => name === 'cindy_orca' || (report && report.state !== 'pending'));
-            if (onlyOrcaNeedsRecheck) mcpRecoveryNotBefore = Date.now() + 30_000;
+            if (onlyOrcaNeedsRecheck) mcpRecoveryNotBefore = orcaProbeNotBefore;
             return;
           }
           // Unloading a thread also stops native children/terminals. Leave those
