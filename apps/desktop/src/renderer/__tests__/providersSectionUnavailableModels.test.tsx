@@ -1501,6 +1501,44 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(screen.queryByRole('switch', { name: 'Custom model' })).toBeNull();
   });
 
+  it.each(['unavailable', 'unknown'] as const)('handles %s Flash access independently of a failed chat refresh', async access => {
+    const chat = { id: 'glm-5', name: 'My chat', defaultEnabled: false };
+    selectSpeechProvider({
+      id: 'glm', name: 'GLM', runtimes: { codex: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        catalogPresetId: 'zhipu-glm-cn', models: [chat, { id: 'glm-realtime-flash', name: 'My Flash', nameExplicit: true,
+          discoveredMetadata: { mode: 'realtime', modalities: { input: ['audio'], output: ['audio'] } } }] } },
+    });
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({
+      ok: false, code: 'AUTH_INVALID' as const, glmFlashProbe: access,
+    }));
+    vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
+    let releaseReadback!: () => void;
+    const readback = new Promise<void>(resolve => { releaseReadback = resolve; });
+    refetchProvidersSpy.mockImplementation(async () => { await readback; return false; });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    const refresh = await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' });
+    await act(async () => { fireEvent.click(refresh); });
+    expect(toast.error).toHaveBeenCalledWith('providerError.AUTH_INVALID');
+    expect(toast.success).not.toHaveBeenCalled();
+    if (access === 'unknown') {
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+    } else {
+      expect(updateCustomProvider).toHaveBeenCalledOnce();
+      expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+      expect(refresh.isConnected).toBe(true);
+      expect((refresh as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { releaseReadback(); });
+      fireEvent.click(screen.getAllByRole('button', { name: 'settings.providers.models.advanced.openAria' })[0]);
+      fireEvent.change(screen.getByRole('textbox', { name: 'settings.providers.models.advanced.displayName' }), { target: { value: 'Work alias' } });
+      expect((screen.getByRole('button', { name: 'settings.providers.models.advanced.saveName' }) as HTMLButtonElement).disabled).toBe(true);
+      const models = vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex!.models;
+      expect(models).toContainEqual(expect.objectContaining(chat));
+      const flash = models.find(m => m.id === 'glm-realtime-flash');
+      expect(flash).toMatchObject({ name: 'My Flash', discoveredMetadata: { mode: 'realtime' } });
+      expect(flash!.discoveredMetadata).not.toHaveProperty('modalities');
+    }
+  });
+
   // #9619: saved connection refresh must consume structured failures instead of
   // losing them in continue. Real component/button, in-memory IPC responses (unit).
   // Minimal failure: all configured runtimes reject discovery. Existing coverage

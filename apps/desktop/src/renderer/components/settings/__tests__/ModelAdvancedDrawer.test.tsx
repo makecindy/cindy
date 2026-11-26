@@ -964,6 +964,142 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
+  // Regression: catalog fallback is not a Kimi Code entitlement, even for the same upstream model ID.
+  it('does not display metered model specs or prices for a Kimi Code connection', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const endpoint = preset.runtimes.codex!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...endpoint, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654, contextWindowMax: 1_987_654,
+      supportsFastMode: true, status: 'alpha' as const };
+    render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+    expect(screen.queryByText('987,654')).toBeNull();
+    expect(screen.queryByText('1,987,654')).toBeNull();
+    expect(screen.getByText('1,048,576')).toBeTruthy();
+    expect(screen.getByText(/modalities\.video/)).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.advanced.lifecycle.alpha')).toBeNull();
+    expect(mocks.priceProps.mock.lastCall?.[0].manualPriceOnly('codex')).toBe(true);
+  });
+
+  // Same name/ID on two actual routes: only the plan must reject catalog fallback.
+  it.each([
+    'aliyun-bailian-coding', 'aliyun-bailian-token-plan-cn', 'aliyun-bailian-token-plan-team-cn',
+    'zhipu-coding-plan-cn', 'zai-coding-plan-global', 'xiaomi-mimo-token-plan-cn',
+    'volcengine-coding-plan', 'volcengine-agent-plan', 'tencentcloud-coding-plan', 'opencode-go',
+  ])('keeps public API specs out of the %s plan drawer', (id) => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const runtime = preset.runtimes.codex!;
+    const configuredModel = runtime.models.find(item => item.route &&
+      item.route.baseUrl !== runtime.baseUrl) ?? { id: 'test-model', name: 'Model' };
+    const source = { ...buildUserProvider({ id: 'plan', name: 'Plan', runtimes: {
+      codex: { ...runtime, catalogPresetId: id, models: [configuredModel] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654 };
+    const rendered = render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.queryByText('987,654'), JSON.stringify({
+      route: published.route, upstream: source.routing.codex?.upstream, preset: preset.runtimes.codex?.baseUrl,
+    })).toBeNull();
+    const apiRoute = { ...source, routing: {
+      codex: { ...source.routing.codex!, upstream: 'https://example.test/v1' },
+    } };
+    const replacement = { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const };
+    const apiModel = { ...published, route: replacement,
+      userModelConfig: { ...published.userModelConfig!, route: replacement } };
+    rendered.rerender(drawer(apiModel, apiModel.defaultEffort, apiModel.efforts, apiRoute));
+    expect(screen.getByText('987,654')).toBeTruthy();
+  });
+
+  // The same Messages URL accepts both products. Require the selected plan preset.
+  it.each([
+    ['zhipu-glm-cn', true],
+    ['zhipu-coding-plan-cn', false],
+  ] as const)('keeps metered specs visible only on the API preset at the shared GLM Messages URL (%s)', (id, metered) => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const agent = 'claude-code';
+    const provider = { ...buildUserProvider({ id: 'glm', name: 'GLM', runtimes: {
+      [agent]: { ...preset.runtimes[agent]!, catalogPresetId: id, models: [{ id: 'glm-test', name: 'GLM' }] },
+    } }), connected: true } as ProviderView;
+    const model = { ...provider.models[agent]![0], maxOutput: 987_654 };
+    render(<ModelAdvancedDrawer
+      provider={provider} row={{ id: model.id, name: model.name, avail: [agent], byAgent: { [agent]: model } }}
+      open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+      disabled={false} paymentRequired={false}
+    />);
+    expect(Boolean(screen.queryByText('987,654'))).toBe(metered);
+  });
+
+  it('keeps public prices and specs out of a GLM plan saved at its Responses URL', () => {
+    const id = 'zhipu-coding-plan-cn';
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const route = { baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'openai-responses' as const };
+    const source = { ...buildUserProvider({ id: 'glm-plan', name: 'GLM', runtimes: {
+      codex: { ...preset.runtimes.codex!, ...route, catalogPresetId: id,
+        models: [{ id: 'glm-5.4', name: 'GLM', route }] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654 };
+    const view = render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.queryByText('987,654')).toBeNull();
+    expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+
+    const customRoute = { ...route, requestPath: '/custom' };
+    const custom = { ...published, route: customRoute, userModelConfig: { ...published.userModelConfig!, route: customRoute } };
+    view.rerender(drawer(custom, custom.defaultEffort, custom.efforts, source));
+    expect(screen.getByText('987,654')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.subscription')).toBeNull();
+  });
+
+  it('leaves Kimi Code quote fields empty unless an estimate was explicitly saved', async () => {
+    mocks.realPricing = true;
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const previous = window.electronAPI;
+    const quote = { currency: 'USD', inputPerMtok: 1, outputPerMtok: 4 };
+    const read = vi.fn(async () => ({ editable: true, reference: quote, effective: quote, override: null,
+      conflict: false, allowedCurrencies: ['USD'], registryUpdatedAt: null }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { getModelPriceOverride: read } } });
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      await waitFor(() => expect(input.disabled).toBe(false));
+      expect(read).toHaveBeenCalled();
+      expect(input.value).toBe('');
+      expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it.each(['USD', 'CNY'] as const)('updates a saved sparse %s Kimi Code estimate without revealing the inherited API value', async (currency) => {
+    mocks.realPricing = true;
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const previous = window.electronAPI;
+    const reference = { currency, inputPerMtok: 1, outputPerMtok: 4 };
+    const estimate = (output: number) => ({ editable: true, reference, effective: { ...reference, outputPerMtok: output },
+      override: { outputPerMtok: output }, conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null });
+    const write = vi.fn(async () => estimate(6));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      getModelPriceOverride: async () => estimate(5), setModelPriceOverride: write,
+    } } });
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      const output = screen.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+      await waitFor(() => expect(output.value).toBe('5'));
+      expect(input.value).toBe('');
+      fireEvent.change(output, { target: { value: '6' } });
+      fireEvent.blur(output);
+      await waitFor(() => expect(write).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        currency, inputPerMtok: 1, outputPerMtok: 6,
+      })));
+      expect(input.value).toBe('');
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   // Older explicit choices stored only api/route; presets must still offer the way back to automatic.
   it('lets a legacy api/route-only preset choice return to automatic', async () => {
     const update = vi.fn(async (...args: unknown[]) => {
