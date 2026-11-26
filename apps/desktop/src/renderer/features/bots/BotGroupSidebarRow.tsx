@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
-import type { BotGroupSummary } from '../../../shared/botGroupChat';
+import { canStopBotGroupWork, isOwnBotGroupSpeaker, type BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
@@ -140,15 +140,23 @@ export function BotGroupSidebarRow({
     return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)} title={text}>{text}</span>;
   };
 
+  const ownRoundSpeakers = group.round?.speakers.filter((speaker) => isOwnBotGroupSpeaker(group, speaker));
+  const ownSpeakingIds = ownRoundSpeakers
+    ? ownRoundSpeakers.filter((speaker) => speaker.executionStatus !== 'queued').map((speaker) => speaker.botId)
+    : group.serverBacked
+      ? group.speakingBotIds.filter((botId) => canStopBotGroupWork(group.members.find((member) => member.botId === botId), false))
+      : group.speakingBotIds;
+  const hasOwnSpeaking = ownRoundSpeakers ? ownRoundSpeakers.length > 0 : ownSpeakingIds.length > 0;
+
   const renderSubtitle = (group: BotGroupSummary, mutedClass: string): ReactNode => {
     if (group.archived) return renderPreview(null, mutedClass);
-    // Several Bots may think at once in a broadcast round's first circle.
-    const speakingIds = group.round?.speakers.filter(speaker => speaker.executionStatus !== 'queued').map(speaker => speaker.botId) ?? group.speakingBotIds;
-    const speakers = speakingIds
+    // Several Bots may think at once in a broadcast round's first circle;
+    // in multi-user server groups only this account's own working agents trigger the sidebar running state.
+    const speakers = ownSpeakingIds
       .map((botId) => group.members.find((member) => member.botId === botId))
       .filter((member): member is BotGroupSummary['members'][number] => member !== undefined);
     const plan = botGroupSidebarPlanPreview(group);
-    const executions = group.round?.speakers.filter(speaker => speaker.activity !== 'planning');
+    const executions = ownRoundSpeakers?.filter((speaker) => speaker.activity !== 'planning');
     const queued = executions?.find(speaker => speaker.executionStatus === 'queued');
     const queuedStep = executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus === 'queued')
       && !executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus !== 'queued');
@@ -165,8 +173,12 @@ export function BotGroupSidebarRow({
     const names = speakers.map(botGroupMemberDisplayName).join(t('bots.groupChat.memberSeparator'));
     // Planning and a step in progress read as one line; a step waiting for the user's
     // go-ahead keeps the confirmation hint below instead.
+    const ownPlanRunning = !group.serverBacked
+      || plan?.kind !== 'running'
+      || Boolean(ownRoundSpeakers?.some((speaker) => speaker.activity === 'step'))
+      || (!group.round && group.teammateActivity?.phase === 'running');
     const planLine =
-      !waiting && isRunningBotGroupSidebarPreview(plan) && !(plan.kind === 'running' && queuedStep)
+      !waiting && isRunningBotGroupSidebarPreview(plan) && ownPlanRunning && !(plan.kind === 'running' && queuedStep)
         ? plan.kind === 'planning'
           ? t('bots.groupChat.sidebar.planPlanning', { name: plan.botName || names })
           : plan.step !== null && plan.total > 0
@@ -214,7 +226,7 @@ export function BotGroupSidebarRow({
   const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
   const unread = botGroupUnreadCount(group);
   const timestamp = formatBotListTimestamp(
-    !group.archived && group.speakingBotIds.length > 0 ? now : botGroupActivityAt(group),
+    !group.archived && hasOwnSpeaking ? now : botGroupActivityAt(group),
     now,
     t,
   );

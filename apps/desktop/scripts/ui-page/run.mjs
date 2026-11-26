@@ -686,6 +686,8 @@ export async function runPlan(plan, options, externalSignal) {
             const checkStarted = performance.now();
             const ui = {
               ...variant,
+              // `before`/`after`: a check can skip assertions the old code cannot satisfy.
+              role,
               data: current.context.data,
               definition,
               page,

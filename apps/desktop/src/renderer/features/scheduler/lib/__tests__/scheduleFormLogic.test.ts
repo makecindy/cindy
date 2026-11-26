@@ -45,6 +45,7 @@ import {
   usesBoundSessionGenerationModel,
   usesBoundSessionModel,
 } from '../scheduleFormLogic';
+import { pluginCheckState, pluginEventChecked, setPluginEventSelected, setPluginSelected } from '../pluginEventSelection';
 import type { ScheduleFormState } from '../scheduleFormLogic';
 import { formToProjectConfig } from '../projectAutomationConfig';
 import {
@@ -389,6 +390,61 @@ describe('buildScheduleInput webhook trigger', () => {
       const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
       expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
     }
+  });
+
+  // docs/product-rules/plugin-event-triggers.md: plugin sources pick events per plugin. A stale
+  // top-level filter left from another sender would make the engine reject the save, and the form
+  // must keep field conditions an Agent set even though it does not edit them.
+  it('saves plugin sources with their filters and never a top-level event filter', () => {
+    const source = { preset: 'plugin' as const, sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'chatId', operator: 'equals' as const, value: 'c1' }] },
+    ] };
+    const form = makeForm({ webhookEnabled: true, webhookEvents: 'issues', ...webhookSourceFormFields(source) });
+    expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source });
+  });
+
+  // 2026-11-24: GitLab through the GitLab plugin is stored as that plugin's source with project / issue
+  // conditions; reopening it shows GitLab again (not the generic plugin list) and saving keeps it unchanged.
+  it.each([
+    ['a whole project', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.merged'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+    ] }] }],
+    ['one issue', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['issue.comment'], filters: [
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '3' },
+      { field: 'kind', operator: 'equals' as const, value: 'issue' },
+    ] }] }],
+    ['one MR', { preset: 'plugin' as const, sources: [{ plugin: 'cindy-gitlab', events: ['merge_request.comment', 'merge_request.approved'], filters: [
+      { field: 'host', operator: 'equals' as const, value: 'git.example.com' },
+      { field: 'project', operator: 'equals' as const, value: 'group/app' },
+      { field: 'iid', operator: 'equals' as const, value: '12' },
+      { field: 'kind', operator: 'equals' as const, value: 'mr' },
+    ] }] }],
+  ])('reopens and saves GitLab through the plugin for %s', (_name, source) => {
+    const fields = webhookSourceFormFields(source);
+    expect(fields.webhookPreset).toBe('gitlab-plugin');
+    expect(buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger).toEqual({ events: [], source });
+  });
+});
+
+// Same rule: ticking a plugin means all of its events (including ones it declares later);
+// unticking the last event removes the plugin; Agent-set filters survive every toggle.
+describe('plugin event selection', () => {
+  const chat = { plugin: 'public/chat', events: [{ type: 'message.received' }, { type: 'mention' }] };
+  const filters = [{ field: 'chatId', operator: 'equals' as const, value: 'c1' }];
+  it('moves between all, some and none while keeping filters', () => {
+    let sources = setPluginSelected([], chat.plugin, true);
+    expect(sources).toEqual([{ plugin: 'public/chat' }]);
+    expect(pluginCheckState(sources, chat.plugin)).toBe('all');
+    sources = [{ plugin: 'public/chat', filters }];
+    sources = setPluginEventSelected(sources, chat, 'mention', false);
+    expect(sources).toEqual([{ plugin: 'public/chat', events: ['message.received'], filters }]);
+    expect(pluginCheckState(sources, chat.plugin)).toBe('some');
+    expect(pluginEventChecked(sources, chat.plugin, 'mention')).toBe(false);
+    expect(setPluginEventSelected(sources, chat, 'mention', true)).toEqual([{ plugin: 'public/chat', filters }]);
+    expect(setPluginEventSelected(sources, chat, 'message.received', false)).toEqual([]);
+    expect(setPluginSelected(sources, chat.plugin, false)).toEqual([]);
   });
 });
 

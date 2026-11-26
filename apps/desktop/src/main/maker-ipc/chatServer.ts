@@ -24,7 +24,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, chatRetryDeadline, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, chatRequestCaller, chatRetryDeadline, chatRouteNonIds, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
@@ -35,6 +35,7 @@ import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
 import { createGroupProjectFolders, requestRepository } from './groupProjectFolder.js';
 import { createGroupTaskCards } from './groupTaskCards.js';
 import { GROUP_TEAMMATE_HANDOFF_GUIDANCE } from './groupCollaborationSkillContent.js';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 import { createGroupAssistantTasks, formatGroupRequest } from './groupAssistantTask.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
@@ -240,6 +241,8 @@ class SettlementRefused extends Error {
   constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+/** Fixed words of Chat routes kept in failure logs; every other segment is logged as `:id`. */
+const CHAT_ROUTE_WORDS = ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions','conversation-list-state','preferences'];
 const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_000];
 function historyUpgradeRetryAt(error: unknown, failures: number): number {
   const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[Math.min(failures, HISTORY_UPGRADE_RETRY_DELAYS_MS.length) - 1]!;
@@ -513,7 +516,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     let value = histories.get(reader);
     if (!value) {
       value = createChatHistory({ api: route => api(route, 'GET', undefined, reader === selfId ? undefined : reader),
-        store: deps.chatHistoryStore(config.baseUrl, selfId, reader, current), current, newGeneration: randomUUID });
+        store: deps.chatHistoryStore(config.baseUrl, selfId, reader, current), current, newGeneration: randomUUID, readerId: reader });
       if (connected) value.reconnect();
       histories.set(reader, value);
     }
@@ -892,6 +895,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const token = getAccessToken();
     if (!token) return Promise.reject(new Error('AUTH_REQUIRED'));
     const started = Date.now();
+    // Read only when the server refuses the request as malformed (see the failure log below).
+    const callSite = new Error();
     return new Promise<T>((resolve, reject) => {
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Chat-Desktop': '1',
@@ -942,12 +947,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       gate?.observe(error);
       if (error instanceof WorkRequestDeferred) throw error;
       const routeTemplate = route.split('?')[0].split('/').map(part =>
-        ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions','conversation-list-state','preferences'].includes(part) || !part ? part : ':id').join('/');
+        CHAT_ROUTE_WORDS.includes(part) || !part ? part : ':id').join('/');
       const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
       const details = error instanceof ChatResponseError ? detailsDiagnostic(error.details) : undefined;
+      // A malformed request repeats until its caller changes; name the caller and the non-ID slot
+      // so the template alone (`/conversations/:id/messages/:id`) is not all there is to go on.
+      const malformed = error instanceof ChatResponseError && error.status === 400;
+      const nonIds = malformed ? chatRouteNonIds(route) : [];
+      const caller = malformed ? chatRequestCaller(callSite.stack) : undefined;
       deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
         ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error),
-        ...(details === undefined ? {} : { details }) });
+        ...(details === undefined ? {} : { details }), ...(caller ? { caller } : {}), ...(nonIds.length ? { nonIds } : {}) });
       throw error;
     });
   }
@@ -2260,7 +2270,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
     return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
-        archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
+        archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0,
+        isOwnWork: ({ botId, requesterId, maskOwnerId }) =>
+          maskOwnerId ? maskOwnerId === selfId : !!botId && mayStopWork(s.members, botId, requesterId) }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
         // The group's own Cindy: plain 「Cindy」 with Cindy's artwork, nobody's companion.
         if (isAssistant(m)) return { botId: m.id, actorId: m.id, actorKind: 'bot' as const, assistant: true, isSelf: false, role: m.role,
@@ -3122,14 +3134,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const replies = contextLines(s, messages, TASK_CONTEXT_MESSAGES - rootContext.lines.length);
     const quote = readBotGroupQuote(source.content);
     const first = delivered === undefined;
+    const recentLines = [...rootContext.lines, ...replies.lines];
+    const recentMessages = [...rootContext.included, ...replies.included];
+    const omitted = replies.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : [];
     return {
       // Keep the root, then the newest visible messages, when the shared attachment budget fills up.
       rootTitleText: titleWords(root),
       attachmentSources: [...rootContext.included, ...replies.included.reverse()].filter(m => m.id !== quote?.messageId),
+      visibleBackground: [...omitted, ...recentLines.filter((_, i) => recentMessages[i].id !== quote?.messageId)],
       heading: t(`bots.groupChat.assistant.${threadRootId ? first ? 'threadRecent' : 'threadNew' : first ? 'groupRecent' : 'groupNew'}`),
       background: [
         ...(quote?.excerpt ? [t('bots.groupChat.assistant.replyingTo').replaceAll('{{name}}', () => quote.authorName).replaceAll('{{text}}', () => quote.excerpt)] : []),
-        ...(replies.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...rootContext.lines, ...replies.lines],
+        ...omitted, ...recentLines],
     };
   }
   function mentionableTeammates(snapshot: Snapshot, speakerId: string) {
@@ -3212,7 +3228,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
       const scope = threadRootId ?? 'main';
-      const { heading, background, attachmentSources, rootTitleText } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
+      const { heading, background, visibleBackground, attachmentSources, rootTitleText } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
       // Read only the directly quoted original through the room's authorized endpoint. Never
       // take media IDs from the quote snapshot, scan history or follow another quote from it.
       const quote = readBotGroupQuote(source.content);
@@ -3236,8 +3252,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
       const words = bodyText(source).trim();
-      const visibleRequest = formatGroupRequest({ words, heading, background });
-      let message = visibleRequest;
+      let message = formatGroupRequest({ words, heading, background });
       run.mentionable = mentionableTeammates(s, execution.bot_id);
       if (run.mentionable?.length) {
         const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
@@ -3245,13 +3260,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) });
         message = formatGroupRequest({ words, heading, background: [...background, GROUP_TEAMMATE_HANDOFF_GUIDANCE, roster] });
       }
+      const originalText = quotedMessage && quotedText(quotedMessage);
+      const excerpt = quotedMessage
+        ? (originalText ? botGroupQuoteExcerpt(markdownPreviewText(originalText) || originalText) : botGroupQuoteAttachmentName(quotedAttachments(quotedMessage)))
+        : quote?.excerpt || quote?.attachmentName;
+      const note = quote && excerpt ? t('bots.groupChat.assistant.replyingTo')
+        .replace(/{{name}}|{{text}}/g, token => token === '{{name}}' ? quote.authorName : excerpt) : undefined;
+      const visible = formatGroupRequest({ words, note, heading, background: visibleBackground });
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
-      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visibleRequest,
+      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visible,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
-        origin: { kind: 'session', senderSessionId: '', displayText: visibleRequest,
+        origin: { kind: 'session', senderSessionId: '', displayText: visible,
           groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
             speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
         ...(attachments.length ? { attachments } : {}),
