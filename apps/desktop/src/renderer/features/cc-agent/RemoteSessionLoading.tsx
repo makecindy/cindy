@@ -17,10 +17,22 @@ export function RemoteSessionLoading({ compact = false }: { compact?: boolean })
     return (
       <div
         role="status"
-        className="pointer-events-none flex shrink-0 items-center justify-end gap-2 px-4 py-1 text-12 text-[var(--text-secondary)]"
+        className="pointer-events-none flow-root shrink-0 px-4 pt-1 text-right text-12 text-[var(--text-secondary)]"
       >
-        <Spinner size={14} />
-        <span>{t('ccAgent.remoteSession.syncing')}</span>
+        {/* MainLayout's floating buttons are one 28px row. Float their insets so
+            the whole status moves underneath when it cannot fit alongside them. */}
+        <span
+          aria-hidden="true"
+          className="float-left h-[min(1.75rem,var(--content-top-left-actions-inset,0px))] w-[var(--content-top-left-actions-inset,0px)]"
+        />
+        <span
+          aria-hidden="true"
+          className="float-right h-[min(1.75rem,var(--content-top-right-actions-inset,0px))] w-[var(--content-top-right-actions-inset,0px)]"
+        />
+        <span className="inline-flex max-w-full items-center gap-2 pb-1 align-top">
+          <Spinner size={14} />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{t('ccAgent.remoteSession.syncing')}</span>
+        </span>
       </div>
     );
   }
