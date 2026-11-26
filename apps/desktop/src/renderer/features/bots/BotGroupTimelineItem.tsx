@@ -411,7 +411,7 @@ function BotGroupMemberJoinedNotice({ names }: { names: readonly string[] }) {
   const fullText = t('bots.groupChat.notice.memberJoinedList', { names: names.join(separator) });
   if (names.length <= BOT_GROUP_JOIN_SUMMARY_NAMES) {
     return (
-      <p className="select-none text-center text-12 leading-5 text-[var(--text-tertiary)]">
+      <p className="select-none text-center text-12 leading-[1.667] text-[var(--text-tertiary)]">
         {fullText}
       </p>
     );
@@ -427,13 +427,13 @@ function BotGroupMemberJoinedNotice({ names }: { names: readonly string[] }) {
         aria-expanded={expanded}
         data-testid="bot-group-joined-summary"
         onClick={() => setExpanded((open) => !open)}
-        className="max-w-[85%] cursor-pointer select-none rounded-lg px-2 py-0.5 text-center text-12 leading-5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        className="max-w-[85%] cursor-pointer select-none rounded-lg px-2 py-0.5 text-center text-12 leading-[1.667] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       >
         <span>{expanded ? fullText : summaryText}</span>
         <ChevronDown
           aria-hidden
           className={cn(
-            'ml-1 inline-block h-3 w-3 align-[-2px] transition-transform duration-150 motion-reduce:transition-none',
+            'ml-1 inline-block h-3 w-3 align-[-2px] transition-transform duration-[var(--motion-fast)] motion-reduce:transition-none',
             expanded && 'rotate-180',
           )}
         />

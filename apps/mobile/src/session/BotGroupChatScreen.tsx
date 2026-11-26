@@ -1405,8 +1405,8 @@ function BotGroupTimelineItem({
       >
         <Text style={[styles.notice, styles.joinedNoticeText]} testID="botGroup.notice">{joinedExpanded ? fullText : summaryText}</Text>
         {joinedExpanded
-          ? <ChevronUp size={12} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
-          : <ChevronDown size={12} color={colors.textTertiary} strokeWidth={iconStroke.regular} />}
+          ? <ChevronUp size={iconSize.xs} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
+          : <ChevronDown size={iconSize.xs} color={colors.textTertiary} strokeWidth={iconStroke.regular} />}
       </Pressable>;
     }
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
