@@ -62,6 +62,14 @@ describe('readPluginScheduleCreateIntent', () => {
 });
 
 describe('buildPluginScheduleFormOverrides', () => {
+  it('prefills the approved check without replacing the model or execution mode', () => {
+    const checked = { ...intent, preRunPlugin: { pluginId: 'test-plugin', onFailure: 'allow' as const } };
+    expect(readPluginScheduleCreateIntent(pluginScheduleNavigationState(checked))).toEqual(checked);
+    expect(buildPluginScheduleFormOverrides(checked)).toMatchObject({
+      executionMode: 'agent', model: '', preRunHookEnabled: true, preRunSource: 'plugin',
+      preRunPluginId: 'test-plugin', preRunPluginOnFailure: 'allow',
+    });
+  });
   it('落成普通 agent 自动化 —— 不带任何插件专属执行配置', () => {
     const overrides = buildPluginScheduleFormOverrides(intent);
     expect(overrides.executionMode).toBe('agent');

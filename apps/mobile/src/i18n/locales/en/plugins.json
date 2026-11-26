@@ -108,6 +108,7 @@
   "selectFolder": "Select this folder",
   "automationDraft": "New automation",
   "automationDraftHint": "Confirm the content, timing and model, then save to create this automation.",
+  "automationCheck": "Let {{name}} check before using a model",
   "automationName": "Name",
   "automationPrompt": "What to do",
   "automationInterval": "Interval (minutes)",

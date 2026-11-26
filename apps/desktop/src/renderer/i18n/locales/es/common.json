@@ -9104,7 +9104,10 @@
             "user": "Usuario",
             "assistant": "Asistente"
           }
-        }
+        },
+        "agentChecks": "Puede comprobar si hay contenido nuevo",
+        "agentChecksDetail": "Solo intercambia estados de cambio, sin cambios o desconocido con otros complementos autorizados. Cada complemento usa sus propias cuentas conectadas, sin compartir mensajes ni credenciales. La comprobación no usa ningún modelo. También comprueba cambios en conversaciones locales de Cindy sin devolver su contenido.",
+        "agentChecksRequest": "Revisar permiso de comprobación"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",

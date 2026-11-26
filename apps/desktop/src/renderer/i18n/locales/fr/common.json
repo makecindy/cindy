@@ -9104,7 +9104,10 @@
             "user": "Utilisateur",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Peut vérifier si les sources ont du nouveau",
+        "agentChecksDetail": "Échange uniquement les états modifié, inchangé ou inconnu avec les autres plugins autorisés. Chaque plugin utilise ses propres comptes connectés, sans partager de messages ni d’identifiants. La vérification ne sollicite aucun modèle. Vérifie aussi les changements des conversations Cindy locales sans en renvoyer le contenu.",
+        "agentChecksRequest": "Vérifier l’autorisation de détection"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",

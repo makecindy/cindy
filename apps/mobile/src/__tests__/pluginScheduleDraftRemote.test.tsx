@@ -17,6 +17,9 @@ vi.mock("react-native", () => ({
   ScrollView: "div",
   StyleSheet: { create: (v: unknown) => v },
   View: "div",
+  Switch: ({ value, onValueChange }: any) => createElement("input", {
+    type: "checkbox", checked: value, onChange: (e: any) => onValueChange(e.target.checked),
+  }),
   Pressable: ({ onPress, disabled, children }: any) =>
     createElement("button", { onClick: onPress, disabled }, children),
 }));
@@ -83,11 +86,11 @@ const configuration = {
 };
 let root: Root;
 let host: HTMLDivElement;
-const renderDraft = async () => {
+const renderDraft = async (draftIntent: typeof intent | (typeof intent & { preRunPlugin: { pluginId: string; onFailure: 'allow' } }) = intent) => {
   await act(async () => {
     root.render(
       createElement(PluginScheduleDraft, {
-        intent,
+        intent: draftIntent,
         deviceId: "host",
         onClose: () => {},
       }),
@@ -147,6 +150,19 @@ it("lists remote catalogs and creates the schedule with the selected location", 
     model: "remote-model",
     providerId: "remote-provider",
   });
+});
+
+it.each([true, false])('saves the visible pre-run check choice (%s) on the original computer', async enabled => {
+  await renderDraft({ ...intent, preRunPlugin: { pluginId: 'p1', onFailure: 'allow' } });
+  await act(async () => h.picker.unified.onSelect(configuration, { deviceId: 'studio' }));
+  const check = host.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  expect(check.checked).toBe(true);
+  if (!enabled) await act(async () => check.click());
+  await clickButton('plugins.saveConfiguration');
+  const [deviceId, channel, [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(deviceId).toBe('host');
+  expect(channel).toBe('maker:schedule:create');
+  expect(input.preRunPlugin).toEqual(enabled ? { pluginId: 'p1', onFailure: 'allow' } : undefined);
 });
 
 it("clears the location when a local row is selected afterwards", async () => {

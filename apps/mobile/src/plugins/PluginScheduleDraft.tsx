@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   View,
 } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -90,6 +91,7 @@ export function PluginScheduleDraft({
           : d.cronExpr,
     }));
   };
+  const [checkEnabled, setCheckEnabled] = useState(true);
   const [picker, setPicker] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
@@ -157,7 +159,9 @@ export function PluginScheduleDraft({
       const result = await link.invoke<{ id: string }>(
         deviceId,
         "maker:schedule:create",
-        [buildMobileScheduleInput(draft)],
+        [{ ...buildMobileScheduleInput(draft),
+          ...(checkEnabled && intent.preRunPlugin ? { preRunPlugin: intent.preRunPlugin } : {}),
+        }],
         { preSend: assertCurrent },
       );
       if (!result || typeof result.id !== "string")
@@ -207,6 +211,13 @@ export function PluginScheduleDraft({
           <Text style={styles.hint}>
             {intent.ghostName} · {t("plugins.automationDraftHint")}
           </Text>
+          {intent.preRunPlugin ? (
+            <View style={styles.checkRow}>
+              <Text style={styles.checkLabel}>{t("plugins.automationCheck", { name: intent.ghostName })}</Text>
+              <Switch value={checkEnabled} onValueChange={setCheckEnabled} disabled={sent.current}
+                accessibilityLabel={t("plugins.automationCheck", { name: intent.ghostName })} />
+            </View>
+          ) : null}
           <Text style={styles.body}>{t("plugins.automationName")}</Text>
           <TextInput
             accessibilityLabel={t("plugins.automationName")}
@@ -429,6 +440,9 @@ const makeStyles = (colors: ThemeColors) =>
       padding: spacing.lg,
       gap: spacing.md,
     },
+    checkRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
+    checkLabel: { flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium, color: colors.textPrimary },
     frequencies: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     frequency: {
       minHeight: 44,

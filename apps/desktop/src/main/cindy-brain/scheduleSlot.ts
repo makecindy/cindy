@@ -34,12 +34,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { hasDeliveryNamespace, pluginAutomationHostKey } from '../../shared/pluginIdentity.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 import {
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_MS,
   GHOST_SCHEDULE_DRAFT_MIN_INTERVAL_SUGGESTION_MS,
   GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS,
   GHOST_SCHEDULE_DRAFT_PROMPT_MAX_CHARS,
+  ghostControlPointActive,
   type GhostPipeScheduleDraftResult,
   type GhostScheduleDraftPush,
   type InstalledGhost,
@@ -155,6 +157,10 @@ export class GhostScheduleSlot {
       return fail('INVALID_REQUEST', 'schedule-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.preRunCheck !== undefined && typeof request.preRunCheck !== 'boolean')
+      return fail('INVALID_REQUEST', 'preRunCheck must be boolean');
+    if (request.preRunCheck === true && !ghostControlPointActive(ghost, 'will-schedule-run'))
+      return fail('PERMISSION_DENIED', 'The plugin has not been approved for automation checks');
     if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (typeof request.name !== 'string' || request.name.trim().length === 0) {
       return fail('INVALID_REQUEST', 'name 必填且必须是非空字符串(预填的任务名)');
@@ -230,6 +236,7 @@ export class GhostScheduleSlot {
       name,
       prompt: prompt + address,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
+      ...(request.preRunCheck === true ? { preRunPlugin: { pluginId: installedGhostStoragePart(ghost), onFailure: 'allow' as const } } : {}),
     };
     // Older controllers save only the edited name and prompt. The bound draft belongs to the
     // execution computer, whose native editor round-trips its immutable binding.

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   diffGhostPermissionItems,
+  diffInstalledGhostPermissionItems,
+  type InstalledGhost,
   ghostDeclaresHiddenTasks,
   ghostDeclaresModelPreferences,
   ghostManifestToLegacyV2DigestFormat,
@@ -19,6 +21,23 @@ const base = {
   version: '1.0.0',
   entry: 'main.js',
 };
+
+describe('independent change-check permission', () => {
+  it('keeps an old declaration unapproved when the host gains support', () => {
+    const parsed = validateGhostManifest({ ...base, agent: { checks: true, checkSources: ['mail'] } });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const installed = { manifest: parsed.manifest, approval: { state: 'approved', revision: 'fixture' } } as InstalledGhost;
+    expect(diffInstalledGhostPermissionItems(installed, parsed.manifest).added.map(item => item.key)).toEqual(['agent:checks']);
+    expect(diffInstalledGhostPermissionItems({ ...installed, checksCapabilityApproved: true }, parsed.manifest).added).toEqual([]);
+  });
+
+  it.each([
+    { checks: 'yes' }, { checkSources: ['mail'] }, { checks: true, checkSources: [] },
+    { checks: true, checkSources: ['mail', 'mail'] }, { checks: true, checkSources: ['bad/source'] },
+  ])('rejects invalid new check declarations: %j', agent => {
+    expect(validateGhostManifest({ ...base, agent }).ok).toBe(false);
+  });
+});
 describe('plugin tasks permission compatibility', () => {
   it('adds a distinct permission without changing old errand permissions', () => {
     const old = validateGhostManifest({ ...base, agent: { errand: true } });

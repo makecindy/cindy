@@ -72,6 +72,16 @@ const validReq = {
 };
 
 describe('GhostScheduleSlot 资格审', () => {
+  it('suggests only the calling instance’s approved check and never adopts an existing schedule', () => {
+    const ghost = scheduleGhost({ namespace: null });
+    ghost.manifest.subscribe = { hooks: ['will-schedule-run'] };
+    const { slot, pushes } = makeSlot({ getGhost: () => ghost });
+    expect(slot.handleRequest('sched-ghost', { ...validReq, preRunCheck: true })).toMatchObject({ ok: false });
+    expect(pushes).toHaveLength(0);
+    ghost.approvedControlPoints = ['will-schedule-run'];
+    expect(slot.handleRequest('sched-ghost', { ...validReq, preRunCheck: true })).toEqual({ ok: true });
+    expect(pushes[0].preRunPlugin).toEqual({ pluginId: 'sched-ghost', onFailure: 'allow' });
+  });
   it('声明了 agent.schedule:true 才放行', () => {
     const { slot, pushes } = makeSlot();
     expect(slot.handleRequest('sched-ghost', validReq)).toEqual({ ok: true });
