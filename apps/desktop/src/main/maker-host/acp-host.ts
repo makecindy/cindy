@@ -17,7 +17,9 @@ import {
 export { createAcpProcessTransport } from './acp-transport.js';
 export {
   getCachedPluginHarnessModels,
+  getReportedPluginEngineModelDetails,
   onPluginHarnessModelsChanged,
+  onReportedPluginEngineModelDetailsChanged,
   type CachedPluginEngineModel,
 } from './pluginEngineModelCache.js';
 

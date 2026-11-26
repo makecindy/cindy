@@ -15,8 +15,7 @@
  * 慢执行都可能拖很久,那时提示「文件已变更」会让用户读到旧内容;等对应的执行结果
  * (tool_result)到达才算这次编辑落地。
  *
- * 图片预览(ImageLightbox)不在这里:它依赖按消息项挂载的 ImageGalleryContext
- * (会话里翻看同一张消息的图片),提升到会话级会丢掉这个上下文,留在原处。
+ * 图片预览保留打开时的消息图集、附件集合与文件来源。
  */
 
 import {
@@ -42,12 +41,24 @@ import {
 } from '@/features/right-sidebar/lib/lastTurnChangedFiles';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 
-import { useChatSessionFile } from './ChatSessionFileContext';
+import { ImageLightbox } from './ImageLightbox';
+import { ImageGalleryContext, ImageGalleryScopeContext, type GalleryImage } from './ImageGalleryContext';
+import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollectionContext';
+import { ChatSessionFileProvider, type ChatSessionFileContextValue, useChatSessionFile } from './ChatSessionFileContext';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 
 /** 一次「打开文件预览」的请求。 */
 export type FilePreviewRequest =
+  | {
+      kind: 'image';
+      sessionId: string | undefined;
+      src: string;
+      file: ChatSessionFileContextValue;
+      images: readonly GalleryImage[] | null;
+      scope: string | null;
+      attachments: readonly AttachmentCollectionItem[] | null;
+    }
   | {
       kind: 'document';
       /** 会话 id:决定「文件已变更」看哪个会话的消息。 */
@@ -200,6 +211,16 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
           triggerRef={preview.triggerRef}
           onClose={close}
         />
+      ) : preview?.kind === 'image' ? (
+        <ChatSessionFileProvider value={preview.file}>
+          <AttachmentCollectionContext.Provider value={preview.attachments}>
+            <ImageGalleryContext.Provider value={preview.images}>
+              <ImageGalleryScopeContext.Provider value={preview.scope}>
+                <ImageLightbox src={preview.src} onClose={close} />
+              </ImageGalleryScopeContext.Provider>
+            </ImageGalleryContext.Provider>
+          </AttachmentCollectionContext.Provider>
+        </ChatSessionFileProvider>
       ) : preview ? (
         <TextLightbox
           filePath={preview.filePath}

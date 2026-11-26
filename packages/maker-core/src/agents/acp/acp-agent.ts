@@ -48,6 +48,7 @@ import {
   openAcpSession,
   type AcpClientInfo,
   type AcpSession,
+  type AcpReportedModelDetails,
 } from './session.js';
 
 export const ACP_PLUGIN_PROVIDER_PREFIX = 'acp-plugin:';
@@ -105,6 +106,8 @@ export interface AcpAgentDeps extends AgentDeps {
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
+  /** Captures the local settings owner before the endpoint starts. */
+  observeModelDetails?: (providerId: string) => (details: AcpReportedModelDetails | undefined) => void;
   /**
    * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
    * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
@@ -242,6 +245,13 @@ export class AcpAgent extends BaseAgent {
       throw new AgentStartupStoppedError(new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)'));
     }
 
+    const managed = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    // The base provider can rotate through managed logins. Their details belong only to a
+    // separate account provider, never to the original login or a guest's settings.
+    const observeDetails = !hosted && opts.providerId
+      && (!managed || managed.defaultProfile || opts.providerId !== acpProviderIdForHarness(harnessKey))
+      ? this.acpDeps.observeModelDetails?.(opts.providerId)
+      : undefined;
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
     let extra: PiExtraSpawnConfig | null = null;
@@ -263,6 +273,7 @@ export class AcpAgent extends BaseAgent {
           // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
+          recordMcpToolResults: true,
         });
       } catch (error) {
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
@@ -349,6 +360,7 @@ export class AcpAgent extends BaseAgent {
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
+          ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
           logger,
           onEnded: disposeBridge,
         });
@@ -370,6 +382,7 @@ export class AcpAgent extends BaseAgent {
 
     try {
       const session = await open();
+      if (observeDetails) session.observeReportedModelDetails(observeDetails);
       this.acpDeps.onSessionCapabilities?.(harnessKey, session.capabilities);
       session.onCapabilitiesChange((capabilities) => this.acpDeps.onSessionCapabilities?.(harnessKey, capabilities));
       return session;

@@ -982,6 +982,7 @@ interface SessionInputState {
    * activeTurn 里)也能被识破,不再二次入队。
    */
   recentEnqueuedClientIds: string[];
+  withdrawnQueueClientIds: string[];
   generation: number;
   /** Latest authoritative `/clear` token for device-link optimistic input preconditions. */
   clearBoundaryMs: number | null;
@@ -1059,6 +1060,7 @@ function createInitialInputState(
     credentialSwitchRetryGeneration: null,
     botCapabilityRefreshVersion: 0,
     recentEnqueuedClientIds: [],
+    withdrawnQueueClientIds: [],
     generation,
     clearBoundaryMs,
   };
@@ -1415,6 +1417,8 @@ function isManualUiOrigin(origin: AgentInputQueuedMessage['origin']): boolean {
 }
 
 export class AgentInputCoordinator {
+  private readonly projectionHost = crypto.randomUUID();
+  private projectionSequence = 0;
   private readonly terminalRecoveryOwners = new WeakMap<object, {
     instanceId: string; generation: number;
   }>();
@@ -2241,6 +2245,9 @@ export class AgentInputCoordinator {
 
   private rememberEnqueuedClientId(state: SessionInputState, clientId: string): void {
     if (!clientId) return;
+    if (state.withdrawnQueueClientIds.includes(clientId)) {
+      state.withdrawnQueueClientIds = state.withdrawnQueueClientIds.filter((id) => id !== clientId);
+    }
     // Treat the bounded list as an MRU window. A queued item may be accepted
     // later as a same-turn steer; refreshing it here keeps the post-acceptance
     // weak-link retry window intact without growing a second dedupe mechanism.
@@ -4310,6 +4317,12 @@ export class AgentInputCoordinator {
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
     if (removed) {
       state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter((id) => id !== clientId);
+      if (!admissionFailed) {
+        state.withdrawnQueueClientIds.push(clientId);
+        if (state.withdrawnQueueClientIds.length > AgentInputCoordinator.RECENT_ENQUEUED_CLIENT_IDS_LIMIT) {
+          state.withdrawnQueueClientIds.shift();
+        }
+      }
     }
     if (removed) this.removePendingCompactWaitClientId(state, removed.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
@@ -5477,10 +5490,18 @@ export class AgentInputCoordinator {
       state.recovery?.kind === 'active-turn'
         ? { ...state.recovery, item: this.toProjectedItem(state.recovery.item) }
         : state.recovery;
+    const pendingSteers = this.steerRequestLineages.get(sessionId);
     return {
       sessionId,
       pendingQueue,
       turnInProgress: this.isDispatchBoundaryBusy(sessionId, state),
+      queueSnapshot: {
+        host: this.projectionHost,
+        sequence: ++this.projectionSequence,
+        ...(pendingSteers?.size ? { pendingSteerClientIds: [...pendingSteers.keys()] } : {}),
+        ...(this.isQueueRestored(sessionId) ? { dispatchClientId: state.activeTurn?.item?.clientId ?? null } : {}),
+      },
+      ...(state.withdrawnQueueClientIds.length ? { withdrawnQueueClientIds: [...state.withdrawnQueueClientIds] } : {}),
       // Modern projections always carry the explicit null token for a session
       // that has never been cleared.  Only an older controlled Desktop can
       // omit the field at the wire boundary; keeping null here lets a remote

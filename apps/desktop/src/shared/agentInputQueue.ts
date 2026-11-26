@@ -544,6 +544,10 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Recent explicit withdrawals. Older hosts omit this field. */
+  withdrawnQueueClientIds?: string[];
+  /** Snapshot order within a coordinator lifetime. Dispatch ownership is omitted until queue restore succeeds. */
+  queueSnapshot?: { host: string; sequence: number; dispatchClientId?: string | null; pendingSteerClientIds?: string[] };
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];

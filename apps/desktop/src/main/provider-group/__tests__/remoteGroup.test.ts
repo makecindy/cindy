@@ -45,7 +45,7 @@ function harness(options: {
 } = {}) {
   const config: ProviderGroupConfig | null | undefined = 'config' in options
     ? options.config
-    : { strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, SELF, STUDIO, SHARED] };
+    : { strategy: 'expiring', autoSwitch: true, members: [OWNER_LOCAL, SELF, STUDIO, SHARED] };
   const picks = [...(options.picks ?? [STUDIO])];
   const bindings = new Map<string, ProviderGroupBinding>();
   /** 因组内电脑被移出或组被删除而解除过的任务 → 那个组。 */
@@ -66,7 +66,6 @@ function harness(options: {
     listBindings: () => ({}),
     isTurnRunning: () => false,
     now: () => 1_000,
-    random: () => 0,
   });
   const remote = {
     readGroup: vi.fn<ProviderGroupRemoteGroups['readGroup']>(async () => config),
@@ -165,7 +164,7 @@ describe('assigning through a group on another computer', () => {
   it('assigns an implicit remote source using the target default, not the local default', async () => {
     const providerId = 'remote-subscription';
     const h = harness({ row: { providerId: null }, config: {
-      strategy: 'least', autoSwitch: true, members: [{ ...OWNER_LOCAL, providerId }, STUDIO],
+      strategy: 'expiring', autoSwitch: true, members: [{ ...OWNER_LOCAL, providerId }, STUDIO],
     } });
     h.deps.resolveImplicitProvider.mockImplementation(async (_agent, _model, device) => device === OWNER ? providerId : 'local-subscription');
     const context = await h.service.assignBeforeStart(START);
@@ -426,7 +425,7 @@ describe('assigning through a group on another computer', () => {
   //   then the owner is unavailable and an older snapshot without STUDIO is read.
   // - Tier: unit (real service; transport/directory doubles only).
   it('keeps a never-run binding when an older snapshot cannot prove the live-picked member was removed', async () => {
-    const older = { strategy: 'least' as const, autoSwitch: true,
+    const older = { strategy: 'expiring' as const, autoSwitch: true,
       members: [OWNER_LOCAL, SELF, SHARED] };
     const h = harness({ live: false });
     expect(await h.service.assignBeforeStart(START)).toMatchObject({ member: { key: STUDIO.key },
@@ -446,7 +445,7 @@ describe('assigning through a group on another computer', () => {
   });
 
   it('still treats a fresh null or live member removal as authoritative', async () => {
-    const older = { strategy: 'least' as const, autoSwitch: true,
+    const older = { strategy: 'expiring' as const, autoSwitch: true,
       members: [OWNER_LOCAL, SELF, SHARED] };
     const row = { agentDeviceId: STUDIO.agentDeviceId, providerId: STUDIO.providerId };
     const gone = harness({ config: null, live: false, row });
@@ -532,7 +531,7 @@ describe('assigning through a group on another computer', () => {
   //   local coalescer is at capacity before the pick.
   // - Tier: unit, in-memory service harness.
   it('does not fall through to the group owner when local routing capacity is full', async () => {
-    const h = harness({ config: { strategy: 'least', autoSwitch: true, members: [STUDIO] } });
+    const h = harness({ config: { strategy: 'expiring', autoSwitch: true, members: [STUDIO] } });
     h.remote.pick.mockRejectedValueOnce(new ProviderGroupLocalCapacityError());
     await expect(h.service.assignBeforeStart(START)).rejects.toThrow('Group routing capacity is temporarily exhausted');
     expect(h.bindings.size).toBe(0);
@@ -549,7 +548,7 @@ describe('assigning through a group on another computer', () => {
   //   fails before the pick.
   // - Tier: unit, in-memory service harness.
   it('does not replace a task route with the owner when local capacity blocks a group move', async () => {
-    const h = harness({ config: { strategy: 'least', autoSwitch: true, members: [STUDIO] } });
+    const h = harness({ config: { strategy: 'expiring', autoSwitch: true, members: [STUDIO] } });
     h.remote.pick.mockRejectedValueOnce(new ProviderGroupLocalCapacityError());
     await expect(h.service.resolveSwitchTarget('s1', {
       agentKind: 'claude-code', model: MODEL, providerId: 'anthropic', agentDeviceId: OWNER,
@@ -803,7 +802,7 @@ describe('switching computers within a group on another computer', () => {
     expect(failing.deps.fallback).toHaveBeenCalled();
     expect(failing.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
     // 重建同一个组后，即使任务挪到了组那一项，也不再自动纳入(§9.4)。
-    failing.remote.readGroup.mockResolvedValue({ strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, STUDIO] });
+    failing.remote.readGroup.mockResolvedValue({ strategy: 'expiring', autoSwitch: true, members: [OWNER_LOCAL, STUDIO] });
     Object.assign(failing.row, { agentDeviceId: OWNER, providerId: 'anthropic' });
     failing.service.onTurnError('s1', { sdkError: 'rate_limit' }, 4);
     await flush();
@@ -845,7 +844,7 @@ describe('switching computers within a group on another computer', () => {
   });
 
   it('does not take a task back once its computer was removed from the group', async () => {
-    const h = bound({ config: { strategy: 'least', autoSwitch: true, members: [OWNER_LOCAL, SELF] } });
+    const h = bound({ config: { strategy: 'expiring', autoSwitch: true, members: [OWNER_LOCAL, SELF] } });
     h.service.onTurnError('s1', { sdkError: 'rate_limit' }, 3);
     await flush();
     expect(h.bindings.has('s1')).toBe(false);

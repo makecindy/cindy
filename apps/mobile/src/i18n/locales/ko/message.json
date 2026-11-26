@@ -267,6 +267,8 @@
     "imagesNotUploaded_other": "이미지 {{count}}장을 올리지 못했어요",
     "waitingForNamedComputer": "{{name}} 연결 시 자동 전송",
     "reconnectComputer": "다시 연결",
+    "pendingDelivery": "전송 대기 중",
+    "pendingDeliveryHint": "이 휴대폰에 저장했습니다. 컴퓨터의 확인을 기다리고 있습니다.",
     "waitingForComputer": "컴퓨터가 연결되면 전송",
     "waitingForNetwork": "네트워크가 돌아오면 전송",
     "queued": "대기 중",

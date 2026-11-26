@@ -18,7 +18,7 @@ import {
   type Capabilities,
   type Logger,
 } from '@cindy/maker-core';
-import { rememberPluginHarnessModels } from './pluginEngineModelCache.js';
+import { observePluginEngineModelDetails, rememberPluginHarnessModels } from './pluginEngineModelCache.js';
 import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
@@ -80,6 +80,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
       ),
     },
     onSessionCapabilities: rememberCapabilities,
+    observeModelDetails: observePluginEngineModelDetails,
   });
 }
 
