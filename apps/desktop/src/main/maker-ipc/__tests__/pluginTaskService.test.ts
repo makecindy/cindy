@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }),
+}));
 import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
 import { pluginTaskRouteAttempts, resolveLightestPluginTaskFallback, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
@@ -933,6 +937,69 @@ it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a ne
   }
 });
 
+function nativePluginCancel(deps: Record<string, unknown>): PluginTaskServiceDeps['cancel'] {
+  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution, rejectedInputOnly) => {');
+  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
+  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  return new Function(...Object.keys(deps),js)(...Object.values(deps));
+}
+
+// #13300, unit: a rejected host send restores the head before the plugin settles its receipt.
+// Service-only cancellation tests never exercised that callback or the subsequent snapshot write.
+it.each([false, true])('withdraws a rejected plugin input across an interrupted cleanup (%s)', async interrupted => {
+  const f = fixture();
+  let snapshot: string | undefined;
+  let beforeCleanup: string | undefined;
+  const failure = new Error('Host unavailable');
+  let rejection: Promise<unknown> | undefined;
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: async () => ({ kind: 'host-send', accepted: false, code: 'LAZY_CREATE_FAILED', message: 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE' }),
+    steerToAgent: vi.fn(), abortSession: vi.fn(), isTurnRunning: () => false,
+    hasPendingInteraction: () => false, getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+    createUserMessage: vi.fn(), touchUserSend: vi.fn(async () => {}), emitProjection: vi.fn(),
+    persistQueueSnapshot: (_taskId, items) => { snapshot = JSON.stringify(items); },
+    onRejectedUserTurn: (taskId, item) => {
+      beforeCleanup = snapshot;
+      rejection = f.service.discard(taskId, item, 'failed').catch(error => error);
+    },
+  });
+  f.deps.dispatch = async (pluginId, taskId, clientId, text) => {
+    await coordinator.ensureQueueRestored(taskId);
+    coordinator.enqueue(taskId, {
+      clientId, text, persistedContent: text, sourcePlugin: { pluginId },
+      model: 'model', effort: 'medium', permissionMode: 'default', workingDir: '/project',
+      chatMessage: { clientId, role: 'user', content: text },
+      createOpts: { agentKind: 'codex', model: 'model', workingDir: '/project' },
+    });
+    return { ok: true };
+  };
+  f.deps.cancel = nativePluginCancel({
+    inputCoordinator: coordinator, pluginTaskServiceForCurrentOwner: () => f.service,
+    assertPlugin: f.deps.assertAuthorized, assertCurrent: f.deps.assertCurrent,
+    PluginTaskError, withdrawOwnedSessionInputs, awaitAgentInputQueueSnapshotPersistence: async () => {},
+  });
+  if (interrupted) vi.spyOn(f.deps, 'cancel').mockRejectedValueOnce(failure);
+  const run = await f.send();
+  await vi.waitFor(() => expect(rejection).toBeDefined());
+  expect(await rejection).toBe(interrupted ? failure : undefined);
+  const receipt = await f.service.getRun('p', run.runId);
+  expect(receipt.status).toBe('failed');
+  expect(receipt.execution).toBeUndefined();
+  expect(JSON.parse(beforeCleanup!)).toEqual([expect.objectContaining({ clientId: run.inputMessageId })]);
+  await expect(f.service.cancel('other', run.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  const pending = () => coordinator.getQueueControlSnapshot(run.taskId).pendingQueue.map(item => item.clientId);
+  expect(pending()).toEqual(interrupted ? [run.inputMessageId] : []);
+  expect(await f.service.cancel('p', run.runId)).toEqual(receipt);
+  expect(pending()).toEqual([]);
+  expect(JSON.parse(snapshot!)).toEqual([]);
+  expect(await f.service.cancel('p', run.runId)).toEqual(receipt);
+  // A newer steering input can own the reply while the original remains in the active turn.
+  vi.spyOn(coordinator, 'getActiveInputClientId').mockReturnValue('later-steer');
+  vi.spyOn(coordinator, 'getActiveInputClientIds').mockReturnValue([run.inputMessageId, 'later-steer']);
+  await expect(f.service.cancel('p', run.runId)).rejects.toMatchObject({ code: 'TASK_BUSY' });
+});
+
 it.each(['restore','restart'] as const)('the production cancel adapter rechecks revoked ownership after %s waits', async point => {
   const f=fixture(),run=await f.send();
   let release!:()=>void,entered!:()=>void,restores=0;
@@ -951,11 +1018,7 @@ it.each(['restore','restart'] as const)('the production cancel adapter rechecks 
     withSessionRestartLock:async(_id:string,operation:()=>Promise<void>)=>{if(point==='restart')await pause();await operation();},
     readExecution:()=>f.execution,resetAutomaticRecoveryForExplicitStop:vi.fn(),contextOverflowRolloverHolder:null,
     sessionControlService:{stopSessionTurn:stop}};
-  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution) => {');
-  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
-  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-  const cancel=new Function(...Object.keys(deps),js)(...Object.values(deps));
+  const cancel = nativePluginCancel(deps);
   const operation=cancel('p',run.taskId,[run.inputMessageId],f.execution);
   const result=expect(operation).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
   await started;await f.service.withUninstall('p',async()=>{});release();await result;

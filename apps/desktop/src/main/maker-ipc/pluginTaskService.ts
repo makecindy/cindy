@@ -100,6 +100,8 @@ const fail = (code: string, message: string): never => {
 };
 const terminal = (run: PluginTaskRun) =>
   ['completed', 'failed', 'cancelled', 'interrupted'].includes(run.status);
+const failedBeforeAcceptance = (run: PluginTaskRun) =>
+  run.status === 'failed' && !run.execution && !run.followUpOf;
 const ownsInput = (run: PluginTaskRun, value: string) =>
   value === run.inputMessageId || run.inputClientIds?.includes(value) === true;
 // Object insertion order is not part of the task API; array order still is.
@@ -214,6 +216,7 @@ export interface PluginTaskServiceDeps {
     taskId: string,
     inputClientIds: readonly string[],
     execution?: SessionExecutionIdentity,
+    rejectedInputOnly?: true,
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
@@ -962,7 +965,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await save(row, run);
         return run;
       });
-      if (terminal(prepared)) return prepared;
+      if (terminal(prepared)) {
+        if (failedBeforeAcceptance(prepared)) {
+          await deps.cancel(pluginId, prepared.taskId, [prepared.inputMessageId], undefined, true);
+        }
+        return prepared;
+      }
       deps.assertAuthorized(pluginId);
       const outcome = await deps.cancel(
         pluginId,
@@ -1124,25 +1132,36 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         }
       }),
     discard: (taskId: string, item: OwnedQueuedInput, status: 'cancelled' | 'failed') =>
-      exclusive(async () => {
-        for (const row of await deps.store.forSession(taskId)) {
-          const run = JSON.parse(row.payload) as PluginTaskRun;
-          if (terminal(run) || !queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
-            continue;
-          // A late queue cleanup for an older accepted input cannot settle a
-          // newer recovery attempt. Unknown aliases still represent rejection
-          // before acceptance and must be settled by the coordinator.
-          const latestAccepted = run.inputClientIds?.at(-1);
-          if (
-            run.execution &&
-            latestAccepted &&
-            ownsInput(run, item.clientId) &&
-            item.clientId !== latestAccepted
-          )
-            continue;
-          run.status = status;
-          run.completedAt = now();
-          await save(row, run);
+      completeOperation(async () => {
+        const rejected = await exclusive(async () => {
+          const rejected: Array<{ pluginId: string; run: PluginTaskRun }> = [];
+          for (const row of await deps.store.forSession(taskId)) {
+            const run = JSON.parse(row.payload) as PluginTaskRun;
+            if (terminal(run) || !queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
+              continue;
+            // A late queue cleanup for an older accepted input cannot settle a
+            // newer recovery attempt. Unknown aliases still represent rejection
+            // before acceptance and must be settled by the coordinator.
+            const latestAccepted = run.inputClientIds?.at(-1);
+            if (
+              run.execution &&
+              latestAccepted &&
+              ownsInput(run, item.clientId) &&
+              item.clientId !== latestAccepted
+            )
+              continue;
+            run.status = status;
+            run.completedAt = now();
+            await save(row, run);
+            if (failedBeforeAcceptance(run) && run.inputMessageId === item.clientId) {
+              rejected.push({ pluginId: row.pluginId, run });
+            }
+          }
+          return rejected;
+        });
+        // The native adapter rechecks ownership using this service. Release the receipt lock first.
+        for (const { pluginId, run } of rejected) {
+          await deps.cancel(pluginId, taskId, [run.inputMessageId], undefined, true);
         }
       }),
   };
