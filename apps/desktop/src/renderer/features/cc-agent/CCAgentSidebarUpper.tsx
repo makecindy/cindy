@@ -211,7 +211,8 @@ import {
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
-import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
+import { useProjectPinFocusHandoff } from './sidebar/projectPinFocus';
+import { ProjectNode as ProjectNodeView, ProjectPinContext, ProjectPinMenuItem } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
@@ -3035,6 +3036,19 @@ function ExpandedView({
     [filter.removePin, filter.promotePin, t],
   );
 
+  const captureProjectPinFocus = useProjectPinFocusHandoff(
+    sidebarScrollRef,
+    pinnedProjectComparisonKeys,
+  );
+  const projectPinActions = useMemo(() => ({
+    isPinned: (project: ProjectNode) =>
+      projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
+    toggle: (project: ProjectNode, currentlyPinned: boolean, options?: { restoreFocus?: boolean }) => {
+      if (options?.restoreFocus) captureProjectPinFocus(project.projectKey);
+      void handleToggleProjectPin(project, currentlyPinned);
+    },
+  }), [pinnedProjectComparisonKeys, localPlatform, handleToggleProjectPin, captureProjectPinFocus]);
+
   // Event-only state: metadata updates recreate the collapsed Set even when
   // membership is unchanged. Do not propagate that identity to every task row.
   const collapsedProjectsForMoveRef = useRef(collapse.collapsed);
@@ -3582,7 +3596,7 @@ function ExpandedView({
   const bulkActionDisabled = bulkActionPending !== null;
 
   return (
-    <>
+    <ProjectPinContext.Provider value={projectPinActions}>
       {creatingProject && (
         <ProjectSettingsDialog
           create
@@ -4006,7 +4020,7 @@ function ExpandedView({
         <ProjectSettingsDialog
           key={settingsProject.projectKey}
           project={settingsProject}
-          isPinned={projectKeyComparisonSetHas(pinnedProjectComparisonKeys, settingsProject.projectKey, localPlatform)}
+          isPinned={projectPinActions.isPinned(settingsProject)}
           onTogglePin={handleToggleProjectPin}
           onImport={handleImportFromTools}
           onRemove={handleRemoveProject}
@@ -4055,7 +4069,7 @@ function ExpandedView({
         onSettings={setSettingsProject}
       />
       {deleteScheduleDialog}
-    </>
+    </ProjectPinContext.Provider>
   );
 }
 
@@ -4960,6 +4974,7 @@ function RailPanels({
                   <Settings size={16} aria-hidden="true" />
                   {t('projectSettings.title')}
                 </DropdownMenuItem>
+                {menuTarget && <ProjectPinMenuItem project={menuTarget} />}
                 <DropdownMenuItem
                   disabled={menuTarget == null || menuTargetBlocked}
                   onSelect={() => {

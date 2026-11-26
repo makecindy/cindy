@@ -16,7 +16,7 @@ import { deviceDisplayName } from '@/lib/deviceName';
  *   - aria-expanded 反映 !isCollapsed
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Archive,
   ArchiveRestore,
@@ -27,6 +27,8 @@ import {
   FolderOpen,
   Link2,
   PanelLeft,
+  Pin,
+  PinOff,
   Search,
   Settings,
   SquarePen,
@@ -574,12 +576,39 @@ const ProjectHeader = memo(function ProjectHeader({
             onBrowseFiles={onBrowseFiles}
             onOpenInExplorer={onOpenInExplorer}
             onArchiveAll={onArchiveAll}
+            restorePinFocus
           />
         </DropdownMenuContent>
       </DropdownMenu>
     </>
   );
 });
+
+export const ProjectPinContext = createContext<{
+  isPinned: (project: ProjectNodeData) => boolean;
+  /** restoreFocus：菜单来自会随置顶换段重挂的侧栏项目行，需要把焦点交给新位置。 */
+  toggle: (project: ProjectNodeData, currentlyPinned: boolean, options?: { restoreFocus?: boolean }) => void;
+} | null>(null);
+
+export function ProjectPinMenuItem({
+  project,
+  restoreFocus = false,
+}: {
+  project: ProjectNodeData;
+  restoreFocus?: boolean;
+}) {
+  const actions = useContext(ProjectPinContext);
+  const { t } = useTranslation();
+  if (!actions) return null;
+  const pinned = actions.isPinned(project);
+  const Icon = pinned ? PinOff : Pin;
+  return (
+    <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => actions.toggle(project, pinned, { restoreFocus })}>
+      <Icon size={16} aria-hidden="true" />
+      {t(pinned ? 'ccAgent.sidebar.projectAction.unpin' : 'ccAgent.sidebar.projectAction.pin')}
+    </DropdownMenuItem>
+  );
+}
 
 type ProjectMenuProps = Pick<
   ProjectHeaderProps,
@@ -591,7 +620,7 @@ type ProjectMenuProps = Pick<
   | 'onOpenInExplorer'
   | 'onArchiveAll'
   | 'onSettings'
->;
+> & { restorePinFocus?: boolean };
 
 export function ProjectMenuItems({
   project,
@@ -602,6 +631,7 @@ export function ProjectMenuItems({
   onBrowseFiles,
   onOpenInExplorer,
   onArchiveAll: handleArchiveAll,
+  restorePinFocus = false,
 }: ProjectMenuProps) {
   const { t } = useTranslation();
   const projectWritesBlocked = isDeviceLinkWriteBlocked(project);
@@ -634,6 +664,7 @@ export function ProjectMenuItems({
         <Settings aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
         {t('projectSettings.title')}
       </DropdownMenuItem>
+      <ProjectPinMenuItem project={project} restoreFocus={restorePinFocus} />
       <DropdownMenuSeparator />
       <DropdownMenuItem
         className={MENU_ITEM_CLASS}
