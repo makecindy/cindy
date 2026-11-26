@@ -107,7 +107,11 @@ export function ProviderAppearanceDialog({ provider, scope, onClose }: {
   return <Dialog.Root open onOpenChange={open => { if (!open && !busy) onClose(); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
-      <Dialog.Content aria-describedby={undefined} className="modal-panel fixed left-1/2 top-1/2 z-modal-raised max-h-[85vh] w-[min(512px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-6 text-[var(--text-primary)]">
+      <Dialog.Content
+        aria-describedby={undefined}
+        onPointerDownOutside={event => event.preventDefault()}
+        className="modal-panel fixed left-1/2 top-1/2 z-modal-raised max-h-[85vh] w-[min(512px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-6 text-[var(--text-primary)]"
+      >
         <Dialog.Title className="mb-5 text-18 font-semibold">{t('settings.providers.menu.appearance')}</Dialog.Title>
         <form onSubmit={event => { event.preventDefault(); void save(); }}>
           <fieldset disabled={busy} className="space-y-5">

@@ -54,6 +54,10 @@ export default {
       });
       await dialog.locator('input[type=file]').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
       await dialog.locator('img').first().waitFor();
+      await page.locator('.modal-scrim').click({ position: { x: 8, y: 8 } });
+      const ownImage = dialog.getByRole('radio', { name: await ui.t('settings.providers.menu.ownImage'), exact: true });
+      assert.equal(await ownImage.count(), 1, 'clicking the scrim keeps the appearance draft open');
+      assert.ok(await ownImage.isChecked(), 'the uploaded icon remains selected');
       await dialog.getByRole('button', { name: await ui.t('settings.providers.custom.cancel'), exact: true }).click();
       await page.locator('[data-picker] button').first().click();
       const mark = id => page.locator(`[data-rail-item="provider:glm-${id}"] svg path`).first().getAttribute('d');
