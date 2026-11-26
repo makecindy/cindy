@@ -9507,9 +9507,9 @@ export function registerGhostIpc(): void {
       install: async (id, options, prompt, assertCurrent, assertScope, remoteOperation) => {
         await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope, remoteOperation);
       },
-      installedOperations: (items, controller) => {
+      installedOperations: (items, controller, live) => {
         const services = requireRemotePluginManagementServices();
-        return services.market.installedOperations ? services.market.installedOperations(items, controller) : Promise.resolve([...items]);
+        return services.market.installedOperations ? services.market.installedOperations(items, controller, live) : Promise.resolve([...items]);
       },
     },
     setEnabled: async (id, enabled, approval, assertCurrent) => { await setGhostEnabledForUser(id, enabled, approval, assertCurrent); },

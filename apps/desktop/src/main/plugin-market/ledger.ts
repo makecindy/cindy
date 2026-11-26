@@ -92,7 +92,14 @@ export interface PluginMarketInstallationRecord {
    * 存量兼容同 `sourceIdBinding`：只增可选字段，`validRecord` 不检查它；旧记录缺省；降级时旧版本保留未知字段、
    * 重写记录时丢弃，结果都是缺省（控制端未确认）。
    */
-  remoteOperationBinding?: { operationId: string; controller: string; keyId: string; rawManifestSha256: string };
+  remoteOperationBinding?: {
+    operationId: string;
+    controller: string;
+    keyId: string;
+    rawManifestSha256: string;
+    /** 契约 V2.10：那次落位后实例的批准令牌（每次落位新铸）；缺省的旧证据不投影。 */
+    approval?: string;
+  };
 }
 
 /**

@@ -215,7 +215,11 @@ vi.mock('../../cindy-brain/index.js', () => ({
       );
       if (runtimeGhost) runtimeGhost.dir = dir;
     }
-    await options.afterCommitInLock?.(installed, {
+    // Production hands over the placed instance with its (freshly minted) approval; the list default stands in for it.
+    await options.afterCommitInLock?.({
+      ...installed,
+      approval: (installed as { approval?: unknown }).approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    } as typeof installed, {
       rawManifestSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
       legacyManifestDigest: ghostManifestDigest(
         ghostManifestToLegacyV2DigestFormat(
@@ -1341,7 +1345,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'baguette-simulator', namespace: null }), {
       remoteOperationBinding: { operationId: 'op-0000000000000009', controller: sourceIds.controllerTag!('phone-a')!,
-        keyId: sourceIds.keyId()!, rawManifestSha256: crypto.createHash('sha256').update(raw).digest('hex') },
+        keyId: sourceIds.keyId()!, rawManifestSha256: crypto.createHash('sha256').update(raw).digest('hex'),
+        approval: APPROVED_INSTALL_TOKEN },
     }));
     await h.service.snapshot();
     expect(runtime.install).not.toHaveBeenCalled();

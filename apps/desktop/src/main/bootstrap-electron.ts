@@ -3146,7 +3146,7 @@ setRemotePluginManagementServices({
         ...(remoteOperation ? { remoteOperation } : {}),
       });
     },
-    installedOperations: (items, controller) => getPluginMarketService().withInstalledOperationIds(items, controller),
+    installedOperations: (items, controller, live) => getPluginMarketService().withInstalledOperationIds(items, controller, live),
   },
 });
 registerGhostIpc();
