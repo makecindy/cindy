@@ -304,6 +304,18 @@ export function parsePluginManagementReceipt(value: unknown, operationId: string
 export function pluginApprovalToken(plugin: ManagedPlugin): string {
   return plugin.approval.state === 'approved' ? `approved:${plugin.approval.revision}` : plugin.approval.state;
 }
+/**
+ * The approval token an installed-list row carries now: the computer's `plugins` collection gives each row the revision
+ * `[manifest version, approval token]` (JSON; desktop mobilePageService `revision`). Undefined when the row is not there
+ * or its revision has another shape (nothing is concluded from it then).
+ */
+export function installedApprovalToken(revision: string | undefined): string | undefined {
+  if (!revision) return undefined;
+  try {
+    const value: unknown = JSON.parse(revision);
+    return Array.isArray(value) && value.length === 2 && typeof value[1] === 'string' ? value[1] : undefined;
+  } catch { return undefined; }
+}
 /** Never infer a namespace from a name/prefix. Legacy wire falls back only to the exact physical key. */
 export function marketItemMatchesPlugin(item: Pick<ManagedMarketItem, 'ghostId' | 'namespace'>, plugin: ManagedPlugin): boolean {
   return item.ghostId === plugin.manifest.id && (item.namespace !== undefined && plugin.namespace !== undefined

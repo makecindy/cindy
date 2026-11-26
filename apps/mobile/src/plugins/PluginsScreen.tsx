@@ -80,6 +80,7 @@ import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
 import { PluginNotice, type PluginNoticeProps } from "./PluginNotice";
 import { createPluginManagementClient } from "./pluginManagementClient";
 import {
+  installedApprovalToken,
   marketItemMatchesPlugin,
   pluginApprovalToken,
   samePluginMarketSourceIdentity,
@@ -91,7 +92,7 @@ import {
 } from "./PluginDirectoryView";
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
-import { pluginConclusionListed, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
+import { pluginConclusionListed, retryPluginCheckReadback, tellPluginConclusion, usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
@@ -967,6 +968,14 @@ function PluginDirectory() {
   const openChecked = (operationId: string) => {
     const proven = conclusions.find((item) => item.operationId === operationId);
     if (openedFromList.current || proven?.readback !== "verified" || !proven.instanceKey) return;
+    // The installed list says that instance is another install now (its approval token, same key; maintainer review
+    // 14:25 #1): nothing opens; the record reads it again (no page change when that read comes back).
+    const now = list.items.find((row) => row.host.deviceId === proven.who.deviceId && row.item.ref.id === proven.instanceKey);
+    const token = installedApprovalToken(now?.item.revision);
+    if (token !== undefined && proven.approvalToken !== undefined && token !== proven.approvalToken) {
+      void retryPluginCheckReadback(operationId);
+      return;
+    }
     if (!openInstalled(proven.who, proven.instanceKey)) return;
     openedFromList.current = true;
     tellPluginConclusion(operationId);

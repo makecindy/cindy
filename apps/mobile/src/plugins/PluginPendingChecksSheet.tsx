@@ -8,7 +8,7 @@ import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollO
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import { samePluginSlotHolder, type PluginSlotEntry, type PluginSlotHolder } from "./pluginManagementSlot";
 import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
-import { pluginConclusionSettled, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
+import { pluginConclusionSettled, pluginCheckConclusion, retryPluginCheckReadback, stopPluginConclusion, tellPluginConclusion, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
 export interface PluginOperationLine {
@@ -64,8 +64,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
   // "Open plugin" opens at once what its line shows. A success is a past result (the plugin may have been replaced
   // since), so one proven before the list was opened is read again, once, as the list opens (or as soon as its computer
   // can be read), and its line has no "Open plugin" until that read is back. One proven while the list is open was read
-  // just now. After that the list does not follow the computer: what changes there while the list stays open shows the
-  // next time it is opened.
+  // just now. After that, a plugin change notification from that computer or its coming back online takes "Open plugin"
+  // away and the record reads it again (usePluginManagement `holdPluginConclusionsOn`; maintainer review 14:25 #1).
   const provenBefore = useRef<Set<string> | undefined>(undefined);
   const proven = (item: PluginCheckConclusion) => item.readback === "verified" && !item.told
     && (item.result === "succeeded" || item.result === "installed") && item.entry !== "uninstall";
@@ -80,7 +80,9 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
       provenBefore.current!.delete(operationId);
       // After this commit's effects: the page says whether the computer can be reached in its own effect, which runs
       // after this one. A read issued before that would count as issued while unreachable and, failing, be read twice.
-      queueMicrotask(() => { void retryPluginCheckReadback(operationId); });
+      // A computer that just came back has its proven successes read again already (they are no longer "verified"): no
+      // second read.
+      queueMicrotask(() => { if (pluginCheckConclusion(operationId)?.readback === "verified") void retryPluginCheckReadback(operationId); });
     }
   });
   if (!visible) seen.current.clear();
