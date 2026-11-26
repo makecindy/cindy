@@ -51,7 +51,7 @@ export function AppBadgeAttentionSync() {
     owner: typeof owner;
     count: number;
     sessionIds: string[];
-    mutedUnreadGroups: Map<string, number>;
+    mutedGroupIds: Set<string>;
   } | null>(null);
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
@@ -101,22 +101,17 @@ export function AppBadgeAttentionSync() {
     // 本桶的计数；用它 gate 整次推送会让角标永久停在旧值上(投影响应一次永不再发)。
     if (isLoading || error) return;
     const previous = previousBadge.current?.owner === owner ? previousBadge.current : null;
-    const mutedUnreadGroups = new Map<string, number>();
-    let windowsSilentIncrease = 0;
-    if (isWindows) {
-      for (const group of unreadGroups) {
-        const lastReplyAt = group.lastReplyAt ?? 0;
-        if (group.notificationMode === 'none') {
-          mutedUnreadGroups.set(group.id, lastReplyAt);
-        } else {
-          const mutedAt = previous?.mutedUnreadGroups.get(group.id);
-          // Restoring the same unread should update the badge without alerting again.
-          if (mutedAt !== undefined && lastReplyAt <= mutedAt) windowsSilentIncrease += 1;
-        }
-      }
-    }
-    const badgeCount = count + unreadLocalBots + unreadGroups.length - mutedUnreadGroups.size;
-    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedUnreadGroups };
+    const mutedGroupIds = new Set(
+      isWindows ? groups.filter(group => group.notificationMode === 'none').map(group => group.id) : [],
+    );
+    const badgeGroups = unreadGroups.filter(group => !mutedGroupIds.has(group.id));
+    // List refreshes can combine message arrivals and preference changes.
+    // A newly unmuted group's unread can update the badge but cannot prove a live alert.
+    const windowsSilentIncrease = previous
+      ? badgeGroups.filter(group => previous.mutedGroupIds.has(group.id)).length
+      : 0;
+    const badgeCount = count + unreadLocalBots + badgeGroups.length;
+    const next = { owner, count: badgeCount, sessionIds: catalogSessionIds, mutedGroupIds };
     previousBadge.current = next;
     if (previous?.count === badgeCount && previous.sessionIds === catalogSessionIds) return;
     void window.electronAPI
@@ -132,6 +127,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, unreadLocalBots, unreadGroups, isWindows, isLoading, error, catalogSessionIds, owner]);
+  }, [count, unreadLocalBots, groups, unreadGroups, isWindows, isLoading, error, catalogSessionIds, owner]);
   return null;
 }

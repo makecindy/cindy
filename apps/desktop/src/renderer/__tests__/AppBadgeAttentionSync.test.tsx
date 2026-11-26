@@ -369,10 +369,15 @@ it('keeps muted group unread in navigation without adding it to the Windows task
   }));
 
   botState.groups = [{ ...group, notificationMode: 'none' }];
+  botState.unreadGroups.clear();
   view.rerender(<AppBadgeAttentionSync />);
+
+  // A single refresh can include unread that arrived during mute and the unmute.
   botState.groups = [{ ...group, lastReplyAt: 200 }];
+  botState.unreadGroups.add(group.id);
   view.rerender(<AppBadgeAttentionSync />);
-  const latest = state.publish.mock.lastCall?.[0];
-  expect(latest).toEqual(expect.objectContaining({ count: 4 }));
-  expect(latest).not.toHaveProperty('windowsSilentIncrease');
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+    count: 4,
+    windowsSilentIncrease: 1,
+  }));
 });
