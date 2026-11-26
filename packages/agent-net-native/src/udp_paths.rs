@@ -138,6 +138,12 @@ impl Stun {
         for address in self.servers.iter().filter_map(|server| server.mapped) { if !found.contains(&address) { found.push(address); } }
         found
     }
+
+    /// Raw per-server STUN observations without deduplication, so JS NAT classification can distinguish
+    /// multiple servers agreeing on the same address (`cone`) from a single STUN response (`single-server`).
+    pub(crate) fn observations(&self) -> Vec<SocketAddr> {
+        self.servers.iter().filter_map(|server| server.mapped).collect()
+    }
 }
 
 fn parse_mapped(message: &[u8]) -> Option<SocketAddr> {
@@ -1125,5 +1131,53 @@ mod tests {
         assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
         drain(&mut relay, now, &mut last);
         assert!(last.0 >= 4 && last.1 >= 2 && last.2 == 2);
+    }
+
+    // Regression (2026-11-27): `Stun::mapped()` deduplicates identical external addresses for candidate announcements,
+    // while `Stun::observations()` must retain every server's response so NAT diagnostics distinguish `cone` from `single-server`.
+    #[test]
+    fn stun_observations_preserve_duplicate_server_answers_for_cone_nat() {
+        let s1 = UdpSocket::bind("127.0.0.1:0").expect("bind stun1");
+        let s2 = UdpSocket::bind("127.0.0.1:0").expect("bind stun2");
+        let a1 = s1.local_addr().expect("addr1");
+        let a2 = s2.local_addr().expect("addr2");
+        let client_raw = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+        client_raw.set_nonblocking(true).expect("nonblocking");
+        let client_sock = Udp::new(client_raw);
+
+        let mut stun = Stun::new(&[(a1.ip().to_string(), a1.port()), (a2.ip().to_string(), a2.port())]);
+        let mut seq = 1u8;
+        let mut next_tx = || { let id = [seq; 12]; seq += 1; id };
+        for _ in 0..20 {
+            stun.tick(1_000_000, &client_sock, &mut next_tx);
+            if stun.servers.iter().all(|s| s.transaction.is_some()) { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(stun.servers.iter().all(|s| s.transaction.is_some()), "both STUN requests should be sent");
+
+        // Build RFC 5389 XOR-MAPPED-ADDRESS success responses returning the exact same external IP:port from both servers.
+        let make_response = |tx: [u8; 12], ip: [u8; 4], port: u16| -> Vec<u8> {
+            let mut msg = vec![0u8; 32];
+            msg[0..2].copy_from_slice(&BINDING_SUCCESS.to_be_bytes());
+            msg[2..4].copy_from_slice(&12u16.to_be_bytes());
+            msg[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
+            msg[8..20].copy_from_slice(&tx);
+            msg[20..22].copy_from_slice(&XOR_MAPPED_ADDRESS.to_be_bytes());
+            msg[22..24].copy_from_slice(&8u16.to_be_bytes());
+            msg[25] = 0x01; // IPv4
+            let xport = port ^ ((MAGIC_COOKIE >> 16) as u16);
+            let xip = u32::from_be_bytes(ip) ^ MAGIC_COOKIE;
+            msg[26..28].copy_from_slice(&xport.to_be_bytes());
+            msg[28..32].copy_from_slice(&xip.to_be_bytes());
+            msg
+        };
+        let tx1 = stun.servers[0].transaction.unwrap();
+        let tx2 = stun.servers[1].transaction.unwrap();
+        assert!(stun.intercept(&make_response(tx1, [161, 29, 200, 234], 54520)));
+        assert!(stun.intercept(&make_response(tx2, [161, 29, 200, 234], 54520)));
+
+        let expected: SocketAddr = "161.29.200.234:54520".parse().unwrap();
+        assert_eq!(stun.mapped(), vec![expected]);
+        assert_eq!(stun.observations(), vec![expected, expected]);
     }
 }

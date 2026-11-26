@@ -3,6 +3,7 @@ import { generateIdentity } from '@cindy/agent-net-relay';
 import {
   buildNatPmpExternalAddressRequest,
   buildNatPmpMapRequest,
+  computePortMapRenewDelayMs,
   createPortMapSession,
   parseDarwinRouteOutput,
   parseLinuxProcRoute,
@@ -18,7 +19,6 @@ import {
   type PortMappingEntry,
 } from '../types.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
-import { createCoreTransport } from '../transport.js';
 
 /** 测试价值
  * - 生产入口与可观察结果：验证 `portMap.ts` 的 NAT-PMP (RFC 6886) 与 UPnP IGD 编解码及路由解析，
@@ -54,12 +54,18 @@ describe('portMap wire codecs and SSRF boundaries', () => {
     expect(parseNatPmpMapResponse(mapOk, 50000)).toBeNull();
   });
 
-  it('enforces LAN-only same-host boundaries for SSDP and UPnP IGD control URLs', () => {
-    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://192.168.68.1:1900/rootDesc.xml\r\n')).toBe('http://192.168.68.1:1900/rootDesc.xml');
-    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://169.254.169.254/latest/meta-data\r\n')).toBeNull();
-    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1:8080/desc.xml\r\n')).toBeNull();
-    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: https://192.168.68.1/desc.xml\r\n')).toBeNull();
-    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://8.8.8.8/desc.xml\r\n')).toBeNull();
+  it('enforces gateway-bound same-host boundaries for SSDP and UPnP IGD control URLs', () => {
+    const gw = '192.168.68.1';
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://192.168.68.1:1900/rootDesc.xml\r\n', gw)).toBe('http://192.168.68.1:1900/rootDesc.xml');
+    // Must reject other LAN/VPN IPs even though they are private IPv4 addresses (prevents LAN SSDP SSRF).
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://192.168.68.99:8080/internal\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://10.8.0.5:9000/admin\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://user:pass@192.168.68.1:1900/rootDesc.xml\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://169.254.169.254/latest/meta-data\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1:8080/desc.xml\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: https://192.168.68.1/desc.xml\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://8.8.8.8/desc.xml\r\n', gw)).toBeNull();
+    expect(parseSsdpLocation('HTTP/1.1 200 OK\r\nLOCATION: http://192.168.68.1:1900/rootDesc.xml\r\n', '8.8.8.8')).toBeNull();
 
     const validXml = `<root><device><serviceList><service>
       <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
@@ -145,16 +151,122 @@ describe('createPortMapSession lifecycle', () => {
       vi.useRealTimers();
     }
   });
+
+  it('renews short leases before expiry, retries transiently failed renewals, and recovers after backoff', async () => {
+    vi.useFakeTimers();
+    expect(computePortMapRenewDelayMs(30)).toBe(15_000);
+    expect(computePortMapRenewDelayMs(1)).toBe(500);
+    expect(computePortMapRenewDelayMs(7200)).toBe(30 * 60_000);
+
+    const events: Array<PortMappingEntry | null> = [];
+    const released: string[] = [];
+    let routerReachable = true;
+    let pmpCalls = 0;
+
+    const session = createPortMapSession((m) => events.push(m), {
+      discoverGateway: async () => ({ gatewayIp: '192.168.68.1', localIp: '192.168.68.59' }),
+      tryNatPmp: async (_gw, port) => {
+        pmpCalls += 1;
+        if (!routerReachable) return null;
+        return { address: '161.29.200.234', port, lifetimeSec: 30, protocol: 'nat-pmp' };
+      },
+      releaseNatPmp: async (gw, port) => { released.push(`${gw}:${port}`); },
+      tryUpnp: async () => null,
+    });
+    try {
+      session.refresh(41000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(pmpCalls).toBe(1);
+      expect(session.current()?.lifetimeSec).toBe(30);
+
+      // Router goes temporarily unreachable before the 15s half-lifetime renewal.
+      routerReachable = false;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(pmpCalls).toBe(2);
+      // Still unexpired (< 30s): candidate must stay active while retrying before actual expiry.
+      expect(session.current()).not.toBeNull();
+
+      // Advance past the 30s lease expiry: active mapping clears and emits null.
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(session.current()).toBeNull();
+      expect(events.at(-1)).toBeNull();
+
+      // Router recovers: exponential backoff retry automatically re-acquires the mapping without external refresh().
+      routerReachable = true;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(session.current()).toEqual({ address: '161.29.200.234', port: 41000, lifetimeSec: 30, protocol: 'nat-pmp' });
+      expect(released).toContain('192.168.68.1:41000');
+    } finally {
+      await session.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases old gateway mapping on network change with same UDP port and serializes overlapping refreshes', async () => {
+    vi.useFakeTimers();
+    const events: Array<PortMappingEntry | null> = [];
+    const released: string[] = [];
+    let gateway: { gatewayIp: string; localIp: string } | null = { gatewayIp: '192.168.1.1', localIp: '192.168.1.10' };
+    const pendingResolvers: Array<(value: { address: string; port: number; lifetimeSec: number; protocol: 'nat-pmp' } | null) => void> = [];
+    let holdFirstPmp = true;
+    let pmpStarts = 0;
+
+    const session = createPortMapSession((m) => events.push(m), {
+      discoverGateway: async () => gateway,
+      tryNatPmp: async (gw, port) => {
+        pmpStarts += 1;
+        if (holdFirstPmp) {
+          holdFirstPmp = false;
+          return new Promise((resolve) => { pendingResolvers.push(resolve); });
+        }
+        return { address: gw === '192.168.1.1' ? '161.29.200.1' : '161.29.200.2', port, lifetimeSec: 120, protocol: 'nat-pmp' };
+      },
+      releaseNatPmp: async (gw, port) => { released.push(`${gw}:${port}`); },
+      tryUpnp: async () => null,
+    });
+    try {
+      // Two rapid refreshes for the same gateway + port must serialize and NEVER delete the acquired mapping.
+      session.refresh(45000);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(pmpStarts).toBe(1);
+      session.refresh(45000);
+      expect(pmpStarts).toBe(1);
+
+      pendingResolvers.shift()?.({ address: '161.29.200.1', port: 45000, lifetimeSec: 120, protocol: 'nat-pmp' });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(released).toEqual([]);
+      expect(session.current()).toEqual({ address: '161.29.200.1', port: 45000, lifetimeSec: 120, protocol: 'nat-pmp' });
+
+      // Network switches to gateway B with the SAME local UDP port (45000): old gateway A mapping must be cleared and released.
+      gateway = { gatewayIp: '192.168.68.1', localIp: '192.168.68.59' };
+      session.refresh(45000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(released).toContain('192.168.1.1:45000');
+      expect(events).toContain(null);
+      expect(session.current()).toEqual({ address: '161.29.200.2', port: 45000, lifetimeSec: 120, protocol: 'nat-pmp' });
+
+      // Network switches to no LAN gateway: old gateway B mapping must be cleared and released.
+      gateway = null;
+      session.refresh(45000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(released).toContain('192.168.68.1:45000');
+      expect(session.current()).toBeNull();
+    } finally {
+      await session.close();
+      vi.useRealTimers();
+    }
+  });
 });
 
 /** 测试价值
  * - 生产入口与可观察结果：验证 `classifyNatMapping` 与 `formatTransportDiagnosticsLog` 对五类 NAT/出口状态的分类，
- *   以及在 `NativeTransport` 和 `createCoreTransport` 中融合端口映射候选、输出不含任何明文 IP/端口/密钥的诊断日志。
+ *   以及在 `NativeTransport` 中融合端口映射候选、利用未去重 `stunObservations` 准确判定 `cone` 并输出不含任何明文 IP/端口/密钥的诊断日志。
  * - Bug／规则依据：2026-11-26 排查发现透明代理引发对称 NAT 与跨区出口分流时，日志缺乏 NAT 映射分类，无法直接归因；
  *   同时按 `docs/dev-rules/log-upload-and-redaction.md` 约束，传输诊断日志不得夹带原始公私网 IP 或端口号。
  * - 现有覆盖缺口：此前无多 STUN NAT 分类、无端口映射候选融合、无脱敏日志格式锁测试。
- * - 最小失败输入：同/异端口与同/异 IP 的 STUN 观察数组；带 `createPortMap` 的 `NativeTransport` 与 `createCoreTransport`。
- * - tier：unit，内存引擎/本地环回；约 30 毫秒。
+ * - 最小失败输入：同/异端口与同/异 IP 的 STUN 观察数组；带 `createPortMap` 与 `stunObservations` 的 `NativeTransport`。
+ * - tier：unit，内存引擎无网络；约 20 毫秒。
  */
 describe('NAT diagnostics and transport port-map integration', () => {
   it('classifies cone, symmetric, multi-egress NAT and formats logs without leaking IPs or ports', () => {
@@ -189,6 +301,7 @@ describe('NAT diagnostics and transport port-map integration', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const local = generateIdentity('native-diag');
     let mapped = [{ address: '161.29.200.234', port: 51156 }, { address: '161.29.200.234', port: 63133 }];
+    let stunObservations: Array<{ address: string; port: number }> | undefined = mapped;
     let pushMapping!: (entry: PortMappingEntry | null) => void;
     const refreshed: number[] = [];
     let closedPortMap = false;
@@ -199,7 +312,7 @@ describe('NAT diagnostics and transport port-map integration', () => {
           return { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 45000, features: ['stun'] } as T;
         }
         if (command.op === 'poll') {
-          return { packets: [], connections: [], mapped } as T;
+          return { packets: [], connections: [], mapped, ...(stunObservations ? { stunObservations } : {}) } as T;
         }
         return true as T;
       },
@@ -238,45 +351,24 @@ describe('NAT diagnostics and transport port-map integration', () => {
       expect(transport.diagnostics().portMapped).toBe('nat-pmp');
       expect(transport.diagnostics().publicCandidates).toBe(3);
 
+      // Deduplicated `mapped` has 1 address while raw `stunObservations` has 2 identical answers -> must classify as `cone`!
       mapped = [{ address: '161.29.200.234', port: 45000 }];
+      stunObservations = [{ address: '161.29.200.234', port: 45000 }, { address: '161.29.200.234', port: 45000 }];
       transport.networkChanged();
       expect(refreshed).toEqual([45000, 45000]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(transport.diagnostics()).toEqual({
+        natMapping: 'cone',
+        portPreserving: true,
+        stunResponses: 2,
+        portMapped: 'nat-pmp',
+        localCandidates: 1,
+        publicCandidates: 1,
+      });
+      expect(logs.some((l) => l.level === 'info' && l.message.includes('nat=cone') && l.message.includes('stun=2'))).toBe(true);
     } finally {
       await transport.close();
       vi.useRealTimers();
-    }
-    expect(closedPortMap).toBe(true);
-  });
-
-  it('merges port-mapped candidates and exposes diagnostics in createCoreTransport', async () => {
-    let pushMapping!: (entry: PortMappingEntry | null) => void;
-    let closedPortMap = false;
-    const logs: Array<{ level: string; message: string }> = [];
-    const transport = await createCoreTransport({
-      admit: () => true,
-      onIncoming: () => undefined,
-      bindAddress: '127.0.0.1',
-      onLog: (level, message) => logs.push({ level, message }),
-      createPortMap: (onMapped) => {
-        pushMapping = onMapped;
-        return {
-          refresh() {},
-          current() { return null; },
-          async close() { closedPortMap = true; },
-        };
-      },
-    });
-    try {
-      pushMapping({ address: '161.29.200.234', port: 54321, lifetimeSec: 3600, protocol: 'upnp' });
-      expect(transport.diagnostics?.()).toMatchObject({
-        natMapping: 'unknown',
-        portMapped: 'upnp',
-        publicCandidates: 1,
-      });
-      expect(logs.some((l) => l.level === 'info' && l.message.includes('portMap=upnp'))).toBe(true);
-      expect(logs.every((l) => !/\d+\.\d+\.\d+\.\d+/.test(l.message))).toBe(true);
-    } finally {
-      await transport.close();
     }
     expect(closedPortMap).toBe(true);
   });

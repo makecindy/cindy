@@ -608,13 +608,15 @@ fn rotating_ids_survive_random_moves() {
     }
 }
 
-/// 测试价值（小 MTU 直连路径自动降档探测）：
+/// 测试价值（小 MTU 直连路径自动降档探测与双向传输）：
 /// - 生产入口与可观察结果：`SecureConnection::probe_path` 与 `poll_transmit_via` 在直连路径丢弃 > 1200 字节 UDP 包时，
-///   前两次满长（1309 B）探测失败后第 3 次自动降档到 `SMALL_MTU_PROBE_LEN`（1180 B）验证通过，切到直连并将活跃路径发包上限
-///   收窄至 1180 B 完成 64 KiB 数据传输；再切到全 MTU 路径时恢复 1309 B。若切换瞬间发送队列仍有未确认的超长分片，先留作备用
-///   不卡死重传，待确认清空后再次探测可顺利切换。
-/// - Bug／规则依据：跨 PPPoE/IPv6/VPN 隧道直连时，1309 B 验证包被静默黑洞会导致整条直连永远打不通并卡死在中转。
-/// - 现有覆盖缺口：已有迁移测试的链路均放行完整 `send_packet_size`，未覆盖小 MTU 直连路径黑洞与活跃发包上限收窄/恢复。
+///   主动端前两次满长（1309 B）探测失败后第 3 次自动降档到 `SMALL_MTU_PROBE_LEN`（1180 B）验证通过并收窄活跃发包上限；
+///   随后主动端经新路径发送短包触发跟随端受放大额度限制的短验证（< 1180 B），跟随端收到 1180 B 回复后同样收窄到 1180 B
+///   （不把短验证误当满长证明），两端在 1200 B 路径上双向各完成 64 KiB 数据传输；再切到全 MTU 路径时双端恢复 1309 B。
+///   若切换瞬间发送队列仍有未确认的超长分片，先留作备用不卡死重传，待确认清空后再次探测可顺利切换。
+/// - Bug／规则依据：跨 PPPoE/IPv6/VPN 隧道直连时，1309 B 验证包被静默黑洞会导致直连打不通；若跟随端把受放大限制的短验证
+///   当成 1309 B 满长证明，反向大包仍会在 1200 B 路径上被持续丢弃。
+/// - 现有覆盖缺口：已有迁移测试的链路均放行完整 `send_packet_size`，未覆盖小 MTU 直连路径黑洞、跟随端短验证与双向发包上限收窄/恢复。
 /// - 最小失败输入：中转路径 0（全 MTU，cost 1）+ 直连路径 1（硬上限 1200 B，cost 0）+ 直连路径 2（全 MTU，cost 0）。
 /// - tier：Rust integration，虚拟时间，无真实网络。
 #[test]
@@ -630,16 +632,18 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
     let mut out = [0u8; 2048];
     let mut now = 0u64;
 
-    let mut step = |now: u64, client: &mut SecureConnection<TestCrypto<AesGcm>>, server: &mut Option<SecureConnection<TestCrypto<AesGcm>>>, max_on_path1: usize, drop_path0: bool| -> (Vec<usize>, Vec<u8>) {
-        let mut path1_sizes = Vec::new();
-        let mut delivered = Vec::new();
+    let mut step = |now: u64, client: &mut SecureConnection<TestCrypto<AesGcm>>, server: &mut Option<SecureConnection<TestCrypto<AesGcm>>>, max_on_path1: usize, drop_path0: bool| -> (Vec<usize>, Vec<usize>, Vec<u8>, Vec<u8>) {
+        let mut client_path1_sizes = Vec::new();
+        let mut server_path1_sizes = Vec::new();
+        let mut server_delivered = Vec::new();
+        let mut client_delivered = Vec::new();
         let mut buf = [0u8; 2048];
         for _ in 0..32 {
             let mut moved = false;
             while let Some((n, path)) = client.poll_transmit_via(now, &mut out) {
                 moved = true;
                 if path == 1 {
-                    path1_sizes.push(n);
+                    client_path1_sizes.push(n);
                     if n > max_on_path1 {
                         continue;
                     }
@@ -660,8 +664,11 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
             if let Some(srv) = server.as_mut() {
                 while let Some((n, path)) = srv.poll_transmit_via(now, &mut out) {
                     moved = true;
-                    if path == 1 && n > max_on_path1 {
-                        continue;
+                    if path == 1 {
+                        server_path1_sizes.push(n);
+                        if n > max_on_path1 {
+                            continue;
+                        }
                     }
                     if path == 0 && drop_path0 {
                         continue;
@@ -671,12 +678,17 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
                 loop {
                     let got = srv.recv(now, &mut buf);
                     if got == 0 { break; }
-                    delivered.extend_from_slice(&buf[..got]);
+                    server_delivered.extend_from_slice(&buf[..got]);
                 }
+            }
+            loop {
+                let got = client.recv(now, &mut buf);
+                if got == 0 { break; }
+                client_delivered.extend_from_slice(&buf[..got]);
             }
             if !moved { break; }
         }
-        (path1_sizes, delivered)
+        (client_path1_sizes, server_path1_sizes, server_delivered, client_delivered)
     };
 
     client.set_path_cost(0, 1);
@@ -689,13 +701,14 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
     }
     assert_eq!(client.path(), 0);
     assert_eq!(client.active_send_packet_size(), 1309);
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), 1309);
 
     // Probe direct path 1 whose MTU ceiling is 1200 bytes: first two 1309B probes drop, third steps down to 1180B and succeeds.
     assert!(client.probe_path(now, 1));
     let mut saw_full_probe = false;
     let mut saw_small_probe = false;
     while client.path() != 1 {
-        let (sizes, _) = step(now, &mut client, &mut server, 1200, false);
+        let (sizes, _, _, _) = step(now, &mut client, &mut server, 1200, false);
         for s in sizes {
             if s == 1309 { saw_full_probe = true; }
             if s == agent_net_core::SMALL_MTU_PROBE_LEN { saw_small_probe = true; }
@@ -708,7 +721,46 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
     assert!(saw_full_probe && saw_small_probe, "expected full-size attempts before stepping down");
     assert_eq!(client.active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
 
-    // Transfer 64 KiB over the 1200B-MTU direct path; every emitted packet on path 1 must stay <= 1180B.
+    // Trigger follower migration with a tiny packet so server's first passive challenge is amplification-limited (< 1180B).
+    // Server must NOT treat that short challenge + 1180B response as proof of 1309B MTU; it must clamp to 1180B as well.
+    let ping_payload = b"short-follow-trigger";
+    assert_eq!(client.send(now, ping_payload), ping_payload.len());
+    let mut short_received = Vec::new();
+    let mut saw_short_follower_challenge = false;
+    while server.as_ref().unwrap().path() != 1 || short_received.len() < ping_payload.len() {
+        let (_, srv_sizes, got, _) = step(now, &mut client, &mut server, 1200, false);
+        if srv_sizes.iter().any(|&s| s < agent_net_core::SMALL_MTU_PROBE_LEN) {
+            saw_short_follower_challenge = true;
+        }
+        short_received.extend_from_slice(&got);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 6_000_000, "follower did not migrate to small-MTU path 1");
+    }
+    assert_eq!(short_received, ping_payload);
+    assert!(saw_short_follower_challenge, "expected follower to send an amplification-limited short challenge");
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
+
+    // Reverse bulk transfer (server -> client, 64 KiB) over the 1200B-MTU direct path: every server packet must stay <= 1180B.
+    let reverse_payload: Vec<u8> = (0..65_536).map(|i| ((i * 7 + 13) % 251) as u8).collect();
+    let mut reverse_sent = 0usize;
+    let mut reverse_received = Vec::new();
+    while reverse_received.len() < reverse_payload.len() {
+        if reverse_sent < reverse_payload.len() {
+            reverse_sent += server.as_mut().unwrap().send(now, &reverse_payload[reverse_sent..]);
+        }
+        let (_, srv_sizes, _, got_client) = step(now, &mut client, &mut server, 1200, false);
+        assert!(srv_sizes.iter().all(|&s| s <= agent_net_core::SMALL_MTU_PROBE_LEN), "oversized follower packet on clamped path: {srv_sizes:?}");
+        reverse_received.extend_from_slice(&got_client);
+        now += 5_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 12_000_000, "reverse transfer stalled on small-MTU path: got {}/{}", reverse_received.len(), reverse_payload.len());
+    }
+    assert_eq!(reverse_received, reverse_payload);
+
+    // Forward bulk transfer (client -> server, 64 KiB) over the 1200B-MTU direct path; every emitted packet on path 1 must stay <= 1180B.
     let payload: Vec<u8> = (0..65_536).map(|i| (i % 251) as u8).collect();
     let mut sent = 0usize;
     let mut received = Vec::new();
@@ -716,26 +768,39 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
         if sent < payload.len() {
             sent += client.send(now, &payload[sent..]);
         }
-        let (sizes, got) = step(now, &mut client, &mut server, 1200, false);
+        let (sizes, _, got, _) = step(now, &mut client, &mut server, 1200, false);
         assert!(sizes.iter().all(|&s| s <= agent_net_core::SMALL_MTU_PROBE_LEN), "oversized packet on clamped path: {sizes:?}");
         received.extend_from_slice(&got);
         now += 5_000;
         client.tick(now);
         server.as_mut().unwrap().tick(now);
-        assert!(now < 10_000_000, "transfer stalled on small-MTU path: got {}/{}", received.len(), payload.len());
+        assert!(now < 18_000_000, "transfer stalled on small-MTU path: got {}/{}", received.len(), payload.len());
     }
     assert_eq!(received, payload);
 
-    // Probing a full-MTU direct path (path 2) restores active_send_packet_size back to 1309.
+    // Probing a full-MTU direct path (path 2) restores active_send_packet_size back to 1309 on BOTH client and follower.
     assert!(client.probe_path(now, 2));
     while client.path() != 2 {
         step(now, &mut client, &mut server, 1200, false);
         now += 10_000;
         client.tick(now);
         server.as_mut().unwrap().tick(now);
-        assert!(now < 12_000_000, "full-MTU path 2 did not validate");
+        assert!(now < 20_000_000, "full-MTU path 2 did not validate");
     }
     assert_eq!(client.active_send_packet_size(), 1309);
+    let follow_full = b"back-to-full-mtu";
+    assert_eq!(client.send(now, follow_full), follow_full.len());
+    let mut full_received = Vec::new();
+    while server.as_ref().unwrap().path() != 2 || full_received.len() < follow_full.len() {
+        let (_, _, got, _) = step(now, &mut client, &mut server, 1200, false);
+        full_received.extend_from_slice(&got);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 22_000_000, "follower did not migrate to full-MTU path 2");
+    }
+    assert_eq!(full_received, follow_full);
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), 1309);
 
     // Queue an oversized segment (> 1180B) on full-MTU path 2 and drop path 2 packets so it remains unacked while probing
     // small-MTU path 1: switch must defer instead of livelocking, and succeed cleanly once path 2 drains.
@@ -775,12 +840,12 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
     // Drain path 2 so oversized segments finish acking, then re-probe path 1 -> switches cleanly to 1180B.
     let mut drained = Vec::new();
     while drained.len() < big.len() {
-        let (_, got) = step(now, &mut client, &mut server, 1200, false);
+        let (_, _, got, _) = step(now, &mut client, &mut server, 1200, false);
         drained.extend_from_slice(&got);
         now += 10_000;
         client.tick(now);
         server.as_mut().unwrap().tick(now);
-        assert!(now < 16_000_000, "failed to drain oversized segment: got {}/{}", drained.len(), big.len());
+        assert!(now < 28_000_000, "failed to drain oversized segment: got {}/{}", drained.len(), big.len());
     }
     assert_eq!(drained, big);
     // Allow ack to settle back to client.
@@ -796,7 +861,7 @@ fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
         now += 20_000;
         client.tick(now);
         server.as_mut().unwrap().tick(now);
-        assert!(now < 20_000_000, "path 1 did not switch after drain");
+        assert!(now < 32_000_000, "path 1 did not switch after drain");
     }
     assert_eq!(client.active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
 }

@@ -419,6 +419,7 @@ impl NativeEngine {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.relay_udp.as_ref().is_some_and(|relay| relay.up(self.now)).hash(&mut hasher);
         self.stun.as_ref().map(Stun::mapped).unwrap_or_default().hash(&mut hasher);
+        self.stun.as_ref().map(Stun::observations).unwrap_or_default().hash(&mut hasher);
         for id in self.endpoint.ids().take(MAX_CONNECTIONS) {
             let Some(connection) = self.endpoint.connection(id) else { continue; };
             (id, connection.is_established(), connection.is_dead(), connection.closed_by_peer()).hash(&mut hasher);
@@ -584,7 +585,10 @@ impl NativeEngine {
         self.local_streams.retain(|id,_| live.contains(id));
         let mapped: Vec<Value> = self.stun.as_ref().map(Stun::mapped).unwrap_or_default().into_iter()
             .map(|address| json!({"address":address.ip().to_string(),"port":address.port()})).collect();
+        let stun_observations: Vec<Value> = self.stun.as_ref().map(Stun::observations).unwrap_or_default().into_iter()
+            .map(|address| json!({"address":address.ip().to_string(),"port":address.port()})).collect();
         json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
+            "stunObservations":stun_observations,
             "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now)),
             "relayRoute":self.relay_udp.as_ref().map(|relay| relay.route(now)),
             "udpTraffic":self.udp.as_ref().map(Udp::traffic)})
@@ -636,7 +640,7 @@ fn has_work(result: &Value) -> bool {
 /// The part of a result the application acts on without any data arriving: which connections exist, whether each is
 /// established or gone and over which path, relay UDP and the mapped addresses. Counters and round trips are left out.
 fn signature(result: &Value) -> String {
-    let mut text = format!("{}|{}", result["relayUdp"], result["mapped"]);
+    let mut text = format!("{}|{}|{}", result["relayUdp"], result["mapped"], result["stunObservations"]);
     for c in result["connections"].as_array().into_iter().flatten() {
         text.push_str(&format!("|{}:{}:{}:{}:{}", c["id"], c["established"], c["dead"], c["closedByPeer"], c["path"]));
     }

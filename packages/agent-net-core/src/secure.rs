@@ -744,7 +744,7 @@ impl Paths {
         if challenge_index < candidate.sent_at.len() {
             candidate.sent_at[challenge_index] = now_us;
             candidate.sent_size[challenge_index] = size;
-            candidate.stepped_down[challenge_index] = step_down && size == SMALL_MTU_PROBE_LEN;
+            candidate.stepped_down[challenge_index] = step_down;
         }
         candidate.due_at = now_us + (candidate.interval_us << candidate.challenges);
         candidate.challenges += 1;
@@ -752,13 +752,18 @@ impl Paths {
     }
 
     /// 对端回了验证：返回是哪一条正在验证的路径发出的值、是否只换了端口、是不是这一端自己要验证的、是否允许换过去，
-    /// 以及若通过的是降档后的小 MTU 探测包则返回对应的收窄发包上限；不是任何一条的值时返回 `None`。同时记录这次探测测得的往返时间。
-    fn on_response(&mut self, now_us: u64, value: u64) -> Option<(u64, bool, bool, bool, Option<usize>)> {
+    /// 以及若未能证明路径支持满长 `full_limit`（例如主动降档到小 MTU，或受放大限制发出的短验证仅收到非满长回复）则返回收窄后的发包上限；
+    /// 不是任何一条的值时返回 `None`。同时记录这次探测测得的往返时间。
+    fn on_response(&mut self, now_us: u64, value: u64, response_size: usize, full_limit: usize) -> Option<(u64, bool, bool, bool, Option<usize>)> {
         let candidate = self.candidates.iter().find(|candidate| (candidate.first..candidate.first + candidate.challenges as u64).contains(&value))?;
         let offset = (value - candidate.first) as usize;
         let rtt_us = candidate.sent_at.get(offset).copied().map(|sent| now_us.saturating_sub(sent)).unwrap_or(0);
-        let reduced_limit = candidate.stepped_down.get(offset).copied().unwrap_or(false)
-            .then(|| candidate.sent_size.get(offset).copied().unwrap_or(SMALL_MTU_PROBE_LEN));
+        let stepped_down = candidate.stepped_down.get(offset).copied().unwrap_or(false);
+        let sent_size = candidate.sent_size.get(offset).copied().unwrap_or(0);
+        // 满长发送能力仅在未降档且（本端发出了满长验证，或跟随端受放大限制时对端在活跃路径上回了满长回复）时成立。
+        // 主动端已降档到 1180 B 时，它回给跟随端的验证回复同样受限在 1180 B，跟随端不得把短验证误当成 1309 B 满长证明。
+        let full_proven = !stepped_down && (sent_size >= full_limit || (!candidate.proactive && response_size >= full_limit));
+        let reduced_limit = (!full_proven && full_limit > SMALL_MTU_PROBE_LEN).then_some(SMALL_MTU_PROBE_LEN);
         let result = (candidate.path, candidate.same_route, candidate.proactive, candidate.switch_on_pass, reduced_limit);
         if self.probe_rtts.len() == MAX_PROBE_RTTS {
             self.probe_rtts.pop_front();
@@ -1378,7 +1383,7 @@ impl<C: Crypto> SecureConnection<C> {
                 // 验证期间的确认又都发往了旧端口。真换了网络时不补：自己知道换了网络的对端已经重来，补的确认只确认旧路径上的包，
                 // 2026-11-05 模拟里这时上传反而慢 2%、双向慢 3%。
                 // 这一端自己要验证的路径比数据路径贵、数据路径又还好好的：留作备用，不换。
-                let Some((path, same_route, proactive, switch_on_pass, reduced_limit)) = self.paths.on_response(now_us, value) else { return };
+                let Some((path, same_route, proactive, switch_on_pass, reduced_limit)) = self.paths.on_response(now_us, value, size, self.config.send_limit()) else { return };
                 if !switch_on_pass {
                     self.paths.keep_alternate(path);
                     self.stats.alternates_kept += 1;

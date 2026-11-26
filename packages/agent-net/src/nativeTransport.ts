@@ -40,7 +40,10 @@ interface NativeState {
   probeRtts?: [Address | { link: number }, number][];
 }
 interface Poll {
-  packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[]; relayUdp?: boolean;
+  packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[];
+  /** Per-server STUN observations without deduplication (so NAT classification distinguishes cone vs single-server). */
+  stunObservations?: Address[];
+  relayUdp?: boolean;
   /** `relay-udp-health` builds: how relayed datagrams go and why (engine.rs `read`, udp_paths.rs `route`). */
   relayRoute?: RelayRoute | null;
   /** `relay-udp-health` builds: bytes sent and received on the engine's UDP socket so far. */
@@ -231,6 +234,7 @@ export class NativeTransport implements Transport {
   private readonly features: Set<string>;
   private localAddresses: string[];
   private mapped: Address[] = [];
+  private stunObservations: Address[] | null = null;
   private portMapped: PortMappingEntry | null = null;
   private readonly portMapper: PortMapController | null = null;
   private lastLoggedDiagnostics = '';
@@ -349,7 +353,8 @@ export class NativeTransport implements Transport {
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES);
   }
   diagnostics(): TransportDiagnostics {
-    const { natMapping, portPreserving } = classifyNatMapping(this.mapped, this.identity.udpPort);
+    const observations = this.stunObservations ?? this.mapped;
+    const { natMapping, portPreserving } = classifyNatMapping(observations, this.identity.udpPort);
     let localCandidates = 0;
     let publicCandidates = 0;
     for (const candidate of this.candidateList) {
@@ -359,14 +364,15 @@ export class NativeTransport implements Transport {
     return {
       natMapping,
       portPreserving,
-      stunResponses: this.mapped.length,
+      stunResponses: observations.length,
       portMapped: this.portMapped?.protocol ?? null,
       localCandidates,
       publicCandidates,
     };
   }
   private maybeLogDiagnostics(): void {
-    if (!this.options.onLog || (!this.mapped.length && !this.portMapped)) return;
+    const hasStun = (this.stunObservations ?? this.mapped).length > 0;
+    if (!this.options.onLog || (!hasStun && !this.portMapped)) return;
     const snapshot = this.diagnostics();
     const line = formatTransportDiagnosticsLog(snapshot);
     if (line === this.lastLoggedDiagnostics) return;
@@ -792,11 +798,25 @@ export class NativeTransport implements Transport {
     if (traffic && Array.isArray(result.udpTraffic) && result.udpTraffic.every(value => Number.isSafeInteger(value) && value >= 0)) {
       Atomics.store(traffic, 0, BigInt(result.udpTraffic[0])); Atomics.store(traffic, 1, BigInt(result.udpTraffic[1]));
     }
-    if (Array.isArray(result.mapped)) {
-      const mapped = result.mapped.filter(value => value && typeof value.address === 'string' && value.address.length <= 128
-        && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
-      if (JSON.stringify(mapped) !== JSON.stringify(this.mapped)) { this.mapped = mapped; this.updateCandidates(); }
+    const readAddresses = (raw: Address[]): Address[] => raw.filter(value => value && typeof value.address === 'string'
+      && value.address.length <= 128 && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
+    let diagnosticsChanged = false;
+    if (Array.isArray(result.stunObservations)) {
+      const observations = readAddresses(result.stunObservations);
+      if (JSON.stringify(observations) !== JSON.stringify(this.stunObservations)) {
+        this.stunObservations = observations;
+        diagnosticsChanged = true;
+      }
     }
+    if (Array.isArray(result.mapped)) {
+      const mapped = readAddresses(result.mapped);
+      if (JSON.stringify(mapped) !== JSON.stringify(this.mapped)) {
+        this.mapped = mapped;
+        this.updateCandidates();
+        diagnosticsChanged = false;
+      }
+    }
+    if (diagnosticsChanged) this.maybeLogDiagnostics();
     const alive = new Set(result.connections.map(connection => connection.id));
     for (const id of this.remoteKeys.keys()) if (!alive.has(id)) this.remoteKeys.delete(id);
     for (const state of result.connections) {
