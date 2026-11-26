@@ -25,6 +25,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type RefObject,
@@ -104,6 +105,11 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
   const [preview, setPreview] = useState<FilePreviewRequest | null>(null);
   const [changed, setChanged] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  // 变化代次:每检测到一次新的文件变化 +1。
+  // 刷新开始时记下当时的代次,刷新完成后只有代次没变才收提示 —— 刷新在途时又来了
+  // 新变化,取到的还是旧版本,提示必须留着让用户能再点一次。
+  const changeGen = useRef(0);
+  const refreshGen = useRef(0);
 
   const open = useCallback((request: FilePreviewRequest) => {
     setPreview(request);
@@ -119,12 +125,14 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
   const refresh = useCallback(() => {
     // 只递增加计数,不在这里清提示:刷新可能只拿到历史副本(远端不可达)或直接失败,
     // 那时提示要留着,用户才能再点一次 —— 清了就再也看不到「视图不是最新的」。
+    refreshGen.current = changeGen.current;
     setRefreshToken((token) => token + 1);
   }, []);
 
   // 预览真的换成了最新内容才收起提示(issue #12851)。
+  // 代次对不上 = 刷新在途时又来了新变化:面板里的还是旧版本,提示留着。
   const handleRefreshed = useCallback((fresh: boolean) => {
-    if (fresh) setChanged(false);
+    if (fresh && changeGen.current === refreshGen.current) setChanged(false);
   }, []);
 
   // 只有文稿预览有「文件已变更」这回事(diff 是打开瞬间的快照)。
@@ -173,7 +181,10 @@ export function FilePreviewLightboxProvider({ children }: { children?: ReactNode
         inFlight.delete(message.toolUseId);
         if (paths.some((path) => isSameWorkdirPath(path, target))) changed = true;
       }
-      if (changed) setChanged(true);
+      if (changed) {
+        changeGen.current += 1;
+        setChanged(true);
+      }
     };
     return makerChatStore.subscribe(sessionId, check);
   }, [preview?.sessionId, documentPath, workingDir]);

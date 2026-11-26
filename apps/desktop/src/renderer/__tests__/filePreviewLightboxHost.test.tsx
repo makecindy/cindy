@@ -12,6 +12,7 @@
  *      点一下才重新读内容(不自动替换用户正在读的内容)。
  *   4. 远程会话里点「文件已变更」但只取回历史副本(stale)时,提示不能被这次刷新
  *      吃掉 —— 用户还得能再点一次。
+ *   5. 刷新在途时又来一次编辑 → 这次刷新取回的是上一个版本,提示不能被清掉。
  *
  * 走的都是生产入口:真实的 AgentActionRow(点文件 chip)、真实的 FilePreviewLightboxHost、
  * 真实的 TextLightbox / ToolPayloadLightbox。CodeMirror / Markdown 渲染引擎是 jsdom 里
@@ -23,16 +24,17 @@
  *   打开预览的那一行被卸载后浮层是否还在、浮层右上角有没有「文件已变更」、点一下内容
  *   是否换成最新的、刷新没拿到最新内容时提示还在不在。
  * - Bug／规则依据:issue #12851(工具行被重建时,用户没点关闭,预览浮层凭空消失);
- *   PR review 的三条意见(编辑还没执行完就提示「文件已变更」、远程文件刷新后仍是旧副本、
- *   刷新只拿到历史副本或直接失败时提示被清掉)。
+ *   PR review 的四条意见(编辑还没执行完就提示「文件已变更」、远程文件刷新后仍是旧副本、
+ *   刷新只拿到历史副本或直接失败时提示被清掉、刷新在途时又来一次编辑却被清掉)。
  * - 现有覆盖缺口:agentActionRowRendering.test.ts 把 TextLightbox 整个 mock 成 null、
  *   并把 shouldOpenTextLightbox 短路成 false,永远打不开预览;workGroupBlockLivePreview
  *   只断言实时预览区的行数裁剪,没有跨行卸载后浮层存活的断言;没有用例覆盖远程预览
- *   刷新失败 / 只拿到历史副本时的提示去留。
+ *   刷新失败 / 只拿到历史副本时的提示去留,也没有用例覆盖刷新在途时又来一次编辑。
  * - 最小失败输入:一个已打开文稿预览(或 diff 预览)的工具行被卸载(实时预览区收起 /
  *   「最近 5 条」把旧行挤出 / work group 换 key);预览期间新增一条 Edit 该文件的
  *   tool_use 消息(编辑进行中)与它的 tool_result(编辑完成);远程会话里点一次
- *   「文件已变更」而取回只返回历史副本。
+ *   「文件已变更」而取回只返回历史副本;远程会话里点一次「文件已变更」、副本读取挂在
+ *   半路时又来一次 Edit 完成。
  * - tier:unit(jsdom + testing-library,走真实组件入口;CodeMirror / Markdown 渲染引擎
  *   按仓库既有做法换成桩)。另开一个文件而不是并入 agentActionRowRendering.test.ts,
  *   是因为那个文件把预览整族 mock 掉了,合进去就再也测不到真实浮层。
@@ -105,6 +107,17 @@ const editResult: ChatMessage = {
   role: 'tool_result',
   content: '',
   toolUseId: editMessage.toolUseId,
+  toolName: 'Edit',
+};
+
+// 第二次编辑(刷新在途时到达的那次)。
+const editMessage2 = mkTool('tool-edit-2', 'Edit', { file_path: FILE_PATH });
+
+const editResult2: ChatMessage = {
+  clientId: 'tool-edit-2-result',
+  role: 'tool_result',
+  content: '',
+  toolUseId: editMessage2.toolUseId,
   toolName: 'Edit',
 };
 
@@ -269,4 +282,54 @@ it('keeps the changed prompt when the remote refetch only reaches a cached copy'
   expect(document.querySelector('[data-text-lightbox-overlay]')?.textContent).toContain(
     i18n.t('chat.remoteFile.staleBadge'),
   );
+});
+
+it('keeps the changed prompt when a new edit lands while the refresh is in flight', async () => {
+  // 刷新在途时又来一次编辑:这次刷新取到的是上一个版本(内容 B),面板里显示的仍是 B,
+  // 版本 C 还没取回来 —— 提示必须留着,用户能再点一次。
+  let readCount = 0;
+  let releaseRead: (() => void) | null = null;
+  readCached.mockImplementation(async () => {
+    readCount += 1;
+    if (readCount === 1) return { ok: true, kind: 'text', content: 'v1' };
+    if (readCount === 2) {
+      // 第二次取回(刷新)挂在半路:模拟「副本已取回、还在读」的那段窗口。
+      await new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      return { ok: true, kind: 'text', content: 'v2' };
+    }
+    return { ok: true, kind: 'text', content: 'v3' };
+  });
+
+  render(<RemoteHarness message={readMessage} />);
+  fireEvent.click(screen.getByRole('button'));
+  await waitFor(() => expect(screen.getByText('v1')).toBeTruthy());
+
+  // 第一次编辑完成 → 提示出现。
+  sessionMessages = [editMessage, editResult];
+  act(() => notifyStore?.());
+  await waitFor(() => expect(screen.getByText(i18n.t('chat.filePreview.changed'))).toBeTruthy());
+
+  // 用户点提示 → 刷新开始,副本读取挂在半路。
+  fireEvent.click(screen.getByText(i18n.t('chat.filePreview.changed')));
+  await waitFor(() => expect(readCount).toBe(2));
+
+  // 刷新在途:Agent 又改了同一个文件(版本 C 落地)。
+  sessionMessages = [editMessage, editResult, editMessage2, editResult2];
+  act(() => notifyStore?.());
+
+  // 这次刷新读回来的内容成功落地(版本 B)。
+  await act(async () => {
+    releaseRead?.();
+  });
+  await waitFor(() => expect(screen.getByText('v2')).toBeTruthy());
+
+  // 面板里是版本 B,版本 C 的提示不能被这次刷新清掉。
+  expect(screen.getByText(i18n.t('chat.filePreview.changed'))).toBeTruthy();
+
+  // 再点一次 → 取到版本 C,这次没有新变化,提示才收掉。
+  fireEvent.click(screen.getByText(i18n.t('chat.filePreview.changed')));
+  await waitFor(() => expect(screen.getByText('v3')).toBeTruthy());
+  expect(screen.queryByText(i18n.t('chat.filePreview.changed'))).toBeNull();
 });
