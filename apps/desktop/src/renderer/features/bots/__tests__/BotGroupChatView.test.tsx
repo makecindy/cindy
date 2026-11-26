@@ -35,6 +35,7 @@ import type {
   BotGroupMessageView,
   BotGroupPlanView,
 } from '../../../../shared/botGroupChat';
+import { BOT_GROUP_MESSAGE_MAX_CHARS } from '../../../../shared/botGroupChat';
 
 vi.mock('@/components/chat/FileLightbox', () => ({
   FileLightbox: ({ filePath }: { filePath: string }) => <div data-testid="group-pdf-preview" data-path={filePath} />,
@@ -2004,6 +2005,49 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  // A topic reply refused a long paste past its cap with no feedback (the field just stayed as
+  // it was); a short one is cut by the field's maxLength, which jsdom does not model, so only the
+  // notice is observable for it. Real topic entry. A paste that fits stays silent: it replaces a
+  // selection, and a Windows line break counts once as the field stores it. Unit tier, no waits.
+  it.each([
+    ['long', 'line\n'.repeat(23) + 'last'],
+    ['short', 'short text'],
+  ])('tells why a %s paste past the topic reply limit does not fit', async (_kind, pasted) => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const input = await within(await screen.findByRole('complementary')).findByRole('textbox') as HTMLTextAreaElement;
+    const draft = 'x'.repeat(BOT_GROUP_MESSAGE_MAX_CHARS);
+    fireEvent.change(input, { target: { value: draft } });
+    input.setSelectionRange(0, 3);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'a\r\nb' } });
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    input.setSelectionRange(draft.length, draft.length);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => pasted } });
+    expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.composer.tooLong');
+    expect(input.value).toBe(draft);
+    expect(document.querySelector('[data-pasted-text-chip]')).toBeNull();
+  });
+
+  it('tells why a paste past the topic reply limit does not fit once the reply holds a folded paste', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const folded = 'line\n'.repeat(23) + 'last';
+    fireEvent.paste(await within(panel).findByRole('textbox'), { clipboardData: { items: [], getData: () => folded } });
+    await waitFor(() => expect(panel.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = within(panel).getByRole('textbox');
+    const before = editor.textContent;
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => 'x'.repeat(BOT_GROUP_MESSAGE_MAX_CHARS) } });
+    expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.composer.tooLong');
+    expect(editor.textContent).toBe(before);
+  });
+
   it('keeps a newline after a folded paste until the configured send shortcut', async () => {
     localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
     renderView();
@@ -3177,6 +3221,35 @@ describe('BotGroupChatView', () => {
       expect(block.tagName).toBe('DIV');
       expect(block.textContent).toContain('bots.groupChat.quote.deleted');
       expect(document.body.textContent).not.toContain('私密的原文');
+    });
+
+    it('pastes only the selected part of a quote into the group composer', async () => {
+      const user = userEvent.setup();
+      const base = detail({ serverBacked: true });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...base, messages: [
+        msg({ id: 'b1', sequence: 2, authorKind: 'bot', authorBotId: 'xiaoman', authorName: '小满', content: '周六 8:10 有票' }),
+        msg({ id: 'q1', sequence: 5, content: '那就这班', quote: quoteOf('b1') })] } });
+      renderView();
+      const block = await screen.findByTestId('bot-group-quote');
+      block.focus();
+      const text = within(block).getByText('周六 8:10 有票').firstChild!;
+      const range = document.createRange();
+      range.setStart(text, 3);
+      range.setEnd(text, 7);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try {
+        fireEvent.click(block, { detail: 1 });
+        const clipboard = await user.copy();
+        expect(clipboard?.getData('text/plain')).toBe('8:10');
+        const composer = screen.getByRole<HTMLTextAreaElement>('textbox');
+        await user.click(composer);
+        await user.paste(clipboard);
+        expect(composer.value).toBe('8:10');
+      } finally {
+        selection.removeAllRanges();
+      }
     });
 
     it('pages back to an original that is not loaded yet', async () => {
