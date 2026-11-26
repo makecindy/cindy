@@ -76,9 +76,11 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 ## 自定义市场的来源身份
 
 自定义市场插件的安装可以经同账号远程控制端发起，所以控制端需要知道两件事：「装的是哪个来源」（来源身份与
-`sourceId`），以及回执过期后「当前装着的是不是我那次操作装的」（操作级证据 `installedOperationId`，见下文）。
+`sourceId`），以及「当前装着的是不是我那次操作装的」（操作级证据 `installedOperationId` 与归属标记
+`installedOperationAttribution`，见下文）。
 来源身份是同一形状的可选对象：`{kind:'git', repository, ref?, sourceId}` 或 `{kind:'local', sourceId}`，只出现在
-自定义市场的条目与确认里。`installedOperationId` 服务端市场与自定义市场的条目都可能给出；`originSourceChanged`
+自定义市场的条目与确认里。`installedOperationId`、`installedOperationAttribution` 服务端市场与自定义市场的条目都可能
+给出；`originSourceChanged`
 出现在自定义市场的换源确认与显式替换为服务端市场版本的确认里。其它来源的确认不带这些字段。
 
 - **三处投影**：
@@ -202,9 +204,30 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - 形状 `^[A-Za-z0-9_-]{8,128}$`；不合形状的操作号照常执行，只是不留证据。操作号不是机密，但不记日志。
   - 持久化在账本里，Host 重启、原操作回执丢失后仍然可用。控制端设备身份在重连、App 重启、Host 重启后不变；
     App 重装或重新配对后身份变了，或密钥重建后，旧证据不再投影，控制端按未确认处理。
-  - 控制端回执过期后的核实：已装、`releaseId` 相同、`installedOperationId` 等于本次操作号，三者都满足才算已确认。
   - 账本兼容同 `sourceIdBinding`：只增可选字段，读取校验不检查它，旧记录缺省，降级时保留或重写丢弃，结果都是缺省。
   - 实现：`plugin-market/service.ts` 的 `withInstalledOperationIds`、`remotePluginManagement.ts` 的 `withOperations`。
+- **当前安装的归属 `installedOperationAttribution`**（2026-11-26 新增，市场条目可选字段，取值 `'self' | 'unattributed'`）：
+  - 来由：手机插件市场 #12684 的复审要求控制端能区分「确认是这次操作装的」「已变更或无法证实」「旧 Host 未提供
+    证据」。只有 `installedOperationId` 时，后两种都表现为字段缺省。
+  - 出现位置同 `installedOperationId`，只在远程管理响应里；条目 `installState` 为 `installed`／`update-available` 时
+    **一律给出**，`not-installed`／`conflict` 不给，电脑本机界面永远没有。
+  - `'self'` 必带 `installedOperationId`，条件同上；其余已装情况一律 `'unattributed'`，不带操作号。包括电脑本机
+    安装或更新、后台自动更新、Agent、文件或分享安装、另一控制端、证据缺失或损坏、包摘要不符、密钥换代或不可用、
+    旧账本记录。`'unattributed'` 不说明是谁，不区分本机与另一控制端，也不区分证据丢失与密钥换代。
+  - 同一条目的 `installState` 与归属来自同一次账本读取：服务层记下条目投影时用的那份本机快照（Main 内存，
+    不上线），归属只按那份快照核实，不另读账本或磁盘。远程出口 `withOperations` 经共享的
+    `projectInstalledOperationAttribution` 再收口一次，保证 `'self'` ⇔ 带合法操作号；下层不提供归属时，
+    已装条目同样是 `'unattributed'`。
+  - 「操作号相等 ⇒ 当前包就是那次操作装的」：**继承的绑定清除，本次事务新生成的绑定保留**，是否带绑定由生成它的
+    那一层显式决定。
+    - 标记卸载、断开路由的恢复、同发行重新提交包这三条，调用方只持有继承的旧记录，一律清除。
+    - 模拟器路由迁移只保留调用方经参数显式交来的新绑定（远程更新旧模拟器的提交），中断迁移的修复不传，继承的
+      一律清除。
+    - 换装失败时原样恢复整条旧记录会保留，因为包也回到了那一份。
+    - 其余新绑定随整条新记录写入。`sourceIdBinding` 在这些路径上保留：它绑定来源指纹与 raw manifest 摘要，换包或换来源后自然失效；
+    恢复与迁移两条只对从不带它的服务端记录生效。
+  - 条目上的 `releaseId`／`version` 永远是**目录当前发行**。已装版本在 snapshot 的 `ghosts[]`
+    （`manifest.version`）里，条目上没有「已装发行」字段。核实不比较版本，操作绑定已钉住已装包。
 - **白名单与缺省**：
   - `repository` 只含小写 host 加 2–4 段路径，整体匹配 `PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN`；用户名、密码、
     令牌、端口一律不读取。地址含 `?` `#` `[` `]`、空白、控制符、零宽或双向控制符、反斜杠、百分号编码、原始 `.` / `..`
@@ -218,10 +241,20 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
   - `origin === 'custom-market'` 的确认回执或任务卡缺来源身份时，控制端不允许批准（不分首装和升级），提示回电脑
     确认；不能把只显示市场名当作已核对仓库。
   - 发起安装前，最后一次详情读取的 `sourceIdentity` 必须与用户选择时记下的完全相等，否则停止。
-  - 回执过期后核实（「是不是这次操作」）：同时满足 `installState === 'installed'`、`releaseId` 与本次尝试相同、
-    `installedOperationId` 等于本次操作号，才算已确认；缺任何一项都按未确认收口，不打开实例，也不重发安装或批准。
-    `installedSourceId` 与 `originSource.sourceId` 一致只说明「来自哪里」，不能代替这一判定；它仍用于确认前的来源
-    比对与换源判断。
+  - 当前安装的三分判定（只看同一 `pluginId`；尝试已记下目标实例时 `ghostId`、`namespace` 也要相同）：
+    1. 证实：`installState` 为 `installed` 或 `update-available`，`installedOperationAttribution === 'self'`，且
+       `installedOperationId` 等于本次操作号。
+    2. 未能证实：已装且带归属标记，但不满足 1。包括 `'unattributed'`、`'self'` 但号不同、未知取值、`'self'` 缺号或号不合
+       形状、有号却缺标记。
+    3. 旧 Host：已装但两个字段都没有。
+  - 成功回执只是历史结果。「打开」一律按最新一次读取判定，回执是否过期都一样：1 可「打开」；2、3、未装或冲突都保留
+    成功结论、不提供「打开」。自定义市场在旧 Host 上本来批准不了（确认缺来源身份）；服务端市场在旧 Host 上可装，
+    记录里不提供「打开」。
+  - 回执过期（`management:operation` 返回 NOT_FOUND）后读 `management:market-detail`：只有 1 算「已成功且当前实例
+    就是它装的」；其余按未确认收口，不判成功也不判失败、不打开实例，也不重发安装或批准。
+  - **不得**拿条目的 `releaseId`／`version` 与本次尝试比较：目录只推进版本时原安装仍在，比较会误判。
+    `installedSourceId` 与 `originSource.sourceId` 一致只说明「来自哪里」，同样不能代替这一判定；它仍用于确认前的
+    来源比对与换源判断。
   - 换源提示：`originSourceChanged === true` 时按上文三句规则选一句展示，只有确认里展示了仓库时才提「上面显示的
     仓库」。
   - 现状：电脑作为控制端时只展示 `originSource`，形状不对时只显示市场名。手机端由手机插件市场 PR #12684 接通，

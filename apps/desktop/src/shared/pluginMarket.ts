@@ -70,6 +70,13 @@ export interface PluginMarketItem {
    */
   installedOperationId?: string;
   /**
+   * 当前安装能否归到请求方发起的那次远程操作（契约 V2.10）。只在远程管理响应里、且 `installState` 为
+   * `installed`／`update-available` 时出现：`'self'` 必带 `installedOperationId`；`'unattributed'` 表示 Host 核实过，
+   * 但当前安装不能归到请求方的操作（本机或其它控制端装的、证据缺失或无法核实），不带操作号，也不说明是谁。
+   * 两个字段都缺省即旧 Host。由 projectInstalledOperationAttribution 统一给出。
+   */
+  installedOperationAttribution?: PluginMarketInstalledOperationAttribution;
+  /**
    * 新版本比已装版本权限变多，或（自定义市场）实际来源与已装版本不同，后台更新已暂停、
    * 等待用户确认。只在 Main 按真实包与来源记录判定过后出现；缺省表示未知或无需确认，
    * 不能据此推断可以静默更新。
@@ -328,6 +335,27 @@ export const PLUGIN_MARKET_SOURCE_REPOSITORY_PATTERN =
 export const PLUGIN_MARKET_OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 export function isPluginMarketOperationId(value: unknown): value is string {
   return typeof value === 'string' && PLUGIN_MARKET_OPERATION_ID_PATTERN.test(value);
+}
+export type PluginMarketInstalledOperationAttribution = 'self' | 'unattributed';
+
+/**
+ * 远程管理响应里「当前安装归属」的唯一出口（契约 V2.10）。先去掉条目上已有的两个字段，再按结论重新给出，保证
+ * `'self'` ⇔ 带 `installedOperationId`：
+ * - 条目不是 installed／update-available：两个字段都不给；
+ * - `operationId` 合法：`'self'` + 该操作号；
+ * - 其余：`'unattributed'`，不带操作号。
+ */
+export function projectInstalledOperationAttribution<T extends PluginMarketItem>(
+  item: T,
+  operationId: string | null | undefined,
+): T {
+  const copy = { ...item };
+  delete copy.installedOperationId;
+  delete copy.installedOperationAttribution;
+  if (copy.installState !== 'installed' && copy.installState !== 'update-available') return copy;
+  return isPluginMarketOperationId(operationId)
+    ? { ...copy, installedOperationId: operationId, installedOperationAttribution: 'self' }
+    : { ...copy, installedOperationAttribution: 'unattributed' };
 }
 /** 来源标识：16 字节 HMAC 截断的 base64url（无填充）。 */
 export const PLUGIN_MARKET_SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;

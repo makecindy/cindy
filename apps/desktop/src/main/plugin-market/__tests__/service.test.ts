@@ -278,6 +278,8 @@ const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
   consent: { prompt: async () => true, initiator: 'user' },
 };
 import { PluginMarketEndpointUnsupportedError, PluginMarketApi } from '../api';
+import { RemotePluginManagement } from '../../cindy-brain/remotePluginManagement';
+import { createMarketSourceIdOf, SOURCE_ID_KEY_DIR } from '../sources/sourceId';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
@@ -1213,6 +1215,140 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(snapshot.items[0]).toMatchObject({ installState: 'installed' });
     expect(h.ledger.installationForPlugin(item)).toMatchObject({ releaseId: RELEASE_ID, version: '2.0.0' });
     expect(h.ledger.installationForPlugin({ ghostId: 'baguette-simulator', namespace: null })).toBeNull();
+  });
+
+  /* 测试价值（契约 V2.10，PR #12731 维护者复审 6067717502）
+   * - 生产入口与可观察结果：RemotePluginManagement.invoke 的 management:begin（用旧 baguette-simulator 的批准令牌
+   *   更新到 cindy-simulator）、answer、operation；Host 重启后 market-detail 里的 installedOperationAttribution／
+   *   installedOperationId；以及中断迁移经快照修复后，原发起设备读到的归属。
+   * - 缺口：迁移提交时服务生成了本次操作的新绑定，账本却无条件删掉，发起设备回执过期后只能读到 unattributed，
+   *   无法核实这次已完成的更新；而中断迁移的修复只复制旧记录，必须清除继承来的绑定。
+   * - 最小失败输入：电脑上是符合迁移条件的旧模拟器，phone-a 远程更新；旧记录带着 phone-a 的旧绑定、且摘要与新包
+   *   相同时的修复。
+   * - 改前失败：远程更新一条在 382861f9ad 上失败（phone-a 读到 unattributed）；修复一条改前即通过（保留的断言）。
+   * - tier：unit（临时目录，运行时替身）。
+   */
+  function simulatorRemote(service: PluginMarketService) {
+    const management = new RemotePluginManagement({
+      list: () => runtime.ghosts.map((ghost) => ({
+        ...ghost, approval: ghost.approval ?? { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      })) as unknown as InstalledGhost[],
+      capture: () => () => true,
+      captureReceipt: () => () => true,
+      market: {
+        snapshot: (legacyCatalog) => service.snapshot({ discoveryOnly: true, legacyCatalog }),
+        detail: (id) => service.detail(id),
+        install: async (id, options, prompt, assertCurrent, assertScope, remoteOperation) => {
+          await service.install(id, options, {
+            consent: { prompt, initiator: 'user' }, assertCurrent, assertScope, ...(remoteOperation ? { remoteOperation } : {}),
+          });
+        },
+        installedOperations: (items, controller) => service.withInstalledOperationIds(items, controller),
+      },
+      setEnabled: async () => {},
+      uninstall: async () => {},
+    });
+    const invoke = async (peer: string, action: string, input: Record<string, unknown>, target?: string) =>
+      (await management.invoke(peer, {
+        collectionId: 'plugins', actionId: `management:${action}`, input,
+        client: { protocolVersion: 1, primitives: ['action'] },
+        ...(target ? { resourceRef: { collectionId: 'plugins', kind: 'plugin', id: target } } : {}),
+      } as never)).result as Record<string, unknown>;
+    const seen = async (peer: string, pluginId: string) => {
+      const item = await invoke(peer, 'market-detail', { pluginId });
+      return Object.fromEntries(['installState', 'installedOperationAttribution', 'installedOperationId']
+        .filter((key) => key in item).map((key) => [key, item[key]]));
+    };
+    return { invoke, seen };
+  }
+
+  it('keeps the evidence of a remote update that migrates the simulator, for its controller only', async () => {
+    const item = summary({ ghostId: 'cindy-simulator', namespace: null,
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID, version: '2.0.0' } });
+    const oldManifest = manifest('baguette-simulator');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-simulator-migration-'));
+    roots.push(root);
+    const oldDir = path.join(root, 'baguette-simulator');
+    fs.mkdirSync(oldDir);
+    fs.writeFileSync(path.join(oldDir, 'ghost.json'), JSON.stringify(oldManifest));
+    const oldGhost = { manifest: oldManifest, dir: oldDir, namespace: null, enabled: false };
+    runtime.ghosts = [oldGhost];
+    runtime.approvedInstallEvidence.mockReturnValue({ packageSha256: 'a'.repeat(64),
+      approvedManifest: normalizedManifest(oldManifest), legacyMigrated: false });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'baguette-simulator', namespace: null }), {
+      manifestDigest: ghostManifestDigest(oldManifest),
+    }));
+    runtime.install.mockImplementation(async () => {
+      const next = manifest('cindy-simulator', '2.0.0');
+      const dir = path.join(root, 'cindy-simulator');
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(next));
+      runtime.ghosts = [{ manifest: next, dir, namespace: null, enabled: false }];
+      return runtime.ghosts[0];
+    });
+
+    const remote = simulatorRemote(h.service);
+    const detail = await remote.invoke('phone-a', 'market-detail', { pluginId: item.id });
+    const operationId = 'op-0000000000000001';
+    await remote.invoke('phone-a', 'begin', {
+      operationId, kind: 'install', pluginId: item.id, expectedReleaseId: detail.releaseId,
+      expectedManifest: detail.manifest, expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+    }, installedGhostStoragePart(oldGhost as unknown as InstalledGhost));
+    let receipt: Record<string, unknown> = {};
+    for (let attempt = 0; attempt < 400; attempt++) {
+      receipt = await remote.invoke('phone-a', 'operation', { operationId });
+      if (receipt.phase === 'succeeded' || receipt.phase === 'failed') break;
+      if (receipt.phase === 'confirmation') {
+        await remote.invoke('phone-a', 'answer', {
+          operationId, requestId: (receipt.consent as Record<string, unknown>).requestId, confirmed: true });
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(receipt).toMatchObject({ phase: 'succeeded' });
+    expect(runtime.install.mock.calls[0]![1]).toMatchObject({ ghostId: 'cindy-simulator', simulatorPreviousRelId: 'baguette-simulator' });
+    expect(h.ledger.installationForPlugin({ ghostId: 'baguette-simulator', namespace: null })).toBeNull();
+
+    // Host restart: the receipt is gone; only the controller that ran the update reads it back from the new instance.
+    const restarted = simulatorRemote(new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger));
+    await expect(restarted.invoke('phone-a', 'operation', { operationId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await restarted.seen('phone-a', item.id))
+      .toEqual({ installState: 'installed', installedOperationAttribution: 'self', installedOperationId: operationId });
+    expect(await restarted.seen('phone-b', item.id))
+      .toEqual({ installState: 'installed', installedOperationAttribution: 'unattributed' });
+  });
+
+  it('does not bring an inherited operation id back when it repairs an interrupted simulator migration', async () => {
+    const item = summary({ ghostId: 'cindy-simulator', namespace: null,
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID, version: '2.0.0' } });
+    const next = manifest('cindy-simulator', '2.0.0');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-simulator-migration-'));
+    roots.push(root);
+    const dir = path.join(root, 'cindy-simulator');
+    fs.mkdirSync(dir);
+    const raw = JSON.stringify(next);
+    fs.writeFileSync(path.join(dir, 'ghost.json'), raw);
+    runtime.ghosts = [{ manifest: next, dir, namespace: null, enabled: true }];
+    runtime.approvedInstallEvidence.mockReturnValue({ packageSha256: item.currentRelease.sha256,
+      approvedManifest: normalizedManifest(next), legacyMigrated: false,
+      simulatorMarketRelease: { pluginId: item.id, releaseId: RELEASE_ID, previousPackageSha256: 'a'.repeat(64) },
+    });
+    // The old record carries phone-a's evidence bound to the very bytes now on disk: the strongest case for a revival.
+    const sourceIds = createMarketSourceIdOf(
+      path.join(runtime.userDataRoot, 'owners', runtime.session.dataOwnerId ?? 'local', 'plugin-market', SOURCE_ID_KEY_DIR));
+    await sourceIds.prepare!();
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'baguette-simulator', namespace: null }), {
+      remoteOperationBinding: { operationId: 'op-0000000000000009', controller: sourceIds.controllerTag!('phone-a')!,
+        keyId: sourceIds.keyId()!, rawManifestSha256: crypto.createHash('sha256').update(raw).digest('hex') },
+    }));
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.ledger.installationForPlugin(item)).toMatchObject({ ghostId: 'cindy-simulator', releaseId: RELEASE_ID });
+    expect(h.ledger.installationForPlugin(item)).not.toHaveProperty('remoteOperationBinding');
+    expect(await simulatorRemote(h.service).seen('phone-a', item.id))
+      .toEqual({ installState: 'installed', installedOperationAttribution: 'unattributed' });
   });
 
   it.each(['another-market-record', 'different-approved-package', 'server-rollback'] as const)(

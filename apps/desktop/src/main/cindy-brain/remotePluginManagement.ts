@@ -17,6 +17,7 @@ import type {
   PluginMarketPage,
   PluginMarketItem,
 } from '../../shared/pluginMarket.js';
+import { projectInstalledOperationAttribution } from '../../shared/pluginMarket.js';
 import type {
   PluginManagementProject,
   PluginManagementProjectState,
@@ -100,8 +101,8 @@ export interface RemotePluginManagementDeps {
       remoteOperation?: { operationId: string; controller: string },
     ): Promise<void>;
     /**
-     * 契约 V2.9：只对 `controller` 补上它自己那次操作留下的 `installedOperationId`，其它一律去掉。缺省时远程响应
-     * 不带这个字段。
+     * 契约 V2.9／V2.10：按 `controller` 给已装条目定归属：它自己那次操作装的给 `'self'` + `installedOperationId`，
+     * 其余 `'unattributed'`。缺省时远程响应里的已装条目一律 `'unattributed'`。
      */
     installedOperations?<T extends PluginMarketItem>(items: readonly T[], controller: string): Promise<T[]>;
   };
@@ -304,15 +305,19 @@ export class RemotePluginManagement {
   invalidate(): void {
     this.prune();
   }
-  /** 契约 V2.9：`installedOperationId` 只对发起那次操作的控制端给出；不支持时整体去掉。 */
+  /**
+   * 契约 V2.9／V2.10：远程响应里「当前安装归属」的出口。服务层按请求方给出结论；这里再经同一个
+   * projectInstalledOperationAttribution 收口，只有 `'self'` 且带合法操作号的才保留，已装条目其余一律
+   * `'unattributed'`。服务层不支持归属时同样得到 `'unattributed'`，不会把别人的结论或缺省漏出去。
+   */
   private async withOperations<T extends PluginMarketItem>(peer: string, items: readonly T[]): Promise<T[]> {
-    if (this.deps.market.installedOperations) return this.deps.market.installedOperations(items, peer);
-    return items.map((item) => {
-      if (!('installedOperationId' in item)) return item;
-      const copy = { ...item };
-      delete copy.installedOperationId;
-      return copy;
-    });
+    const projected = this.deps.market.installedOperations
+      ? await this.deps.market.installedOperations(items, peer)
+      : items.map((item) => projectInstalledOperationAttribution(item, null));
+    return projected.map((item) => projectInstalledOperationAttribution(
+      item,
+      item.installedOperationAttribution === 'self' ? item.installedOperationId : null,
+    ));
   }
   async invoke(
     peer: string,
