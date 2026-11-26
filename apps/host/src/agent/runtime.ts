@@ -700,6 +700,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
   );
   const agent = options.binaryPath ? new ClaudeCodeAgent(explicitPorts<AgentDeps>({
+    requiresNativeSubscriptionAccount: undefined,
     ...PORTS_ONLY_CODEX_READS,
     ...PORTS_ONLY_PI_READS,
     resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
@@ -774,6 +775,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // codexModelResolvers exists exactly when there is a Codex binary (above).
   const codex = codexBinaryPath && codexModelResolvers
     ? new CodexAgent(explicitPorts<AgentDeps>({
+        requiresNativeSubscriptionAccount: undefined,
         ...PORTS_ONLY_CLAUDE_READS,
         ...PORTS_ONLY_PI_READS,
         ...PORTS_ONLY_CLAUDE_AND_PI_READ,
@@ -860,6 +862,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   const pi = options.piBinaryPath
     ? new PiAgent(explicitPorts<AgentDeps>({
+        requiresNativeSubscriptionAccount: undefined,
         ...PORTS_ONLY_CLAUDE_READS,
         ...PORTS_ONLY_CODEX_READS,
         ...PORTS_ONLY_CLAUDE_AND_CODEX_READ,

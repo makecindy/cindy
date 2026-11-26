@@ -17,6 +17,7 @@ import {
 import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
 import { legacyCodexAccountHome } from '../maker-host/codex-account-path.js';
 import { getUserDataDir } from '../userDataPath.js';
+import { externalClaudeDirectoryForAccount, peekExternalClaudeAccountId } from '../maker-host/external-claude-runtime.js';
 
 const legacyProviderIdValid = (id: string) => id !== 'openai' && /^[a-z0-9_-]{1,40}$/.test(id);
 
@@ -55,6 +56,10 @@ export function normalizePoolFile(raw: unknown): PoolFile {
   for (const provider of ['anthropic', 'openai'] as const) {
     const pool = value?.pools?.[provider];
     if (!pool || !Array.isArray(pool.accounts)) continue;
+    if (provider === 'anthropic' && pool.accounts.some(account => account
+      && account.externalRuntime !== undefined && account.externalRuntime !== 'external-claude')) {
+      throw new Error('Unrecognized external Claude account requirement; account access is blocked');
+    }
     const seen = new Set<string>();
     const legacyAccounts = provider === 'openai' ? normalizeLegacyAccounts(pool.legacyCodexAccounts) : undefined;
     pools[provider] = {
@@ -69,6 +74,8 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
+          ...(provider === 'anthropic' && a.externalRuntime === 'external-claude'
+            ? { externalRuntime: 'external-claude' as const } : {}),
           ...(provider === 'anthropic' && typeof a.lastConfirmedIdentity === 'string' && a.lastConfirmedIdentity.trim()
             && a.lastConfirmedIdentity.length <= 320
             ? { lastConfirmedIdentity: a.lastConfirmedIdentity.trim() } : {}),
@@ -110,9 +117,21 @@ export const accountOwnerPrefix = () => {
   if (!owner) throw new Error('An active owner is required');
   return createHash('sha256').update(owner).digest('hex').slice(0, 12);
 };
+/** A durable account requirement, independent of the optional runtime file. */
+export function isExternalClaudeAccount(id: string): boolean {
+  return store.readStrict().pools.anthropic?.accounts.find(account => account.id === id)?.externalRuntime === 'external-claude';
+}
 export function accountDirectory(provider: SubscriptionProvider, id: string): string {
   if (!accountIdValid(id) || (id !== 'default' && !id.startsWith(`cindy-${accountOwnerPrefix()}-`)))
     throw new Error('Subscription account is unavailable');
+  if (provider === 'anthropic') {
+    if (isExternalClaudeAccount(id)) {
+      const external = externalClaudeDirectoryForAccount(id);
+      if (!external) throw new Error('The external Claude runtime for this account is unavailable; launch is blocked');
+      return external;
+    }
+    if (peekExternalClaudeAccountId() === id) throw new Error('The external Claude account must be explicitly registered before use');
+  }
   const legacy = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
   if (legacy) return legacyCodexAccountHome(getUserDataDir(), getActiveAppSession().dataOwnerId, legacy);
   return path.join(

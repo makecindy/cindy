@@ -1,4 +1,5 @@
 import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime.js';
+import { isExternalClaudeAccount } from '../subscription-accounts/store.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
@@ -1466,6 +1467,7 @@ export function getMaker(): Maker {
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint, resolveClaudeAgentEndpoint),
       get binaryPath() { return requireBinary('claude-code'); },
+      requiresNativeSubscriptionAccount: () => isExternalClaudeAccount('default'),
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,

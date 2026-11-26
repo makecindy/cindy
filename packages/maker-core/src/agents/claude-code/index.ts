@@ -23,7 +23,7 @@
  */
 
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
-import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeClaudeRuntime, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
 import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
 import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
@@ -984,6 +984,34 @@ const CAPABILITIES: Capabilities = {
 
 // ── Agent 实现 ────────────────────────────────────────────────────────────────
 
+// Only the trusted account capability may select a different executable. This
+// list deliberately excludes credentials, endpoints, TLS trust and process hooks.
+const EXTERNAL_CLAUDE_ENV_KEYS = new Set([
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+  'BROWSER', 'DISABLE_AUTOUPDATER', 'DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CONFIG_DIR',
+]);
+function snapshotExternalClaudeRuntime(account: NativeSubscriptionAccount | undefined): NativeClaudeRuntime | undefined {
+  const runtime = account?.claudeRuntime;
+  if (!runtime || !account) return undefined;
+  if (!path.isAbsolute(runtime.executablePath) || runtime.executablePath.includes('\0') ||
+      !path.isAbsolute(account.configDir) || typeof runtime.prepare !== 'function') {
+    throw new Error('External Claude runtime is invalid');
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(runtime.env)) {
+    if (!EXTERNAL_CLAUDE_ENV_KEYS.has(key) || typeof value !== 'string' || value.includes('\0')) {
+      throw new Error('External Claude runtime contains an unsupported environment setting');
+    }
+    if (key === 'CLAUDE_CONFIG_DIR' && value !== account.configDir) {
+      throw new Error('External Claude runtime profile does not match the selected account');
+    }
+    env[key] = value;
+  }
+  env.CLAUDE_CONFIG_DIR = account.configDir;
+  return { executablePath: runtime.executablePath, env: Object.freeze(env), prepare: (signal) => runtime.prepare(signal) };
+}
+
 export class ClaudeCodeAgent extends BaseAgent {
   readonly kind = 'claude-code' as const;
   readonly capabilities: Capabilities;
@@ -1104,6 +1132,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const abortController = new AbortController();
     const idleInput = createAsyncQueue<never>();
     try {
+      if (!nativeSubscriptionAccount && this.deps.requiresNativeSubscriptionAccount?.()) {
+        throw new Error('Select the configured Claude subscription provider before using the external CLI');
+      }
       // oauth-bearer 形态下 auth adapter 只按本机 Claude Code 订阅登录作答。
       const authState = await this.deps.auth.getState({ credentialMode: 'oauth-bearer', nativeSubscriptionAccount });
       if (!authState.authenticated) return false;
@@ -1121,13 +1152,29 @@ export class ClaudeCodeAgent extends BaseAgent {
         nativeCliAuth: true,
         subagentModel: null,
       });
+      const externalRuntime = snapshotExternalClaudeRuntime(nativeSubscriptionAccount);
+      if (externalRuntime) {
+        Object.assign(env, externalRuntime.env);
+        await externalRuntime.prepare(abortController.signal);
+        nativeSubscriptionAccount!.assertCurrent();
+      }
+      let externalProbeSpawned = false;
       q = sdkQuery({
         prompt: idleInput as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
           abortController,
           cwd: probeDir,
-          pathToClaudeCodeExecutable: this.deps.binaryPath,
+          pathToClaudeCodeExecutable: externalRuntime?.executablePath ?? this.deps.binaryPath,
           env,
+          ...(externalRuntime ? {
+            settings: { env: { ...externalRuntime.env } },
+            spawnClaudeCodeProcess: (spawnOptions) => {
+              nativeSubscriptionAccount!.assertCurrent();
+              if (externalProbeSpawned) throw new Error('External Claude runtime requires a new preflight before respawn');
+              externalProbeSpawned = true;
+              return spawnObservedClaudeProcess({ spawnOptions });
+            },
+          } : {}),
         },
       });
       const query = q;
@@ -1516,6 +1563,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Claude 订阅(含 adapter 把隐式来源解析成订阅的情形)由 CLI 用自己的登录直连,
     // host 不接管连接、不经手凭证(见 env-builder nativeCliAuth)。远端会话不适用。
     const nativeCliAuth = !opts.remoteHostId && effectiveCredentialMode === 'oauth-bearer';
+    if (nativeCliAuth && !nativeSubscriptionAccount && this.deps.requiresNativeSubscriptionAccount?.()) {
+      throw new Error('Select the configured Claude subscription provider before using the external CLI');
+    }
     // 订阅会话不设 host 接管标记,CLI 会直接应用工作区设置里的 env:能改写上游 / 鉴权 /
     // TLS 信任的项目级设置会让订阅请求带着登录凭证发往别处,启动前拒绝(见 workspace-settings-guard)。
     if (nativeCliAuth) {
@@ -1535,7 +1585,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须早于下面的 configuredWindows （窗口表在 buildQuery 之前就要用它，
     // 否则会撞 TDZ）。
     let mutableContextWindowBudget: number | null = opts.contextWindowBudget ?? null;
-    const binaryPath = opts.remoteHostId ? undefined : this.deps.binaryPath;
+    const externalRuntime = nativeCliAuth ? snapshotExternalClaudeRuntime(nativeSubscriptionAccount) : undefined;
+    const binaryPath = opts.remoteHostId ? undefined : externalRuntime?.executablePath ?? this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
@@ -1605,6 +1656,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
       subagentModel: null,
     });
+    if (externalRuntime) Object.assign(env, externalRuntime.env);
 
     // 「Subagent 模型」设置的默认值语义(见 subagent-model-default.ts):
     // 平台的 CLAUDE_CODE_SUBAGENT_MODEL 是最高优先级**强制覆盖**,会静默盖掉用户手写
@@ -3012,6 +3064,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         botSkillPolicy: reviewMode ? undefined : isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
+      if (externalRuntime) settings.env = { ...settings.env, ...externalRuntime.env };
       if (appliedMaxOutputTokens !== null) {
         // --settings wins over settings.json.env without changing that file.
         // Process env alone can be overwritten by the user's global settings.
@@ -4562,6 +4615,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         await mcpSelectionReady;
         yield* inputQueue;
       };
+      let externalRuntimeSpawned = false;
       const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
         prompt: (requestedHostSkips.length ? selectedInput() : inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -4624,10 +4678,15 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile || externalRuntime
             ? {
-                spawnClaudeCodeProcess: (spawnOptions) =>
-                  spawnObservedClaudeProcess({
+                spawnClaudeCodeProcess: (spawnOptions) => {
+                  if (externalRuntime) {
+                    nativeSubscriptionAccount!.assertCurrent();
+                    if (externalRuntimeSpawned) throw new Error('External Claude runtime requires a new preflight before respawn');
+                    externalRuntimeSpawned = true;
+                  }
+                  return spawnObservedClaudeProcess({
                     spawnOptions,
                     registerProcess: (pid) =>
                       this.deps.registerLocalAgentProcess?.({
@@ -4654,7 +4713,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                         log.info('Claude Code SDK process exited', details);
                       }
                     },
-                  }),
+                  });
+                },
               }
             : {}),
           // 订阅 token 到期续命回调 —— 仅当本次 spawn 实际注入了订阅 OAuth token
@@ -4740,6 +4800,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 落盘是异步的：等它回来期间账号可能被换掉、伙伴可能被删。围栏要在
         // 真正拉起 SDK 之前再验一次，失效的启动走下面 catch 的清理路径。
         companionEnvironment?.assertCurrent?.();
+        if (externalRuntime) {
+          await externalRuntime.prepare(querySignal);
+          nativeSubscriptionAccount!.assertCurrent();
+          companionEnvironment?.assertCurrent?.();
+          if (closed || querySignal.aborted) throw new Error('Claude session closed during external runtime preflight');
+          Object.assign(env, externalRuntime.env);
+        }
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
@@ -4790,7 +4857,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             taintWorkspaceSettings(message);
             throw new Error(message);
           }
-          return applyFlagSettings(opts.fastModePolicy?.isAllowed() === false ? { ...settings, fastMode: false } : settings);
+          const pinnedSettings = externalRuntime ? { ...settings, env: { ...settings.env, ...externalRuntime.env } } : settings;
+          return applyFlagSettings(opts.fastModePolicy?.isAllowed() === false ? { ...pinnedSettings, fastMode: false } : pinnedSettings);
         };
       }
       if (newSdkSessionId && localQueryStarted && !unacceptedForks.has(query)) {

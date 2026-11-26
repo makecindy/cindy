@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { homedir } from 'node:os';
+import { externalClaudeRuntimeForDirectory } from '../maker-host/external-claude-runtime.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { clearCodexModelSnapshot, readSavedCodexModelAccount, restoreCodexModelSnapshot, saveCodexModelSnapshot } from './codexModelSnapshot.js';
 import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
@@ -1286,7 +1288,9 @@ export async function refreshSubscriptionPoolClaudeModels(force = false, provide
       try {
         assertCurrent();
         const models = await probe({ id: `${accountOwnerPrefix()}:anthropic:${id}`, configDir: directory,
-          defaultProfile: id === 'default', assertCurrent, readState: async () => { assertCurrent(); return auth; } },
+          defaultProfile: id === 'default' && directory === path.join(homedir(), '.claude'),
+          claudeRuntime: externalClaudeRuntimeForDirectory(directory),
+          assertCurrent, readState: async () => { assertCurrent(); return auth; } },
         sameLogin ? previous?.models ?? [] : []);
         assertCurrent();
         if (models === null) throw new Error('Claude model probe did not return a current list');
@@ -3051,7 +3055,9 @@ export async function acquireSubscriptionAccount(
     ...(api ? { apiConnectionId: api.connectionId } : { account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
       configDir: directoryFor(provider, selected),
-      defaultProfile: selected === 'default',
+      defaultProfile: selected === 'default' && (provider !== 'anthropic' || directoryFor(provider, selected) === path.join(homedir(), '.claude')),
+      ...(provider === 'anthropic'
+        ? { claudeRuntime: externalClaudeRuntimeForDirectory(directoryFor(provider, selected)) } : {}),
       assertCurrent,
       readState: async () => {
         assertCurrent();

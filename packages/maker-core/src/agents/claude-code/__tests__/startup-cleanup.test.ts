@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentNotAuthenticatedError, AgentStartupCleanupPendingError, AgentStartupStoppedError, type AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 import type { SessionMeta, SessionStorage } from '../../../interfaces/session-storage.js';
 import { Maker, type CreateSessionOptions } from '../../../maker.js';
 import { createAsyncQueue } from '../../shared/async-queue.js';
@@ -35,6 +36,100 @@ describe('Claude startup exit evidence', () => {
       },
     };
   }
+
+  // Test value: real startSession must keep an opt-in native runtime separate from
+  // gateway/remote routing, and preserve no-process failure evidence. Existing
+  // startup tests did not cover host-supplied executable/network capabilities.
+  // Minimal regression: authenticated native account + failing prepare; unit SDK fake.
+  function externalAccount(overrides: Record<string, string> = {}): NativeSubscriptionAccount {
+    return {
+      id: 'default', configDir: path.join(workingDir, 'external-profile'),
+      assertCurrent: vi.fn(), readState: async () => ({ authenticated: true }),
+      claudeRuntime: {
+        executablePath: path.join(workingDir, 'external-claude.exe'),
+        env: { HTTPS_PROXY: 'http://127.0.0.1:17890', BROWSER: path.join(workingDir, 'browser.exe'), ...overrides },
+        prepare: vi.fn(async () => {}),
+      },
+    };
+  }
+
+  it('selects the external executable, profile and pinned network only for native subscription dispatch', async () => {
+    const account = externalAccount();
+    const dependencies = deps();
+    sdk.query.mockImplementationOnce(() => { throw new Error('dispatch observed'); });
+    await expect(new ClaudeCodeAgent(dependencies).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'anthropic',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    })).rejects.toThrow('dispatch observed');
+    const options = sdk.query.mock.calls[0][0].options;
+    expect(options.pathToClaudeCodeExecutable).toBe(account.claudeRuntime!.executablePath);
+    expect(options.env).toMatchObject({ ...account.claudeRuntime!.env, CLAUDE_CONFIG_DIR: account.configDir });
+    expect(options.settings.env).toMatchObject({ ...account.claudeRuntime!.env, CLAUDE_CONFIG_DIR: account.configDir });
+    expect(options.env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(account.claudeRuntime!.prepare).toHaveBeenCalledOnce();
+  });
+
+  it.each(['prepare', 'identity', 'forbidden-env'] as const)('fails closed before CLI dispatch: %s', async failure => {
+    const account = externalAccount(failure === 'forbidden-env' ? { ANTHROPIC_BASE_URL: 'https://invalid.test' } : {});
+    if (failure === 'prepare') vi.mocked(account.claudeRuntime!.prepare).mockRejectedValueOnce(new Error('proxy unavailable'));
+    if (failure === 'identity') vi.mocked(account.claudeRuntime!.prepare).mockImplementationOnce(async () => {
+      vi.mocked(account.assertCurrent).mockImplementation(() => { throw new Error('account changed'); });
+    });
+    await expect(new ClaudeCodeAgent(deps()).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'anthropic',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    })).rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(sdk.query).not.toHaveBeenCalled();
+  });
+
+  // Unit: opt-in external-default status must not authenticate a no-account
+  // fallback that would otherwise launch the bundled CLI with the old profile.
+  it.each([undefined, 'anthropic'])('rejects unbound local subscription startup with configured external default (%s)', async providerId => {
+    const dependencies = deps();
+    dependencies.requiresNativeSubscriptionAccount = vi.fn(() => true);
+    dependencies.auth.getState = vi.fn(async () => ({ authenticated: true, authSource: 'oauth' as const }));
+    sdk.query.mockImplementationOnce(() => { throw new Error('unexpected bundled dispatch'); });
+    await expect(new ClaudeCodeAgent(dependencies).startSession({ workingDir, model: 'claude-sonnet-4-6', providerId }))
+      .rejects.toMatchObject({ cause: expect.objectContaining({ message: expect.stringContaining('Select the configured Claude subscription provider') }) });
+    expect(sdk.query).not.toHaveBeenCalled();
+    expect(dependencies.requiresNativeSubscriptionAccount).toHaveBeenCalledOnce();
+  });
+
+  it('never applies the local external runtime to remote execution', async () => {
+    const account = externalAccount();
+    const dependencies = deps();
+    dependencies.remoteCcQueryFactory = vi.fn().mockRejectedValueOnce(new Error('remote dispatch observed'));
+    dependencies.requiresNativeSubscriptionAccount = vi.fn(() => { throw new Error('local configuration must not be read'); });
+    Object.defineProperty(dependencies, 'binaryPath', { get: () => { throw new Error('local binary must not be read'); } });
+    await expect(new ClaudeCodeAgent(dependencies).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'anthropic', remoteHostId: 'remote-1', sessionId: 'remote',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    })).rejects.toThrow('remote dispatch observed');
+    expect(dependencies.remoteCcQueryFactory).toHaveBeenCalledOnce();
+    expect(dependencies.requiresNativeSubscriptionAccount).not.toHaveBeenCalled();
+    expect(account.claudeRuntime!.prepare).not.toHaveBeenCalled();
+    expect(sdk.query).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a native external runtime to a company gateway session', async () => {
+    const account = externalAccount();
+    const dependencies = deps();
+    dependencies.runtimeConfig.endpoint = 'http://127.0.0.1:19090';
+    dependencies.requiresNativeSubscriptionAccount = vi.fn(() => { throw new Error('native policy must not affect gateway'); });
+    dependencies.auth.getAuthEnv = vi.fn(async () => ({ ANTHROPIC_API_KEY: 'synthetic-test-key' }));
+    sdk.query.mockImplementationOnce(() => { throw new Error('gateway dispatch observed'); });
+    await expect(new ClaudeCodeAgent(dependencies).startSession({
+      workingDir, model: 'claude-sonnet-4-6', providerId: 'xd',
+      [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
+    })).rejects.toThrow('gateway dispatch observed');
+    const options = sdk.query.mock.calls[0][0].options;
+    expect(options.pathToClaudeCodeExecutable).toBe(process.execPath);
+    expect(options.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:19090');
+    expect(options.env.ANTHROPIC_API_KEY).toBe('synthetic-test-key');
+    expect(dependencies.requiresNativeSubscriptionAccount).not.toHaveBeenCalled();
+    expect(options.env.BROWSER).not.toBe(account.claudeRuntime!.env.BROWSER);
+    expect(account.claudeRuntime!.prepare).not.toHaveBeenCalled();
+  });
 
   // Unit: offline construction must expose local capabilities, while missing
   // runtime failure on actual dispatch still proves no process owns the workdir.

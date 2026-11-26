@@ -6,6 +6,8 @@ export interface ClaudeCliStatusRequest {
   binary: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  /** Trusted external-runtime environment pinned above profile settings. */
+  settingsEnv?: Readonly<Record<string, string>>;
 }
 
 // Only the bundled CLI's read-only status query runs here. Login cancellation
