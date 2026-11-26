@@ -2,7 +2,8 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import type { ChatMaskAction, ChatMaskMention, ChatMaskState } from '../../../shared/botGroupChat';
-import { GroupMaskContext, maskIdentity, type GroupMaskPresentation, type GroupMaskSettings } from './groupMaskPresentation';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED } from '@cindy/maker-shared/botGroupChat';
+import { GroupMentionContext, GroupMaskContext, maskIdentity, type GroupMaskPresentation, type GroupMaskSettings } from './groupMaskPresentation';
 
 /** Server owns activation, persistence and cancellation. This adapter never sends a group reply. */
 export function GroupMaskProvider({ groupId, children }: { groupId: string; children: ReactNode }) {
@@ -27,15 +28,12 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     const owner=getDataOwnerGeneration(), revision=version.current;
     const current=()=>alive.current && isDataOwnerGenerationCurrent(owner) && version.current===revision;
     try {
-      const response=await api.mask({groupId});
-      if (!current()) return;
-      if (!response.ok) {
-        if (['CONVERSATION_NOT_FOUND', 'OWNER_CHANGED', 'HUMAN_REQUIRED', 'UNSUPPORTED_OPERATION'].includes(response.errorCode)) {
-          authority.current++; failed.current.clear(); operations.current.clear(); stateRef.current=null; setState(null); setMentions([]);
-        } else if (stateRef.current) { setError(true); setConnectionLost(true); }
-        return;
+      if (BOT_GROUP_PERSONAL_REPLIES_ENABLED) {
+        const response=await api.mask({groupId});
+        if (!current()) return;
+        if (!response.ok) throw new Error(response.errorCode);
+        setState(response.state);
       }
-      setState(response.state);
       const all:ChatMaskMention[]=[];
       let before:string|undefined;
       do {
@@ -47,7 +45,13 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
         before=page.mentions.at(-1)!.sequence;
       } while(current());
       if(current()) { setMentions(all); setError(failed.current.size > 0); setConnectionLost(false); }
-    } catch { if(current()) { setError(true); setConnectionLost(true); } }
+    } catch (e) {
+      if (current()) {
+        if (e instanceof Error && ['CONVERSATION_NOT_FOUND', 'OWNER_CHANGED', 'HUMAN_REQUIRED', 'UNSUPPORTED_OPERATION'].includes(e.message)) {
+          authority.current++; failed.current.clear(); operations.current.clear(); stateRef.current=null; setState(null); setMentions([]);
+        } else { setError(true); setConnectionLost(true); }
+      }
+    }
     finally {
       busy.current=false;
       if(pending.current && alive.current) { pending.current=false; void reload(); }
@@ -123,19 +127,25 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     failed.current.delete(retryKey); operations.current.set(retryKey,send);
     queue.current=queue.current.then(send,send);
   },[mentions,groupId,reload]);
+  const history = useMemo(() => ({
+    groupId, saving, markMentionsRead: markRead,
+    unreadMentions: mentions.map(m => ({ ...m, ...(m.reply ? { reply: { ...m.reply, companion: maskIdentity(m.reply.companion) } } : {}) })),
+  }), [groupId, saving, markRead, mentions]);
   // Keep shared composer, settings and attention consumers on one stable projection.
   const value=useMemo<GroupMaskPresentation|null>(()=>{
   if(!state) return null;
   const update=(patch:Partial<GroupMaskSettings>)=>act(`save:${Object.keys(patch).sort().join(',')}`,current=>({type:'save',expectedRevision:current.revision,
     settings:{...current.settings,companionId:current.settings.companionId ?? current.defaultCompanionId ?? null,...patch,timeZone:current.revision ? current.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone}}));
-  return {groupId,self:maskIdentity(state.self),companions:state.companions.map(maskIdentity),
-    toolAccessSupported:state.toolAccessSupported,settings:{...state.settings,companionId:state.settings.companionId ?? state.defaultCompanionId ?? null},status:connectionLost && state.status==='enabled' ? 'offline' : state.status,saving,error,loading:false,manualRunning:state.manualRunning,
+  return {...history,self:maskIdentity(state.self),companions:state.companions.map(maskIdentity),
+    toolAccessSupported:state.toolAccessSupported,settings:{...state.settings,companionId:state.settings.companionId ?? state.defaultCompanionId ?? null},status:connectionLost && state.status==='enabled' ? 'offline' : state.status,error,loading:false,manualRunning:state.manualRunning,
     update,retry:()=>{if(failed.current.size) for(const send of failed.current.values()) queue.current=queue.current.then(send,send);else void reload();},
     participate:()=>{if(!stateRef.current?.settings.enabled || stateRef.current.settings.trigger==='always' || Date.now()-lastParticipation.current<2000)return;lastParticipation.current=Date.now();act('participate',()=>({type:'participate'}));},
     resume:()=>{lastParticipation.current=0;act('resume',()=>({type:'resume'}));},stopManual:()=>act('stop',()=>({type:'stop'})),
     requestDigest:()=>act('digest',()=>({type:'digest'})),digestStatus:state.digestStatus,
-    attributions:{},unreadMentions:mentions.map(m=>({...m,...(m.reply?{reply:{...m.reply,companion:maskIdentity(m.reply.companion)}}:{})})),markMentionsRead:markRead,
+    attributions:{},
   };
-  },[state,mentions,saving,error,connectionLost,act,reload,groupId,markRead]);
-  return <GroupMaskContext.Provider value={value}>{children}</GroupMaskContext.Provider>;
+  },[state,history,error,connectionLost,act,reload]);
+  return <GroupMentionContext.Provider value={history.unreadMentions.length ? history : null}>
+    <GroupMaskContext.Provider value={value}>{children}</GroupMaskContext.Provider>
+  </GroupMentionContext.Provider>;
 }

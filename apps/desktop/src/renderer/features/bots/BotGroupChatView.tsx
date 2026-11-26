@@ -130,7 +130,7 @@ import {
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAutoContinue, useBotGroupSummary } from './botGroupStore';
 import { botGroupReadKey, markBotRead } from './botReadState';
-import { useGroupMask, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
+import { useGroupMentionHistory, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
   enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
   getBotGroupOutboxPreviews, interleaveBotGroupOutbox, mergeBotGroupLocalAttachments,
@@ -865,7 +865,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     speakingBotIds: mainHeaderSpeakers.map(speaker => speaker.botId),
     round: { ...headerGroup.round!, speakers: mainHeaderSpeakers },
   } : headerGroup, displayName, t) : null;
-  const personalMask = useGroupMask(groupId);
+  const mentionHistory = useGroupMentionHistory(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const header = useMemo(() => {
     if (!headerGroup) return null;
@@ -1581,13 +1581,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         {/* Keep the shared bubbles mounted and their space reserved while navigation takes the slot. */}
         <div data-group-bottom-bubbles inert={messageNavigationVisible}
           className={cn('shrink-0', messageNavigationVisible && 'invisible')}>
-          {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
+          {(group.threads?.length || mentionHistory) && !sharing && !group.archived ? (
             // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
             <div className="relative h-0 shrink-0">
               <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[var(--cindy-message-width)] px-2">
                 <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
-                  onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
-                  onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
+                  onOpen={rootId => onOpenThread(rootId)} mentions={mentionHistory?.unreadMentions} onLocateMention={locateMention}
+                  onReadMentions={mentionHistory ? () => mentionHistory.markMentionsRead() : undefined} saving={mentionHistory?.saving} />
               </div>
             </div>
           ) : null}

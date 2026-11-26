@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED } from '@cindy/maker-shared/botGroupChat';
 import type { BotAvatarProps } from './BotAvatar';
 
 export type GroupMaskTrigger = 'scheduled' | 'manual' | 'always';
@@ -56,16 +57,29 @@ export interface GroupMaskPresentation {
   digestStatus?: 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'empty';
 }
 
+type GroupMentionHistory = Pick<GroupMaskPresentation, 'groupId' | 'saving' | 'unreadMentions' | 'markMentionsRead'>;
+export const GroupMentionContext = createContext<GroupMentionHistory | null>(null);
+export function useGroupMentionHistory(groupId: string) {
+  const history = useContext(GroupMentionContext);
+  const mask = useGroupMask(groupId);
+  return history?.groupId === groupId ? history : mask;
+}
+
 export const GroupMaskContext = createContext<GroupMaskPresentation | null>(null);
 export function useGroupMask(groupId?: string) {
   const value = useContext(GroupMaskContext);
   return value && (!groupId || value.groupId === groupId) ? value : null;
 }
+export function useGroupMaskControls(groupId?: string) {
+  const mask = useGroupMask(groupId);
+  return BOT_GROUP_PERSONAL_REPLIES_ENABLED ? mask : null;
+}
+
 export const GROUP_MASK_SETTINGS_PARAM = 'groupMask';
 
 /** A human navigation acknowledges only the original that actually becomes visible. */
 export function useReadLocatedMention(groupId: string) {
-  const mask = useGroupMask(groupId);
+  const mask = useGroupMentionHistory(groupId);
   const maskRef = useRef(mask); maskRef.current = mask;
   const [located, setLocated] = useState<{ groupId: string; messageId: string; element: HTMLElement } | null>(null);
   useEffect(() => {

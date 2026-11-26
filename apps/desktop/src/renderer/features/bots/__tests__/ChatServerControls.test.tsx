@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { StrictMode, useState, type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -11,7 +12,7 @@ import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
 import { GroupMaskIndicator } from '../GroupMaskControls';
-import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
+import { GroupMaskContext, useGroupMask, useGroupMentionHistory, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
@@ -97,6 +98,11 @@ describe('chat interaction controls', () => {
         <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
     </>;
   }
+  function renderWithPersonalReplies(probe: ReactNode) {
+    const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => enabled.mockRestore());
+    return render(probe);
+  }
   // Unit: actual Provider actions, missing coverage for permanent delegation.
   // A keystroke must not send a takeover; an explicit disable must still persist.
   it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
@@ -106,7 +112,7 @@ describe('chat interaction controls', () => {
       if (action?.type === 'participate') state = { ...state, status: 'paused' };
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     const participate = await screen.findByText('Participate');
     await act(async () => fireEvent.click(participate));
     expect(mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
@@ -129,7 +135,7 @@ describe('chat interaction controls', () => {
       }
       return { ok: true, state };
     });
-    render(<MemoryRouter><GroupMaskProvider groupId="room"><GroupMaskIndicator groupId="room" onTakeOver={vi.fn()} /></GroupMaskProvider></MemoryRouter>);
+    renderWithPersonalReplies(<MemoryRouter><GroupMaskProvider groupId="room"><GroupMaskIndicator groupId="room" onTakeOver={vi.fn()} /></GroupMaskProvider></MemoryRouter>);
     fireEvent.click(await screen.findByTestId('group-mask-status'));
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.mask.stop' }));
     expect((await screen.findByRole('alert')).textContent).toBe('bots.groupChat.mask.saveError');
@@ -157,7 +163,7 @@ describe('chat interaction controls', () => {
       if (action?.type === 'save') state = { ...state, revision: 2, settings: action.settings };
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     const read = await screen.findByText('Read original');
     await act(async () => fireEvent.click(read));
     if (mode === 'failed') await act(async () => fireEvent.click(screen.getByText('Participate')));
@@ -178,7 +184,7 @@ describe('chat interaction controls', () => {
     let finish!: (value: unknown) => void, changed = () => {};
     mocks.mask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     window.electronAPI.maker.onBotGroupChanged = callback => { changed = () => callback({ groupId: 'room', change: 'messages' }, undefined); return () => {}; };
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     fireEvent.change(screen.getByLabelText('Chat draft'), { target: { value: 'My unfinished message' } });
     await act(async () => finish({ ok: true, state: maskState() }));
     await screen.findByText('Config ready');
@@ -202,7 +208,7 @@ describe('chat interaction controls', () => {
       else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
     });
     mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     await screen.findByText('Config ready');
     await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
     await setHidden(true);
@@ -224,7 +230,7 @@ describe('chat interaction controls', () => {
       }
       return { ok: true, state };
     });
-    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
     fireEvent.click(await screen.findByText('Disable reply'));
     await screen.findByRole('alert');
     await act(async () => fireEvent.click(screen.getByText(operation)));
@@ -236,16 +242,26 @@ describe('chat interaction controls', () => {
     expect(saves).toHaveLength(2);
     expect(saves[1]![0]).toMatchObject({ action: { settings: { enabled: false } }, operationId: saves[0]![0].operationId });
   });
-  it.each([true, false])('offers post-join setup only with confirmed personal capability (%s)', async supported => {
+  // Unit: the mentions inbox used to require a successful read of personal
+  // settings. One unread question must still be accessible in a paused client.
+  it('loads the human mention inbox without reading personal reply settings', async () => {
+    function Inbox() {
+      const history = useGroupMentionHistory('room');
+      return <span>{history?.unreadMentions[0]?.messageId}</span>;
+    }
+    render(<GroupMaskProvider groupId="room"><Inbox /></GroupMaskProvider>);
+    await screen.findByText('question');
+    expect(mocks.mask).not.toHaveBeenCalled();
+  });
+  it.each([true, false])('joins directly while personal replies are paused, even with host capability %s', async supported => {
     mocks.status.mockResolvedValue({ enabled: true, connected: true, ...(supported ? { personalMask: true } : {}) });
     const joined = vi.fn();
     render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
     await screen.findByText('Invited group');
     const toggle = screen.queryByRole('checkbox', { name: 'bots.groupChat.mask.joinSetup' });
-    expect(!!toggle).toBe(supported);
-    if (toggle) fireEvent.click(toggle);
+    expect(toggle).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: k('accept') }));
-    await waitFor(() => expect(joined).toHaveBeenCalledWith(...(supported ? ['room', true] : ['room'])));
+    await waitFor(() => expect(joined).toHaveBeenCalledWith('room'));
   });
 
   // Unit regression for the human-read contract: prior inbox tests covered opening/dismissal,
