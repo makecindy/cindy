@@ -9161,9 +9161,13 @@ describe('Claude long-lived token', () => {
     authenticated: true, identity: 'second@example.test', plan: 'max', planTier: 'max_20x',
     loginExpiresAt: '2030-01-05T00:00:00.000Z',
   };
-  const onToken = (storedLogin: boolean, source: 'descriptor' | 'settings' = 'descriptor') => storedLogin
-    ? { ...stored, longLivedToken: { source, storedLogin: true } }
-    : { authenticated: true, longLivedToken: { source, storedLogin: false } };
+  const onToken = (
+    storedLogin: boolean,
+    source: 'descriptor' | 'settings' = 'descriptor',
+    version = `${source}:v1`,
+  ) => storedLogin
+    ? { ...stored, longLivedToken: { source, storedLogin: true, version } }
+    : { authenticated: true, longLivedToken: { source, storedLogin: false, version } };
   let second: Record<string, unknown>;
   const restart = () => { h.owner = 'owner-a:' + ++generation; };
   beforeEach(() => {
@@ -9224,7 +9228,7 @@ describe('Claude long-lived token', () => {
     observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
       five_hour: { utilization: 0.3, resetsAt: fiveHour + offset },
       seven_day: { utilization: 0.2, resetsAt: sevenDay + offset },
-    } });
+    } }, { claudeTokenVersion: 'descriptor:v1' });
     await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe(verdict));
     lease!.release();
     const view = await readSubscriptionPool('anthropic');
@@ -9245,6 +9249,134 @@ describe('Claude long-lived token', () => {
     expect(h.tokenCreate).toHaveBeenCalledExactlyOnceWith('anthropic/second', expect.any(AbortSignal));
     expect(renewed.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'pending' } });
     expect(renewed.accounts[1].authIssue).toBeUndefined();
+  });
+
+  it('ignores usage events from older ordinary-login or replaced-token CLI processes during verification', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const fiveHour = now + 3_600;
+    const sevenDay = now + 3 * 86_400;
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second' ? { claudeUsage: {
+      fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+      source: 'oauth-endpoint', updatedAt: Date.now(),
+    } } : {});
+    // Process started while the account was still on its ordinary login.
+    const oldLease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v1'); });
+    await runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint-v1' });
+
+    // Events from the old ordinary-login process (null or omitted version) must not verify token v1.
+    const matchingEvent = { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } };
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent, { claudeTokenVersion: null });
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+
+    // Renewing to token v2: an event from a process still running token v1 must not verify v2.
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v2'); });
+    await runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint-v2' });
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent, { claudeTokenVersion: 'descriptor:v1' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+
+    // Only an event from a process launched with token v2 completes verification for v2.
+    observeSubscriptionAccountUsage(oldLease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour + 3_600 }, seven_day: { utilization: 0.2, resetsAt: sevenDay + 3_600 },
+    } }, { claudeTokenVersion: 'descriptor:v2' });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe('mismatch'));
+    oldLease!.release();
+  });
+
+  it('forces a fresh account and ordinary-login quota read before marking mismatch', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      const fiveHour = usageCalls === 1 ? oldFiveHour : updatedFiveHour;
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    const readsBefore = h.read.mock.calls.length;
+    // Immediately (well inside the 30s snapshot TTL) report the updated window. The re-read must
+    // bypass the cache, fetch fresh ordinary-login quota, and conclude 'verified' instead of 'mismatch'.
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe('verified'));
+    expect(usageCalls).toBe(2);
+    expect(h.read.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(h.read.mock.calls.at(-1)?.[2]).toEqual({ force: true });
+    lease!.release();
+  });
+
+  it('does not mark mismatch when the confirmation quota re-read fails', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      if (usageCalls > 1) throw new Error('temporary network failure');
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: oldFiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(usageCalls).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+    lease!.release();
+  });
+
+  it('does not let an in-flight mismatch check clobber a concurrent token renewal', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let finishReread!: () => void;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      if (usageCalls === 2) await new Promise<void>(resolve => { finishReread = resolve; });
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: oldFiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(finishReread).toBeTypeOf('function'));
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v2'); });
+    const renewing = runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'race' });
+    finishReread();
+    const renewed = await renewing;
+    expect(renewed.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'pending' } });
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+    lease!.release();
   });
 
   it('keeps a token stored in user settings away from sessions that start without them', async () => {

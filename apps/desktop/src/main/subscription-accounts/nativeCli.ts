@@ -102,7 +102,7 @@ export type NativeAccountState = AuthState & {
    * Claude: tasks run on a long-lived token. Identity, plan and `loginExpiresAt` then come from the
    * ordinary login kept beside it; `storedLogin` says whether that login is still signed in.
    */
-  longLivedToken?: { source: ClaudeLongLivedTokenSource; storedLogin?: boolean };
+  longLivedToken?: { source: ClaudeLongLivedTokenSource; storedLogin?: boolean; version?: string };
 };
 
 const claudeConfigDir = (directory: string) => directory === path.join(homedir(), '.claude') ? undefined : directory;
@@ -136,7 +136,13 @@ export async function readNativeAccount(
       planDisplayName: result.planDisplayName,
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
       ...(result.loggedIn && result.longLivedToken
-        ? { longLivedToken: { source: result.longLivedToken, ...(result.storedLogin !== undefined ? { storedLogin: result.storedLogin } : {}) } }
+        ? {
+            longLivedToken: {
+              source: result.longLivedToken,
+              ...(result.storedLogin !== undefined ? { storedLogin: result.storedLogin } : {}),
+              ...(result.longLivedTokenVersion ? { version: result.longLivedTokenVersion } : {}),
+            },
+          }
         : {}),
     };
   }

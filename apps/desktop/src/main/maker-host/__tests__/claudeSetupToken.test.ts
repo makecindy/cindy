@@ -9,7 +9,7 @@
  * - tier:unit(内存里的假终端、临时目录,不拉起 CLI)。
  */
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,7 +24,7 @@ vi.mock('@cindy/maker-core', () => ({ cleanProcessEnv: () => ({ PATH: '/usr/bin'
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 
 import type { ClaudeCliLoginStatus } from '@cindy/maker-core/claude-cli-login-status';
-import { removeClaudeLongLivedToken, saveClaudeLongLivedToken } from '../claude-long-lived-token.js';
+import { removeClaudeLongLivedToken, replaceClaudeLongLivedToken, saveClaudeLongLivedToken } from '../claude-long-lived-token.js';
 import { createClaudeNativeCli } from '../claude-native-cli.js';
 import { runClaudeSetupToken, type SetupTokenTerminal } from '../claude-setup-token.js';
 import { TerminalScreen } from '../terminal-screen.js';
@@ -157,6 +157,37 @@ describe('keeping the token in the account directory', () => {
     await expect(saveClaudeLongLivedToken(directory, TOKEN, 'win32')).rejects.toThrow();
     expect(readFileSync(settings, 'utf8')).toBe('{ not json');
   });
+
+  it('restores the previous token on rollback on both POSIX and Windows, leaving no backup behind', async () => {
+    const previous = `sk-ant-oat01-${'B'.repeat(95)}`;
+    const posixProfile = path.join(directory, 'posix-profile');
+    await saveClaudeLongLivedToken(posixProfile, previous, 'darwin');
+    const posixFile = path.join(posixProfile, 'cindy-long-lived-token');
+    const beforeIno = statSync(posixFile).ino;
+    const pendingPosix = await replaceClaudeLongLivedToken(posixProfile, TOKEN, 'darwin');
+    expect(readFileSync(posixFile, 'utf8')).toBe(`${TOKEN}\n`);
+    await pendingPosix.rollback();
+    expect(readFileSync(posixFile, 'utf8')).toBe(`${previous}\n`);
+    expect(statSync(posixFile).ino).toBe(beforeIno);
+    expect(readdirSync(posixProfile)).toEqual(['cindy-long-lived-token']);
+
+    const winProfile = path.join(directory, 'win-profile');
+    await saveClaudeLongLivedToken(winProfile, previous, 'win32');
+    const winSettings = path.join(winProfile, 'settings.json');
+    writeFileSync(winSettings, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: previous, HTTPS_PROXY: 'http://p:8080' }, theme: 'dark' }));
+    const pendingWin = await replaceClaudeLongLivedToken(winProfile, TOKEN, 'win32');
+    expect(JSON.parse(readFileSync(winSettings, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN);
+    await pendingWin.rollback();
+    expect(JSON.parse(readFileSync(winSettings, 'utf8'))).toEqual({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: previous, HTTPS_PROXY: 'http://p:8080' }, theme: 'dark',
+    });
+
+    const freshWin = path.join(directory, 'win-fresh');
+    const pendingFreshWin = await replaceClaudeLongLivedToken(freshWin, TOKEN, 'win32');
+    expect(existsSync(path.join(freshWin, 'settings.json'))).toBe(true);
+    await pendingFreshWin.rollback();
+    expect(existsSync(path.join(freshWin, 'settings.json'))).toBe(false);
+  });
 });
 
 describe('moving an account onto a long-lived token', () => {
@@ -217,6 +248,50 @@ describe('moving an account onto a long-lived token', () => {
     await authorize();
     await expect(result).resolves.toEqual({ ok: false, reason: 'login_failed' });
     expect(tokenStored()).toBe(false);
+  });
+
+  it.each([
+    ['the status confirmation fails', () => { readStatus.mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(onToken(true)); }, 'local_unavailable'],
+    ['the CLI does not recognize the new token', () => { readStatus.mockResolvedValueOnce(signedIn).mockResolvedValue(onToken(true)); }, 'login_failed'],
+  ])('preserves the previous working token when renewal fails because %s', async (_name, setupAfter, reason) => {
+    const previous = `sk-ant-oat01-${'B'.repeat(95)}`;
+    await saveClaudeLongLivedToken(profile, previous);
+    readStatus.mockResolvedValueOnce(onToken(true));
+    setupAfter();
+    const { runClaudeCliLongLivedToken } = cli();
+    const result = runClaudeCliLongLivedToken(new AbortController().signal, profile);
+    await authorize();
+    await expect(result).resolves.toEqual({ ok: false, reason });
+    if (posix) {
+      expect(readFileSync(path.join(profile, 'cindy-long-lived-token'), 'utf8')).toBe(`${previous}\n`);
+      expect(readdirSync(profile)).toEqual(['cindy-long-lived-token']);
+    } else {
+      expect(JSON.parse(readFileSync(path.join(profile, 'settings.json'), 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(previous);
+    }
+  });
+
+  it('restores the previous token when cancelled during post-write status confirmation', async () => {
+    const previous = `sk-ant-oat01-${'B'.repeat(95)}`;
+    await saveClaudeLongLivedToken(profile, previous);
+    const abort = new AbortController();
+    let finishConfirm!: (status: ClaudeCliLoginStatus) => void;
+    readStatus
+      .mockResolvedValueOnce(onToken(true))
+      .mockImplementationOnce(() => new Promise<ClaudeCliLoginStatus>((resolve) => { finishConfirm = resolve; }))
+      .mockResolvedValue(onToken(true));
+    const { runClaudeCliLongLivedToken } = cli();
+    const result = runClaudeCliLongLivedToken(abort.signal, profile);
+    await authorize();
+    await vi.waitFor(() => expect(finishConfirm).toBeTypeOf('function'));
+    abort.abort();
+    finishConfirm(onToken(true));
+    await expect(result).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+    if (posix) {
+      expect(readFileSync(path.join(profile, 'cindy-long-lived-token'), 'utf8')).toBe(`${previous}\n`);
+      expect(readdirSync(profile)).toEqual(['cindy-long-lived-token']);
+    } else {
+      expect(JSON.parse(readFileSync(path.join(profile, 'settings.json'), 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN).toBe(previous);
+    }
   });
 
   it.each([

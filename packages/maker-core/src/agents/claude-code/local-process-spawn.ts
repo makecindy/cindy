@@ -1,9 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams, type StdioOptions } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, fstatSync, openSync } from 'node:fs';
 
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 
-import { CLAUDE_OAUTH_TOKEN_DESCRIPTOR, CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV } from './cli-login-status.js';
+import {
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR,
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV,
+  claudeLongLivedTokenVersionFromStats,
+} from './cli-login-status.js';
 
 export interface ObservedClaudeProcessExit {
   pid: number | undefined;
@@ -19,6 +23,8 @@ export interface ObservedClaudeProcessOptions {
    * itself; this process never reads the token. A file that is gone leaves the CLI on its stored login.
    */
   oauthTokenFile?: string;
+  /** Called once per spawn with the secret-free version of the handed token descriptor, or null when launched without one. */
+  onOAuthTokenVersion?: (version: string | null) => void;
   registerProcess?: (pid: number) => void | (() => void);
   trackDebugFile?: () => () => void;
   onStderr?: (chunk: string) => void;
@@ -32,12 +38,19 @@ export function spawnObservedClaudeProcess(
   const stdio: StdioOptions = ['pipe', 'pipe', 'pipe'];
   let env = opts.spawnOptions.env;
   let tokenDescriptor: number | undefined;
+  let tokenVersion: string | null = null;
   if (opts.oauthTokenFile) {
     try {
       tokenDescriptor = openSync(opts.oauthTokenFile, 'r');
+      tokenVersion = claudeLongLivedTokenVersionFromStats('descriptor', fstatSync(tokenDescriptor));
       stdio[CLAUDE_OAUTH_TOKEN_DESCRIPTOR] = tokenDescriptor;
       env = { ...env, [CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV]: String(CLAUDE_OAUTH_TOKEN_DESCRIPTOR) };
     } catch {
+      if (tokenDescriptor !== undefined) {
+        try { closeSync(tokenDescriptor); } catch { /* ignore */ }
+        tokenDescriptor = undefined;
+      }
+      tokenVersion = null;
       // Removed between selection and launch: the CLI falls back to its stored login.
     }
   }
@@ -58,6 +71,7 @@ export function spawnObservedClaudeProcess(
     // The child holds its own inherited copy.
     if (tokenDescriptor !== undefined) closeSync(tokenDescriptor);
   }
+  opts.onOAuthTokenVersion?.(tokenVersion);
   let disposeRegistration: (() => void) | undefined;
   let disposeDebugFile: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {

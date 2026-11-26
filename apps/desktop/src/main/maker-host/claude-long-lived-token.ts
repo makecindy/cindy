@@ -12,12 +12,19 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { CLAUDE_LONG_LIVED_TOKEN_FILE, claudeConfigDirectory } from '@cindy/maker-core/claude-cli-login-status';
 
 const TOKEN_ENV_KEY = 'CLAUDE_CODE_OAUTH_TOKEN';
+
+export interface PendingClaudeLongLivedToken {
+  /** Confirm the written token and remove any temporary backup of the previous one. */
+  commit(): Promise<void>;
+  /** Restore the previous token (or remove the newly written one if none existed). */
+  rollback(): Promise<void>;
+}
 
 async function writePrivateFile(file: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -32,23 +39,115 @@ async function writePrivateFile(file: string, contents: string): Promise<void> {
 }
 
 /** The account's user settings as an object; a file that is not a JSON object is left alone. */
-async function readUserSettings(file: string): Promise<Record<string, unknown>> {
+async function readUserSettingsWithPresence(file: string): Promise<{ existed: boolean; settings: Record<string, unknown> }> {
   let raw: string;
   try {
     raw = await fs.readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { existed: false, settings: {} };
     throw error;
   }
-  if (!raw.trim()) return {};
+  if (!raw.trim()) return { existed: true, settings: {} };
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Claude settings file is not an object');
-  return parsed as Record<string, unknown>;
+  return { existed: true, settings: parsed as Record<string, unknown> };
 }
 
 function settingsEnv(settings: Record<string, unknown>): Record<string, unknown> {
   const env = settings.env;
   return env && typeof env === 'object' && !Array.isArray(env) ? { ...(env as Record<string, unknown>) } : {};
+}
+
+async function backupExistingFile(file: string, backup: string): Promise<boolean> {
+  try {
+    await fs.link(file, backup);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return false;
+    if (code !== 'EXDEV' && code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EACCES') throw error;
+    try {
+      await fs.copyFile(file, backup, fsConstants.COPYFILE_EXCL);
+      await fs.chmod(backup, 0o600);
+      return true;
+    } catch (copyError) {
+      await fs.rm(backup, { force: true }).catch(() => {});
+      throw copyError;
+    }
+  }
+}
+
+/**
+ * Write a new long-lived token while keeping a rollback path to any existing token until the
+ * official CLI confirms the replacement. On POSIX the previous file is preserved via link/copy
+ * without reading token bytes into memory.
+ */
+export async function replaceClaudeLongLivedToken(
+  configDir: string | undefined,
+  token: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<PendingClaudeLongLivedToken> {
+  const directory = claudeConfigDirectory(configDir);
+  if (platform !== 'win32') {
+    const file = path.join(directory, CLAUDE_LONG_LIVED_TOKEN_FILE);
+    const backup = `${file}.${randomBytes(6).toString('hex')}.bak`;
+    const hasBackup = await backupExistingFile(file, backup);
+    try {
+      await writePrivateFile(file, `${token}\n`);
+    } catch (error) {
+      if (hasBackup) await fs.rm(backup, { force: true }).catch(() => {});
+      throw error;
+    }
+    let settled = false;
+    return {
+      async commit() {
+        if (settled) return;
+        settled = true;
+        if (hasBackup) await fs.rm(backup, { force: true }).catch(() => {});
+      },
+      async rollback() {
+        if (settled) return;
+        settled = true;
+        if (hasBackup) {
+          await fs.rename(backup, file);
+          return;
+        }
+        await removeClaudeLongLivedToken(configDir, platform);
+      },
+    };
+  }
+  const file = path.join(directory, 'settings.json');
+  const { existed, settings } = await readUserSettingsWithPresence(file);
+  const previousEnv = settingsEnv(settings);
+  const hadPreviousToken = Object.hasOwn(previousEnv, TOKEN_ENV_KEY);
+  const previousToken = previousEnv[TOKEN_ENV_KEY];
+  await writePrivateFile(file, `${JSON.stringify({ ...settings, env: { ...previousEnv, [TOKEN_ENV_KEY]: token } }, null, 2)}\n`);
+  let settled = false;
+  return {
+    async commit() {
+      settled = true;
+    },
+    async rollback() {
+      if (settled) return;
+      settled = true;
+      const { settings: current } = await readUserSettingsWithPresence(file);
+      const env = settingsEnv(current);
+      if (hadPreviousToken) {
+        env[TOKEN_ENV_KEY] = previousToken;
+        await writePrivateFile(file, `${JSON.stringify({ ...current, env }, null, 2)}\n`);
+        return;
+      }
+      delete env[TOKEN_ENV_KEY];
+      const next = { ...current };
+      if (Object.keys(env).length > 0) next.env = env;
+      else delete next.env;
+      if (!existed && Object.keys(next).length === 0) {
+        await fs.rm(file, { force: true });
+        return;
+      }
+      await writePrivateFile(file, `${JSON.stringify(next, null, 2)}\n`);
+    },
+  };
 }
 
 export async function saveClaudeLongLivedToken(
@@ -62,7 +161,7 @@ export async function saveClaudeLongLivedToken(
     return;
   }
   const file = path.join(directory, 'settings.json');
-  const settings = await readUserSettings(file);
+  const { settings } = await readUserSettingsWithPresence(file);
   await writePrivateFile(file, `${JSON.stringify({ ...settings, env: { ...settingsEnv(settings), [TOKEN_ENV_KEY]: token } }, null, 2)}\n`);
 }
 
@@ -82,7 +181,7 @@ export async function removeClaudeLongLivedToken(
     }
   }
   const file = path.join(directory, 'settings.json');
-  const settings = await readUserSettings(file);
+  const { settings } = await readUserSettingsWithPresence(file);
   const env = settingsEnv(settings);
   if (!(TOKEN_ENV_KEY in env)) return false;
   delete env[TOKEN_ENV_KEY];

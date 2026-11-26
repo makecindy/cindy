@@ -8,7 +8,7 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
-import { closeSync, openSync, statSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -43,6 +43,8 @@ export interface ClaudeCliLoginStatus {
    * fields and `loginExpiresAt` then describe the ordinary login stored beside it (when there is one).
    */
   longLivedToken?: ClaudeLongLivedTokenSource;
+  /** Secret-free file version of the long-lived token observed during status read; never token content. */
+  longLivedTokenVersion?: string;
   /** With `longLivedToken`: whether the ordinary login beside it is still signed in. Absent when unread. */
   storedLogin?: boolean;
 }
@@ -72,6 +74,31 @@ export function claudeLongLivedTokenFile(
   try {
     const stats = statSync(file);
     return stats.isFile() && stats.size > 0 ? file : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Secret-free version key derived solely from file metadata (never reads token bytes). */
+export function claudeLongLivedTokenVersionFromStats(
+  source: ClaudeLongLivedTokenSource,
+  stats: Pick<Stats, 'dev' | 'ino' | 'size' | 'mtimeMs' | 'ctimeMs'>,
+): string {
+  return `${source}:${stats.dev}:${stats.ino}:${stats.size}:${Math.trunc(stats.mtimeMs)}:${Math.trunc(stats.ctimeMs)}`;
+}
+
+/** Secret-free version of the account's long-lived token file or user settings file, if present. */
+export function claudeLongLivedTokenFileVersion(
+  source: ClaudeLongLivedTokenSource,
+  configDir?: string,
+): string | undefined {
+  const file = path.join(
+    claudeConfigDirectory(configDir),
+    source === 'descriptor' ? CLAUDE_LONG_LIVED_TOKEN_FILE : 'settings.json',
+  );
+  try {
+    const stats = statSync(file);
+    return stats.isFile() && stats.size > 0 ? claudeLongLivedTokenVersionFromStats(source, stats) : undefined;
   } catch {
     return undefined;
   }
@@ -195,6 +222,7 @@ export interface ReadClaudeCliStatusOptions {
 interface StatusLaunch {
   oauthTokenFile?: string;
   skipUserSettings?: boolean;
+  onTokenVersion?: (version: string) => void;
 }
 
 /**
@@ -237,7 +265,16 @@ async function readStatusOnce(
   timeoutMs = options.timeoutMs,
 ): Promise<ClaudeCliLoginStatus | null> {
   const prefix = launch.skipUserSettings ? CLAUDE_CLI_SKIP_USER_SETTINGS_ARGS : [];
-  const stdout = await readStatusOutput({ ...options, timeoutMs }, [...prefix, ...CLAUDE_CLI_STATUS_ARGS], launch, true);
+  let jsonDescriptorVersion: string | undefined;
+  let textDescriptorVersion: string | undefined;
+  const settingsVersionBefore = launch.skipUserSettings
+    ? undefined : claudeLongLivedTokenFileVersion('settings', options.env.CLAUDE_CONFIG_DIR);
+  const stdout = await readStatusOutput(
+    { ...options, timeoutMs },
+    [...prefix, ...CLAUDE_CLI_STATUS_ARGS],
+    { ...launch, onTokenVersion: (version) => { jsonDescriptorVersion = version; } },
+    true,
+  );
   const status = parseClaudeCliLoginStatus(stdout);
   const record = statusRecord(stdout);
   const viaToken = !!record && tokenLogin(record);
@@ -246,8 +283,18 @@ async function readStatusOnce(
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0) return status;
   try {
-    const text = await readStatusOutput({ ...options, timeoutMs: remainingMs }, [...prefix, ...CLAUDE_CLI_TEXT_STATUS_ARGS], launch);
-    return parseClaudeCliLoginStatus(stdout, text);
+    const text = await readStatusOutput(
+      { ...options, timeoutMs: remainingMs },
+      [...prefix, ...CLAUDE_CLI_TEXT_STATUS_ARGS],
+      { ...launch, onTokenVersion: (version) => { textDescriptorVersion = version; } },
+    );
+    const parsed = parseClaudeCliLoginStatus(stdout, text);
+    if (!parsed?.longLivedToken) return parsed;
+    const version = parsed.longLivedToken === 'descriptor'
+      ? (jsonDescriptorVersion && jsonDescriptorVersion === textDescriptorVersion ? jsonDescriptorVersion : undefined)
+      : (settingsVersionBefore && settingsVersionBefore === claudeLongLivedTokenFileVersion('settings', options.env.CLAUDE_CONFIG_DIR)
+        ? settingsVersionBefore : undefined);
+    return version ? { ...parsed, longLivedTokenVersion: version } : parsed;
   } catch {
     // An optional display label must never make a valid JSON login unavailable.
     return status;
@@ -260,7 +307,9 @@ function readStatusOutput(
   launch: StatusLaunch = {},
   acceptErrorOutput = false,
 ): Promise<string> {
-  if (launch.oauthTokenFile) return readStatusOutputWithToken(options, args, launch.oauthTokenFile, acceptErrorOutput);
+  if (launch.oauthTokenFile) {
+    return readStatusOutputWithToken(options, args, launch.oauthTokenFile, acceptErrorOutput, launch.onTokenVersion);
+  }
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   execFile(
     options.binary,
@@ -291,6 +340,7 @@ function readStatusOutputWithToken(
   args: readonly string[],
   oauthTokenFile: string,
   acceptErrorOutput: boolean,
+  onTokenVersion?: (version: string) => void,
 ): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   let descriptor: number;
@@ -302,6 +352,7 @@ function readStatusOutputWithToken(
   }
   let child: ReturnType<typeof spawn>;
   try {
+    onTokenVersion?.(claudeLongLivedTokenVersionFromStats('descriptor', fstatSync(descriptor)));
     child = spawn(options.binary, [...args], {
       env: { ...options.env, [CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV]: String(CLAUDE_OAUTH_TOKEN_DESCRIPTOR) },
       stdio: ['ignore', 'pipe', 'ignore', descriptor],

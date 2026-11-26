@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process';
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseClaudeCliLoginStatus, readClaudeCliLoginStatusBySpawn } from '../cli-login-status.js';
+import { claudeLongLivedTokenFileVersion, parseClaudeCliLoginStatus, readClaudeCliLoginStatusBySpawn } from '../cli-login-status.js';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 
@@ -134,5 +137,30 @@ describe('long-lived subscription token', () => {
     await expect(readClaudeCliLoginStatusBySpawn(options)).resolves.toEqual({
       loggedIn: true, authMethod: 'oauth_token', longLivedToken: 'settings', storedLogin: false,
     });
+  });
+
+  it('reports a distinct secret-free token version when the token file is replaced', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-status-token-version-'));
+    try {
+      const settingsPath = path.join(dir, 'settings.json');
+      writeFileSync(settingsPath, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-first' } }));
+      const dirOptions = { ...options, env: { CLAUDE_CONFIG_DIR: dir } };
+      reply(tokenJson);
+      reply('Auth token: CLAUDE_CODE_OAUTH_TOKEN\n');
+      reply(JSON.stringify({ loggedIn: false, authMethod: 'none' }), new Error('exit 1'));
+      const first = await readClaudeCliLoginStatusBySpawn(dirOptions);
+      expect(first?.longLivedTokenVersion).toMatch(/^settings:/);
+      expect(first?.longLivedTokenVersion).not.toContain('sk-ant-');
+
+      // Atomic replacement (temp + rename, like writePrivateFile) changes inode and version.
+      const tmp = path.join(dir, 'settings.json.tmp');
+      writeFileSync(tmp, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-second' } }));
+      renameSync(tmp, settingsPath);
+      const secondVersion = claudeLongLivedTokenFileVersion('settings', dir);
+      expect(secondVersion).toMatch(/^settings:/);
+      expect(secondVersion).not.toBe(first?.longLivedTokenVersion);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

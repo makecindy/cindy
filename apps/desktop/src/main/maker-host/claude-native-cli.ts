@@ -9,7 +9,11 @@ import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compa
 
 import { createLogger } from '../logger.js';
 import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
-import { removeClaudeLongLivedToken, saveClaudeLongLivedToken } from './claude-long-lived-token.js';
+import {
+  removeClaudeLongLivedToken,
+  replaceClaudeLongLivedToken,
+  type PendingClaudeLongLivedToken,
+} from './claude-long-lived-token.js';
 import { runClaudeSetupToken, type SpawnSetupTokenTerminal } from './claude-setup-token.js';
 import {
   isClaudeCliLoginStatusFresh,
@@ -541,8 +545,10 @@ async function runClaudeCliLongLivedToken(
     spawn: ports.spawnTerminal,
   });
   if (!minted.ok) return minted;
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  let pending: PendingClaudeLongLivedToken;
   try {
-    await saveClaudeLongLivedToken(configDir, minted.token);
+    pending = await replaceClaudeLongLivedToken(configDir, minted.token);
   } catch (err) {
     // The error of a failed write names the path only, never the token.
     log.warn('claude long-lived token could not be saved', { error: err instanceof Error ? err.name : typeof err });
@@ -554,11 +560,14 @@ async function runClaudeCliLongLivedToken(
   } catch {
     after = null;
   }
-  if (after?.longLivedToken) return { ok: true, status: after };
-  // The CLI does not see the token: leave the account exactly as it was.
-  await removeClaudeLongLivedToken(configDir).catch(() => {});
+  if (!signal.aborted && after?.longLivedToken) {
+    await pending.commit();
+    return { ok: true, status: after };
+  }
+  // Cancelled, or the CLI does not confirm the new token: restore any previous token (or remove the new one).
+  await pending.rollback().catch(() => {});
   await refreshClaudeCliLoginStatus({ force: true, configDir }).catch(() => {});
-  return { ok: false, reason: after ? 'login_failed' : 'local_unavailable' };
+  return { ok: false, reason: signal.aborted ? 'login_cancelled' : after ? 'login_failed' : 'local_unavailable' };
 }
 
 /** 拿掉账号的长期令牌,回到它的普通登录。令牌在 Anthropic 那边仍有效到期满,官方没有作废命令。 */

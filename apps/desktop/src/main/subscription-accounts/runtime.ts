@@ -171,6 +171,8 @@ interface AccountSnapshot {
    * token's own task events are compared against them (claudeTokenAccountCheck.ts).
    */
   storedLoginResets?: ClaudeQuotaWindowResets;
+  /** Monotonic sequence incremented each time ordinary-login Claude quota is freshly read. */
+  storedLoginResetsSeq?: number;
   retryDelayMs?: number;
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
@@ -248,7 +250,11 @@ interface OwnerRuntime {
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
   /** Claude accounts whose long-lived token is being checked against their ordinary login right now. */
-  tokenChecks: Set<string>;
+  tokenChecks: Map<string, symbol>;
+  /** Incremented whenever a Claude account's long-lived token is created, replaced or removed. */
+  tokenMutationEpoch: Map<string, number>;
+  /** Monotonic sequence for fresh ordinary-login Claude quota reads. */
+  storedLoginReadSeq: number;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
   codexModels: Map<string, CodexModelSnapshot>;
@@ -369,7 +375,9 @@ function currentRuntime(): OwnerRuntime {
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
-      tokenChecks: new Set(),
+      tokenChecks: new Map(),
+      tokenMutationEpoch: new Map(),
+      storedLoginReadSeq: 0,
       quotaCooling: loadCooling(),
       codexModels: new Map(),
       codexModelFlights: new Map(),
@@ -725,6 +733,7 @@ function assertOwner(state: OwnerRuntime): void {
 export function observeSubscriptionAccountUsage(
   account: NativeSubscriptionAccount,
   raw: unknown,
+  options?: { claudeTokenVersion?: string | null },
 ): void {
   try {
     account.assertCurrent();
@@ -803,8 +812,12 @@ export function observeSubscriptionAccountUsage(
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider, undefined, 'usage');
-  if (provider === 'anthropic' && incoming && cached.auth.authenticated && cached.auth.longLivedToken)
-    checkLongLivedTokenAccount(state, key.slice(provider.length + 1), cached, claudeQuotaWindowResets(incoming));
+  const currentTokenVersion = provider === 'anthropic' && cached.auth.authenticated
+    ? cached.auth.longLivedToken?.version : undefined;
+  if (provider === 'anthropic' && incoming && currentTokenVersion
+    && typeof options?.claudeTokenVersion === 'string' && options.claudeTokenVersion === currentTokenVersion) {
+    checkLongLivedTokenAccount(state, key.slice(provider.length + 1), cached, currentTokenVersion, claudeQuotaWindowResets(incoming));
+  }
 }
 function eventOwnedClaudeUsage(usage: NonNullable<Usage['claudeUsage']> | null | undefined) {
   if (!usage) return usage;
@@ -822,36 +835,68 @@ function checkLongLivedTokenAccount(
   state: OwnerRuntime,
   id: string,
   cached: AccountSnapshot,
+  expectedTokenVersion: string,
   token: ClaudeQuotaWindowResets | undefined,
 ): void {
   if (state.tokenChecks.has(id)) return;
-  if (readPool('anthropic')?.accounts.find(account => account.id === id)?.longLivedToken?.verification) return;
+  const record = readPool('anthropic')?.accounts.find(account => account.id === id)?.longLivedToken;
+  if (record?.verification) return;
   const first = compareClaudeQuotaWindows(token, cached.storedLoginResets, Date.now());
   if (first === 'unknown') return;
-  state.tokenChecks.add(id);
+  const runToken = Symbol('token-check');
+  const mutationEpoch = state.tokenMutationEpoch.get(id) ?? 0;
+  const expectedMintedAt = record?.mintedAt;
+  const beforeSeq = cached.storedLoginResetsSeq ?? 0;
+  state.tokenChecks.set(id, runToken);
+  const stillSameToken = (latest?: AccountSnapshot | null): boolean => {
+    if (!isCurrentRuntime(state)) return false;
+    if ((state.tokenMutationEpoch.get(id) ?? 0) !== mutationEpoch) return false;
+    const currentRecord = readPool('anthropic')?.accounts.find(account => account.id === id)?.longLivedToken;
+    if (currentRecord?.verification || currentRecord?.mintedAt !== expectedMintedAt) return false;
+    const snap = latest ?? state.cache.get(keyOf('anthropic', id));
+    return snap?.auth.authenticated === true && snap.auth.longLivedToken?.version === expectedTokenVersion;
+  };
   void (async () => {
     let verdict: ReturnType<typeof compareClaudeQuotaWindows> = first;
     if (verdict === 'different') {
-      const fresh = await snapshot(state, 'anthropic', id, false, true).catch(() => null);
-      verdict = compareClaudeQuotaWindows(token, fresh?.storedLoginResets, Date.now());
+      // Finish any earlier read before starting a fresh forced read of both account and ordinary-login quota.
+      await state.flights.get(keyOf('anthropic', id))?.promise.catch(() => {});
+      if (!stillSameToken()) return;
+      const fresh = await snapshot(state, 'anthropic', id, true, true).catch(() => null);
+      if (!fresh || !stillSameToken(fresh)) return;
+      // Do not mark mismatch if the re-read fell back to cached quota rather than fetching fresh windows.
+      if ((fresh.storedLoginResetsSeq ?? 0) <= beforeSeq) return;
+      verdict = compareClaudeQuotaWindows(token, fresh.storedLoginResets, Date.now());
     }
     if (verdict === 'unknown') return;
     assertOwner(state);
+    if (!stillSameToken()) return;
+    let wrote = false;
     await updatePool('anthropic', (pool) => {
       assertOwner(state);
-      return { ...pool, accounts: pool.accounts.map(account => account.id === id
-        ? { ...account, longLivedToken: { ...account.longLivedToken, verification: verdict === 'same' ? 'verified' as const : 'mismatch' as const } }
-        : account) };
+      if ((state.tokenMutationEpoch.get(id) ?? 0) !== mutationEpoch) return pool;
+      return { ...pool, accounts: pool.accounts.map(account => {
+        if (account.id !== id) return account;
+        if (account.longLivedToken?.verification || account.longLivedToken?.mintedAt !== expectedMintedAt) return account;
+        if (state.cache.get(keyOf('anthropic', id))?.auth.longLivedToken?.version !== expectedTokenVersion) return account;
+        wrote = true;
+        return { ...account, longLivedToken: { ...account.longLivedToken, verification: verdict === 'same' ? 'verified' as const : 'mismatch' as const } };
+      }) };
     });
+    if (!wrote) return;
     assertOwner(state);
     if (verdict === 'different') {
       log.warn('long-lived token does not match the account', { accountId: id });
       // The next read reports the mismatch and stops assigning the account.
       await state.flights.get(keyOf('anthropic', id))?.promise.catch(() => {});
-      state.cache.delete(keyOf('anthropic', id));
+      if ((state.tokenMutationEpoch.get(id) ?? 0) === mutationEpoch) {
+        state.cache.delete(keyOf('anthropic', id));
+      }
     }
     changed('anthropic');
-  })().catch(() => {}).finally(() => state.tokenChecks.delete(id));
+  })().catch(() => {}).finally(() => {
+    if (state.tokenChecks.get(id) === runToken) state.tokenChecks.delete(id);
+  });
 }
 /**
  * Keep the owner-local notes of a long-lived token in step with what the official CLI reports,
@@ -980,7 +1025,7 @@ async function snapshot(
           ? await readLegacyCodexProviderAccount(imported, directory)
           : id === 'default' && legacyCodexDefault(provider)
             ? await readLegacyCodexAccount()
-            : expectedIdentity
+            : expectedIdentity || (provider === 'anthropic' && force)
               ? await readNativeAccount(provider, directory, { force: true })
               : await readNativeAccount(provider, directory);
         if (provider === 'anthropic' && auth.authenticated && auth.longLivedToken && !auth.identity) {
@@ -1085,13 +1130,17 @@ async function snapshot(
         }
         let readSucceeded = false;
         let storedLoginResets = sameAccount(current) ? current?.storedLoginResets : undefined;
+        let storedLoginResetsSeq = sameAccount(current) ? current?.storedLoginResetsSeq : undefined;
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
             : await readNativeAccountUsage(provider, directory).then(value => {
                 readSucceeded = true;
                 observedUsage = true;
-                if (provider === 'anthropic') storedLoginResets = claudeQuotaWindowResets(value.claudeUsage);
+                if (provider === 'anthropic') {
+                  storedLoginResets = claudeQuotaWindowResets(value.claudeUsage);
+                  storedLoginResetsSeq = ++state.storedLoginReadSeq;
+                }
                 return value;
               }).catch(() => {
                 const latest = state.cache.get(key);
@@ -1151,6 +1200,7 @@ async function snapshot(
           auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
           usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
           ...(storedLoginResets ? { storedLoginResets } : {}),
+          ...(storedLoginResetsSeq !== undefined ? { storedLoginResetsSeq } : {}),
           at: Date.now(),
           usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
@@ -3768,6 +3818,10 @@ async function changeLongLivedToken(
   const key = keyOf(provider, accountId);
   if (!readPool(provider)?.accounts.some((account) => account.id === accountId)) throw new Error('Account not found');
   const directory = directoryFor(provider, accountId);
+  const bumpTokenEpoch = () => {
+    state.tokenMutationEpoch.set(accountId, (state.tokenMutationEpoch.get(accountId) ?? 0) + 1);
+    state.tokenChecks.delete(accountId);
+  };
   const reread = async () => {
     await state.flights.get(key)?.promise.catch(() => {});
     assertOwner(state);
@@ -3775,8 +3829,10 @@ async function changeLongLivedToken(
     state.claudeModels.delete(accountId);
   };
   if (command.action === 'token-remove') {
+    bumpTokenEpoch();
     await removeNativeLongLivedToken(directory);
     assertOwner(state);
+    bumpTokenEpoch();
     await reread();
     await snapshot(state, provider, accountId, true);
     return;
@@ -3806,6 +3862,7 @@ async function changeLongLivedToken(
       throw new Error('not_signed_in');
     await createNativeLongLivedToken(directory, abort.signal);
     assertOwner(state);
+    bumpTokenEpoch();
     await updatePool(provider, (pool) => {
       assertOwner(state);
       return { ...pool, accounts: pool.accounts.map((account) => account.id === accountId
@@ -3816,7 +3873,7 @@ async function changeLongLivedToken(
     });
     assertOwner(state);
     await reread();
-    const after = await snapshot(state, provider, accountId, true);
+    const after = await snapshot(state, provider, accountId, true, true);
     assertOwner(state);
     if (!after.auth.authenticated || !after.auth.longLivedToken) throw new Error('login_failed');
   } catch (error) {
