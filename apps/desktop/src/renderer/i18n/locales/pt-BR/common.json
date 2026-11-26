@@ -18107,7 +18107,7 @@
         "label": "Palavras-chave",
         "any": "Qualquer palavra",
         "all": "Todas as palavras",
-        "help": "Use “frase exata” para texto contínuo ou a + b para exigir ambas as palavras na mesma mensagem. Os títulos são pesquisados separadamente. Coloque espaços ao redor de +.",
+        "help": "Escolha todas as palavras-chave e separe-as com espaços para exigi-las na mesma mensagem. Use “frase exata” para texto consecutivo. Os títulos são comparados separadamente.",
         "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a busca a um projeto."
       }
     }

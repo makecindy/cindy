@@ -17938,7 +17938,7 @@
         "label": "Keywords",
         "any": "Any keyword",
         "all": "All keywords",
-        "help": "Use “exact phrase” for continuous text, or a + b to require both keywords in one message. Titles are matched separately. Put spaces around +.",
+        "help": "Choose All keywords and separate keywords with spaces to require them in one message. Use “exact phrase” for consecutive text. Titles match separately.",
         "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
       }
     }

@@ -18107,7 +18107,7 @@
         "label": "Mots-clés",
         "any": "Un des mots-clés",
         "all": "Tous les mots-clés",
-        "help": "Utilisez “expression exacte” pour du texte continu ou a + b pour exiger les deux mots dans un même message. Les titres sont recherchés séparément. Entourez + d’espaces.",
+        "help": "Choisissez tous les mots-clés et séparez-les par des espaces pour les exiger dans un même message. “Expression exacte” recherche du texte consécutif. Les titres sont comparés séparément.",
         "partial": "Les résultats peuvent être incomplets. Précisez les mots-clés ou limitez la recherche à un projet."
       }
     }

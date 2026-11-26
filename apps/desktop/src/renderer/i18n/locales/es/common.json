@@ -18107,7 +18107,7 @@
         "label": "Palabras clave",
         "any": "Cualquier palabra",
         "all": "Todas las palabras",
-        "help": "Usa “frase exacta” para texto continuo o a + b para exigir ambas palabras en un mismo mensaje. Los títulos se buscan por separado. Deja espacios alrededor de +.",
+        "help": "Elige todas las palabras clave y sepáralas con espacios para exigirlas en un mismo mensaje. Usa “frase exacta” para texto consecutivo. Los títulos se comparan por separado.",
         "partial": "Los resultados pueden estar incompletos. Usa palabras más específicas o limita la búsqueda a un proyecto."
       }
     }

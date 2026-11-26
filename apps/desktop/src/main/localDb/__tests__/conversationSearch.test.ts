@@ -209,6 +209,15 @@ describe('explicit task search', () => {
       add('d', 'hidden', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
       add('e', 'hidden', '缓存', 101);
       add('same-message', 'same', '登录后清除缓存');
+      // Chinese is still indexed character by character. Search a substring
+      // in the middle of a longer sentence, through the actual FTS + verifier.
+      add('middle-chinese', 'one', '这里的构建目录太大了，清理一下旧缓存再继续。');
+      const middlePhrase = await searchConversations({ query: '"目录太大了，清理一下"' });
+      expect(middlePhrase.results.map((item) => item.session.id)).toEqual(['one']);
+      const middleAll = await searchConversations({ query: '+ 目录太大 清理一下' });
+      expect(middleAll.results[0]?.contentHits.map((hit) => hit.messageId)).toEqual(['middle-chinese']);
+      const separatedCharacters = await searchConversations({ query: '+ 目录太大 清下' });
+      expect(separatedCharacters.results).toEqual([]);
       const exact = await searchConversations({ query: '"登录失败"' });
       expect(exact.results.map((item) => item.session.id)).toEqual(['both']);
       const all = await searchConversations({ query: '登录 + 缓存' });

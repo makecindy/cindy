@@ -17938,7 +17938,7 @@
         "label": "Suchbegriffe",
         "any": "Beliebiger Suchbegriff",
         "all": "Alle Suchbegriffe",
-        "help": "“Exakte Wortgruppe” sucht zusammenhängenden Text. a + b verlangt beide Begriffe in derselben Nachricht. Titel werden separat durchsucht. Leerzeichen um + setzen.",
+        "help": "Wähle alle Schlüsselwörter und trenne sie durch Leerzeichen, damit sie in derselben Nachricht vorkommen müssen. “Exakte Phrase” sucht zusammenhängenden Text. Titel werden separat geprüft.",
         "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
       }
     }

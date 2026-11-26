@@ -198,8 +198,8 @@ export function SidebarInlineSearch({
                紧凑纯图标形态,与搜索框合为一体(无分隔线、无文字提示)。
                菜单开合上报 → 打开期间保持展开,不因鼠标移到菜单而收起。 */}
           <SearchFilterMenu
-            query={search.query}
-            onQueryChange={search.setQuery}
+            matchAll={search.matchAll}
+            onMatchAllChange={search.setMatchAll}
             status={search.statusFilter}
             agentKind={search.agentFilter}
             lastActivity={search.lastActivityFilter}
