@@ -6953,9 +6953,9 @@ assertRouteCurrent();
         'features.goals': false,
         ...taskShellEnvConfig,
         ...commandRustLogConfig,
-        // Keep companion memory in its own Home. Native delegation uses the
-        // same feature settings and permissions as an ordinary task.
-        ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
+        // Keep companion memory (both V1 and V2 project teammates) in its own Cindy memory
+        // folder rather than Codex's native <CODEX_HOME>/memories/ store.
+        ...(opts.botRuntimeProfile || opts.makerMemorySwitchOwned ? {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),

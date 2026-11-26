@@ -81,6 +81,7 @@ export {
   memoryScopeDirName,
   buildFilename,
   parseFilename,
+  isSafeMemoryMarkdownFilename,
   validateSlug,
   SSH_SCOPE_KEY_PREFIX,
   type MemoryStorageMeta,
@@ -121,7 +122,7 @@ export {
   type MemoryFlushControllerDeps,
 } from './memory/flush-controller.js';
 export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
-export { loadMemoryContext } from './memory/context.js';
+export { loadMemoryContext, readProjectCoreMemoryIndex } from './memory/context.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
 export { VoiceCallContext, nativeVoiceCallInstructions, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';

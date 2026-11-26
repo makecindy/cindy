@@ -5,7 +5,27 @@ import matter from 'gray-matter';
 import { parseFilename } from '@cindy/maker-core';
 import type { BotLearningReceipt } from '@cindy/maker-shared/bot-learning';
 import { readTeammateMemories, teammateProjectMemoryDir } from './botProjectMemory.js';
-import { BOT_MEMORY_TYPES } from '../../shared/botMemory.js';
+
+function titleForMemoryFile(filename: string, raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (filename === 'MEMORY.md') return 'Core Memory';
+  let body = trimmed;
+  if (/^---\r?\n/.test(trimmed)) {
+    try {
+      const parsed = matter(trimmed);
+      if (typeof parsed.data?.title === 'string' && parsed.data.title.trim()) {
+        return parsed.data.title.trim().slice(0, 100);
+      }
+      body = parsed.content.trim();
+    } catch {
+      body = trimmed;
+    }
+  }
+  const heading = /^#\s+(.+?)\s*$/m.exec(body)?.[1]?.trim();
+  if (heading) return heading.slice(0, 100);
+  return filename.replace(/\.md$/i, '').replace(/[_-]+/g, ' ').trim().slice(0, 100) || filename;
+}
 
 /** Host-only feedback: one async baseline at hydration, one scan per tool-using turn's seal.
  * Native files stay the source of truth; no polling, model context or application write tool. */
@@ -24,16 +44,13 @@ export async function createProjectMemoryReceipts(workspace: string) {
     for (const record of records) {
       const parsed = parseFilename(record.filename);
       // Match the settings page: Pi's automatic compaction digests are not curated saves.
-      if (!parsed || !BOT_MEMORY_TYPES.some(type => type === parsed.type)) continue;
-      try {
-        const { data } = matter(record.content);
-        if (typeof data.title !== 'string' || !data.title.trim()
-          || typeof data.description !== 'string' || !data.description.trim()
-          || data.type !== parsed.type) continue;
-        result.set(record.filename, {
-          hash: createHash('sha256').update(record.content).digest('hex'), title: data.title,
-        });
-      } catch { /* Partial/invalid files are not confirmed saves. */ }
+      if (parsed?.type === 'digest') continue;
+      const title = titleForMemoryFile(record.filename, record.content);
+      if (!title) continue;
+      result.set(record.filename, {
+        hash: createHash('sha256').update(record.content).digest('hex'),
+        title,
+      });
     }
     return result;
   }

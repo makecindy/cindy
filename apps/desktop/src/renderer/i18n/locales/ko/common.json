@@ -5482,6 +5482,27 @@
           "confirm": "재설정",
           "cancel": "취소"
         }
+      },
+      "tidy": {
+        "label": "메모리 및 스킬 정리",
+        "description": "버디의 메모리와 스킬을 백그라운드에서 주기적으로 중복 제거하고 간결하게 정리합니다. 충분한 새 활동이 있을 때만 실행되며, 변경이 없으면 비용이 들지 않고 사이드바에 작업이 남지 않습니다.",
+        "cadenceLabel": "정리 주기",
+        "cadences": {
+          "weekly": "매주",
+          "biweekly": "2주마다",
+          "monthly": "매월",
+          "off": "끄기 (수동만)"
+        },
+        "runNow": "지금 정리",
+        "running": "정리 중…",
+        "toast": {
+          "cadenceSaved": "정리 주기가 업데이트되었습니다",
+          "cadenceFailed": "정리 주기 업데이트에 실패했습니다",
+          "updated": "정리가 완료되었습니다 ({{count}}개 업데이트)",
+          "idle": "정리가 필요한 항목이 없습니다",
+          "skipped": "정리할 버디가 없습니다",
+          "failed": "메모리 정리에 실패했습니다"
+        }
       }
     },
     "subagentModels": {

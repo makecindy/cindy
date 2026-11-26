@@ -125,11 +125,59 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
       expect(await store.search('sencha')).toHaveLength(1);
       await rm(file);
       expect(await store.search('sencha')).toHaveLength(0);
-      const hosted = await loadMemoryContext({ manager, scopeKey: '/remote', hosted: true, projectDirectory: directory, snapshot: 'OLD_INDEX' });
-      expect(hosted).toEqual(context);
+      const hosted = await loadMemoryContext({ manager, scopeKey: '/remote', hosted: true, projectDirectory: directory, snapshot: '# Core\n- Conclusions first' });
+      expect(hosted.index).toBe('# Core\n- Conclusions first');
+      expect(hosted.rules).toBe(context.rules);
+      expect(hosted.projectDirectory).toBe(directory);
       const ordinary = await loadMemoryContext({ manager, scopeKey: path.join(rootB, 'ordinary'), snapshot: 'ordinary index' });
       expect(ordinary.index).toBe('ordinary index');
       expect(ordinary.rules).toContain('cindy_memory');
+    } finally { manager.dispose(); }
+  });
+  // 测试价值:
+  // - 生产入口与可观察结果: loadMemoryContext / MakerMemoryStore (nativeFileEdits) 在伙伴项目目录下读写自由命名 .md、保留手写 MEMORY.md 并向启动上下文注入有界核心记忆。
+  // - Bug/规则依据: V2 伙伴记忆自由 Markdown + MEMORY.md 常驻入口重设计（不覆盖手写 MEMORY.md、不静默丢弃非 type_slug 文件或 >8KB 笔记）。
+  // - 现有覆盖缺口: 原有测试只验证标准 user_drink.md 且断言 context.index 恒为空。
+  // - 最小失败输入: 写入自由文件 notes.md (无 frontmatter, >8KB) 与手写 MEMORY.md 后打开 store 并检索。
+  // - tier: unit (临时目录真实文件与内存 SQLite)。
+  it('preserves authored MEMORY.md, injects bounded core index, and indexes freeform project markdown', async () => {
+    const workdir = path.join(rootA, 'project-freeform');
+    const directory = path.join(workdir, '.cindy', 'memory');
+    await mkdir(directory, { recursive: true });
+    const coreText = '# Core Memory\n- Always lead with conclusions.\n- See `notes.md` for release rules.';
+    await writeFile(path.join(directory, 'MEMORY.md'), coreText);
+    const largeBody = `# Release Notes\n\nDeploy window is Tuesday 10:00.\n${'detail '.repeat(1400)}`;
+    await writeFile(path.join(directory, 'notes.md'), largeBody);
+
+    const factory = vi.fn(trackingSqlite().factory);
+    const manager = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: factory, agents: {}, logger: noopLogger, initialEnabled: true,
+      resolveStorageDir: (scope) => scope === workdir ? directory : null,
+    });
+    try {
+      const ctx = await loadMemoryContext({ manager, scopeKey: workdir });
+      expect(ctx.index).toBe(coreText);
+      expect(factory).not.toHaveBeenCalled();
+
+      const store = await manager.getStore(workdir);
+      // Opening store must NOT overwrite authored MEMORY.md
+      expect(await readFile(path.join(directory, 'MEMORY.md'), 'utf8')).toBe(coreText);
+      const list = await store.list();
+      expect(list.map((r) => r.filename)).toEqual(['notes.md']);
+      expect(list[0].frontmatter.title).toBe('Release Notes');
+      expect(list[0].freeform).toBe(true);
+      expect(await store.search('Tuesday')).toHaveLength(1);
+
+      // Update freeform file in place (>8KB allowed in project memory) without clobbering MEMORY.md
+      const updated = await store.update('notes.md', list[0].frontmatter.updatedAt, {
+        title: 'Release Notes',
+        description: 'Deploy window',
+        body: largeBody.replace('Tuesday', 'Thursday'),
+      });
+      expect(updated.body).toContain('Thursday');
+      expect(await readFile(path.join(directory, 'MEMORY.md'), 'utf8')).toBe(coreText);
+      expect(await store.search('Thursday')).toHaveLength(1);
+      expect(await store.search('Tuesday')).toHaveLength(0);
     } finally { manager.dispose(); }
   });
   it.each(['resetAll', 'resetDigests'] as const)(

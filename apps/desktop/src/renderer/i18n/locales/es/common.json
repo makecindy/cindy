@@ -5585,6 +5585,27 @@
           "confirm": "Restablecer",
           "cancel": "Cancelar"
         }
+      },
+      "tidy": {
+        "label": "Limpieza de memoria y skills",
+        "description": "Depura y compacta periódicamente en segundo plano la memoria y las skills de tus compañeros. Solo se ejecuta cuando hay suficiente actividad nueva, no consume recursos si no hay cambios y no deja tareas residuales.",
+        "cadenceLabel": "Frecuencia de limpieza",
+        "cadences": {
+          "weekly": "Semanal",
+          "biweekly": "Cada 2 semanas",
+          "monthly": "Mensual",
+          "off": "Desactivada (solo manual)"
+        },
+        "runNow": "Limpiar ahora",
+        "running": "Limpiando…",
+        "toast": {
+          "cadenceSaved": "Frecuencia de limpieza actualizada",
+          "cadenceFailed": "No se pudo actualizar la frecuencia de limpieza",
+          "updated": "Limpieza completada ({{count}} actualizados)",
+          "idle": "No hizo falta limpiar nada",
+          "skipped": "No hay compañeros pendientes de limpieza",
+          "failed": "Error al limpiar la memoria"
+        }
       }
     },
     "subagentModels": {

@@ -5482,6 +5482,27 @@
           "confirm": "清之",
           "cancel": "罷"
         }
+      },
+      "tidy": {
+        "label": "憶錄與技藝理輯",
+        "description": "按期於幕後輕理諸伴之憶錄與技藝（去複、削繁、參校全域技藝）。唯積有新事乃啟，無變則不費毫釐，亦不留餘務於側欄。",
+        "cadenceLabel": "理輯之期",
+        "cadences": {
+          "weekly": "每七日",
+          "biweekly": "每半月",
+          "monthly": "每月",
+          "off": "止（唯手啟）"
+        },
+        "runNow": "即刻理輯",
+        "running": "理輯中…",
+        "toast": {
+          "cadenceSaved": "理輯之期已更",
+          "cadenceFailed": "更易理輯之期未成",
+          "updated": "理輯已畢（整新 {{count}} 伴）",
+          "idle": "諸憶錄技藝皆已清整，無須更易",
+          "skipped": "暫無待理之伴",
+          "failed": "理輯未成"
+        }
       }
     },
     "subagentModels": {

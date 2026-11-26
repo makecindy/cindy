@@ -60,7 +60,7 @@ describe('buddy repository initialization (#10216)', () => {
   it('recovers after local identity is supplied, preserves user files/config, and is then idempotent', async () => {
     const failed = await prepare('missing_identity');
     expect(failed.repository).toBe('failed');
-    expect(failed.registered).toBe(true);
+    expect(failed.registered).toBe(false);
     const workspace = failed.workingDir;
     expect(await readWorkspaceRepositoryStatus(workspace)).toBe('needs-identity');
     await expect(gitExec(['rev-parse', '--verify', 'HEAD'], workspace)).rejects.toThrow();
@@ -89,7 +89,7 @@ describe('buddy repository initialization (#10216)', () => {
     await fs.writeFile(path.join(workspace, '.git'), 'broken metadata\n');
     const result = await prepare('broken_metadata');
     expect(result.repository).toBe('failed');
-    expect(result.registered).toBe(true);
+    expect(result.registered).toBe(false);
     expect(await readWorkspaceRepositoryStatus(workspace)).toBe('failed');
     expect(await fs.readFile(path.join(workspace, '.git'), 'utf8')).toBe('broken metadata\n');
   });
@@ -212,9 +212,10 @@ describe('buddy repository initialization (#10216)', () => {
     // Next start with a writable regular file: both lists are completed, still nothing versioned.
     if (kind === 'link') { await fs.rm(ignore); await fs.writeFile(ignore, 'node_modules/\n'); }
     await expect(prepare(botId)).resolves.toMatchObject({ workingDir: workspace });
-    for (const file of ['token.json', '.cindy/memory/MEMORY.md', '.cindy/memory/fts.db', '.cindy/memory/meta.json']) {
+    for (const file of ['token.json', '.cindy/memory/fts.db', '.cindy/memory/meta.json']) {
       expect(await ignored(file), file).toBe(true);
     }
+    expect(await ignored('.cindy/memory/MEMORY.md')).toBe(false);
     expect(await ignored('.cindy/memory/project_launch.md')).toBe(false);
     expect(await versioned()).toBe(false);
   }
@@ -286,10 +287,10 @@ describe('buddy repository initialization (#10216)', () => {
     expect((await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).startsWith(rules)).toBe(true);
     const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
     for (const file of ['token.json', '.env', '.env.local', 'credentials.json', 'key.pem', '.venv/bin/python', 'venv/lib/x.py',
-      '.cindy-worktrees/t/a.txt', '.agents/skills/a/token.json', '.cindy/memory/MEMORY.md', '.cindy/memory/fts.db']) {
+      '.cindy-worktrees/t/a.txt', '.agents/skills/a/token.json', '.cindy/memory/fts.db']) {
       expect(await ignored(file), file).toBe(true);
     }
-    for (const file of ['.env.example', '.cindy/memory/project_launch.md', '.cindy/memory/.cindy-memory-migration-v1.json', 'notes.md']) {
+    for (const file of ['.env.example', '.cindy/memory/MEMORY.md', '.cindy/memory/project_launch.md', '.cindy/memory/.cindy-memory-migration-v1.json', 'notes.md']) {
       expect(await ignored(file), file).toBe(false);
     }
   });

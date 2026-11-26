@@ -32,6 +32,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   isolatedBotProfile,
+  readProjectCoreMemoryIndex,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -298,9 +299,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         try {
           const manager = deps.makerMemory();
           opts.makerMemoryProjectDir = manager?.getProjectMemoryDirectory(scopeKey);
-          const store = opts.makerMemoryProjectDir ? undefined : await manager?.getStore(scopeKey);
-          requireCurrent();
-          opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          if (opts.makerMemoryProjectDir) {
+            opts.makerMemoryIndexSnapshot = await readProjectCoreMemoryIndex(opts.makerMemoryProjectDir);
+            requireCurrent();
+          } else {
+            const store = await manager?.getStore(scopeKey);
+            requireCurrent();
+            opts.makerMemoryIndexSnapshot = await store?.getIndex() ?? '';
+          }
         } catch (error) {
           requireCurrent();
           log.warn('remote agent: memory index unavailable; starting without it', { error: String(error) });

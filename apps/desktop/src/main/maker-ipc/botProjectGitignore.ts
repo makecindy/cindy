@@ -59,7 +59,6 @@ export const BOT_PROJECT_MEMORY_GITIGNORE = [
   `${MEMORY_DIR}/*`,
   `!${MEMORY_DIR}/*.md`,
   `!${MEMORY_DIR}/${MEMORY_STORE_RECEIPT}`,
-  `${MEMORY_DIR}/MEMORY.md`,
 ];
 
 /**

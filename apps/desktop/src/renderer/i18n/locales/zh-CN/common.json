@@ -5482,6 +5482,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "记忆与技能整理",
+        "description": "定期在后台轻量整理各伙伴的记忆与技能（去重、精简、对照全局技能）。仅在有足够积压时才触发，无变动不消耗额度，也不在侧栏留下多余任务。",
+        "cadenceLabel": "整理频率",
+        "cadences": {
+          "weekly": "每周",
+          "biweekly": "每两周",
+          "monthly": "每月",
+          "off": "关闭（仅手动）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理频率已更新",
+          "cadenceFailed": "更新整理频率失败",
+          "updated": "整理完成（已更新 {{count}} 位伙伴）",
+          "idle": "当前记忆与技能都很整洁，无需改动",
+          "skipped": "暂无需要整理的伙伴",
+          "failed": "记忆整理失败"
+        }
       }
     },
     "subagentModels": {
