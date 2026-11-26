@@ -100,10 +100,17 @@ it('learns an omitted size from the response before writing and rejects a respon
   const sha256 = createHash('sha256').update(body).digest('hex');
   const events: any[] = [];
   const reserve = vi.spyOn(PluginDownloadCache.prototype, 'reserve');
+  // '/overflow' declares 3 bytes, then keeps streaming: only a pull-based body shows how far it was read.
+  let overflowPulls = 0;
+  const overflowing = () => new ReadableStream<Uint8Array>({
+    pull(c) { if (++overflowPulls > 100) c.close(); else c.enqueue(new Uint8Array([0x61])); },
+  });
   guarded.fetch.mockReset().mockImplementation(async (url: string) => ({
     response: url.endsWith('/sized')
       ? new Response(body, { headers: { 'content-length': String(body.length) } })
-      : new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } })),
+      : url.endsWith('/overflow')
+        ? new Response(overflowing(), { headers: { 'content-length': '3' } })
+        : new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } })),
   }));
   const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch, root: id => path.join(root, id), scope: () => 'owner',
     send: (_, event) => events.push(event), download: createDownloader(),
@@ -117,6 +124,10 @@ it('learns an omitted size from the response before writing and rejects a respon
       .toMatchObject({ loaded: body.length, total: body.length, percent: 100 });
     expect(await slot.handle('p', { kind: 'start', id: 'unsized', url: 'https://github.com/unsized', sha256 }))
       .toMatchObject({ ok: false });
+    // A body longer than its declared size stops at that size instead of filling the 8 GiB ceiling.
+    expect(await slot.handle('p', { kind: 'start', id: 'overflow', url: 'https://github.com/overflow', sha256 }))
+      .toMatchObject({ ok: false });
+    expect(overflowPulls).toBeLessThan(10);
     const files = (await fs.readdir(path.join(root, 'p'), { recursive: true })).map(f => path.basename(String(f)));
     expect(files.filter(name => name.startsWith('artifact'))).toEqual(['artifact']);
   } finally {

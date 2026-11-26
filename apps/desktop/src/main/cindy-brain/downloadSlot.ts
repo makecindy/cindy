@@ -10,20 +10,46 @@ import { PluginDownloadCache } from './downloadCache.js';
 const MAX_DOWNLOAD_BYTES = 8 * 1024 ** 3;
 
 /**
- * Whole-artifact size declared by a 200/206 response, or null. Used only when the plugin
- * omits `bytes`: the size must be known before any byte is written so the cache budget
- * is reserved up front. Chunked or re-encoded bodies (the downloader asks for identity)
- * are rejected rather than guessed.
+ * Whole-artifact size declared by a 200/206 response and the offset its body starts at, or
+ * null. Used only when the plugin omits `bytes`: the size must be known before any byte is
+ * written so the cache budget is reserved up front. Re-encoded bodies (the downloader asks
+ * for identity) are rejected rather than guessed.
  */
-function declaredArtifactSize(response: Response): number | null {
+function declaredArtifactSize(response: Response): { total: number; start: number } | null {
   const encoding = response.headers.get('content-encoding')?.trim().toLowerCase();
   if (encoding && encoding !== 'identity') return null;
   if (response.status === 206) {
-    const range = /^bytes \d+-\d+\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
-    return range ? Number(range[1]) : null;
+    const range = /^bytes (\d+)-\d+\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+    return range ? { total: Number(range[2]), start: Number(range[1]) } : null;
   }
   const length = response.headers.get('content-length')?.trim() ?? '';
-  return /^\d+$/.test(length) ? Number(length) : null;
+  return /^\d+$/.test(length) ? { total: Number(length), start: 0 } : null;
+}
+
+/**
+ * The downloader caps writes only by `expectedSize` / `maxBytes`, which an omitted size leaves
+ * at 8 GiB. A response may omit Content-Length (a 206 relies on Content-Range alone) and keep
+ * sending, so stop the body itself once it passes what the response declared: never write
+ * more than was reserved.
+ */
+function capResponseBody(response: Response, limit: number): Response {
+  if (!response.body) return response;
+  let seen = 0;
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > limit)
+          controller.error(new DownloadError('SIZE', 'Download exceeds the size the response declared'));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 /** Verified public artifacts, in the requesting plugin's host-managed cache only. */
@@ -296,19 +322,23 @@ export class PluginDownloadSlot {
             // The downloader only writes after this returns, so a missing, oversized or
             // changed size (the file was replaced between attempts) never reaches disk.
             try {
-              const total = declaredArtifactSize(sent.response);
+              const declared = declaredArtifactSize(sent.response);
               if (
-                total === null ||
-                total < 1 ||
-                total > MAX_DOWNLOAD_BYTES ||
-                (size !== undefined && total !== size)
+                declared === null ||
+                declared.total < 1 ||
+                declared.total > MAX_DOWNLOAD_BYTES ||
+                declared.start >= declared.total ||
+                (size !== undefined && declared.total !== size)
               )
                 throw new DownloadError('SIZE', 'Download response does not declare a usable size');
               if (size === undefined) {
-                await reserveReplacement(total);
-                size = total;
+                await reserveReplacement(declared.total);
+                size = declared.total;
               }
-              return sent;
+              return {
+                ...sent,
+                response: capResponseBody(sent.response, declared.total - declared.start),
+              };
             } catch (error) {
               await sent.response.body?.cancel().catch(() => {});
               await sent.release?.();

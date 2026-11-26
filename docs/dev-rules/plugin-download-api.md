@@ -12,7 +12,7 @@ SHA-256 必填，单文件最大 8 GiB。目标由宿主管理，不接受本机
 GitHub API）：开始时只预留条目开销；每次连接经 `request` 注入点拿到 200／206 后，从
 `Content-Length` 或 `Content-Range` 读出整文件大小，先按它预留缓存再交给下载器写盘。没有声明
 大小、带非 identity 的 `Content-Encoding`、超过 8 GiB，或重连后大小与首次不同，都在写盘前以
-`SIZE` 终局失败。大小只用于预留、进度和完整性核对，接受与否仍由 SHA-256 决定。缓存身份把
+`SIZE` 终局失败；响应体超过它声明的长度时也在越界那一块停下，不写入超出预留的字节。大小只用于预留、进度和完整性核对，接受与否仍由 SHA-256 决定。缓存身份把
 「省略」与「给出」视为不同请求，不共享条目。较早的宿主省略时返回
 `URL, SHA-256 and exact size (up to 8 GiB) are required`，插件需按此回退为带 `bytes` 的请求。
 面板不获得宿主路径。通过 `node.request({downloadTokens:{archive:token},params:{...}})`
