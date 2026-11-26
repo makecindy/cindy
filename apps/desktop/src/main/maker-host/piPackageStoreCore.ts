@@ -139,6 +139,10 @@ const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
 // full read + SHA-256 serial 2457ms / 4-way 1007ms / 8-way 732ms / 16-way 554ms.
 // Past 8 the extra gain is marginal, so fingerprint I/O is bounded at 8.
 const PI_PACKAGE_FINGERPRINT_CONCURRENCY = 8;
+// Reads are also bounded by buffered bytes: a wave of 8 small files still
+// overlaps, but a directory of large files cannot buffer more than this at
+// once. Bytes are reserved against the package budget before reading.
+const PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES = 8 * 1024 * 1024;
 // A managed npm store keeps every Pi package in one hoisted resolver tree, and
 // `snapshotRootForInstalledPackage` hands that whole tree to inspection, the
 // approval fingerprint and the launch copy. The ceilings therefore cover a
@@ -3232,6 +3236,13 @@ const __testing = {
   ): boolean {
     return isDurableInspectionFailure(new PiPackageSnapshotLimitError(scope, reason));
   },
+  /** Narrow seam for the fingerprint budget and ordering contract. */
+  fingerprintPiPackageTree(
+    root: string,
+    limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
+  ): Promise<string> {
+    return fingerprintPiPackageTree(root, limits);
+  },
 };
 
 interface SnapshotBudgetCounters {
@@ -3349,7 +3360,7 @@ async function fingerprintPiPackageTree(
 
   // Only I/O is parallel. The returned chunks are copied out of the shared
   // scratch buffer because they are committed to the hash later; at most one
-  // wave of files is ever buffered.
+  // byte-bounded batch of files is ever buffered.
   const readFileContribution = async (
     canonical: string,
     relativePath: string,
@@ -3370,9 +3381,9 @@ async function fingerprintPiPackageTree(
       for (;;) {
         const { bytesRead } = await handle.read(scratch, 0, scratch.length, position);
         if (bytesRead === 0) break;
-        // Early fail-closed guard; the authoritative accounting stays in the
-        // ordered commit below so concurrent reads cannot double-count bytes.
-        assertSnapshotBudget(budget, position + bytesRead);
+        // Bytes were reserved before the read started; only the duration and
+        // entry budgets still need a check while streaming this file.
+        assertSnapshotBudget(budget);
         chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
         position += bytesRead;
       }
@@ -3386,21 +3397,49 @@ async function fingerprintPiPackageTree(
     }
   };
 
-  const commitFileContribution = (contribution: FingerprintFileContribution): void => {
-    updatePackageFingerprintField(hash, contribution.field);
-    for (const chunk of contribution.chunks) {
-      assertSnapshotBudget(budget);
-      assertSnapshotBudget(budget, chunk.length);
-      hash.update(chunk);
-      recordSnapshotBytes(budget, chunk.length);
+  // Every entry, including an ordinary file, is counted and budget-checked
+  // exactly once here. File bytes are reserved before the read so concurrent
+  // waves cannot exceed maxBytes while their buffers are still in memory.
+  const accountEntry = (canonical: string, stat: Stats): void => {
+    if (!isWithinConfinement(root, canonical)) throw new Error(escapedMessage);
+    assertSnapshotBudget(budget);
+    recordSnapshotEntry(budget);
+    if (stat.isFile()) {
+      assertSnapshotBudget(budget, stat.size);
+      recordSnapshotBytes(budget, stat.size);
     }
+  };
+
+  const commitFileContribution = (contribution: FingerprintFileContribution): void => {
+    assertSnapshotBudget(budget);
+    updatePackageFingerprintField(hash, contribution.field);
+    for (const chunk of contribution.chunks) hash.update(chunk);
+  };
+
+  type PendingFile = { canonical: string; relativePath: string; stat: Stats };
+  let pendingFiles: PendingFile[] = [];
+  let pendingBytes = 0;
+  const flushPendingFiles = async (): Promise<void> => {
+    if (pendingFiles.length === 0) return;
+    const batch = pendingFiles;
+    pendingFiles = [];
+    pendingBytes = 0;
+    const contributions = await Promise.all(batch.map((file) =>
+      readFileContribution(file.canonical, file.relativePath, file.stat)));
+    for (const contribution of contributions) commitFileContribution(contribution);
+  };
+  const queueFile = async (canonical: string, relativePath: string, stat: Stats): Promise<void> => {
+    if (pendingFiles.length > 0 && pendingBytes + stat.size > PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) {
+      await flushPendingFiles();
+    }
+    pendingFiles.push({ canonical, relativePath, stat });
+    pendingBytes += stat.size;
+    if (pendingBytes >= PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) await flushPendingFiles();
   };
 
   const visit = async (canonical: string, relativePath: string, before: Stats): Promise<void> => {
     assertSnapshotBudget(budget);
     if (!isWithinConfinement(root, canonical)) throw new Error(escapedMessage);
-    recordSnapshotEntry(budget);
-    assertSnapshotBudget(budget, before.isFile() ? before.size : 0);
     const name = relativePath || '.';
 
     if (before.isDirectory()) {
@@ -3425,20 +3464,22 @@ async function fingerprintPiPackageTree(
                 changedMessage,
                 escapedMessage,
               );
-              const childPath = relativePath ? path.join(relativePath, entry) : entry;
-              const contribution = child.stat.isFile()
-                ? await readFileContribution(child.canonicalPath, childPath, child.stat)
-                : undefined;
-              return { child, childPath, contribution };
+              return {
+                child,
+                childPath: relativePath ? path.join(relativePath, entry) : entry,
+              };
             }),
           );
-          for (const { child, childPath, contribution } of prepared) {
-            if (contribution) {
-              commitFileContribution(contribution);
+          for (const { child, childPath } of prepared) {
+            accountEntry(child.canonicalPath, child.stat);
+            if (child.stat.isFile()) {
+              await queueFile(child.canonicalPath, childPath, child.stat);
             } else {
+              await flushPendingFiles();
               await visit(child.canonicalPath, childPath, child.stat);
             }
           }
+          await flushPendingFiles();
         }
         const [after, finalEntries] = await Promise.all([
           fs.lstat(canonical),
@@ -3454,9 +3495,11 @@ async function fingerprintPiPackageTree(
     }
     if (!before.isFile()) throw new Error('Pi extension fingerprint contains a special file');
 
-    commitFileContribution(await readFileContribution(canonical, name, before));
+    await queueFile(canonical, name, before);
+    await flushPendingFiles();
   };
 
+  accountEntry(root, rootStat);
   await visit(root, '', rootStat);
   return hash.digest('hex');
 }

@@ -5961,4 +5961,93 @@ describe('Pi package fingerprint ordering', () => {
     expect(maxActive).toBeLessThanOrEqual(8);
     expect(await approvedFingerprint(second.source)).toBe(baseline);
   });
+
+  // 测试价值：直接测指纹预算入口，修复普通文件不计数导致空文件目录绕过条目上限。
+  // Bug 依据：旧实现只在 visit 中计数，wave 里的文件子项直接提交，24 个空文件仍算 1 项。
+  // 覆盖缺口：golden/乱序用例不覆盖预算边界。
+  // 最小失败输入：24 个空文件 + maxEntries=10；tier：unit（真实临时目录）。
+  it('counts ordinary files, including empty ones, against the entry budget', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-entry-budget');
+    await fs.mkdir(root, { recursive: true });
+    for (let index = 0; index < 24; index += 1) {
+      await fs.writeFile(path.join(root, `empty-${String(index).padStart(2, '0')}.txt`), '');
+    }
+    const store = await import('../pi-package-store.js');
+    await expect(store.__testing.fingerprintPiPackageTree(root, {
+      maxEntries: 10,
+      maxBytes: 1024 * 1024,
+      maxDurationMs: 10_000,
+    })).rejects.toMatchObject({
+      name: 'PiPackageSnapshotLimitError', scope: 'package', reason: 'entries',
+    });
+  });
+
+  // 测试价值：证明字节预算在读取前预留，而不是整批缓冲后才记账。
+  // Bug 依据：旧实现让 8 个并发文件各自通过 256 MiB 检查，先缓冲再超限。
+  // 覆盖缺口：乱序用例只测顺序，不测预算。
+  // 最小失败输入：2 个 3 MiB 文件 + maxBytes=4 MiB；tier：unit（真实临时目录 + fs.open spy）。
+  it('reserves file bytes before opening so the byte budget rejects early', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-byte-budget');
+    await fs.mkdir(root, { recursive: true });
+    const payload = Buffer.alloc(3 * 1024 * 1024, 7);
+    for (const name of ['a.bin', 'b.bin']) await fs.writeFile(path.join(root, name), payload);
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let opens = 0;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]).includes('fingerprint-byte-budget')) opens += 1;
+      return originalOpen(...args);
+    });
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 4 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).rejects.toMatchObject({
+        name: 'PiPackageSnapshotLimitError', scope: 'package', reason: 'bytes',
+      });
+      expect(opens).toBe(0);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  // 测试价值：证明并发读取仍存在，但按字节分批，缓冲区不会随文件数线性增长。
+  // Bug 依据：旧的 8 路按文件计数并发会同时缓冲 5 个 3 MiB 文件。
+  // 覆盖缺口：上面的 byte 用例只证明提前失败，不证明正常路径的缓冲上限。
+  // 最小失败输入：5 个 3 MiB 文件 + 8 MiB 在途上限（最多 2 个同时在途）；tier：unit。
+  it('bounds buffered bytes while keeping file reads concurrent', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-inflight-budget');
+    await fs.mkdir(root, { recursive: true });
+    const payload = Buffer.alloc(3 * 1024 * 1024, 9);
+    for (let index = 0; index < 5; index += 1) {
+      await fs.writeFile(path.join(root, `part-${index}.bin`), payload);
+    }
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let active = 0;
+    let maxActive = 0;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (!String(args[0]).includes('fingerprint-inflight-budget')) return originalOpen(...args);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      try {
+        return await originalOpen(...args);
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 64 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).resolves.toEqual(expect.any(String));
+      expect(maxActive).toBeGreaterThan(1);
+      expect(maxActive).toBeLessThanOrEqual(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
 });
