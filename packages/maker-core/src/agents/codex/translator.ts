@@ -1049,6 +1049,11 @@ export function classifyCodexError(
         ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
         : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
           ? CONTEXT_OVERFLOW_REASON
+          // Native Responses truncation has no dedicated CodexErrorInfo variant.
+          // Match only its complete diagnostic, not rejected request parameters
+          // or transport errors that happen to mention max_output_tokens.
+          : rawMessage.trim() === 'Incomplete response returned, reason: max_output_tokens'
+            ? 'output-limit'
           // Preserve a diagnosis that native only provided inside its exhausted
           // transport wrapper. This reason is presentation-only: upstream-overload
           // and errorStatus=529 also authorize host/goal retries. Do not promote
