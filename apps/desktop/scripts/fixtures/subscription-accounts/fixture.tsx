@@ -208,6 +208,8 @@ void mountPage({
       } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
+        existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
+          ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.

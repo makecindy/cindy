@@ -1,3 +1,5 @@
+import { chatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
+
 /** Live chat notifications. Server reads/mute state win over delayed or replayed socket events. */
 export interface ChatMessageNotification {
   groupId: string;
@@ -17,7 +19,7 @@ export interface ChatNotificationMessage {
 }
 
 export interface ChatAttentionSnapshot<M extends ChatNotificationMessage> {
-  room: { name: string; kind?: string; archived?: boolean; dissolved_at?: string | null };
+  room: { name: string; default_notification_scope?: 'all' | 'mentions'; kind?: string; archived?: boolean; dissolved_at?: string | null };
   messages: M[];
   reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }>;
 }
@@ -31,7 +33,7 @@ export function isChatMessageAttention<M extends ChatNotificationMessage>(snapsh
   if (!snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at || main?.muted
     || message.deleted || message.origin === 'system' || message.origin === 'import' || message.authorId === selfId) return false;
   const mentioned = message.mentions?.includes(selfId) === true;
-  if (snapshot.room.kind !== 'direct' && main?.notification_scope === 'mentions' && !mentioned) return false;
+  if (snapshot.room.kind !== 'direct' && chatGroupNotificationMode(snapshot.room, main) === 'mentions' && !mentioned) return false;
   const read = snapshot.reads.find(read => read.thread_key === (message.threadRootId ?? 'main'));
   if (read?.muted || BigInt(message.seq) <= BigInt(read?.read_seq ?? '0')) return false;
   return !message.threadRootId || read?.following === true || mentioned;

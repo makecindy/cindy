@@ -20,6 +20,7 @@ import { History } from 'lucide-react';
 import { useDeleteDeviceDialog } from '@/components/settings/useDeleteDeviceDialog';
 import { deviceLabel } from '@/components/settings/deviceLabels';
 
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SettingsCard } from '@/components/ui/settings-rows';
 import type { SelfHostedRelayController } from '@/components/settings/RelayServicePanel';
@@ -31,6 +32,7 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 
 import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
+import { startPeerUpdate, type PeerUpdateConfirmTarget } from './peerAppUpdate';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
 import { ConnectionTraffic } from './ConnectionTraffic';
 import { RemoteSwitchBatch } from './RemoteSwitchBatch';
@@ -107,6 +109,8 @@ export function RemoteConnectionV2Section({
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
   const [showOffline, setShowOffline] = useState(false);
+  const [updateTarget, setUpdateTarget] = useState<PeerUpdateConfirmTarget | null>(null);
+  const [updateSubmitting, setUpdateSubmitting] = useState(false);
   const remoteSwitch = useSyncExternalStore(remoteSwitchStore.subscribe, remoteSwitchStore.getSnapshot);
 
   const relayName =
@@ -174,6 +178,56 @@ export function RemoteConnectionV2Section({
     }
   }, [t]);
 
+  const onConfirmUpdate = useCallback(async () => {
+    if (!updateTarget || updateSubmitting) return;
+    const target = updateTarget;
+    setUpdateSubmitting(true);
+    try {
+      const result = await startPeerUpdate(
+        target.targetId,
+        target.targetVersion,
+        target.currentVersion,
+        (errorCode) => {
+          toast.error(
+            t(
+              errorCode === 'version_changed'
+                ? 'settings.remoteControl.v2.peerUpdate.toast.versionChanged'
+                : 'settings.remoteControl.v2.peerUpdate.toast.failed',
+              { name: target.deviceName },
+            ),
+          );
+        },
+      );
+      if (result.ok) {
+        setUpdateTarget(null);
+        toast.success(
+          t(
+            result.state === 'relaunching'
+              ? 'settings.remoteControl.v2.peerUpdate.toast.relaunching'
+              : 'settings.remoteControl.v2.peerUpdate.toast.started',
+            { name: target.deviceName, version: result.targetVersion },
+          ),
+        );
+      } else {
+        setUpdateTarget(null);
+        toast.error(
+          t(
+            result.code === 'PEER_APP_UPDATE_VERSION_CHANGED'
+              ? 'settings.remoteControl.v2.peerUpdate.toast.versionChanged'
+              : result.code === 'PEER_APP_UPDATE_NO_UPDATE'
+                ? 'settings.remoteControl.v2.peerUpdate.toast.noUpdate'
+                : result.code === 'PEER_APP_UPDATE_BUSY'
+                  ? 'settings.remoteControl.v2.peerUpdate.toast.busy'
+                  : 'settings.remoteControl.v2.peerUpdate.toast.failed',
+            { name: target.deviceName },
+          ),
+        );
+      }
+    } finally {
+      setUpdateSubmitting(false);
+    }
+  }, [t, updateSubmitting, updateTarget]);
+
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
   const offlineToggleVisible = model.stats.offline >= 2;
 
@@ -222,6 +276,7 @@ export function RemoteConnectionV2Section({
               switches={remoteSwitch.entries}
               onSwitch={onSwitch}
               onPathPreferenceChange={onPathPreferenceChange}
+              onUpdate={setUpdateTarget}
             />
           </div>
           {offlineToggleVisible ? (
@@ -241,6 +296,54 @@ export function RemoteConnectionV2Section({
         </SettingsCard>
       </section>
       {dialog}
+      <ConfirmDialog
+        open={updateTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !updateSubmitting) setUpdateTarget(null);
+        }}
+        title={t(
+          updateTarget?.isSelf
+            ? 'settings.remoteControl.v2.peerUpdate.confirm.selfTitle'
+            : 'settings.remoteControl.v2.peerUpdate.confirm.title',
+          { name: updateTarget?.deviceName ?? '' },
+        )}
+        description={t(
+          updateTarget?.isSelf
+            ? 'settings.remoteControl.v2.peerUpdate.confirm.selfDescription'
+            : 'settings.remoteControl.v2.peerUpdate.confirm.description',
+          {
+            from: updateTarget?.currentVersion ?? '',
+            to: updateTarget?.targetVersion ?? '',
+          },
+        )}
+        content={
+          updateTarget && (updateTarget.busy || updateTarget.platform === 'linux' || updateTarget.platform === 'win32') ? (
+            <div className="flex flex-col gap-1.5 text-12 leading-[1.5]">
+              {updateTarget.busy ? (
+                <p className="text-[var(--warning-fg)]">
+                  {t(
+                    updateTarget.isSelf
+                      ? 'settings.remoteControl.v2.peerUpdate.confirm.selfBusyWarning'
+                      : 'settings.remoteControl.v2.peerUpdate.confirm.busyWarning',
+                  )}
+                </p>
+              ) : null}
+              {updateTarget.platform === 'linux' ? (
+                <p className="text-[var(--text-secondary)]">
+                  {t('settings.remoteControl.v2.peerUpdate.confirm.linuxPermissionHint')}
+                </p>
+              ) : updateTarget.platform === 'win32' && !updateTarget.isSelf ? (
+                <p className="text-[var(--text-secondary)]">
+                  {t('settings.remoteControl.v2.peerUpdate.confirm.windowsPermissionHint')}
+                </p>
+              ) : null}
+            </div>
+          ) : undefined
+        }
+        confirmText={t('settings.remoteControl.v2.peerUpdate.confirm.action')}
+        loading={updateSubmitting}
+        onConfirm={() => void onConfirmUpdate()}
+      />
     </>
   );
 }
