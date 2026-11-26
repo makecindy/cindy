@@ -739,8 +739,7 @@ export function BotSettings({
                     {t('bots.homeFolder.open')}
                   </Button>
                 </SettingsBlock>
-              ) : null}
-
+              ) : null}
               {!isRemote && folderError ? (
                 <SettingsBlock className="px-5 py-3">
                   <p className="text-12 text-[var(--text-danger)]" role="alert">

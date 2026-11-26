@@ -22587,8 +22587,6 @@
     "lineNumbers": "줄 번호"
   },
   "openAiAccountGroup": {
-    "strategy": "계정 그룹 전략",
-    "leastHint": "실행 중인 작업이 가장 적은 연결 우선",
     "removeDescription": "이 연결은 그룹의 새 작업을 받지 않습니다. 실행 중인 작업은 이 연결에 그대로 남습니다.",
     "mergeDescription": "{{target}}에서 시작한 새 작업은 두 제공자를 모두 사용할 수 있습니다. 로그인, 키, 기존 작업은 그대로 유지됩니다. 연결하기 전에 Cindy가 {{apiKey}}의 API 키를 테스트합니다.",
     "modelUnavailable": "이 연결에서는 테스트에 선택된 모델을 사용할 수 없습니다. 다시 테스트하면 다른 후보를 시도할 수 있습니다.",

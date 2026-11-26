@@ -22676,8 +22676,6 @@
     "lineNumbers": "Zeilennummern"
   },
   "openAiAccountGroup": {
-    "strategy": "Strategie der Kontogruppe",
-    "leastHint": "Verbindung mit den wenigsten laufenden Aufgaben bevorzugen",
     "removeDescription": "Diese Verbindung erhält keine neuen Aufgaben aus der Gruppe. Laufende Aufgaben bleiben auf dieser Verbindung.",
     "mergeDescription": "Über {{target}} gestartete neue Aufgaben können beide Anbieter nutzen. Anmeldungen, Schlüssel und bestehende Aufgaben bleiben am bisherigen Ort. Vor der Verknüpfung testet Cindy den API-Schlüssel von {{apiKey}}.",
     "modelUnavailable": "Diese Verbindung kann das ausgewählte Testmodell nicht verwenden. Ein erneuter Test kann ein anderes Modell ausprobieren.",

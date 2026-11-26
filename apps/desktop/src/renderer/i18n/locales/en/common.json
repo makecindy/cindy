@@ -22676,8 +22676,6 @@
     "lineNumbers": "Line numbers"
   },
   "openAiAccountGroup": {
-    "strategy": "Account group strategy",
-    "leastHint": "Prefer the connection running the fewest tasks",
     "removeDescription": "This connection will stop receiving new tasks from the group. Tasks already running will stay on this connection.",
     "mergeDescription": "New tasks started through {{target}} can use both providers. Sign-ins, keys and existing tasks stay where they are. Cindy will test the API key for {{apiKey}} before adding the scheduling connection.",
     "modelUnavailable": "This connection cannot use the model chosen for the test. Test again to try another candidate.",

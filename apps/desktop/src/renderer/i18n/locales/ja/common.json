@@ -22587,8 +22587,6 @@
     "lineNumbers": "行番号"
   },
   "openAiAccountGroup": {
-    "strategy": "アカウントグループの割り当て",
-    "leastHint": "実行中のタスクが最も少ない接続を優先",
     "removeDescription": "この接続にはグループの新しいタスクが割り当てられなくなります。実行中のタスクはこの接続に残ります。",
     "mergeDescription": "{{target}} で新しく作成したタスクは両方のプロバイダーを利用できます。ログイン、キー、既存のタスクは元のままです。連携する前に Cindy が {{apiKey}} の API キーをテストします。",
     "modelUnavailable": "この接続ではテスト用に選んだモデルを使用できません。再テストすると別の候補を試せます。",

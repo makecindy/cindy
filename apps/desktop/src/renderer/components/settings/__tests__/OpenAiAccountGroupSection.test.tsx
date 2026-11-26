@@ -81,12 +81,12 @@ it('recovers a failed group read and saves against its target from the member pa
   fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
   expect(await screen.findAllByTestId('openai-group-account')).toHaveLength(2);
   expect(screen.queryByRole('alert')).toBeNull();
-  // 选法与智能路由同一套名字(按权重 = weighted)。
-  // jsdom 没有 scrollIntoView：下拉列表打开时会滚到选中项。
-  Element.prototype.scrollIntoView ??= () => undefined;
-  fireEvent.click(screen.getByRole('combobox', { name: 'openAiAccountGroup.strategy' }));
-  fireEvent.click(await screen.findByRole('option', { name: 'modelGroups.strategy.weighted.title' }));
+  // 选法只在「智能路由」里改(2026-11-26)：这里只有现状说明，没有第二个选法控件。
+  expect(screen.getByTestId('route-strategy-note')).toBeTruthy();
+  expect(screen.queryByRole('combobox', { name: 'modelGroups.settings.pick' })).toBeNull();
+  // 每个账号的开关仍在这里，保存到目标组。
+  fireEvent.click(screen.getByRole('switch', { name: 'providerGroup.member.assignAria Fixture key' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith({
-    action: 'account-allocation', providerId: 'openai', expectedConfig: detail.group?.config, edit: { strategy: 'weighted' },
+    action: 'account-allocation', providerId: 'openai', expectedConfig: detail.group?.config, edit: { accountId: key.id, paused: true },
   }));
 });

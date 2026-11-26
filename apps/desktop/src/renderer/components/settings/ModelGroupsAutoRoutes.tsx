@@ -45,7 +45,12 @@ import {
 } from '../../../shared/modelGroups';
 import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { ModelGroupRoutePreview } from './ModelGroupRoutePreview';
-import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
+import {
+  providerGroupDeviceCount,
+  withLocalProviderGroupAccounts,
+  type ProviderGroupAccountAllocation,
+  type ProviderGroupConfig,
+} from '../../../shared/providerGroup';
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
@@ -197,34 +202,70 @@ function AccountsRouteRow({ provider, plain = null }: { provider: Provider; plai
   );
 }
 
-/** 把几台电脑上的同一个供应商合成的一组。 */
+/**
+ * 把几台电脑上的同一个供应商合成的一组；也可以是同一个 OpenAI 供应商下本机的几个账号(订阅与 API key 混合，
+ * main 2026-11-25 加入)，或两者都有。账号与电脑在同一份组配置里排先后、按同一个选法分配。
+ */
 function ComputersRouteRow({ provider, initial }: { provider: Provider; initial: ProviderGroupConfig }) {
   const { t } = useTranslation();
+  const { providers } = useProviders();
   const group = useProviderGroup(provider.id, { initialConfig: initial });
   const [saving, setSaving] = useState(false);
   const config = group.view?.config ?? initial;
-  const change = async (strategy: RouteStrategy) => {
+  // 本机的几个账号存在 localAccountIds / localAccountSettings 里，要展开才看得到它们各自的先后与权重。
+  const mixed = (config.localAccountIds?.length ?? 0) > 0;
+  const members = mixed ? withLocalProviderGroupAccounts(config, provider.id).members : config.members;
+  const localCount = members.filter((member) => member.kind === 'local').length;
+  const remoteCount = providerGroupDeviceCount(config.members.filter((member) => member.kind !== 'local'));
+  const run = async (save: () => Promise<unknown>) => {
     setSaving(true);
     try {
-      await group.save({ ...config, strategy });
+      await save();
     } catch {
       toast.error(t('modelGroups.settings.saveFailed'));
     } finally {
       setSaving(false);
     }
   };
+  // 本机账号的设置只能经账号分配命令改(带着读到的那份配置，别处改过就拒绝)，与供应商页同一条路。
+  const allocate = (edit: ProviderGroupAccountAllocation) => run(() => window.electronAPI.providerGroup.command({
+    action: 'account-allocation', providerId: provider.id, expectedConfig: config, edit,
+  }));
+  const change = (strategy: RouteStrategy) => (mixed ? allocate({ strategy }) : run(() => group.save({ ...config, strategy })));
   // 组里各台电脑的先后与权重(2026-11-26 补上，原来只能在供应商页改权重、先后不能调)：与供应商页是同一份组配置。
-  const saveMembers = async (members: ProviderGroupConfig['members']) => {
-    setSaving(true);
-    try {
-      await group.save({ ...config, members });
-    } catch {
-      toast.error(t('modelGroups.settings.saveFailed'));
-    } finally {
-      setSaving(false);
+  const saveMembers = (next: ProviderGroupConfig['members']) => run(() => group.save({ ...config, members: next }));
+  const setWeight = (member: ProviderGroupConfig['members'][number], weight: number) => (member.kind === 'local' && mixed
+    ? allocate({ accountId: member.providerId, weight })
+    : saveMembers(config.members.map((item) => (item.key === member.key ? { ...item, weight } : item))));
+  // 账号只在账号之间调先后，电脑只在电脑之间调(两种各占各的位置，与供应商页一致)。
+  const neighbour = (index: number, delta: -1 | 1) => {
+    const member = members[index];
+    const other = members[index + delta];
+    return member && other && (member.kind === 'local') === (other.kind === 'local') ? other : undefined;
+  };
+  const move = (index: number, delta: -1 | 1) => {
+    const member = members[index]!;
+    const other = neighbour(index, delta)!;
+    if (member.kind === 'local' && mixed) {
+      const order = members.filter((item) => item.kind === 'local').map((item) => item.providerId);
+      const from = order.indexOf(member.providerId);
+      const to = order.indexOf(other.providerId);
+      [order[from], order[to]] = [order[to]!, order[from]!];
+      return allocate({ order });
     }
+    return saveMembers(swap(config.members, config.members.findIndex((item) => item.key === member.key),
+      config.members.findIndex((item) => item.key === other.key)));
+  };
+  const nameOf = (member: ProviderGroupConfig['members'][number]) => {
+    if (member.kind === 'local') {
+      return mixed ? providers.find((item) => item.id === member.providerId)?.name ?? member.providerId : t('providerGroup.member.local');
+    }
+    return member.label || member.providerName || member.providerId;
   };
   const listed = config.strategy === 'weighted' || config.strategy === 'order';
+  const size = mixed
+    ? [t('modelGroups.auto.accounts', { count: localCount }), ...(remoteCount ? [t('modelGroups.auto.computers', { count: remoteCount + 1 })] : [])].join(' · ')
+    : t('modelGroups.auto.computers', { count: providerGroupDeviceCount(config.members) });
   return (
     <>
       <SettingsRow
@@ -233,11 +274,11 @@ function ComputersRouteRow({ provider, initial }: { provider: Provider; initial:
         data-auto-route={`computers:${provider.id}`}
         lead={<ProviderLead provider={provider} />}
         title={provider.name}
-        hint={`${t('modelGroups.auto.computers', { count: providerGroupDeviceCount(config.members) })} · ${t(`modelGroups.strategy.${config.strategy}.hint`)}`}
+        hint={`${size} · ${t(`modelGroups.strategy.${config.strategy}.hint`)}`}
         trailing={<StrategySelect label={t('modelGroups.auto.pickFor', { name: provider.name })} value={config.strategy} disabled={saving} onChange={(next) => void change(next)} />}
       />
-      {listed && config.members.map((member, index) => {
-        const name = member.agentDeviceId === null ? t('providerGroup.member.local') : member.label || member.providerName || member.providerId;
+      {listed && members.map((member, index) => {
+        const name = nameOf(member);
         return (
           <SettingsRow
             key={member.key}
@@ -257,18 +298,16 @@ function ComputersRouteRow({ provider, initial }: { provider: Provider; initial:
                       width="xs"
                       options={[...new Set([...ACCOUNT_WEIGHTS, member.weight])].sort((a, b) => a - b)
                         .map((weight) => ({ value: String(weight), label: t('providerGroup.member.weightOption', { weight }) }))}
-                      onValueChange={(value) => {
-                        if (Number(value) !== member.weight) void saveMembers(config.members.map((item) => (item.key === member.key ? { ...item, weight: Number(value) } : item)));
-                      }}
+                      onValueChange={(value) => { if (Number(value) !== member.weight) void setWeight(member, Number(value)); }}
                     />
                   </span>
                 )}
-                <RowIconButton label={t('modelGroups.settings.moveUp')} busy={saving} disabled={index === 0}
+                <RowIconButton label={t('modelGroups.settings.moveUp')} busy={saving} disabled={!neighbour(index, -1)}
                   move={{ row: `computer:${member.key}`, direction: 'up' }}
-                  onClick={() => saveMembers(swap(config.members, index, index - 1))}><ArrowUp size={15} /></RowIconButton>
-                <RowIconButton label={t('modelGroups.settings.moveDown')} busy={saving} disabled={index === config.members.length - 1}
+                  onClick={() => move(index, -1)}><ArrowUp size={15} /></RowIconButton>
+                <RowIconButton label={t('modelGroups.settings.moveDown')} busy={saving} disabled={!neighbour(index, 1)}
                   move={{ row: `computer:${member.key}`, direction: 'down' }}
-                  onClick={() => saveMembers(swap(config.members, index, index + 1))}><ArrowDown size={15} /></RowIconButton>
+                  onClick={() => move(index, 1)}><ArrowDown size={15} /></RowIconButton>
               </span>
             }
           />

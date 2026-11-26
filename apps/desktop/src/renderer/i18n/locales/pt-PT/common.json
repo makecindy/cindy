@@ -22891,8 +22891,6 @@
     "lineNumbers": "Números de linha"
   },
   "openAiAccountGroup": {
-    "strategy": "Estratégia do grupo de contas",
-    "leastHint": "Dar prioridade à ligação com menos tarefas em execução",
     "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
     "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
     "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",

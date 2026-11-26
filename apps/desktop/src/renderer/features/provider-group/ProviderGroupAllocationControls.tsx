@@ -16,14 +16,13 @@ const weights = [1, 2, 3, 5, 10, 20, 50, PROVIDER_GROUP_MAX_WEIGHT];
  * OpenAI 订阅与 API key 混合的账号组在供应商页里的选法(main 2026-11-26 新增)。选项、名字与说明和智能路由同一套
  * (shared/routeStrategy.ts、modelGroups.strategy.*)，选的是同一个选择函数。
  */
-export function ProviderGroupStrategyControl({ strategy, disabled, onChange, localAccounts = false }: {
+export function ProviderGroupStrategyControl({ strategy, disabled, onChange }: {
   strategy: RouteStrategy;
   disabled: boolean;
   onChange: (strategy: RouteStrategy) => void;
-  localAccounts?: boolean;
 }) {
   const { t } = useTranslation();
-  const label = t(localAccounts ? 'openAiAccountGroup.strategy' : 'modelGroups.settings.pick');
+  const label = t('modelGroups.settings.pick');
   return (
     <SettingsBlock className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center justify-between gap-3">

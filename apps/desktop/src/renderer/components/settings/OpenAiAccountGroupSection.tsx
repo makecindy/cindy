@@ -10,12 +10,13 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { ProviderGroupLimitSelect, ProviderGroupStrategyControl, ProviderGroupWeightSelect } from '@/features/provider-group/ProviderGroupAllocationControls';
+import { ProviderGroupLimitSelect, ProviderGroupWeightSelect } from '@/features/provider-group/ProviderGroupAllocationControls';
 import { providerManagementErrorKey } from '@/features/provider-group/providerManagement';
 import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupProbeResult } from '../../../shared/openAiAccountGroup';
 import { withLocalProviderGroupAccounts, type ProviderGroupAccountAllocation } from '../../../shared/providerGroup';
 import type { SubscriptionAccountView } from '../../../shared/subscriptionAccounts';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { RouteStrategyNote } from './RouteStrategyNote';
 import { useSettingDefinition } from './useSettingDefinition';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
@@ -280,8 +281,8 @@ export function OpenAiAccountGroupSection({ providerId, group, mergeAction, sett
         {targets.map(target => <Link key={target.id} className="text-13 text-[var(--text-primary)] underline"
           to={`/settings?tab=providers&connect=${encodeURIComponent(target.id)}`}>{target.name}</Link>)}
       </div>}
-      {mixedConfig && <ProviderGroupStrategyControl localAccounts strategy={mixedConfig.strategy} disabled={blocked}
-        onChange={strategy => void saveAllocation({ strategy })} />}
+      {/* 这几个账号怎么分与别的账号池一样只在「智能路由」里改：这里说明现状并给出入口(每个账号的并发、权重、开关与先后仍在下面)。 */}
+      {mixedConfig && <RouteStrategyNote strategy={mixedConfig.strategy} providerId={groupProviderId} />}
       {mixedConfig && (ordered
         ? <SortableList items={membership} getId={account => account.id} renderItem={renderAccount}
             disabled={blocked} reducedMotion={reducedMotion} handle="[data-account-drag]"

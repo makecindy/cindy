@@ -22587,8 +22587,6 @@
     "lineNumbers": "行號"
   },
   "openAiAccountGroup": {
-    "strategy": "帳號組策略",
-    "leastHint": "優先分配給執行任務最少的連線",
     "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
     "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
     "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
