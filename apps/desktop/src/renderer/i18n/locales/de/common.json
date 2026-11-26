@@ -9596,6 +9596,7 @@
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
         "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
+        "embeddedGuide": "Dein Assistent hat dieses Formular geöffnet, um MCP für die aktuelle Aufgabe einzurichten. Prüfe die vorausgefüllten Angaben anhand der Anleitung des Anbieters, ergänze fehlende Angaben und speichere die Konfiguration.",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {

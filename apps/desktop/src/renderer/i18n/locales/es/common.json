@@ -9671,6 +9671,7 @@
         "createTitle": "Agregar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Solo MCP remoto http / sse. Las nuevas sesiones de Agent podrán usarlo después de guardar; las sesiones de Agent en curso no se verán afectadas.",
+        "embeddedGuide": "Tu asistente abrió este formulario para configurar MCP en la tarea actual. Sigue las instrucciones del proveedor del servicio para revisar los datos que ya están rellenados, completar los que falten y guardar la configuración.",
         "teammateDesc": "Solo MCP remoto http / sse. Después de guardar, tu amigo lo añade a sus herramientas y puede usarlo desde el siguiente mensaje de esta conversación, sin necesidad de una nueva sesión."
       },
       "fields": {

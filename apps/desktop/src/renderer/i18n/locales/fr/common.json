@@ -9671,6 +9671,7 @@
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
         "desc": "MCP distant http / sse uniquement. Les nouvelles sessions peuvent l'appeler après l'enregistrement ; les sessions en cours ne sont pas affectées.",
+        "embeddedGuide": "Ton assistant a ouvert ce formulaire pour configurer MCP pour la tâche en cours. Suis les instructions du fournisseur de services pour vérifier les informations préremplies, compléter les champs manquants et enregistrer la configuration.",
         "teammateDesc": "MCP distant http / sse uniquement. Après l'enregistrement, votre ami l'ajoute à ses outils et peut l'utiliser dès le prochain message de cette conversation, sans nouvelle session."
       },
       "fields": {

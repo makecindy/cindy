@@ -9552,6 +9552,7 @@
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
+        "embeddedGuide": "助手为当前任务打开了 MCP 配置表单。请按服务供应商的说明核对已填信息，补全缺项，再保存配置。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
       },
       "fields": {
