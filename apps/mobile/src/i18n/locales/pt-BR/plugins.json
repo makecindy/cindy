@@ -531,6 +531,8 @@
       "ended": "Encerrado",
       "readingBack": "Concluído. Verificando o plugin no computador…",
       "changedSince": "Concluído, mas este plugin mudou no computador desde então.",
+      "goneSince": "Concluído, mas este plugin não está mais no computador.",
+      "unproven": "Concluído, mas o computador não confirmou que o plugin instalado agora é o desta instalação, então não dá para abri-lo daqui.",
       "succeededUnread": "Concluído, mas não foi possível ler os plugins do computador.",
       "uninstalled": "Desinstalado"
     },

@@ -531,6 +531,8 @@
       "ended": "Terminé",
       "readingBack": "Terminé. Vérification du plugin sur l’ordinateur…",
       "changedSince": "Terminé, mais ce plugin a changé sur l’ordinateur depuis.",
+      "goneSince": "Terminé, mais ce plugin n’est plus sur l’ordinateur.",
+      "unproven": "Terminé, mais l’ordinateur n’a pas confirmé que le plugin présent est celui de cette installation : il ne peut pas être ouvert d’ici.",
       "succeededUnread": "Terminé, mais les plugins de l’ordinateur n’ont pas pu être lus.",
       "uninstalled": "Désinstallé"
     },

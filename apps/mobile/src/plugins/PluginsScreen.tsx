@@ -92,7 +92,7 @@ import {
 import { usePluginMarket } from "./usePluginMarket";
 import { pluginOperationHold, samePluginSlotHolder, usePluginManagementSlot, type PluginSlotHolder, type PluginSlotToken } from "./pluginManagementSlot";
 import { usePluginCheckConclusions, usePluginPendingChecks } from "./usePluginManagement";
-import { pluginOperationOpens } from "./pluginOperationOpens";
+import { PLUGIN_NOT_OPENED_TEXT, pluginOperationOpens } from "./pluginOperationOpens";
 import { PluginPendingChecksSheet, type PluginOperationLine } from "./PluginPendingChecksSheet";
 import { usePluginPrompt } from "./usePluginPrompt";
 import { PluginMarketSection } from "./PluginMarketSection";
@@ -1145,10 +1145,9 @@ function PluginDirectory() {
       const finished = controller.finishedOperation();
       let plugin = viewed;
       if (snapshot && finished && (finished.entry === "update" || finished.entry === "page-approval")) {
-        const opens = pluginOperationOpens(finished, { ghosts: snapshot.ghosts, receipt: "final",
-          market: finished.detail ? snapshot.market.items.find((item) => item.pluginId === finished.detail!.pluginId) : undefined });
+        const opens = pluginOperationOpens(finished, { ghosts: snapshot.ghosts, market: snapshot.market.items });
         plugin = opens.open ? snapshot.ghosts.find((item) => item.instanceKey === opens.instanceKey) : viewed;
-        if (!opens.open && viewed) tell("plugins.checks.result.succeeded", "plugins.checks.result.changedSince");
+        if (!opens.open && viewed) tell("plugins.checks.result.succeeded", PLUGIN_NOT_OPENED_TEXT[opens.reason]);
       }
       if (plugin)
         void showDetail({

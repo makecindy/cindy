@@ -529,6 +529,8 @@
       "ended": "Finished",
       "readingBack": "Done. Checking the plugin on the computer…",
       "changedSince": "Done, but this plugin has changed on the computer since.",
+      "goneSince": "Done, but this plugin isn’t on the computer now.",
+      "unproven": "Done, but the computer gave no evidence that the plugin there now is the one from this install, so it can’t be opened from here.",
       "succeededUnread": "Done, but the plugins on the computer couldn’t be read.",
       "uninstalled": "Uninstalled"
     },

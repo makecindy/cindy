@@ -114,6 +114,11 @@ describe("more pending-check states from cindy://plugins?checks=<state>", () => 
     ["uninstalled", () => expect(ended()).toEqual([["uninstall", "succeeded", "none"]])],
     ["updateGone", () => expect(ended()).toEqual([["update", "installed", "verified"]])],
     ["unprovableUninstall", () => expect(__retainedForTests.checks().map((c) => [c.entry, c.unprovable])).toEqual([["uninstall", { present: true }]])],
+    // Dispatcher R-4: a success, then the computer answers as it does when it reinstalled the same version itself, when
+    // the plugin was uninstalled, and when only its catalog moved on (still this install: Open).
+    ["reinstalled", () => expect(ended()).toEqual([["market-install", "succeeded", "unproven"]])],
+    ["goneSince", () => expect(ended()).toEqual([["market-install", "succeeded", "gone"]])],
+    ["catalogAhead", () => expect(ended()).toEqual([["market-install", "succeeded", "verified"]])],
   ] as const)("%s, after the list opened", async (state, assert) => {
     const after = await seedPluginChecksForVisualMock(state);
     await flush();

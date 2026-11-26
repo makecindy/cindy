@@ -21,9 +21,13 @@ const SCENARIOS: PluginMarketVisualScenario[] = ["normal", "outdated", "unavaila
  * a success whose first installed read fails, a failure; `running`: still under way. `readingBack`: a success after
  * which the computer's installed reads stay out (the list says it is still reading); `changed`: a success after which
  * the plugin is at another version (changed on the computer since); `gone`: the operation takes effect (not an
- * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on).
+ * uninstall) and the computer then forgets its receipt (NOT_FOUND from then on). After a success, as the computer
+ * answers in each situation (dispatcher R-4): `reinstalled`, the computer installed the same version again itself (no
+ * evidence for this phone); `uninstalledAfter`, the plugin was uninstalled; `catalogAhead`, only the catalog published
+ * its next release (this install stays, `update-available`, still this phone's evidence).
  */
-export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone";
+export type VisualCheckBehavior = "running" | "waiting" | "consent" | "succeeded" | "unread" | "failed" | "readingBack" | "changed" | "gone"
+  | "reinstalled" | "uninstalledAfter" | "catalogAhead";
 const scripted = new Map<string, { behavior: VisualCheckBehavior; lookups: number }>();
 export function scriptVisualCheckOperation(operationId: string, behavior: VisualCheckBehavior) {
   scripted.set(operationId, { behavior, lookups: 0 });
@@ -230,10 +234,13 @@ const CUSTOM_SOURCE_NAMES = [CUSTOM_MARKET, LEGACY_MARKET, LONG_MARKET, FOLDER_M
 const installed = new Map<string, { demo: DemoPlugin; enabled: boolean; version: string; operationId?: string }>();
 /** `readingBack` checks: the computer's installed reads stay out until the next seed. */
 let holdInstalledReads = false;
+/** Demo plugins whose catalog moved on to its next release (`catalogAhead`). */
+const catalogAhead = new Set<string>();
+const NEXT_RELEASE = "1.5.0";
 export function pluginMarketVisualHoldsInstalledReads(): boolean { return holdInstalledReads; }
 /** DEV: the mock computer back to its first state (each `checks=` seed starts from it). */
 export function resetPluginMarketVisualComputer() {
-  installed.clear(); operations.clear(); scripted.clear(); holdInstalledReads = false; failInstalledRead = false;
+  installed.clear(); operations.clear(); scripted.clear(); catalogAhead.clear(); holdInstalledReads = false; failInstalledRead = false;
   failInstalledReadOnCommit = false; seedInstalled();
 }
 const operations = new Map<string, { kind: "install" | "update" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
@@ -246,6 +253,7 @@ seedInstalled();
 // Same form the phone receives from a real Host: dispatch's IPC_ERROR unwraps to Error("[CODE] message").
 const failure = (code: string) => new Error(`[${code}] Demo plugin management request`);
 
+const catalogVersion = (demo: DemoPlugin) => catalogAhead.has(demo.ghostId) ? NEXT_RELEASE : RELEASE;
 function marketItem(demo: DemoPlugin): ManagedMarketItem {
   const server = demo.publisher !== "custom";
   const entry = installed.get(instanceKey(demo.ghostId));
@@ -255,8 +263,9 @@ function marketItem(demo: DemoPlugin): ManagedMarketItem {
     ...(server && demo.publisher !== "organization" ? { publisherKind: demo.publisher === "official" ? "official" as const : "personal" as const } : {}),
     scope: demo.publisher === "organization" ? "organization" : "public",
     organizationId: demo.publisher === "organization" ? "demo-org" : null, defaultInstall: false,
-    releaseId: `${demo.ghostId}@${RELEASE}`, version: RELEASE, publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
-    installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === RELEASE ? "installed" : "update-available",
+    // The catalog's current release (it may be ahead of what is installed, `catalogAhead`).
+    releaseId: `${demo.ghostId}@${catalogVersion(demo)}`, version: catalogVersion(demo), publishedAt: "2026-11-01T00:00:00.000Z", icon: null,
+    installState: demo.conflict ? "conflict" : !entry ? "not-installed" : entry.version === catalogVersion(demo) ? "installed" : "update-available",
     enabled: entry?.enabled ?? null,
     sourceType: server ? "server" : demo.market === "folder" ? "local-market" : "git-market", sourceMarketName: server ? null : marketName(demo),
     ...(server || demo.legacySource ? {} : { sourceIdentity: marketSource(demo) }),
@@ -369,6 +378,10 @@ function receipt(operationId: string) {
   if (script?.behavior === "readingBack") holdInstalledReads = true;
   // Changed on the computer since: an older package of the same plugin replaced it.
   if (script?.behavior === "changed") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: "0.9.0" });
+  // The computer reinstalled the same version itself: the record is rewritten without this phone's evidence.
+  if (script?.behavior === "reinstalled") installed.set(instanceKey(demo.ghostId), { demo, enabled: true, version: RELEASE });
+  if (script?.behavior === "uninstalledAfter") installed.delete(instanceKey(demo.ghostId));
+  if (script?.behavior === "catalogAhead") catalogAhead.add(demo.ghostId);
   op.done = "succeeded";
   return { operationId, phase: "succeeded" };
 }

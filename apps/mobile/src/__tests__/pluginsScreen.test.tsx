@@ -9,6 +9,7 @@ import { pluginConsentPresentation } from "@/plugins/pluginConsentPresentation";
 import { usePluginManagement, __retainedForTests } from "@/plugins/usePluginManagement";
 import { __testing as slotTesting, pluginManagementSlotFor } from "@/plugins/pluginManagementSlot";
 import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
+import { HOST_INSTALL_SITUATIONS, hostInstallFacts, type HostInstallSituation } from "./hostPluginInstallFacts";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
@@ -1398,7 +1399,20 @@ describe("page slot release paths", () => {
     /** Leave this detail for another plugin's (the update's view goes away). */
     const leave = async () => { await act(async () => fixture.props.get("directory").onDetail(fixture.extraRows[0])); await settle(14); };
     const writes = () => asked.filter((id) => !["management:snapshot", "management:market-detail"].includes(id));
-    return { update, requests, market, snapshot, plugin, leave, writes };
+    /**
+     * The computer after this phone's update `operationId` of Demo 1 → 2 (market release r2), then `situation`: its
+     * installed snapshot and market detail as it would answer this phone (hostPluginInstallFacts.ts).
+     */
+    const become = (situation: HostInstallSituation, operationId: string) => {
+      const facts = hostInstallFacts(situation, { operationId, target: { ...market, installState: "installed" } as any,
+        instance: { ...plugin, manifest: { ...plugin.manifest, version: "2" } } as any, next: { releaseId: "r3", version: "3" } });
+      snapshot.ghosts.splice(0, snapshot.ghosts.length, ...facts.ghosts);
+      for (const key of Object.keys(market)) delete (market as any)[key];
+      // The detail's manifest is the catalog's current release.
+      Object.assign(market, facts.record, { manifest: { ...(facts.record as any).manifest, version: (facts.record as any).version } });
+      snapshot.market.items.splice(0, snapshot.market.items.length, market);
+    };
+    return { update, requests, market, snapshot, plugin, leave, writes, become };
   }
   const receiptOf = (request: any, phase: string, extra: Record<string, unknown> = {}) => ({ operationId: request.input.operationId, phase, ...extra });
   it("releases it when the update succeeds", async () => {
@@ -1492,8 +1506,9 @@ describe("page slot release paths", () => {
       await settle(14);
     };
     it.each(["update", "uninstall"] as const)("%s", async (entry) => {
-      let done = false;
-      const s = await updateScreen({ begin: (request) => receiptOf(request, "running"), operation: (request) => receiptOf(request, done ? "succeeded" : "running") });
+      let done = false, operationId = "";
+      const s = await updateScreen({ begin: (request) => { operationId = request.input.operationId; return receiptOf(request, "running"); },
+        operation: (request) => receiptOf(request, done ? "succeeded" : "running") });
       if (entry === "update") await s.update();
       else if (entry === "uninstall") {
         await act(async () => { void fixture.props.get("header").rightToolbar.props.onAction("uninstall"); });
@@ -1506,8 +1521,8 @@ describe("page slot release paths", () => {
       await act(async () => root.render(createElement(PluginsScreen)));
       await settle(14);
       done = true;
-      // What the computer has after it: the update applied (the uninstall's instance is gone in its own test below).
-      if (entry === "update") { Object.assign(s.plugin.manifest, { version: "2" }); Object.assign(s.market, { installState: "installed" }); }
+      // What the computer has after it: this phone's update in place (the uninstall's instance is gone in its own test below).
+      if (entry === "update") s.become("own", operationId);
       await press("plugins.slotHolder.show");
       await press("plugins.checks.verify");
       expect(s.writes()).toEqual(["management:begin", "management:operation"]);
@@ -1586,24 +1601,27 @@ describe("page slot release paths", () => {
       expect(s.writes()).toEqual(["management:begin", "management:operation"]);
       return { s, text: () => byId("plugins.checks")?.textContent ?? "" };
     }
-    const updated = (s: Awaited<ReturnType<typeof updateScreen>>, installedOperationId?: string) => {
-      Object.assign(s.plugin.manifest, { version: "2" });
-      Object.assign(s.market, { installState: "installed", ...(installedOperationId ? { installedOperationId } : {}) });
-    };
+    // The computer's own answers (hostPluginInstallFacts.ts, dispatcher R-3) after this phone's update, then each situation.
     it.each([
-      ["update, the Host's record names this operation", "match", "plugins.checks.result.installed", true],
-      ["update, the Host's record names another operation", "other", "plugins.market.unconfirmedMismatch", false],
-      ["update, no record of an operation (another controller or an older Host)", "none", "plugins.market.unconfirmedMismatch", false],
-      ["update, the instance it started from is gone (another instance has the plugin now)", "replaced", "plugins.market.unconfirmedNotInstalled", false],
-    ] as const)("%s", async (_name, record, text, opens) => {
-      const { s } = await gone("update", (s, operationId) => {
-        updated(s, record === "match" ? operationId : record === "other" ? "other-operation-0001" : undefined);
-        if (record === "replaced") Object.assign(s.plugin, { instanceKey: "demo-copy" });
-      });
+      ["own", "plugins.checks.result.installed", true],
+      ["catalogAdvanced", "plugins.checks.result.installed", true],
+      ["localReinstall", "plugins.market.unconfirmedMismatch", false],
+      ["otherControllerReinstall", "plugins.market.unconfirmedMismatch", false],
+      ["otherControllerUpdate", "plugins.market.unconfirmedMismatch", false],
+      ["bindingLost", "plugins.market.unconfirmedMismatch", false],
+      ["olderHost", "plugins.market.unconfirmedMismatch", false],
+      ["uninstalled", "plugins.market.unconfirmedNotInstalled", false],
+    ] as const)("update, then the computer: %s", async (situation, text, opens) => {
+      const { s } = await gone("update", (s, operationId) => s.become(situation, operationId));
       const shown = byId("plugins.checks")?.textContent ?? "";
       expect(shown).toContain(text);
       expect(!!byId("plugins.checks.open")).toBe(opens);
       expect(s.writes()).toEqual(["management:begin", "management:operation"]);
+    });
+    it("update, the instance it started from is gone (another instance has the plugin now)", async () => {
+      await gone("update", (s, operationId) => { s.become("own", operationId); Object.assign(s.snapshot.ghosts[0]!, { instanceKey: "demo-copy" }); });
+      expect(byId("plugins.checks")?.textContent ?? "").toContain("plugins.market.unconfirmedNotInstalled");
+      expect(byId("plugins.checks.open")).toBeNull();
     });
     it.each([
       ["uninstall, the plugin is gone", "uninstall", (s: any) => { s.snapshot.ghosts.splice(0); }, "plugins.checks.status.unprovable.uninstall.absent"],
@@ -1638,19 +1656,27 @@ describe("page slot release paths", () => {
   // Dispatcher O-2: the installed detail after its own update uses the same decision as the list (pluginOperationOpens):
   // the computer showing the new version keeps the detail on it quietly; one still at the old version (it changed since)
   // keeps the detail on the instance shown and says so once. Minimal failing input on 015469869c: no sentence. Tier: unit.
+  // Dispatcher R-1, R-3: the computer's answer after the update, as it gives it in each situation. Only this phone's
+  // update in place (also with the catalog at its next release) stays quiet; a reinstall by the computer or another
+  // controller (no evidence for this phone), another controller's update and the old version each say why, once; an
+  // instance gone closes the detail. Minimal failing input on 5983ba71dd: the catalog's next release said "changed".
+  // Tier: unit/jsdom.
   it.each([
-    ["the computer has the new version", true],
-    ["the computer still has the old version", false],
-  ] as const)("after an update succeeds on its detail and %s", async (_name, applied) => {
-    const s = await updateScreen({ begin: (request) => {
-      if (applied) { Object.assign(s.plugin.manifest, { version: "2" }); Object.assign(s.market, { installState: "installed" }); }
-      return receiptOf(request, "succeeded");
-    } });
+    ["own", null], ["catalogAdvanced", null], ["localReinstall", "plugins.checks.result.unproven"],
+    ["otherControllerReinstall", "plugins.checks.result.unproven"], ["otherControllerUpdate", "plugins.checks.result.changedSince"],
+  ] as const)("after an update succeeds on its detail, the computer then: %s", async (situation, said) => {
+    const s = await updateScreen({ begin: (request) => { s.become(situation, request.input.operationId); return receiptOf(request, "succeeded"); } });
     fixture.alert.mockClear();
     await s.update();
-    const told = fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.changedSince");
-    expect(told).toHaveLength(applied ? 0 : 1);
+    const told = fixture.alert.mock.calls.filter((call) => String(call[1]).startsWith("plugins.checks.result."));
+    expect(told.map((call) => call[1])).toEqual(said ? [said] : []);
     expect(fixture.props.get("header")).toBeDefined();
+  });
+  it("after an update succeeds on its detail and the computer still has the old version: says it changed", async () => {
+    const s = await updateScreen({ begin: (request) => receiptOf(request, "succeeded") });
+    fixture.alert.mockClear();
+    await s.update();
+    expect(fixture.alert.mock.calls.filter((call) => call[1] === "plugins.checks.result.changedSince")).toHaveLength(1);
   });
   it("follows an update to its end after the page is left, then releases it", async () => {
     let finish!: () => void;
@@ -2630,7 +2656,9 @@ it("installs from the market through the existing consent sheet and opens the ne
       case "management:snapshot":
         if (request.input?.read === "capabilities") return { catalogPaging: true };
         if (request.input?.read === "catalog") return marketPage([item]);
-        return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+        // Once installed, the computer's record of it carries this phone's operation id (hostPluginInstallFacts.ts).
+        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation" }] : [],
+          unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
           ghosts: installed ? [{ instanceKey: "_root__demo", namespace: null, manifest, enabled: true,
             approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
       case "management:market-detail": return { ...item, manifest };
@@ -2677,7 +2705,8 @@ it("installs from a custom Git market with the Host's manifest check and opens t
       case "management:snapshot":
         if (request.input?.read === "capabilities") return { catalogPaging: true };
         if (request.input?.read === "catalog") return { ...marketPage(installed ? [] : [item]), customSourceNames: ["Demo Git Market"] };
-        return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+        return { version: 1, market: { items: installed ? [{ ...item, installState: "installed", installedOperationId: "screen-operation" }] : [],
+          unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
           ghosts: installed ? [{ instanceKey: "_root__repo-tools", namespace: null, manifest, enabled: true,
             approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } }] : [] };
       case "management:market-detail": return { ...item, manifest };
@@ -2710,8 +2739,14 @@ it("installs from a custom Git market with the Host's manifest check and opens t
 const hostError = (code: string) => new Error(`[${code}] Plugin management request is no longer available`);
 const demoGhost = { instanceKey: "_root__demo", namespace: null, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" },
   enabled: true, approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
-const managementSnapshot = (installed: boolean) => ({ version: 1, ghosts: installed ? [demoGhost] : [],
-  market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
+/**
+ * The computer's installed snapshot as it answers this phone (dispatcher R-3): once this phone's install of Demo is there,
+ * the snapshot's market records include Demo's, with this phone's operation id (contract V2.9; see
+ * hostPluginInstallFacts.ts). `record` replaces that record (another situation's shape).
+ */
+const managementSnapshot = (installed: boolean, record?: unknown) => ({ version: 1, ghosts: installed ? [demoGhost] : [],
+  market: { items: installed ? [record ?? { ...marketItem("demo", "Demo"), installState: "installed", installedOperationId: "screen-operation" }] : [],
+    unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
 it("keeps the shown market rows when the same page is pulled to refresh", async () => {
   const item = marketItem("demo", "Demo");
   marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([item]));
@@ -2856,8 +2891,8 @@ describe("market install recovery", () => {
               const items = scope === "custom" || scope === "all" ? (world.installed && world.hide === "excludeInstalled" ? [] : [custom]) : [official];
               return { ...marketPage(items), customSourceNames: ["Demo Git Market"] };
             }
-            return { version: 1, market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
-              ghosts: world.installed ? [ghost] : [] };
+            return { version: 1, market: { items: world.installed ? [{ ...custom, installState: "installed", installedOperationId: "screen-operation" }] : [],
+              unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }, ghosts: world.installed ? [ghost] : [] };
           }
           case "management:market-detail": return { ...custom, manifest };
           case "management:begin": return consent;
@@ -2986,7 +3021,9 @@ describe("market install recovery", () => {
     }
     type World = { operation: () => unknown; installed: boolean; installedBy?: string; snapshotFails?: number; answer?: () => unknown;
       /** The computer's instances instead of `installed`'s, and the market's record of them in the installed read. */
-      ghosts?: () => unknown[]; marketItems?: unknown[] };
+      ghosts?: () => unknown[]; marketItems?: unknown[];
+      /** The computer's installed snapshot and market detail as it answers in one situation (hostPluginInstallFacts.ts). */
+      facts?: { ghosts: unknown[]; record: unknown } };
     const consentOf = (requestId = "consent") => ({ operationId: "screen-operation", phase: "confirmation", consent: {
       requestId, initiator: "user", origin: "market", facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } });
     const receipt = (phase: string, extra: object = {}) => ({ operationId: "screen-operation", phase, ...extra });
@@ -2997,9 +3034,14 @@ describe("market install recovery", () => {
             if (request.input?.read === "capabilities") return { catalogPaging: true };
             if (request.input?.read === "catalog") return marketPage(world.installed ? [] : [item]);
             if (world.snapshotFails) { world.snapshotFails -= 1; throw hostError("TIMEOUT"); }
+            if (world.facts) return { ...managementSnapshot(false), ghosts: world.facts.ghosts,
+              market: { ...managementSnapshot(false).market, items: [world.facts.record] } };
             return { ...managementSnapshot(world.installed), ...(world.ghosts ? { ghosts: world.ghosts() } : {}),
               ...(world.marketItems ? { market: { ...managementSnapshot(false).market, items: world.marketItems } } : {}) };
-          case "management:market-detail": return { ...item, installState: world.installed ? "installed" : "not-installed",
+          // The detail's manifest is the catalog's current release (its version is the record's, not the installed one).
+          case "management:market-detail": if (world.facts) return { ...(world.facts.record as object),
+            manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: (world.facts.record as { version: string }).version } };
+            return { ...item, installState: world.installed ? "installed" : "not-installed",
             ...(world.installedBy ? { installedOperationId: world.installedBy } : {}), manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
           case "management:begin": throw new Error("[TIMEOUT] remote invoke timed out");    // written; the reply is lost
           case "management:answer": return world.answer ? world.answer() : receipt("running");
@@ -3211,35 +3253,65 @@ describe("market install recovery", () => {
       await click("plugins.checks.readAgain");
       expect(byId("plugins.checks.open")).not.toBeNull();
     });
-    // Dispatcher O-2: after a success the list opens only the instance this operation put there (pluginOperationOpens):
-    // otherwise the success stands, there is no Open, and one sentence says the plugin changed on the computer since.
-    // Minimal failing input on 015469869c: the readback found an older version with the same id, or the market item
-    // named another operation, and Open opened it. The uninstalled and other-namespace rows also passed before
-    // (existing behaviour; the uninstalled row's text changed). Tier: unit/jsdom.
-    it.each([
-      ["the instance is not on the computer (uninstalled since)", () => [], undefined],
-      ["only an older version with the same id", () => [{ ...demoGhost, manifest: { ...demoGhost.manifest, version: "0" } }], undefined],
-      ["the same version, installed by another operation", () => [demoGhost], { installState: "installed", installedOperationId: "other-operation-0001" }],
-      ["the same name in another namespace", () => [{ ...demoGhost, instanceKey: "team__demo", namespace: "team" }], undefined],
-    ] as const)("succeeded, but %s: no Open, says the plugin changed since", async (_name, ghosts, record) => {
+    // Dispatcher O-2, R-1, R-2, R-3 (maintainer review 01:21 of #12684): after the operation, the list opens only what
+    // the computer's facts now name as this operation's instance (pluginOperationOpens); a success receipt is a past
+    // result. The facts are the computer's own answers in each situation (hostPluginInstallFacts.ts), after a final
+    // receipt and after the receipt is gone. Otherwise the result stands and one sentence says why there is no Open.
+    // Minimal failing inputs on 5983ba71dd: a same-version reinstall by the computer or another controller (evidence left
+    // out) still offered Open after a final receipt; only the catalog's next release lost Open after the final receipt
+    // and read "could not confirm" after the receipt was gone. Tier: unit/jsdom.
+    const situated = (situation: HostInstallSituation) => hostInstallFacts(situation, { operationId: "screen-operation",
+      target: { ...item, installState: "installed" } as any, instance: demoGhost as any, next: { releaseId: "demo@2", version: "2" } });
+    const afterFinal: Record<HostInstallSituation, string | null> = {
+      own: null, catalogAdvanced: null,
+      localReinstall: "plugins.checks.result.unproven", otherControllerReinstall: "plugins.checks.result.unproven",
+      bindingLost: "plugins.checks.result.unproven", olderHost: "plugins.checks.result.unproven",
+      otherControllerUpdate: "plugins.checks.result.changedSince", uninstalled: "plugins.checks.result.goneSince",
+    };
+    it.each(HOST_INSTALL_SITUATIONS)("succeeded, then the computer: %s", async (situation) => {
       const world: World = { operation: () => receipt("running"), installed: false };
       const requests = await toPanel(world);
       world.operation = () => receipt("succeeded");
-      world.ghosts = ghosts as () => unknown[];
-      if (record) world.marketItems = [{ ...item, ...record }];
+      world.facts = situated(situation);
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      const said = afterFinal[situation];
+      if (said) expect(status()).toContain(said); else expect(status()).toContain("plugins.checks.result.succeeded");
+      expect(!!byId("plugins.checks.open")).toBe(said === null);
+    });
+    // As the computer answers (dispatcher R-3): an older package of the same plugin installed over it rewrites the record
+    // (no evidence for this phone, the record an older release on this route); the root instance gone with one of the same
+    // name in another namespace leaves the root record not installed.
+    it.each([
+      ["only an older version with the same id", { ghosts: [{ ...demoGhost, manifest: { ...demoGhost.manifest, version: "0" } }],
+        record: { ...item, installState: "update-available" } }, "plugins.checks.result.changedSince"],
+      ["the same name in another namespace", { ghosts: [{ ...demoGhost, instanceKey: "team__demo", namespace: "team" }],
+        record: { ...item, installState: "not-installed" } }, "plugins.checks.result.goneSince"],
+    ] as const)("succeeded, but %s: no Open, says why", async (_name, facts, said) => {
+      const world: World = { operation: () => receipt("running"), installed: false };
+      const requests = await toPanel(world);
+      world.operation = () => receipt("succeeded");
+      world.facts = facts as unknown as World["facts"];
       await verifyFrom(requests);
-      expect(status()).toContain("plugins.checks.result.changedSince");
+      expect(status()).toContain(said);
       expect(byId("plugins.checks.open")).toBeNull();
     });
-    // Existing behaviour (passes on 015469869c too): the record naming this operation keeps Open.
-    it("succeeded, the market item names this operation: Open", async () => {
+    const afterGone: Record<HostInstallSituation, [string, boolean]> = {
+      own: ["plugins.checks.result.installed", true], catalogAdvanced: ["plugins.checks.result.installed", true],
+      localReinstall: ["plugins.market.unconfirmedMismatch", false], otherControllerReinstall: ["plugins.market.unconfirmedMismatch", false],
+      bindingLost: ["plugins.market.unconfirmedMismatch", false], olderHost: ["plugins.market.unconfirmedMismatch", false],
+      otherControllerUpdate: ["plugins.market.unconfirmedMismatch", false], uninstalled: ["plugins.market.unconfirmedNotInstalled", false],
+    };
+    it.each(HOST_INSTALL_SITUATIONS)("NOT_FOUND, then the computer: %s: settles from its facts, writes nothing", async (situation) => {
       const world: World = { operation: () => receipt("running"), installed: false };
       const requests = await toPanel(world);
-      world.operation = () => receipt("succeeded");
-      world.installed = true;
-      world.marketItems = [{ ...item, installState: "installed", installedOperationId: "screen-operation" }];
-      await verifyFrom(requests);
-      expect(byId("plugins.checks.open")).not.toBeNull();
+      world.operation = () => { throw hostError("NOT_FOUND"); };
+      world.facts = situated(situation);
+      const sent = await verifyFrom(requests);
+      expect(sent()).toEqual(["operation:screen-operation"]);
+      const [text, opens] = afterGone[situation];
+      expect(status()).toContain(text);
+      expect(!!byId("plugins.checks.open")).toBe(opens);
     });
     it.each([["failed", "plugins.checks.result.failed"], ["cancelled", "plugins.checks.result.cancelled"]])(
       "%s (here or by another controller): says how it ended, writes nothing", async (phase, text) => {
@@ -3251,21 +3323,6 @@ describe("market install recovery", () => {
         expect(status()).toContain(text);
         expect(byId("plugins.checks.open")).toBeNull();
       });
-    it.each([
-      ["installed, its operation id recorded", true, "screen-operation", "plugins.checks.result.installed", true],
-      ["installed by another operation", true, "computer-update-0001", "plugins.market.unconfirmedMismatch", false],
-      ["not installed", false, undefined, "plugins.market.unconfirmedNotInstalled", false],
-    ] as const)("NOT_FOUND, %s: settles from the computer's facts, writes nothing", async (_name, installed, installedBy, text, opens) => {
-      const world: World = { operation: () => receipt("running"), installed: false };
-      const requests = await toPanel(world);
-      world.operation = () => { throw hostError("NOT_FOUND"); };
-      world.installed = installed;
-      world.installedBy = installedBy;
-      const sent = await verifyFrom(requests);
-      expect(sent()).toEqual(["operation:screen-operation"]);
-      expect(status()).toContain(text);
-      expect(!!byId("plugins.checks.open")).toBe(opens);
-    });
     it.each([["a retryable failure", "TIMEOUT"], ["a protocol error", "INVALID_RESPONSE"]])(
       "lookup fails with %s: stays unconfirmed, Check result stays, nothing written", async (_name, code) => {
         const world: World = { operation: () => receipt("running"), installed: false };
@@ -3363,8 +3420,9 @@ describe("market install recovery", () => {
   it.each([
     ["installed on the computer", true, null, "screen-operation"],
     ["not on the computer", false, "plugins.market.unconfirmedNotInstalled", "screen-operation"],
-    // Contract V2.9: Allow was written, but the computer's record says another operation installed this release.
-    ["installed on the computer by another operation", true, "plugins.market.unconfirmedMismatch", "computer-update-0001"],
+    // Contract V2.9: Allow was written, but the computer or another controller installed this release since: the computer
+    // then leaves the evidence out for this phone (dispatcher R-3: its actual answer, not another id).
+    ["installed on the computer by another install", true, "plugins.market.unconfirmedMismatch", undefined],
   ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey, installedBy) => {
     let installed = false;
     const requests = installWire({
@@ -3396,7 +3454,8 @@ describe("market install recovery", () => {
   // receipt gone → reconnect. Tier: unit (jsdom, in-memory Host).
   it.each([
     ["this attempt's operation installed it", "screen-operation", true],
-    ["another operation installed the same release", "computer-update-0001", false],
+    // The computer or another controller installed the same release: the computer leaves the field out for this phone.
+    ["another install put the same release there (the field left out)", undefined, false],
     ["the Host gives no operation evidence (older Host)", undefined, false],
   ] as const)("checks a written Allow after offline, timeout and an expired receipt: %s", async (_name, installedBy, confirmed) => {
     let installed = false, receiptGone = false, releaseReply!: () => void;
@@ -3471,7 +3530,8 @@ describe("market install recovery", () => {
   // operation installed the package confirms it; the installed source id is no longer the check.
   const sourceA = { kind: "git", repository: "github.com/acme/market", sourceId: "SourceA_0123456789abcd" };
   it.each([
-    ["another operation installed the same id and release (e.g. from a same-name source)", "other-operation-0001", "unconfirmed"],
+    // Another install (the computer's or another controller's, e.g. from a same-name source): the field is left out.
+    ["another install put the same id and release there (e.g. from a same-name source)", undefined, "unconfirmed"],
     ["the computer gives no operation evidence (older Host)", undefined, "unconfirmed"],
     ["this attempt's operation installed it", "screen-operation", "installed"],
   ])("confirms a lost-receipt custom-market install only from the Host's operation evidence: %s", async (_name, installedOperationId, expected) => {

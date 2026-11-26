@@ -7,6 +7,7 @@ import { fontWeight, lineHeight, radius, spacing, typeScale, useTheme, useThemed
 import { ScrollFade, ScrollThumb, useScrollOverflow } from "@/components/ScrollOverflow";
 import { CONSENT_FADE_HEIGHT } from "./pluginConsentPresentation";
 import type { PluginSlotEntry, PluginSlotHolder } from "./pluginManagementSlot";
+import { PLUGIN_NOT_OPENED_TEXT } from "./pluginOperationOpens";
 import { retryPluginCheckReadback, type PluginCheckConclusion, type PluginPendingCheck } from "./usePluginManagement";
 
 /** One line of the list: an operation holding its computer's slot, a pending check, or both (the same operation). */
@@ -84,8 +85,8 @@ export function PluginPendingChecksSheet({ visible, lines, conclusions, isOnline
         return canOpen(conclusion.who.deviceId) ? { text: done, open: conclusion.instanceKey }
           : { text: done, openUnavailable: true };
       case "pending": return { text: t("plugins.checks.result.readingBack") };
-      // The success stands; the plugin on the computer is no longer this operation's (pluginOperationOpens).
-      case "changed": return { text: t("plugins.checks.result.changedSince") };
+      // The success stands as a past result; the computer's facts now do not name this operation's instance.
+      case "gone": case "changed": case "unproven": return { text: t(PLUGIN_NOT_OPENED_TEXT[conclusion.readback]) };
       case "failed": return { text: t("plugins.checks.result.succeededUnread"), readAgain: conclusion.operationId };
       default: return { text: done };
     }

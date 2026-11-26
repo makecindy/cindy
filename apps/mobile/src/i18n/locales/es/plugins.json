@@ -531,6 +531,8 @@
       "ended": "Terminado",
       "readingBack": "Hecho. Comprobando el complemento en el ordenador…",
       "changedSince": "Hecho, pero este complemento ha cambiado en el ordenador desde entonces.",
+      "goneSince": "Hecho, pero este complemento ya no está en el ordenador.",
+      "unproven": "Hecho, pero el ordenador no ha confirmado que el complemento que tiene ahora sea el de esta instalación, así que no se puede abrir desde aquí.",
       "succeededUnread": "Hecho, pero no se pudieron leer los complementos del ordenador.",
       "uninstalled": "Desinstalado"
     },

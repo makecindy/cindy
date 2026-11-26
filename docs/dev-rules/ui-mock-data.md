@@ -174,6 +174,9 @@ pnpm mobile:sim:whoami -- --mock --json
   | 「查看并决定」被占用挡住（说明要等另一项结束） | `cindy://plugins?checks=decideBlocked`，点 Demo Agenda 的「查看并决定」（Demo Device Simulator 正在同一台电脑上安装） |
   | 卸载回执过期，无法确认（显示还装着、只有「不再跟踪」） | `cindy://plugins?checks=unprovableUninstall`（面板打开后自动核实一次即出现） |
   | 更新完成且回执过期后核实（「已安装」+ 打开） | `cindy://plugins?checks=updateGone`（Demo Reading List 的更新） |
+  | 成功，但电脑没有给出依据（本机换装同版本，没有「打开」） | `cindy://plugins?checks=reinstalled` |
+  | 成功，但电脑上现在没有这个插件（之后被卸载） | `cindy://plugins?checks=goneSince` |
+  | 成功，只推进了目录版本（条目「可更新」，仍可「打开」） | `cindy://plugins?checks=catalogAhead` |
   | 确认与选择不一致（只能拒绝） | 没有模拟入口：模拟电脑的确认都与所选一致（`pluginMarketVisualFixture.test.ts` 逐场景核对）；组件测试覆盖 |
   | 来源变化（更新预检） | `cindy://plugins?market=updateSourceChanged`，已安装里 Demo Moved Source 详情「管理插件 → 更新到 v版本」 |
   | 版本变化（更新预检） | `cindy://plugins?market=updateReleaseChanged`，已安装里 Demo Weather Board 详情「更新到 v版本」 |

@@ -529,6 +529,8 @@
       "ended": "已終",
       "readingBack": "已成，方核彼機之法器…",
       "changedSince": "已成，然彼機此法器其後又有所易。",
+      "goneSince": "已成，然彼機今無此法器。",
+      "unproven": "已成，然彼機未示今所存者即此番所裝，不能於此啟之。",
       "succeededUnread": "已成，然未能讀彼機之法器。",
       "uninstalled": "已卸"
     },

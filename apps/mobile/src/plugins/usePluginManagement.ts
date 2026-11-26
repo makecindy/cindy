@@ -63,11 +63,12 @@ export interface PluginCheckConclusion {
   result: "succeeded" | "failed" | "cancelled" | "installed" | "notInstalled" | "mismatch";
   errorCode?: string | null;
   /**
-   * `pending`: the read is out; `verified`: it found this operation's instance (`instanceKey`, `pluginOperationOpens`);
-   * `changed`: it did not (the plugin changed on the computer since: gone, another version, another operation's);
-   * `failed`: it did not come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
+   * `pending`: the read is out; `verified`: the computer's facts name this operation's instance now (`instanceKey`,
+   * `pluginOperationOpens`); `gone`, `changed`, `unproven`: they do not (no instance now; another version or not this
+   * operation's; no evidence either way), so nothing opens and the success stays a past result; `failed`: it did not
+   * come back (it can be read again); `none`: nothing to open (an uninstall, or no success).
    */
-  readback: "pending" | "verified" | "changed" | "failed" | "none";
+  readback: "pending" | "verified" | "gone" | "changed" | "unproven" | "failed" | "none";
   /** The instance found by that read (never the instance the operation started from: an uninstall has none). */
   instanceKey?: string;
   /** Its own view was showing it and handled the result already (only the list of checks still tells it). */
@@ -175,11 +176,10 @@ async function readBack(operationId: string) {
     const snapshot = await createPluginManagementClient({ invoke: job.invoke, deviceId: job.check.who.deviceId, isCurrent: current })
       .snapshot(job.snapshotRead);
     if (!current()) return;
-    // The final receipt said it succeeded; the market's record read with these facts may name another operation since.
-    const opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, receipt: "final",
-      market: job.check.detail ? snapshot.market.items.find((item) => item.pluginId === job.check.detail!.pluginId) : undefined });
+    // The final receipt is a past result: only what the computer has now (its instance, package and evidence) opens it.
+    const opens = pluginOperationOpens(job.check, { ghosts: snapshot.ghosts, market: snapshot.market.items });
     const latest = conclusions.find((item) => item.operationId === operationId) ?? before;
-    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey } : { ...latest, readback: "changed", instanceKey: undefined });
+    conclude(job, opens.open ? { ...latest, readback: "verified", instanceKey: opens.instanceKey } : { ...latest, readback: opens.reason, instanceKey: undefined });
     readbacks.delete(operationId);
   } catch {
     if (!current()) return;
@@ -236,8 +236,8 @@ async function settleFromFacts(entry: ManagementEntry, facts: NonNullable<Plugin
   try {
     const market = await createPluginManagementClient({ invoke: entry.invoke, deviceId: check.who.deviceId, isCurrent: valid })
       .detail(item.pluginId);
-    // No receipt: only the Host's record of this operation id proves it (same release, same instance, this operation).
-    const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market, receipt: "gone" });
+    // The same decision as after a final receipt: the instance, its installed package and the computer's evidence.
+    const opens = pluginOperationOpens(check, { ghosts: facts.ghosts, market });
     if (opens.open) settle("installed", opens.instanceKey); else settle("mismatch");
   } catch { /* Market facts not read: still unconfirmed; "Check result" verifies again. */ }
 }

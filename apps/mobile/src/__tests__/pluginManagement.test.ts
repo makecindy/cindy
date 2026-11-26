@@ -12,6 +12,7 @@ import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/Plugi
 import { createPluginManagementController, nextDetachedStep } from '@/plugins/pluginManagementController';
 import { invokeSendEvidence } from '@/device-link/invokeSendEvidence';
 import { pluginOperationOpens } from '@/plugins/pluginOperationOpens';
+import { HOST_INSTALL_SITUATIONS, hostInstallFacts, type HostInstallSituation } from './hostPluginInstallFacts';
 import { declaredPluginConsent, declaredTaskCardConsent, pluginConsentAllowance } from '@/plugins/pluginConsentAllowance';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
@@ -2409,41 +2410,60 @@ describe('confirmation sheet wording', () => {
   });
 });
 
-// Dispatcher O-2: one decision for every "Open" after an operation (the list of checks, the market row, the installed
-// detail). Each condition on its own, from the operation that holds and one change at a time: the instance (an install's
-// market plugin, an update's or a page approval's own instance), the version, and the Host's evidence (its record naming
-// this operation, or this operation's final receipt while the record names none). Minimal failing input: any one of
-// them changed and Open still offered. Tier: unit (pure).
+// Dispatcher O-2, R-1, R-2, R-3 (maintainer review 01:21 of #12684): one decision for every "Open" after an operation.
+// It reads only the computer's facts now: a success receipt is a past result. The facts are the shapes the computer
+// actually sends in each situation (hostPluginInstallFacts.ts, from its projection code and tests), never convenient
+// values it does not send. Minimal failing inputs on 5983ba71dd: a same-version reinstall by the computer or another
+// controller (evidence field absent) still opened after a final receipt; only the catalog's next release (the record
+// `update-available`, next `releaseId`, this operation's id) lost "Open" and was "not confirmed" after the receipt.
+// Tier: unit (pure).
 describe('whether a finished operation opens an instance', () => {
   const finished = (entry: 'market-install' | 'update' | 'page-approval' | 'uninstall' | 'enable' | 'task-settings', instanceKey?: string) =>
     ({ operationId: 'operation-1', entry, who: { instanceKey }, detail: entry === 'market-install' || entry === 'update' ? detail : undefined });
   const updated: ManagedPlugin = { ...plugin, manifest: { ...plugin.manifest, version: '2' } };
-  const record = { pluginId: detail.pluginId, releaseId: detail.releaseId, installState: 'installed' as const };
+  const facts = (situation: HostInstallSituation) => hostInstallFacts(situation, { operationId: 'operation-1',
+    target: { ...detail, installState: 'installed' }, instance: updated, next: { releaseId: 'release-3', version: '3' } });
+  // [situation, what install and update decide]
+  const expected: Record<HostInstallSituation, ReturnType<typeof pluginOperationOpens>> = {
+    own: { open: true, instanceKey: '_root__demo' },
+    catalogAdvanced: { open: true, instanceKey: '_root__demo' },
+    localReinstall: { open: false, reason: 'unproven' },
+    otherControllerReinstall: { open: false, reason: 'unproven' },
+    bindingLost: { open: false, reason: 'unproven' },
+    olderHost: { open: false, reason: 'unproven' },
+    otherControllerUpdate: { open: false, reason: 'changed' },
+    uninstalled: { open: false, reason: 'gone' },
+  };
+  it.each(HOST_INSTALL_SITUATIONS.flatMap((situation) => (['market-install', 'update'] as const).map((entry) => [situation, entry] as const)))(
+    '%s, %s', (situation, entry) => {
+      const { ghosts, record } = facts(situation);
+      // The same answer from the installed snapshot's records and from the market detail.
+      expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts, market: [record] })).toEqual(expected[situation]);
+      expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts, market: record })).toEqual(expected[situation]);
+    });
   it.each([
-    ['install: this instance, this version, final receipt', 'market-install', [updated], undefined, 'final', '_root__demo'],
-    ['install: the record names this operation, receipt gone', 'market-install', [updated], { ...record, installedOperationId: 'operation-1' }, 'gone', '_root__demo'],
-    ['install: receipt gone and no record of an operation', 'market-install', [updated], record, 'gone', null],
-    ['install: the record names another operation', 'market-install', [updated], { ...record, installedOperationId: 'operation-2' }, 'final', null],
-    ['install: an older version with the same id', 'market-install', [plugin], undefined, 'final', null],
-    ['install: the record is at another release', 'market-install', [updated], { ...record, releaseId: 'release-3' }, 'final', null],
-    ['install: the record says an update is available', 'market-install', [updated], { ...record, installState: 'update-available' as const }, 'final', null],
-    ['install: the same name in another namespace', 'market-install', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }], undefined, 'final', null],
-    ['install: not on the computer', 'market-install', [], undefined, 'final', null],
-    ['update: its own instance at the new version', 'update', [updated], undefined, 'final', '_root__demo'],
-    ['update: another instance of the plugin, its own gone', 'update', [{ ...updated, instanceKey: 'demo-copy' }], undefined, 'final', null],
-  ] as const)('%s', (_name, entry, ghosts, market, receipt, opened) => {
-    const result = pluginOperationOpens(finished(entry, '_root__demo'), { ghosts, market, receipt });
-    expect(result).toEqual(opened ? { open: true, instanceKey: opened } : { open: false });
+    // A record of this phone's other operation on the same plugin (the one id of another operation this phone can see).
+    ['the record names another operation of this phone', [updated], [{ ...detail, installState: 'installed' as const, installedOperationId: 'operation-2' }], 'changed'],
+    ['an older version with the same id, evidence own', [plugin], [{ ...detail, installState: 'installed' as const, installedOperationId: 'operation-1' }], 'changed'],
+    ['the same name in another namespace', [{ ...updated, instanceKey: 'team__demo', namespace: 'team' }],
+      [{ ...detail, namespace: 'team', installState: 'installed' as const, installedOperationId: 'operation-1' }], 'gone'],
+    ['no records read with the facts', [updated], [], 'unproven'],
+  ] as const)('install: %s', (_name, ghosts, market, reason) => {
+    expect(pluginOperationOpens(finished('market-install'), { ghosts, market })).toEqual({ open: false, reason });
   });
-  it('page approval: its own instance with its pages approved, after its final receipt only', () => {
+  it('update: another instance of the plugin with its own gone', () => {
+    const { record } = facts('own');
+    expect(pluginOperationOpens(finished('update', '_root__demo'), { ghosts: [{ ...updated, instanceKey: 'demo-copy' }], market: [record] }))
+      .toEqual({ open: false, reason: 'gone' });
+  });
+  it('page approval: its own instance with its pages approved now', () => {
     const approved = { ...plugin, uiCapabilityApproved: true as const };
-    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved], receipt: 'final' })).toEqual({ open: true, instanceKey: '_root__demo' });
-    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [plugin], receipt: 'final' })).toEqual({ open: false });
-    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved], receipt: 'gone' })).toEqual({ open: false });
-    expect(pluginOperationOpens(finished('page-approval', 'demo-copy'), { ghosts: [approved], receipt: 'final' })).toEqual({ open: false });
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [approved] })).toEqual({ open: true, instanceKey: '_root__demo' });
+    expect(pluginOperationOpens(finished('page-approval', '_root__demo'), { ghosts: [plugin] })).toEqual({ open: false, reason: 'changed' });
+    expect(pluginOperationOpens(finished('page-approval', 'demo-copy'), { ghosts: [approved] })).toEqual({ open: false, reason: 'gone' });
   });
   it.each(['uninstall', 'enable', 'task-settings'] as const)('%s never opens one', (entry) => {
-    expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated], receipt: 'final' })).toEqual({ open: false });
+    expect(pluginOperationOpens(finished(entry, '_root__demo'), { ghosts: [updated] })).toMatchObject({ open: false });
   });
 });
 

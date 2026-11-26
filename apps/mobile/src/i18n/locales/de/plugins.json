@@ -529,6 +529,8 @@
       "ended": "Beendet",
       "readingBack": "Erledigt. Das Plugin auf dem Computer wird geprüft…",
       "changedSince": "Erledigt, aber dieses Plugin hat sich seitdem auf dem Computer geändert.",
+      "goneSince": "Erledigt, aber dieses Plugin ist jetzt nicht auf dem Computer.",
+      "unproven": "Erledigt, aber der Computer hat nicht belegt, dass das Plugin dort jetzt aus dieser Installation stammt. Es lässt sich hier nicht öffnen.",
       "succeededUnread": "Erledigt, aber die Plugins auf dem Computer konnten nicht gelesen werden.",
       "uninstalled": "Deinstalliert"
     },
