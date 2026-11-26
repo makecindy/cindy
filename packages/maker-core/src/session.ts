@@ -415,6 +415,7 @@ export type SessionSendResult =
   | {
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
     };
 
 export interface SessionTurnControlSnapshot {
@@ -1173,6 +1174,7 @@ export class Session {
           return {
             accepted: false,
             reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+            ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
           };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
