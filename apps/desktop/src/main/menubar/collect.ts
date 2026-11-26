@@ -97,6 +97,8 @@ export interface MenubarCollectDeps {
   listPluginEngines?(): Promise<readonly PluginEngineView[]> | readonly PluginEngineView[];
   /** Reads one plugin engine's current account usage; null when unreadable or empty. */
   readPluginEngineUsage?(key: string): Promise<GhostHarnessUsage | null>;
+  readCachedPluginEngineDefaultPlan?(key: string): string | null;
+  warmPluginEngineDefaultPlan?(key: string): void;
   /** Subscriptions on the user's other computers, already read and mapped. */
   readRemoteSubscriptions?(): Promise<MenubarSubscriptionInput[]>;
   /** Null when the account has no Cindy balance (organization accounts, signed out). */
@@ -199,7 +201,8 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         if (engine.suspended || engine.availability.state === 'unavailable' || engine.reportsUsage !== true) return null;
         const usage = await safe(`plugin:${engine.key}`, () => deps.readPluginEngineUsage!(engine.key), null);
         if (!usage) return null;
-        return pluginEngineSource(engine, usage, deps.nowMs);
+        deps.warmPluginEngineDefaultPlan?.(engine.key);
+        return pluginEngineSource(engine, usage, deps.nowMs, 'local', deps.readCachedPluginEngineDefaultPlan?.(engine.key));
       })
     : [];
   for (const source of [...(await Promise.all(subscriptionReads)).flat(), ...(await Promise.all(pluginEngineReads))]) {
@@ -941,6 +944,7 @@ export function pluginEngineSource(
   usage: GhostHarnessUsage | null,
   nowMs: number,
   scopeKey = 'local',
+  plan: string | null = null,
 ): MenubarSubscriptionInput {
   const windows: MenubarWindowInput[] = (usage?.windows ?? [])
     .filter((row) => row.resetsAt === undefined || row.resetsAt > nowMs)
@@ -949,7 +953,7 @@ export function pluginEngineSource(
       label: row.label,
       usedPercent: clampPercent(100 - row.remainingPercent),
       resetsAtMs: row.resetsAt ?? null,
-      windowMinutes: 0,
+      windowMinutes: row.windowMinutes ?? 0,
     }));
   const balances = (usage?.balances ?? []).flatMap((row) => {
     const amount = Number(row.amount);
@@ -964,7 +968,7 @@ export function pluginEngineSource(
       ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
-    plan: null,
+    plan,
     windows,
     ...(balances.length > 0 ? { balances } : {}),
     credits: null,

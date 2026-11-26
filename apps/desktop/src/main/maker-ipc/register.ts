@@ -15,7 +15,7 @@ import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readS
 import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } from '../plugin-engine-accounts/failover.js';
-import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readPluginEngineTaskUsage } from '../plugin-engine-accounts/runtime.js';
+import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readCachedPluginEngineDefaultPlan, readPluginEngineTaskUsage, warmPluginEngineDefaultPlan } from '../plugin-engine-accounts/runtime.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
 import { createSessionControlRuntimeWriter } from './sessionControlRuntimeWriter.js';
@@ -7026,7 +7026,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       update: updatePluginEnginePrefs,
       onChange: onPluginEnginePrefsChanged,
     },
+    getActiveOwner: getActiveDataOwnerPushStamp,
     readTaskUsage: readPluginEngineTaskUsage,
+    readCachedPluginEngineDefaultPlan,
+    warmPluginEngineDefaultPlan,
     // Providers taken out of plugin engines (subscription-account-pools.md 插件引擎的账号).
     accountProviders: {
       list: listPluginEngineSeparateProviders,

@@ -1634,6 +1634,9 @@
       "full": "满格。",
       "relaxed": "节奏宽松。",
       "onPace": "节奏正常。",
+      "tightest": "{{window}}剩得最少，",
+      "refillsAt": "{{at}} 回满。",
+      "tightestRefills": "{{window}} {{at}} 回满。",
       "windowRefresh": "{{window}}窗口{{at}}刷新",
       "usedUpWithResets_other": "还有 {{n}} 次重置可用，用一次立即回满。"
     },

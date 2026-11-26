@@ -350,6 +350,11 @@ export interface GhostHarnessAccountStatus {
   models?: string[];
 }
 
+/** Display text for an account plan from a plugin or its host computer. */
+export function isGhostHarnessAccountPlan(value: unknown): value is string {
+  return plainText(value, ACCOUNT_PLAN_MAX);
+}
+
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,253}$/;
 
 /**
@@ -368,7 +373,7 @@ export function parseGhostHarnessAccountStatus(raw: unknown): GhostHarnessAccoun
     };
     if (Object.keys(identity).length) status.identity = identity;
   }
-  if (plainText(raw.plan, ACCOUNT_PLAN_MAX)) status.plan = raw.plan;
+  if (isGhostHarnessAccountPlan(raw.plan)) status.plan = raw.plan;
   if (plainText(raw.fingerprint, ACCOUNT_FINGERPRINT_MAX)) status.fingerprint = raw.fingerprint;
   const models = parseModelIdList(raw.models);
   if (models) status.models = models;

@@ -569,6 +569,27 @@ describe('plugin engine menubar and widget projection', () => {
     expect(widget?.sources[0]).toMatchObject({ id: source.id, kind: 'subscription', name: 'DeepSeek Harness', monogram: 'D', value: '40', unit: '%', fill: 0.4 });
   });
 
+  // #12709, unit: the existing mixed-quota case checks percentages, but a missing
+  // duration cannot establish pace. Only the limiting window belongs in the plugin copy.
+  it('describes the limiting plugin window using the timing evidence available', () => {
+    const other = { kind: 'custom' as const, label: 'Week', usedPercent: 0, resetsAtMs: NOW + DAY, windowMinutes: 10_080 };
+    const fast = { ...other, label: 'Fast', usedPercent: 15, resetsAtMs: NOW + 3 * HOUR, windowMinutes: 0 };
+    const detail = (window: MenubarSubscriptionInput['windows'][number], family: MenubarSubscriptionInput['family'] = 'plugin') =>
+      buildMenubarView(input([codex('source', 0, { family, windows: [window, other] })])).details.source;
+    const unknown = detail(fast);
+    const at = unknown.facts[0].value;
+    expect(unknown).toMatchObject({ sayPrimary: 'Fast is lowest; ', saySecondary: `refills ${at}.` });
+    expect(detail({ ...fast, resetsAtMs: null })).toMatchObject({ sayPrimary: 'Fast is lowest; ', saySecondary: null });
+    expect(detail({ ...fast, windowMinutes: 300 })).toMatchObject({
+      sayPrimary: 'Plenty of room at this pace.', saySecondary: `Fast refills ${at}.`,
+    });
+    expect(detail({ ...fast, usedPercent: 40, windowMinutes: 300 })).toMatchObject({
+      sayPrimary: 'On pace.', saySecondary: `Fast refills ${at}.`,
+    });
+    expect(detail({ ...fast, usedPercent: 0 })).toMatchObject({ sayPrimary: 'Full.', saySecondary: null });
+    expect(detail(fast, 'claude')).toMatchObject({ sayPrimary: 'On pace.', saySecondary: expect.stringContaining('Week window refreshes') });
+  });
+
   it('renders a balance-only plugin engine as a filled tube and keeps it in widgets and low-quota checks', () => {
     const positive: MenubarSubscriptionInput = {
       kind: 'subscription',

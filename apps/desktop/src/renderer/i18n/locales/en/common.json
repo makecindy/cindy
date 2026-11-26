@@ -1654,6 +1654,9 @@
       "full": "Full.",
       "relaxed": "Plenty of room at this pace.",
       "onPace": "On pace.",
+      "tightest": "{{window}} is lowest; ",
+      "refillsAt": "refills {{at}}.",
+      "tightestRefills": "{{window}} refills {{at}}.",
       "windowRefresh": "{{window}} window refreshes {{at}}",
       "usedUpWithResets_one": "{{n}} reset is available; using it refills right away.",
       "usedUpWithResets_other": "{{n}} resets are available; using one refills right away."

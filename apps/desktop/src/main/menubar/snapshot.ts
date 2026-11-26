@@ -1047,7 +1047,7 @@ class Builder {
         }))
       : [{ fraction: clamp(remaining / 100, 0, 1), color: ringColor }];
     const limits = state.windows.filter((window) => window.window.kind !== 'scoped');
-    const refreshList = limits
+    const refreshList = source.family === 'plugin' ? '' : limits
       .filter((window) => window.window.resetsAtMs !== null)
       .map((window) => this.t('say.windowRefresh', { window: this.windowLabel(window.window), at: this.at(window.window.resetsAtMs!) }))
       .join(this.t('headline.joiner'));
@@ -1076,6 +1076,15 @@ class Builder {
     } else if (remaining >= 99.5) {
       sayPrimary = this.t('say.full');
       saySecondary = refreshList ? this.t('headline.sentence', { text: refreshList }) : null;
+    } else if (source.family === 'plugin') {
+      const window = this.windowLabel(limit.window);
+      if (limit.pace === null) {
+        sayPrimary = this.t('say.tightest', { window });
+        saySecondary = resetAt ? this.t('say.refillsAt', { at: resetAt }) : null;
+      } else {
+        sayPrimary = this.t(limit.pace < -3 ? 'say.relaxed' : 'say.onPace');
+        saySecondary = resetAt ? this.t('say.tightestRefills', { window, at: resetAt }) : null;
+      }
     } else if (limit.pace !== null && limit.pace < -3) {
       sayPrimary = this.t('say.relaxed');
       saySecondary = refreshList ? this.t('headline.sentence', { text: refreshList }) : null;

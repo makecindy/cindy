@@ -1654,6 +1654,9 @@
       "full": "Voll.",
       "relaxed": "Bei diesem Verbrauch ist noch viel Spielraum.",
       "onPace": "Im Zeitplan.",
+      "tightest": "Bei {{window}} ist am wenigsten übrig. ",
+      "refillsAt": "{{at}} ist das Kontingent wieder voll.",
+      "tightestRefills": "Bei {{window}} ist das Kontingent {{at}} wieder voll.",
       "windowRefresh": "Das Zeitfenster {{window}} wird {{at}} erneuert",
       "usedUpWithResets_one": "{{n}} Zurücksetzung verfügbar; damit wird das Kontingent sofort aufgefüllt.",
       "usedUpWithResets_other": "{{n}} Zurücksetzungen verfügbar; mit einer davon wird das Kontingent sofort aufgefüllt."
