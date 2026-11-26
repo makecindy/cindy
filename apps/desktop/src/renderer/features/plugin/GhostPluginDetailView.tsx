@@ -852,7 +852,8 @@ function ToolDescriptionRow({ tool }: { tool: Pick<GhostToolDecl, 'name' | 'desc
     return () => observer.disconnect();
   }, [expanded, tool.description]);
   return (
-    <li className="grid min-w-0 gap-x-3 gap-y-1 py-3 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]">
+    // 窄屏单列也要显式 minmax(0,1fr)：隐式 auto 列按最长不可断的工具名撑宽，内容会越出卡片。
+    <li className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-3 gap-y-1 py-3 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]">
       <code className="break-words text-13 text-[var(--text-primary)]">{tool.name}</code>
       <p ref={ref} className={cn('whitespace-pre-line break-words text-13 leading-[1.54] text-[var(--text-secondary)]', !expanded && 'line-clamp-2')}>
         {tool.description || t('settings.ghosts.detail.noToolDescription')}
