@@ -6,6 +6,7 @@ import {
   MODEL_FAVORITES_APPLY,
   MODEL_FAVORITES_CHANGED,
   MODEL_FAVORITE_TEXT_MAX_LENGTH,
+  PLUGIN_ENGINE_FAVORITE_WIRE_AGENT,
   agentDeviceFavoriteSource,
   parseAgentDeviceFavoriteSource,
   providerShareFavoriteSource,
@@ -93,4 +94,31 @@ it("encodes a shared provider favorite with the same share and member identity D
   expect(() => parseModelFavorites([{ ...item, providerId: longKey }])).toThrow();
   expect(parseProviderShareFavoriteSource("provider-share-favorite:[\"only\"]")).toBeNull();
   expect(() => providerShareFavoriteSource({ ...source, shareId: "" })).toThrow("Invalid shared favorite source");
+});
+
+// 生产入口：parseModelFavorites / parseModelFavoriteMutation 与 PLUGIN_ENGINE_FAVORITE_WIRE_AGENT。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」— 旧客户端只认 cc/codex/pi，
+// 插件引擎收藏必须经该占位 agent 与既有 acp-plugin: / 复合来源键完整往返且不触发整表校验失败。
+// 覆盖缺口：此前仅测试内置 providerId，未覆盖插件引擎本地、远端电脑与分享三种收藏键的 wire 往返。
+// 最小失败输入与 tier：unit；acp-plugin: 本地/远端/分享三条收藏，若 agent 写成 'acp' 则整表抛错。
+it("round-trips local, remote-computer, and shared plugin engine favorites with the wire-compatible agent", () => {
+  const engineProvider = "acp-plugin:dsh-plugin:dsh";
+  const remoteKey = agentDeviceFavoriteSource({ deviceId: "studio-mac", providerId: engineProvider });
+  const shareKey = providerShareFavoriteWireKey({
+    shareId: "s1",
+    memberId: "m1",
+    providerId: engineProvider,
+    owner: { region: "global" },
+  })!;
+  const pluginItems = [
+    { uid: "fav-p1", providerId: engineProvider, modelId: "pro", agent: PLUGIN_ENGINE_FAVORITE_WIRE_AGENT, effort: "high" },
+    { uid: "fav-p2", providerId: remoteKey, modelId: "default", agent: PLUGIN_ENGINE_FAVORITE_WIRE_AGENT },
+    { uid: "fav-p3", providerId: shareKey, modelId: "pro", agent: PLUGIN_ENGINE_FAVORITE_WIRE_AGENT, effort: "max" },
+  ];
+  expect(parseModelFavorites(pluginItems)).toEqual(pluginItems);
+  expect(parseModelFavoriteMutation({ kind: "add", item: pluginItems[0]! })).toMatchObject({
+    kind: "add",
+    item: { providerId: engineProvider, modelId: "pro", agent: "cc", effort: "high" },
+  });
+  expect(() => parseModelFavorites([{ ...pluginItems[0]!, agent: "acp" }])).toThrow();
 });

@@ -824,6 +824,8 @@ describe('cross-device actions use the task permission mode', () => {
         toolParams: { name: 'send_to_session', args: { target_session_id: target, message: 'hi' } },
       });
     expect(helper('mbp::sess-9')).toBe('prompt-each-time');
+      // Shared links use the same task permission flow, never trusted-server silence.
+      expect(helper('cindy://session/shared?device=scoped')).toBe('prompt-each-time');
     expect(helper('mbp::sess-9', undefined)).toBe('prompt-each-time');
     expect(helper('sess-9')).toBe('prompt-each-time');
     expect(helper('local::sess-9')).toBe('prompt-each-time');
