@@ -1723,6 +1723,16 @@ export class AgentInputCoordinator {
     return this.projectQueueInspection(state);
   }
 
+  /** The original input is still queued because its working directory was unavailable before dispatch. */
+  getWorkdirBlockedQueueHead(sessionId: string): string | undefined {
+    const state = this.states.get(sessionId);
+    if (state?.recovery?.kind !== 'queue-head' || !state.error?.startsWith('WORKDIR_MISSING: ')) return;
+    const head = state.pendingQueue[0];
+    if (head?.clientId === state.recovery.clientId && !this.isDispatchBoundaryBusy(sessionId, state)) {
+      return head.clientId;
+    }
+  }
+
   /** Read the canonical pause bit without creating state or restoring a snapshot. */
   getQueuePausedIfRestored(sessionId: string): boolean | undefined {
     return this.isQueueRestored(sessionId) ? this.states.get(sessionId)?.queuePaused : undefined;
