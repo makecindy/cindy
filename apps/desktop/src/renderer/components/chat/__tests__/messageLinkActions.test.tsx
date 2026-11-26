@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('react-i18next', async (original) => ({
   ...(await original<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string, opts?: { count?: number; role?: string }) =>
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { count?: number; role?: string }) =>
     opts?.count !== undefined ? `${key}:${opts.count}` : opts?.role ? `${key}:${opts.role}` : key }),
 }));
 vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({
@@ -24,6 +24,7 @@ vi.mock('../useForkAtMessage', () => ({
 }));
 vi.mock('../useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }));
 
+import { Tooltip } from '@/components/ui/tooltip';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageImageLink } from '../UserMessageImageLink';
 import { UserMessage } from '../UserMessage';
@@ -78,6 +79,21 @@ describe('message link entry points', () => {
     expect(await screen.findByText((_content, element) => element?.tagName === 'PRE' && element.textContent === body)).toBeTruthy();
     if (count) expect(screen.queryByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeNull();
     else expect(screen.getByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeTruthy();
+  });
+
+  // Unit, docs/plans/acp-plugin-bridge.md「分叉、侧聊与起名」: plugin engine tasks fork from Cindy's
+  // record, so the message keeps its Fork action; rewind still needs the agent's own history and stays
+  // hidden. Before, both actions were hidden for every plugin engine task (agentKind 'acp').
+  it('offers Fork but not Rewind on a plugin engine task message', () => {
+    // Renderer Session types list the built-in kinds only; a plugin engine task's 'acp' arrives as a
+    // runtime value through session.agentKind (docs/plans/acp-plugin-bridge.md「硬约束」).
+    const pluginEngineKind = 'acp' as unknown as 'cc';
+    render(<MemoryRouter><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="continue"
+      workingDir="/workspace" sessionId="task" messageClientId="user-2" agentKind={pluginEngineKind} /></MemoryRouter>,
+    { wrapper: Tooltip.Provider });
+    expect(screen.getByRole('button', { name: 'chat.messageActionBar.fork' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.rewind' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'chat.messageActionBar.rewind' })).toBeNull();
   });
 
   it('copies assistant URLs from a keyboard menu even without a task context', async () => {

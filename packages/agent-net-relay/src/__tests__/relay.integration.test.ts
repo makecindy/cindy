@@ -10,6 +10,8 @@
  *   中转给出的不安全存储请求被客户端拒绝；存储不可达时（含经中转下载）返回可重试的 503 MEDIA_STORAGE_UNAVAILABLE；
  *   删除前签发、删除后才到达的写入由过期清理在授权失效后删除；客户端连不上存储时上传下载回退到中转。
  *   最小失败输入：1 MiB + 5311 字节附件，跨 AEAD 块边界 seek；删除后再用旧地址写入第一块。
+ * - 分享限流（2026-11-26 cooker02 生成分享链接 429）：中转不读回环 ingress 追加的客户端，自建中转的所有访客共用一个
+ *   180 次/分钟的桶。最小失败输入：同一设备第 181 次请求（旧实现返回 200）；同时断言 Retry-After、按来源 1200 次与脱敏日志。
  * - tier：integration，必须经真实本地 socket 与临时磁盘，禁止用 handler mock 代替。
  * - 实测耗时：2026-11-14 本机整文件约 13 秒（真实 socket 与磁盘的集成用例；附件直传部分约 2 秒）。
  */
@@ -48,6 +50,50 @@ it('advertises a configured STUN host next to the bound UDP port', async () => {
   expect(await (await fetch(split.relay.url + API + '/info')).json())
     .toMatchObject({ udpPort: split.relay.udpAddress?.port, stunHost: 'agent-net-stun.example.test' });
   await expect(startAgentNetRelay({ dataDir: split.dataDir, udpPort: 0, stunHost: 'agent-net-stun.example.test:3479' })).rejects.toThrow('INVALID_STUN_HOST');
+});
+
+// 2026-11-26 cooker02 share-link 429 (official relay; this self-hosted copy had the same shape): the relay never read
+// the client the loopback ingress appends, so every guest of a self-hosted relay shared one 180/min bucket; refusals
+// carried no Retry-After and left no record. A verified device now has its own budget, the per-address bucket only
+// stops floods, and refusals say when to retry and are logged redacted.
+it('limits sharing per verified device and per forwarded client, answers with Retry-After and logs redacted', async () => {
+  let networkId = '';
+  const warnings: Record<string, unknown>[] = [];
+  const f = await fixture({ logger: { info() {}, error() {}, warn: fields => { warnings.push(fields); } }, sharing: {
+    async authenticate(req) {
+      const device = req.headers['x-unit-device'];
+      if (typeof device !== 'string') throw new AppError('UNAUTHORIZED', 401, 'No scoped card');
+      return { accountId: 'owner-account', deviceId: device, networkId };
+    },
+    providers: { hostCapability: 'provider-share-v1', identityCards: {
+      async verify() { throw new Error('Unused'); }, async inspect() { throw new Error('Unused'); },
+    } },
+  } });
+  networkId = f.bootstrap.networkId;
+  const request = (client: string, device?: string) => fetch(f.relay.url + API + '/sharing/shared-tasks', {
+    headers: { 'x-forwarded-for': '198.51.100.9, ' + client, ...(device ? { 'x-unit-device': device } : {}) },
+  });
+  const burst = async (count: number, client: string, device?: string) => {
+    const statuses: number[] = [];
+    for (let sent = 0; sent < count; sent += 100) statuses.push(...await Promise.all(
+      Array.from({ length: Math.min(100, count - sent) }, () => request(client, device).then(r => r.status))));
+    return statuses;
+  };
+  expect(await burst(180, '192.0.2.1', 'device-a')).not.toContain(429);
+  const refused = await request('192.0.2.3', 'device-a');
+  expect(refused.status).toBe(429);
+  expect(Number(refused.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+  expect(Number(refused.headers.get('retry-after'))).toBeLessThanOrEqual(60);
+  expect((await request('192.0.2.1', 'device-b')).status).not.toBe(429);
+  // 181 requests so far from 192.0.2.1; its address bucket holds 1200.
+  expect(await burst(1019, '192.0.2.1')).toEqual(Array(1019).fill(401));
+  expect((await request('192.0.2.1')).status).toBe(429);
+  expect((await request('192.0.2.2')).status).toBe(401);
+  expect(warnings).toEqual(expect.arrayContaining([
+    expect.objectContaining({ limit: 'sharing-device', maximum: 180 }),
+    expect.objectContaining({ limit: 'sharing', subject: '192.0.2.0/24', maximum: 1200 }),
+  ]));
+  expect(JSON.stringify(warnings)).not.toMatch(/device-a|owner-account|192\.0\.2\.1\b/);
 });
 
 // Bug: opaque media storage alone did not protect App attachments or authenticated video seeks.

@@ -15,6 +15,7 @@ import {
 const state = vi.hoisted(() => ({
   authenticated: true,
   scope: 'cloud:owner:1',
+  settingsReads: vi.fn(),
   remoteControl: true,
   allowed: new Set<string>(['anthropic']),
   owned: [] as ProviderShareOwned[],
@@ -52,7 +53,7 @@ vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   remoteProviderAccessEpoch: () => '1',
 }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allows: () => true } }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => { state.settingsReads(); return { remoteControlEnabled: state.remoteControl }; } }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
@@ -103,6 +104,7 @@ import {
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   providerShareGuestAccess,
   ownedProviderShareGuestAccess,
+  withProviderShareGuestAccessSnapshot,
   providerShareGuestDenial,
   providerShareMemberMatcher,
   quietProviderShareRequests,
@@ -1513,4 +1515,25 @@ describe('provider share guest routing', () => {
     }
   });
 
+});
+
+// Unit: real common guest access reader. Two checks for one peer share one settings check,
+// another member cannot borrow it, and a later phase must observe remote-control revocation.
+// Incident: poll metadata amplification; previous access tests did not count repeated config checks.
+it.each(['remote-control', 'owner', 'provider'] as const)('reuses common access only within a synchronous phase and isolates members (%s)', async change => {
+  state.owned = [share([member('m1'), member('m2', 'paused')])];
+  startProviderShareHost(events());
+  await refreshProviderShareHost('test');
+  state.settingsReads.mockClear();
+  withProviderShareGuestAccessSnapshot(() => {
+    expect(providerShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m2'))).toBeNull();
+  });
+  expect(state.settingsReads).toHaveBeenCalledTimes(1);
+  if (change === 'remote-control') state.remoteControl = false;
+  else if (change === 'owner') state.scope = 'cloud:other:2';
+  else state.allowed.clear();
+  withProviderShareGuestAccessSnapshot(() => expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull());
+  expect(state.settingsReads).toHaveBeenCalledTimes(change === 'owner' ? 1 : 2);
 });

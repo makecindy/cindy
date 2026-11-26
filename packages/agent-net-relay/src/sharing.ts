@@ -41,6 +41,8 @@ export interface SharingHost {
   saveRequest(request: DelegationRequest): Promise<void>;
   grant(request: DelegationRequest): { rootPublicKey: string; certificate: DeviceCertificate; delegation?: Delegation; revoked?: boolean };
   remember(account: string, device: string, nonce: string): void | Promise<void>;
+  /** Per-device request budget, applied once the identity is verified; throws to refuse. */
+  admit?(actor: SharingActor): void;
   rootPublicKey(networkId: string): string;
   now(): number;
   grants?(networkId: string): Delegation[];
@@ -131,6 +133,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     if (!actor || typeof actor.accountId !== 'string' || typeof actor.deviceId !== 'string'
       || !actor.accountId || !actor.deviceId || typeof actor.networkId !== 'string' || !ID_PATTERN.test(actor.networkId))
       throw new AppError('UNAUTHORIZED', 401, 'Verified network/device identity required');
+    host.admit?.(actor);
     await host.synchronize?.(req, actor.networkId);
     let input: Record<string, unknown> = {};
     if (bytes.length) {
