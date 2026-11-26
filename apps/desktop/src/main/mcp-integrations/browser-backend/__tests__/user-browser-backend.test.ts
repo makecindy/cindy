@@ -1368,4 +1368,114 @@ describe('automatic browser startup', () => {
       expect((await call).ok).toBe(false); expect(fake.jobs).toHaveLength(0);
     } finally { vi.useRealTimers(); }
   });
+
+  // Regression (P0-1): when the MV3 service worker sleeps >35s, ensureConnected previously skipped
+  // reconnect grace and immediately launched a duplicate Chrome process.
+  // Production entry: UserBrowserBackend.call({ action: 'tabs' }); unit tier with fake timers.
+  it('waits during reconnect grace for a previously-connected extension without re-launching Chrome', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      const baseStatus = await fake.control.bridge.status();
+      if (!baseStatus.ok) throw new Error('fixture status failed');
+      fake.control.bridge.status = vi.fn(async () => ({
+        ...baseStatus,
+        hadConnectedClient: true,
+        clients: clients.map((id) => ({
+          id,
+          browser: 'chrome' as const,
+          version: '0.4.68',
+          protocolVersion: '0.4.13',
+          connected: true,
+          trusted: true,
+          identitySupported: true,
+          nativeBindingRequired: false,
+          origin: 'chrome-extension://fixture',
+          extensionId: 'fixture',
+        })),
+      }));
+      const startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        reconnectWaitMs: 4000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const pending = b.call({ action: 'tabs' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(startBrowser).not.toHaveBeenCalled();
+      clients.push('client-aaaaaaaa');
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await pending).ok).toBe(true);
+      expect(startBrowser).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Regression (P0-1): when the user's browser process is already running, do NOT spawn another
+  // instance even if the extension stays disconnected past the reconnect grace window.
+  it('never launches a duplicate browser when the user browser is already running', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] });
+      const startBrowser = vi.fn(async () => {});
+      const isBrowserRunning = vi.fn(async () => true);
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        isBrowserRunning,
+        reconnectWaitMs: 1000,
+        startupWaitMs: 1000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const first = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      const firstResult = await first;
+      expect(firstResult.ok).toBe(false);
+      expect(firstResult.message).toContain('已在运行');
+      expect(startBrowser).not.toHaveBeenCalled();
+
+      const second = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1500);
+      const secondResult = await second;
+      expect(secondResult.ok).toBe(false);
+      expect(secondResult.message).toContain('已在运行');
+      expect(startBrowser).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Regression (P0-1): after a timed-out startup attempt, subsequent retries inside the cooldown
+  // window must not repeatedly spawn Chrome even if process detection reports false.
+  it('enforces a cooldown after a timed-out launch and resets once an extension connects', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      const startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        isBrowserRunning: async () => false,
+        startupWaitMs: 1000,
+        launchCooldownMs: 30_000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const first = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await first).ok).toBe(false);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+
+      const second = await b.call({ action: 'start' });
+      expect(second.ok).toBe(false);
+      expect(second.message).toContain('避免反复重试启动');
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+
+      // Once cooldown expires, launching is permitted again.
+      await vi.advanceTimersByTimeAsync(30_000);
+      const third = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await third).ok).toBe(false);
+      expect(startBrowser).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
 });
