@@ -32,6 +32,20 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
 }
 
 /**
+ * The current actor's own change can be ahead of the reactors read (it shows before the server
+ * confirms it): add or remove only that actor, so their avatar appears or leaves with the click.
+ */
+function withSelf(reactors: ChatReactor[], reaction: Reaction, members: readonly BotGroupMemberView[] | undefined): ChatReactor[] {
+  const hasSelf = reactors.some(r => r.isSelf);
+  if (reaction.me && !hasSelf && reactors.length === reaction.count - 1) {
+    const self = members?.find(m => m.isSelf && m.actorId);
+    return [...reactors, { actorId: self?.actorId ?? 'self', name: self?.name ?? null, isSelf: true, formerMember: false }];
+  }
+  if (!reaction.me && hasSelf && reactors.length === reaction.count + 1) return reactors.filter(r => !r.isSelf);
+  return reactors;
+}
+
+/**
  * A reaction badge. Clicking toggles the current actor's reaction. With only a few reactors the
  * badge shows their avatars instead of a number; avatars come from the group member projection,
  * and actors without one fall back to an initial, never an invented identity.
@@ -72,7 +86,8 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   }, [wantsAvatars, groupId, nearViewport, loadedSummary, messageId, reaction.emoji, summary]);
   // Reactors read for an older summary are never shown for the current one. A failed read, or a list
   // that disagrees with the count (a change still in flight), keeps the honest count instead.
-  const current = loaded?.summary === summary ? loaded : null;
+  const read = loaded?.summary === summary ? loaded : null;
+  const current = read?.reactors ? { ...read, reactors: withSelf(read.reactors, reaction, members) } : read;
   const showAvatars = wantsAvatars && (!current || current.reactors?.length === reaction.count);
   // Membership follows the latest projection both ways: a current member takes its current name, and a
   // named actor missing from it has left since the read. Only unrecorded actors stay unnamed.

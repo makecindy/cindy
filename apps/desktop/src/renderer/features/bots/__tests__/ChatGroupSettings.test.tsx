@@ -152,6 +152,41 @@ it.each(['owner', 'admin'] as const)('lets a %s change member invitations withou
   expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
 });
 
+// Unit: a group switch flips the moment it is clicked; a refused save flips it back and says why.
+it('shows a group switch change at once and takes it back when the save is refused', async () => {
+  let finish!: (value: { ok: false; errorCode: string }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role: 'owner' as const } : member) };
+  renderAt(initial, 'manage');
+  const toggle = () => screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' });
+  fireEvent.click(toggle());
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  await act(async () => finish({ ok: false, errorCode: 'FORBIDDEN' }));
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByText('bots.groupChat.server.notAllowed')).toBeTruthy();
+});
+
+// Unit: making a member an admin shows the new role at once, until the member list carries it.
+it('shows a role change at once and keeps the server role after a refusal', async () => {
+  let finish!: (value: { ok: boolean; errorCode?: string }) => void;
+  mocks.manage.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const value = group(true);
+  value.members[0]!.role = 'owner';
+  value.members.push({ ...value.members[0]!, actorId: 'peer', botId: 'peer', name: 'Peer', isSelf: false, isOwned: false, role: 'member', actorKind: 'human' });
+  renderAt(value);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const promote = async () => {
+    openMenu(screen.getByRole('button', { name: 'Peer' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: key('makeAdmin') }));
+  };
+  await promote();
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'peer', action: 'role', role: 'admin' } }));
+  expect(screen.getAllByText(new RegExp(key('admin'))).length).toBeGreaterThan(0);
+  await act(async () => finish({ ok: false, errorCode: 'FORBIDDEN' }));
+  expect(screen.queryAllByText(new RegExp(key('admin')))).toHaveLength(0);
+});
+
 it('hides member invitation controls from ordinary members and on older servers', () => {
   const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
   expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
@@ -174,7 +209,8 @@ it('lets an ordinary member choose notifications and follows the confirmed cross
   rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
   expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
 });
-it('keeps the confirmed notification value during saving and after rejection', async () => {
+// The choice shows the moment it is made; a rejected save returns to the confirmed value and says so.
+it('shows the chosen notification value while saving and returns to the confirmed one after rejection', async () => {
   let finish!: (value: { ok: false; errorCode: string }) => void;
   mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsNotificationSettings: true, notificationMode: 'all' }} /></MemoryRouter>);
@@ -182,7 +218,7 @@ it('keeps the confirmed notification value during saving and after rejection', a
   fireEvent.click(control);
   fireEvent.click(screen.getByRole('option', { name: key('notifications.none') }));
   expect(control.disabled).toBe(true);
-  expect(control.textContent).toContain(key('notifications.all'));
+  expect(control.textContent).toContain(key('notifications.none'));
   await act(async () => finish({ ok: false, errorCode: 'REQUEST_FAILED' }));
   expect(control.disabled).toBe(false);
   expect(control.textContent).toContain(key('notifications.all'));

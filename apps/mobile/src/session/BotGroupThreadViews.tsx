@@ -35,14 +35,36 @@ export function BotGroupThreadEntry({ message, summary, identityFor, onPress }: 
     accessibilityHint={threadPreview?.replies.map(reply => `${reply.authorName}: ${reply.text}`).join(' · ')} />;
 }
 
-export function BotGroupThreadFollow({ nativeHeader = false, following, online, onChange, onError }: {
+/**
+ * Follow / unfollow a Thread. The button flips at once and saves behind it; taps while a save runs
+ * are sent after it, so the last tap is what the server keeps. A failure returns to the saved state.
+ */
+export function BotGroupThreadFollow({ nativeHeader = false, following: saved, online, onChange, onError }: {
   nativeHeader?: boolean; following?: boolean; online: boolean; onChange(value: boolean): Promise<boolean>; onError(error: unknown): void;
 }) {
-  const { t } = useTranslation(); const [busy, setBusy] = useState(false);
+  const { t } = useTranslation();
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const saving = useRef(false);
+  const wanted = useRef<boolean | null>(null);
+  const following = saved === undefined ? undefined : chosen ?? saved;
   const label = t(following ? 'groupChat.thread.following' : 'groupChat.thread.follow');
-  const disabled = following === undefined || !online || busy;
+  const disabled = following === undefined || !online;
   const toggle = () => {
-    if (disabled) return; setBusy(true); void onChange(!following).catch(onError).finally(() => setBusy(false));
+    if (disabled) return;
+    const next = !following;
+    setChosen(next); wanted.current = next;
+    if (saving.current) return;
+    saving.current = true;
+    void (async () => {
+      let sent: boolean | null = null;
+      try {
+        while (wanted.current !== null && wanted.current !== sent) { sent = wanted.current; await onChange(sent); }
+      } catch (error) { onError(error); }
+      finally {
+        // The saved value has been applied to the page by now; it shows again.
+        saving.current = false; wanted.current = null; setChosen(null);
+      }
+    })();
   };
   // Toolbar.View can collapse a custom button into UIKit's overflow.
   if (nativeHeader) return <Stack.Toolbar placement="right">
@@ -51,7 +73,7 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
   </Stack.Toolbar>;
   if (following === undefined) return null;
   return <MainWindowActionButton density="compact" action={{ label, active: following,
-    disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
+    disabled, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
 export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {

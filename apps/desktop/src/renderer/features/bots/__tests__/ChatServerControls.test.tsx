@@ -17,6 +17,8 @@ import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/
 import type { AttachedFile } from '@/lib/fileTypes';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
+import { resetOptimisticReactionsForTest } from '../optimisticReactions';
+import { toast } from '@/lib/toast';
 import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMaskState } from '../../../../shared/botGroupChat';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
@@ -55,9 +57,15 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 const k = (name: string) => `bots.groupChat.server.${name}`;
 const message = { id: 'root', kind: 'message', authorKind: 'user', isSelf: false, authorName: 'Human', content: 'Root message', reactions: [{ emoji: '👍', count: 2, me: true }], attachments: [] } as unknown as BotGroupMessageView;
 const group = { id: 'room', members: [], messages: [message] } as unknown as BotGroupDetail;
+/** How many reactors a badge shows: its avatar slots in a small group, otherwise its count. */
+const reactionShown = (badge: HTMLElement) => {
+  const avatars = within(badge).queryByTestId('reaction-avatars');
+  return avatars ? avatars.children.length : Number(badge.textContent?.replace(/\D/g, ''));
+};
 const render = (ui: ReactNode) => renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
 beforeEach(() => {
   vi.clearAllMocks(); mocks.ownerCurrent = true;
+  resetOptimisticReactionsForTest();
   mocks.reply.mockReset();
   shareSelectionStore.reset();
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
@@ -91,12 +99,28 @@ describe('chat interaction controls', () => {
     const mask = useGroupMask('room'), [draft, setDraft] = useState('');
     return <><input aria-label="Chat draft" value={draft} onChange={e => setDraft(e.target.value)} />
       <span>{mask ? 'Config ready' : 'No config'}</span>
+      {mask && <span data-testid="mask-enabled">{mask.settings.enabled ? 'on' : 'off'}</span>}
       {mask && <><button onClick={() => mask.update({ enabled: false })}>Disable reply</button>
         <button onClick={() => mask.update({ trigger: 'always' })}>Permanent reply</button>
         <button onClick={mask.participate}>Participate</button><button onClick={() => mask.markMentionsRead(['question'])}>Read original</button>
         <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
     </>;
   }
+  // Unit: a settings change shows before its save answers; a refused save returns to the saved value.
+  it('shows a mask setting change at once and returns to the saved value when it is refused', async () => {
+    const state = maskState();
+    let finish!: (value: unknown) => void;
+    mocks.mask.mockImplementation(async ({ action }) => action?.type === 'save'
+      ? new Promise(resolve => { finish = resolve; }) : { ok: true, state });
+    mocks.mentions.mockResolvedValue({ ok: true, mentions: [], hasMore: false });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    fireEvent.click(await screen.findByText('Disable reply'));
+    expect(screen.getByTestId('mask-enabled').textContent).toBe('off');
+    await waitFor(() => expect(mocks.mask.mock.calls.some(([input]) => input.action?.type === 'save')).toBe(true));
+    await act(async () => finish({ ok: false, errorCode: 'NETWORK_ERROR' }));
+    expect(screen.getByTestId('mask-enabled').textContent).toBe('on');
+    expect(screen.getByRole('alert').textContent).toBe('Save failed');
+  });
   // Unit: actual Provider actions, missing coverage for permanent delegation.
   // A keystroke must not send a takeover; an explicit disable must still persist.
   it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
@@ -764,6 +788,69 @@ describe('chat interaction controls', () => {
     fireEvent.click(reaction);
     await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
+  });
+
+  // Unit: a reaction shows the moment it is clicked, not after the server round trip. Rapid clicks
+  // on one emoji are sent in order so the last one wins, and the server's agreeing copy takes over.
+  it('shows a reaction at once and keeps the last of rapid clicks until the server agrees', async () => {
+    const answers: Array<(value: { ok: true }) => void> = [];
+    mocks.react.mockImplementation(() => new Promise(resolve => { answers.push(resolve); }));
+    const changed = vi.fn();
+    const plain = { ...message, reactions: [] } as BotGroupMessageView;
+    const view = render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={plain} onChanged={changed} />);
+    fireEvent.click(screen.getByRole('button', { name: k('addReaction') }));
+    fireEvent.click(await screen.findByRole('button', { name: '🎉' }));
+    // Named by count, or by who reacted once the reactors read lands with this actor added.
+    const badge = () => screen.queryByRole('button', { name: /reaction(Count|Who)$/ });
+    const shown = () => reactionShown(badge()!);
+    expect(badge()?.getAttribute('aria-pressed')).toBe('true');
+    expect(badge()?.textContent).toContain('🎉');
+    // Two more clicks before the first answer: the badge leaves and returns at once. The net intent
+    // equals what is already being sent, so nothing else goes out.
+    fireEvent.click(badge()!);
+    expect(badge()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: k('addReaction') }));
+    fireEvent.click(await screen.findByRole('button', { name: '🎉' }));
+    expect(badge()?.getAttribute('aria-pressed')).toBe('true');
+    // A flip while one is in flight is sent once it answers, so the server ends at the last click.
+    fireEvent.click(badge()!);
+    expect(badge()).toBeNull();
+    await act(async () => answers[0]({ ok: true }));
+    await waitFor(() => expect(mocks.react).toHaveBeenCalledTimes(2));
+    expect(mocks.react.mock.calls.map(([input]) => input.present)).toEqual([true, false]);
+    expect(changed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: k('addReaction') }));
+    fireEvent.click(await screen.findByRole('button', { name: '🎉' }));
+    await act(async () => answers[1]({ ok: true }));
+    await waitFor(() => expect(mocks.react).toHaveBeenCalledTimes(3));
+    await act(async () => answers[2]({ ok: true }));
+    expect(mocks.react.mock.calls.map(([input]) => input.present)).toEqual([true, false, true]);
+    expect(changed).toHaveBeenCalledOnce();
+    // An older read still without the reaction keeps it on screen; the agreeing copy then takes over.
+    view.rerender(<Tooltip.Provider><ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...plain }} onChanged={changed} /></Tooltip.Provider>);
+    expect(shown()).toBe(1);
+    const confirmed = { ...plain, reactions: [{ emoji: '🎉', count: 2, me: true }] };
+    view.rerender(<Tooltip.Provider><ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={confirmed} onChanged={changed} /></Tooltip.Provider>);
+    expect(shown()).toBe(2);
+    // Ended: a later remote removal by this actor's other device shows as the server says.
+    view.rerender(<Tooltip.Provider><ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={plain} onChanged={changed} /></Tooltip.Provider>);
+    expect(badge()).toBeNull();
+  });
+
+  it('takes back a reaction the server refused and says why', async () => {
+    let answer!: (value: unknown) => void;
+    mocks.react.mockImplementation(() => new Promise(resolve => { answer = resolve; }));
+    const changed = vi.fn();
+    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
+    const badge = () => screen.getByRole('button', { name: /reaction(Count|Who)$/ });
+    fireEvent.click(badge());
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    expect(reactionShown(badge())).toBe(1);
+    await act(async () => answer({ ok: false, errorCode: 'FORBIDDEN' }));
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(reactionShown(badge())).toBe(2);
+    expect(toast.error).toHaveBeenCalledWith(k('notAllowed'));
+    expect(changed).toHaveBeenCalledOnce();
   });
 
   // Unit, PR #7396: a latest refresh must not invalidate the reaction recheck for

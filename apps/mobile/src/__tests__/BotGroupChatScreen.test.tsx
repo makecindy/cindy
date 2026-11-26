@@ -3261,6 +3261,19 @@ describe('mobile group threads', () => {
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenLastCalledWith(false);
   });
 
+  // Unit: following a Thread flips the button before the save answers; a failed save flips it back.
+  it('shows a Thread follow at once and returns to the saved state when the save fails', async () => {
+    let fail!: (error: Error) => void;
+    h.chat.server = true; h.chat.followThread = vi.fn(() => new Promise<boolean>((_resolve, reject) => { fail = reject; }));
+    h.chat.threadMeta = { threads: [], shares: {}, following: false, readSeq: '1' };
+    await render(threadGroup(), 'ready', rootId, '');
+    const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
+    await act(async () => follow().click());
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.following');
+    await act(async () => fail(new Error('NETWORK_ERROR')));
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.follow');
+  });
+
   it('uses a real self receipt for the posted footer and leaves someone else’s post independently shareable', async () => {
     h.chat.server = true; h.chat.shareToMain = vi.fn(async () => {});
     h.chat.threadMeta = { shares: { reply: { messageId: 'other-share', bySelf: false } }, threads: [] };

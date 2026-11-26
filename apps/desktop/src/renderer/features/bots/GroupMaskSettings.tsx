@@ -17,7 +17,10 @@ function SelectRow(props: SelectProps) {
 }
 
 const key = (name: string) => `bots.groupChat.mask.${name}`;
-/** AI 代答: your own setting in this group, one card per concern (who, when, to-dos). */
+/**
+ * AI 代答: your own setting in this group, one card per concern (who, when, to-dos). A change shows at
+ * once and saves in order behind it, so the controls stay usable while an earlier change is saving.
+ */
 export function GroupMaskSettings({ groupId }: { groupId: string }) {
   const mask = useGroupMask(groupId);
   const { t } = useTranslation();
@@ -38,12 +41,12 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
       </SettingsCard>
       {mask.error && <SettingsNotice tone="error" action={<Button variant="secondary" size="sm" onClick={mask.retry}>{t(key('retry'))}</Button>}>{t(key('saveError'))}</SettingsNotice>}
       <SettingsCard>
-        <SelectRow label={t(key('companion'))} value={config.companionId ?? ''} disabled={saving} truncateOptions
+        <SelectRow label={t(key('companion'))} value={config.companionId ?? ''} truncateOptions
           options={mask.companions.map(c => ({ value: c.id, label: c.name }))}
           onValueChange={companionId => update({ companionId })} />
-        <SettingsRow title={t(key('enabled'))} trailing={<Switch checked={config.enabled} disabled={saving || !config.companionId} aria-label={t(key('enabled'))}
+        <SettingsRow title={t(key('enabled'))} trailing={<Switch checked={config.enabled} disabled={!config.companionId} aria-label={t(key('enabled'))}
           onCheckedChange={enabled => update({ enabled })} />} />
-        {mask.toolAccessSupported && <SelectRow label={t(key('toolAccess'))} value={config.access ?? 'chat'} disabled={saving}
+        {mask.toolAccessSupported && <SelectRow label={t(key('toolAccess'))} value={config.access ?? 'chat'}
           options={(['chat', 'tools'] as const).map(value => ({ value, label: t(`bots.groupChat.server.settings.${value === 'tools' ? 'accessTools' : 'accessChat'}`) }))}
           onValueChange={async access => {
             const owner = getDataOwnerGeneration(), companionId = config.companionId;
@@ -56,13 +59,13 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
           }} />}
       </SettingsCard>
       {config.enabled && <SettingsCard>
-        <SelectRow label={t(key('triggerLabel'))} value={config.trigger} disabled={saving}
+        <SelectRow label={t(key('triggerLabel'))} value={config.trigger}
           options={(['scheduled', 'manual', 'always'] as const).map(value => ({ value, label: t(key(`trigger.${value}`)) }))}
           onValueChange={trigger => update({ trigger: trigger as GroupMaskTrigger })} />
         {config.trigger === 'scheduled' && <SettingsRow wrap title={t(key('hours'))} trailing={<span className="flex items-center gap-2">
           {(['start', 'end'] as const).map((field, index) => <span key={field} className="contents">
             {index > 0 && <span aria-hidden className="text-[var(--text-tertiary)]">–</span>}
-            <input type="time" aria-label={t(key(field))} value={config[field]} disabled={saving}
+            <input type="time" aria-label={t(key(field))} value={config[field]}
               className="h-8 w-[104px] rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 tabular-nums text-[var(--text-primary)] outline-none [color-scheme:light_dark] focus:border-[var(--text-tertiary-stone)] focus:ring-2 focus:ring-[var(--focus-ring-soft)] disabled:opacity-60"
               onChange={event => event.target.value && update({ [field]: event.target.value })} />
           </span>)}
@@ -73,9 +76,9 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
         </div>}
       </SettingsCard>}
       <SettingsCard>
-        <SettingsRow title={t(key('todos'))} trailing={<Switch checked={config.collectTodos} disabled={saving} aria-label={t(key('todos'))}
+        <SettingsRow title={t(key('todos'))} trailing={<Switch checked={config.collectTodos} aria-label={t(key('todos'))}
           onCheckedChange={collectTodos => update({ collectTodos })} />} />
-        {config.collectTodos && <SelectRow label={t(key('digestLabel'))} value={config.digest} disabled={saving}
+        {config.collectTodos && <SelectRow label={t(key('digestLabel'))} value={config.digest}
           options={(['daily', 'manual'] as const).map(value => ({ value, label: t(key(`digest.${value}`)) }))}
           onValueChange={digest => update({ digest: digest as 'daily' | 'manual' })} />}
         {config.collectTodos && mask.requestDigest && <div className={cn('flex flex-wrap items-center gap-3 px-4 py-3', SETTINGS_DIVIDER)}>

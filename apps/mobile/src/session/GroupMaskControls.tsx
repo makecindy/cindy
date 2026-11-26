@@ -47,12 +47,12 @@ export function GroupMaskSettingsSheet({ visible, mask, onClose, onClosed }: { v
   const [times, setTimes] = useState({ start: '', end: '' });
   useEffect(() => { if (settings) setTimes({ start: settings.start, end: settings.end }); }, [settings?.start, settings?.end, visible]);
   const pick = (label: string, value: string, options: Array<{ id: string; title: string }>, select: (value: string) => void) =>
-    <BotGroupMenu title={label} accessibilityLabel={label} disabled={mask.saving} sections={[{ id: 'options', options: options.map(o => ({ ...o, selected: o.id === value })) }]} onSelect={select}>
+    <BotGroupMenu title={label} accessibilityLabel={label} sections={[{ id: 'options', options: options.map(o => ({ ...o, selected: o.id === value })) }]} onSelect={select}>
       {open => <Pressable onPress={open} style={styles.row} accessibilityRole="button"><Text style={styles.label}>{label}</Text>
         <Text style={styles.value} numberOfLines={2}>{options.find(o => o.id === value)?.title ?? t(key('choose'))}</Text><ChevronDown size={iconSize.md} color={colors.textSecondary} /></Pressable>}
     </BotGroupMenu>;
   const toggle = (label: string, value: boolean, change: (value: boolean) => void, disabled = false) => <View style={styles.row}>
-    <Text style={styles.label}>{label}</Text><NativeSwitch accessibilityLabel={label} value={value} disabled={mask.saving || disabled} onValueChange={change} /></View>;
+    <Text style={styles.label}>{label}</Text><NativeSwitch accessibilityLabel={label} value={value} disabled={disabled} onValueChange={change} /></View>;
   return <CompanionSheet visible={visible} title={t(key('title'))} onClose={onClose} onClosed={onClosed} testID="botGroup.mask.settings">
     <View style={styles.content}>
       {settings && state ? <>
@@ -67,7 +67,7 @@ export function GroupMaskSettingsSheet({ visible, mask, onClose, onClosed }: { v
         {settings.trigger === 'scheduled' ? <View style={styles.row}>
           {(['start', 'end'] as const).map(field => <View key={field} style={styles.time}>
             <Text style={styles.secondary}>{t(key(field))}</Text><TextInput style={styles.input} value={times[field]} maxLength={5}
-              accessibilityLabel={t(key(field))} placeholder="09:00" keyboardType="numbers-and-punctuation" editable={!mask.saving}
+              accessibilityLabel={t(key(field))} placeholder="09:00" keyboardType="numbers-and-punctuation"
               onChangeText={value => setTimes(old => ({ ...old, [field]: value }))}
               onBlur={() => { if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(times[field])) mask.update({ [field]: times[field] });
                 else setTimes(old => ({ ...old, [field]: settings[field] })); }} />

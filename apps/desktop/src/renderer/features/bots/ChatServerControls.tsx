@@ -1,6 +1,7 @@
 import { chatErrorKey } from './chatError';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { ChatReactionButton } from './ChatReactionButton';
+import { toggleReaction, useOptimisticReactions } from './optimisticReactions';
 import { useTranslation } from 'react-i18next';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
@@ -28,24 +29,21 @@ export { chatErrorKey } from './chatError';
 export const messageReactionRevision = (group: Pick<BotGroupDetail, 'reactionRevision' | 'reactionRevisions'>, messageId: string) =>
   `${group.reactionRevision ?? 0}:${group.reactionRevisions?.[messageId] ?? 0}`;
 
-/** Adds or removes the current actor's reaction; the caller re-reads the authoritative message. */
+/**
+ * Adds or removes the current actor's reaction. The badge changes at once; the request runs behind it
+ * and the caller re-reads the authoritative message. A failure removes the local change and says so.
+ */
 function useChatReaction(groupId: string | undefined, messageId: string, onChanged: (messageId: string) => void) {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
-  async function react(emoji: string, present: boolean) {
-    if (!groupId || busyRef.current) return;
-    busyRef.current = true; setBusy(true);
+  function react(emoji: string, present: boolean) {
+    if (!groupId) return;
     const owner = getDataOwnerGeneration();
-    try {
-      const result = await api().react({ groupId, messageId, emoji, present });
-      if (!isDataOwnerGenerationCurrent(owner)) return;
-      if (!result.ok) toast.error(t(chatErrorKey(result.errorCode)));
-      else onChanged(messageId);
-    } catch { if (isDataOwnerGenerationCurrent(owner)) toast.error(t(key('requestFailed'))); }
-    finally { busyRef.current = false; setBusy(false); }
+    toggleReaction(input => api().react(input), groupId, messageId, emoji, present, {
+      onChanged: id => { if (isDataOwnerGenerationCurrent(owner)) onChanged(id); },
+      onFailed: code => { if (isDataOwnerGenerationCurrent(owner)) toast.error(t(code ? chatErrorKey(code) : key('requestFailed'))); },
+    });
   }
-  return { busy, react };
+  return { react };
 }
 
 interface ChatMessageActionProps {
@@ -69,8 +67,9 @@ interface ChatMessageActionProps {
  * the bubble's outer top corner (right for others, left for your own) so they never take a row. They stay
  * in flow so the bubble widens to fit them, and wrap when even the widest bubble cannot.
  */
-export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', corner = false, onChanged }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'onChanged'> & { corner?: boolean }) {
-  const { busy, react } = useChatReaction(groupId, message.id, onChanged);
+export function ChatMessageReactions({ groupId, message: serverMessage, members, reactionRevision, align = 'left', corner = false, onChanged }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'onChanged'> & { corner?: boolean }) {
+  const message = useOptimisticReactions(groupId, serverMessage);
+  const { react } = useChatReaction(groupId, message.id, onChanged);
   if (!message.reactions?.length) return null;
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-reaction-corner={corner ? align : undefined}
@@ -79,17 +78,18 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
           : cn('mt-1 flex-wrap', align === 'right' && 'justify-end'))}>
       {message.reactions.map(reaction => (
         <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
-          corner={corner} disabled={busy || !groupId} onToggle={() => void react(reaction.emoji, !reaction.me)} />
+          corner={corner} disabled={!groupId} onToggle={() => react(reaction.emoji, !reaction.me)} />
       ))}
     </div>
   );
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false, pluginUi }: ChatMessageActionProps & {
+function ChatMessageToolbar({ groupId, shareScope, message: serverMessage, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false, pluginUi }: ChatMessageActionProps & {
   picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
 }) {
   const { t } = useTranslation();
-  const { busy, react } = useChatReaction(groupId, message.id, onChanged);
+  const message = useOptimisticReactions(groupId, serverMessage);
+  const { react } = useChatReaction(groupId, message.id, onChanged);
   return (
     <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
       align={align} hovered simplifiedBotConversation compact={compact}
@@ -97,10 +97,10 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
       quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
       replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
         label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
-      reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange, disabled: busy,
+      reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange,
         content: <div className="grid grid-cols-6 gap-1">{emojiChoices.map(emoji =>
           <button type="button" key={emoji} className={iconClass} aria-label={emoji}
-            onClick={() => { onPickerChange(false); void react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>
+            onClick={() => { onPickerChange(false); react(emoji, !message.reactions?.some(r => r.emoji === emoji && r.me)); }}>
             {/* Color emoji inherit the text color's alpha; keep their native colors fully opaque. */}
             <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{emoji}</span>
           </button>)}</div>,

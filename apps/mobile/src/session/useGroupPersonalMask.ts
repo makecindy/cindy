@@ -21,6 +21,16 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   const state = data.key === key ? data.state : null, mentions = data.key === key ? data.mentions : [];
   const stateRef = useRef(state); stateRef.current = state;
   const [saving, setSaving] = useState(false), [error, setError] = useState(false), [connectionLost, setConnectionLost] = useState(false);
+  // Settings changes show at once; each stays until its save answers (the answer then carries it) or fails.
+  const [drafts, setDrafts] = useState<{ key: string; byOperation: ReadonlyMap<string, Partial<ChatMaskSettings>> }>({ key, byOperation: new Map() });
+  const shownDrafts = drafts.key === key ? [...drafts.byOperation.values()] : [];
+  const endDraft = useCallback((retryKey: string, draft: Partial<ChatMaskSettings> | undefined) => {
+    if (draft) setDrafts(old => {
+      if (old.byOperation.get(retryKey) !== draft) return old;
+      const byOperation = new Map(old.byOperation); byOperation.delete(retryKey);
+      return { ...old, byOperation };
+    });
+  }, []);
   const current = useCallback(() => mounted.current && active.current === key && deps.current.enabled && api.current(), [key, api]);
   const call = useCallback(async (kind: 'mask' | 'mask-mentions', input: Record<string, unknown> = {}) => {
     if (!current()) throw new Error('OWNER_CHANGED');
@@ -57,7 +67,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
       if (valid()) {
         if (e && typeof e === 'object' && 'status' in e && (e.status === 403 || e.status === 404)) {
           authority.current++; failed.current.clear(); operations.current.clear();
-          stateRef.current = null; setData({ key, state: null, mentions: [] });
+          stateRef.current = null; setData({ key, state: null, mentions: [] }); setDrafts({ key, byOperation: new Map() });
         }
         setError(true); setConnectionLost(true);
       }
@@ -66,7 +76,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; version.current++; }; }, []);
   useEffect(() => {
     failed.current.clear(); operations.current.clear(); version.current++; authority.current++;
-    setError(false); setSaving(false); setConnectionLost(false);
+    setError(false); setSaving(false); setConnectionLost(false); setDrafts({ key, byOperation: new Map() });
     if (!enabled) { stateRef.current = null; setData({ key, state: null, mentions: [] }); }
   }, [key, enabled]);
   // What the last read was started for. Opening the screen reads once; afterwards only a
@@ -85,26 +95,28 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     readFor.current = { reload, change };
     void reload();
   }, [change, focused, reload]);
-  const run = useCallback((retryKey: string, work: (valid: () => boolean) => Promise<void>) => {
+  const run = useCallback((retryKey: string, work: (valid: () => boolean) => Promise<void>, draft?: Partial<ChatMaskSettings>) => {
     const generation = authority.current;
     const valid = () => current() && generation === authority.current;
     const send = async () => {
       if (!valid() || operations.current.get(retryKey) !== send) return;
       version.current++; setSaving(true); setError(failed.current.size > 0);
       try { await work(valid); if (valid()) {
+        endDraft(retryKey, draft);
         if (operations.current.get(retryKey) === send) failed.current.delete(retryKey);
         setError(failed.current.size > 0);
       } }
-      catch { if (valid() && operations.current.get(retryKey) === send) { failed.current.set(retryKey, send); setError(true); } }
+      catch { if (valid() && operations.current.get(retryKey) === send) { failed.current.set(retryKey, send); setError(true); endDraft(retryKey, draft); } }
       finally { if (valid()) { setSaving(false); void reload();
         if (operations.current.get(retryKey) === send && !failed.current.has(retryKey)) operations.current.delete(retryKey);
       } }
     };
     // New intent supersedes only the same operation, never another setting/read.
     failed.current.delete(retryKey); operations.current.set(retryKey, send);
+    if (draft) setDrafts(old => ({ key, byOperation: new Map(old.key === key ? old.byOperation : undefined).set(retryKey, draft) }));
     queue.current = queue.current.then(send, send);
-  }, [current, reload]);
-  const action = useCallback((retryKey: string, make: (state: ChatMaskState) => ChatMaskAction) => {
+  }, [current, reload, endDraft, key]);
+  const action = useCallback((retryKey: string, make: (state: ChatMaskState) => ChatMaskAction, draft?: Partial<ChatMaskSettings>) => {
     let operationId = randomUUID(), value: ChatMaskAction | undefined;
     run(retryKey, async valid => {
       if (!stateRef.current || !valid()) return;
@@ -123,7 +135,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
         }
         throw e;
       }
-    });
+    }, draft);
   }, [call, current, key, run]);
   const markRead = useCallback((ids: string[]) => {
     const batches = Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => ({ readIds: ids.slice(index * 100, index * 100 + 100), operationId: randomUUID() }));
@@ -134,9 +146,9 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   }, [call, current, run]);
   const lastParticipation = useRef(0);
   const homeOffline = !!state?.homeDeviceId && getPresenceAvailability(state.homeDeviceId) === false;
-  return { state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: { ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null } } : null, mentions, saving, error, reload, markRead,
+  return { state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: Object.assign({ ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null }, ...shownDrafts) } : null, mentions, saving, error, reload, markRead,
     update: (patch: Partial<ChatMaskSettings>) => action(`save:${Object.keys(patch).sort().join(',')}`, s => ({ type: 'save', expectedRevision: s.revision,
-      settings: { ...s.settings, companionId: s.settings.companionId ?? s.defaultCompanionId ?? null, ...patch, timeZone: s.revision ? s.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone } })),
+      settings: { ...s.settings, companionId: s.settings.companionId ?? s.defaultCompanionId ?? null, ...patch, timeZone: s.revision ? s.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone } }), { ...patch }),
     perform: (type: 'resume' | 'stop' | 'digest' | 'participate') => action(type, () => ({ type })),
     participate: () => { if (!stateRef.current?.settings.enabled || stateRef.current.settings.trigger === 'always' || Date.now() - lastParticipation.current < 2000) return;
       lastParticipation.current = Date.now(); action('participate', () => ({ type: 'participate' })); },

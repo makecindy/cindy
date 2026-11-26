@@ -69,6 +69,7 @@ import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
+import { useOptimisticReactions } from './optimisticReactions';
 
 // ---- @ mention highlight ----------------------------------------------------------------
 
@@ -411,7 +412,9 @@ export function botGroupTaskOwned(authorBotId: string | null, members: readonly 
 function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const mask = useGroupMask();
   const { t } = useTranslation();
-  const { message, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  const { authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  // This actor's reactions show at once, before the server confirms them.
+  const message = useOptimisticReactions(props.reactionGroupId, props.message);
   const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
     : mask?.attributions[message.id];
   const continued = props.continued && !attribution;
