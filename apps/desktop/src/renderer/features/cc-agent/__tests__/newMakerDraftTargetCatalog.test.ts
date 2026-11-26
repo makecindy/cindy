@@ -1730,9 +1730,14 @@ describe('the seeded source is pinned only by an explicit model or source choice
 
   it('does not pin the seeded source after a permission-only edit', () => {
     const h = harness();
+    const setRemoteDraftPermission = vi.fn();
     callback<(mode: string) => void>('handlePermissionModeDidChange', {
-      ...h.common, isDeviceLinkDraft: true,
+      ...h.common,
+      isDeviceLinkDraft: true,
+      effectiveDeviceLinkDeviceId: 'dev-1',
+      setRemoteDraftPermission,
     })('auto');
+    expect(setRemoteDraftPermission).toHaveBeenCalledWith({ deviceId: 'dev-1', permissionMode: 'auto' });
     expect(h.dlRuntimeTouchedRef.current).toBe(true);
     expect(h.dlExplicitChoiceRef.current).toBe(false);
     expect(h.explicitProviderId()).toBeNull();

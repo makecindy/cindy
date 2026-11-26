@@ -4645,6 +4645,15 @@
       "menu": {
         "disableProvider": "이 제공자 비활성화",
         "enableProvider": "이 제공자 활성화",
+        "icon": "연결 아이콘",
+        "appearance": "이름 및 아이콘",
+        "ownImage": "이미지 선택",
+        "imageError": "10 MB 이하의 PNG, JPG 또는 WebP 이미지를 선택하세요.",
+        "connectionIcon": {
+          "default": "기본값",
+          "personal": "개인용",
+          "work": "업무용"
+        },
         "hideProvider": "모델 선택기에서 숨기기",
         "showProvider": "모델 선택기에 표시"
       },
@@ -5653,7 +5662,7 @@
       "title": "개인화",
       "subtitle": "사용자 정의 프롬프트",
       "description": "어시스턴트에 추가 지침과 컨텍스트를 제공합니다.",
-      "placeholder": "여기에 사용자 정의 지침을 입력하세요. Claude / Codex 시스템 프롬프트 끝에 추가됩니다.\n\n· {{appName}} 내장 세션에만 적용됩니다. 기존 세션은 시작 시점의 스냅샷을 유지하며, 변경 사항은 다음 새 세션부터 적용됩니다.\n· 모든 Claude Code 세션(터미널, 기타 IDE 포함)에서 강제로 적용하려면 ~/.claude/settings.json 에 SessionStart 훅을 설정하세요(harness 수준 강제).\n· Codex CLI 는 ~/.codex/hooks.json 에 SessionStart 훅을 설정하면 harness 수준 강제 주입이 가능합니다(CC와 동일). 또는 ~/.codex/AGENTS.md 자동 로드(소프트 제약, 모델이 무시할 수 있음)도 사용 가능합니다.",
+      "placeholder": "여기에 사용자 정의 지침을 입력하세요. Claude / Codex 시스템 프롬프트 끝에 추가됩니다.\n\n· {{appName}} 내장 세션에만 적용됩니다. 기존 세션은 시작 시점의 스냅샷을 유지하며, 변경 사항은 다음 새 세션부터 적용됩니다.\n· 모든 Claude Code 세션(터미널, 기타 IDE 포함)에서 강제로 적용하려면 ~/.claude/settings.json 에 SessionStart 훅을 설정하세요(Harness 수준 강제).\n· Codex CLI 는 ~/.codex/hooks.json 에 SessionStart 훅을 설정하면 Harness 수준 강제 주입이 가능합니다(CC와 동일). 또는 ~/.codex/AGENTS.md 자동 로드(소프트 제약, 모델이 무시할 수 있음)도 사용 가능합니다.",
       "ariaLabel": "사용자 정의 지침",
       "save": "저장",
       "overLimit": " — 길이 제한 초과",
@@ -5854,7 +5863,7 @@
       "uninstallTitle": "Pi 확장을 제거할까요?",
       "uninstallDescription": "{{name}}을(를) 이 기기에서 제거합니다. 이미 열려 있는 Pi 작업은 닫을 때까지 이전 확장을 유지합니다.",
       "confirmUninstall": "제거",
-      "extensionDialogConfirm": "확인",
+      "extensionDialogConfirm": "계속",
       "cancel": "취소",
       "relativePathUnsupported": "설정에서 로컬 확장을 설치할 때는 절대 경로를 사용하세요. ./extension 같은 상대 경로는 Pi 작업에서 설치할 수 있습니다.",
       "resources": {
@@ -9763,7 +9772,7 @@
       "allow": "허용",
       "deny": "거부",
       "questionTitle": "답변이 필요합니다",
-      "submit": "제출",
+      "submit": "답변 보내기",
       "planTitle": "계획 검토",
       "approve": "승인",
       "requestChanges": "수정 요청",
@@ -10323,10 +10332,10 @@
       }
     },
     "byAgent": {
-      "title": "Agent / harness별",
+      "title": "Agent / Harness별",
       "subtitle": "최근 30일",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "최근 30일 토큰",
         "totalInRange": "{{range}} 토큰",
         "share": "비중",
@@ -12332,7 +12341,7 @@
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
           "archive": "그룹 보관",
           "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 동반자 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
-          "confirm": "확인",
+          "confirm": "계속",
           "lastOwner": "나가거나 소유자를 내보내기 전에 다른 멤버에게 소유권을 이전하세요.",
           "conflict": "다른 멤버가 설정을 변경했습니다. 새로 고침 후 다시 시도하세요.",
           "unarchive": "그룹 보관 해제",
@@ -13188,7 +13197,7 @@
       }
     },
     "confirmDialog": {
-      "confirm": "확인",
+      "confirm": "계속",
       "cancel": "취소",
       "dontShowAgain": "다음부터 표시하지 않기"
     },
@@ -14729,11 +14738,11 @@
         },
         "acp": {
           "ask": {
-            "label": "매번 확인",
+            "label": "기본 권한",
             "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
           },
           "default": {
-            "label": "기본",
+            "label": "기본 권한",
             "description": "Agent의 기본 방식으로 작업합니다. 권한 요청은 직접 확인합니다."
           },
           "acceptEdits": {
@@ -14741,15 +14750,15 @@
             "description": "Agent가 파일을 바로 수정합니다. 그 밖의 권한 요청은 직접 확인합니다."
           },
           "auto": {
-            "label": "자동",
+            "label": "자동 리뷰",
             "description": "확인이 필요한 작업은 Agent가 판단합니다. 요청된 권한은 직접 확인합니다."
           },
           "plan": {
-            "label": "계획만",
+            "label": "계획 모드",
             "description": "Agent가 분석과 계획만 하고 파일은 수정하지 않습니다."
           },
           "bypassPermissions": {
-            "label": "모두 허용",
+            "label": "전체 접근",
             "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."
           }
         }
@@ -15412,7 +15421,7 @@
       "back": "뒤로",
       "skip": "건너뛰기",
       "next": "다음",
-      "submit": "제출",
+      "submit": "답변 보내기",
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",
@@ -15842,6 +15851,10 @@
       "diffUnchangedLines_one": "변경 없는 줄 {{count}}개",
       "diffUnchangedLines_other": "변경 없는 줄 {{count}}개",
       "diffPreviewLoading": "diff 미리보기를 준비하는 중입니다…"
+    },
+    "filePreview": {
+      "changed": "파일이 변경되었습니다",
+      "refreshHint": "클릭하여 새로고침"
     },
     "textLightbox": {
       "unreadable": "이 파일을 읽을 수 없습니다",
