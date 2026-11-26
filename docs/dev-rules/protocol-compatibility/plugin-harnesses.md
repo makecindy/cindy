@@ -19,7 +19,7 @@ Host receipt 追加可选 `approvedHarnesses?: string[]`：只来自安装／更
 插件同源端点（本机 Electron 插件页与远程设置页的同一 fetch 白名单，非 device-link）：`PUT /harnesses` 正文
 `{ harnesses: [{ id, available: boolean, reason?: slug, message?: ≤200, version?: ≤64, models?: [{ id: ≤256, name: ≤200, description?: ≤200, group?: ≤200, efforts?: [level] ≤16, defaultEffort?: level }] ≤200, modes?: [mode] ≤16, defaultMode?: mode }] }`，
 整体覆盖，内容不变不写盘不通知，成功返回规范化后的列表；`GET /harnesses` 读回（按当前清单过滤）。未声明 `harnesses` 403，未安装 404，
-格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 与 Node Host 返回 404，插件按不支持处理；
+格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 返回 404，插件按不支持处理（Node Host 同步支持 `/harnesses`）；
 不认识 `models` 的旧 Host 丢弃该字段，新 Host 读到没有 `models` 的旧记录按「插件不列模型」处理。
 `efforts` / `defaultEffort`（2026-11-19）是 Cindy 思考深度 id（`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 maker-core 从
 ACP `thought_level` 取值映射的集合相同）：非数组、非字符串或有 `defaultEffort` 无 `efforts` 400；本版不认识的 id 跳过、不拒整份
@@ -252,7 +252,7 @@ method-not-found 时本会话撤回插话能力，之后的插话排队。
 `/<skill>` 用的 Skill 清单（`AcpAgent.listAgentSkills`，与首轮 Skill 清单同源），返回既有 `AgentSkillCommand` 形状，
 `runtimeCommandName` / `runtimeStatus` / `origin` 不出现。这是既有字段的新取值，channel 早已在 allowlist：新控制端对旧被控端
 发出时旧端以 INVALID_PARAMS 拒绝，菜单按读取失败不列 Skill（旧被控端的引擎也不展开 `/<skill>`，不会列出点了没用的项）；
-旧控制端从不发出。Node Host（`/api/agent-skills`）不运行插件引擎，对 `acp` 回「未注册」，不按 Claude 列清单。
+旧控制端从不发出。Node Host（`/api/agent-skills`）装配了插件引擎，在 `acp` 已注册时与桌面同样经 `maker.listAgentSkills` 返回该引擎的 Skill 清单（未注册时回「未注册」，不按 Claude 列清单）。
 不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。

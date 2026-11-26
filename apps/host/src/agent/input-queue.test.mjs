@@ -4109,18 +4109,100 @@ test('model change at send: the context rollover resumes a released Pi task to r
     'the released runtime is resumed to read its window');
 });
 
-// Production entry: the Host's switchAgent handler leaves the task and its pending choice unchanged.
-// Basis: #11629, Host has no ACP runtime. The desktop's tests only reject with the admission port bound.
-// Minimal input (unit): a local Claude task and a valid plugin engine route, using the real Host handler.
-test('switching to a plugin engine is unsupported on the Host', async t => {
+// Production entry: Host switchAgent admits local plugin engines using the live harness registry
+// and switches tasks to and from `acp`, rejecting unavailable/missing plugin engines cleanly.
+// Minimal input (unit): a local Claude task with the shared plugin harness registry configured.
+test('switching to and from a plugin engine follows live plugin engine admission on the Host', async t => {
+  const { configurePluginHarnessRegistry, reconcilePluginHarnesses } = await import('../../../desktop/src/main/cindy-brain/pluginHarnesses.ts');
+  const { validateGhostManifest } = await import('../../../desktop/src/shared/ghost.ts');
+  const { installedGhostStoragePart } = await import('../../../desktop/src/shared/pluginIdentity.ts');
   const r = await modelChangeRuntime(t);
   await r.createTask('switch-to-acp');
+  let listedGhosts = [];
+  let availability = {};
+  configurePluginHarnessRegistry({
+    listGhosts: () => listedGhosts,
+    isAvailable: () => true,
+    readAvailability: (id) => availability[id] ?? {},
+    uiLocale: () => 'en',
+    spawn: async () => { throw new Error('unused in switch admission test'); },
+  });
+  reconcilePluginHarnesses([]);
+  t.after(() => {
+    listedGhosts = [];
+    availability = {};
+    reconcilePluginHarnesses([]);
+  });
+
+  // Publish an approved, enabled harness descriptor first so we share the canonical providerId.
+  const parsed = validateGhostManifest({
+    schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh-acp', name: 'DeepSeek ACP', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['acp.js'] },
+    harnesses: [{ id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'acp.js' }],
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const ghost = {
+    manifest: parsed.manifest,
+    dir: path.join(os.tmpdir(), 'fixture-dsh-acp'),
+    enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    approvedHarnesses: ['dsh'],
+    approvedNode: true,
+  };
+  const ghostKey = installedGhostStoragePart(ghost);
+  const acpProviderId = `acp-plugin:${ghostKey}:dsh`;
+
+  // Unlisted engine is refused and leaves the task untouched.
   await assert.rejects(r.selection.switchAgent({
     sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
-    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
-  }), { code: 'UNSUPPORTED_CAPABILITY', message: '[UNSUPPORTED_CAPABILITY] plugin engines are not available here' });
+    providerId: acpProviderId,
+  }), /停用或卸载/);
   assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
   assert.equal(r.selection.projectIntent('switch-to-acp') ?? null, null);
+
+  // Publish the approved, enabled harness and verify switching to ACP and back to Claude.
+  listedGhosts = [ghost];
+  availability = {
+    [ghostKey]: {
+      harnesses: [{
+        id: 'dsh', available: true, version: '0.3.0',
+        models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      }],
+    },
+  };
+  reconcilePluginHarnesses(listedGhosts);
+
+  const pickedAcp = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
+    providerId: acpProviderId, effort: 'low',
+  });
+  assert.equal(pickedAcp.deferred, true, 'switch to ACP stages a pending intent until next send');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.targetAgentKind, 'acp');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.providerId, acpProviderId);
+
+  // Next send lands the switch onto `acp`.
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'acp-1', text: 'hello acp' });
+  await waitFor(() => r.h.maker.sessions.get('switch-to-acp')?.sent.length === 1);
+  const acpSession = r.h.maker.sessions.get('switch-to-acp');
+  assert.equal(acpSession.agentKind, 'acp');
+  assert.equal(acpSession.options.providerId, acpProviderId);
+  assert.equal(acpSession.options.model, 'deepseek-v4');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'acp');
+  acpSession.emit({ type: 'done', data: {}, sessionTurnGeneration: acpSession.generation, sessionInstanceId: acpSession.instanceId });
+  await waitFor(() => !r.h.queue.projection('switch-to-acp').active);
+
+  // Switch back from `acp` to built-in `claude-code`.
+  const pickedClaude = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'claude-code', model: 'big', providerId: 'prov-a',
+  });
+  assert.equal(pickedClaude.deferred, true);
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'cc-back-1', text: 'back to claude' });
+  await waitFor(() => {
+    const next = r.h.maker.sessions.get('switch-to-acp');
+    return next && next !== acpSession && next.sent.length === 1;
+  });
+  assert.equal(r.h.maker.sessions.get('switch-to-acp').agentKind, 'claude-code');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
 });
 
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails

@@ -41,7 +41,7 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   requestPluginHarnessRefresh: () => {},
   readPluginHarnessUsage: () => null,
 }));
-vi.mock('../../maker-host/acp-host.js', () => ({
+vi.mock('../../maker-host/pluginEngineModelCache.js', () => ({
   getCachedPluginHarnessModels: () => [],
   onPluginHarnessModelsChanged: () => () => {},
 }));

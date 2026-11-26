@@ -117,6 +117,9 @@ import { RuntimePluginControlError } from '../../../desktop/src/main/cindy-brain
 import { closeRejectedRuntimeAndRestoreControlStores } from '../../../desktop/src/main/maker-ipc/runtimeSetModel.js';
 import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/maker-ipc/sessionControlRuntimeWriter.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
+import { admitPluginEngineSwitchTarget } from '../../../desktop/src/main/maker-ipc/pluginEngineSessionAdmission.js';
+import { listPluginEngineViews } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
+import { pluginEngineKeyFromProviderId } from '../../../desktop/src/shared/pluginEngines.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
 import { explicitPorts } from './explicit-ports.ts';
 
@@ -380,11 +383,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
     cancelPendingRemoteStart: undefined,
-    // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
+    // Task switching onto a local plugin engine (docs/plans/acp-plugin-bridge.md), using the same
+    // live admission and engine display name as Desktop (register.ts).
     canSwitchCompletedAutomationSession: undefined,
-    admitPluginEngineTarget: undefined,
+    admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
     admitRemotePluginEngineTarget: undefined,
-    describePluginEngine: undefined,
+    describePluginEngine: (providerId) => {
+      const key = pluginEngineKeyFromProviderId(providerId);
+      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
+    },
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);

@@ -169,6 +169,38 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'maker:list-plugin-engines',
+    webPath: 'maker.listPluginEngines',
+    hostPath: '/api/plugin-engines/list',
+    body: () => null,
+  },
+  {
+    desktopChannel: 'maker:refresh-plugin-engines',
+    webPath: 'maker.refreshPluginEngines',
+    hostPath: '/api/plugin-engines/refresh',
+    body: ([targetGhostId]) => (targetGhostId !== undefined ? { targetGhostId } : {}),
+  },
+  {
+    desktopChannel: 'maker:get-plugin-engine-usage',
+    webPath: 'maker.getPluginEngineUsage',
+    hostPath: '/api/plugin-engines/usage',
+    body: ([key, task]) => ({ key, ...(task !== undefined ? { task } : {}) }),
+  },
+  {
+    desktopChannel: 'maker:set-plugin-engine-remote-use',
+    webPath: 'maker.setPluginEngineRemoteUse',
+    hostPath: '/api/plugin-engines/set-remote-use',
+    trustedRenderer: true,
+    body: ([input]) => ({ input }),
+  },
+  {
+    desktopChannel: 'maker:set-plugin-engine-prefs',
+    webPath: 'maker.setPluginEnginePrefs',
+    hostPath: '/api/plugin-engines/set-prefs',
+    trustedRenderer: true,
+    body: ([input]) => ({ input }),
+  },
+  {
     desktopChannel: 'maker:provider:list',
     webPath: 'maker.listProviders',
     hostPath: '/api/providers',

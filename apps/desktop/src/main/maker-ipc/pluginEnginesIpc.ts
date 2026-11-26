@@ -15,7 +15,7 @@ import {
   readPluginHarnessUsage,
   type PluginHarness,
 } from '../cindy-brain/pluginHarnesses.js';
-import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
+import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/pluginEngineModelCache.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   PLUGIN_ENGINE_NAME_MAX,

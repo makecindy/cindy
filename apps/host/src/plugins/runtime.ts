@@ -8,10 +8,14 @@ import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.js';
 import { GhostPipeDispatcher } from '../../../desktop/src/main/cindy-brain/pipeDispatcher.js';
 import { createGhostExecutionPipe } from '../../../desktop/src/main/cindy-brain/executionPipe.js';
-import { createGhostKvStore } from '../../../desktop/src/main/cindy-brain/ghostKvStore.js';
+import { createGhostKvStore, removeGhostKvBestEffort } from '../../../desktop/src/main/cindy-brain/ghostKvStore.js';
 import { createGhostPageHandler } from '../../../desktop/src/main/cindy-brain/runtime/ghostPageHandler.js';
 import { handleGhostSecretsRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostSecretsEndpoint.js';
 import { handleGhostModelsRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostModelsEndpoint.js';
+import { handleGhostHarnessesRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostHarnessesEndpoint.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from '../../../desktop/src/main/cindy-brain/pluginHarnesses.js';
+import { pluginEngineAccountRoot } from '../../../desktop/src/main/plugin-engine-accounts/paths.js';
+import { forgetPluginEngineAccountsOfPlugin } from '../../../desktop/src/main/plugin-engine-accounts/store.js';
 import { checkGhostSecret } from '../../../desktop/src/main/cindy-brain/runtime/ghostSecretCheck.js';
 import { mediaTypeForLibraryPath } from '../../../desktop/src/main/cindy-brain/runtime/ghostFiles.js';
 import { GhostLibrarySlot } from '../../../desktop/src/main/cindy-brain/librarySlot.js';
@@ -175,6 +179,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const secret = createHostPluginSecrets(options.profileDir, options.ownerId, options.credentials);
   const kv = createGhostKvStore({ getRootDir: () => root('ghost-kv'), log });
   const models = createGhostKvStore({ getRootDir: () => root('ghost-published-models'), log });
+  const harnesses = createGhostKvStore({ getRootDir: () => root('ghost-published-harnesses'), log });
   // Desktop's findGhostForInstanceId over this owner's manager (ghostAvailability.ts),
   // including its account-availability check. Identity reads use it; the runtime's
   // getGhost keeps its suspension overlay for everything else.
@@ -385,6 +390,12 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       ghostAppContextProvider: options.appContext,
       ghostModelsHandler: input => handleGhostModelsRequest({ ...input, needs: () => getGhost(input.ghostId)?.manifest.models ?? null,
         store: models, onChanged: () => publish('ghosts:changed', { ghosts: options.manager.list() }) }),
+      ghostHarnessesHandler: input => handleGhostHarnessesRequest({
+        ...input,
+        declared: () => { const item = getGhost(input.ghostId); return item ? item.manifest.harnesses : null; },
+        store: harnesses,
+        onChanged: () => reconcilePluginHarnesses(),
+      }),
       ghostSecretsHandler: async input => {
         const item = getGhost(input.ghostId); if (!item) return { status: 404 };
         const declared = item.manifest.network?.secrets ?? [];
@@ -477,6 +488,55 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   const dispatcher = new HostGhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
+  configurePluginHarnessRegistry({
+    listGhosts: () => (current() ? identityLookup.availableGhosts().map(withSuspension) : []),
+    isAvailable: id => current() && identityLookup.isGhostAvailableForActiveSession(id) && !suspended.has(id),
+    readAvailability: id => (current() ? harnesses.read(id) : {}),
+    uiLocale: () => {
+      const result = options.appContext();
+      const ctx = result.ok ? (result.context as { uiLocale?: string; locale?: string }) : undefined;
+      return ctx?.uiLocale ?? ctx?.locale ?? 'en';
+    },
+    spawn: async (ghostId, harnessId, spawnOptions) => {
+      assertPluginAvailable();
+      return node.spawnHarness(ghostId, harnessId, spawnOptions);
+    },
+    requestRefresh: ghostId => {
+      if (!current() || pausedReason()) return false;
+      try { return sandbox.acceptGatewayDelivery(ghostId, { type: 'harnesses-refresh-requested' }); }
+      catch { return false; }
+    },
+    readUsage: async (ghostId, harnessId, accountDir) => {
+      if (!current() || pausedReason()) return null;
+      const response = await node.handleRequest(ghostId, {
+        type: 'node-request', method: 'usage',
+        params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) },
+        timeoutMs: 26_000,
+      });
+      if (!current()) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
+    },
+    callAccount: async (ghostId, method, params, timing) => {
+      if (!current() || pausedReason()) return null;
+      const response = await node.handleRequest(ghostId, {
+        type: 'node-request', method, params, ...timing,
+      });
+      return response.ok && current() ? response.result : null;
+    },
+    accountRoot: (ghostId, harnessId) => (current() ? pluginEngineAccountRoot(ghostId, harnessId) : null),
+    log,
+  });
   function startResident(ghost: InstalledGhost) {
     spawnResidentGhost(ghost, {
       isAvailable: () => !pausedReason() && isCurrent(ghost),
@@ -493,7 +553,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     const approvals = summarizeLegacyPluginApprovals(ghosts);
     if (legacyApprovals === null) log.info('legacy plugin approval census: %j', approvals);
     legacyApprovals = approvals;
-    browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
+    const effectiveGhosts = ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false });
+    browserExtensions.reconcile(effectiveGhosts);
+    reconcilePluginHarnesses(effectiveGhosts);
     for (const [id, previous] of known) {
       if (desktopPause) return;
       if (previous === revision(getGhost(id))) continue;
@@ -620,7 +682,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         suspended.add(key);
         taskPlugins.dropGhost(key);
         network.disposeGhost(key);
-        browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
+        const effectiveGhosts = options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false });
+        browserExtensions.reconcile(effectiveGhosts);
+        reconcilePluginHarnesses(effectiveGhosts);
         runtime.stop(key);
         await node.stopAndWait(key);
         await library.disposeGhost(key);
@@ -638,6 +702,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   async function dispose() {
     closed = true; stopSignal.abort(); runtime.destroyAll();
+    reconcilePluginHarnesses([]);
     fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
@@ -677,6 +742,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       const release = mutation.acquire();
       try {
         await authorization.cleanupSourceReferences(part, check);
+        removeGhostKvBestEffort(harnesses, part, log);
+        await forgetPluginEngineAccountsOfPlugin(part).catch(error =>
+          log.warn('plugin engine account cleanup failed', { part, error: error instanceof Error ? error.message : String(error) }));
         check();
       } finally { release(); }
     },
