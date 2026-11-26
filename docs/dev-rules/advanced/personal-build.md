@@ -948,13 +948,13 @@ and the target phone before calling delivery successful.
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
   key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
   数据兼容性未知仍禁止自动退回旧版。
-- 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
-  后注销预览包，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销。
+- 换壳后同时注销退役包的 LaunchServices 与 PlugInKit（`Contents/PlugIns/*.appex`）登记并重新登记固定安装路径，同时向已注销退役扩展及停机换壳前残留的扩展进程发送 `SIGTERM` 以便系统加载新二进制；隔离 smoke 正常停止后同样注销预览包及其扩展，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销；新旧个人版复用同一 Electron `CFBundleVersion` 时，若旧备份的 `.appex` 仍留在 PlugInKit 中，系统会继续拉起旧版灵动岛扩展。
   系统登记失败不得阻断文件安装或旧版恢复：完成文件事务，在安装元数据记录
   `registrationPending`，由 doctor 提示、registry-clean 成功后清除；smoke 的登记错误
   写入 `registrationWarnings`，不改变候选启动结果。停止进程失败仍使 smoke 失败。
-  `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
-  同 ID 且未运行的副本：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
+  固定安装启动前还会非阻断地核对 PlugInKit 的 `<bundleId>.agent-activity` 登记，清理陈旧的受管/缺失副本。
+  `doctor` 列出同 Bundle ID 的 LaunchServices 登记路径、PlugInKit 扩展登记路径及遗留的同级 `.previous-*` 备份；显式 `registry-clean --config FILE` 只注销
+  同 ID 且未运行的副本（含其 `.appex` 扩展登记并结束退役扩展残留进程）：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
   其它位置仍要求同证书有效签名；同 ID 查询中已不存在的路径只注销陈旧登记。真实路径
   是固定包的别名、异 ID、运行中或身份不明的条目保留。固定包始终验证原签名和摘要。
   此命令不删除文件、不重置 TCC；登记查询限时 60 秒，注销/登记各限时 15 秒。

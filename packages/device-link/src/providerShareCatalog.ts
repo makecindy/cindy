@@ -204,7 +204,7 @@ export function scrubSharedProvider<T>(provider: T): T {
   delete fields.group;
   delete fields.customIcon;
   // Gateway and organization artwork must not disclose the owner's organization identity.
-  if (fields.id === 'xd' || fields.source === 'organization') delete fields.logoKind;
+  if (fields.id === 'xd' || fields.source === 'organization' || fields.logoKind === 'personal' || fields.logoKind === 'work' || (typeof fields.logoKind === 'string' && fields.logoKind.startsWith('mark-'))) delete fields.logoKind;
   delete fields[PROVIDER_RUNNING_TURNS_FIELD];
   delete fields[PROVIDER_SHARE_GROUP_SIZE_FIELD];
   delete fields[PROVIDER_SHARE_GROUP_STATUS_FIELD];

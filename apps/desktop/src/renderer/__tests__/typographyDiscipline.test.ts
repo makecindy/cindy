@@ -320,7 +320,7 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/components/chat/GeneratedFilesCard.tsx', { 'leading-5': 4 }),
   fixedLeadingDebt('src/renderer/components/chat/InlineReferenceChip.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/components/chat/MessageStream.tsx', { 'leading-5': 1 }),
-  fixedLeadingDebt('src/renderer/components/chat/SessionHandoffCard.tsx', { 'leading-4': 5, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/components/chat/SessionHandoffCard.tsx', { 'leading-4': 4, 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/components/chat/UserMessage.tsx', { 'leading-5': 2 }),
   fixedLeadingDebt('src/renderer/components/log-support/StartupLogSupport.tsx', { 'leading-4': 1 }),
   fixedLeadingDebt('src/renderer/components/new-chat/AskUserQuestionPrompt.tsx', { 'leading-5': 2 }),
@@ -342,7 +342,6 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/components/settings/RelayServicePanel.tsx', { 'leading-5': 7 }),
   fixedLeadingDebt('src/renderer/components/settings/SessionShareImportWizard.tsx', { 'leading-8': 1 }),
   fixedLeadingDebt('src/renderer/components/settings/UserProfileCard.tsx', { 'leading-4': 1, 'leading-5': 1 }),
-  fixedLeadingDebt('src/renderer/components/sidebar/NewTag.tsx', { 'leading-4': 1 }),
   fixedLeadingDebt('src/renderer/components/status/QuotaHoverCard.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/components/title-bar/WindowControls.tsx', { 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/billing/BillingCheckoutDialog.tsx', { 'leading-5': 1 }),
@@ -409,11 +408,10 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/right-sidebar/EmptyState.tsx', { 'leading-5': 2 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/BackgroundTasksBody.tsx', { 'leading-4': 1, 'leading-5': 3 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/WorkflowAgentStrip.tsx', { 'leading-4': 1 }),
-  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/WorkflowProgressTree.tsx', { 'leading-4': 6, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/background-tasks/WorkflowProgressTree.tsx', { 'leading-4': 5, 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/retired-feature/index.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/review/DiffViewer/PlainUnifiedDiff.tsx', { 'leading-5': 3 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/side-chat/SideChatTabBody.tsx', { 'leading-5': 3 }),
-  fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/ConversationStream.tsx', { 'leading-4': 1 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/DetailView.tsx', { 'leading-4': 4, 'leading-5': 6 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/RunList.tsx', { 'leading-4': 3, 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/right-sidebar/plugins/subagents/SubagentChrome.tsx', { 'leading-4': 3, 'leading-5': 1 }),
@@ -443,7 +441,7 @@ const inlineSizeDebt = (file: string, counts: Record<string, number>): Exemption
 
 const INLINE_SIZE_DEBT: Exemption[] = [
   inlineSizeDebt('src/renderer/features/skillhub/SkillhubMarketListView.tsx', {
-    'fontSize …13': 2,
+    'fontSize …13': 1,
     'fontSize …12': 2,
     'fontSize …11': 1,
   }),

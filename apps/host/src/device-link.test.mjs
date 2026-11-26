@@ -143,6 +143,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const url = `ws://127.0.0.1:${wss.address().port}`;
   const closedSessions = [];
   const metaPatches = [];
+  const titleCalls = [];
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -241,6 +242,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return rows.length > 0;
     },
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
+    autoTitle: {
+      generateTitle: async req => { titleCalls.push(['generate', req]); return { title: 'Gen title' }; },
+      regenerateTitle: async req => { titleCalls.push(['regenerate', req]); return { title: 'Regen title' }; },
+    },
     requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
     invalidatePluginOauth: peer => { oauthCancelled.push(peer ?? 'all'); },
   });
@@ -351,6 +356,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(badField.ok, false);
   const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
   assert.equal(badDiscard.ok, false);
+  const genTitle = await clients[0].invoke('host', { channel: 'maker:generate-title', args: [{ message: 'hello', agentKind: 'claude-code', sessionId: 'task' }] });
+  assert.deepEqual(genTitle, { ok: true, result: { title: 'Gen title' } });
+  const regenTitle = await clients[0].invoke('host', { channel: 'maker:regenerate-title', args: [{ sessionId: 'task' }] });
+  assert.deepEqual(regenTitle, { ok: true, result: { title: 'Regen title' } });
+  assert.deepEqual(titleCalls, [['generate', { message: 'hello', agentKind: 'claude-code', sessionId: 'task' }], ['regenerate', { sessionId: 'task' }]]);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -934,6 +944,7 @@ const PINNED_DISPATCH_PORTS = {
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
   'refused-at-entry': ['requestPluginOauth'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
     'delegatedProviderShareGuestAccess', 'locallyProvenProviderShareDelegation',
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
