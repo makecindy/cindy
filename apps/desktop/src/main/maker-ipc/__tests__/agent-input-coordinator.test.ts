@@ -626,7 +626,8 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
         if (controllerDeviceId === 'database-unavailable') throw Object.assign(new Error('Temporary state read failure'), { code: 'INTERNAL' });
         return { clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
           leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
-          ...(controllerDeviceId === 'released-before-enqueue' && ++reads >= 4 ? { releasedAt: 1 } : {}),
+          // The third read runs under the release lock, after both preparation reads.
+          ...(controllerDeviceId === 'released-before-enqueue' && ++reads >= 3 ? { releasedAt: 1 } : {}),
         }) };
       },
     }).enqueue;
@@ -642,6 +643,41 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
       });
       expect(h.sendToAgent).not.toHaveBeenCalled();
     }
+  });
+
+  // #13225, unit: unlike the admission tests above, clear the Worker while
+  // INPUT_ENQUEUE reads its first session row. The stale input must not dispatch.
+  it('does not dispatch ACP input superseded during the first session read', async () => {
+    const h = createHarness();
+    const sid = 'remote-worker';
+    const row = {
+      clearedAt: null,
+      agentKind: 'acp',
+      orcaRemoteLead: JSON.stringify({
+        leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+      }),
+    };
+    const reading = deferred<void>();
+    const firstRow = deferred<typeof row>();
+    const enqueue = createInputEnqueueHarness(h.coordinator, {
+      getInputSessionRow: vi.fn(async () => row).mockImplementationOnce(() => {
+        reading.resolve();
+        return firstRow.promise;
+      }),
+    }).enqueue;
+    const item = makeItem('acp-input', 'Do the task');
+    item.createOpts.agentKind = 'acp';
+    const pending = enqueue({}, sid, item);
+    await reading.promise;
+    h.coordinator.clearSession(sid);
+    firstRow.resolve(row);
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('REMOTE_OPTIMISTIC_INPUT_SUPERSEDED'),
+    });
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
   });
 
   function hostInput(

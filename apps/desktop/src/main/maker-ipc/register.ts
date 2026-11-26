@@ -21678,16 +21678,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
       const isPluginInput = (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp';
-      const assertPluginEngineInput = async () => {
-        const link = getDeviceLinkInvokeContext();
-        if (!link || link.sharedTask) throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
-        const row = await getInputSessionRow(sid);
+      const pluginLink = isPluginInput ? getDeviceLinkInvokeContext() : null;
+      if (isPluginInput && (!pluginLink || pluginLink.sharedTask)) {
+        throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
+      }
+      const assertPluginEngineInput = (row: Awaited<ReturnType<typeof getInputSessionRow>> | undefined) => {
         if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
-        const origin = parseOrcaRemoteLead(row.orcaRemoteLead);
-        if (row.agentKind !== 'acp' || !origin || origin.releasedAt !== undefined || origin.leadDeviceId !== link.controllerDeviceId)
+        const origin = parseOrcaRemoteLead(row?.orcaRemoteLead);
+        if (row?.agentKind !== 'acp' || !origin || origin.releasedAt !== undefined || origin.leadDeviceId !== pluginLink?.controllerDeviceId) {
           throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
+        }
       };
-      if (isPluginInput) await assertPluginEngineInput();
       const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, { allowPluginEngine: isPluginInput }));
       // debug 日志：远程发送在被控端各阶段的耗时，不影响任何判定。
       const sendTrace = deviceLinkInvoke ? beginRemoteSendTrace(sid, parsed.clientId) : undefined;
@@ -21708,6 +21709,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 已删除的远控任务必须在恢复队列、附件下载、引用水合和自动起名预检之前终止。
       // 入队前仍会再读一次，覆盖准备期间发生的删除竞态。
       let inputSessionRow = deviceLinkInvoke ? await getInputSessionRow(sid) : undefined;
+      // 复用记录清空代次后的首个会话快照，避免 ACP 准入时清空任务却接受旧输入。
+      if (isPluginInput) assertPluginEngineInput(inputSessionRow);
       if (deviceLinkInvoke) {
         inputCoordinator.observeClearBoundary(sid, inputSessionRow?.clearedAt);
         assertRemoteInputClearNotInFlight(sid, true);
@@ -21894,7 +21897,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (isPluginInput) {
           // Share the release path’s lock, and recheck after all async preparation.
           projection = await withSendToSessionLock(sid, async () => {
-            await assertPluginEngineInput();
+            assertPluginEngineInput(await getInputSessionRow(sid));
             return enqueueInput(queued);
           });
         } else {
