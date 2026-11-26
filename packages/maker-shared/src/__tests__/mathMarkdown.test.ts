@@ -211,12 +211,18 @@ describe('normalizeMathDelimiters — 对抗性输入(ReDoS 回归,CodeQL js/pol
     expect(normalizeMathDelimiters('尾部未闭合 \\alpha \\(x')).toBe('尾部未闭合 \\alpha \\(x');
   });
 
-  it('大量未闭合方括号与表格管道符线性完成', () => {
+  it('大量未闭合方括号、表格管道符与单长行重复 \\[...\\] 均线性完成', () => {
     const adversarial = '['.repeat(30000) + '\\[Schedule\\]' + '](x) ' + '|'.repeat(30000);
+    const sameLineRepeatedMath = '\\[x=1\\] '.repeat(20000);
+    const sameLineRepeatedTag = '\\[tag\\] '.repeat(20000);
     const started = Date.now();
     const out = normalizeMathDelimiters(adversarial);
+    const outMath = normalizeMathDelimiters(sameLineRepeatedMath);
+    const outTag = normalizeMathDelimiters(sameLineRepeatedTag);
     expect(Date.now() - started).toBeLessThan(2000);
     expect(out).toBe(adversarial);
+    expect(outMath).toContain('$$\nx=1\n$$');
+    expect(outTag).toBe(sameLineRepeatedTag);
   });
 });
 

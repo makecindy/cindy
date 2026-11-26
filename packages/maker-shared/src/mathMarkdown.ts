@@ -59,8 +59,6 @@ export interface NormalizeMathDelimitersOptions {
 // 合法的数学公式场景,整行保护安全且省去 destination/title 的精细切分。
 const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[(?:[^\]\\\n]|\\.)*\]:/gm;
 
-// 独占一行的 display `\[...\]` 行首允许空白与 blockquote 前缀。
-const STANDALONE_DISPLAY_PREFIX_RE = /^(?: {0,3}> ?)*[ \t]*$/;
 // 行中嵌入的单行 `\[...\]` 与 CommonMark 转义方括号(`\[Schedule\]`、`\[TODO\]`、
 // `\[飞书·...\]`)写法完全重合:只有在内容具备明确 LaTeX / 数学信号时才转成
 // display math;独立成行或跨行的 `\[...\]` 不受此限制,仍按标准块级公式处理。
@@ -384,13 +382,54 @@ function findGfmTableLineRanges(segment: string): Array<[number, number]> {
   return ranges;
 }
 
-function isStandaloneDisplayRange(text: string, open: number, closeEnd: number): boolean {
-  const lineStart = text.lastIndexOf('\n', open - 1) + 1;
-  const lineEndIdx = text.indexOf('\n', closeEnd);
-  const lineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
-  const before = text.slice(lineStart, open);
-  const after = text.slice(closeEnd, lineEnd);
-  return STANDALONE_DISPLAY_PREFIX_RE.test(before) && /^[ \t\r]*$/.test(after);
+/**
+ * 单调 O(n) 判定单行 `\[...\]` 是否独占一行(行首仅允许空白或 blockquote 前缀,
+ * 行尾仅允许空白)。每个物理行最多计算一次首尾有效字符边界,避免长行内重复出现
+ * `\[...\]` 时逐次向前/向后扫描整行退化为 O(n²)。
+ */
+function createStandaloneDisplayChecker(
+  text: string,
+): (open: number, closeEnd: number) => boolean {
+  let cachedLineEnd = -1;
+  let cachedFirstContent = -1;
+  let cachedLastContentEnd = -1;
+
+  return (open: number, closeEnd: number): boolean => {
+    if (open > cachedLineEnd) {
+      const lineStart = text.lastIndexOf('\n', open - 1) + 1;
+      const lineEndIdx = text.indexOf('\n', open);
+      cachedLineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+
+      // 跳过可选的 blockquote 前缀 `(?: {0,3}> ?)*` 与前导 `[ \t]*`
+      let i = lineStart;
+      while (i < cachedLineEnd) {
+        let spaces = 0;
+        while (i + spaces < cachedLineEnd && text[i + spaces] === ' ' && spaces < 3) {
+          spaces += 1;
+        }
+        if (i + spaces < cachedLineEnd && text[i + spaces] === '>') {
+          i += spaces + 1;
+          if (i < cachedLineEnd && text[i] === ' ') i += 1;
+        } else {
+          break;
+        }
+      }
+      while (i < cachedLineEnd && (text[i] === ' ' || text[i] === '\t')) i += 1;
+      cachedFirstContent = i;
+
+      // 剥除行尾 `[ \t\r]*`
+      let j = cachedLineEnd;
+      while (
+        j > cachedFirstContent &&
+        (text[j - 1] === ' ' || text[j - 1] === '\t' || text[j - 1] === '\r')
+      ) {
+        j -= 1;
+      }
+      cachedLastContentEnd = j;
+    }
+
+    return open === cachedFirstContent && closeEnd === cachedLastContentEnd;
+  };
 }
 
 function looksLikeMidlineDisplayMath(inner: string): boolean {
@@ -415,6 +454,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
 
   const inFullProtected = createRangeLookup(fullProtectedRanges);
   const inDisplayProtected = createRangeLookup(displayProtectedRanges);
+  const isStandaloneDisplay = createStandaloneDisplayChecker(segment);
 
   let out = '';
   let consumed = 0;
@@ -506,7 +546,7 @@ function transformOutsideInlineCode(segment: string, preserveLineCount: boolean)
     if (
       isDisplay &&
       !inner.includes('\n') &&
-      !isStandaloneDisplayRange(segment, open, close + 2) &&
+      !isStandaloneDisplay(open, close + 2) &&
       !looksLikeMidlineDisplayMath(inner)
     ) {
       scan = close + 2;

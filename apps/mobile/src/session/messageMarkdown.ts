@@ -1306,7 +1306,9 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
   let markdownLink: ReturnType<typeof matchMarkdownLink> | undefined;
   let localPathLink: ReturnType<typeof matchLocalPathLink> | undefined;
+  let linkLabelStarts: Map<number, number> | undefined;
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
+  const getLinkLabelStarts = () => (linkLabelStarts ??= buildMarkdownLinkLabelStarts(input));
   return {
     startsInsideHtmlComment,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
@@ -1316,13 +1318,13 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
     commentProbe,
     nextLink: (from: number) => {
       if (markdownLink === undefined || (markdownLink !== null && markdownLink.index < from)) {
-        markdownLink = matchMarkdownLink(input, from);
+        markdownLink = matchMarkdownLink(input, from, getLinkLabelStarts);
       }
       return markdownLink;
     },
     nextLocalPathLink: (from: number) => {
       if (localPathLink === undefined || (localPathLink !== null && localPathLink.index < from)) {
-        localPathLink = matchLocalPathLink(input, from);
+        localPathLink = matchLocalPathLink(input, from, getLinkLabelStarts);
       }
       return localPathLink;
     },
@@ -1449,24 +1451,90 @@ function matchBareUrl(input: string, from: number) {
   return raw;
 }
 
-// 从 `](` 的 `]` 处向左按 CommonMark 方括号平衡语义找配对 `[`(跳过反斜杠转义
-// `\[` / `\]`,不跨行,不越过 minStart),与 sessionLinks.findMarkdownLabelStart 同口径。
-function findMarkdownLabelStartFrom(
-  text: string,
-  closeBracketIndex: number,
-  minStart: number,
-): number {
-  if (isBackslashEscaped(text, closeBracketIndex)) return -1;
-  let depth = 1;
-  for (let cursor = closeBracketIndex - 1; cursor >= minStart; cursor -= 1) {
-    const code = text.charCodeAt(cursor);
-    if (code === 10 /* \n */) return -1;
-    if (code !== 91 /* [ */ && code !== 93 /* ] */) continue;
-    if (isBackslashEscaped(text, cursor)) continue;
-    if (code === 93) depth += 1;
-    else if (--depth === 0) return cursor;
+/**
+ * 一次性前向 O(n) 计算段落内每个未转义 `]` 对应的配对 `[` 下标(不跨行,
+ * 跳过反斜杠转义 `\[` / `\]` 与 inline code span `` `...` `` 内的括号)。
+ * 供 `matchMarkdownLink` 与 `matchLocalPathLink` 共用:
+ * - 查找任意 `](` 的标签起点均为 O(1),杜绝重复回扫导致平方级耗时;
+ * - 行内代码内的方括号(如 ``[`arr[0`](https://example.com)``)不污染括号栈,
+ *   避免外层链接被拆开。
+ */
+function buildMarkdownLinkLabelStarts(input: string): Map<number, number> {
+  const map = new Map<number, number>();
+  const codeEnds = new Map<number, number>();
+  if (input.includes('`')) {
+    const runs: Array<{ start: number; end: number; len: number }> = [];
+    const byLen = new Map<number, number[]>();
+    let pos = 0;
+    while (pos < input.length) {
+      const tick = input.indexOf('`', pos);
+      if (tick === -1) break;
+      let end = tick + 1;
+      while (end < input.length && input[end] === '`') end += 1;
+      const len = end - tick;
+      const idx = runs.length;
+      runs.push({ start: tick, end, len });
+      let list = byLen.get(len);
+      if (!list) {
+        list = [];
+        byLen.set(len, list);
+      }
+      list.push(idx);
+      pos = end;
+    }
+    const headByLen = new Map<number, number>();
+    let r = 0;
+    while (r < runs.length) {
+      const run = runs[r];
+      const list = byLen.get(run.len)!;
+      let head = headByLen.get(run.len) ?? 0;
+      while (head < list.length && list[head] <= r) head += 1;
+      headByLen.set(run.len, head);
+      if (head >= list.length) {
+        r += 1;
+        continue;
+      }
+      const closeIdx = list[head];
+      headByLen.set(run.len, head + 1);
+      codeEnds.set(run.start, runs[closeIdx].end);
+      r = closeIdx + 1;
+    }
   }
-  return -1;
+
+  const stack: number[] = [];
+  let i = 0;
+  while (i < input.length) {
+    const codeEnd = codeEnds.get(i);
+    if (codeEnd !== undefined) {
+      i = codeEnd;
+      continue;
+    }
+    const ch = input.charCodeAt(i);
+    if (ch === 92 /* \\ */) {
+      i += 2;
+      continue;
+    }
+    if (ch === 10 /* \n */) {
+      stack.length = 0;
+      i += 1;
+      continue;
+    }
+    if (ch === 91 /* [ */) {
+      stack.push(i);
+      i += 1;
+      continue;
+    }
+    if (ch === 93 /* ] */) {
+      const openIdx = stack.pop();
+      if (openIdx !== undefined) {
+        map.set(i, openIdx);
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return map;
 }
 
 const MARKDOWN_LINK_CLOSE_RE_SOURCE =
@@ -1475,22 +1543,17 @@ const MARKDOWN_LINK_CLOSE_RE_SOURCE =
 function matchMarkdownLink(
   input: string,
   from: number,
+  getLabelStarts: () => Map<number, number>,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
   if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
+  const labelStarts = getLabelStarts();
   const closeRe = new RegExp(MARKDOWN_LINK_CLOSE_RE_SOURCE, 'g');
   closeRe.lastIndex = from;
-  let minStart = from;
   let match: RegExpExecArray | null;
   while ((match = closeRe.exec(input)) !== null) {
     const closeIdx = match.index;
-    if (isBackslashEscaped(input, closeIdx)) continue;
-    const labelStart = findMarkdownLabelStartFrom(input, closeIdx, minStart);
-    if (labelStart === -1) {
-      // 未找到配对 `[`:该 `]` 之前没有可跨过的未闭合 `[`,推进下界保持严格 O(n)
-      minStart = closeIdx + 1;
-      continue;
-    }
-    if (closeIdx <= labelStart + 1) continue;
+    const labelStart = labelStarts.get(closeIdx);
+    if (labelStart === undefined || labelStart < from || closeIdx <= labelStart + 1) continue;
     const url = trimUrlPunctuation(match[1]);
     return {
       index: labelStart,
@@ -1520,26 +1583,23 @@ function matchMarkdownLink(
 function matchLocalPathLink(
   input: string,
   from: number,
+  getLabelStarts: () => Map<number, number>,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
   if (input.indexOf('](', from) === -1 || input.indexOf('[', from) === -1) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
   // 未过重置路径时会漏匹配(bot review 实捉);同文件其它 matcher 也是每调用新建字面量。
   const closeRe = /\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
   closeRe.lastIndex = from;
-  let minStart = from;
+  let labelStarts: Map<number, number> | null = null;
   let match: RegExpExecArray | null;
   while ((match = closeRe.exec(input)) !== null) {
-    const closeIdx = match.index;
-    if (isBackslashEscaped(input, closeIdx)) continue;
-    const labelStart = findMarkdownLabelStartFrom(input, closeIdx, minStart);
-    if (labelStart === -1) {
-      minStart = closeIdx + 1;
-      continue;
-    }
-    if (closeIdx <= labelStart + 1) continue;
-    if (labelStart > 0 && input[labelStart - 1] === '!') continue;
+    // 先判目标是否为本地路径,排除 http(s)/深链等不支持的目标,再 O(1) 查预计算的括号表
     const url = parseLocalMarkdownDestination(match[1]);
     if (!url || !classifyChatPathLinkTarget(url)) continue;
+    const closeIdx = match.index;
+    const labelStart = (labelStarts ??= getLabelStarts()).get(closeIdx);
+    if (labelStart === undefined || labelStart < from || closeIdx <= labelStart + 1) continue;
+    if (labelStart > 0 && input[labelStart - 1] === '!') continue;
     return {
       index: labelStart,
       end: closeIdx + match[0].length,

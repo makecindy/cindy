@@ -2124,21 +2124,28 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
     ]);
   });
 
-  it('移动端链接 label 支持转义方括号、平衡嵌套方括号与本地路径链接, 异常大量 ]( 保持线性', () => {
+  it('移动端链接 label 支持转义方括号、平衡嵌套方括号、行内代码方括号与本地路径链接, 异常大量括号保持线性', () => {
     expect(
       parseMobileMarkdownInlines(
-        '见 [[WIP] 文档](https://example.com/a) 和 [\\[RFC\\] 源码](src/a.ts "标题")',
+        '见 [[WIP] 文档](https://example.com/a)、[`arr[0`](https://example.com/b)、[`arr]0`](https://example.com/c) 和 [\\[RFC\\] `arr[0` 源码](src/a.ts "标题")',
       ),
     ).toEqual([
       { type: 'text', text: '见 ' },
       { type: 'link', text: '[WIP] 文档', url: 'https://example.com/a' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '`arr[0`', url: 'https://example.com/b' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '`arr]0`', url: 'https://example.com/c' },
       { type: 'text', text: ' 和 ' },
-      { type: 'link', text: '[RFC] 源码', url: 'src/a.ts' },
+      { type: 'link', text: '[RFC] `arr[0` 源码', url: 'src/a.ts' },
     ]);
 
-    const adversarial = '[x ' + '](https://example.com/a) '.repeat(4000);
+    // 验证大量嵌套/未配对 `](` 与非本地 URL 目标在单遍括号表下保持严格 O(n) 线性
+    const nestedNonLocal = '['.repeat(5000) + '](not-a-path)'.repeat(5000);
+    const nestedHttp = '['.repeat(5000) + '](https://example.com/a)'.repeat(200);
     const started = Date.now();
-    parseMobileMarkdownInlines(adversarial);
+    parseMobileMarkdownInlines(nestedNonLocal);
+    parseMobileMarkdownInlines(nestedHttp);
     expect(Date.now() - started).toBeLessThan(1000);
   });
 });
