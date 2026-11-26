@@ -433,6 +433,8 @@ interface MarkdownRendererProps {
    * 方案 A 的安全前提)。
    */
   emitSourceLines?: boolean;
+  /** Notifies host cards when an in-app image, text or 3D preview lightbox opens or closes. */
+  onPreviewOpenChange?: (open: boolean) => void;
 }
 
 function parseSessionCardHref(href: string): {
@@ -1901,6 +1903,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   resolveImageSrc,
   emitSourceLines = false,
   gallerySection,
+  onPreviewOpenChange,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
@@ -1992,6 +1995,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
+  const previewOpen = Boolean(lightbox || textLightboxFile || modelLightboxPath);
+  useEffect(() => {
+    if (!onPreviewOpenChange) return;
+    onPreviewOpenChange(previewOpen);
+    return () => onPreviewOpenChange(false);
+  }, [previewOpen, onPreviewOpenChange]);
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still

@@ -7768,9 +7768,9 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it.each([
-    ['RPC response exceeded 16 MiB and was discarded.', 'pi-retry-history-frame-too-large'],
-    ['550 status code (no body)', undefined],
-  ])('rejects a failed history read before retry accepts another prompt: %s', async (error, diagnostic) => {
+    ['RPC response exceeded 16 MiB and was discarded.', 'pi-retry-history-frame-too-large', undefined],
+    ['550 status code (no body)', 'pi-retry-history-unavailable', 550],
+  ])('rejects a failed history read before retry accepts another prompt: %s', async (error, diagnostic, upstreamStatus) => {
     captured.requestHandler = async command => {
       if (command.type === 'get_state') return { success: true, data: {
         sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
@@ -7786,8 +7786,11 @@ describe("Pi provider-aware model routing", () => {
     await expect(handle.send({ type: 'user', content: 'same input' }, {
       retryTranscriptUserEntryId: 'accepted',
     })).rejects.toMatchObject({
-      message: diagnostic ? `Pi retry history unavailable: ${error}` : 'Pi retry history unavailable',
+      message: diagnostic === 'pi-retry-history-frame-too-large'
+        ? `Pi retry history unavailable: ${error}`
+        : 'Pi retry history unavailable',
       diagnostic,
+      upstreamStatus,
     });
     expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
     await handle.close();

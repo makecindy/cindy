@@ -3257,6 +3257,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-get'),
   setAutoUpdateSettings: (settings: {
     autoRelaunchOnIdle: boolean;
@@ -3264,11 +3265,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-set', settings),
   resetAutoUpdateSettings: (): Promise<{
     autoRelaunchOnIdle: boolean;
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
+    unattendedInstallSupported?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
   // beta 测试渠道(设备级)开关
   getUpdateChannelSettings: (): Promise<{
@@ -7191,7 +7194,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     setProviderPresentation: (input: {
       providerId?: string;
-      action: 'rename' | 'remove' | 'restore';
+      action: 'rename' | 'remove' | 'restore' | 'appearance';
+      icon?: import('@cindy/model-providers/branding').ConnectionArtwork | null;
       name?: string;
       dataOwnerId: string | null;
       ownerGeneration: number;

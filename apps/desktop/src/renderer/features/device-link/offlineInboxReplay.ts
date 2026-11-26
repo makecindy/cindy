@@ -340,7 +340,11 @@ export function replayOfflineInboxIntentsForDevice(
       }
 
       // decision.action === 'apply-complete'
-      const automationStatus = await deps.checkActiveBoundAutomation(deviceId, intent.sessionId);
+      // Pinned tasks settle without archiving (task-inbox.md): mark read and preserve pin/worktree.
+      const automationStatus =
+        freshSession?.pinnedAt != null
+          ? 'active'
+          : await deps.checkActiveBoundAutomation(deviceId, intent.sessionId);
       if (!isStillCurrent(intent)) continue;
       if (automationStatus === 'transient') continue;
       if (automationStatus === 'unknown') {

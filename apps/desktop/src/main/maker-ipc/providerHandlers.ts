@@ -14,7 +14,8 @@ import { getProviderRouteCredentialRevision } from '../maker-host/provider-route
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { presentManagementDeviceCode } from '../host-settings/managementAuthorization.js';
-import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
+import { readProviderConnectionIcons, setProviderConnectionIcon, setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
 import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
@@ -1868,17 +1869,37 @@ export function registerProviderHandlers(
     if (provider.source === 'organization') {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
-    if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
+    if (value.action === 'rename' || value.action === 'appearance') {
+      const name = typeof value.name === 'string' ? value.name.trim() : undefined;
+      const icon = value.icon;
+      if ((value.name !== undefined || value.action === 'rename') && (!name || name.length > 128)) {
+        throwIpcError('INVALID_PARAMS', 'Invalid provider name');
+      }
+      if (value.action === 'appearance' && provider.source !== 'user' || icon !== undefined &&
+          (value.action !== 'appearance' || icon !== null && !isProviderConnectionIcon(icon) && !isProviderConnectionImage(icon))) {
+        throwIpcError('INVALID_PARAMS', 'Invalid connection artwork');
+      }
       if (provider.source === 'builtin') {
-        await setProviderPresentation(providerId, { name: value.name });
+        await setProviderPresentation(providerId, { name });
       } else {
         const id = storedCustomProviderId(providerId);
-        const name = value.name.trim();
         await withProviderConfigMutation(id, async () => {
           assertOptionalRequestedOwner(value);
           const current = await getCustomProvider(id);
           assertOptionalRequestedOwner(value);
-          if (!current || !await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          if (!current) throwIpcError('NOT_FOUND', 'Provider not found');
+          const icons = icon === undefined ? {} : readProviderConnectionIcons();
+          const previousIcon = Object.hasOwn(icons, providerId) ? icons[providerId] : null;
+          if (icon !== undefined) await setProviderConnectionIcon(providerId, icon);
+          if (!name || current.name === name) return;
+          try {
+            assertOptionalRequestedOwner(value);
+            if (!await updateCustomProvider(id, { ...current, name })) throwIpcError('NOT_FOUND', 'Provider not found');
+          } catch (error) {
+            assertOptionalRequestedOwner(value);
+            if (icon !== undefined) await setProviderConnectionIcon(providerId, previousIcon ?? null);
+            throw error;
+          }
           assertOptionalRequestedOwner(value);
           await refreshCatalogAfterCommit();
         });
@@ -3007,6 +3028,12 @@ export function registerProviderHandlers(
                   error: removed.error ?? 'remove_failed',
                 });
               }
+            }
+            if (Object.hasOwn(readProviderConnectionIcons(), runtimeProviderId)) {
+              await setProviderConnectionIcon(runtimeProviderId, null).catch(() => {
+                log.warn('Failed to clear connection icon after provider deletion', { providerId });
+              });
+              assertProviderMutationOwner(ownerAtIngress);
             }
             // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
             // 凭证/override 的恢复只覆盖删除本身失败的场景。
