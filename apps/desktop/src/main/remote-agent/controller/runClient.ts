@@ -303,7 +303,9 @@ export class RemoteAgentRunClient implements PolledRun {
       if (this.closed) {
         // 打开途中本机关掉了这个任务：对方可能先收到关闭(那时还没有这个任务)再收到打开，补发一次关闭。
         void started.catch(() => undefined);
-        void this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
+        // Do not settle the abandoned open before its compensating close returns.
+        // Callers can then observe completed cleanup even on a slow remote host.
+        await this.invoke([{ op: 'close', runId: this.runId, mode: 'close', reason: 'navigation' }]).catch(() => undefined);
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       this.registered = true;
