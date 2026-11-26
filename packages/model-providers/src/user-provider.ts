@@ -540,6 +540,7 @@ export function buildUserProvider(
       rt.piCatalogProviderId,
       rt.supportsImageGeneration,
     );
+    if (rt.catalogPresetId) routing[agent]!.catalogPresetId = rt.catalogPresetId;
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
     if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
     if (followsPreset && preset && rt.models.every(model => !model.route?.baseUrl ||

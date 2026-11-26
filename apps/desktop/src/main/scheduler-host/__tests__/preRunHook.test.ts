@@ -149,6 +149,21 @@ describe('executePreRunHook', () => {
     })).toBe('pre-run hook failed with exit code 1: Error: boom');
   });
 
+  it.each([
+    ['multiline JSON', JSON.stringify({ error: { message: ' upstream request\r\n  timed out\u2028retry later ' } }, null, 2), false, 'upstream request timed out retry later'],
+    ['long JSON message', JSON.stringify({ error: { message: 'x'.repeat(201) } }), false, `${'x'.repeat(200)}…`],
+    ['malformed JSON', '{\n  "error":', false, '{'],
+    ['truncated capture', '{\n  "error": {"message": "partial capture"}\n}', true, '{'],
+    ['blank message', '{\n  "error": {"message": "  \\n"}\n}', false, '{'],
+    ['non-string message', '{\n  "error": {"message": 42}\n}', false, '{'],
+    ['plain text', 'gh not found\nsecond line', false, 'gh not found'],
+  ])('formats a failed hook with %s', (_case, stderr, stderrTruncated, reason) => {
+    expect(formatPreRunHookFailure({
+      status: 'failed', decision: 'block', exitCode: 1, durationMs: 1,
+      stdout: '', stderr, stdoutTruncated: false, stderrTruncated, timedOut: false, aborted: false,
+    })).toBe(`pre-run hook failed with exit code 1: ${reason}`);
+  });
+
   it('stdout / stderr 分别捕获', async () => {
     const result = await executePreRunHook({
       command: 'node -e "console.log(\'to-out\');console.error(\'to-err\');process.exit(0)"',

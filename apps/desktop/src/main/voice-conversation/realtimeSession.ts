@@ -1,3 +1,4 @@
+import { RealtimeProtocolAdapter, type RealtimeToolRequest } from './realtimeProtocol.js';
 import { nativeVoiceCallInstructions } from '@cindy/maker-core';
 import WebSocket from 'ws';
 import type { AudioGate, AudioTrace } from '@cindy/voice-input-core';
@@ -23,91 +24,14 @@ type Output = {
   wake?: () => void;
 };
 type Tool = {
-  callId: string;
+  wireId?: string;
+  responseId: string;
   inputId: string | null;
   supplement: string;
   handled?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 };
 const MAX_BUFFER = 8 * 1024 * 1024;
-const handoff = {
-  name: 'handoff_task',
-  description:
-    'Ask the existing companion task to perform work requiring tools or continue in the background. The host attaches the actual user utterance; do not supply or rewrite it.',
-  parameters: {
-    type: 'object',
-    properties: {
-      supplement: {
-        type: 'string',
-        description: 'Optional context for the task, never a replacement for the user request.',
-      },
-    },
-    required: ['supplement'],
-    additionalProperties: false,
-  },
-};
-
-/** Protocol differences stay at this boundary; ownership, task dispatch and playback are shared. */
-export function realtimeSessionUpdate(selection: RealtimeVoiceSelection, reference: string) {
-  const instructions = nativeVoiceCallInstructions(reference);
-  return {
-    type: 'session.update',
-    session:
-      selection.protocol === 'openai-realtime'
-        ? {
-            type: 'realtime',
-            instructions,
-            output_modalities: ['audio'],
-            tools: [{ type: 'function', ...handoff }],
-            audio: {
-              input: {
-                format: { type: 'audio/pcm', rate: 24000 },
-                transcription: { model: 'gpt-4o-mini-transcribe' },
-                turn_detection: {
-                  type: 'server_vad',
-                  silence_duration_ms: 500,
-                  create_response: true,
-                  interrupt_response: true,
-                },
-              },
-              output: { format: { type: 'audio/pcm', rate: 24000 }, voice: selection.voice },
-            },
-          }
-        : {
-            instructions,
-            modalities: ['text', 'audio'],
-            voice: selection.voice,
-            input_audio_format: 'pcm',
-            output_audio_format: 'pcm',
-            turn_detection: { type: 'server_vad', threshold: 0.5, silence_duration_ms: 500 },
-            tools: [{ type: 'function', function: handoff }],
-          },
-  };
-}
-
-/** Stateful 16 → 24 kHz linear conversion. Fractional positions carry across capture frames. */
-export class RealtimePcmResampler {
-  private samples: number[] = [];
-  private position = 0;
-  convert(pcm: ArrayBuffer): Buffer {
-    const view = new DataView(pcm);
-    for (let i = 0; i < view.byteLength; i += 2) this.samples.push(view.getInt16(i, true));
-    const output: number[] = [];
-    while (this.position + 1 < this.samples.length) {
-      const i = Math.floor(this.position),
-        fraction = this.position - i;
-      output.push(Math.round(this.samples[i] * (1 - fraction) + this.samples[i + 1] * fraction));
-      this.position += 2 / 3;
-    }
-    const consumed = Math.floor(this.position);
-    this.samples.splice(0, consumed);
-    this.position -= consumed;
-    const bytes = Buffer.alloc(output.length * 2);
-    output.forEach((sample, i) => bytes.writeInt16LE(sample, i * 2));
-    return bytes;
-  }
-}
-
 export class RealtimeVoiceSession {
   private socket?: WebSocket;
   private stopped = false;
@@ -117,6 +41,10 @@ export class RealtimeVoiceSession {
   private acceptAudioAfterMs = 0;
   private question = false;
   private speakingInput: string | null = null;
+  // More than one unserved commit can share the next model response. The audio
+  // can still play, but a task cannot be attributed to either user's utterance.
+  private queuedReply?: { inputId: string | null };
+  private requestedInput: string | null = null;
   private latestInput: string | null = null;
   private response: string | null = null;
   private responseSequence = 0;
@@ -128,13 +56,14 @@ export class RealtimeVoiceSession {
   private readonly rejectedResponses = new Set<string>();
   private readonly inputs = new Map<
     string,
-    { text?: string; suppressed: boolean; question: boolean }
+    { text?: string; committed?: boolean; suppressed: boolean; question: boolean }
   >();
   private readonly outputs = new Map<string, Output>();
+  private pendingUntaggedTool?: Tool;
   private readonly tools = new Map<string, Tool>();
   private readonly resultIds = new Set<string>();
   private readonly cancellationEvents = new Set<string>();
-  private readonly resampler = new RealtimePcmResampler();
+  private adapter!: RealtimeProtocolAdapter;
   private totalBuffered = 0;
   private gate?: AudioGate;
   private ping?: ReturnType<typeof setInterval>;
@@ -159,7 +88,7 @@ export class RealtimeVoiceSession {
 
   async start(): Promise<void> {
     const binding = this.deps.connection();
-    this.deps.selection = { ...this.deps.selection, protocol: binding.protocol };
+    this.adapter = new RealtimeProtocolAdapter(binding.protocol);
     const identity = JSON.stringify(binding);
     const assertCurrent = this.deps.assertCurrent;
     this.deps.assertCurrent = () => {
@@ -187,7 +116,10 @@ export class RealtimeVoiceSession {
       };
       const opened = () => {
         try {
-          this.send(realtimeSessionUpdate(this.deps.selection, this.deps.reference));
+          this.send(this.adapter.start({
+            kind: 'call', model: this.deps.selection.modelId, voice: this.deps.selection.voice,
+            instructions: nativeVoiceCallInstructions(this.deps.reference),
+          }));
         } catch {
           this.fail();
         }
@@ -206,8 +138,9 @@ export class RealtimeVoiceSession {
         if (this.stopped) return;
         try {
           this.deps.assertCurrent();
-          const event = JSON.parse(raw.toString()) as Record<string, any>;
+          const event = this.adapter.decode(raw.toString());
           if (event.type === 'session.updated' && !this.ready) {
+            this.adapter.checkCallAcknowledgement(event);
             this.ready = true;
             this.startGate();
             done();
@@ -237,7 +170,7 @@ export class RealtimeVoiceSession {
       this.socket.bufferedAmount > MAX_BUFFER
     )
       throw new Error('realtime_unavailable');
-    this.socket.send(JSON.stringify(event));
+    this.socket.send(this.adapter.encode(event));
   }
   private startGate(): void {
     this.gate = this.deps.createAudioGate?.();
@@ -257,14 +190,10 @@ export class RealtimeVoiceSession {
   }
   private sendAudio(pcm: ArrayBuffer): void {
     try {
-      const bytes =
-        this.deps.selection.protocol === 'openai-realtime'
-          ? this.resampler.convert(pcm)
-          : Buffer.from(pcm);
+      const { bytes, durationMs } = this.adapter.inputAudio(pcm);
       if (bytes.length) {
         this.send({ type: 'input_audio_buffer.append', audio: bytes.toString('base64') });
-        this.inputAudioMs +=
-          bytes.length / (this.deps.selection.protocol === 'openai-realtime' ? 48 : 32);
+        this.inputAudioMs += durationMs;
       }
     } catch {
       this.fail();
@@ -302,7 +231,7 @@ export class RealtimeVoiceSession {
     if (type === 'error') {
       if (
         this.cancellationEvents.delete(e.error?.event_id) ||
-        e.error?.code === 'response_cancel_not_active' ||
+        this.adapter.isIdleCancellation(e.error?.code, this.cancellationEvents.size > 0) ||
         (this.cancellationEvents.size &&
           e.error?.param === 'response.cancel' &&
           e.error?.type === 'invalid_request_error')
@@ -313,6 +242,7 @@ export class RealtimeVoiceSession {
       throw new Error('realtime_provider_error');
     }
     if (type === 'input_audio_buffer.speech_started' && id) {
+      if (this.inputs.has(id)) return;
       if (this.inputs.size >= 2_000) throw new Error('call_limit');
       const stale =
         typeof e.audio_start_ms === 'number' && e.audio_start_ms < this.acceptAudioAfterMs;
@@ -322,11 +252,17 @@ export class RealtimeVoiceSession {
         question: this.question && !stale,
       });
       if (!suppressed) this.deps.beginTurn(id);
+      if (this.adapter.untaggedToolResults && this.latestInput !== id) this.latestInput = null;
       this.speakingInput = id;
       this.deps.emit({ type: 'realtime-interrupt', throughResponse: this.responseSequence });
       this.deps.emit({ type: 'realtime-input-start', itemId: id });
     } else if (type === 'input_audio_buffer.speech_stopped') {
-      if (this.speakingInput === id) this.speakingInput = null;
+      if (this.speakingInput === id) {
+        this.speakingInput = null;
+        // A suppressed GLM input will never queue its own reply on commit.
+        const resumeResult = this.adapter.requestsUserResponses && this.pendingContinuation && this.inputs.get(id)?.suppressed;
+        if ((this.queuedReply && this.inputs.get(id)?.committed) || resumeResult) this.continueResponse();
+      }
     } else if (type === 'input_audio_buffer.committed' && id) {
       if (!this.inputs.has(id)) {
         if (this.inputs.size >= 2_000) throw new Error('call_limit');
@@ -334,7 +270,14 @@ export class RealtimeVoiceSession {
         this.inputs.set(id, { suppressed, question: this.question });
         if (!suppressed) this.deps.beginTurn(id);
       }
+      const input = this.inputs.get(id)!;
+      if (input.committed) return;
+      input.committed = true;
       this.latestInput = id;
+      if (this.adapter.requestsUserResponses && !input.suppressed) {
+        this.queuedReply = { inputId: this.queuedReply ? null : id };
+        this.continueResponse();
+      }
     } else if (type === 'conversation.item.input_audio_transcription.completed' && id) {
       const input = this.inputs.get(id);
       if (
@@ -365,14 +308,20 @@ export class RealtimeVoiceSession {
       }
       for (const tool of this.tools.values()) if (tool.inputId === id) void this.executeTool(tool);
     } else if (type === 'response.created' && typeof e.response?.id === 'string') {
+      if (this.responseSequences.has(e.response.id)) return;
       if (this.responseSequences.size >= 2_000) throw new Error('call_limit');
+      if (this.adapter.requestsUserResponses && this.response) throw new Error('overlapping_responses');
+      const unexpected = this.adapter.requestsUserResponses && !this.awaitingResponse;
       this.response = e.response.id;
       this.responseSequences.set(this.response!, ++this.responseSequence);
       this.awaitingResponse = false;
-      const input = this.explicitResponse ? null : this.latestInput;
+      const input = this.adapter.requestsUserResponses ? this.requestedInput
+        : this.explicitResponse ? null : this.latestInput;
+      this.requestedInput = null;
       this.explicitResponse = false;
       this.responseInputs.set(this.response!, input);
-      if (this.question || (input && this.inputs.get(input)?.suppressed)) this.interrupt();
+      const mutedInput = unexpected && this.latestInput && this.inputs.get(this.latestInput)?.suppressed;
+      if (this.question || mutedInput || (input && this.inputs.get(input)?.suppressed)) this.interrupt();
       else this.deps.emit({ type: 'realtime-thinking' });
     } else if (
       type === 'response.output_item.added' &&
@@ -380,7 +329,7 @@ export class RealtimeVoiceSession {
       typeof e.item.id === 'string'
     ) {
       this.output(e.item.id, e.response_id, 0);
-    } else if (type === 'response.audio.delta' || type === 'response.output_audio.delta') {
+    } else if (type === 'response.audio.delta') {
       if (!id || typeof e.delta !== 'string') return;
       const output = this.output(id, e.response_id, e.content_index ?? 0);
       if (output.discarded) return;
@@ -399,9 +348,7 @@ export class RealtimeVoiceSession {
     } else if (
       [
         'response.audio_transcript.delta',
-        'response.output_audio_transcript.delta',
         'response.audio_transcript.done',
-        'response.output_audio_transcript.done',
       ].includes(type)
     ) {
       if (!id) return;
@@ -413,50 +360,52 @@ export class RealtimeVoiceSession {
         throw new Error('text_limit');
       this.deps.turn(id, 'assistant', output.text, complete);
     } else if (type === 'response.function_call_arguments.done') {
-      if (typeof e.call_id !== 'string' || this.tools.has(e.call_id)) return;
-      if (this.tools.size >= 2_000) throw new Error('call_limit');
-      const responseId = e.response_id;
-      const inputId = this.responseInputs.get(responseId) ?? null;
-      let supplement = '';
-      try {
-        const args = JSON.parse(e.arguments);
-        if (
-          e.name !== 'handoff_task' ||
-          typeof args.supplement !== 'string' ||
-          args.supplement.length > 8_000
-        )
-          throw new Error();
-        supplement = args.supplement;
-      } catch {
-        this.tools.set(e.call_id, {
-          callId: e.call_id,
-          inputId: null,
-          supplement: '',
-          handled: true,
-        });
-        this.functionResult(e.call_id, false);
-        return;
+      if (!this.adapter.untaggedToolResults || (this.response && e.response_id === this.response)) {
+        const tool = this.adapter.readTool(e);
+        if (tool) this.receiveTool(tool);
       }
-      const tool: Tool = {
-        callId: e.call_id,
-        inputId: this.rejectedResponses.has(responseId) ? null : inputId,
-        supplement,
-      };
-      this.tools.set(tool.callId, tool);
-      void this.executeTool(tool);
     } else if (type === 'response.done') {
       const responseId = e.response?.id;
+      if (responseId === this.response) {
+        const tool = this.adapter.readTool(e);
+        if (tool && !this.rejectedResponses.has(responseId)) this.receiveTool(tool);
+      }
       for (const [itemId, output] of this.outputs)
         if (output.response === responseId) {
           output.done = true;
           output.wake?.();
-          if (output.discarded && this.deps.selection.protocol === 'qwen-audio-realtime')
-            this.send({ type: 'conversation.item.delete', item_id: itemId });
+          if (output.discarded) {
+            const event = this.adapter.finishDiscardedItem(itemId);
+            if (event) this.send(event);
+          }
         }
       if (this.response === responseId) this.response = null;
       if (e.response?.status === 'failed') throw new Error('realtime_response_failed');
       this.continueResponse();
     }
+  }
+
+  private receiveTool(request: RealtimeToolRequest): void {
+    const key = request.requestKey;
+    if (this.tools.has(key)) return;
+    if (this.tools.size >= 2_000) throw new Error('call_limit');
+    const tool: Tool = {
+      wireId: request.wireId,
+      responseId: request.responseId,
+      inputId: this.rejectedResponses.has(request.responseId) ? null : this.responseInputs.get(request.responseId) ?? null,
+      supplement: '',
+    };
+    this.tools.set(key, tool);
+    try {
+      if (typeof request.arguments !== 'string') throw new Error('invalid_tool');
+      const args = JSON.parse(request.arguments);
+      if (request.name !== 'handoff_task' || typeof args.supplement !== 'string' || args.supplement.length > 8_000)
+        throw new Error('invalid_tool');
+      tool.supplement = args.supplement;
+    } catch {
+      tool.inputId = null;
+    }
+    void this.executeTool(tool);
   }
 
   private output(id: string, response: string, index: number): Output {
@@ -513,23 +462,20 @@ export class RealtimeVoiceSession {
       output.chunks = [];
       output.wake?.();
       this.deps.interrupted(id);
-      if (this.deps.selection.protocol === 'openai-realtime' && output.total) {
-        this.send({
-          type: 'conversation.item.truncate',
-          item_id: id,
-          content_index: output.index,
-          audio_end_ms: Math.min(
-            Math.floor(output.total / 48),
-            id === position?.itemId ? Math.max(0, Math.floor(position.playedMs)) : 0,
-          ),
-        });
-      } else if (this.deps.selection.protocol === 'qwen-audio-realtime' && output.done)
-        this.send({ type: 'conversation.item.delete', item_id: id });
+      const event = this.adapter.interruptItem(id, output, id === position?.itemId ? position.playedMs : 0);
+      if (event) this.send(event);
     }
   }
 
   private async executeTool(tool: Tool): Promise<void> {
     if (this.stopped || tool.handled) return;
+    if (!this.canAnswerTool(tool)) {
+      clearTimeout(tool.timer);
+      if (this.pendingUntaggedTool === tool) this.pendingUntaggedTool = undefined;
+      tool.handled = true;
+      return;
+    }
+    if (this.adapter.untaggedToolResults) this.pendingUntaggedTool = tool;
     const input = tool.inputId ? this.inputs.get(tool.inputId) : undefined;
     if (input && input.text === undefined) {
       tool.timer ??= setTimeout(() => {
@@ -544,25 +490,28 @@ export class RealtimeVoiceSession {
     try {
       this.deps.assertCurrent();
       const accepted =
+        !this.rejectedResponses.has(tool.responseId) &&
         !!id &&
         !!input?.text?.trim() &&
         !input.suppressed &&
         !this.question &&
         (await this.deps.handoff(id, tool.supplement));
-      if (!this.stopped) this.functionResult(tool.callId, accepted);
+      if (this.pendingUntaggedTool === tool) this.pendingUntaggedTool = undefined;
+      if (!this.stopped && this.canAnswerTool(tool)) this.functionResult(tool.wireId, accepted);
     } catch {
       if (!this.stopped) this.fail();
     }
   }
-  private functionResult(callId: string, accepted: boolean): void {
-    this.send({
-      type: 'conversation.item.create',
-      item: {
-        type: 'function_call_output',
-        call_id: callId,
-        output: JSON.stringify({ status: accepted ? 'accepted' : 'not_accepted' }),
-      },
-    });
+  private canAnswerTool(tool: Tool): boolean {
+    if (!this.adapter.untaggedToolResults) return true;
+    const origin = this.responseInputs.get(tool.responseId);
+    return (!origin || origin === this.latestInput) && !this.speakingInput &&
+      !this.rejectedResponses.has(tool.responseId) &&
+      this.responseSequences.get(tool.responseId) === this.responseSequence && !this.awaitingResponse;
+  }
+
+  private functionResult(callId: string | undefined, accepted: boolean): void {
+    this.send(this.adapter.functionResult(callId, accepted));
     this.pendingContinuation = true;
     this.continueResponse();
   }
@@ -586,8 +535,12 @@ export class RealtimeVoiceSession {
     this.continueResponse();
   }
   private continueResponse(): void {
+    const queuedInput = this.queuedReply?.inputId;
+    if (queuedInput && this.inputs.get(queuedInput)?.suppressed) this.queuedReply = undefined;
     if (
-      !this.pendingContinuation ||
+      (!this.pendingContinuation && !this.queuedReply) ||
+      // A background reply would supersede the GLM call awaiting its transcript or handoff receipt.
+      (this.pendingUntaggedTool && this.canAnswerTool(this.pendingUntaggedTool)) ||
       this.response ||
       this.awaitingResponse ||
       this.speakingInput ||
@@ -595,7 +548,9 @@ export class RealtimeVoiceSession {
       this.stopped
     )
       return;
+    this.requestedInput = this.queuedReply?.inputId ?? null;
     this.pendingContinuation = false;
+    this.queuedReply = undefined;
     this.explicitResponse = true;
     this.awaitingResponse = true;
     this.send({ type: 'response.create' });

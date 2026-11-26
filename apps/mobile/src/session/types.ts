@@ -114,6 +114,8 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
@@ -137,6 +139,8 @@ export interface RemoteSession {
    *  createSession 还没确认,会话页据此禁发(输入可编辑存草稿)、syncSession 守卫
    *  跳过 NOT_FOUND。fresh 对象来自服务器,天然无此标记,权威 upsert 后自净。 */
   pendingLocalCreation?: boolean;
+  /** Local retry state for a side chat whose fork has not been acknowledged. */
+  sideChatCreationError?: 'session.sideChat.unsupported' | 'session.sideChat.waitForReply' | 'session.sideChat.createFailed';
 }
 
 export interface RemoteSessionRuntimeProfile {
@@ -318,6 +322,7 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;

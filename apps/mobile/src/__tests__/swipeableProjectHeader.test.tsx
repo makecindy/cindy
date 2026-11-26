@@ -71,6 +71,7 @@ vi.mock("@/platform/gestureHandler", async () => {
 vi.mock("lucide-react-native", () => ({
   List: () => null,
   Search: () => null,
+  Settings: () => null,
   SquarePen: () => null,
 }));
 vi.mock("react-i18next", async (importOriginal) => ({
@@ -103,6 +104,9 @@ function render(projectKey = "project-a", edgeInset = 0) {
         },
         onSearch: () => {
           destination = "search";
+        },
+        onSettings: () => {
+          destination = "settings";
         },
         children: "Project",
       })),
@@ -171,16 +175,17 @@ describe("project header navigation and swipe lifecycle", () => {
   );
 
   it.each([
-    ["newTask", "new", "right"],
-    ["allTasks", "tasks", "left"],
-    ["search", "search", "left"],
-  ])("closes the revealed header before opening %s", (action, target, side) => {
+    ["newTask", "new", "right", "devices.list.projectActions.newTask"],
+    ["allTasks", "tasks", "left", "devices.list.projectActions.allTasks"],
+    ["search", "search", "left", "devices.list.projectActions.search"],
+    ["settings", "settings", "right", "settings.projectInfo.title"],
+  ])("closes the revealed header before opening %s", (action, target, side, label) => {
     render();
     act(() => native.props.onSwipeableOpenStartDrag());
     act(() =>
       host
         .querySelector<HTMLButtonElement>(
-          `[data-side="${side}"] [aria-label="devices.list.projectActions.${action}"]`,
+          `[data-side="${side}"] [aria-label="${label}"]`,
         )!
         .click(),
     );

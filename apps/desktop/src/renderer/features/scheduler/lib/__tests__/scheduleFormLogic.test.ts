@@ -1154,6 +1154,133 @@ describe('plugin engine selection', () => {
     expect(fields.agentKind).not.toBe('acp');
   });
 
+  it('saves and reopens a bound plugin-engine override while keeping follow-task acp bindings as follow', () => {
+    const input = buildScheduleInput(makeForm({
+      targetSessionId: 'task-1',
+      boundAgent: { sessionId: 'task-1', agentKind: 'codex' },
+      agentKind: 'codex',
+      model: '',
+      providerId: '',
+      fastMode: true,
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+    }));
+    expect(input).toMatchObject({
+      targetSessionId: 'task-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      useWorktree: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: '',
+    });
+    const reopened = scheduleEngineFormFields({
+      ...input,
+      id: 's-bound',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopened).toMatchObject({
+      boundAgent: { sessionId: 'task-1', agentKind: 'claude-code' },
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high' },
+      model: '',
+      providerId: '',
+      modelAgentKind: undefined,
+    });
+    expect(reopened.pluginEngine?.deviceId).toBeUndefined();
+    const followAcp = scheduleEngineFormFields({
+      ...input,
+      id: 's-follow-acp',
+      agentKind: 'acp',
+      modelAgentKind: undefined,
+      model: undefined,
+      providerId: undefined,
+      effort: undefined,
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(followAcp.pluginEngine).toBeNull();
+    expect(followAcp.boundAgent).toEqual({ sessionId: 'task-1', agentKind: 'claude-code' });
+  });
+
+  // 2026-11-26: remote plugin engines keep their deviceId across fresh and bound schedule round-trips.
+  // Minimal failing input: a remote plugin engine saved with deviceId='studio' dropping its location.
+  it('saves and reopens remote plugin-engine selections for fresh and bound schedules', () => {
+    const freshInput = buildScheduleInput(makeForm({
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      fastMode: true,
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      useWorktree: true,
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(freshInput).toMatchObject({
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      useWorktree: true,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const reopenedFresh = scheduleEngineFormFields({
+      ...freshInput,
+      id: 's-remote-fresh',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopenedFresh.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      effort: 'high',
+      deviceId: 'studio',
+    });
+
+    const boundInput = buildScheduleInput(makeForm({
+      targetSessionId: 'task-1',
+      boundAgent: { sessionId: 'task-1', agentKind: 'codex' },
+      agentKind: 'codex',
+      model: '',
+      providerId: '',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', deviceId: 'studio' },
+    }));
+    expect(boundInput).toMatchObject({
+      targetSessionId: 'task-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      fastMode: false,
+      agentDeviceId: undefined,
+      modelAgentDeviceId: 'studio',
+    });
+    const reopenedBound = scheduleEngineFormFields({
+      ...boundInput,
+      id: 's-remote-bound',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopenedBound.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      deviceId: 'studio',
+    });
+  });
+
   it('keeps built-in automations unchanged', () => {
     const input = buildScheduleInput(makeForm({ agentKind: 'codex', model: 'gpt-5.5', pluginEngine: null }));
     expect(input.agentKind).toBe('codex');

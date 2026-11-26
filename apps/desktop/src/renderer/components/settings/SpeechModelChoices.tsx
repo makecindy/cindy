@@ -20,12 +20,14 @@ export function SpeechModelChoices({
   choices,
   onToggle,
   onAdd,
+  sessionConfirmed = false,
   loading = false,
   mode = 'audio_speech',
 }: {
   choices: SpeechModelChoice[];
   onToggle: (id: string) => void;
-  onAdd: (id: string) => void;
+  onAdd?: (id: string) => void;
+  sessionConfirmed?: boolean;
   loading?: boolean;
   mode?: 'audio_speech' | 'realtime';
 }) {
@@ -39,7 +41,7 @@ export function SpeechModelChoices({
     : choices.filter((choice, index) => index < 2 || choice.checked);
   const hidden = choices.length - visible.length;
   const add = () => {
-    if (loading || !id.trim()) return;
+    if (!onAdd || loading || !id.trim()) return;
     onAdd(id.trim());
     setId('');
   };
@@ -49,7 +51,7 @@ export function SpeechModelChoices({
         <AudioLines size={16} aria-hidden="true" />
         {title}
       </div>
-      <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
+      {!sessionConfirmed && <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
         {t(
           choices.some((choice) => choice.reference)
             ? 'settings.providers.speechSetup.referenceHint'
@@ -57,7 +59,7 @@ export function SpeechModelChoices({
               ? 'settings.providers.speechSetup.discoveryHint'
               : 'settings.providers.speechSetup.manualHint',
         )}
-      </p>
+      </p>}
       {choices.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
           {visible.map((choice) => (
@@ -95,19 +97,19 @@ export function SpeechModelChoices({
                       ? t('settings.providers.speechSetup.reference')
                       : choice.manual
                         ? t('settings.providers.speechSetup.manualSource')
-                        : t('settings.providers.speechSetup.discovered')}
+                        : t(sessionConfirmed ? 'settings.providers.speechSetup.realtimeConfirmed' : 'settings.providers.speechSetup.discovered')}
               </span>
             </label>
           ))}
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      {(onAdd || hidden > 0) && <div className="flex flex-wrap items-center justify-between gap-2">
         {hidden > 0 && (
           <Button variant="secondary" tone="quiet" onClick={() => setExpanded(true)}>
             {t('settings.providers.speechSetup.more', { count: hidden })}
           </Button>
         )}
-        <Button
+        {onAdd && <Button
           variant="secondary"
           tone="quiet"
           onClick={() => setManual((value) => !value)}
@@ -115,9 +117,9 @@ export function SpeechModelChoices({
         >
           <Plus size={14} aria-hidden="true" />
           {t(mode === 'realtime' ? 'bots.voiceMode.realtime.add' : 'settings.providers.speechSetup.manual')}
-        </Button>
-      </div>
-      {manual && (
+        </Button>}
+      </div>}
+      {onAdd && manual && (
         <div className="flex items-center gap-2">
           <SettingsTextInput
             aria-label={t('settings.providers.speechSetup.modelId')}

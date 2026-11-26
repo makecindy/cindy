@@ -26,7 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import type { Schedule, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
-import { findPluginEngine, usePluginEngines } from '@/hooks/usePluginEngines';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
@@ -70,9 +70,12 @@ export function RunHistoryPane({
   connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
-  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称)。
-  const pluginEngines = usePluginEngines(s.agentKind === 'acp');
-  const pluginEngineName = findPluginEngine(pluginEngines, s.providerId)?.name;
+  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称；另一台电脑时从该电脑目录读取)。
+  const pluginEngineIdentity = usePluginEngineIdentity(
+    s.agentKind === 'acp' ? s.providerId : null,
+    (s.modelAgentDeviceId || s.agentDeviceId) || undefined,
+  );
+  const pluginEngineName = s.agentKind === 'acp' ? pluginEngineIdentity.name : undefined;
   const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载

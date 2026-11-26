@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 
+/** 账号区读到之后默认收成一行(每个账号的余量写在这一行)；这里检查的是账号列表本身，先点开。 */
+async function expandAccounts(page) {
+  await page.locator('[data-testid="subscription-accounts-summary"], [data-testid="subscription-accounts-body"]:not(.hidden)').first().waitFor({ state: 'attached' });
+  const summary = page.getByTestId('subscription-accounts-summary');
+  if (await summary.count()) await summary.first().click();
+}
+
 export default {
   name: 'provider-share-sources',
   entry: './fixture.tsx',
@@ -58,7 +65,8 @@ export default {
     if (ui.case.startsWith('legacy-upgrade')) {
       await page.getByRole('button', { name: /^OpenAI/ }).first().click();
       const accounts = page.getByTestId('subscription-accounts');
-      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      await accounts.getByText('alex@example.com', { exact: true }).first().waitFor();
+      await expandAccounts(page);
       await accounts.getByText('work@example.com', { exact: true }).waitFor();
       const shared = ui.case === 'legacy-upgrade-shared';
       assert.equal(await page.getByText('Old login one', { exact: true }).count(), shared ? 1 : 0);
@@ -101,7 +109,7 @@ export default {
         await dialog.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).last().click();
         await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'cancel'));
       } else {
-        await page.getByTestId('subscription-accounts').getByText('alex@example.com', { exact: true }).waitFor();
+        await page.getByTestId('subscription-accounts').getByText('alex@example.com', { exact: true }).first().waitFor();
       }
       await dialog.waitFor({ state: 'hidden' });
       assert.equal(await page.evaluate(() => window.providerSourcesFixture.snapshot.providers.filter(p => p.id.startsWith('openai')).length), 1);
@@ -110,7 +118,8 @@ export default {
     }
     if (ui.case === 'subscription-pool') {
       const accounts = page.getByTestId('subscription-accounts');
-      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      await accounts.getByText('alex@example.com', { exact: true }).first().waitFor();
+      await expandAccounts(page);
       assert.equal(await accounts.getByText('work@example.com', { exact: true }).count(), 1);
       assert.equal(await accounts.getByRole('switch').count(), 2);
       // Each account shows every window of its own quota once; no provider-level copy repeats one account.
