@@ -2521,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "事件设音，则独奏所择之声；未设或关之，则从系统通知之设。",
+      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
       "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
@@ -2576,7 +2576,7 @@
         "select": "点击"
       },
       "soundOptions": {
-        "none": "随系统",
+        "none": "无",
         "startup-chime": "启动之音",
         "ring-chime": "圆环之音",
         "item-found": "得宝",
@@ -18048,6 +18048,13 @@
         "active": "筛 {{count}}",
         "reset": "重设",
         "allProjects": "诸案"
+      },
+      "match": {
+        "label": "检词",
+        "any": "任一词",
+        "all": "诸词俱备",
+        "help": "择“全部关键词”，以空格分词，诸词须同见于一则消息。以“精确短语”寻相连之文。标题另验。",
+        "partial": "所得或有未尽，请细其词或限其案。"
       }
     }
   },

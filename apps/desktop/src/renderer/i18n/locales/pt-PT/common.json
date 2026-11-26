@@ -2589,7 +2589,7 @@
       "skinLabel": "Personagem",
       "skinHint": "O personagem apresentado no Agent Notch e na Dynamic Island.",
       "soundLabel": "Sons de eventos",
-      "soundHint": "Quando é definido um som de evento, apenas esse som é reproduzido. Sons não definidos ou desativados seguem as definições de notificação do sistema.",
+      "soundHint": "Escolhe um som de 8 bits para cada aviso, partilhado pelo Agent Notch e pela Dynamic Island. O som de toque só toca quando tocas no Agent Notch.",
       "soundAria": "Ativar ou desativar sons do Agent Notch",
       "soundSelectAria": "Som de {{event}}",
       "soundPreviewAria": "Pré-ouvir som de {{event}}",
@@ -2644,7 +2644,7 @@
         "select": "Ação de clique"
       },
       "soundOptions": {
-        "none": "Seguir o sistema",
+        "none": "Nenhum",
         "startup-chime": "Toque de arranque",
         "ring-chime": "Toque de sino",
         "item-found": "Objeto encontrado",
@@ -18296,6 +18296,13 @@
         "active": "{{count}} filtros",
         "reset": "Repor",
         "allProjects": "Todos os projetos"
+      },
+      "match": {
+        "label": "Palavras-chave",
+        "any": "Qualquer palavra",
+        "all": "Todas as palavras",
+        "help": "Escolha todas as palavras-chave e separe-as com espaços para exigi-las na mesma mensagem. Use “frase exata” para texto consecutivo. Os títulos são comparados separadamente.",
+        "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a pesquisa a um projeto."
       }
     }
   },

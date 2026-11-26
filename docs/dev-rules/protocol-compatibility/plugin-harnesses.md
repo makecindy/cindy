@@ -228,23 +228,29 @@ maker-core `agents/acp/{protocol,session,acp-agent}.ts`、`main/plugin-engine-ac
 Cindy 与引擎入口之间的 ACP wire 追加一个可选扩展，沿用生态已有约定（claude-agent-acp 0.109、codex-acp、oh-my-pi），不自创方法：
 Agent 在 `initialize` 结果**顶层** `_meta.steering.supported === true` 时，`sameTurnSteer` 为支持，运行中的插话发请求
 `_session/steering`，参数 `{ sessionId, prompt: ContentBlock[], _meta: { steering: { idleBehavior: 'promptRequired' } } }`。
-结果 `injected` 为受理；`promptRequired` 按「没有进行中的回合」交给宿主改为下一轮发送；`startedNewTurn`（不认识
+结果 `injected` 为受理；`queued`（如 `zcode-acp` 在当前轮无法中段注入时由引擎内部排队受理）按已受理处理且不提前截断当前回复段；
+`promptRequired` 按「没有进行中的回合」交给宿主改为下一轮发送；`startedNewTurn`（不认识
 `idleBehavior` 的旧适配器自己开了一轮）按受理处理，输出按回合外工作显示；其他结果或 JSON-RPC 错误按未受理处理；
 已发出但超时或连接断开按「送达未知」（`delivery uncertain`）交给宿主，队首保留并暂停，不重发。Agent 声明了却回
-method-not-found 时本会话撤回插话能力，之后的插话排队。
+method-not-found 时本会话撤回插话能力，之后的插话排队，并通过 `AgentSessionHandle.onCapabilitiesChange` 立即同步到
+远程 Agent 状态帧与输入投影。
 
 兼容：没有声明的 Agent（含全部存量插件引擎）`sameTurnSteer` 仍不支持。旧版 Cindy 从不发送该请求。
 远程与分享任务的能力沿用既有 `negotiatedCapabilities` 状态带回控制端，`steer` 沿用既有 remote-agent 方法与受邀者实时复核，
-新旧控制端与被控端任意组合都按被控端握手结果决定是否插话；不新增 manifest 字段、权限、批准、channel 或中转帧。
-实现见 maker-core `agents/acp/protocol.ts`、`capabilities.ts`、`session.ts`；回归见 `acp-session.test.ts`「AcpSession same-turn steering」。
+运行中能力变化经 `onCapabilitiesChange` 即时推送给控制端与输入协调器；新旧控制端与被控端任意组合都按被控端握手结果决定是否插话；
+不新增 manifest 字段、权限、批准、channel 或中转帧。
+实现见 maker-core `agents/acp/protocol.ts`、`capabilities.ts`、`session.ts`、`agents/base-agent.ts`、`session.ts` 与
+remote-agent `host/runHost.ts`、`controller/proxyHandle.ts`；回归见 `acp-session.test.ts`「AcpSession same-turn steering」与
+`roundtrip.test.ts`「propagates runtime capability updates」。
 
-不支持插话时的呈现（同日）：输入协调器（Desktop 与 Node Host 共用）在会话 `sameTurnSteer` 不支持时，界面发起的插话不再
+不支持插话时的呈现（同日；手机端于 2026-11-26 对齐）：输入协调器（Desktop 与 Node Host 共用）在会话 `sameTurnSteer` 不支持时，界面发起的插话不再
 交给引擎报 `UNSUPPORTED_CAPABILITY`，而是按「这一轮结束后发送」排队（队列行插话移到队首，输入框插话排到队尾），不显示错误；
 控制面严格插话（`fallbackToTurn: false`）照旧返回未插入。`AgentInputProjection` 追加可选 `steerUnsupported?: boolean`，
-只在确知不支持时为 `true`，经既有输入 projection 推给本机界面、控制端与手机。新界面据此隐藏插话入口（输入框按排队发送、
+只在确知不支持时为 `true`，经既有输入 projection 推给本机界面、控制端与手机。新版桌面与手机界面据此隐藏插话入口（输入框按排队发送、
 排队消息菜单不出现插话），队列等待时在消息流末尾显示一行说明。旧被控端不带该字段，新界面按支持处理，行为与以前相同；
 旧控制端与手机忽略该字段，仍显示插话入口，点击后由新被控端排队，不再报错。不新增 channel 或中转帧，自建中转原样转发。
-回归见 `agent-input-coordinator.test.ts`「sends a steer after this turn」与 renderer `pendingQueueRowPresentation.test.ts`「PendingQueueBubble steer action」。
+回归见 `agent-input-coordinator.test.ts`「sends a steer after this turn」、renderer `pendingQueueRowPresentation.test.ts`「PendingQueueBubble steer action」、
+`maker-shared/src/__tests__/queue.test.ts` 以及 mobile `inputProjection.test.ts`、`InlineQueueSection.test.tsx`、`PendingSendBubble.touch.test.tsx`。
 
 ## `/` 菜单里的 Skill（2026-11-25）
 

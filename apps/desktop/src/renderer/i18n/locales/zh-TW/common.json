@@ -2521,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊和動態島裡顯示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "設定事件音效時，只播放所選音效；未設定或關閉事件音效時，跟隨系統通知設定。",
+      "soundHint": "為每類提醒選擇 8-bit 音效，任務膠囊和動態島共用；點按的音效只在點任務膠囊時播放。",
       "soundAria": "切換任務膠囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "預覽{{event}}音效",
@@ -2576,7 +2576,7 @@
         "select": "點選操作"
       },
       "soundOptions": {
-        "none": "跟隨系統",
+        "none": "無",
         "startup-chime": "啟動音",
         "ring-chime": "圓環音",
         "item-found": "發現道具",
@@ -18050,6 +18050,13 @@
         "active": "篩選 {{count}}",
         "reset": "重置",
         "allProjects": "所有專案"
+      },
+      "match": {
+        "label": "關鍵詞匹配",
+        "any": "任一關鍵詞",
+        "all": "全部關鍵詞",
+        "help": "選擇「全部關鍵詞」後，用空格分開關鍵詞，要求同一則訊息全部包含。用 “精確短語” 比對連續文字。標題單獨比對。",
+        "partial": "結果可能不完整，請使用更具體的關鍵詞或限定專案。"
       }
     }
   },
