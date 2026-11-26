@@ -1197,7 +1197,7 @@ it("only shows the Android empty directory after the selected computer replies",
     (button) => button.textContent === "plugins.allComputers",
   );
   await act(async () => selectComputer!.click());
-  await act(async () => fixture.alert.mock.lastCall![2][1].onPress());
+  await act(async () => element.querySelector<HTMLButtonElement>('[data-testid="plugins.computer.mac"]')!.click());
   expect(element.textContent).toContain("Mac");
   expect(element.textContent).toContain("plugins.listLoadFailed");
   expect(element.textContent).not.toContain("plugins.noPlugins");
