@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
@@ -63,7 +64,7 @@ import {
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
   readBotGroupTaskCard, readBotGroupLiveTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
-  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice,
+  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice, groupAssistantNoticeCode,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
 import { groupTaskName } from './groupTaskNaming.js';
@@ -98,6 +99,7 @@ interface Message {
   actingFor?: { actorId: string; name: string } | null;
 }
 interface Room {
+  assistant_device_id?: string | null;
   default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; allow_member_mention_all?: boolean; allow_member_invites?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
@@ -112,7 +114,7 @@ interface Room {
  * `othersRead`: per Thread, the highest read position among the other members, teammates included; only servers
  * that report message readers (`capabilities.messageReaders`) send it.
  */
-interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }
+interface Snapshot { assistantComputers?: Array<{ id: string; name: string }>; room: Room; members: Member[]; messages: Message[]; cursor: string; mentionReadIds?: string[]; reads?: Array<{ thread_key: string; read_seq: string; following?: boolean; muted?: boolean; notification_scope?: 'all' | 'mentions' | null }>; othersRead?: Array<{ thread_key: string; read_seq: string }> }
 interface SavedChatSend {
   snapshot: Snapshot; plans: ServerPlan[]; members: Member[];
   quote: (BotGroupQuoteView & { recipientActorId?: string }) | null;
@@ -360,10 +362,6 @@ const mediaNames = (m: Message) => m.deleted ? '' : m.content.flatMap(b => b.typ
  * renew for as long as their Session owns them; its idle watchdog handles stalls.
  */
 const TURN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-/** How long the computers a request to the group's Cindy was not sent from leave it to the one it was. */
-const ASSISTANT_SENDER_HEAD_START_MS = 8_000;
-/** A message sent this recently from this computer is taken to be the request now waiting. */
-const ASSISTANT_SENDER_WINDOW_MS = 60_000;
 /** One server message holds this much text. */
 const CHAT_MESSAGE_TEXT_MAX = 8000;
 /** Splits long text into message-sized pieces, preferring a line break near the limit; '' → []. */
@@ -533,6 +531,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let messageReadersEpoch = 0;
   const forgetMessageReaders = (roomId: string) => { messageReadersEpoch++; for (const key of messageReaders.keys()) if (key.startsWith(`${roomId}:`)) messageReaders.delete(key); };
   let supportsMemberAvatar = false;
+  let boundAssistantDevice = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
   let supportsMemberMentionAll = false;
@@ -818,6 +817,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (targetId === roomId) deps.onChanged?.({ groupId: sourceId, change: 'messages' }, scope);
     }, CHANGE_COALESCE_MS));
   };
+  const membershipChanged = (roomId: string) => {
+    // A personal membership edit may leave the conversation cursor unchanged.
+    history()?.invalidate(roomId, true);
+    changed(roomId, true);
+  };
   // A receipt that reads one of my loaded messages is the only one worth a re-read: the rest of a
   // detail read (executions, plans) is not needed for it, and each message changes at most once.
   const pendingReceiptRefresh = new Map<string, ReturnType<typeof setTimeout>>();
@@ -890,7 +894,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const started = Date.now();
     return new Promise<T>((resolve, reject) => {
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-        method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Chat-Desktop': '1',
           ...(actorId ? { 'X-Chat-Actor': actorId } : {}) }, timeout: 15000,
       }, res => {
         const chunks: Buffer[] = []; let size = 0;
@@ -1193,7 +1197,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
@@ -1201,6 +1205,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
+      boundAssistantDevice = me.capabilities?.groupAssistantDevice === 1;
       supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
       supportsMemberMentionAll = me.capabilities?.groupMemberMentionAll === 1;
@@ -1523,7 +1528,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               // Only the account's own preferences reach this actor scope; consumers read the key themselves.
               if (change.type === 'preference.changed' && typeof change.entityId === 'string') deps.onAccountPreferenceChanged?.(change.entityId);
               if (change.type === 'conversation.updated' && change.data?.dissolvedAt) retirePlanning(change.entityId);
-              if (change.type === 'membership.changed' || change.type === 'conversation.updated') changed(change.entityId);
+              if (change.type === 'membership.changed') membershipChanged(change.entityId);
+              else if (change.type === 'conversation.updated') changed(change.entityId);
               // A Thread read on another device clears its unread here too.
               if (change.type === 'read.changed' && typeof change.entityId === 'string') {
                 const reads = readChanges.get(change.entityId) ?? [];
@@ -1750,7 +1756,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const person = actorId ? members.find(candidate => candidate.id === actorId) : undefined;
       return person ? memberName(person, ownerMembers) : fallback?.trim() || '';
     };
-    if (assistantNotice) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', capabilityNoticeCode: 'GROUP_ASSISTANT_UNAVAILABLE',
+    if (assistantNotice) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', capabilityNoticeCode: groupAssistantNoticeCode(assistantNotice.reason),
+      ...(assistantNotice.reason === 'unbound' && assistantNotice.requesterId === selfId && boundAssistantDevice ? { canChooseAssistantDevice: true as const } : {}),
       authorKind: 'bot', isSelf: false, authorBotId: m.authorId,
       authorName: spokeFor(assistantNotice.requesterId ?? m.actingFor?.actorId, m.actingFor?.name),
       content: displayText(m), threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], mentions: { all: false, botIds: [] },
@@ -2247,7 +2254,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
-    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    const assistantComputers = s.assistantComputers?.map(device =>
+      device.id === selfDeviceId && device.name === device.id ? { ...device, name: hostname() || device.name } : device);
+    if (assistantComputers && selfDeviceId && !assistantComputers.some(device => device.id === selfDeviceId))
+      assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
+    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -3823,37 +3834,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     hints.set(`room:${run.execution.conversation_id}`, { roomId: run.execution.conversation_id });
     queuedHints.set(botId, hints);
   }
-  /**
-   * The group's Cindy answers on the computer the request was sent from (bot-group-chat.md §9):
-   * every computer of the account may take its requests, so the others hold back for a moment and
-   * only take a request nobody here sent once it is still waiting after that. A request sent from a
-   * phone has no such computer and goes to whichever takes it first.
-   */
-  const sentHere = new Map<string, number>();
-  let lastSentHere = 0;
-  let assistantWaitingSince: number | undefined;
-  function noteSentHere(messageId: string) {
-    lastSentHere = Date.now();
-    sentHere.set(messageId, lastSentHere);
-    if (sentHere.size > 200) sentHere.delete(sentHere.keys().next().value!);
-  }
-  /** False while this computer gives the computer the request was sent from a head start; wakes the poll when it ends. */
-  function mayTakeAssistantRequest(actorId: string, request?: { sourceId: string; createdAt?: string }): boolean {
-    const now = Date.now();
-    let since: number;
-    if (request) {
-      if (sentHere.has(request.sourceId)) return true;
-      since = Date.parse(request.createdAt ?? '') || now;
-    } else {
-      // Not knowing which request is waiting: a message sent here just before it counts as its source.
-      if (now - lastSentHere < ASSISTANT_SENDER_WINDOW_MS) return true;
-      since = assistantWaitingSince ??= now;
-    }
-    const wait = since + ASSISTANT_SENDER_HEAD_START_MS - now;
-    if (wait <= 0) return true;
-    setTimeout(() => { if (current()) workPolling.wake([actorId]); }, wait).unref?.();
-    return false;
-  }
   /** Leases one execution: the oldest the server offers, or exactly `executionId`. */
   async function claim(actorId: string, executionId?: string): Promise<Execution | null> {
     const payload = { operationId: randomUUID(), executorId, accessPolicyVersion: 1, planVersion: 1, ...(directRoomClaims ? { directRoomVersion: 1 } : {}),
@@ -3873,10 +3853,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       if (masked.execution) return masked.execution;
     }
-    if (assistant && !executionId && !mayTakeAssistantRequest(actorId)) return null;
-    const claimed = (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
-    if (assistant && !executionId) assistantWaitingSince = undefined;
-    return claimed;
+    if (assistant && !boundAssistantDevice) return null;
+    return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST',
+      assistant && hostname() ? { ...payload, deviceName: hostname().slice(0, 160) } : payload, actorId)).execution;
   }
 
   /**
@@ -3921,7 +3900,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         let lane: string;
         try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
-        if (actorId === assistantActorId && !mayTakeAssistantRequest(actorId, { sourceId: row.source_message_id, createdAt: row.created_at })) continue;
         // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
         if (!mayRequest()) return;
         const execution = await claim(actorId, row.id);
@@ -3940,7 +3918,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(localProfilesRead === localProfilesRevision ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)).map(actor => actor.id) : []),
       // The group's Cindy: the server hands this computer only its own account's requests to it, and
       // naming it in the availability probe is how this computer says it can take them.
-      ...(assistantActorId && selfId ? [assistantActorId] : []),
+      ...(boundAssistantDevice && assistantActorId && selfId ? [assistantActorId] : []),
     ].map(actorId => {
       const runs = runsOf(actorId);
       for (const run of runs) resolveLane(run);
@@ -3950,7 +3928,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     longIdle: () => workNotifications && connected,
     probe: async ids => {
       try {
-        const response = availabilityResponse.safeParse(await workApi('/executions/availability', 'POST', { botIds: ids }));
+        const response = availabilityResponse.safeParse(await workApi('/executions/availability', 'POST', { botIds: ids, ...(boundAssistantDevice && hostname() ? { deviceName: hostname().slice(0, 160) } : {}) }));
         if (!response.success || response.data.items.length !== ids.length
           || new Set(response.data.items.map(item => item.botId)).size !== ids.length
           || response.data.items.some(item => !ids.includes(item.botId))) throw new ChatResponseError('INVALID_WORK_AVAILABILITY', 502);
@@ -4091,7 +4069,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const namesNobody = (mentions: BotGroupMention) => !mentions.all && !mentions.allBots && !mentions.botIds.length;
   async function mentionIds(roomId: string, mentions: BotGroupMention, rootId: string) {
     const [members, root] = await Promise.all([
-      api<Member[]>(`/conversations/${roomId}/members`), readMessage(roomId, rootId),
+      api<Member[]>(`/conversations/${roomId}/members`), namesNobody(mentions) ? readMessage(roomId, rootId) : undefined,
     ]);
     const target = root && !root.deleted && root.threadRootId === null && root.origin !== 'system'
       && root.author.kind === 'bot' ? root.authorId : undefined;
@@ -4207,6 +4185,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const actorAction = z.object({ actorId: id });
       const action = z.discriminatedUnion('type', [
         z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
+        z.object({ type: z.literal('assistantDevice'), deviceId: z.string().min(1).max(200) }).strict(),
         z.object({ type: z.literal('notifications'), mode: z.enum(['all', 'mentions', 'none']) }).strict(),
         z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), allowMemberMentionAll: z.boolean().optional(), allowMemberInvites: z.boolean().optional(), assistant: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
@@ -4233,6 +4212,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (BigInt(message.seq) > BigInt(read)) {
           await writeReadState(target, { operationId: `read-main:${target}:${message.seq}`, readSeq: message.seq });
         }
+        return {};
+      }
+      if (action.type === 'assistantDevice') {
+        if (!boundAssistantDevice) throw new Error('CHAT_UNAVAILABLE');
+        await api(`/conversations/${target}/assistant-device`, 'POST', { operationId: randomUUID(), deviceId: action.deviceId });
+        membershipChanged(target);
         return {};
       }
       if (action.type === 'notifications') {
@@ -4634,7 +4619,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     if (prepared?.ok) prepared.commit();
     sendJournal.confirm(journalKey, signature, result.id);
-    noteSentHere(result.id);
     deps.log?.info?.('Chat group send confirmed', { groupId: i.groupId, messageId: result.id,
       trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), durationMs: Date.now() - started });
     // The message exists: the send is answered now and its receipt answers any retry, so the

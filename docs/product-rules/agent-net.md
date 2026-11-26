@@ -133,6 +133,11 @@
   这与第 5 条不冲突，开关关闭时所有旧版路径的行为不变。
 - 开了「仅使用 Agent-Net」时，旧版分享不会出现在列表里也不能用；任务用到时要说明是这个开关挡住的，
   关掉即可继续，不能说成对方删除了分享（错误码 `REMOTE_AGENT_SHARE_LEGACY_DISABLED`）。
+- （2026-11-26 用户决定）以前接受的 Device Link 供应商分享，在分享者和受邀者都开着官方 Agent-Net 后自动改走
+  Agent-Net，用户无感：**授权不动，只换线路**，不建新的成员资格、不出现新的申请或批准，暂停、移除、额度和用量仍是
+  原来那一份。消息和附件一起走 Agent-Net；连接不通时一起回到 Device Link，不会一半走一边。第一版只在官方服务上、
+  同区域分享之间生效；「仅使用 Agent-Net」下旧分享仍按上一条处理。协议见
+  [Device Link 供应商分享改走 Agent-Net](../dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md)。
 
 ## 界面
 

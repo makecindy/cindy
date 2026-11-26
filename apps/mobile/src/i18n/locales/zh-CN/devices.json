@@ -477,7 +477,14 @@
         "nextWeek": "下周",
         "indefinite": "无限期",
         "custom": "自定义…",
-        "invalidTime": "请选择未来一年内的日期和时间。"
+        "invalidTime": "请选择未来一年内的日期和时间。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "电脑上线后自动归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待处理：worktree 有未提交改动，需确认后再归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待处理：电脑离线期间该任务有新进展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待处理：该任务正在运行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待处理：该任务正被接管或处于共享状态，未自动归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。"
       },
       "taskListMode": {
         "enterInbox": "切换到收件箱",
@@ -828,9 +835,6 @@
     "connectionsEmpty": "尚未选择技能或连接",
     "largeProfileRecovery": "此资料过长，无法在手机上编辑。请在 {{deviceName}} 上编辑完整资料。",
     "addModel": "添加备用模型",
-    "removeModel": "移除模型",
-    "moveModelUp": "上移模型",
-    "backupModels": "备用模型（{{count}}）",
     "settingsTitle": "伙伴设置",
     "name": "名字",
     "portraitNumber": "头像 {{number}}",
