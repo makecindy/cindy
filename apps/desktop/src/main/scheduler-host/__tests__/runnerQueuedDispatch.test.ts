@@ -2629,6 +2629,29 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
+  it('允许 provider-thread relink 期间暂时没有 live session 的排队心跳继续派发', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.6-sol' });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'gpt-5.6-sol',
+    });
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'codex', model: 'gpt-5.6-sol', providerId: 'openai-0b90b56c',
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+
+    // provider-thread-relink closes the old instance before the replacement
+    // is visible to the scheduler. The replacement is ready by acceptance.
+    vi.mocked(maker.getSession).mockReturnValueOnce(undefined);
+    await queue.accept();
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+
+    const result = await fire;
+    expect(result).toMatchObject({ sessionId: SESSION_ID });
+    expect(result.deferred).not.toBe(true);
+  });
+
   it('排队 Pi 跨 proxy 身份时在发送前热切到目标来源', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',

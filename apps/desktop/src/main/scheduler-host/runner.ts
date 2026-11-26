@@ -3290,7 +3290,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           const row = await this.runtime.getSessionRowSnapshot(sessionId);
           if (row?.status !== 'active') throw queuedRouteMismatch('saved session unavailable');
           assertQueuedRoute(row, routingBaseline, row.providerId, true);
-        } else {
+        } else if (live) {
+          // Other rebuilds validate the replacement at acceptance.
           assertQueuedRoute(live, routingBaseline, selection ? getSessionProvider(sessionId) : null, false);
         }
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
