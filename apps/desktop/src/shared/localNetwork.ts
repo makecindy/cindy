@@ -7,6 +7,15 @@ export const LOCAL_NETWORK_LOCAL = {
 
 export type LocalNetworkAccess = 'granted' | 'denied' | 'unknown' | 'notRequired';
 
+export type LocalNetworkSettingsStage = 'none' | 'standard' | 'separate';
+
+export interface LocalNetworkRequestOptions {
+  /** Open System Settings directly instead of only triggering the OS permission prompt. */
+  openSettings?: boolean;
+  /** Open a fresh System Settings window to bypass an unrelated sheet or sub-pane. */
+  separateWindow?: boolean;
+}
+
 /**
  * Why the sidebar should remind the user. Only set while access is denied.
  * `controlEnabled`: the user just allowed same-account devices to control this computer.
@@ -20,6 +29,10 @@ export type LocalNetworkReminder =
 export interface LocalNetworkState {
   access: LocalNetworkAccess;
   reminder: LocalNetworkReminder | null;
+  /** Running macOS .app bundle path for local "Show in Finder" guidance. */
+  appBundlePath?: string;
+  /** Tracks whether System Settings was already opened while denied, for separate-window retry. */
+  settingsOpenStage?: LocalNetworkSettingsStage;
 }
 
 export interface LocalNetworkApi {
@@ -28,7 +41,12 @@ export interface LocalNetworkApi {
    * without touching the LAN, so merely showing the app never triggers the system prompt.
    */
   status(options?: { probe?: boolean }): Promise<LocalNetworkState>;
-  /** Shows the system prompt when macOS has not decided, otherwise opens System Settings. */
-  request(): Promise<LocalNetworkState>;
+  /**
+   * Without `openSettings`, probes the LAN in the foreground to trigger the one-time macOS
+   * prompt without stealing focus to System Settings. Pass `{ openSettings: true }` to open
+   * Privacy & Security in System Settings (and `{ openSettings: true, separateWindow: true }`
+   * to open a fresh System Settings window).
+   */
+  request(options?: LocalNetworkRequestOptions): Promise<LocalNetworkState>;
   onChanged(callback: (state: LocalNetworkState) => void): () => void;
 }
