@@ -11952,6 +11952,8 @@
         "loadEarlierFailed": "更早的訊息沒能載入，請再試一次",
         "emptyTitle": "群聊裡還沒有訊息",
         "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
+        "emptyDescriptionWithAssistant": "可以 @Cindy，或從右上角邀請朋友和夥伴。",
+        "emptyDescriptionInvite": "可以從右上角邀請朋友和夥伴。",
         "roundEnded": "夥伴們說完了",
         "stepTag": "第 {{count}} 步",
         "sending": "傳送中",
@@ -12283,7 +12285,7 @@
         "loginRequired": "請先登入目前帳號，再重試。",
         "requestFailed": "暫時無法連線至群聊服務，請稍後重試。",
         "copyFailed": "複製失敗，請選取連結手動複製。",
-        "createDescription": "可以選擇夥伴，也可以先建立群組，再邀請朋友加入。",
+        "createDescription": "建立後可以邀請朋友和夥伴。",
         "settings": {
           "notifications": {
             "title": "訊息通知",

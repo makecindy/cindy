@@ -11998,6 +11998,8 @@
         "loadEarlierFailed": "Couldn’t load earlier messages. Try again.",
         "emptyTitle": "No messages in this group yet",
         "emptyDescription": "Say something to get started and your buddies will join in. @ a buddy to have only them reply.",
+        "emptyDescriptionWithAssistant": "Mention @Cindy or use the Invite menu in the top right to invite people or add buddies.",
+        "emptyDescriptionInvite": "Use the Invite menu in the top right to invite people or add buddies.",
         "roundEnded": "Buddies are done",
         "stepTag": "Step {{count}}",
         "sending": "Sending",
@@ -12329,7 +12331,7 @@
         "loginRequired": "Sign in to your account and try again.",
         "requestFailed": "The chat service is unavailable. Try again shortly.",
         "copyFailed": "Could not copy. Select the link and copy it manually.",
-        "createDescription": "Choose companions, or create the group first and invite people to join.",
+        "createDescription": "After creating the group, you can invite people and add buddies.",
         "settings": {
           "notifications": {
             "title": "Message notifications",

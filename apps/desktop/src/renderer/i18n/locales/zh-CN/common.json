@@ -11952,6 +11952,8 @@
         "loadEarlierFailed": "更早的消息没能加载，请再试一次",
         "emptyTitle": "群里还没有消息",
         "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
+        "emptyDescriptionWithAssistant": "可以 @Cindy，或从右上角邀请朋友和伙伴。",
+        "emptyDescriptionInvite": "可以从右上角邀请朋友和伙伴。",
         "roundEnded": "伙伴们说完了",
         "stepTag": "第 {{count}} 步",
         "sending": "发送中",
@@ -12283,7 +12285,7 @@
         "loginRequired": "请先登录当前账号，再重试。",
         "requestFailed": "群聊服务暂时无法连接，请稍后重试。",
         "copyFailed": "复制失败，请选中链接手动复制。",
-        "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
+        "createDescription": "创建后可以邀请朋友和伙伴。",
         "settings": {
           "notifications": {
             "title": "消息通知",
