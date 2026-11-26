@@ -642,7 +642,7 @@ function AgentInstallRow({
           时发的 event 不补 (Phase D 的取舍, 不引 main 端 log buffer)。 */}
       {(installing || installLog.length > 0) && (
         <pre
-          className="max-h-32 overflow-auto rounded-md border p-2 text-11 leading-tight"
+          className="max-h-32 overflow-auto rounded-lg border p-2 text-11 leading-tight"
           style={{
             backgroundColor: 'var(--settings-input-bg, #faf9f5)',
             borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -778,7 +778,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
         </span>
       </div>
       <pre
-        className="max-h-64 overflow-auto rounded-md border p-2 text-12 leading-snug whitespace-pre-wrap"
+        className="max-h-64 overflow-auto rounded-lg border p-2 text-12 leading-snug whitespace-pre-wrap"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -798,7 +798,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
             {t('settings.remote.detail.quickTestStderr')}
           </summary>
           <pre
-            className="mt-1 max-h-32 overflow-auto rounded-md border p-2 text-11 whitespace-pre-wrap"
+            className="mt-1 max-h-32 overflow-auto rounded-lg border p-2 text-11 whitespace-pre-wrap"
             style={{
               backgroundColor: 'var(--settings-input-bg, #faf9f5)',
               borderColor: 'var(--settings-input-border, #d7d7d4)',

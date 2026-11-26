@@ -5,7 +5,23 @@ import { forgetFailedMarketIcon, mergePluginItems, readReusedMarketIcon } from '
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { schedulePluginCatalogPrewarm } from '../lib/prewarmPluginCatalog';
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); resetPluginCatalogMemoryForTest(); });
+const { preloadPluginPage, pluginPageImported } = vi.hoisted(() => ({
+  preloadPluginPage: vi.fn(),
+  pluginPageImported: vi.fn(),
+}));
+vi.mock('../GhostPluginRoute', () => ({ preloadPluginPage }));
+vi.mock('../GhostPluginPage', () => {
+  pluginPageImported();
+  return { GhostPluginPage: () => null };
+});
+
+afterEach(() => {
+  preloadPluginPage.mockClear();
+  pluginPageImported.mockClear();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  resetPluginCatalogMemoryForTest();
+});
 
 it('reuses signed icons across recommendations and search results in the same catalog partition', async () => {
   const memory = pluginCatalogMemory('first-owner', 'local');
@@ -52,28 +68,47 @@ it('reuses signed icons across recommendations and search results in the same ca
   expect(lookup).not.toHaveBeenCalled();
 });
 
-// Unit: login preheat must use the page's exact owner/language bucket, and must
-// not scan/count a market the user has not opened. The navigation suite only
-// exercises mounted routes and cannot cover idle work or owner changes.
-it('prewarms installed data and recommendations once per owner, sharing the page bucket', async () => {
-  vi.useFakeTimers();
+// Unit / 工程约定 §7: run the startup entry with a current owner and an idle
+// slot. A navigation test cannot detect work that starts without any navigation.
+it('keeps the existing catalog prewarm without loading the plugin page or reading recent usage', async () => {
   setDataOwnerGeneration('warm-owner', 31);
+  const requestIdle = vi.fn((_run: IdleRequestCallback, _options?: IdleRequestOptions) => 1);
+  vi.stubGlobal('requestIdleCallback', requestIdle);
+  const locale = Promise.withResolvers<void>();
+  const recentUsage = vi.fn();
+  const recentUsageSync = vi.fn(() => ({ ids: [] }));
   const snapshot = vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }));
   const recommendations = vi.fn(async () => []);
   const query = vi.fn();
-  vi.stubGlobal('window', { electronAPI: { pluginMarket: { snapshot, recommendations, query }, setApplicationMenuLocale: vi.fn().mockResolvedValue(undefined) } });
+  vi.stubGlobal('window', { electronAPI: {
+    ghosts: { recentUsage, recentUsageSync }, pluginMarket: { snapshot, recommendations, query },
+    setApplicationMenuLocale: () => locale.promise,
+  } });
   const input = { mode: 'cloud' as const, ownerId: 'warm-owner', generation: 31, locale: 'en' };
   schedulePluginCatalogPrewarm(input);
-  await vi.advanceTimersByTimeAsync(300);
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  expect(requestIdle).toHaveBeenCalledWith(expect.any(Function), { timeout: 2_000 });
+  requestIdle.mock.calls[0]![0]({ didTimeout: false, timeRemaining: () => 1 });
   await vi.dynamicImportSettled();
   const memory = pluginCatalogMemory(pluginCatalogOwnerKey(input.mode, input.ownerId, input.generation, input.locale), 'local');
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  expect(pluginPageImported).not.toHaveBeenCalled();
+  expect(recentUsage).not.toHaveBeenCalled();
+  expect(recentUsageSync).not.toHaveBeenCalled();
+  expect(snapshot).not.toHaveBeenCalled();
+  locale.resolve();
+  await vi.dynamicImportSettled();
   expect(memory.snapshot?.items).toEqual([]);
   expect(memory.todayLoaded).toBe(true);
   expect(snapshot).toHaveBeenCalledOnce();
   expect(recommendations).toHaveBeenCalledOnce();
   expect(query).not.toHaveBeenCalled();
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  expect(pluginPageImported).not.toHaveBeenCalled();
+  expect(recentUsage).not.toHaveBeenCalled();
+  expect(recentUsageSync).not.toHaveBeenCalled();
   schedulePluginCatalogPrewarm(input);
-  await vi.runOnlyPendingTimersAsync();
+  expect(requestIdle).toHaveBeenCalledOnce();
   expect(snapshot).toHaveBeenCalledOnce();
 });
 
@@ -81,10 +116,13 @@ it('does not fetch or publish data after the owner changes before idle execution
   vi.useFakeTimers();
   setDataOwnerGeneration('outgoing-owner', 41);
   const snapshot = vi.fn();
-  vi.stubGlobal('window', { electronAPI: { pluginMarket: { snapshot } } });
+  const recentUsageSync = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { ghosts: { recentUsageSync }, pluginMarket: { snapshot } } });
   schedulePluginCatalogPrewarm({ mode: 'cloud', ownerId: 'outgoing-owner', generation: 41, locale: 'en' });
   setDataOwnerGeneration(null, 42);
   await vi.runOnlyPendingTimersAsync();
+  expect(preloadPluginPage).not.toHaveBeenCalled();
+  expect(recentUsageSync).not.toHaveBeenCalled();
   expect(snapshot).not.toHaveBeenCalled();
 });
 

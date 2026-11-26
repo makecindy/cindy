@@ -8,6 +8,31 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// #10568 / unit: ordinary tasks must discover the local migration primitive through
+// the production index; caller identity is host supplied, and SSH/plugin callers
+// cannot redirect a local buddy by supplying it in tool arguments.
+it('discovers local workspace relocation and validates its caller and action arguments', async () => {
+  const run = vi.fn(async () => ({ phase: 'pending', scope: 'local' }));
+  const context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/project', sessionId: 'task', sessionInstanceId: 'instance' };
+  const server = createXdtHelperMcpServer({ workspaceMigration: { run }, resolveSurface: async () => 'default' },
+    { agentKind: 'codex', workingDir: '/project', getSessionContext: () => context });
+  const client = new Client({ name: 'workspace-migration', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const discovery = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '工作区迁移' } }));
+    expect(discovery).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'teammates.management' })]) });
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'request', teammate_id: 'buddy', target_directory: '/data/buddy' })))
+      .toMatchObject({ ok: true, phase: 'pending' });
+    expect(run).toHaveBeenLastCalledWith({ action: 'request', teammateId: 'buddy', target: '/data/buddy', callerSessionId: 'task', callerSessionInstanceId: 'instance' }, undefined);
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy', target_directory: '/unexpected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    context.remoteHostId = 'ssh';
+    expect(parsePayload(await server.hostTools.call('teammate_workspace_migration', { action: 'status', teammate_id: 'buddy' }))).toMatchObject({ ok: false });
+    expect(run).toHaveBeenCalledOnce();
+  } finally { await client.close(); await server.close(); }
+});
+
 // Unit: native catalog discovery/mutation through the real host-tool registry.
 // Existing runtime controls lack native method argument and stdio boundaries.
 it('exposes native catalogs on demand and rejects process MCP configuration', async () => {
