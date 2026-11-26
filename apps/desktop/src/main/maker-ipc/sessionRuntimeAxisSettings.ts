@@ -176,17 +176,30 @@ export function createStagePendingUserRuntimeAxis(ports: {
     const targetDeviceId = intent.targetAgentDeviceId === undefined
       ? row.agentDeviceId : intent.targetAgentDeviceId;
     if (intent.targetAgentKind === 'acp') {
-      if (!intent.providerId || !agentSwitchDeps.admitPluginEngineTarget) {
+      if (!intent.providerId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
       }
       if (patch.fastMode !== undefined && patch.fastMode !== false) {
         throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
       }
-      const admitted = agentSwitchDeps.admitPluginEngineTarget({
+      const target = {
         providerId: intent.providerId,
         model: intent.model,
         effort: updated.effort,
-      });
+        permissionMode: row.permissionMode ?? null,
+      };
+      let admitted: { effort: string };
+      if (targetDeviceId) {
+        if (!agentSwitchDeps.admitRemotePluginEngineTarget) {
+          throwIpcError('PRECONDITION_FAILED', 'switching to a plugin engine on another computer is not available here');
+        }
+        admitted = await agentSwitchDeps.admitRemotePluginEngineTarget(targetDeviceId, target);
+      } else {
+        if (!agentSwitchDeps.admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        admitted = agentSwitchDeps.admitPluginEngineTarget(target);
+      }
       if (patch.effort !== undefined && admitted.effort !== patch.effort) {
         throwIpcError('INVALID_PARAMS', `effort "${patch.effort}" is unavailable for model "${intent.model}"`);
       }

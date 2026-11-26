@@ -492,10 +492,10 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   历史，不开原生分叉（`sdk_session_id = null`），写一条待发送的交接（`context_rebuild`，
   `reason = native-session-recovery`，`sourceAgentKind = acp`），子任务第一条消息启动全新会话并带上它。
   在第一条消息上分叉时没有可交接的内容，不写空交接。目标在内置引擎的段落里时照旧原生分叉。
-  只限本机插件引擎：那一段跑在另一台电脑或收到的分享上时，分叉会绕过执行端对每个任务的准入，仍明确拒绝
-  （见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)「暂未开放」）。
+  跑在另一台电脑或直连分享（`share:<id>`）上的插件引擎同样走这条记录交接路径（子任务继承 `agentDeviceId`、
+  `sdk_session_id = null`，首条消息启动新会话时由执行端完整复核准入；非法 peer 标识仍拒绝）。
   实现见 `maker-orchestration/fork.ts`（`resolveForkNativeSource`），回归见 `__tests__/fork.test.ts`。
-  侧聊走同一条路径。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
+  侧聊走同一条路径（含侧聊内切换插件引擎/切回内置引擎）。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
 - **起名**：自动起名、插件建的任务起名与「AI 重命名」都走辅助模型。辅助模型不可用时不借用任何内置引擎
   兜底（以前普通任务按 Claude Code 读，会回落到 Claude 的一次性请求），标题保留用户原话的截断版；
   「AI 重命名」此时提示生成失败。实现见 `maker-ipc/title.ts`、`maker-host/auxiliary-title-one-shot.ts`

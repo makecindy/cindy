@@ -997,7 +997,7 @@ export async function performSessionAgentSwitch(
       if (deps.readOwnerGeneration?.() !== ownerGeneration) {
         throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
       }
-    } else if (row.source && row.source !== 'desktop' && row.source !== 'bot') {
+    } else if (row.source && row.source !== 'desktop' && row.source !== 'bot' && row.source !== 'side-chat') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {

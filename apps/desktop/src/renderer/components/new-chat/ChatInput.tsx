@@ -4771,7 +4771,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);

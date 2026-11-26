@@ -2350,7 +2350,10 @@ function CCAgentSessionContent({
   const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
+    && ((session.source ?? 'desktop') === 'desktop'
+      || session.source === 'bot'
+      || session.source === 'side-chat'
+      || completedLocalAutomation)
     && session.status !== 'archived';
   const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
     && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
@@ -3941,6 +3944,7 @@ function CCAgentSessionContent({
       pluginEngineTask && session
         ? {
             providerId: session.providerId ?? '',
+            agentDeviceId: session.agentDeviceId ?? null,
             engine: pluginEngine,
             // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
             engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),

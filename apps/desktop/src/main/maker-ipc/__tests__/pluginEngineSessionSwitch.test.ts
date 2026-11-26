@@ -215,6 +215,30 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
+  // 2026-11-27 regression: side-chat sessions were excluded from plugin-engine switches, blocking
+  // switching a side chat onto a plugin engine or switching a plugin-engine side chat back to a
+  // built-in engine. Coverage gap: source tests only covered desktop/bot/scheduler/feishu. Minimal
+  // failing input: row.source === 'side-chat' switching cc -> acp and acp -> pi. Tier: unit.
+  it('allows a side-chat session to switch onto a plugin engine and back to a built-in engine', async () => {
+    const toPlugin = makeDeps(makeRow({ source: 'side-chat', agentKind: 'cc' }));
+    await performSessionAgentSwitch(toPlugin.deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+    });
+    expect(toPlugin.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+    });
+
+    const toBuiltin = makeDeps(makeRow({
+      source: 'side-chat', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4',
+    }));
+    await performSessionAgentSwitch(toBuiltin.deps, {
+      sessionId: 's1', targetAgentKind: 'pi', model: 'glm-5', providerId: 'xd',
+    });
+    expect(toBuiltin.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'pi', providerId: 'xd', model: 'glm-5',
+    });
+  });
+
   it.each([
     { name: 'an IM task', row: { source: 'feishu' }, code: 'UNSUPPORTED_CAPABILITY' },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
