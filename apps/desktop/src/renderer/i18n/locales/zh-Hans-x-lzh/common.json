@@ -19284,6 +19284,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "于同伴设置中选「{{restart}}」，可重建当前语境，旧讯仍存。欲另议一事，可在消息操作中选「{{startTopic}}」。",
     "viewSkillDetails": "观技艺之详",
     "projectSkillNotLoaded": "今之 Pi 差事尚未载此案之 Skill，新差事将自试载之",
     "pluginSkillSetup": {

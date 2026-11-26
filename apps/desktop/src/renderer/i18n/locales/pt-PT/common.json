@@ -19534,6 +19534,7 @@
     }
   },
   "commandPalette": {
+    "buddyNewHint": "Nas definições do amigo, escolhe «{{restart}}» para reconstruir o contexto de trabalho e manter o histórico de mensagens. Para discutir algo em separado, escolhe «{{startTopic}}» nas ações de uma mensagem.",
     "viewSkillDetails": "Ver detalhes da Skill",
     "projectSkillNotLoaded": "Esta tarefa Pi não carregou esta Skill do projeto. As novas tarefas tentarão carregá-la automaticamente.",
     "pluginSkillSetup": {
