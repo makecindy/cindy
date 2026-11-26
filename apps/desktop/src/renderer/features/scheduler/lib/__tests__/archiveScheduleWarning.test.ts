@@ -318,11 +318,19 @@ describe('loadActiveBoundScheduleNames', () => {
       { id: 's-laptop-remote-w', name: 'Cross Watch', status: 'active', targetSessionId: 'worker-on-laptop-for-mini' },
       { id: 's-archived-w', name: 'Archived Watch', status: 'active', targetSessionId: 'worker-archived' },
     ]);
-    mocks.invoke.mockResolvedValue([
-      { id: 's-mini-w', name: 'Mini Worker PR #11923', status: 'active', targetSessionId: 'worker-on-mini', cronExpr: '*/10 * * * *' },
-      { id: 's-mini-remote-w', name: 'Remote Relay Follow', status: 'active', targetSessionId: 'worker-remote-for-local', cronExpr: '*/10 * * * *' },
-      { id: 's-released', name: 'Released Watch', status: 'active', targetSessionId: 'worker-released', cronExpr: '*/10 * * * *' },
-    ]);
+    mocks.invoke.mockImplementation(async (_device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return [
+          { id: 'w-hidden', sessionId: 'worker-outside-window', role: 'developer', status: 'idle' },
+        ];
+      }
+      return [
+        { id: 's-mini-w', name: 'Mini Worker PR #11923', status: 'active', targetSessionId: 'worker-on-mini', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-hidden', name: 'Window Outside Watch', status: 'active', targetSessionId: 'worker-outside-window', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-remote-w', name: 'Remote Relay Follow', status: 'active', targetSessionId: 'worker-remote-for-local', cronExpr: '*/10 * * * *' },
+        { id: 's-released', name: 'Released Watch', status: 'active', targetSessionId: 'worker-released', cronExpr: '*/10 * * * *' },
+      ];
+    });
 
     const result = await loadActiveBoundScheduleNames([
       { id: 'lead-local', orcaRole: 'lead' },
@@ -331,12 +339,16 @@ describe('loadActiveBoundScheduleNames', () => {
     ]);
 
     expect(result.get('lead-local')).toEqual(['Local PR Watch', 'Remote Relay Follow']);
-    expect(new Set(result.get('lead-mini'))).toEqual(new Set(['Mini Worker PR #11923', 'Cross Watch']));
+    expect(new Set(result.get('lead-mini'))).toEqual(
+      new Set(['Mini Worker PR #11923', 'Cross Watch', 'Window Outside Watch']),
+    );
     expect(result.has('lead-ended')).toBe(false);
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list'),
+    ).toHaveLength(1);
   });
 
-  it('严格读取:Orca Lead 的跨设备 Worker 所在电脑不可达时返回 null，不静默归档', async () => {
+  it('严格读取:Orca Lead 的跨设备 Worker 或远端 Worker 列表不可达时返回 null，不静默归档', async () => {
     setCurrentAuthDeviceId('laptop');
     mocks.getByFilter.mockReturnValue([{ id: 'lead-local', status: 'active', orcaRole: 'lead' }]);
     mocks.listWorkersByLead.mockResolvedValue([
@@ -351,6 +363,9 @@ describe('loadActiveBoundScheduleNames', () => {
 
     await expect(
       loadConfirmedActiveBoundScheduleNames([{ id: 'lead-local', orcaRole: 'lead' }]),
+    ).resolves.toBeNull();
+    await expect(
+      loadConfirmedActiveBoundScheduleNames([{ id: 'lead-mini', deviceLinkDeviceId: 'mac-mini', orcaRole: 'lead' }]),
     ).resolves.toBeNull();
   });
 });

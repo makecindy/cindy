@@ -1,7 +1,8 @@
 import { dialog } from 'electron';
 import type { Schedule } from '@cindy/maker-scheduler';
+import { normalizeOrcaDeviceId, parseOrcaTeamWorkers } from '@cindy/maker-shared/orca-team';
 import { t } from '../i18n.desktop.js';
-import { remoteInvoke } from '../device-link/index.js';
+import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
 import { listWorkersByLead } from '../localDb/orcaTeamStore.js';
 import { getRemovalPreview } from '../worktree/WorktreeManager.js';
 import { getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
@@ -21,6 +22,11 @@ async function listRemoteBindings(deviceId: string): Promise<Schedule[]> {
   return result.ok && Array.isArray(result.result) ? (result.result as Schedule[]) : [];
 }
 
+async function listRemoteWorkersByLead(deviceId: string, leadSessionId: string) {
+  const result = await remoteInvoke(deviceId, 'local-db:orca-workflows:list-workers-by-lead', [leadSessionId]);
+  return result.ok ? parseOrcaTeamWorkers(result.result) : [];
+}
+
 /** Match desktop archive preflights, with the confirmation on the initiating computer. */
 export async function confirmIslandArchive(sessionId: string, deviceId: string | null): Promise<boolean> {
   const preview = (async () => {
@@ -34,54 +40,62 @@ export async function confirmIslandArchive(sessionId: string, deviceId: string |
     .catch(() => null);
   const boundNames = withBudget(
     (async (): Promise<string[]> => {
-      if (deviceId) {
-        const list = await listRemoteBindings(deviceId);
-        return list
-          .filter((s) => s.targetSessionId === sessionId && s.status === 'active' && !s.persistentSession)
-          .map((s) => s.name);
-      }
-      const [localList, workers] = await Promise.all([
-        getScheduleStorageIfInitialized()?.list({ status: 'active' }) ?? Promise.resolve([] as Schedule[]),
-        listWorkersByLead(sessionId).catch(() => []),
+      const selfDeviceId = typeof getSelfDeviceId === 'function' ? getSelfDeviceId() : null;
+      const ownerDevice = normalizeOrcaDeviceId(deviceId, selfDeviceId);
+      const readLocalActive = () =>
+        getScheduleStorageIfInitialized()?.list({ status: 'active' }) ?? Promise.resolve([] as Schedule[]);
+      const [ownerList, workers] = await Promise.all([
+        ownerDevice ? listRemoteBindings(ownerDevice).catch(() => [] as Schedule[]) : readLocalActive(),
+        ownerDevice
+          ? listRemoteWorkersByLead(ownerDevice, sessionId).catch(() => [])
+          : listWorkersByLead(sessionId).catch(() => []),
       ]);
-      const localTargets = new Set<string>([sessionId]);
-      const remoteTargetsByDevice = new Map<string, Set<string>>();
+      const targetsByDevice = new Map<string | null, Set<string>>([[ownerDevice, new Set([sessionId])]]);
+      const addTarget = (targetDevice: string | null, targetSessionId: string) => {
+        let set = targetsByDevice.get(targetDevice);
+        if (!set) {
+          set = new Set();
+          targetsByDevice.set(targetDevice, set);
+        }
+        set.add(targetSessionId);
+      };
       for (const worker of workers) {
         if (worker.executionDevice) {
-          let set = remoteTargetsByDevice.get(worker.executionDevice.deviceId);
-          if (!set) {
-            set = new Set();
-            remoteTargetsByDevice.set(worker.executionDevice.deviceId, set);
-          }
-          set.add(worker.executionDevice.remoteSessionId);
+          addTarget(
+            normalizeOrcaDeviceId(worker.executionDevice.deviceId, selfDeviceId),
+            worker.executionDevice.remoteSessionId,
+          );
         } else {
-          localTargets.add(worker.sessionId);
+          addTarget(ownerDevice, worker.sessionId);
         }
       }
-      const remoteLists = remoteTargetsByDevice.size > 0
-        ? await Promise.all(
-            [...remoteTargetsByDevice.entries()].map(async ([remoteDeviceId, targetIds]) => [
-              remoteDeviceId,
-              targetIds,
-              await listRemoteBindings(remoteDeviceId).catch(() => [] as Schedule[]),
-            ] as const),
-          )
-        : [];
+      const listsByDevice = new Map<string | null, Schedule[]>([[ownerDevice, ownerList]]);
+      const extraDevices = [...targetsByDevice.keys()].filter((targetDevice) => targetDevice !== ownerDevice);
+      if (extraDevices.length > 0) {
+        const extraLists = await Promise.all(
+          extraDevices.map(async (targetDevice) => [
+            targetDevice,
+            targetDevice
+              ? await listRemoteBindings(targetDevice).catch(() => [] as Schedule[])
+              : await readLocalActive().catch(() => [] as Schedule[]),
+          ] as const),
+        );
+        for (const [targetDevice, list] of extraLists) {
+          listsByDevice.set(targetDevice, list);
+        }
+      }
       const seen = new Set<string>();
       const names: string[] = [];
-      const collect = (scope: string, list: readonly Schedule[], targets: ReadonlySet<string>) => {
-        for (const s of list) {
+      for (const [targetDevice, targets] of targetsByDevice) {
+        const scope = targetDevice ?? '';
+        for (const s of listsByDevice.get(targetDevice) ?? []) {
           if (!s.targetSessionId || !targets.has(s.targetSessionId)) continue;
-          if (s.status !== 'active' || s.persistentSession) continue;
+          if (s.status !== 'active') continue;
           const key = `${scope}\0${s.id ?? s.name}`;
           if (seen.has(key)) continue;
           seen.add(key);
           names.push(s.name);
         }
-      };
-      collect('', localList, localTargets);
-      for (const [remoteDeviceId, targetIds, list] of remoteLists) {
-        collect(remoteDeviceId, list, targetIds);
       }
       return names;
     })(),

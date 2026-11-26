@@ -9,6 +9,7 @@ import {
   indexActiveOrcaWorkersByLead,
   normalizeOrcaDeviceId,
   orcaLeadSessionKey,
+  parseOrcaTeamWorkers,
   type OrcaBoundSessionRef,
   type OrcaRetainedWorkerProjection,
 } from '@cindy/maker-shared/orca-team';
@@ -121,6 +122,40 @@ async function readLocalLeadWorkersOnce(
   }
 }
 
+async function readRemoteLeadWorkersOnce(
+  deviceId: string,
+  leadSessionId: string,
+  selfDeviceId: string | null,
+): Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }> {
+  const invoke = typeof window !== 'undefined' ? window.electronAPI?.deviceLink?.invoke : undefined;
+  if (!invoke) return { workers: [], ok: false };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const raw = await Promise.race([
+      invoke(deviceId, 'local-db:orca-workflows:list-workers-by-lead', [leadSessionId]),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COLD_SCHEDULE_LOAD_WAIT_MS);
+      }),
+    ]);
+    if (!Array.isArray(raw)) return { workers: [], ok: false };
+    return {
+      ok: true,
+      workers: parseOrcaTeamWorkers(raw).map((worker) =>
+        worker.executionDevice
+          ? {
+              sessionId: worker.executionDevice.remoteSessionId,
+              deviceId: normalizeOrcaDeviceId(worker.executionDevice.deviceId, selfDeviceId),
+            }
+          : { sessionId: worker.sessionId, deviceId },
+      ),
+    };
+  } catch {
+    return { workers: [], ok: false };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function expandTargetsWithOrcaWorkers(
   targets: readonly ArchiveTarget[],
   selfDeviceId: string | null,
@@ -144,13 +179,14 @@ async function expandTargetsWithOrcaWorkers(
       retainedProjections: collectRetainedOrcaWorkerProjections(),
     },
   );
-  const localLeadWorkerReads = new Map<string, Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }>>();
+  const leadWorkerReads = new Map<string, Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }>>();
   const refsByTarget = new Map<ArchiveTarget, OrcaBoundSessionRef[]>();
 
   for (const target of targets) {
     const normalizedDevice = normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId);
     const selfRef: OrcaBoundSessionRef = { sessionId: target.id, deviceId: normalizedDevice };
-    const known = knownByKey.get(orcaLeadSessionKey(target.id, normalizedDevice, selfDeviceId));
+    const leadKey = orcaLeadSessionKey(target.id, normalizedDevice, selfDeviceId);
+    const known = knownByKey.get(leadKey);
     const effectiveRole = target.orcaRole !== undefined ? target.orcaRole : known?.orcaRole;
     const refs: OrcaBoundSessionRef[] = [selfRef];
     if (effectiveRole === 'lead') {
@@ -159,23 +195,28 @@ async function expandTargetsWithOrcaWorkers(
           refs.push(worker);
         }
       }
-      if (normalizedDevice === null && !localLeadWorkerReads.has(target.id)) {
-        localLeadWorkerReads.set(target.id, readLocalLeadWorkersOnce(target.id, selfDeviceId));
+      if (!leadWorkerReads.has(leadKey)) {
+        leadWorkerReads.set(
+          leadKey,
+          normalizedDevice === null
+            ? readLocalLeadWorkersOnce(target.id, selfDeviceId)
+            : readRemoteLeadWorkersOnce(normalizedDevice, target.id, selfDeviceId),
+        );
       }
     }
     refsByTarget.set(target, refs);
   }
 
   let workersConfirmed = true;
-  if (localLeadWorkerReads.size > 0) {
+  if (leadWorkerReads.size > 0) {
     const resolved = new Map<string, { workers: OrcaBoundSessionRef[]; ok: boolean }>(
       await Promise.all(
-        [...localLeadWorkerReads.entries()].map(async ([leadId, read]) => [leadId, await read] as const),
+        [...leadWorkerReads.entries()].map(async ([leadKey, read]) => [leadKey, await read] as const),
       ),
     );
     for (const [target, refs] of refsByTarget) {
-      if (normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId) !== null) continue;
-      const entry = resolved.get(target.id);
+      const normalizedDevice = normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId);
+      const entry = resolved.get(orcaLeadSessionKey(target.id, normalizedDevice, selfDeviceId));
       if (!entry) continue;
       if (!entry.ok) workersConfirmed = false;
       for (const worker of entry.workers) {

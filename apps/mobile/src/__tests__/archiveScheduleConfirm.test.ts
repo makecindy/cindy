@@ -9,6 +9,7 @@ vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
 vi.mock('@/session/scheduleIndex', () => ({ sessionMayHaveScheduleRuns: mocks.mayHave }));
 
 import {
+  anyMayHaveBoundSchedules,
   countSessionsWithActiveBoundSchedules,
   loadActiveBoundScheduleNames,
   loadConfirmedActiveBoundScheduleNames,
@@ -94,38 +95,74 @@ describe('archive schedule lookup deadline', () => {
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
-  // Rule: task-inbox.md / archive-pauses-automations.md — an Orca Lead must inherit active
-  // automations bound to its active local or cross-device Workers for archive protection.
-  it('checks active local and cross-device Orca Workers for a Lead and fails closed in strict mode', async () => {
-    const sessions = [
-      { id: 'lead', status: 'active', orcaRole: 'lead', deviceLinkDeviceId: 'pc' },
-      { id: 'worker-local', status: 'active', orcaRole: 'worker', orcaLeadSessionId: 'lead', deviceLinkDeviceId: 'pc' },
-      {
-        id: 'worker-remote',
-        status: 'active',
-        deviceLinkDeviceId: 'mini',
-        orcaRemoteLead: { leadDeviceId: 'pc', leadSessionId: 'lead' },
-      },
-    ];
-    mocks.mayHave.mockImplementation(((_d: string, id: string) => id !== 'lead') as never);
-    mocks.list.mockImplementation(async (device: string) =>
-      device === 'pc'
-        ? [{ id: 's1', name: 'Local Worker Job', status: 'active', targetSessionId: 'worker-local' }]
-        : [{ id: 's2', name: 'Mini PR #11923', status: 'active', targetSessionId: 'worker-remote' }],
-    );
+  // Rule: task-inbox.md / archive-pauses-automations.md — an Orca Lead must discover active
+  // local and cross-device Workers authoritatively (even outside the 200-row home window)
+  // and fail closed in strict mode when either workers or schedules cannot be read.
+  it('discovers Orca Workers outside the loaded list window and fails closed in strict mode', async () => {
+    const leadOnlySessions = [{ id: 'lead', status: 'active', orcaRole: 'lead', deviceLinkDeviceId: 'pc' }];
+    mocks.mayHave.mockReturnValue(false);
+    expect(anyMayHaveBoundSchedules('pc', [{ id: 'lead', orcaRole: 'lead' }], leadOnlySessions)).toBe(true);
+
+    mocks.list.mockImplementation(async (device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return [
+          { id: 'w1', sessionId: 'worker-outside-200', role: 'developer', status: 'idle' },
+          {
+            id: 'w2',
+            sessionId: 'proxy-mini',
+            role: 'reviewer',
+            status: 'idle',
+            executionDevice: { deviceId: 'mini', remoteSessionId: 'worker-remote' },
+          },
+        ];
+      }
+      return device === 'pc'
+        ? [{ id: 's1', name: 'Local Worker Job', status: 'active', targetSessionId: 'worker-outside-200' }]
+        : [{ id: 's2', name: 'Mini PR #11923', status: 'active', targetSessionId: 'worker-remote' }];
+    });
 
     await expect(
-      loadActiveBoundScheduleNames({ deviceId: 'pc', invoke: mocks.list as never, sessionId: 'lead', sessions }),
+      loadActiveBoundScheduleNames({
+        deviceId: 'pc',
+        invoke: mocks.list as never,
+        sessionId: 'lead',
+        orcaRole: 'lead',
+        sessions: leadOnlySessions,
+      }),
     ).resolves.toEqual(['Local Worker Job', 'Mini PR #11923']);
     await expect(
-      countSessionsWithActiveBoundSchedules('pc', mocks.list as never, [{ id: 'lead' }], sessions),
+      countSessionsWithActiveBoundSchedules('pc', mocks.list as never, [{ id: 'lead', orcaRole: 'lead' }], leadOnlySessions),
     ).resolves.toBe(1);
 
-    mocks.list.mockImplementation(async (device: string) =>
-      device === 'pc' ? [] : Promise.reject(new Error('DEVICE_OFFLINE')),
-    );
+    // Strict mode must fail closed if list-workers-by-lead fails OR a worker device is unreachable.
+    mocks.list.mockImplementation(async (_device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') throw new Error('DEVICE_OFFLINE');
+      return [];
+    });
     await expect(
-      loadConfirmedActiveBoundScheduleNames({ deviceId: 'pc', invoke: mocks.list as never, sessionId: 'lead', sessions }),
+      loadConfirmedActiveBoundScheduleNames({
+        deviceId: 'pc',
+        invoke: mocks.list as never,
+        sessionId: 'lead',
+        orcaRole: 'lead',
+        sessions: leadOnlySessions,
+      }),
+    ).resolves.toBeNull();
+
+    mocks.list.mockImplementation(async (device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return [{ id: 'w2', sessionId: 'proxy-mini', role: 'reviewer', status: 'idle', executionDevice: { deviceId: 'mini', remoteSessionId: 'worker-remote' } }];
+      }
+      return device === 'pc' ? [] : Promise.reject(new Error('DEVICE_OFFLINE'));
+    });
+    await expect(
+      loadConfirmedActiveBoundScheduleNames({
+        deviceId: 'pc',
+        invoke: mocks.list as never,
+        sessionId: 'lead',
+        orcaRole: 'lead',
+        sessions: leadOnlySessions,
+      }),
     ).resolves.toBeNull();
   });
 });
