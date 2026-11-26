@@ -328,6 +328,28 @@ describe('FolderPickerPopover wheel routing', () => {
     expect(list.scrollTop).toBe(40);
   });
 
+  // Short windows: the menu is capped to the space beside the trigger and the
+  // section above the pinned "new project / add remote project" actions scrolls.
+  // Minimal failing input: list already at its end, section still scrollable —
+  // before the cap there was no such section and the rest was unreachable.
+  it('scrolls the section above the pinned actions once the list reaches its end', () => {
+    renderPicker(manyProjects);
+    const list = scrollList();
+    list.scrollTop = 748;
+    const section = document.querySelector<HTMLElement>('[data-folder-picker-section]')!;
+    Object.defineProperties(section, {
+      scrollHeight: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+
+    fireEvent(screen.getByText('newChat.folderPicker.projects'), wheel);
+
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(list.scrollTop).toBe(748);
+    expect(section.scrollTop).toBe(24);
+  });
+
   it('routes recent-folder header wheels to its separate list without intercepting its rows', () => {
     // The legacy picker has a separate scroll node and no project-search ref.
     // One cancelable header event must still cancel before manual forwarding.
