@@ -12747,7 +12747,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [{ includeIcons: false }]);
     assertCurrent();
     if (!reply.ok) {
-      if (reply.error?.code === 'CHANNEL_NOT_ALLOWED') return [];
+      // Catalog tools distinguish an unsupported or failed read from a successful empty catalog.
       throw new Error(reply.error?.message || '[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
     }
     return parseOfferedPluginEngines(reply.result);
