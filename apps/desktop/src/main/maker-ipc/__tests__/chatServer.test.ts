@@ -498,6 +498,8 @@ describe('Chat Server result delivery and refresh', () => {
           ...(mode === 'quoted-source' ? [buildBotGroupQuoteCard({ messageId: laterId, authorName: 'Peer', authorKind: 'user',
             excerpt: 'Do not copy this snapshot', attachmentCount: 0, attachmentName: null, sequence: 1 })] : [])] };
       const posts: unknown[] = [];
+      const warn = vi.fn();
+      if (mode === 'refused') (deps as unknown as { log: unknown }).log = { warn, info: vi.fn() };
       let settled = false;
       fixture.handle.mockImplementation((route, _method, body) => {
         if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1 } } };
@@ -509,7 +511,9 @@ describe('Chat Server result delivery and refresh', () => {
         }
         if (body?.action === 'complete') {
           posts.push(structuredClone(body.content));
-          if (mode === 'refused' && posts.length === 1) return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+          if (mode === 'refused' && posts.length === 1) return { status: 400, body: { error: {
+            code: 'INVALID_INPUT', message: 'raw rejection with fake bearer secret', details: { author: peer, text: source.content[0] },
+          } } };
         }
         if (route.endsWith(`/messages/${source.id}`)) {
           if (settled && mode === 'forbidden') return { status: 403, body: {} };
@@ -530,7 +534,15 @@ describe('Chat Server result delivery and refresh', () => {
       const reply = { type: 'text', text: 'Finished reply' };
       const process = expect.objectContaining({ namespace: 'cindy.work-record' });
       expect(posts[0]).toEqual(['visible', 'refused'].includes(mode) ? [quote, reply, process] : [reply, process]);
-      if (mode === 'refused') expect(posts[1]).toEqual([reply, process]);
+      if (mode === 'refused') {
+        expect(posts[1]).toEqual([reply, process]);
+        expect(deliveries().map(([, , body]) => body.operationId)).toEqual(Array(2).fill(`chat:${execution.id}:${execution.epoch}:complete`));
+        expect(warn.mock.calls.filter(([message]) => message === 'Group reply quote refused')).toEqual([
+          ['Group reply quote refused', { action: 'complete', downgrade: 'drop-quote', code: 'INVALID_INPUT', status: 400,
+            blocks: [{ type: 'card', namespace: 'cindy.quote', schemaRevision: 1 }, { type: 'text' },
+              { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1 }] }],
+        ]);
+      }
     });
 
   // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty

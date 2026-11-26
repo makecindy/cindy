@@ -2805,8 +2805,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       refusal = await attempt();
       if (!invalidInput(refusal) && (!refusal || refusal instanceof ChatResponseError)) supportsTeammateMentions = false;
     }
+    const refusedContent = payload.content;
     if (run.readMentionReplyQuote && contentRefusal(action, refusal)
       && dropSettlementCard(payload, 'cindy.quote')) {
+      deps.log?.warn('Group reply quote refused', {
+        action, downgrade: 'drop-quote', ...chatErrorDiagnostic(refusal), blocks: contentShapes(refusedContent),
+      });
       refusal = await attempt();
     }
     if (!refusal) return;
