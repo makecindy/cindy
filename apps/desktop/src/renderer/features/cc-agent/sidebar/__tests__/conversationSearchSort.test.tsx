@@ -129,6 +129,20 @@ describe('useConversationSearch sort persistence', () => {
 });
 
 describe('useConversationSearch visibility scope', () => {
+  // Explicit syntax must not start a delayed semantic search that can widen
+  // results; reset must remove the conjunction from the shared query (unit).
+  it('runs only keyword search for explicit syntax and resets its all-keyword filter', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useConversationSearch({ enabled: true, navigate: vi.fn() as never, allKnownProjects: [] }));
+    act(() => result.current.setQuery('+ "login error" cache'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(searchConversations).toHaveBeenCalledTimes(1);
+    expect(searchConversations).toHaveBeenCalledWith(expect.objectContaining({ query: '+ "login error" cache', semanticMode: 'keyword' }), expect.anything());
+    expect(result.current.activeFilterCount).toBe(1);
+    act(() => result.current.resetFilters());
+    expect(result.current.query).toBe('"login error" cache');
+    expect(result.current.activeFilterCount).toBe(0);
+  });
   it('keeps global search unbounded while scoping an explicit local project by session ids', async () => {
     vi.useFakeTimers();
     const searchMock = vi.mocked(searchConversations);

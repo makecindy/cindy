@@ -17933,6 +17933,13 @@
         "active": "{{count}} filters",
         "reset": "Reset",
         "allProjects": "All projects"
+      },
+      "match": {
+        "label": "Keywords",
+        "any": "Any keyword",
+        "all": "All keywords",
+        "help": "Use “exact phrase” for continuous text, or a + b to require both keywords in one message. Titles are matched separately. Put spaces around +.",
+        "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
       }
     }
   },

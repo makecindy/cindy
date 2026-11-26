@@ -18102,6 +18102,13 @@
         "active": "{{count}} filtros",
         "reset": "Repor",
         "allProjects": "Todos os projetos"
+      },
+      "match": {
+        "label": "Palavras-chave",
+        "any": "Qualquer palavra",
+        "all": "Todas as palavras",
+        "help": "Use “frase exata” para texto contínuo ou a + b para exigir ambas as palavras na mesma mensagem. Os títulos são pesquisados separadamente. Coloque espaços à volta de +.",
+        "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a pesquisa a um projeto."
       }
     }
   },

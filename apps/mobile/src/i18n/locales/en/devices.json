@@ -521,7 +521,8 @@
           "30d": "30d",
           "all": "All"
         }
-      }
+      },
+      "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
     },
     "renameDevice": {
       "title": "Rename Device",

@@ -3840,6 +3840,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             searching={indexedSearch.status === 'searching'}
+            poolCapped={indexedSearch.poolCapped}
             onChangeQuery={indexedSearch.setQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}

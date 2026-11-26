@@ -17933,6 +17933,13 @@
         "active": "{{count}} Filter",
         "reset": "Zurücksetzen",
         "allProjects": "Alle Projekte"
+      },
+      "match": {
+        "label": "Suchbegriffe",
+        "any": "Beliebiger Suchbegriff",
+        "all": "Alle Suchbegriffe",
+        "help": "“Exakte Wortgruppe” sucht zusammenhängenden Text. a + b verlangt beide Begriffe in derselben Nachricht. Titel werden separat durchsucht. Leerzeichen um + setzen.",
+        "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
       }
     }
   },

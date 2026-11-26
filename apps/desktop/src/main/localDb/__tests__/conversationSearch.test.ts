@@ -19,6 +19,7 @@ vi.mock('../chatHistorySearch.js', () => ({
 }));
 
 import { searchConversations } from '../conversationSearch.js';
+import { cjkSeg } from '../cjkSeg.js';
 
 const conversationSearchSource = readFileSync(
   resolve(__dirname, '..', 'conversationSearch.ts'),
@@ -161,6 +162,7 @@ function createSearchDb(): Database.Database {
 function makeSearchDbClient(db: Database.Database): DbClient {
   return {
     drizzle: drizzle(db, { schema }),
+    query: async (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   } as unknown as DbClient;
 }
 
@@ -180,6 +182,55 @@ afterEach(() => {
   clearCurrentDbClient();
   vi.useRealTimers();
   mocks.searchChatHistoryHybrid.mockReset();
+});
+
+// Explicit search must narrow by visible phrase and by message before limiting.
+// Existing OR-pool tests cannot detect cross-message false positives or token-only
+// false positives. Unit: real in-memory SQLite through searchConversations.
+describe('explicit task search', () => {
+  it('requires all keywords in one visible message and never combines title or other messages', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    db.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content)');
+    const add = (id: string, sessionId: string, content: string, rewindAt: number | null = null) => {
+      db.prepare('INSERT INTO messages(id,client_id,session_id,role,content,created_at,rewind_at) VALUES(?,?,?,?,?,?,?)')
+        .run(id, id, sessionId, 'user', content, 100, rewindAt);
+      db.prepare('INSERT INTO messages_fts(message_id,content) VALUES(?,?)').run(id, cjkSeg(content));
+    };
+    try {
+      for (const id of ['both', 'one', 'gapped', 'hidden', 'same']) insertSearchSession(db, id, 100, null);
+      for (let index = 0; index < 205; index++) {
+        add(`noise-${index}`, 'one', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      }
+      add('a', 'both', '登录失败');
+      add('b', 'both', '缓存');
+      add('c', 'gapped', '登录，失败');
+      add('d', 'hidden', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      add('e', 'hidden', '缓存', 101);
+      add('same-message', 'same', '登录后清除缓存');
+      const exact = await searchConversations({ query: '"登录失败"' });
+      expect(exact.results.map((item) => item.session.id)).toEqual(['both']);
+      const all = await searchConversations({ query: '登录 + 缓存' });
+      expect(all.results.map((item) => item.session.id)).toEqual(['same']);
+      expect(all.results[0].contentHits.map((hit) => hit.messageId)).toEqual(['same-message']);
+      expect(all.vectorUsed).toBe(false);
+      const titleAndContent = await searchConversations({ query: '+ both 缓存' });
+      expect(titleAndContent.results).toEqual([]);
+      const titleOnly = await searchConversations({ query: '+ needle both' });
+      expect(titleOnly.results.map((item) => item.session.id)).toEqual(['both']);
+      const scoped = await searchConversations({ query: '+ 登录 缓存', filters: { sessionIds: ['one'] } });
+      expect(scoped.results).toEqual([]);
+      db.prepare('UPDATE messages SET created_at = 1000 WHERE id = ?').run('same-message');
+      const newest = await searchConversations({ query: '+ 登录', limit: 1 });
+      expect(newest.results.map((item) => item.session.id)).toEqual(['same']);
+      for (let index = 0; index < 1001; index++) add(`wide-${index}`, 'one', 'wide');
+      const querySpy = vi.spyOn(client, 'query');
+      const capped = await searchConversations({ query: '+ wide' });
+      expect(capped.poolCapped).toBe(true);
+      expect(querySpy).toHaveBeenCalledTimes(5);
+    } finally { clearCurrentDbClient(client); db.close(); }
+  });
 });
 
 // #7026 / #6916: the mobile cache only contains the first 200 tasks. The existing

@@ -3751,6 +3751,7 @@ function ExpandedView({
               onContextMenu={(event) => event.stopPropagation()}
             >
               <SearchResultsBody
+                poolCapped={search.poolCapped}
                 trimmed={search.trimmed}
                 status={search.status}
                 results={search.results}

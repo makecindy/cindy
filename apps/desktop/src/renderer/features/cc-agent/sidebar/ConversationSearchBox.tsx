@@ -1,4 +1,5 @@
 import { TaskTagDots } from '@/features/task-tags/TaskTags';
+import { parseConversationSearchQuery, setConversationSearchAll } from '@cindy/maker-shared/conversation-search';
 import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Button } from '@/components/ui/button';
@@ -199,6 +200,7 @@ export function useConversationSearch({
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
   const unnamedLabel = t('ccAgent.common.unnamedSession');
   const query = useSyncExternalStore(subscribeSearchDraft, getSearchDraft);
+  const matchAll = parseConversationSearchQuery(query).all;
   const [active, setActive] = useState(false);
   const resume = useCallback(() => setActive(true), []);
   const setQuery = useCallback((next: string) => {
@@ -345,13 +347,13 @@ export function useConversationSearch({
     sessionIds: selectedProjectSessionIds,
   });
   const activeFilterCount = useMemo(() => {
-    let count = 0;
+    let count = matchAll ? 1 : 0;
     if (statusFilter !== 'all') count += 1;
     if (agentFilter !== 'all') count += 1;
     if (lastActivityFilter !== 'all') count += 1;
     if (projectSelection !== 'all' || lockedSessionGroup) count += 1;
     return count;
-  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup]);
+  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup, matchAll]);
 
   useEffect(() => {
     if (!requestProjectKey && requestGroupName === null) return;
@@ -415,7 +417,8 @@ export function useConversationSearch({
     let keywordPage: ConversationSearchResponse | null = null;
     let semanticPage: ConversationSearchResponse | null = null;
     let keywordSettled = false;
-    const hasLocalOrigin = scope.origins.some((origin) => origin.kind === 'local');
+    const hasLocalOrigin = !parseConversationSearchQuery(trimmed).explicit
+      && scope.origins.some((origin) => origin.kind === 'local');
     let semanticSettled = !hasLocalOrigin;
     const publishResults = () => {
       if (seq !== requestSeqRef.current) return;
@@ -543,11 +546,12 @@ export function useConversationSearch({
 
   /** 筛选面板「重置」:清空各筛选;有项目锁定时回落到锁定项目。 */
   const resetFilters = useCallback(() => {
+    if (matchAll) setQuery(setConversationSearchAll(query, false));
     setStatusFilter('all');
     setAgentFilter('all');
     setLastActivityFilter('all');
     setProjectSelection(lockedProjectKey ? [lockedProjectKey] : 'all');
-  }, [lockedProjectKey]);
+  }, [lockedProjectKey, query, setQuery, matchAll]);
 
   const handleSelect = useCallback(
     async (
@@ -606,6 +610,7 @@ export function useConversationSearch({
     activeFilterCount,
     status,
     results,
+    poolCapped: response?.poolCapped ?? false,
     dismiss,
     resume,
     clearLock,
@@ -626,7 +631,9 @@ export function SearchResultsBody({
   maxHeightClass,
   leading,
   leadingCount = 0,
+  poolCapped = false,
 }: {
+  poolCapped?: boolean;
   trimmed: string;
   status: 'idle' | 'searching' | 'done' | 'error';
   results: ConversationSearchResultItem[];
@@ -641,6 +648,7 @@ export function SearchResultsBody({
   if (trimmed && leadingCount > 0) {
     return (
       <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
+        {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
         {leading}
         {status === 'searching' ? (
           <div className="flex items-center justify-center gap-2 px-3 py-4 text-12 text-[var(--cmd-palette-item-meta)]">
@@ -685,12 +693,13 @@ export function SearchResultsBody({
   if (results.length === 0) {
     return (
       <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
-        {t('ccAgent.search.noResults')}
+        {t(poolCapped ? 'ccAgent.search.match.partial' : 'ccAgent.search.noResults')}
       </div>
     );
   }
   return (
     <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
+      {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
       {results.map((item) => (
         <SearchResultRow
           key={conversationSearchResultKey(item)}
@@ -880,6 +889,8 @@ export function ConversationSearchBox({
           </div>
           <div className="mt-2 flex items-center gap-2">
             <SearchFilterMenu
+              query={search.query}
+              onQueryChange={search.setQuery}
               status={search.statusFilter}
               agentKind={search.agentFilter}
               lastActivity={search.lastActivityFilter}
@@ -900,6 +911,7 @@ export function ConversationSearchBox({
           </div>
         </div>
         <SearchResultsBody
+          poolCapped={search.poolCapped}
           trimmed={search.trimmed}
           status={search.status}
           results={search.results}
@@ -919,6 +931,8 @@ export function ConversationSearchBox({
  * 常显在首行右侧,不用展开子菜单就能看到——这也是排序选项不需要图标的原因。
  */
 export function SearchFilterMenu({
+  query = '',
+  onQueryChange,
   status,
   agentKind,
   lastActivity,
@@ -938,6 +952,8 @@ export function SearchFilterMenu({
   compact,
   onOpenChange,
 }: {
+  query?: string;
+  onQueryChange?: (value: string) => void;
   status: ConversationSearchStatusFilter;
   agentKind: ConversationSearchAgentFilter;
   lastActivity: ConversationSearchLastActivityFilter;
@@ -1063,6 +1079,24 @@ export function SearchFilterMenu({
             />
           ))}
         </MenuSubRow>
+
+        {onQueryChange && (
+          <MenuSubRow
+            label={t('ccAgent.search.match.label')}
+            value={t(parseConversationSearchQuery(query).all ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+          >
+            {[false, true].map((all) => (
+              <SelectMenuItem
+                key={String(all)}
+                label={t(all ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+                selected={parseConversationSearchQuery(query).all === all}
+                onSelect={() => onQueryChange(setConversationSearchAll(query, all))}
+              />
+            ))}
+            <DropdownMenuSeparator />
+            <p className="max-w-64 px-2 py-1.5 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.help')}</p>
+          </MenuSubRow>
+        )}
 
         <MenuSubRow label={t('ccAgent.sidebar.filterStatusHeading')} value={statusValue}>
           {STATUS_OPTIONS.map((option) => (
