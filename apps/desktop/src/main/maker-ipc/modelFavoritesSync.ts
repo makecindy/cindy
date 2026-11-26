@@ -59,6 +59,11 @@ export async function applyHostModelFavorite(mutation: ModelFavoriteMutation): P
   if (!hostRequest) throwIpcError('DEVICE_LINK_UNAVAILABLE', 'Favorites host not ready');
   return (await hostRequest(mutation)).items;
 }
+/** Cloud settings: reads, or applies one mutation, over the same host bridge. */
+export async function requestModelFavorites(mutation?: unknown): Promise<RemoteModelFavorite[]> {
+  if (!hostRequest) throwIpcError('DEVICE_LINK_UNAVAILABLE', 'Favorites host not ready');
+  return (await hostRequest(mutation)).items;
+}
 
 /** The existing renderer store is authoritative. Dispatch once to ONE owner-fenced
  * app window and acknowledge persisted results, never maintain a second database. */

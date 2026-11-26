@@ -24,6 +24,7 @@ import { normalizeSessionProviderId, getSessionProvider, hasSessionProvider, set
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { PLUGIN_ENGINE_DEFAULT_MODEL, isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
+import { customProviderExists } from '../maker-host/custom-provider-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
@@ -42,7 +43,7 @@ import { readSshCodexModelList, assertSshCodexModel } from '../remote-ssh/codex-
 import { projectPendingAgentSwitchIntent } from './sessionAgentSwitchHandler.js';
 import { closeRejectedRuntimeAndRestoreControlStores, applyRuntimeSetModelChange } from './runtimeSetModel.js';
 import { getSessionLastLiveUsage } from './sessionLastLiveUsage.js';
-import { logColdPiRehydrationFailure, reportColdPiRehydrationFailure, ColdPiRehydrationError } from './coldPiRehydrationFailure.js';
+import { describeMissingColdPiConnection, logColdPiRehydrationFailure, reportColdPiRehydrationFailure, ColdPiRehydrationError } from './coldPiRehydrationFailure.js';
 import { classifyColdPiRehydrationOutcome } from './coldPiRehydration.js';
 import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import { resolveModelSwitchWindows, resolveModelSwitchContextTokens, describeModelWindowGateFailure } from './modelSwitchGateInput.js';
@@ -600,7 +601,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         });
         if ((!provider?.connected && routeExplicit) || !catalogModel) {
           throwIpcError(
-            'INVALID_PARAMS',
+            runtimeAgentKind === 'pi' && provider?.connected && !catalogModel
+              ? 'MODEL_SELECTION_UNAVAILABLE' : 'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
         }
@@ -773,6 +775,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         hadLiveSession: maker.getSession(sessionId) !== undefined,
       };
       let liveSessionBeforeRouteChange = maker.getSession(sessionId);
+      let coldPiRecoveryError: unknown;
       let rehydratedColdPiRuntime: typeof liveSessionBeforeRouteChange = undefined;
       // 冷 Pi 但没做活进程窗口核验（本轮新增：目标窗口对已知占用有余量、压力预检证明
       // 核实不可能改变结论，于是跳过了冷启动核实）：目标 route 照常落定，由下一次发送
@@ -856,7 +859,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       if (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange) {
         if (!piPreview || piPreview.action === 'unavailable') {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            piPreview?.modelNotOffered ? 'MODEL_SELECTION_UNAVAILABLE' : 'PRECONDITION_FAILED',
             piPreview?.reason ?? 'Pi target route cannot be previewed; runtime selection was not changed',
           );
         }
@@ -944,6 +947,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               // fail-open 放行热切，目标路由由下一次发送懒创建；届时 bootstrap 失败
               // 会带真实原因浮现。完整原因仍进 Main 日志（#5508）。
               logColdPiRehydrationFailure({ log }, coldPiFailureContext, error);
+              coldPiRecoveryError = error;
               coldPiRehydrationFailed = true;
               coldPiRouteWithoutLiveWindowCheck = true;
             }
@@ -1027,10 +1031,6 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             && resolvedCurrentWindow > 0
             ? resolvedCurrentWindow
             : undefined);
-        const targetDoesNotShrink =
-          typeof verifiedCurrentWindow === 'number' &&
-          typeof verifiedTargetWindow === 'number' &&
-          verifiedTargetWindow >= verifiedCurrentWindow;
         // Materialized/user-provider catalog windows can be display-only fallbacks.
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
@@ -1068,6 +1068,14 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           : null;
         if (windowGateFailure) {
           if (rehydratedColdPiRuntime) await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
+          if (windowGateFailure.category === 'current-window-unverified' && coldPiRecoveryError) {
+            const missingConnection = await describeMissingColdPiConnection({
+              error: coldPiRecoveryError, currentProviderId, providers: runtimeProviders,
+              providerExists: customProviderExists, applyingOnSend: internalOptions.applyingUserSelectionOnSend,
+            });
+            assertRuntimeOwnerCurrent();
+            if (missingConnection) Object.assign(windowGateFailure, missingConnection);
+          }
           log.warn('set-model: model window gate refused the runtime selection', {
             sessionId, ...windowGateFailure, model, targetRouteProviderId,
             contextTokens, verifiedCurrentWindow, targetContextWindow,
@@ -1088,7 +1096,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           gate: {
             inTurn: isSessionInTurn(sessionId),
             isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' ||
-              (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
+              (!ownerWindowRebuild && !internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
             agentKind: runtimeAgentKind,
             runtimeRouteChanged: runtimeRouteChanged || piConfigurationRefresh,
             verifiedTargetWindow,
@@ -1111,8 +1119,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           !ownerPiFinalWindow &&
           !modelSwitchPlan.skipRebuild &&
           typeof targetContextWindow === 'number' &&
-          targetContextWindow > 0 &&
-          !targetDoesNotShrink
+          targetContextWindow > 0
         ) {
           if (!contextOverflowRolloverHolder) {
             throwIpcError(
@@ -1132,7 +1139,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               nextInputChars: internalOptions.nextInputChars,
               recheckTargetPressure: true,
               confirmedTargetPressure:
-                (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
+                (internalOptions.source === 'user' &&
                   (ownerWindowRebuild || localWindowRebuild)) ||
                 (modelSelectionOrigin === undefined && !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow),
               onConfirmationRequired: (contextTokens) => {

@@ -190,7 +190,9 @@ const prFollowWatch = new PrFollowWatch({
   runNow: async (id, trigger, expectedSchedule, mrObservation) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
+    // PrFollowWatch owns the single pending doorbell for every watched schedule (both
+    // explicit prTrigger and legacy hook URLs), so busy deferrals must not clobber nextFireAt.
+    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: true });
   },
   log,
 });

@@ -121,6 +121,27 @@ describe('usage limit recovery detection', () => {
         NOW,
       ),
     ).toEqual({ resetAtMs: null });
+    // 测试价值：依据 Codex 0.156 rateLimitExceeded 与安全拦截边界；rateLimitExceeded 应保留临时限流提示而不误判账号限额，
+    // 安全拦截即使含 usage policy 也绝不能触发额度恢复等待；生产入口 extractUsageLimitRecoveryHint；
+    // 最小失败输入为 codexErrorInfo:'rateLimitExceeded' 与 usage policy 拦截文本；tier: unit。
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'rateLimitExceeded',
+          message: 'Too many requests',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: null });
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          message: 'Your prompt was flagged as potentially violating our usage policy.',
+        },
+        NOW,
+      ),
+    ).toBeNull();
   });
 
   it('parses the real Claude session-limit wording with a named timezone', () => {
@@ -221,5 +242,14 @@ describe('usage limit recovery detection', () => {
         NOW,
       ),
     ).toBeNull();
+  });
+
+  it('uses structured OpenAI codes before rate, billing or overload wording', () => {
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"credit_balance_exhausted","message":"upstream overloaded"}}',
+    }, NOW)).toBeNull();
+    expect(extractUsageLimitRecoveryHint({
+      errorStatus: 429, message: '{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}',
+    }, NOW)).toEqual({ resetAtMs: null });
   });
 });

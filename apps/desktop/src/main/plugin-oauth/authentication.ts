@@ -262,6 +262,9 @@ export class AuthenticatedOauthHost {
       try {
         this.assertCurrent(c);
         const result = await this.deps.request(peer, request);
+        // A successful close invalidates the page before the response guard can run.
+        // Release its slot here while still enforcing the guard on the reply.
+        if (request.op === 'settings' && request.command.kind === 'close') c.finished = true;
         this.assertCurrent(c);
         if (request.op === 'start') {
           const id = (result as { id?: unknown })?.id;
@@ -270,7 +273,6 @@ export class AuthenticatedOauthHost {
         }
         if (
           request.op === 'cancel' ||
-          (request.op === 'settings' && request.command.kind === 'close') ||
           ['succeeded', 'failed', 'cancelled', 'expired'].includes(
             String((result as { phase?: unknown })?.phase),
           )

@@ -17,6 +17,7 @@ import {
   PROVIDER_GROUP_LOCAL_MEMBER_KEY,
   providerGroupDeviceCount,
   providerGroupSummaryForWire,
+  publicProviderGroupConfig,
   type ProviderGroupConfig,
   type ProviderGroupRebalanceSuggestion,
   type ProviderGroupRemotePick,
@@ -241,7 +242,8 @@ export async function handleProviderGroupRemote(
       }
       // The view is an allowed object-form read. The host, not the caller,
       // owns the first-hop budget; an existing shorter stamp wins.
-      return { ...view, providerContinuity: readProviderMetadataContinuity(view)
+      return { ...view, config: view.config ? publicProviderGroupConfig(view.config) : null,
+        providerContinuity: readProviderMetadataContinuity(view)
         ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
     }
     case 'usage':

@@ -31,7 +31,11 @@ import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, 
 import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
-import { isCodexModelUnavailableError, type CodexDownshiftModelRejection } from '@cindy/maker-core';
+import {
+  isCodexModelUnavailableError,
+  type CodexDownshiftModelRejection,
+  type CodexUpstreamCapacitySignal,
+} from '@cindy/maker-core';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 /**
  * Desktop 端 codex-proxy 生命周期管理 ——
@@ -135,7 +139,8 @@ import {
 import type { CodexSubagentRouteSnapshot } from './codex-subagent-config.js';
 import { getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed } from './session-provider-store.js';
 import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
-import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel } from './guest-provider-route-store.js';
+import { captureGuestRequestUsage, guestProviderModelDenial, guestProviderModelAllowed, guestProviderOffersModel, guestProviderRouteForSession, hostedProviderOffersModel, poolAuthorizationProvider } from './guest-provider-route-store.js';
+import { getSessionSubscriptionAccount, readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
@@ -268,6 +273,104 @@ export function shouldCompactCodexWebSocketFrame(message: Buffer, limitBytes = C
   }
 }
 
+const CODEX_CAPACITY_MESSAGE_RE = /\bat capacity\b|\bcurrently overloaded\b/i;
+const CODEX_CAPACITY_MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
+const CODEX_CAPACITY_WS_INSPECT_MAX_BYTES = 64 * 1024;
+const CODEX_CAPACITY_HTTP_INSPECT_MAX_BYTES = 16 * 1024;
+
+function parseBoundedRetryAfterMs(
+  retryAfterHeader: string | string[] | undefined,
+  errorObjects: ReadonlyArray<Record<string, unknown>>,
+  now: number,
+): number | undefined {
+  const clamp = (ms: number): number | undefined =>
+    Number.isFinite(ms) && ms > 0 && ms <= CODEX_CAPACITY_MAX_RETRY_AFTER_MS ? Math.round(ms) : undefined;
+  const rawHeader = Array.isArray(retryAfterHeader) ? retryAfterHeader[0] : retryAfterHeader;
+  if (typeof rawHeader === 'string' && rawHeader.trim().length > 0) {
+    const trimmed = rawHeader.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const fromSeconds = clamp(Number(trimmed) * 1000);
+      if (fromSeconds !== undefined) return fromSeconds;
+    } else {
+      const parsedDate = Date.parse(trimmed);
+      if (Number.isFinite(parsedDate)) {
+        const delta = clamp(parsedDate - now);
+        if (delta !== undefined) return delta;
+      }
+    }
+  }
+  for (const obj of errorObjects) {
+    if (typeof obj.retry_after_ms === 'number') {
+      const ms = clamp(obj.retry_after_ms);
+      if (ms !== undefined) return ms;
+    }
+    for (const key of ['retry_after', 'retry_after_seconds', 'resets_in_seconds'] as const) {
+      const value = obj[key];
+      if (typeof value === 'number') {
+        const ms = clamp(value * 1000);
+        if (ms !== undefined) return ms;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract a structured, secret-free capacity/overload signal from an upstream
+ * OpenAI Responses WebSocket frame, SSE error event, or HTTP error JSON body.
+ */
+export function extractCodexUpstreamCapacitySignal(
+  payload: unknown,
+  opts: { status?: number; retryAfterHeader?: string | string[]; now?: number } = {},
+): CodexUpstreamCapacitySignal | null {
+  if (!isPlainObject(payload)) return null;
+  const topType = typeof payload.type === 'string' ? payload.type : '';
+  const responseObj = isPlainObject(payload.response) ? payload.response : null;
+  const nestedError = isPlainObject(payload.error)
+    ? payload.error
+    : responseObj && isPlainObject(responseObj.error)
+      ? responseObj.error
+      : null;
+  // Only inspect explicit error / response.failed envelopes so normal assistant
+  // text mentioning "at capacity" can never trigger a false overload signal.
+  if (!nestedError && topType !== 'error' && topType !== 'response.failed') return null;
+
+  const candidates = [nestedError, payload].filter((v): v is Record<string, unknown> => isPlainObject(v));
+  let matchedCode: CodexUpstreamCapacitySignal['code'] | null = null;
+  for (const candidate of candidates) {
+    const code = typeof candidate.code === 'string' ? candidate.code
+      : typeof candidate.type === 'string' ? candidate.type : '';
+    if (code === 'server_is_overloaded' || code === 'slow_down') {
+      matchedCode = code;
+      break;
+    }
+  }
+  if (!matchedCode) {
+    for (const candidate of candidates) {
+      const msg = typeof candidate.message === 'string' ? candidate.message : '';
+      if (msg && CODEX_CAPACITY_MESSAGE_RE.test(msg)) {
+        matchedCode = 'at_capacity';
+        break;
+      }
+    }
+  }
+  if (!matchedCode) return null;
+
+  const rawStatus =
+    opts.status
+    ?? (typeof payload.status === 'number' ? payload.status : undefined)
+    ?? (nestedError && typeof nestedError.status === 'number' ? nestedError.status : undefined);
+  const status = typeof rawStatus === 'number' && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : undefined;
+  const now = opts.now ?? Date.now();
+  const retryAfterMs = parseBoundedRetryAfterMs(opts.retryAfterHeader, candidates, now);
+  return {
+    code: matchedCode,
+    ...(status !== undefined ? { status } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    observedAt: now,
+  };
+}
+
 export function createCodexProxyHost(ports: CodexProxyHostPorts) {
 const imagePreprocessor = createInlineImagePreprocessor();
 const { bearerKeyFromHeaders, reportCindyGatewayKeyRejected, createAttachmentRecovery, createRequestSizeController, restrictSubscriptionRequest, withSubscriptionFastRequestPolicy, peekGrokAccessToken, isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId, buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM, claudeUpstreamEndpoint, isOpenAiSubscriptionProviderId, createXaiProxyAuthInvalidationObserver, resolveDesktopOutboundProxy, outboundFetch, readSilentEncryptedRetrySettings, recordXaiRateLimitSnapshot, CODEX_IMAGE_GENERATION_ACTOR_HEADER, codexCustomProviderRoutesSignature, findCodexAppliedCustomProviderRoute, isCodexCustomProviderNamespacePath, parseCodexCustomProviderPath, relativeProviderRequestPath, setAppliedCustomProviderRoutes } = ports;
@@ -301,6 +404,175 @@ const observedSubagentIdentityByThread = new Map<string, CodexObservedSubagentId
 type DownshiftRequest = { turnId: string; model: string; transport?: CodexDownshiftModelRejection['transport'] };
 const downshiftByThread = new Map<string, DownshiftRequest>();
 const downshiftByRequestHeaders = new WeakMap<RequestTransformCtx['headers'], DownshiftRequest>();
+const upstreamCapacityByThread = new Map<string, CodexUpstreamCapacitySignal>();
+const upstreamCapacityListenersBySession = new Map<
+  string,
+  Set<(event: { threadId: string; signal: CodexUpstreamCapacitySignal }) => void>
+>();
+
+function recordObservedUpstreamCapacity(threadId: string, signal: CodexUpstreamCapacitySignal): void {
+  if (!threadId) return;
+  upstreamCapacityByThread.set(threadId, signal);
+  log.warn('observed upstream codex capacity signal', {
+    threadId,
+    code: signal.code,
+    ...(signal.status !== undefined ? { status: signal.status } : {}),
+    ...(signal.retryAfterMs !== undefined ? { retryAfterMs: signal.retryAfterMs } : {}),
+  });
+  const sessionId = threadToSession.get(threadId);
+  if (!sessionId || sessionToThread.get(sessionId) !== threadId) return;
+  const listeners = upstreamCapacityListenersBySession.get(sessionId);
+  if (!listeners || listeners.size === 0) return;
+  for (const listener of [...listeners]) {
+    try {
+      listener({ threadId, signal });
+    } catch {
+      // Observer errors must never disrupt proxy forwarding.
+    }
+  }
+}
+
+function getObservedCodexUpstreamCapacity(
+  sessionId: string,
+  threadId: string,
+): CodexUpstreamCapacitySignal | undefined {
+  if (sessionToThread.get(sessionId) !== threadId) return undefined;
+  return upstreamCapacityByThread.get(threadId);
+}
+
+function subscribeCodexUpstreamCapacity(
+  sessionId: string,
+  listener: (event: { threadId: string; signal: CodexUpstreamCapacitySignal }) => void,
+): () => void {
+  let set = upstreamCapacityListenersBySession.get(sessionId);
+  if (!set) {
+    set = new Set();
+    upstreamCapacityListenersBySession.set(sessionId, set);
+  }
+  set.add(listener);
+  return () => {
+    const current = upstreamCapacityListenersBySession.get(sessionId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) upstreamCapacityListenersBySession.delete(sessionId);
+  };
+}
+
+function observeInboundWebSocketCapacity(threadId: string, message: Buffer): void {
+  if (!threadId || message.length === 0 || message.length > CODEX_CAPACITY_WS_INSPECT_MAX_BYTES) return;
+  if (
+    !message.includes('"error"')
+    && !message.includes('"response.failed"')
+    && !message.includes('server_is_overloaded')
+    && !message.includes('slow_down')
+  ) {
+    return;
+  }
+  const parsed = parseJsonObject(message.toString('utf8'));
+  if (!parsed) return;
+  const signal = extractCodexUpstreamCapacitySignal(parsed);
+  if (signal) recordObservedUpstreamCapacity(threadId, signal);
+}
+
+function createCodexCapacityResponseObserver(): ResponseObserver {
+  return (ctx) => {
+    if (ctx.method !== 'POST') return null;
+    const reqPath = ctx.url.split('?', 1)[0] ?? ctx.url;
+    if (!reqPath.endsWith('/responses') && reqPath !== '/responses') return null;
+    const threadId = selectedThreadIdFromObserver(ctx);
+    if (!threadId) return null;
+    // Any fresh HTTP /responses attempt supersedes a prior turn's capacity signal.
+    upstreamCapacityByThread.delete(threadId);
+
+    const contentType = (ctx.responseHeaders['content-type'] ?? '').toLowerCase();
+    const isSse = contentType.includes('text/event-stream');
+    if (ctx.status === 503 || ctx.status === 529) {
+      let bytes = 0;
+      const chunks: Buffer[] = [];
+      let truncated = false;
+      return {
+        onData: (chunk: Buffer) => {
+          if (truncated) return;
+          bytes += chunk.length;
+          if (bytes > CODEX_CAPACITY_HTTP_INSPECT_MAX_BYTES) {
+            truncated = true;
+            chunks.length = 0;
+            return;
+          }
+          chunks.push(Buffer.from(chunk));
+        },
+        onEnd: () => {
+          if (truncated || chunks.length === 0) return;
+          const text = Buffer.concat(chunks).toString('utf8');
+          const parsed = parseJsonObject(text);
+          const signal = parsed
+            ? extractCodexUpstreamCapacitySignal(parsed, {
+              status: ctx.status,
+              retryAfterHeader: ctx.responseHeaders['retry-after'],
+            })
+            : CODEX_CAPACITY_MESSAGE_RE.test(text)
+              ? {
+                code: 'at_capacity' as const,
+                status: ctx.status,
+                ...(parseBoundedRetryAfterMs(ctx.responseHeaders['retry-after'], [], Date.now()) !== undefined
+                  ? { retryAfterMs: parseBoundedRetryAfterMs(ctx.responseHeaders['retry-after'], [], Date.now()) }
+                  : {}),
+                observedAt: Date.now(),
+              }
+              : null;
+          if (signal) recordObservedUpstreamCapacity(threadId, signal);
+        },
+      };
+    }
+
+    if (ctx.status < 200 || ctx.status >= 300 || !isSse) return null;
+    let done = false;
+    let pending = '';
+    const processFrame = (frame: string) => {
+      if (done) return;
+      if (
+        !frame.includes('error')
+        && !frame.includes('response.failed')
+        && !frame.includes('server_is_overloaded')
+        && !frame.includes('slow_down')
+      ) {
+        return;
+      }
+      const evt = tryReadSseEvent(frame);
+      if (!evt?.data) return;
+      const signal = extractCodexUpstreamCapacitySignal(evt.data);
+      if (signal) {
+        done = true;
+        recordObservedUpstreamCapacity(threadId, signal);
+      }
+    };
+    const drain = (flush: boolean) => {
+      const frames = pending.split(/\r?\n\r?\n/);
+      pending = frames.pop() ?? '';
+      for (const frame of frames) {
+        processFrame(frame);
+        if (done) break;
+      }
+      if (!done && flush && pending.trim()) {
+        processFrame(pending);
+        pending = '';
+      }
+      if (pending.length > CODEX_CAPACITY_WS_INSPECT_MAX_BYTES) {
+        pending = pending.slice(-CODEX_CAPACITY_HTTP_INSPECT_MAX_BYTES);
+      }
+    };
+    return {
+      onData: (chunk: Buffer) => {
+        if (done) return;
+        pending += chunk.toString('utf8');
+        drain(false);
+      },
+      onEnd: () => {
+        if (!done) drain(true);
+      },
+    };
+  };
+}
 
 function getRejectedCodexDownshiftModel(sessionId: string, threadId: string, turnId: string): CodexDownshiftModelRejection | undefined {
   if (sessionToThread.get(sessionId) !== threadId) return;
@@ -727,7 +999,7 @@ function providerContextForRequest(
   }
   return {
     sessionId,
-    providerId: sessionId ? getSessionProvider(sessionId) : null,
+    providerId: readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getSessionProvider(sessionId) : null),
     catalogModel: requestModel,
   };
 }
@@ -2809,15 +3081,30 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
   frozenAuthInjection?: CodexProxyAuthInjection,
   guestSessionId?: string,
   frozenRoutes?: readonly CodexCustomProviderRoute[],
+  account = getSessionSubscriptionAccount(guestSessionId),
 ): (body: unknown, ctx: RequestTransformCtx) => Promise<RoutingDecision | null | undefined> {
+  // The native engine supplies the bearer from this lease. A proxy from an
+  // earlier run of the same task must stop as soon as its lease is replaced.
+  const leaseIsCurrent = (): boolean => {
+    try {
+      return !!guestSessionId && account?.sharedProviderId === providerId
+        && getSessionSubscriptionAccount(guestSessionId) === account
+        && guestProviderRouteForSession(guestSessionId)?.providerId === providerId
+        && getSessionProvider(guestSessionId) === providerId;
+    } catch { return false; }
+  };
   return async (body, ctx) => {
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const requestSessionId = sessionIdFromHeaders(ctx.headers);
+    const grantProviderId = poolAuthorizationProvider(guestSessionId, providerId);
     // This proxy belongs to one guest. Headerless calls use that binding, and
     // headers cannot borrow another guest's grants, even on the same provider.
     if (guestSessionId && ((requestSessionId && requestSessionId !== guestSessionId)
-      || guestProviderRouteForSession(guestSessionId)?.providerId !== providerId
-      || getSessionProvider(guestSessionId) !== providerId)) return codexGuestRouteRefusal();
+      || !grantProviderId || guestProviderRouteForSession(guestSessionId)?.providerId !== grantProviderId
+      || getSessionProvider(guestSessionId) !== grantProviderId)) return codexGuestRouteRefusal();
+    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    if (account?.sharedProviderId && (authInjection !== 'oauth-bearer' || !leaseIsCurrent()))
+      return codexGuestRouteRefusal();
     const sessionId = requestSessionId ?? guestSessionId;
     const customPath = parseCodexCustomProviderPath(ctx.url);
     if (customPath.kind === 'route' && customPath.pathKind === 'images') {
@@ -2833,8 +3120,12 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
       ? reviewerModelBySession.get(sessionId)
       : undefined;
     if (!await guestProviderModelAllowed(providerId, reviewerModel ?? requestModel, sessionId)) return codexGuestRouteRefusal(sessionId, reviewerModel ?? requestModel, 'model');
-    if (parseCodexCustomProviderPath(ctx.url).kind !== 'not-custom-provider-route') return undefined;
-    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    if (customPath.kind !== 'not-custom-provider-route') return undefined;
+    if (grantProviderId !== providerId) {
+      if (sessionId && requestSessionId === sessionId && ctx.method === 'POST' && ctx.url.split('?', 1)[0]?.endsWith('/responses'))
+        return undefined; // The owner-side pool route resolves and revalidates this exact connection.
+      return codexGuestRouteRefusal();
+    }
     if (ctx.url.split('?', 1)[0]?.endsWith('/responses')) {
       const effectiveModel = providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ?? requestModel;
       if (effectiveModel !== requestModel && !await guestProviderModelAllowed(providerId, effectiveModel, sessionId)) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
@@ -2842,6 +3133,11 @@ function codexGuestRouteRefusal(sessionId?: string | null, model = '', kind: 'sc
         ? isOpenAiSubscriptionProviderId(providerId)
         : await guestProviderOffersModel(providerId, 'codex', effectiveModel, sessionId ?? undefined);
       if (!offered) return codexGuestRouteRefusal(sessionId, effectiveModel, 'model');
+    }
+    if (account?.sharedProviderId) {
+      return leaseIsCurrent()
+        ? { upstreamOverride: CODEX_OAUTH_UPSTREAM, dispatchGenerationValid: leaseIsCurrent }
+        : codexGuestRouteRefusal();
     }
     if (requestSessionId) {
       return guestProviderRouteForSession(requestSessionId)?.providerId === providerId
@@ -3255,6 +3551,17 @@ function resolveCodexCustomProviderRoutingDecision(
     // Provider/catalog model。嵌套子线程继承同一份路由快照。
     const subagentRoute = subagentRouteFromHeaders(ctx.headers);
     const model = subagentRoute?.catalogModel ?? reportedModel;
+    const poolRoute = readPoolExecutionRoute(sessionId);
+    if (poolRoute && model) {
+      const valid = () => readPoolExecutionRoute(sessionId) === poolRoute
+        && poolAuthorizationProvider(sessionId, poolRoute.connectionId, model) !== null;
+      if (!valid() || (subagentRoute && subagentRoute.providerId !== poolRoute.connectionId))
+        return codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable');
+      return resolveProviderRouteDecision(poolRoute.connectionId, 'codex', _readGatewayKey(), model, sessionId)
+        .then(resolved => resolved?.decision && valid()
+          ? { ...resolved.decision, dispatchGenerationValid: valid }
+          : codexCustomProviderRouteFailure(403, 'pool_account_route_unavailable'));
+    }
     const explicitProviderId = subagentRoute?.providerId
       ?? (sessionId ? getSessionProvider(sessionId) : null);
     const authorizationModel = model === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
@@ -3701,7 +4008,8 @@ async function createCodexProxyHandle(
   const modelRoute = createModelRoutingTransform(frozenAuthInjection, frozenCustomProviderRoutes, () => alive,
     ctx => { crossProviderRequests.add(ctx.headers); }, guestSessionId);
   // 供应商分享受邀者的任务：先过受邀者守门，只经分享的那一个供应商出站。
-  const guestGuard = guestProviderId ? createCodexGuestRoutingGuard(guestProviderId, frozenAuthInjection, guestSessionId, frozenCustomProviderRoutes) : undefined;
+  const guestAccount = guestProviderId ? getSessionSubscriptionAccount(guestSessionId) : undefined;
+  const guestGuard = guestProviderId ? createCodexGuestRoutingGuard(guestProviderId, frozenAuthInjection, guestSessionId, frozenCustomProviderRoutes, guestAccount) : undefined;
   const route: RoutingTransform = guestGuard
     ? async (body, ctx) => {
       const guarded = await guestGuard(body, ctx);
@@ -3752,11 +4060,12 @@ async function createCodexProxyHandle(
           return normalized ? { ...rewritten, body: Buffer.from(JSON.stringify(normalized)) } : rewritten;
         } };
       }
-      if (!decision?.localHandler && guestProviderId && isOpenAiSubscriptionProviderId(guestProviderId)) return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
-      if (decision?.localHandler || !isXaiUpstream(decision?.upstreamOverride ?? '')
-        || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
-      // The observer receives raw wire bytes. Negotiate plaintext so the execution-price
-      // receipt is recorded synchronously before Codex can emit the corresponding usage.
+      if (!decision?.localHandler && guestProviderId && (isOpenAiSubscriptionProviderId(guestProviderId) || guestAccount?.sharedProviderId === guestProviderId))
+        return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
+      if (decision?.localHandler || ctx.method !== 'POST' || !ctx.url.split('?', 1)[0]?.endsWith('/responses')) return decision;
+      if (!isXaiUpstream(decision?.upstreamOverride ?? '') && !localCustomResponses.has(ctx.headers)) return decision;
+      // Response observers receive raw wire bytes. Negotiate plaintext for every routed
+      // Responses request so capacity errors cannot be hidden by gzip or brotli framing.
       return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
     };
     const decision = route(body, ctx);
@@ -3873,17 +4182,29 @@ async function createCodexProxyHandle(
       };
     },
     // Accepted WebSockets route exclusively to CODEX_OAUTH_UPSTREAM (see resolver below).
-    webSocketTransforms: ctx => codexTextOnlyWebSocketTransforms(() => isCodexTextOnly(selectedThreadIdFromHeaders(ctx.headers)), true, (message, signal) => {
-      const body: unknown = JSON.parse(message.toString('utf8'));
-      // A subsequent WebSocket sample also supersedes any HTTP compaction denial.
-      downshiftByThread.delete(selectedThreadIdFromHeaders(ctx.headers));
-      const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
-      const restricted = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
-      const next = shortenCodexCallIds(restricted ?? body) ?? restricted;
-      const request = next ? Buffer.from(JSON.stringify(next)) : message;
-      const fullReplay = isFullCodexWebSocketReplay(body);
-      return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);
-    }),
+    webSocketTransforms: ctx => {
+      const wsThreadId = selectedThreadIdFromHeaders(ctx.headers);
+      return codexTextOnlyWebSocketTransforms(
+        () => isCodexTextOnly(wsThreadId),
+        true,
+        (message, signal) => {
+          const body: unknown = JSON.parse(message.toString('utf8'));
+          // A subsequent WebSocket sample also supersedes any HTTP compaction denial
+          // and any earlier upstream capacity observation for this thread.
+          downshiftByThread.delete(wsThreadId);
+          upstreamCapacityByThread.delete(wsThreadId);
+          const context = providerContextForRequest(ctx.headers, isPlainObject(body) && typeof body.model === 'string' ? body.model : '');
+          const restricted = restrictSubscriptionRequest(body, context.sessionId ?? guestSessionId, context.providerId ?? guestProviderId ?? 'openai');
+          const next = shortenCodexCallIds(restricted ?? body) ?? restricted;
+          const request = next ? Buffer.from(JSON.stringify(next)) : message;
+          const fullReplay = isFullCodexWebSocketReplay(body);
+          return fitWebSocketRequest(request, next ?? body, fullReplay, ctx, signal);
+        },
+        (message) => {
+          observeInboundWebSocketCapacity(wsThreadId, message);
+        },
+      );
+    },
     transformResponse: (ctx) => {
       const response = {
         contentType: ctx.responseHeaders['content-type'] ?? '',
@@ -3931,12 +4252,15 @@ async function createCodexProxyHandle(
       },
       createResponsesCallIdLimitObserver((threadId, model, upstreamBase) =>
         responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase)),
+      createCodexCapacityResponseObserver(),
       createCodexResponseObserver(),
       createProviderUpstreamErrorObserver({
         agent: 'codex',
+        resolveUserSessionId: headers => guardianParentThreadIdFromHeaders(headers) || isCollabSpawnRequest(headers)
+          ? null : sessionIdFromHeaders(headers) ?? null,
         resolveUserProviderId: (requestHeaders) => {
           const sessionId = sessionIdFromHeaders(requestHeaders);
-          return sessionId ? getUserProviderIdForSession(sessionId) : null;
+          return readPoolExecutionRoute(sessionId)?.connectionId ?? (sessionId ? getUserProviderIdForSession(sessionId) : null);
         },
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
@@ -4357,6 +4681,7 @@ function clearSessionThreads(sessionId: string): string[] {
       }
       threadToSession.delete(threadId);
       downshiftByThread.delete(threadId);
+      upstreamCapacityByThread.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
       subagentRouteByThread.delete(threadId);
@@ -4395,6 +4720,8 @@ function clearSessionThreads(sessionId: string): string[] {
   sessionToThreads.clear();
   threadToSession.clear();
   downshiftByThread.clear();
+  upstreamCapacityByThread.clear();
+  upstreamCapacityListenersBySession.clear();
   subagentRouteByParentThread.clear();
   subagentRouteByThread.clear();
   smartSubagentRoutesByParentThread.clear();
@@ -4460,5 +4787,5 @@ function clearSessionThreads(sessionId: string): string[] {
   }));
   clearCodexTextOnlyPolicies();
 }
-return { setCodexAppliedCustomProviderRoutes, getRejectedCodexDownshiftModel, armCodexHttpRecovery, setCodexProxyAuthInjection, clearCodexProxyAuthInjection, getCodexProxyAuthInjectionState, getCodexProxyAuthInjection, setCodexSubagentOAuthReader, setCodexProxyGatewayKeyReader, getObservedCodexSubagentIdentity, chatBridgeSystemMessagePolicyForRoute, chatBridgeCapabilitiesForRoute, resolveXaiCodexCatalogModel, createCrossProviderCompactionCompatTransform, decideCodexRoute, createCodexGuestRoutingGuard, createModelRoutingTransform, getCodexThreadUpstreamOrigin, resetCodexThreadUpstreamForTest, withCodexUpstreamRecording, ensureCodexProxyReady, ensureCodexControlPlaneProxyReady, isCodexControlPlaneProxyHandleReady, getCodexControlPlaneProxyEndpoint, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, getCodexCustomContextProxyEndpoint, releaseCodexCustomContextProxy, getCodexProxyEndpoint, registerComposed, registerReviewerRouteContext, registerChildThread, unregister, isCodexProxyHandleReady, disposeCodexProxy };
+return { setCodexAppliedCustomProviderRoutes, getRejectedCodexDownshiftModel, getObservedCodexUpstreamCapacity, subscribeCodexUpstreamCapacity, armCodexHttpRecovery, setCodexProxyAuthInjection, clearCodexProxyAuthInjection, getCodexProxyAuthInjectionState, getCodexProxyAuthInjection, setCodexSubagentOAuthReader, setCodexProxyGatewayKeyReader, getObservedCodexSubagentIdentity, chatBridgeSystemMessagePolicyForRoute, chatBridgeCapabilitiesForRoute, resolveXaiCodexCatalogModel, createCrossProviderCompactionCompatTransform, decideCodexRoute, createCodexGuestRoutingGuard, createModelRoutingTransform, getCodexThreadUpstreamOrigin, resetCodexThreadUpstreamForTest, withCodexUpstreamRecording, ensureCodexProxyReady, ensureCodexControlPlaneProxyReady, isCodexControlPlaneProxyHandleReady, getCodexControlPlaneProxyEndpoint, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, getCodexCustomContextProxyEndpoint, releaseCodexCustomContextProxy, getCodexProxyEndpoint, registerComposed, registerReviewerRouteContext, registerChildThread, unregister, isCodexProxyHandleReady, disposeCodexProxy };
 }

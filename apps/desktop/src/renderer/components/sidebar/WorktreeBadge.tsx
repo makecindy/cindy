@@ -52,7 +52,7 @@ export function WorktreeBadge({
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className={cn(
-            'shrink-0 inline-flex items-center justify-center rounded-md',
+            'shrink-0 inline-flex items-center justify-center rounded-lg',
             'size-5 text-sidebar-action-icon hover:text-foreground',
             'transition-colors focus:outline-none',
             className,

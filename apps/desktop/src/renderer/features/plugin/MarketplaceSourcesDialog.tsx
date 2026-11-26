@@ -7,12 +7,13 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  * 刷新、移除操作。刷新与移除失败时在列表上方内联展示本地化引导 +
  * （git 类错误的）消毒后原始输出。
  */
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { RefreshCw, Trash2, X } from 'lucide-react';
+import { Folder, RefreshCw, Store, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
@@ -49,6 +50,7 @@ export function MarketplaceSourcesDialog({
   onChanged,
 }: MarketplaceSourcesDialogProps) {
   const { t, i18n } = useTranslation();
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const [busySource, setBusySource] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<MarketSourceSummary | null>(null);
   const [operationError, setOperationError] = useState<{
@@ -139,34 +141,34 @@ export function MarketplaceSourcesDialog({
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus({ preventScroll: true });
+          }}
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[85vh] w-full select-none flex-col p-4',
+            'modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[70vh] w-[calc(100%-2rem)] max-w-[560px] select-none flex-col overflow-hidden p-6',
           )}
           style={
             {
               WebkitAppRegion: 'no-drag',
-              maxWidth: 'min(460px, 100vw - 32px)',
             } as CSSProperties
           }
         >
           <div className="flex shrink-0 items-start justify-between gap-3">
-            <Dialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
+            <Dialog.Title ref={titleRef} tabIndex={-1} className="text-18 font-medium text-[var(--confirm-title)]">
               {t('settings.ghosts.market.sources.listTitle')}
             </Dialog.Title>
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                aria-label={t('settings.ghosts.market.sources.close')}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-              >
-                <X size={15} aria-hidden="true" />
-              </button>
-            </Dialog.Close>
+            <Tip text={t('settings.ghosts.market.sources.close')}>
+              <Dialog.Close asChild>
+                <Button variant="secondary" tone="quiet" size="sm" className="w-7 px-0" aria-label={t('settings.ghosts.market.sources.close')}>
+                  <X size={15} aria-hidden="true" />
+                </Button>
+              </Dialog.Close>
+            </Tip>
           </div>
 
-          <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="-mx-1 mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1">
             {operationError ? (
               <ErrorNotice
                 role="alert"
@@ -182,70 +184,76 @@ export function MarketplaceSourcesDialog({
               </div>
             ) : null}
 
-            <div className="flex flex-col gap-2">
+            <div className="divide-y divide-[var(--border-default)]">
               {sources.map((source) => (
                 <div
                   key={source.name}
-                  className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
+                  className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0 min-[480px]:grid-cols-[auto_minmax(0,1fr)_auto]"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
-                      {source.name}
-                    </span>
-                    <span className="shrink-0 text-12 tabular-nums text-[var(--text-tertiary)]">
-                      {source.status === 'ok'
-                        ? t('settings.ghosts.market.sources.pluginCount', {
-                            count: source.pluginCount,
-                          })
-                        : t('settings.ghosts.market.sources.sourceError')}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
-                    <span className="shrink-0">
-                      {source.source.type === 'local'
-                        ? t('settings.ghosts.market.sources.localBadge')
-                        : (source.source.ref ??
-                          t('settings.ghosts.market.sources.defaultRef'))}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span className="min-w-0 truncate">{sourceSummary(source.source)}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="shrink-0">{formatSyncedAt(source.lastSyncedAt)}</span>
-                  </div>
-                  {source.status === 'ok' ? (
-                    <div className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
-                      {source.pluginCount === 0 &&
-                      source.skippedCount === 0 &&
-                      source.unreadableCount === 0 ? (
-                        <p>{t('settings.ghosts.market.sources.empty')}</p>
-                      ) : null}
-                      {source.skippedCount > 0 ? (
-                        <p>
-                          {t('settings.ghosts.market.sources.skippedEntries', {
-                            count: source.skippedCount,
-                          })}
-                        </p>
-                      ) : null}
-                      {source.pluginCount === 0 &&
-                      source.skippedCount > 0 &&
-                      source.unreadableCount === 0 ? (
-                        <p className="text-[var(--warning-fg)]">
-                          {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
-                        </p>
-                      ) : null}
-                      {source.unreadableCount > 0 ? (
-                        <p className="text-[var(--warning-fg)]">
-                          {t('settings.ghosts.market.sources.unreadableEntries', {
-                            count: source.unreadableCount,
-                          })}
-                        </p>
-                      ) : null}
+                  {source.source.type === 'local' ? (
+                    <Folder size={18} aria-hidden="true" className="mt-0.5 text-[var(--text-secondary)]" />
+                  ) : (
+                    <Store size={18} aria-hidden="true" className="mt-0.5 text-[var(--text-secondary)]" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="min-w-0 break-words text-14 font-medium text-[var(--text-primary)]">
+                        {source.name}
+                      </span>
+                      <span className="shrink-0 text-12 tabular-nums text-[var(--text-tertiary)]">
+                        {source.status === 'ok'
+                          ? t('settings.ghosts.market.sources.pluginCount', {
+                              count: source.pluginCount,
+                            })
+                          : t('settings.ghosts.market.sources.sourceError')}
+                      </span>
                     </div>
-                  ) : null}
-                  <div className="mt-2.5 flex items-center justify-end gap-2">
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 text-12 text-[var(--text-tertiary)]">
+                      <span className="min-w-0 break-words">
+                        {source.source.type === 'local'
+                          ? t('settings.ghosts.market.sources.localBadge')
+                          : (source.source.ref ??
+                            t('settings.ghosts.market.sources.defaultRef'))}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{formatSyncedAt(source.lastSyncedAt)}</span>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-12 text-[var(--text-tertiary)]">{sourceSummary(source.source)}</p>
+                    {source.status === 'ok' ? (
+                      <div className="mt-1.5 text-12 leading-[1.333] text-[var(--text-tertiary)]">
+                        {source.pluginCount === 0 &&
+                        source.skippedCount === 0 &&
+                        source.unreadableCount === 0 ? (
+                          <p>{t('settings.ghosts.market.sources.empty')}</p>
+                        ) : null}
+                        {source.skippedCount > 0 ? (
+                          <p>
+                            {t('settings.ghosts.market.sources.skippedEntries', {
+                              count: source.skippedCount,
+                            })}
+                          </p>
+                        ) : null}
+                        {source.pluginCount === 0 &&
+                        source.skippedCount > 0 &&
+                        source.unreadableCount === 0 ? (
+                          <p className="text-[var(--warning-fg)]">
+                            {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
+                          </p>
+                        ) : null}
+                        {source.unreadableCount > 0 ? (
+                          <p className="text-[var(--warning-fg)]">
+                            {t('settings.ghosts.market.sources.unreadableEntries', {
+                              count: source.unreadableCount,
+                            })}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="col-start-2 flex flex-wrap items-center gap-2 min-[480px]:col-start-3 min-[480px]:justify-end">
                     <Button
                       variant="secondary"
-                      size="md"
+                      size="sm"
                       compact
                       loading={busySource === source.name}
                       type="button"
@@ -257,7 +265,7 @@ export function MarketplaceSourcesDialog({
                     </Button>
                     <Button
                       variant="secondary"
-                      size="md"
+                      size="sm"
                       tone="danger"
                       compact
                       type="button"

@@ -4677,7 +4677,7 @@ function RailPanels({
           aria-disabled={disabled ? true : undefined}
           aria-label={disabled ? label : undefined}
           tabIndex={disabled ? 0 : undefined}
-          className="inline-flex self-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="inline-flex self-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
           <button
             type="button"
@@ -4689,7 +4689,7 @@ function RailPanels({
               onCreate();
             }}
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md -my-1',
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-lg -my-1',
               'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
               // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
               // token 化 focus 环(DESIGN.md §10;codex review)。

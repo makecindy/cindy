@@ -11,6 +11,7 @@
  *  - Codex:error 事件带 `codexErrorInfo: 'usageLimitExceeded'`,另有 `data.message` 文本兜底。
  */
 
+import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 import {
   extractUsageLimitRecoveryHint,
   isBillingDepletionError,
@@ -23,20 +24,29 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const d = data as {
     sdkError?: unknown;
+    reason?: unknown;
     message?: unknown;
     errorStatus?: unknown;
     usageLimit?: unknown;
     codexErrorInfo?: unknown;
   };
+  const msg = typeof d.message === 'string' ? d.message : '';
+  if (
+    d.codexErrorInfo === 'cyberPolicy' ||
+    d.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    d.sdkError === 'content_filter' ||
+    isProviderSafetyRefusalError(msg, d.reason)
+  ) {
+    return false;
+  }
   // 余额 / 计费耗尽要充值、不会周期重置,文案里带 quota 也不算(保持 blocked)。
   if (isBillingDepletionError(data)) return false;
   // 结构化 tag(权威)。
   if (d.sdkError === 'rate_limit') return true;
-  if (d.codexErrorInfo === 'usageLimitExceeded') return true;
+  if (d.codexErrorInfo === 'usageLimitExceeded' || d.codexErrorInfo === 'rateLimitExceeded') return true;
   if (d.usageLimit === true) return true;
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
-  const msg = typeof d.message === 'string' ? d.message : '';
   return isClaudeUsageLimitMessage(msg) || /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
 }
 
@@ -86,6 +96,7 @@ export function readTurnUsageResetAt(
  */
 export function classifyTurnOverload(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
+  if (isBillingDepletionError(data)) return false;
   const d = data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown };
   // 结构化 tag 优先(与 maker-core 的 parseOverloadError 同序): Codex 的过载文案是
   // codex 二进制里硬编码的用户可见提示语, 随版本漂移; 只靠文案判定会在某次升级后

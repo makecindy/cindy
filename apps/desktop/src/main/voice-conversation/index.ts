@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import { CompanionCallDialogue } from './dialogue.js';
+import { normalizeRealtimeVoiceSelection } from '../../shared/realtimeVoice.js';
+import { loadSpeechVoices } from './voices.js';
+import { realtimeCustomVoiceConnection, realtimeModels, resolveRealtimeConnection } from './realtimeModels.js';
+import { updateRealtimeVoicePreference } from './preferences.js';
 import { ipcMain, webContents, type IpcMainInvokeEvent } from 'electron';
 import type { AsrProvider, AudioGate } from '@cindy/voice-input-core';
 import { storedCustomProviderId } from '@cindy/model-providers';
@@ -142,7 +146,8 @@ export function registerVoiceConversationIpc(deps: {
     };
   };
   const service = new VoiceConversationService({
-    createDialogue: (selection, emit) => new CompanionCallDialogue({ ...selection, emit }),
+    createDialogue: (selection, emit, nativeResult) => new CompanionCallDialogue({ ...selection, emit, nativeResult }),
+    realtimeConnection: selection => resolveRealtimeConnection(catalogDeps(), selection),
     ...deps,
     log,
     owner: () => (isAppSessionBoundaryPending() ? 'changing-account' : activeOwnerScopeKey()),
@@ -162,12 +167,15 @@ export function registerVoiceConversationIpc(deps: {
       if (target && !target.isDestroyed()) target.send('voice-conversation:event', event);
     },
   });
+  const catalogRequests = new Map<number, { id: string; controller: AbortController }>();
   const observed = new Set<number>();
   const observe = (event: IpcMainInvokeEvent): void => {
     if (observed.has(event.sender.id)) return;
     const sender = event.sender.id;
     observed.add(sender);
     const released = () => {
+      catalogRequests.get(sender)?.controller.abort();
+      catalogRequests.delete(sender);
       void service.end(sender);
       voiceCallCoordinator.windowGone(sender);
     };
@@ -202,6 +210,39 @@ export function registerVoiceConversationIpc(deps: {
     await waitForModelVisibilityMirror();
     return service.models();
   });
+  handle('realtime-models', async () => {
+    await waitForModelVisibilityMirror();
+    return realtimeModels(catalogDeps());
+  });
+  handle('realtime-custom-voices', async (event, raw, requestId) => {
+    const id = boundedString(requestId, 'requestId', 64);
+    const model = normalizeSpeechModelSelection(raw);
+    if (!model?.providerId || !model.agent) throw new Error('invalid_realtime_model');
+    const route = { providerId: model.providerId, agent: model.agent, modelId: model.modelId, protocol: 'qwen-audio-realtime' as const };
+    const resolve = () => realtimeCustomVoiceConnection(catalogDeps(), route);
+    const owner = activeOwnerScopeKey();
+    const connection = resolve();
+    const identity = JSON.stringify(connection);
+    const sender = event.sender.id;
+    observe(event);
+    catalogRequests.get(sender)?.controller.abort();
+    const controller = new AbortController();
+    catalogRequests.set(sender, { id, controller });
+    try {
+      const catalog = await loadSpeechVoices(connection, route.modelId, outboundFetch, () => {
+        if (activeOwnerScopeKey() !== owner || JSON.stringify(resolve()) !== identity)
+          throw new Error('connection_changed');
+      }, undefined, controller.signal);
+      return controller.signal.aborted ? { source: 'manual', voices: [] } : catalog;
+    } finally {
+      if (catalogRequests.get(sender)?.controller === controller) catalogRequests.delete(sender);
+    }
+  });
+  handle('cancel-realtime-custom-voices', (event, rawId) => {
+    const id = boundedString(rawId, 'requestId', 64);
+    const request = catalogRequests.get(event.sender.id);
+    if (request?.id === id) request.controller.abort();
+  });
   handle('voices', (_event, raw) => {
     const selection = normalizeSpeechModelSelection(raw);
     if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid speech model');
@@ -210,8 +251,10 @@ export function registerVoiceConversationIpc(deps: {
   handle('preview', (event, raw) => {
     if (isAppSessionBoundaryPending()) throw new Error('changing_account');
     const value = requireObject(raw);
-    const selection = normalizeVoiceConversationSelection(value);
-    if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid speech selection');
+    const selection = value.mode === 'realtime'
+      ? normalizeRealtimeVoiceSelection(value)
+      : normalizeVoiceConversationSelection(value);
+    if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid preview selection');
     observe(event);
     return service.startPreview(event.sender.id, {
       ...selection,
@@ -266,6 +309,18 @@ export function registerVoiceConversationIpc(deps: {
       return companionVoicePreference(deps.updateSettings(patch), botId);
     });
   handle('preference', (_event, raw) => readPreference(raw));
+  handle('set-realtime-preference', (_event, raw, value) => preferenceBot(raw, botId => {
+    const selection = value === null ? null : normalizeRealtimeVoiceSelection(value);
+    if (selection === undefined) throwIpcError('INVALID_PARAMS', 'Invalid realtime selection');
+    if (selection) resolveRealtimeConnection(catalogDeps(), selection);
+    return companionVoicePreference(deps.updateSettings(
+      updateRealtimeVoicePreference(deps.getSettings(), botId, selection),
+    ), botId);
+  }));
+  handle('realtime-question', (event, id, pending) => {
+    if (typeof pending !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid question state');
+    service.setRealtimeQuestion(event.sender.id, boundedString(id, 'callId', 64), pending);
+  });
   handle('set-preference', (_event, raw, value, sentencePlayback) =>
     writePreference(raw, value, sentencePlayback),
   );
@@ -286,7 +341,8 @@ export function registerVoiceConversationIpc(deps: {
     handle(operation, async (event, raw) => {
       if (isAppSessionBoundaryPending()) throw new Error('changing_account');
       const value = requireObject(raw);
-      const selection = normalizeVoiceConversationSelection(value);
+      const selection = value.mode === 'realtime' && operation === 'start'
+        ? normalizeRealtimeVoiceSelection(value) : normalizeVoiceConversationSelection(value);
       if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid speech selection');
       observe(event);
       const input = {
@@ -376,9 +432,18 @@ export function registerVoiceConversationIpc(deps: {
     }
   });
   handle('end', (event, id) => service.end(event.sender.id, boundedString(id, 'callId', 64)));
-  handle('interrupt', (event, id) =>
-    service.interrupt(event.sender.id, boundedString(id, 'callId', 64)),
-  );
+  handle('interrupt', (event, id, raw, throughResponse) => {
+    if (throughResponse !== undefined && (typeof throughResponse !== 'number' || !Number.isSafeInteger(throughResponse) || throughResponse < 0 || throughResponse > 2_000))
+      throwIpcError('INVALID_PARAMS', 'Invalid response position');
+    let position;
+    if (raw !== undefined) {
+      const value = requireObject(raw);
+      if (typeof value.playedMs !== 'number' || !Number.isFinite(value.playedMs) || value.playedMs < 0 || value.playedMs > 3_600_000)
+        throwIpcError('INVALID_PARAMS', 'Invalid playback position');
+      position = { itemId: boundedString(value.itemId, 'itemId', 128), playedMs: value.playedMs };
+    }
+    service.interrupt(event.sender.id, boundedString(id, 'callId', 64), position, throughResponse as number | undefined);
+  });
   handle('speak', (event, raw) => {
     const value = requireObject(raw);
     if (value.streaming !== undefined && typeof value.streaming !== 'boolean')

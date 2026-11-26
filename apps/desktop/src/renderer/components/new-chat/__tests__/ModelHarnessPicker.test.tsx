@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { unifiedModelEntries, type ProviderView } from '@cindy/model-providers';
 import dictionary from '../../../i18n/locales/zh-CN/common.json';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { ModelHarnessPicker } from '../ModelHarnessPicker';
 import { ModelConfigFlyout } from '../ModelConfigFlyout';
 
@@ -53,12 +54,18 @@ describe('model harness choices', () => {
   // #4477 unit: the remote model row previously skipped native metadata entirely.
   // The target's 100K preview must win over the local preferences and static catalog.
   it.each([true, false])('shows remote native metadata without a controller/catalog fallback (available=%s)', async available => {
+    setDataOwnerGeneration('test-owner');
+    onTestFinished(() => {
+      cleanup();
+      setDataOwnerGeneration(null);
+      Reflect.deleteProperty(window, 'electronAPI');
+    });
     const local = vi.fn().mockResolvedValue({ codexContext: { contextWindow: 272_000 } });
     const invoke = vi.fn().mockResolvedValue({ codexContext: available ? { contextWindow: 100_000 } : null });
     Object.assign(window, { electronAPI: { maker: { getModelContextLimit: local }, deviceLink: { invoke } } });
     const model = entry();
     const capability = model.capabilities.codex!;
-    const rendered = render(<ModelConfigFlyout entry={model} deviceId="execution-device"
+    render(<ModelConfigFlyout entry={model} deviceId="execution-device"
       config={{ engine: 'codex', agent: 'codex', capability, efforts: [], effort: null, fast: false,
         fastCapable: false, customized: false, wireModelId: capability.wireModelId }}
       state="recommended" sourceLabel="Cindy AI" price={null} effortLabelOf={(_, effort) => effort}
@@ -69,8 +76,6 @@ describe('model harness choices', () => {
       providerId: 'xd', agent: 'codex', modelId: capability.wireModelId,
     }]);
     expect(local).not.toHaveBeenCalled();
-    rendered.unmount();
-    Reflect.deleteProperty(window, 'electronAPI');
   });
   it.each(['cc', 'codex', 'pi'] as const)('shows the saved budget and refreshed default for %s', async (engine) => {
     let changed: (() => void) | undefined;
