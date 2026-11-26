@@ -1663,6 +1663,31 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  // Group chat §4.1, unit: the composer must find a roster member by pinyin
+  // and send that exact member ID. The existing @ menu test only types the trigger.
+  it('finds group mentions by Chinese name, pinyin fragments and initials', async () => {
+    const data = group({ openPlan: null });
+    const members = [
+      { ...data.members[0]!, name: '黄晓文' },
+      { ...data.members[1]!, name: '黄晓文', status: 'archived' as const },
+      { ...data.members[2]!, name: '单乐' },
+    ];
+    await render({ ...data, members });
+    await type('请 @shanyue');
+    expect(byId('botGroup.mention.xiaoman')).not.toBeNull();
+    for (const query of ['黄晓文', '晓', 'huangxiaowen', 'huang', 'ang', 'hxw', 'xw', 'xiaow', 'huangxw']) {
+      await type(`请 @${query}`);
+      expect(byId('botGroup.mention.mimi'), query).not.toBeNull();
+      expect(byId('botGroup.mention.abu'), query).toBeNull();
+    }
+    await click('botGroup.mention.mimi');
+    expect(h.row.value).toBe('请 @黄晓文 ');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '请 @黄晓文', mentions: { all: false, botIds: ['mimi'] },
+    }));
+  });
+
   it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
     const data = group({ openPlan: null });
     const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
@@ -2048,6 +2073,22 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // Unit regression: the settings sheet used to search only literal text. Find the
+  // current member by a middle syllable or initials and restore everyone after clearing.
+  it('searches member names by pinyin in the mobile members tab', async () => {
+    const data = group({ serverBacked: true });
+    data.members[0] = { ...data.members[0], actorKind: 'human', name: '徐紫旋', isSelf: true };
+    await openSettings(data);
+    await click('botGroup.settings.tab.members');
+    for (const query of ['zi', 'ZX', '紫']) {
+      await act(async () => h.inputs['botGroup.settings.memberSearch'].onChangeText(query));
+      expect(byId('botGroup.settings.members')?.textContent).toContain('徐紫旋');
+      expect(byId(`botGroup.settings.member.${data.members[1].botId}`)).toBeNull();
+    }
+    await act(async () => h.inputs['botGroup.settings.memberSearch'].onChangeText(''));
+    expect(byId(`botGroup.settings.member.${data.members[1].botId}`)).not.toBeNull();
+  });
 
   // Unit regression: server settings through an upgraded host previously hid My companions.
   // Exercise real screen/sheet navigation, confirmation and action, plus the old-host fallback.

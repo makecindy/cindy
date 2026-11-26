@@ -1,4 +1,4 @@
-import type { BotGroupTextInput } from './botGroupTextInput';
+import { botGroupInputElement, type BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊 @ 点名候选：主群输入框与 Thread 回复框共用的一套状态与候选列表。
  *
@@ -44,6 +44,7 @@ import {
   type BotGroupTrackedMention,
 } from './botGroupMentions';
 import { chatGroupMentionRoster, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 
 type MentionOption =
   | { kind: 'all' | 'allBots'; label: string }
@@ -83,6 +84,7 @@ export function useBotGroupMentionPicker({
   const textRef = useRef(text);
   textRef.current = text;
   const pendingCaretRef = useRef<number | null>(null);
+  const composingRef = useRef(false);
   // @ list: glide highlight on the aria-selected option; arrow keys stay in the textarea.
   const listRef = useMenuPanel<HTMLDivElement>(undefined, {
     lockWidth: false,
@@ -100,20 +102,22 @@ export function useBotGroupMentionPicker({
   // You never name yourself: the host drops you from the targets (as on mobile).
   const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(activeMembers), [activeMembers]);
   const query = focused && !disabled ? findBotGroupMentionQuery(text, caret, activeMembers) : null;
+  const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || activeMembers.length === 0) return [];
+    if (queryText === undefined || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
-      filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+      filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
         ? [{ kind: 'all', label: allLabel }]
         : [];
-    const people = filterBotGroupMentionCandidates(query.query, activeMembers).map(
+    const people = searchMembers(queryText).map(
       (member): MentionOption => ({ kind: 'member', label: member.name, member }),
     );
-    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [activeMembers.length, allLabel, allBotsLabel, allowMentionAllBots, queryText, searchMembers]);
   const open = query !== null && options.length > 0 && dismissedStart !== query.start;
   const activeIndex = Math.min(highlight, Math.max(0, options.length - 1));
 
@@ -134,7 +138,8 @@ export function useBotGroupMentionPicker({
 
   const syncCaret = () => {
     const element = textareaRef.current;
-    if (!element) return;
+    // Focus can return before React writes a picked mention and its new caret.
+    if (!element || pendingCaretRef.current !== null) return;
     selectionRef.current = {
       start: element.selectionStart ?? element.value.length,
       end: element.selectionEnd ?? element.value.length,
@@ -142,14 +147,14 @@ export function useBotGroupMentionPicker({
     setCaret(selectionRef.current.start);
   };
 
-  const choose = (option: MentionOption | undefined) => {
-    if (disabledRef.current || !option || !query) return;
-    const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
+  const applyChoice = (option: MentionOption, value: string, start: number, end: number) => {
+    if (disabledRef.current) return;
+    const next = insertBotGroupMention(value, { start, end }, option.label);
     // A pick obeys the field's own maxLength, as typing does (a programmatic value would skip it).
     const limit = textareaRef.current?.maxLength ?? -1;
     if (limit >= 0 && next.text.length > limit) return;
     // Re-picking a namesake can leave the text as is; then no re-render moves the caret.
-    if (next.text === text) textareaRef.current?.setSelectionRange(next.caret, next.caret);
+    if (next.text === textRef.current) textareaRef.current?.setSelectionRange(next.caret, next.caret);
     else pendingCaretRef.current = next.caret;
     textRef.current = next.text;
     onTextChange(next.text);
@@ -157,18 +162,38 @@ export function useBotGroupMentionPicker({
     setCaret(next.caret);
     setHighlight(0);
     setTracked((current) => {
-      const remaining = retainBotGroupTrackedMentions(text, next.text, {
+      const remaining = retainBotGroupTrackedMentions(value, next.text, {
         members: mentionMembers,
         allLabels: resolveLabels, allBotLabels,
         tracked: current,
-        editStart: query.start,
-        editEnd: caret,
+        editStart: start,
+        editEnd: end,
       });
       return option.kind === 'member'
-        ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }]
+        ? [...remaining, { botId: option.member.botId, label: option.label, start }]
         : remaining;
     });
     textareaRef.current?.focus();
+  };
+
+  const choose = (option: MentionOption | undefined) => {
+    if (!option || !query || disabledRef.current) return;
+    const input = textareaRef.current;
+    const element = botGroupInputElement(input);
+    if (!composingRef.current || !input || !element) {
+      applyChoice(option, text, query.start, caret);
+      return;
+    }
+    // A pointer pick can finish composition. Let the IME settle the draft before
+    // replacing the query, whose length may have changed when the IME committed.
+    element.blur();
+    requestAnimationFrame(() => {
+      if (textareaRef.current !== input || element.ownerDocument.activeElement !== element.ownerDocument.body) return;
+      const value = input.value;
+      const end = input.selectionStart ?? value.length;
+      const current = findBotGroupMentionQuery(value, end, activeMembers);
+      if (current?.start === query.start) applyChoice(option, value, current.start, end);
+    });
   };
 
   /** Typing reads the updated DOM; programmatic edits supply the previous range. */
@@ -206,7 +231,8 @@ export function useBotGroupMentionPicker({
       setHighlight((activeIndex + step + options.length) % options.length);
       return true;
     }
-    if (event.key === 'Enter' || event.key === 'Tab') {
+    if ((event.key === 'Enter' || event.key === 'Tab') &&
+        !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       choose(options[activeIndex]);
       return true;
@@ -231,7 +257,10 @@ export function useBotGroupMentionPicker({
       setFocused(true);
       syncCaret();
     },
-    onBlur: () => setFocused(false),
+    onBlur: () => {
+      composingRef.current = false;
+      setFocused(false);
+    },
   };
 
   /** The text was sent or replaced from outside: forget picks and the caret. */
@@ -294,6 +323,7 @@ export function useBotGroupMentionPicker({
     textareaProps,
     onChange,
     onKeyDown,
+    composingRef,
     tracked,
     setTracked,
     reset,
