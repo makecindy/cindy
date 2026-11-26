@@ -28,6 +28,7 @@ import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/sc
 import {
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
+  type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 
@@ -52,6 +53,11 @@ export interface ModelGroupResolverDeps {
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
    */
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
+  /**
+   * 本机来源背后是电脑组或几个账号时，内层按它自己的选法下一个会接任务的那一个的额度事实(pick.ts 的
+   * ModelGroupInnerQuota)；不是这种来源、读不到时为 null。别的电脑与分享来的来源不问(只用对方开放的额度)。
+   */
+  innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupCandidate['agentKind'] }): Promise<ModelGroupInnerQuota | null>;
   /**
    * 其他电脑与分享来的位置里此刻能选的那些(插件卡片的远程模型用的同一份名单)。只在路线里有不在本机的来源时读；
    * 没提供时这些来源一律不可用。
@@ -258,6 +264,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         ?.filter((window) => !window.scopedTo || scopedWindowApplies(window.scopedTo, candidate.model, modelName))
         .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
       const exact = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model, effort: '', fastMode: false as const };
+      const inner = !agentDeviceId && deps.innerQuota
+        ? await deps.innerQuota({ providerId: candidate.providerId, model: candidate.model, agentKind: candidate.agentKind }).catch(() => null)
+        : null;
       const available = agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
@@ -278,6 +287,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
+        ...(inner ? { inner } : {}),
         ...(route.strategy === 'cheapest'
           ? { price: agentDeviceId ? remoteListedPrice(view, model) : listedPrice(view, agent, model, pricing) }
           : {}),

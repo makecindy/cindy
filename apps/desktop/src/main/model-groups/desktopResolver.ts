@@ -18,6 +18,10 @@ import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, setModelGroupSourceCatalog } from './store.js';
+import type { ModelGroupInnerQuota } from './pick.js';
+import { pickRouteMember, type SchedulableMember } from '../provider-group/scheduler.js';
+import { readProviderGroup } from '../provider-group/store.js';
+import { quotaWindowsScheduleState } from '../provider-group/usage.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
 const pickLog = createLogger('model-groups:pick');
@@ -120,6 +124,57 @@ async function localViews() {
   return views;
 }
 
+/** 电脑组的「下一台」要读组里各台的状态(含别的电脑)：同一组、同一模型一分钟内只读一次，同时来的共用一次。 */
+const INNER_GROUP_TTL_MS = 60_000;
+const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInnerQuota | null> }>();
+
+/**
+ * 本机来源背后的内层(2026-11-26，dash 建议)：电脑组按组的选法下一台会接任务的电脑、几个账号的连接按账号池下一个会用的
+ * 账号，报能不能用、快满没、急不急、余量，外层智能路由按它判断，与内层实际会用的一致。只读：不占位、不推进轮流或计数。
+ * 单个账号、没有组的来源返回 null，照旧按额度总览里那一份判断。
+ */
+function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null> {
+  const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
+  const config = readProviderGroup(source.providerId);
+  if (config) {
+    const key = `${activeOwnerScopeKey()}\u0000${source.providerId}\u0000${source.model}\u0000${agent}`;
+    const cached = innerGroups.get(key);
+    if (cached && Date.now() - cached.at < INNER_GROUP_TTL_MS) return cached.value;
+    const value = (async (): Promise<ModelGroupInnerQuota | null> => {
+      // 用到时才加载组与账号池的运行时，不把它们拉进启动时就加载的模块。
+      const { getProviderGroupRouter } = await import('../provider-group/runtime.js');
+      const view = await getProviderGroupRouter().view(source.providerId, { model: source.model, agentKind: agent });
+      const now = Date.now();
+      // 组所在电脑给的每台状态：能接新任务的才参与；满载只是忙，不算额度用完。
+      const members: SchedulableMember[] = view.members.map((member) => {
+        const state = member.quota ? quotaWindowsScheduleState([member.quota], now) : null;
+        return {
+          key: member.key, usable: member.state === 'available', paused: member.paused, running: member.running,
+          limit: Number.POSITIVE_INFINITY, weight: member.weight,
+          urgency: state?.urgency ?? null, fiveHourTight: member.fiveHourTight === true, headroom: state?.headroom ?? null,
+        };
+      });
+      const next = members.find((member) => member.key === pickRouteMember(members, config.strategy, { keepUnknownQuota: true }).key);
+      if (!next) return { limited: !view.members.some((member) => member.state === 'full'), urgency: null, fiveHourTight: false, headroom: null };
+      return { limited: false, urgency: next.urgency ?? null, fiveHourTight: next.fiveHourTight === true, headroom: next.headroom ?? null };
+    })().catch(() => null);
+    innerGroups.set(key, { at: Date.now(), value });
+    for (const [entry, item] of innerGroups) if (Date.now() - item.at >= INNER_GROUP_TTL_MS) innerGroups.delete(entry);
+    return value;
+  }
+  // 几个账号的连接：只有确实有两个以上已核实的账号才问账号池(与智能路由页列「N 个账号」同一判断)。
+  const view = lastLocal?.scope === activeOwnerScopeKey() ? lastLocal.views.find((item) => item.id === source.providerId) : undefined;
+  if ((view?.subscriptionAccountKeys?.length ?? 0) < 2) return Promise.resolve(null);
+  return import('../subscription-accounts/runtime.js').then(({ readSubscriptionPoolScheduling }) =>
+    readSubscriptionPoolScheduling(source.providerId, source.model, { agent })).then((summary) => summary && {
+    // 一个都不能接、又不是因为都满载：额度用完或都在冷却。
+    limited: summary.accounts === 0 && !summary.full,
+    urgency: summary.urgency,
+    fiveHourTight: summary.fiveHourTight,
+    headroom: summary.headroom ?? null,
+  }, () => null);
+}
+
 let refreshing: Promise<void> | null = null;
 let refreshedAt = 0;
 
@@ -149,6 +204,7 @@ export const resolver = createModelGroupResolver({
     return result.result as { binaryReady?: boolean } | null | undefined;
   }),
   quotaWindows,
+  innerQuota,
   // 其他电脑与分享来的来源：与插件卡片里的远程模型同一份位置名单与同一条目录读取。
   locations: readWorkerAgentLocations,
   // 带上 stale：读不到时底层会给上次的目录，选路不能把它当成那台现在能用。

@@ -15,6 +15,18 @@ import { pickRouteMember, type RouteWeightStep } from '../provider-group/schedul
 import { FIVE_HOURS_MS, quotaWindowsScheduleState } from '../provider-group/usage.js';
 
 /** 一个候选此刻的事实，顺序与 route.candidates 一致。 */
+/**
+ * 内层(电脑组、几个账号的连接)按它自己的选法「下一个会接任务的」那台电脑或那个账号的额度事实(2026-11-26，dash 建议)：
+ * 外层按它判断能不能用、快满没、急不急、余量，与内层实际会用的一致；只看本机那一份快照会和内层判断对不上。
+ */
+export interface ModelGroupInnerQuota {
+  /** 内层一个能接的都没有，且不是因为都满载(满载只是忙，不算额度用完)。 */
+  limited: boolean;
+  urgency: number | null;
+  fiveHourTight: boolean;
+  headroom: number | null;
+}
+
 export interface ModelGroupCandidateFacts {
   /**
    * 供应商已连接、模型现在可为新任务选用、对应引擎已安装；不在本机的来源还要求那个位置此刻能选、
@@ -25,6 +37,8 @@ export interface ModelGroupCandidateFacts {
   sourceName: string;
   /** 订阅额度窗口；读不到(API 密钥、尚未读到)为 null。 */
   windows: readonly ModelGroupTraceQuota[] | null;
+  /** 来源背后是电脑组或几个账号时，内层下一个会接任务的那一个的额度事实；有它时选路按它判断。 */
+  inner?: ModelGroupInnerQuota | null;
   /**
    * 「最省钱」用的标价：每百万输出 token 的美元价(人民币报价已折算)。订阅来源、没有标价时为 null。
    * 只在选法是 cheapest 时才读取，其余选法可省略。
@@ -97,12 +111,13 @@ export function pickModelGroupCandidate(
       candidate, index, key: modelGroupCandidateKey(candidate),
       noVision: anyVision && fact?.acceptsImage !== true,
       usable: !candidate.off && fact?.available === true && !(anyVision && fact?.acceptsImage !== true),
-      limited: state?.limited ?? false,
-      limitedUntilMs: state?.resetAtMs ?? null,
-      tight: state?.fiveHourTight ?? false,
-      urgency: state?.urgency ?? null,
+      // 内层(电脑组、几个账号)按它下一个会接任务的那一个判断；说明里写的额度窗口仍是读到的那一份。
+      limited: fact?.inner ? fact.inner.limited : state?.limited ?? false,
+      limitedUntilMs: fact?.inner ? null : state?.resetAtMs ?? null,
+      tight: fact?.inner ? fact.inner.fiveHourTight : state?.fiveHourTight ?? false,
+      urgency: fact?.inner ? fact.inner.urgency : state?.urgency ?? null,
       quota: headroom?.window ?? state?.quota ?? null,
-      headroom: headroom?.left ?? null,
+      headroom: fact?.inner && route.strategy === 'headroom' ? fact.inner.headroom : headroom?.left ?? null,
       weight: modelGroupWeight(candidate.weight),
     };
   });
