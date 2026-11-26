@@ -145,7 +145,7 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
       executions.get(executionId)!.status = 'completed';
       completed.push({ executionId, body: body! });
       const source = messages.find(m => m.id === executions.get(executionId)?.source_message_id)!;
-      const text = (body.content as Array<{ text?: string }> | undefined)?.[0]?.text;
+      const text = (body.content as FakeMessage['content'] | undefined)?.find(block => block.type === 'text')?.text;
       if (text) post(text, { by: bots.findIndex(bot => bot.id === executions.get(executionId)!.bot_id), threadRootId: source.threadRootId ?? undefined })
         .content = body.content as FakeMessage['content'];
     }
@@ -502,6 +502,67 @@ describe('Chat Server Thread context reaches the Agent input', () => {
       excerpt: 'snapshot words', attachmentCount: files.count, attachmentName: files.name, sequence: Number(original.seq) }) as never);
     return message;
   }
+
+  // #13022 / unit: exercise the completed reply, including an interleaved message and a
+  // deleted target. Composer and context coverage alone cannot detect a missing outbound card.
+  it.each(['mention', 'quote', 'personal reply', 'deleted', 'refused'] as const)('publishes one authorized reply target (%s)', async kind => {
+    const personal = kind === 'personal reply';
+    const original = post('previous answer', { by: personal ? 'owner' : 0 });
+    const request = post('question', { mentions: [bots[0].id] });
+    if (kind !== 'mention') quoting(request, original);
+    if (personal) {
+      request.authorId = uuid(++ids);
+      request.mentions = [];
+      const [execution] = trigger({ ...request, mentions: [bots[0].id] });
+      queue.clear();
+      Object.assign(execution, { mask_kind: 'reply', mask_owner_id: ownerId, requester_id: request.authorId });
+      fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { personalMask: 1 } } };
+        if (route === '/mask/executions/claim') {
+          if (actor !== bots[0].id || execution.status !== 'queued') return { body: { execution: null } };
+          execution.status = 'running';
+          return { body: { execution } };
+        }
+        return handle(route, method, body, actor);
+      });
+    } else trigger(request);
+    post('unrelated');
+    await vi.advanceTimersByTimeAsync(2000);
+    if (kind === 'deleted') original.deleted = true;
+    if (kind === 'refused') fixture.handle.mockImplementation((route, method, body, actor) =>
+      body?.action === 'complete' && body.content.some((block: FakeMessage['content'][number]) => block.namespace === 'cindy.quote')
+        ? { status: 400, body: { error: { code: 'INVALID_INPUT' } } } : handle(route, method, body, actor));
+    await settle('nova', 'answer');
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks.filter(b => b.type === 'text')).toEqual([{ type: 'text', text: 'answer' }]);
+    const quotes = blocks.filter(b => b.namespace === 'cindy.quote');
+    if (kind === 'deleted' || kind === 'refused') expect(quotes).toEqual([]);
+    else {
+      const target = kind === 'mention' ? request : original;
+      expect(quotes).toEqual([expect.objectContaining({ data: expect.objectContaining({ messageId: target.id }),
+        fallback: expect.stringContaining(target.content[0].text!) })]);
+    }
+  });
+
+  // #13022 / unit: two request inputs arrive out of order in the talk plan, interleaved
+  // with group history. Assert target and visible addressee at the completion endpoint.
+  it('quotes the newest delivered discussion input and names its author in the reply', async () => {
+    const source = post('start');
+    const first = post('first addition');
+    const latest = post('second addition');
+    post('unrelated');
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: source.id, request_text: 'start',
+      note_message_ids: [latest.id, first.id], steps: [{ position: 0, botId: bots[0].id, botName: 'Nova', status: 'running' }] };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger({ ...source, mentions: [bots[0].id] }, { plan_id: planId, plan_step: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle('nova', 'answer');
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks[0].data?.messageId).toBe(latest.id);
+    expect(blocks[1].text).toContain('Alex');
+    expect(blocks[1].text).toContain('answer');
+  });
 
   it('names the quoted file for the Agent, from the original when read and from the snapshot otherwise', async () => {
     const live = post('', { media: ['live-plan.pdf'] });
