@@ -2227,16 +2227,20 @@ describe('remote engine is a window-local choice', () => {
       defaultsReady: false, selectedAgentKind: undefined,
     })).toBe('codex');
   });
-  it('preserves manual selection even after selecting the followed engine again', () => {
+  // 引擎按电脑记：远程电脑上手动换的引擎属于那台电脑，不写进本机落盘。
+  // 最小失败输入：本机 Pi → 远程跟随 Claude → 手动换 Codex → 改目录 → 重启，应仍是 Pi。
+  it('keeps a manual engine change on the remote computer out of the local draft', () => {
     followRemote();
     draftStore.switchVendor('codex', { userSelected: true });
-    draftStore.switchVendor('cc', { userSelected: true });
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('codex');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
     expect(engineFollow.nextRemoteDraftEngine({
-      ownerId: null, deviceId: null, currentVendor: 'cc',
+      ownerId: null, deviceId: null, currentVendor: 'codex',
       defaultsReady: false, selectedAgentKind: undefined,
-    })).toBeNull();
+    })).toBe('pi');
     draftStore.__reloadForTest();
-    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraft().vendor).toBe('pi');
   });
 });
 
