@@ -319,18 +319,18 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   选插件引擎，插件引擎任务显示正确的引擎与模型，也能在任务里切换引擎；规则与电脑相同，只限被控电脑本机的普通任务。
   手机端改动只走 JS 热更新。
 - **定时任务**：自动任务的模型选择里列出本机与同账号其他电脑开放的插件引擎，`cindy_scheduler` 工具同样能选。支持每次新建任务
-  （可用 worktree，2026-11-25；支持另一台电脑，2026-11-26）以及绑定普通桌面任务（2026-11-26，经 `scheduledModelScope` 临时切换并在下次
+  （可用 worktree，2026-11-25；支持另一台电脑，2026-11-26）以及绑定普通桌面任务或独立自动任务产出的会话（2026-11-26，经 `scheduledModelScope` 临时切换并在下次
   用户消息前恢复原引擎，含另一台电脑上的插件引擎）；持续会话、协同/SSH 任务、脚本执行、伙伴例行任务与项目自动化不提供。保存与每次运行前都按对应电脑此刻
   提供的引擎准入，插件停用、不可用或对端不可达时保存或本次运行明确失败，不回落内置模型。权限与内置引擎的自动任务一样默认「全部允许」；
   插件 Agent 自己不请求确认的操作，Cindy 拦不住。
-- **绑定插件引擎任务的自动化（2026-11-25；2026-11-26 支持临时切换模型与远程插件引擎）**：用户反馈 Antigravity 任务（含另一台电脑上的远程插件引擎）里 GitHub 插件的 PR 自动跟进在未指定模型时每轮报
-  「Scheduled tasks is not available for tasks running on a plugin engine」，指定了跟进模型时保存又被拒。
-  现在绑定到普通桌面插件引擎任务（本机或另一台电脑）的自动化（`bindToCurrentSession` / `targetSessionId`）分两种情况运行：
+- **绑定插件引擎任务的自动化（2026-11-25；2026-11-26 支持临时切换模型、远程插件引擎与自动化产出任务）**：用户反馈 Antigravity 任务（含另一台电脑上的远程插件引擎以及自动化新建出来的插件引擎任务）里 GitHub 插件的 PR 自动跟进在未指定模型时每轮报
+  「Scheduled tasks is not available for tasks running on a plugin engine」或落库报「this plugin engine task cannot be bound to an automation」，指定了跟进模型时保存又被拒。
+  现在绑定到普通桌面或独立自动任务产出的插件引擎任务（本机或另一台电脑，非持续会话、非伙伴例行任务）的自动化（`bindToCurrentSession` / `targetSessionId`）分两种情况运行：
   - **未指定模型**：按用户续发消息运行，不论任务忙闲都进该任务的消息队列，由任务自己的发送路径启动引擎，沿用任务当前的引擎、位置、模型与权限档，入队前与派发前各按对应电脑做一次准入检查。
-  - **指定了模型（含内置引擎或本机/远程插件引擎）**：走与内置任务相同的 `scheduledModelScope` 临时切换链路——触发前保存原任务基线（支持 `agentKind = 'acp'` 与 `agentDeviceId`）到 `scheduled_model_baseline`（UI 投影继续展示原任务模型），经 `performSessionAgentSwitch` / `applySessionRuntimeSelection` 临时切换到自动化指定模型执行本轮，下次用户发消息或未指定模型的自动任务触发时自动切回原插件引擎与原位置并清理基线（对端离线时保留基线不丢弃）。同样支持绑定内置桌面任务临时切到本机或另一台电脑的插件引擎执行。
+  - **指定了模型（含内置引擎或本机/远程插件引擎）**：走与内置任务相同的 `scheduledModelScope` 临时切换链路——触发前保存原任务基线（支持 `agentKind = 'acp'` 与 `agentDeviceId`）到 `scheduled_model_baseline`（UI 投影继续展示原任务模型），经 `performSessionAgentSwitch` / `applySessionRuntimeSelection` 临时切换到自动化指定模型执行本轮，下次用户发消息或未指定模型的自动任务触发时自动切回原插件引擎与原位置并清理基线（对端离线时保留基线不丢弃）。同样支持绑定普通桌面或独立自动任务产出的内置任务临时切到本机或另一台电脑的插件引擎执行。
   以下仍明确拒绝，不换引擎、不回落内置模型：
-  未带 `modelAgentKind` 的旧版仅模型覆盖、SSH / 协同任务、持续会话（`persistentSession`）、非普通桌面任务、伙伴例行任务与原始转发对端位置。
-  入口见 `scheduler-host/runner.ts` 的 `boundPluginEngineRefusal` 与 `maker-ipc/scheduledModelSelection.ts`。
+  未带 `modelAgentKind` 的旧版仅模型覆盖、SSH / 协同任务、持续会话（`persistentSession`）、IM / 审查等非普通任务、伙伴例行任务与原始转发对端位置。
+  入口见 `scheduler-host/runner.ts` 的 `boundPluginEngineRefusal`、`scheduler-host/storage.ts` 与 `maker-ipc/scheduledModelSelection.ts`。
 
 ## 第二期：多 Agent 协同（2026-11-19）
 

@@ -205,10 +205,11 @@ const SCHEDULED_TASKS_FEATURE = 'Scheduled tasks';
 
 /**
  * A schedule linked to a plugin-engine task either runs on the task's own engine and model (when no
- * model is chosen), or temporarily switches an ordinary desktop task (local or remote plugin engine)
- * to its explicit model choice via `scheduledModelScope` and restores the original engine before the
- * next user message. Likewise, an ordinary desktop task can temporarily run a bound automation on a
- * local or remote plugin engine. Returns a refusal for every unsupported combination.
+ * model is chosen), or temporarily switches an ordinary desktop or standalone automation task
+ * (local or remote plugin engine) to its explicit model choice via `scheduledModelScope` and
+ * restores the original engine before the next user message. Likewise, an ordinary desktop or
+ * standalone automation task can temporarily run a bound automation on a local or remote plugin
+ * engine. Returns a refusal for every unsupported combination.
  */
 function boundPluginEngineRefusal(
   schedule: Schedule,
@@ -238,20 +239,22 @@ function boundPluginEngineRefusal(
       reason = 'SSH automation targets must keep their current Harness.';
     } else if (target?.orcaRole || target?.orcaRemoteLead) {
       reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-    } else if (target?.source && target.source !== 'desktop') {
+    } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
       reason = 'This task cannot switch to or from a plugin engine.';
     } else if (targetIsPluginEngine && isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
     }
   } else if (targetIsPluginEngine) {
-    if (target?.remoteHostId) {
+    if (schedule.persistentSession) {
+      reason = 'A plugin engine schedule cannot use a persistent session.';
+    } else if (target?.remoteHostId) {
       reason = 'SSH automation targets must keep their current Harness.';
     } else if (isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
     } else if (schedule.modelAgentKind && schedule.model?.trim()) {
       if (target?.orcaRole || target?.orcaRemoteLead) {
         reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-      } else if (target?.source && target.source !== 'desktop') {
+      } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
         reason = 'This task cannot switch to or from a plugin engine.';
       }
     } else if (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort) {

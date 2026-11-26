@@ -1543,6 +1543,111 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentDeviceId: 'studio' }));
   });
 
+  // 2026-11-26 (#13003 / PR #13254): a PR follow-up bound to a scheduler-created
+  // plugin-engine task (source='scheduler', agent_kind='acp') must run both when
+  // following the task's own model and when overriding to an explicit built-in or
+  // plugin model, while persistentSession=true targeting an ACP task stays refused.
+  it('runs a bound follow-up on a scheduler-created plugin-engine task and refuses persistentSession', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    let currentKind: 'acp' | 'codex' = 'acp';
+    let currentProviderId: string | null = 'acp-plugin:agy:agy';
+    let currentModel = 'gemini-4-neon';
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4-neon' });
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'scheduler',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      model: currentModel,
+      userSendAt: null,
+      agentDeviceId: null,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(async () => ({ model: 'gemini-4-neon', effort: '' }));
+    const { runner, maker, notifier } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+        if (!selection) return () => {};
+        currentKind = 'codex';
+        currentProviderId = 'openai';
+        currentModel = selection.model;
+        Object.assign(h.session, { agentKind: 'codex', model: selection.model });
+        return { release: () => {}, selection };
+      },
+    });
+    vi.mocked(maker.getSessionMeta).mockImplementation(async () => ({
+      agentKind: currentKind,
+      model: currentModel,
+      effort: 'high',
+    }) as never);
+
+    // 1. Follow-task run on source='scheduler' ACP task succeeds.
+    const followTask = runner.fire(
+      heartbeatSchedule({ model: undefined, modelAgentKind: undefined }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await followTask).toMatchObject({ sessionId: SESSION_ID });
+
+    // 2. Persistent schedule targeting an ACP task stays refused before enqueue.
+    await expect(runner.fire(
+      heartbeatSchedule({ persistentSession: true, model: undefined, modelAgentKind: undefined }),
+      createFireContext(),
+    )).rejects.toThrow('cannot use a persistent session');
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+
+    // 3. Explicit built-in override on source='scheduler' ACP task switches and dispatches.
+    const overrideQueue = createQueueHarness({ busy: false });
+    const acquireOverrideSwitch = vi.fn(async (
+      _id: string,
+      _signal?: AbortSignal,
+      selection?: Parameters<NonNullable<MakerScheduleRunnerDeps['acquirePendingAgentSwitch']>>[2],
+    ) => {
+      currentKind = 'codex';
+      currentProviderId = 'openai';
+      currentModel = selection!.model;
+      Object.assign(h.session, { agentKind: 'codex', model: selection!.model });
+      return { release: () => {}, selection: selection! };
+    });
+    const { runner: overrideRunner, maker: overrideMaker } = createRunnerHarness(h.session, overrideQueue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: acquireOverrideSwitch,
+    });
+    vi.mocked(overrideMaker.getSessionMeta).mockImplementation(async () => ({
+      id: SESSION_ID,
+      agentKind: currentKind,
+      workDir: '/tmp/bound',
+      model: currentModel,
+      effort: 'medium',
+      sdkSessionId: 'sdk-1',
+    }) as never);
+    const overrideRun = overrideRunner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        providerId: 'openai',
+        model: 'gpt-5.4',
+        effort: 'medium',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(overrideQueue.enqueueCalls).toHaveLength(1));
+    expect(acquireOverrideSwitch).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(AbortSignal),
+      expect.objectContaining({ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.4' }),
+    );
+    await overrideQueue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    expect(await overrideRun).toMatchObject({ sessionId: SESSION_ID });
+  });
+
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });

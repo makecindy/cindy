@@ -1019,5 +1019,24 @@ describe('scheduled baseline permissionMode preservation', () => {
       'acp',
       providerShareGuestPeer('share-1', 'member-1', 'peer-2'),
     )).toThrow('cannot be used for scheduled tasks');
+
+    // Standalone scheduler-created tasks (e.g. a PR created inside an automation run)
+    // can also switch to/from a plugin engine, while IM and teammate routines stay refused.
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'scheduler', providerId: REMOTE_ENGINE },
+      'codex',
+      null,
+    )).not.toThrow();
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'codex', status: 'active', source: 'scheduler' },
+      'acp',
+      'studio',
+      REMOTE_ENGINE,
+    )).not.toThrow();
+    expect(() => assertScheduledHarnessSupported(
+      { agentKind: 'acp', status: 'active', source: 'feishu', providerId: REMOTE_ENGINE },
+      'codex',
+      null,
+    )).toThrow('This task cannot switch to or from a plugin engine');
   });
 });

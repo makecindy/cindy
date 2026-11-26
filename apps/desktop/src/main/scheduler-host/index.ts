@@ -2,13 +2,13 @@ import { primaryHostTargetIsRemote, withPluginAutomationHost } from './pluginAut
 /** Shared scheduler startup, target validation, locking and account-bound teardown. */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { Scheduler, type Logger, type FireContext, type PreRunPluginConfig, type Schedule, type ScheduleRunner, type Notifier } from '@cindy/maker-scheduler';
 import { isGitlabMrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import type { Maker } from '@cindy/maker-core';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
-import { sessions } from '../localDb/schema.js';
+import { schedules, sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
@@ -177,7 +177,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
         }
-        // 绑定普通桌面任务允许在内置与插件引擎(含另一台电脑)之间临时切换(scheduledModelScope)，其余形态明确拒绝。
+        // 绑定普通桌面任务或独立自动任务产出的会话允许在内置与插件引擎(含另一台电脑)之间临时切换(scheduledModelScope)，其余形态明确拒绝。
         if (selection.modelAgentKind === 'acp') {
           if (selection.persistentSession) {
             throw new Error('A plugin engine schedule cannot use a persistent session');
@@ -191,14 +191,29 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           if (row?.orcaRole || row?.orcaRemoteLead) {
             throw new Error('Collaborative tasks cannot switch to or from a plugin engine');
           }
-          if (row?.source && row.source !== 'desktop') {
+          if (row?.source && row.source !== 'desktop' && row.source !== 'scheduler') {
             throw new Error('This task cannot switch to or from a plugin engine');
           }
           if (isDisallowedPluginEngineDeviceId(selection.modelAgentDeviceId)) {
             throw new Error('This plugin engine location cannot be used for scheduled tasks');
           }
+          const [persistentOrRoutineOwner] = await deps
+            .getDb()
+            .select({ id: schedules.id })
+            .from(schedules)
+            .where(and(
+              eq(schedules.targetSessionId, targetSessionId),
+              or(eq(schedules.persistentSession, true), eq(schedules.source, 'bot')),
+            ))
+            .limit(1);
+          if (persistentOrRoutineOwner) {
+            throw new Error('A plugin engine schedule cannot use a persistent session');
+          }
         }
         if (isPluginEngineKind(row?.agentKind)) {
+          if (selection.persistentSession) {
+            throw new Error('A plugin engine schedule cannot use a persistent session');
+          }
           if (selection.source === 'bot' || row?.source === 'bot') {
             throw new Error('Teammate routines cannot run on a plugin engine yet');
           }
@@ -212,7 +227,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
             if (row?.orcaRole || row?.orcaRemoteLead) {
               throw new Error('Collaborative tasks cannot switch to or from a plugin engine');
             }
-            if (row?.source && row.source !== 'desktop') {
+            if (row?.source && row.source !== 'desktop' && row.source !== 'scheduler') {
               throw new Error('This task cannot switch to or from a plugin engine');
             }
           } else if (selection.modelAgentKind || selection.model?.trim() || selection.providerId?.trim() || selection.effort) {

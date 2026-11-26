@@ -12132,7 +12132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentDeviceId: route.agentDeviceId,
         providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
         ...(route.permissionMode ? { permissionMode: route.permissionMode } : {}),
-        applyNow: true, configStaged: true, signal,
+        applyNow: true, configStaged: true, scheduledModelSwitch: true, signal,
       });
       // An automatic model choice does not exit the owner's plan mode.
       if (savedModes?.planMode && route.agentKind !== 'acp') {

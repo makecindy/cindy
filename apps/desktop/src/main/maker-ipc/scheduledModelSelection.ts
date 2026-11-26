@@ -211,7 +211,7 @@ export function assertScheduledHarnessSupported(
     if (target.orcaRole || target.orcaRemoteLead) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Collaborative tasks cannot switch to or from a plugin engine');
     }
-    if (target.source && target.source !== 'desktop') {
+    if (target.source && target.source !== 'desktop' && target.source !== 'scheduler') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'This task cannot switch to or from a plugin engine');
     }
     if (target.agentKind === 'acp' && isDisallowedPluginEngineDeviceId(target.agentDeviceId)) {
