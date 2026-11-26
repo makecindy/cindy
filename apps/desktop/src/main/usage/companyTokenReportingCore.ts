@@ -9,6 +9,28 @@ import type { CaptureCompanyUsage, CompanyExecutionReporting, CompanyModelTokens
 const POLICY_CHECK_INTERVAL_MS = 12 * 60 * 60_000;
 const RETRY_INTERVAL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const directOutboxName = 'company-token-outbox.json';
+const executorOutboxDirectory = 'company-token-executor';
+const receiptId = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+
+function storedReceipts(dir: string) {
+  return existsSync(dir) ? readdirSync(dir).filter(id => receiptId.test(id)) : [];
+}
+
+/** A verified profile mismatch can retire this member's batches without opening another member's queue for upload. */
+export function discardCompanyMemberOutboxes(dir: string, member: string) {
+  const discard = (file: string) => {
+    const outbox = new CompanyTokenQueue(file);
+    try {
+      const scope: unknown = JSON.parse(outbox.scope().owner);
+      if (Array.isArray(scope) && scope.length === 3 && typeof scope[0] === 'string' &&
+          typeof scope[1] === 'string' && scope[2] === member) outbox.clear();
+    } catch { /* Ownership cannot be established for an absent or unreadable batch. */ }
+  };
+  discard(path.join(dir, directOutboxName));
+  const executors = path.join(dir, executorOutboxDirectory);
+  for (const id of storedReceipts(executors)) discard(path.join(executors, id));
+}
 
 export interface ReportingIdentity {
   orgId: string;
@@ -82,9 +104,8 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
     return sendRequest(signal, id, route, method, body);
   };
   const { dir } = ports;
-  const queue = new CompanyTokenQueue(path.join(dir, 'company-token-outbox.json'));
-  const delegatedDir = path.join(dir, 'company-token-executor');
-  const receiptId = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  const queue = new CompanyTokenQueue(path.join(dir, directOutboxName));
+  const delegatedDir = path.join(dir, executorOutboxDirectory);
   const delegated = (id: string) => new CompanyTokenQueue(path.join(delegatedDir, id));
   const liveReceipts = new Map<string, number>();
   const purge = () => {
@@ -208,9 +229,7 @@ export function createCompanyTokenReportingCore(ports: ReportingRuntime) {
       const cutoff = latestUploadableDay(Date.now(), dailyUploadSlot(who.device));
       const sameOwner = () => visible()?.participating && current(who) && invalidation === version;
       for (const [id, exp] of liveReceipts) if (exp <= Date.now()) liveReceipts.delete(id);
-      const files = existsSync(delegatedDir)
-        ? readdirSync(delegatedDir).filter((id) => receiptId.test(id))
-        : [];
+      const files = storedReceipts(delegatedDir);
       // The outboxes can outlive the process that last read their owner. Check scope on disk
       // before disclosing even a receipt identifier to another organization's endpoint.
       const owned = new Map<string, ReturnType<CompanyTokenQueue['scope']>>();

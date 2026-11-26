@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, watch } from 'node:fs';
 import path from 'node:path';
-import { createCompanyTokenReportingCore, type ReportingIdentity } from '../../desktop/src/main/usage/companyTokenReportingCore.js';
+import { createCompanyTokenReportingCore, discardCompanyMemberOutboxes, type ReportingIdentity } from '../../desktop/src/main/usage/companyTokenReportingCore.js';
 import { installCompanyUsageCapture, installExecutionReporting } from '../../desktop/src/main/usage/companyTokenFacts.js';
 import { directCompanyTokenRoute } from '../../desktop/src/main/usage/companyTokenRoute.js';
 import { getActiveCatalog } from '../../desktop/src/main/maker-host/active-catalog.js';
@@ -123,6 +123,12 @@ export function bindHostCompanyReporting(options: HostReportingOptions) {
     },
     suspend: () => update('suspended'),
     signOut: () => update('signed-out'),
+    discardMember(member: string) {
+      if (disposed || !options.reportBuild) return;
+      update('suspended');
+      try { discardCompanyMemberOutboxes(dir, member); }
+      catch { /* Unavailable storage must not change the verified Host login result. */ }
+    },
     dispose() {
       disposed = true;
       watcher?.close();

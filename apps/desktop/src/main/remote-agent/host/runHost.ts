@@ -2048,8 +2048,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   async function pumpEvents(run: Run, handle: AgentSessionHandle): Promise<void> {
-    /** 供应商组：本机这一台上这一轮出过终态错误。 */
-    let groupTurnFailed = false;
+    // The initial provider-initiated turn can have no send ID. Null means no failed send.
+    let failedGroupSend: string | undefined | null = null;
     // The native Codex error and its usage-bearing done are consecutive in this event stream.
     let failedCodex: { turn?: HostedCompanyTurn; send?: string } | undefined;
     let lastCodexDoneId: string | undefined;
@@ -2065,38 +2065,42 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             run.activeTurn = true;
           }
         }
-        const failed = failedCodex;
-        failedCodex = undefined;
         const codexDone = event.source === 'codex' && isProductTurnDoneEvent(event) && event.turnScope !== 'background';
         const nativeTurn = codexDone ? (event.data as { raw?: { id?: string; status?: string } } | null)?.raw : undefined;
         const repeatedDone = typeof nativeTurn?.id === 'string' && nativeTurn.id === lastCodexDoneId;
         if (typeof nativeTurn?.id === 'string') lastCodexDoneId = nativeTurn.id;
-        const pairedDone = failed && codexDone && !repeatedDone && (failed.send === run.lastSendCallId ||
+        if (repeatedDone) continue;
+        const failed = failedCodex;
+        failedCodex = undefined;
+        const pairedDone = failed && codexDone && (failed.send === run.lastSendCallId ||
           nativeTurn?.status === 'failed' || nativeTurn?.status === 'interrupted');
-        const previousSend = pairedDone && failed.send !== run.lastSendCallId;
+        if (pairedDone && failed.send !== run.lastSendCallId) {
+          // N's error was already published. Only its meter consumes this tail; N+1 still owns the lifecycle.
+          meterRunUsage(run, handle.model, event, failed.turn);
+          continue;
+        }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
           run.activeTurn = false;
           run.abortRequested = false;
         }
         // A fenced prior done cannot settle the new turn. Continuation receipts still belong to the live turn.
-        const staleDone = repeatedDone || (isProductTurnDoneEvent(event) && !currentTerminal);
+        const staleDone = isProductTurnDoneEvent(event) && !currentTerminal;
         const usageTurn = pairedDone ? failed.turn : staleDone ? undefined : run.companyTurn;
         meterRunUsage(run, handle.model, event, usageTurn);
-        if (currentTerminal && !previousSend && !repeatedDone) {
+        if (currentTerminal) {
           if (run.kind === 'codex' && event.source === 'codex' && event.type === 'error') {
             failedCodex = { turn: run.companyTurn, send: run.lastSendCallId };
           }
           run.companyTurn = undefined;
         }
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
+        if (failure) failedGroupSend = run.lastSendCallId;
         if (failure && poolFailuresAfterOutput.has(event)) {
-          groupTurnFailed = true;
           append(run, { t: 'event', event });
           continue;
         }
         if (failure && isAccountFailure(failure)) {
-          groupTurnFailed = true;
           await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
             append(run, { t: 'event', event });
           });
@@ -2106,14 +2110,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // 还可以换一台(凭证排在错误前面)。
         if (run.acceptsGroupSwitch || run.groupLoad) {
           if (failure) {
-            groupTurnFailed = true;
             const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), failure, handle.model)
               .catch(() => null);
             if (run.closing) break;
             if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
           } else if (isProductTurnDoneEvent(event)) {
-            noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.accountFailure);
-            groupTurnFailed = false;
+            noteGroupSwitchTurnEnded(run, failedGroupSend === run.lastSendCallId || !!run.accountFailure);
+            failedGroupSend = null;
           }
         }
         const data = event.data as Record<string, unknown> | null;
@@ -2147,7 +2150,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // 受邀者的任务按组分到了本机这一台、一轮进行中本机的 Agent 意外结束(进程退出、事件流中断)：与组内电脑上的
     // 任务意外结束一样可以换一台——凭证排在收尾前面，收尾按出错处理，受邀者那边才会把这一轮当作失败。
     const midTurn = run.activeTurn === true;
-    if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.accountFailure) {
+    if (run.acceptsGroupSwitch && !run.closing && midTurn && failedGroupSend !== run.lastSendCallId && !run.accountFailure) {
       const info = streamFailed ? remoteAgentErrorInfo(streamError) : RELAY_UNAVAILABLE_ERROR;
       const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), {
         reason: 'remote_agent_closed',
@@ -2617,7 +2620,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         else deliver();
       };
       /** 这一轮在那台出过终态错误(这一轮结束时不算「正常结束」)。 */
-      let turnFailed = false;
+      let failedRelaySend: string | undefined | null = null;
       /** 失败时先(异步)判定要不要发凭证，期间那台转来的内容暂存，凭证排在错误前面。 */
       const holdForGroupSwitch = (failure: RelayRunFailure, deliver: () => void): void => {
         const accountFailure = isAccountFailure(failure);
@@ -2698,15 +2701,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             run.abortRequested = false;
           }
           if (failure) {
-            turnFailed = true;
+            failedRelaySend = run.lastSendCallId;
             if (!held || isAccountFailure(failure)) {
               holdForGroupSwitch(failure, deliver);
               return;
             }
           }
           if (isProductTurnDoneEvent(typed)) {
-            noteGroupSwitchTurnEnded(run, turnFailed || !!run.accountFailure);
-            turnFailed = false;
+            noteGroupSwitchTurnEnded(run, failedRelaySend === run.lastSendCallId || !!run.accountFailure);
+            failedRelaySend = null;
           }
           emit(deliver);
         },

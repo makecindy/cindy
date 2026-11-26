@@ -14,6 +14,7 @@ import { HostRefreshDeferredError, HostSessionMissingError, refreshHostSession a
 import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.ts';
 import { projectAdoptedSession } from './credentials/session.mjs';
 import { bindHostCompanyReporting } from './company-token-reporting.ts';
+import { CompanyTokenQueue } from '../../desktop/src/main/usage/companyTokenQueue.ts';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
 import { createDesktopScanner, HostProfileInUseError, nodeProfileScanPorts } from './agent/profile-coexistence.ts';
 import { spawn } from 'node:child_process';
@@ -86,7 +87,7 @@ function setup(overrides = {}) {
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
     createDesktopScanner: () => async () => [], hostLog: { info() {} }, OwnerDatabaseError, HostProfileInUseError,
-    HostAccountMismatchError, HostSignInRequiredError,
+    HostAccountMismatchError, HostSignInRequiredError, companyReporting: { discardMember() {} },
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
@@ -121,6 +122,50 @@ test('matching owner authentication proceeds to its own database', async () => {
   assert.equal(h.opens[0].ownerId, 'account-b');
   // Read after the owner is configured (the boundary path follows that profile), before storage.
   assert.deepEqual(h.steps, ['owner:account-b', 'boundary:account-b', 'open']);
+});
+
+test('verified membership mismatch discards only the expected member batches before that member returns', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'host-membership-outboxes-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const memberA = 'account-a', memberB = 'account-b';
+  const scope = member => ({ owner: JSON.stringify(['global', 'fixture-org', member]), orgRevision: 1, memberRevision: 1 });
+  for (const directMember of [memberA, memberB]) {
+    const profile = path.join(root, directMember);
+    const dir = path.join(profile, 'company-token-host');
+    const delegated = path.join(dir, 'company-token-executor');
+    mkdirSync(delegated, { recursive: true });
+    const files = [
+      [path.join(dir, 'company-token-outbox.json'), directMember],
+      [path.join(delegated, '11111111-1111-4111-8111-111111111111'), memberA],
+      [path.join(delegated, '22222222-2222-4222-8222-222222222222'), memberB],
+    ];
+    const batches = files.map(([file, member]) => {
+      const queue = new CompanyTokenQueue(file);
+      queue.add(scope(member), [{ day: '2020-01-01', model: 'test', input: 5, output: 0, cacheRead: 0, cacheWrite: 0 }]);
+      queue.next(scope(member), '2020-01-02'); // Includes a persisted, unacknowledged batch.
+      return { file, member, queue, original: readFileSync(file) };
+    });
+    const reporter = bindHostCompanyReporting({
+      directory: profile, reportBuild: true, identity: () => null, canWrite: () => false,
+      definitivelyInactive: () => false, gatewayEndpoint: () => null, fetch: () => assert.fail('unexpected request'),
+    });
+    try {
+      let member = memberB;
+      const harness = () => setup({ companyReporting: reporter,
+        CindyAuthClient: class { async getMe() { return { membership: { id: member, kind: 'org', orgId: 'fixture-org' } }; } },
+      });
+      await assert.rejects(harness().start(memberA), HostAccountMismatchError);
+      for (const { file, member: owner, original } of batches) {
+        if (owner === memberA) assert.equal(existsSync(file), false);
+        else assert.deepEqual(readFileSync(file), original);
+      }
+      member = memberA;
+      await assert.rejects(harness().start(memberA), /database opened/);
+      for (const { member: owner, queue } of batches) {
+        if (owner === memberA) assert.equal(queue.next(scope(memberA), '2020-01-02'), null);
+      }
+    } finally { reporter.dispose(); }
+  }
 });
 
 test('an explicit owner cannot open private data without a verified login', async () => {

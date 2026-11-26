@@ -350,7 +350,7 @@ function runId(): string {
   return `11111111-1111-4111-8111-${String(runSeq).padStart(12, '0')}`;
 }
 
-async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>) {
+async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>, agentKind: 'claude-code' | 'codex' = 'claude-code') {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
   /** 受邀者按顺序收到的事件与状态。 */
@@ -372,7 +372,7 @@ async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload
     },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
   let closedReason: string | null = null;
-  const started = await client.open('claude-code', payload);
+  const started = await client.open(agentKind, payload);
   return { client, started, stream, isClosed: () => closedReason !== null, closedReason: () => closedReason };
 }
 
@@ -2906,6 +2906,30 @@ describe('provider group "switch to another computer" for shared users', () => {
       'claude-opus',
     );
   });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['failed', 'completed'] as const).map(status => ({ placement, status }))))(
+    'keeps an accepted Codex send eligible for failover after a prior $status completion on $placement', async ({ placement, status }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), undefined, 'codex');
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        const done = { type: 'done', source: 'codex', data: { type: 'codex/event/task_complete', raw: { id: 'prior', status } } } as AgentEvent;
+        const terminal = status === 'completed' ? done : { type: 'error', source: 'codex',
+          data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent;
+        record.emit(terminal);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === terminal.type));
+        await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+        record.emit(done);
+        record.emit(done);
+        record.end(); // The second send has produced no output.
+        await waitFor(() => guest.isClosed());
+        expect(switchTokenIn(guest.stream)).toBeDefined();
+        expect(env.relay.noteRunFailure.mock.calls.filter(call => call[2].reason === 'remote_agent_closed')).toHaveLength(1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
 
   it('offers another computer when the computer’s task ends unexpectedly in the middle of a turn', async () => {
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });

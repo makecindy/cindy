@@ -502,7 +502,11 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     account = { authenticated: false, realm: null };
     throw error;
   }
-  if (expectedOwner && expectedOwner !== membership.id) throw new HostAccountMismatchError();
+  if (expectedOwner && expectedOwner !== membership.id) {
+    reportEndpoint = null;
+    companyReporting.discardMember(expectedOwner);
+    throw new HostAccountMismatchError();
+  }
   currentSessionToken = sessionToken;
   reportEndpoint = { realm, base: endpoints.authApiBaseUrl };
   if (process.platform==='linux' && endpoints.modelAccessApiBaseUrl) {

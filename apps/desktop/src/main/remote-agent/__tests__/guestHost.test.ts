@@ -1322,7 +1322,7 @@ it('never transfers pending Claude usage across turns or an already attributed t
   }
 });
 
-it('settles the failed Codex receipt against its own send even if the next send is admitted first', async () => {
+it.each([false, true])('settles the failed Codex receipt against its own send even if the next send is admitted first (next failed=%s)', async nextFailed => {
   const first = vi.fn(), next = vi.fn();
   installExecutionReporting({ available: () => true, captureBoundary: () => () => true, direct: () => true,
     challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), issue: async () => null,
@@ -1344,7 +1344,11 @@ it('settles the failed Codex receipt against its own send even if the next send 
     await vi.waitFor(() => expect(started[0].sends).toHaveLength(1));
     yield done('first', 'failed', 3);
     yield done('first', 'failed', 3);
-    yield done('next', 'completed', 7);
+    if (nextFailed) {
+      yield { type: 'error', source: 'codex', data: { isTerminal: true, reason: 'turn-failed' } } as AgentEvent;
+      yield done('first', 'failed', 3); // A duplicate must not consume the next send's uncharged failure.
+    }
+    yield done('next', nextFailed ? 'failed' : 'completed', 7);
   }
   const stream = meteringStream(events());
   const host = makeHost(started, { events: stream });
