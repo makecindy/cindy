@@ -439,6 +439,8 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'SUBSCRIPTION_POOL_MODEL_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'CODEX_ACCOUNT_READ_RETRY',
+  'CODEX_ACCOUNT_SERVICE_UNREACHABLE',
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
@@ -558,6 +560,13 @@ export function localizeSubscriptionAccountError(
   switch (parsed?.code) {
     case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
     case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'CODEX_ACCOUNT_SERVICE_UNREACHABLE': return translate('chat.subscriptionAccountError.unreachable');
+    case 'CODEX_ACCOUNT_READ_RETRY': {
+      const at = Number(/^retryAtMs=(\d{1,16})$/.exec(parsed.fallback)?.[1]);
+      if (!Number.isFinite(at) || at > 8.64e15) return translate('chat.subscriptionAccountError.unreachable');
+      const resetAt = new Intl.DateTimeFormat(locale?.replace(/-x-lzh$/, ''), { timeStyle: 'medium' }).format(at);
+      return translate('chat.subscriptionAccountError.rechecking', { resetAt });
+    }
     case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
     case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
       const resetAt = subscriptionRetryTime(parsed.fallback, locale);

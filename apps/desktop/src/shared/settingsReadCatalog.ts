@@ -16,7 +16,7 @@ export const SETTINGS_READ_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh
 /** Native IM default channels. `imessage` is newer than the frozen v2 wire and stays native-only. */
 export const SETTINGS_READ_IM_CHANNELS = ['global', 'feishu', 'slack', 'discord', 'wechat', 'telegram', 'dingtalk', 'wecom', 'imessage'] as const;
 export const SETTINGS_READ_SHORTCUT_IDS = [
-  'session-history-back', 'session-history-forward', 'region-screenshot',
+  'copy-session-link', 'session-history-back', 'session-history-forward', 'region-screenshot',
   'toggle-sidebar', 'open-settings', 'new-maker', 'close-tab-or-window', 'right-tab-prev', 'right-tab-next',
   'find-in-page', 'search-in-project', 'save-file', 'open-terminal', 'zoom-in', 'zoom-out', 'zoom-reset',
   'browser-focus-url', 'browser-back', 'browser-forward', 'browser-reload', 'cycle-permission-mode',

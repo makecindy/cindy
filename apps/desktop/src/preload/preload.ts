@@ -5338,7 +5338,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // macOS「本地网络」权限：只读本机状态与请求授权，不进入 device-link 远程白名单。
   localNetwork: {
     status: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.STATUS, options),
-    request: () => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST),
+    request: (options) => ipcRenderer.invoke(LOCAL_NETWORK_LOCAL.REQUEST, options),
     onChanged: (callback) => fanOutLocalNetworkChanged((data) => callback(data as LocalNetworkState)),
   } satisfies LocalNetworkApi,
   // 自建中转服务:本机中转与加入别的中转(只接受本机应用窗口)。

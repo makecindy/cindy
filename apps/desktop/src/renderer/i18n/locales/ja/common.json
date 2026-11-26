@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "ローカルネットワーク",
         "deniedHint": "この権限がないと、同じネットワーク上のコンピュータやスマートフォンはこのコンピュータに直接接続できず、リレー経由になるため遅くなります。",
-        "settingsHint": "「システム設定 › プライバシーとセキュリティ › ローカルネットワーク」で Cindy をオンにしてください。戻るとすぐに反映されます。"
+        "promptedHint": "macOS の確認ダイアログで「許可」をクリックしてください。表示されない場合はシステム設定から手動でオンにします。",
+        "settingsHint": "「プライバシーとセキュリティ」で「ローカルネットワーク」を開き、Cindy をオンにしてください。一覧にない場合は「+」からこのアプリを追加すると戻ってすぐ反映されます。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "サイドバーを切り替え",
           "description": "左側のセッションリストを折りたたみ・展開します"
+        },
+        "copy-session-link": {
+          "label": "セッションリンクをコピー",
+          "description": "開いているセッションのリンクをコピー"
         },
         "session-history-back": {
           "label": "前のセッション",
@@ -11986,6 +11991,8 @@
         "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
         "emptyTitle": "このグループにはまだメッセージがありません",
         "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+        "emptyDescriptionWithAssistant": "@Cindy に話しかけたり、右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
+        "emptyDescriptionInvite": "右上の招待メニューから友だちを招待したり、仲間を追加したりできます。",
         "roundEnded": "仲間たちの発言が終わりました",
         "stepTag": "ステップ {{count}}",
         "sending": "送信中",
@@ -12317,7 +12324,7 @@
         "loginRequired": "ログインしてから再試行してください。",
         "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
         "copyFailed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
-        "createDescription": "仲間を選ぶか、先にグループを作成してから友達を招待できます。",
+        "createDescription": "グループの作成後に、友だちを招待したり、仲間を追加したりできます。",
         "settings": {
           "notifications": {
             "title": "メッセージ通知",
@@ -15621,7 +15628,6 @@
       "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
       "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
       "messageNotSent": "メッセージは送信されませんでした。",
-      "upstreamEmpty550": "モデルサービスが空の応答で HTTP 550 を返しました",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
       "retryTitle": "最後のメッセージを再送信",
@@ -16698,6 +16704,8 @@
       "retryIn": "{{seconds}} 秒後に自動で再試行"
     },
     "subscriptionAccountError": {
+      "unreachable": "一時的に Codex アカウントサービスに接続できません。",
+      "rechecking": "一時的に Codex アカウントサービスに接続できません。{{resetAt}} に再試行します。",
       "poolModelLimited": "このモデルのサブスクリプション利用枠が上限に達しました。別のモデルに切り替えられます。",
       "poolRetryUntil": "{{resetAt}} 以降に再試行できます。",
       "poolOtherSignedOut": "別のサブスクリプションアカウントはログアウトしています。タスクを実行するコンピューターでログインして再試行できます。",

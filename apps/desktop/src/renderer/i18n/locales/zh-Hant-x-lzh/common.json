@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "區域網路",
         "deniedHint": "無此權，同網之電腦與手機不得直連此機，唯經中繼，其速遲矣。",
-        "settingsHint": "請於「系統設定 › 隱私權與安全性 › 區域網路」啟 Cindy，歸此即自生效。"
+        "promptedHint": "請於系統彈框中點「允許」；若無彈框，可往系統設定手啟之。",
+        "settingsHint": "於「隱私權與安全性」覓「區域網路」而啟 Cindy；若列中無之，點「+」添此應用，歸即自效。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "顯隱側欄",
           "description": "收或展左側差事錄"
+        },
+        "copy-session-link": {
+          "label": "錄差事連結",
+          "description": "錄當前差事之連結"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -11986,6 +11991,8 @@
         "loadEarlierFailed": "更早之訊未能載，請再試",
         "emptyTitle": "群議寂寂，尚無一言",
         "emptyDescription": "君先開言，群賢畢至，自當接續。@ 某同伴則僅令其答。",
+        "emptyDescriptionWithAssistant": "可 @Cindy，或自右上邀友與同伴。",
+        "emptyDescriptionInvite": "可自右上邀友與同伴。",
         "roundEnded": "同伴言畢",
         "stepTag": "第 {{count}} 步",
         "sending": "方遣",
@@ -12317,7 +12324,7 @@
         "loginRequired": "請先登入當前名籍，再試。",
         "requestFailed": "暫不能連群議服務，請稍後再試。",
         "copyFailed": "錄之未成，請選取連結手錄之。",
-        "createDescription": "可擇同伴，亦可先立群議，再邀友入之。",
+        "createDescription": "群既立，可邀友與同伴。",
         "settings": {
           "name": "群名",
           "topic": "群之主題",
@@ -15612,7 +15619,6 @@
       "piRetryHistoryUnavailable": "此信未發。Pi 讀舊錄以發信時失誤。可再試，或另啟任務。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未發。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
@@ -16698,6 +16704,8 @@
       "retryIn": "{{seconds}} 秒後自試"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 帳號服務暫不可達。",
+      "rechecking": "Codex 帳號服務暫不可達，至 {{resetAt}} 將復試。",
       "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
       "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",

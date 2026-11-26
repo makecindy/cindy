@@ -1,24 +1,28 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { BrowserWindow, ipcMain, shell } from 'electron';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
+import { macPermissionAppPath } from '../../shared/macControlPermission';
 import {
   LOCAL_NETWORK_LOCAL,
   type LocalNetworkAccess,
-  type LocalNetworkReminder,
   type LocalNetworkState,
 } from '../../shared/localNetwork';
 import {
   LocalNetworkAccessService,
   MAC_LOCAL_NETWORK_SETTINGS_URL,
   connectProbe,
+  parseLocalNetworkRequestOptions,
   readMacLanGateway,
 } from './access';
 import { LocalNetworkReminderState } from './reminder';
 
 const log = createLogger('local-network');
+const runMacOpen = promisify(execFile);
 
-/** While System Settings is open, notice the grant even if the user never returns to Cindy. */
+/** While a prompt or System Settings is open, notice the grant even if the user never returns to Cindy. */
 const SETTINGS_WATCH_INTERVAL_MS = 2_000;
 const SETTINGS_WATCH_LIMIT_MS = 3 * 60_000;
 
@@ -26,7 +30,17 @@ const access = new LocalNetworkAccessService({
   platform: process.platform,
   lanGateway: () => readMacLanGateway(),
   connect: connectProbe,
-  openSettings: () => shell.openExternal(MAC_LOCAL_NETWORK_SETTINGS_URL),
+  openSettings: async (separateWindow) => {
+    if (separateWindow) {
+      // Open a separate system-owned settings window without colliding with
+      // another pane's pending edits. Fixed app and URL, no shell interpolation.
+      await runMacOpen('/usr/bin/open', ['-n', '-b', 'com.apple.systempreferences', MAC_LOCAL_NETWORK_SETTINGS_URL], {
+        timeout: 5000,
+      });
+      return;
+    }
+    await shell.openExternal(MAC_LOCAL_NETWORK_SETTINGS_URL);
+  },
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
 });
@@ -39,7 +53,13 @@ let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function currentState(): LocalNetworkState {
   const value = lastAccess ?? 'unknown';
-  return { access: value, reminder: reminder.current(value) };
+  const bundle = macPermissionAppPath(process.platform, process.execPath);
+  return {
+    access: value,
+    reminder: reminder.current(value),
+    ...(bundle ? { appBundlePath: bundle } : {}),
+    settingsOpenStage: access.settingsOpenStage,
+  };
 }
 
 /** The control reminder ends on a clock, not on an event: re-publish when it does. */
@@ -150,10 +170,20 @@ export function registerLocalNetworkIpc(): void {
     if (probe === null) throwIpcError('INVALID_PARAMS', 'Invalid local network status options');
     return probe ? readState() : currentState();
   });
-  ipcMain.handle(LOCAL_NETWORK_LOCAL.REQUEST, async (event) => {
+  ipcMain.handle(LOCAL_NETWORK_LOCAL.REQUEST, async (event, options: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const result = await access.request();
+    const parsed = parseLocalNetworkRequestOptions(options);
+    if (parsed === null) throwIpcError('INVALID_PARAMS', 'Invalid local network request options');
+    if (!parsed.openSettings) {
+      // nehelper drops the native Local Network alert when the app is not in foreground.
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      if (senderWindow && !senderWindow.isDestroyed() && !senderWindow.isFocused()) {
+        senderWindow.focus();
+      }
+    }
+    const result = await access.request(parsed);
     if (result === 'denied') watchSettingsUntilGranted();
+    broadcastIfChanged();
     return currentState();
   });
 }
