@@ -23,7 +23,7 @@ import {
   setAnthropicDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
-import { deriveAvailableModels } from '../catalog-to-descriptors.js';
+import { deriveAvailableModels, resolvePiRuntimeModelDescriptor } from '../catalog-to-descriptors.js';
 
 function xdModels(agent: 'claude-code' | 'codex' | 'pi') {
   const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
@@ -934,7 +934,7 @@ describe('gateway cross-harness defaults', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const candidates = [
       ['deepseek/deepseek-v4-pro', ['text']],
-      ['deepseek/deepseek-v4-flash', ['text']],
+      ['deepseek/deepseek-v4-flash', ['text', 'image']],
       ['deepseek/deepseek-v4-flash-vision-exp', ['text', 'image']],
       ['tencent/hy3', ['text']],
       ['tencent/hy4-preview', ['text']],
@@ -959,6 +959,12 @@ describe('gateway cross-harness defaults', () => {
       expect(enabled(agent).sort()).toEqual(candidates.map(([id]) => id).sort());
     }
     expect(xdModels('pi').every((model) => model.piApi === 'openai-completions')).toBe(true);
+    for (const agent of ['pi', 'claude-code', 'codex'] as const) {
+      expect(xdModels(agent).find((model) => model.id === 'deepseek/deepseek-v4-flash'))
+        .toMatchObject({ supportsImageInput: true, modalities: { input: ['text', 'image'] } });
+    }
+    expect(resolvePiRuntimeModelDescriptor(getActiveCatalog(), 'xd', 'deepseek/deepseek-v4-pro'))
+      .toMatchObject({ supportsImageInput: false });
     setXdGatewayModels(
       live.map((model) => ({
         ...model,
@@ -967,6 +973,8 @@ describe('gateway cross-harness defaults', () => {
       })),
     );
     expect(enabled().sort()).toEqual(candidates.map(([id]) => id).sort());
+    expect(xdModels('pi').find((model) => model.id === 'deepseek/deepseek-v4-flash'))
+      .toMatchObject({ supportsImageInput: true, modalities: { input: ['text', 'image'] } });
     setXdGatewayModels(live.map((model, index) => ({
       ...model, agents: [...model.agents], defaultEnabled: index !== 0,
     })));
