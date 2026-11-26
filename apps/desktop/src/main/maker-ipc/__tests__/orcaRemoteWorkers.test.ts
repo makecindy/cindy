@@ -271,7 +271,7 @@ describe('openRemoteWorker', () => {
         expect(open?.[2][0]).toMatchObject({ agentKind: 'acp', model: route.model, providerId: route.providerId,
           agentDeviceId: route.agentDeviceId });
         expect(result).toMatchObject({ ok: true, agent: 'acp', model: route.model,
-          proxySession: { agentKind: 'acp', agentDeviceId: route.agentDeviceId } });
+          proxySession: { agentKind: 'acp', agentDeviceId: route.agentDeviceId, providerId: route.providerId } });
       } else {
         expect(open).toBeUndefined();
         expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });

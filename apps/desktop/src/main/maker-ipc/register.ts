@@ -21676,15 +21676,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const inputOwner = getCurrentDbClientSnapshot();
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
-      const link = getDeviceLinkInvokeContext();
-      let allowPluginEngine = false;
-      if (link && !link.sharedTask && (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp') {
-        const row = await getSessionRowSnapshot(sid);
-        const origin = parseOrcaRemoteLead(row?.orcaRemoteLead);
-        allowPluginEngine = row?.agentKind === 'acp' && origin != null && origin.releasedAt === undefined && origin.leadDeviceId === link.controllerDeviceId;
+      const isPluginInput = (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp';
+      if (isPluginInput) {
+        const link = getDeviceLinkInvokeContext();
+        if (!link || link.sharedTask) throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
+        const row = await getInputSessionRow(sid);
         if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+        const origin = parseOrcaRemoteLead(row.orcaRemoteLead);
+        if (row.agentKind !== 'acp' || !origin || origin.releasedAt !== undefined || origin.leadDeviceId !== link.controllerDeviceId)
+          throwIpcError('PERMISSION_DENIED', 'Plugin engine input requires the Worker Lead computer');
       }
-      const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, { allowPluginEngine }));
+      const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, { allowPluginEngine: isPluginInput }));
       // debug 日志：远程发送在被控端各阶段的耗时，不影响任何判定。
       const sendTrace = deviceLinkInvoke ? beginRemoteSendTrace(sid, parsed.clientId) : undefined;
       if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);

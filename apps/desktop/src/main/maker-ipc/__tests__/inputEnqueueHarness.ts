@@ -10,6 +10,7 @@ import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 import type { UsageLimitAutoResume } from '../usageLimitAutoResume.js';
 import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
 import { MAKER_INVOKE } from '../channels.js';
+import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -142,6 +143,8 @@ export function createInputStopHarness(coordinator: AgentInputCoordinator, optio
 export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, options: {
   remote?: boolean;
   mobile?: boolean;
+  controllerDeviceId?: string;
+  getInputSessionRow?: () => Promise<{ clearedAt: number | null; agentKind?: string; orcaRemoteLead?: string }>;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
 } = {}) {
@@ -177,6 +180,8 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
     getCurrentDbClientSnapshot: () => owner,
     isDeviceLinkInvoke: () => remote,
+    getDeviceLinkInvokeContext: () => remote ? { controllerDeviceId: options.controllerDeviceId ?? 'lead-computer' } : null,
+    parseOrcaRemoteLead,
     isMobileControllerInvoke: () => mobile,
     readDeviceLinkInvokeSourceDevice: () => mobile
       ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
@@ -185,7 +190,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     readClaimedClassicalStyle: noop,
     getResolvedMainLocale: () => 'zh-CN',
     getMainClassicalStyle: () => 'prose',
-    getInputSessionRow: async () => ({ clearedAt: null }),
+    getInputSessionRow: options.getInputSessionRow ?? (async () => ({ clearedAt: null })),
     getMakerIfReady: () => null,
     beginRemoteSendTrace: noop,
     remoteInputClientIdWasPersisted: () => false,

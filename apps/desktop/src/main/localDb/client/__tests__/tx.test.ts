@@ -3592,7 +3592,8 @@ describe('db worker tx handlers', () => {
       await client.exec("INSERT INTO orca_remote_opens VALUES ('remote', 'device', 1)");
       const args = { id: 'w', teamId: 't', sessionId: 'proxy', label: 'dev', role: 'developer',
         remoteExecution: { deviceId: 'device', remoteSessionId: 'remote',
-          proxySession: { title: 'Remote Worker', model: 'remote-model', agentKind: 'codex',
+          proxySession: { title: 'Remote Worker', model: 'remote-model', agentKind: 'acp',
+            providerId: 'acp-plugin:example:engine', agentDeviceId: 'models',
             effort: null, permissionMode: 'auto', fastMode: true } }, now: 2 };
       // Force a failure after the Worker and route writes. None of them may survive.
       await client.exec("CREATE TRIGGER fail_receipt BEFORE DELETE ON orca_remote_opens BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
@@ -3604,9 +3605,10 @@ describe('db worker tx handlers', () => {
       await client.tx('orca.upsertWorker', args);
       await expect(client.queryOne('SELECT execution_device_id, remote_session_id FROM orca_workers WHERE id = ?', ['w']))
         .resolves.toEqual({ execution_device_id: 'device', remote_session_id: 'remote' });
-      await expect(client.queryOne('SELECT title, working_dir, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role FROM sessions WHERE id = ?', ['proxy']))
+      await expect(client.queryOne('SELECT title, working_dir, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, provider_id, agent_device_id FROM sessions WHERE id = ?', ['proxy']))
         .resolves.toEqual({ title: 'Remote Worker', working_dir: null, model: 'remote-model', effort: 'high',
-          permission_mode: 'auto', fast_mode: 1, status: 'active', agent_kind: 'codex', orca_role: 'worker' });
+          permission_mode: 'auto', fast_mode: 1, status: 'active', agent_kind: 'acp', orca_role: 'worker',
+          provider_id: 'acp-plugin:example:engine', agent_device_id: 'models' });
       await expect(client.query('SELECT * FROM orca_remote_opens')).resolves.toEqual([]);
     }, { useInlineWorker });
   });

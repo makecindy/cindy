@@ -616,6 +616,32 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
+  // #13225, unit: exercise the production handler against a wrong peer and a temporary state read failure.
+  it.each(['lead-computer', 'other-computer', 'database-unavailable'])('authorizes ACP input from the linked Lead (%s)', async controllerDeviceId => {
+    const h = createHarness();
+    const enqueue = createInputEnqueueHarness(h.coordinator, {
+      controllerDeviceId,
+      getInputSessionRow: async () => {
+        if (controllerDeviceId === 'database-unavailable') throw Object.assign(new Error('Temporary state read failure'), { code: 'INTERNAL' });
+        return { clearedAt: null, agentKind: 'acp', orcaRemoteLead: JSON.stringify({
+          leadDeviceId: 'lead-computer', leadSessionId: 'lead-task', workerLabel: 'reviewer',
+        }) };
+      },
+    }).enqueue;
+    const item = makeItem('acp-input', 'Do the task');
+    item.createOpts.agentKind = 'acp';
+    if (controllerDeviceId === 'lead-computer') {
+      await enqueue({}, 'remote-worker', item);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+    } else {
+      await expect(enqueue({}, 'remote-worker', item)).rejects.toMatchObject({
+        code: controllerDeviceId === 'other-computer' ? 'PERMISSION_DENIED' : 'INTERNAL',
+      });
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    }
+  });
+
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,
     resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async () => null,

@@ -560,6 +560,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           ? opened.effort
           : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
+        ...(opened.providerId !== undefined ? { providerId: opened.providerId } : {}),
         fastMode: opened.fastMode ?? (input.fast ?? false),
         ...(opened.agentDeviceId !== undefined ? { agentDeviceId: opened.agentDeviceId } : {}),
       };
