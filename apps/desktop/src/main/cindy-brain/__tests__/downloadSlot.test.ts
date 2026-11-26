@@ -83,8 +83,45 @@ it('admits 8 GiB archives and rejects an extra byte before invoking the download
     expect(download).toHaveBeenCalledOnce();
     expect(download.mock.calls[0]).toEqual([expect.objectContaining({expectedSize:8*1024**3,maxBytes:8*1024**3})]);
     await slot.handle('p',{...request,id:'too-large',bytes:request.bytes+1});
+    await slot.handle('p',{...request,id:'null-size',bytes:null});
     expect(download).toHaveBeenCalledOnce();
+    // An omitted size keeps the 8 GiB ceiling but leaves the exact size to the response.
+    const { bytes: _bytes, ...withoutSize } = request;
+    await slot.handle('p',{...withoutSize,id:'unknown'});
+    expect(download.mock.calls[1]).toEqual([expect.objectContaining({expectedSize:undefined,maxBytes:8*1024**3})]);
   } finally { await fs.rm(root,{recursive:true,force:true}); }
+});
+// 测试价值：生产入口 PluginDownloadSlot.handle + 真实下载器；插件不给 bytes 时（ElyOffice 签名清单只有
+// SHA-256，查大小要调用会被限流的 GitHub API），以响应头声明的大小预留缓存后才写盘，没有声明大小的响应在写盘前拒绝。
+// 现有用例都带 bytes，覆盖不到这条分支。最小失败输入：start 请求省略 bytes。tier：unit（内存 fake 网络 + 临时目录）。
+it('learns an omitted size from the response before writing and rejects a response without one', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-unknown-size-')));
+  const body = 'signed-artifact';
+  const sha256 = createHash('sha256').update(body).digest('hex');
+  const events: any[] = [];
+  const reserve = vi.spyOn(PluginDownloadCache.prototype, 'reserve');
+  guarded.fetch.mockReset().mockImplementation(async (url: string) => ({
+    response: url.endsWith('/sized')
+      ? new Response(body, { headers: { 'content-length': String(body.length) } })
+      : new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } })),
+  }));
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch, root: id => path.join(root, id), scope: () => 'owner',
+    send: (_, event) => events.push(event), download: createDownloader(),
+    getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {}, network: { hosts: ['github.com'] } } }) as unknown as InstalledGhost,
+  });
+  try {
+    expect(await slot.handle('p', { kind: 'start', id: 'sized', url: 'https://github.com/sized', sha256 }))
+      .toMatchObject({ ok: true, bytes: body.length, sha256 });
+    expect(reserve.mock.calls.filter(call => call[3]).map(call => call[2])).toEqual([body.length]);
+    expect(events.filter(e => e.data.phase === 'downloading').at(-1).data)
+      .toMatchObject({ loaded: body.length, total: body.length, percent: 100 });
+    expect(await slot.handle('p', { kind: 'start', id: 'unsized', url: 'https://github.com/unsized', sha256 }))
+      .toMatchObject({ ok: false });
+    const files = (await fs.readdir(path.join(root, 'p'), { recursive: true })).map(f => path.basename(String(f)));
+    expect(files.filter(name => name.startsWith('artifact'))).toEqual(['artifact']);
+  } finally {
+    reserve.mockRestore(); await slot.stopAndWait(); await fs.rm(root, { recursive: true, force: true });
+  }
 });
 it('keeps display progress monotonic across restart retries and resets for a new request', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-progress-')));

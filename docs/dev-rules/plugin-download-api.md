@@ -6,7 +6,15 @@
 
 插件必须声明 node 与 network.hosts；仅允许已声明 HTTPS 主机，重定向每跳重新检查。
 本接口用于匿名公开文件，不携带 Cookie、账号凭证或自定义请求头；带授权请求继续使用 fetch 槽。
-SHA-256 与精确字节数必填，单文件最大 8 GiB。目标由宿主管理，不接受本机目标路径。
+SHA-256 必填，单文件最大 8 GiB。目标由宿主管理，不接受本机目标路径。
+`bytes` 可选。给出时语义不变：精确匹配、预留与进度都按它计算，存量插件的请求走原路径。
+省略时（发布者只在签名清单里给出 SHA-256，另查大小要调用未登录时按出口 IP 限流的
+GitHub API）：开始时只预留条目开销；每次连接经 `request` 注入点拿到 200／206 后，从
+`Content-Length` 或 `Content-Range` 读出整文件大小，先按它预留缓存再交给下载器写盘。没有声明
+大小、带非 identity 的 `Content-Encoding`、超过 8 GiB，或重连后大小与首次不同，都在写盘前以
+`SIZE` 终局失败。大小只用于预留、进度和完整性核对，接受与否仍由 SHA-256 决定。缓存身份把
+「省略」与「给出」视为不同请求，不共享条目。较早的宿主省略时返回
+`URL, SHA-256 and exact size (up to 8 GiB) are required`，插件需按此回退为带 `bytes` 的请求。
 面板不获得宿主路径。通过 `node.request({downloadTokens:{archive:token},params:{...}})`
 交接给同插件 Node，Host 校验账号、插件、批准身份和文件身份后注入 `params.downloads.archive`。
 携带凭据时 params 必须为对象且不得自带 downloads；旧请求不受影响。
