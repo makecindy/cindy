@@ -11,7 +11,7 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
  * 上传成功后由页面转为正式 attachment。
  *
  * 有在途上传时托盘上方常驻一行提示:上传挂在任务页与 App 前台这两条生命周期上,
- * 离开页面、切走 App 或锁屏都会中断。提示只说明这件事,不放按钮、不打断输入;失败卡
+ * 离开本对话、切出应用或锁屏都会中断。提示只说明这件事,不放按钮、不打断输入;失败卡
  * 不算在途(已结算,等用户重试或删除),提示随之收起。
  */
 import { Pen, RefreshCw, Info, X } from 'lucide-react-native';
@@ -321,7 +321,7 @@ function makeTrayStyles(colors: ThemeColors) {
       gap: spacing.sm,
       paddingBottom: spacing.sm,
     },
-    // 上传提示:占满托盘第一行(宽度 100%,在 wrap 行里独占一行),说明「留在本页、别锁屏也别切走」。
+    // 上传提示:占满托盘第一行(宽度 100%,在 wrap 行里独占一行),说明「离开本对话、切出应用或锁屏会中断」。
     // 说明文字按 §3 速查表用 footnote / regular / textSecondary;图标盒高对齐首行行高,
     // 文字 flexShrink 让 320pt 窄屏换行而不是溢出。
     uploadHint: {
