@@ -84,8 +84,12 @@ export function GithubItemFields({
       fail(/^#?\d+$/.test(text.trim()) ? 'no-repository' : 'invalid');
       return () => { current = false; };
     }
-    // A /pull/ link is a PR without asking GitHub; the lookup below only adds the title.
-    if (reference.kind === 'pr' && !unchanged) callbacks.current.onResolved(reference, 'pr');
+    // A /pull/ link is a PR without asking GitHub; any other edited input clears the previous
+    // resolved target immediately so saving during the lookup cannot persist a stale item.
+    if (!unchanged) {
+      if (reference.kind === 'pr') callbacks.current.onResolved(reference, 'pr');
+      else callbacks.current.onUnresolved();
+    }
     setStatus({ kind: 'resolving' });
     const timer = setTimeout(() => {
       const resolve = window.electronAPI.gitContext?.resolveGithubItem;
@@ -132,6 +136,9 @@ export function GithubItemFields({
           <Input {...control} value={text} onChange={(value) => {
             saved.current = null;
             onTextChange(value);
+            const next = parseGithubItemReference(value, defaultRepository);
+            if (next?.kind === 'pr') callbacks.current.onResolved(next, 'pr');
+            else callbacks.current.onUnresolved();
           }} placeholder={t('scheduler.editor.webhook.item.placeholder')} spellCheck={false} />
         )}
       </FormField>

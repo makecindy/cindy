@@ -10001,7 +10001,7 @@ export function registerGhostIpc(): void {
         ...(c.source === 'glab-cli' ? { source: 'glab-cli' as const } : {}),
       });
     }
-    const allowGlab = canUseGitlabHostCredentials(ghost);
+    const allowGlab = connectionDecls.some((c) => c.source === 'glab-cli') && canUseGitlabHostCredentials(ghost);
     return handleGhostConnectionsRequest({
       method,
       pathname,

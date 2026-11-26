@@ -280,7 +280,7 @@
       "networkConnections": "可連線你新增的 {{label}}",
       "networkConnectionsDetail": "地址在這個插件的設定介面裡新增；每次新增地址都需要你確認，你提供的憑證只注入對應地址。",
       "networkConnectionsGlabCli": "可連線你新增的 {{label}}，並優先複用本機 glab 已登入的執行個體",
-      "networkConnectionsGlabCliDetail": "你在外掛設定中新增的執行個體憑證優先；未單獨新增的執行個體，主機會按需讀取本機 glab 的登入權杖並僅注入該執行個體自身的 HTTPS 請求，外掛程式碼無法讀取或儲存權杖。",
+      "networkConnectionsGlabCliDetail": "你在插件設定中新增的執行個體憑證優先；未單獨新增的執行個體，主機會按需讀取本機 glab 的登入權杖並僅注入該執行個體自身的 HTTPS 請求，插件程式碼無法讀取或儲存權杖。",
       "codeDetailNetwork": "在獨立沙箱中執行，無法存取你的檔案；網路僅限上方宣告的網域，由主機代發。",
       "codeDetailWithNode": "面板 UI 在獨立沙箱中執行；本地處理能力由上方宣告的 Node 執行時提供。",
       "added": "新增",

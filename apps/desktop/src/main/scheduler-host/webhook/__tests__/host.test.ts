@@ -300,7 +300,10 @@ describe('ScheduleWebhookHost', () => {
     } } }));
     const chosen = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'plugin-endpoint',
       source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'] }] } } } as Schedule;
-    scheduler.schedules = [chosen, { ...withTrigger, id: 's2', webhookTrigger: { endpointId: 'endpoint-2' } } as Schedule];
+    const notSelf = { id: 's3', status: 'active', webhookTrigger: { endpointId: 'not-self-endpoint',
+      source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+        filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] } } } as Schedule;
+    scheduler.schedules = [chosen, notSelf, { ...withTrigger, id: 's2', webhookTrigger: { endpointId: 'endpoint-2' } } as Schedule];
     host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { remote: {
       baseUrl: () => 'https://webhook.example',
       isSignedIn: () => false,
@@ -313,14 +316,22 @@ describe('ScheduleWebhookHost', () => {
     await host.start();
     expect([...subscribedEventPluginIds()]).toEqual(['public/chat']);
     expect(host.status(chosen)).toMatchObject({ receiver: 'signed-out', hasSecret: true, plugins: [{ plugin: 'public/chat' }] });
-    const message = { id: 'm1', type: 'message.received', occurredAt: 1, data: { chatId: 'c1', fromSelf: true } };
+    const pad = 'x'.repeat(1_000);
+    const tail = 'x'.repeat(990);
+    const message = {
+      id: 'm1',
+      type: 'message.received',
+      occurredAt: 1,
+      data: { p1: pad, p2: pad, p3: pad, p4: tail, chatId: 'c1', fromSelf: true },
+    };
+    // Even after 4,000 chars of earlier fields, `notSelf` sees `fromSelf: true` and stays filtered (`accepted: 1`, only `s1`).
     expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 1, duplicate: false });
     expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 0, duplicate: true });
     expect(await publishPluginEvent('public/mail', { ...message, id: 'm2' })).toEqual({ accepted: 0, duplicate: false });
     await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
-    const [id, options] = (scheduler.runNow.mock.calls as unknown as Array<[string, { webhook: { events: Array<{ fields?: unknown }> } }]>)[0]!;
+    const [id, options] = (scheduler.runNow.mock.calls as unknown as Array<[string, { webhook: { events: Array<{ fields?: Record<string, unknown>; omittedFields?: string[] }> } }]>)[0]!;
     expect(id).toBe('s1');
-    expect(options.webhook.events.map((event) => event.fields)).toEqual([{ chatId: 'c1', fromSelf: true }]);
+    expect(options.webhook.events[0]!.omittedFields).toEqual(['chatId', 'fromSelf']);
     await expect(host.setSecret(chosen)).rejects.toThrow('PLUGIN_EVENT_SOURCE');
     // Account switch: the previous owner's late stop must not detach its successor.
     const previous = host;

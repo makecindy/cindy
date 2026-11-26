@@ -13,7 +13,6 @@ import {
   isManagedWebhookSource,
   sameManagedWebhookScope,
   pluginEventSubscriptions,
-  toPluginWebhookEvent,
   type PluginPublishedEvent,
   scheduleWebhookEventMatches,
   isValidWebhookSecret,
@@ -484,7 +483,6 @@ export class ScheduleWebhookHost {
    */
   async acceptPluginEvent(plugin: string, published: PluginPublishedEvent): Promise<PluginEventPublishResult> {
     if (this.stopped) throw new Error('schedule webhook host is stopped');
-    const event = toPluginWebhookEvent(plugin, published, Date.now());
     let accepted = 0;
     let matched = 0;
     let duplicates = 0;
@@ -492,8 +490,8 @@ export class ScheduleWebhookHost {
       if (this.stopped) throw new Error('schedule webhook host is stopped');
       const trigger = schedule.webhookTrigger;
       if (trigger?.source?.preset !== 'plugin' || !trigger.source.sources.some((item) => item.plugin === plugin)) continue;
-      // The queue re-reads the schedule and applies event types and field conditions.
-      const [result] = await this.queue.acceptBatch(schedule.id, [event], 0, trigger.endpointId);
+      // The queue re-reads the schedule, matches against untruncated fields, and persists a bounded copy.
+      const result = await this.queue.acceptPlugin(schedule.id, plugin, published, trigger.endpointId);
       if (result === 'filtered') continue;
       matched += 1;
       if (result === 'queued') accepted += 1;

@@ -2900,6 +2900,28 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(hop1['PRIVATE-TOKEN']).toBeUndefined();
     expect(hop2['Authorization']).toBeUndefined();
     expect(hop2['PRIVATE-TOKEN']).toBeUndefined();
+
+    // 若 hostsFor 异步探测 glab 期间插件实例更新或账号切换，必须在读取新凭证与发网前中止。
+    let releaseHosts!: (hosts: string[]) => void;
+    const pendingHosts = new Promise<string[]>((resolve) => { releaseHosts = resolve; });
+    const tokenFor = vi.fn(async () => ({
+      value: 'new-owner-token', header: 'Authorization', format: 'Bearer {value}', hostManaged: true,
+    }));
+    let revision = 'rev-1';
+    const raceSlot = makeSlot({
+      getGhost: () => fakeGhost({ network: glabNet }),
+      captureRequestGuard: () => {
+        const expected = revision;
+        return () => { if (revision !== expected) throw new Error('PLUGIN_REPLACED'); };
+      },
+      connections: { hostsFor: () => pendingHosts, tokenFor },
+    });
+    const inFlight = raceSlot.slot.handleFetchRequest('web-search', { url: 'https://git.example.com/api/v4/projects' });
+    revision = 'rev-2';
+    releaseHosts(['git.example.com']);
+    expect(await inFlight).toEqual({ ok: false, message: '请求失败:PLUGIN_REPLACED' });
+    expect(tokenFor).not.toHaveBeenCalled();
+    expect(raceSlot.fetchImpl).not.toHaveBeenCalled();
   });
 
   it('跨连接地址重定向:逐跳重验放行域,并换注目标地址自己的 token', async () => {

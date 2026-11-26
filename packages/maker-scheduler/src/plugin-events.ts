@@ -97,19 +97,37 @@ export function normalizePluginEventSources(value: unknown): SchedulePluginEvent
   });
 }
 
-function filterMatches(filter: SchedulePluginEventFilter, fields: ScheduleWebhookEvent['fields']): boolean {
+function filterMatches(
+  filter: SchedulePluginEventFilter,
+  fields: ScheduleWebhookEvent['fields'],
+  omittedFields?: readonly string[],
+): boolean {
   const actual = fields && Object.hasOwn(fields, filter.field) ? fields[filter.field] : undefined;
-  if (filter.operator === 'not-equals') return actual === undefined || String(actual) !== filter.value;
-  if (actual === undefined) return false;
+  if (actual === undefined) {
+    if (omittedFields?.includes(filter.field)) return false;
+    return filter.operator === 'not-equals';
+  }
   const text = String(actual);
+  if (filter.operator === 'not-equals') return text !== filter.value;
   return filter.operator === 'equals' ? text === filter.value : text.toLowerCase().includes(filter.value.toLowerCase());
+}
+
+/** 按插件发布的完整原始字段判断是否命中任一来源（不受落盘预算截断或丢弃影响）。 */
+export function pluginPublishedEventMatches(
+  sources: readonly SchedulePluginEventSource[],
+  plugin: string,
+  event: PluginPublishedEvent,
+): boolean {
+  return sources.some((source) => source.plugin === plugin
+    && (!source.events?.length || source.events.includes(event.type))
+    && (source.filters ?? []).every((filter) => filterMatches(filter, event.data)));
 }
 
 /** 事件是否命中任一来源（OR）；来源内事件类型与条件同时满足（AND）。 */
 export function pluginEventMatches(sources: readonly SchedulePluginEventSource[], event: ScheduleWebhookEvent): boolean {
   return sources.some((source) => event.source === pluginEventSourceId(source.plugin)
     && (!source.events?.length || source.events.includes(event.event))
-    && (source.filters ?? []).every((filter) => filterMatches(filter, event.fields)));
+    && (source.filters ?? []).every((filter) => filterMatches(filter, event.fields, event.omittedFields)));
 }
 
 /** 范围是否相同：仅重排、重复项不算变化，避免无谓地清空已接收事件。 */
@@ -130,16 +148,38 @@ export function samePluginEventScope(
 
 /**
  * 把插件事件转成队列里的门铃记录。字段按预算截断：队列落盘、提示词注入都基于这份有界副本，
- * 插件需要传更多内容时应让任务自己用插件工具去读。
+ * 插件需要传更多内容时应让任务自己用插件工具去读。priorityFields 会优先保留，确保筛选条件依赖的字段不被大字段挤掉。
  */
-export function toPluginWebhookEvent(plugin: string, event: PluginPublishedEvent, receivedAt: number): ScheduleWebhookEvent {
+export function toPluginWebhookEvent(
+  plugin: string,
+  event: PluginPublishedEvent,
+  receivedAt: number,
+  priorityFields?: Iterable<string>,
+): ScheduleWebhookEvent {
   let budget: number = PLUGIN_EVENT_LIMITS.persistedFieldChars;
   let truncated = false;
+  const omittedFields: string[] = [];
   const fields: Record<string, string | number | boolean> = {};
-  for (const [key, value] of Object.entries(event.data)) {
+  const orderedKeys: string[] = [];
+  const seenKeys = new Set<string>();
+  for (const key of priorityFields ?? []) {
+    if (Object.hasOwn(event.data, key) && !seenKeys.has(key)) {
+      seenKeys.add(key);
+      orderedKeys.push(key);
+    }
+  }
+  for (const key of Object.keys(event.data)) {
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      orderedKeys.push(key);
+    }
+  }
+  for (const key of orderedKeys) {
+    const value = event.data[key]!;
     const cost = key.length + (typeof value === 'string' ? Math.min(value.length, PLUGIN_EVENT_LIMITS.persistedFieldValueChars) : String(value).length);
     if (cost > budget) {
       truncated = true;
+      if (omittedFields.length < 64) omittedFields.push(key);
       continue;
     }
     budget -= cost;
@@ -161,6 +201,7 @@ export function toPluginWebhookEvent(plugin: string, event: PluginPublishedEvent
     ...(subject ? { subject } : {}),
     ...(Object.keys(fields).length ? { fields } : {}),
     ...(truncated ? { fieldsTruncated: true as const } : {}),
+    ...(omittedFields.length ? { omittedFields } : {}),
   };
 }
 

@@ -185,6 +185,8 @@ export interface ScheduleWebhookEvent {
   fields?: Record<string, string | number | boolean>;
   /** 插件事件的字段超出保存预算、有部分被截掉或丢弃。 */
   fieldsTruncated?: true;
+  /** 插件事件：因保存预算而未放入 fields 的字段名，避免重验条件时把已丢弃字段误判为缺失。 */
+  omittedFields?: string[];
 }
 
 /**

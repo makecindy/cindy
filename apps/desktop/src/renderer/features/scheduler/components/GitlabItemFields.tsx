@@ -113,7 +113,13 @@ export function GitlabItemFields({
         error={problem ? t(`scheduler.editor.webhook.gitlabItem.errors.${problem}`) : undefined}
       >
         {(control) => (
-          <Input {...control} value={text} onChange={onTextChange}
+          <Input {...control} value={text} onChange={(value) => {
+            first.current = false;
+            onTextChange(value);
+            const next = parseGitlabItemReference(value, known);
+            if (next && !gitlabItemProblem(value, next, addressAvailable, mrCanOmitHost)) callbacks.current.onResolved(next);
+            else callbacks.current.onUnresolved();
+          }}
             placeholder={t('scheduler.editor.webhook.gitlabItem.placeholder')} spellCheck={false} />
         )}
       </FormField>

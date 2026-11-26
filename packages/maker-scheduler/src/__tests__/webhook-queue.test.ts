@@ -98,6 +98,34 @@ describe('ScheduleWebhookQueue', () => {
     h.queue.stop();
   });
 
+  it('matches plugin events against untruncated fields before persisting bounded copies', async () => {
+    const h = setup();
+    const pad = 'x'.repeat(1_000);
+    const tail = 'x'.repeat(990);
+    const published = {
+      id: 'burst-1',
+      type: 'message.received',
+      occurredAt: 10,
+      data: { a: pad, b: pad, c: pad, d: tail, fromSelf: true, chatId: 'c1' },
+    };
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] },
+    ] } } } as Schedule);
+    await h.queue.start();
+    expect(await h.queue.acceptPlugin('s1', 'public/chat', published, 'e1')).toBe('filtered');
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e2', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [
+        { field: 'chatId', operator: 'equals', value: 'c1' },
+        { field: 'fromSelf', operator: 'equals', value: 'true' },
+      ] },
+    ] } } } as Schedule);
+    expect(await h.queue.acceptPlugin('s1', 'public/chat', published, 'e2')).toBe('queued');
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire).toHaveBeenCalledTimes(1);
+    expect(h.fire.mock.calls[0]![1].events[0]!.fields).toMatchObject({ chatId: 'c1', fromSelf: true });
+    h.queue.stop();
+  });
+
   // 2026-11-24, docs/product-rules/schedule-webhook-trigger.md: a specific Issue is the App source
   // narrowed to one number; other items in the same repository must not wake the automation.
   it('admits GitHub App events only for the chosen item number', async () => {

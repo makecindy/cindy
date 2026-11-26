@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { PLUGIN_EVENT_LIMITS, pluginEventSubscriptions, subscribedEventPlugins, toPluginWebhookEvent } from '../plugin-events.js';
+import {
+  PLUGIN_EVENT_LIMITS,
+  pluginEventMatches,
+  pluginEventSubscriptions,
+  pluginPublishedEventMatches,
+  subscribedEventPlugins,
+  toPluginWebhookEvent,
+} from '../plugin-events.js';
 import {
   gitlabIssueChangeEvents,
   gitlabIssueChangeFromEvents,
@@ -36,7 +43,31 @@ describe('plugin events', () => {
     expect(a.fields).toMatchObject({ chatId: 'c1', fromSelf: false });
     expect((a.fields!.body as string).length).toBe(PLUGIN_EVENT_LIMITS.persistedFieldValueChars);
     expect(JSON.stringify(a.fields).length).toBeLessThan(PLUGIN_EVENT_LIMITS.persistedFieldChars + 200);
+    expect(a.omittedFields).toEqual(['c']);
     expect(b.fields).toBeUndefined();
+  });
+
+  it('never lets persisted-field truncation flip not-equals or drop prioritized filter fields', () => {
+    const pad = 'x'.repeat(PLUGIN_EVENT_LIMITS.persistedFieldValueChars);
+    const tail = 'x'.repeat(990);
+    const published = {
+      id: 'm2',
+      type: 'message.received',
+      occurredAt: 5,
+      data: { p1: pad, p2: pad, p3: pad, p4: tail, fromSelf: true, chatId: 'c1' },
+    };
+    const notSelf = [{ plugin: 'public/chat', filters: [{ field: 'fromSelf', operator: 'not-equals' as const, value: 'true' }] }];
+    const onlySelf = [{ plugin: 'public/chat', filters: [{ field: 'fromSelf', operator: 'equals' as const, value: 'true' }] }];
+    expect(pluginPublishedEventMatches(notSelf, 'public/chat', published)).toBe(false);
+    expect(pluginPublishedEventMatches(onlySelf, 'public/chat', published)).toBe(true);
+    // Even without priority hints, an omitted field must not satisfy `not-equals`.
+    const unprioritized = toPluginWebhookEvent('public/chat', published, 10);
+    expect(unprioritized.omittedFields).toContain('fromSelf');
+    expect(pluginEventMatches(notSelf, unprioritized)).toBe(false);
+    // Prioritizing filter fields keeps `fromSelf` inside the persisted doorbell record.
+    const prioritized = toPluginWebhookEvent('public/chat', published, 10, ['fromSelf']);
+    expect(prioritized.fields?.fromSelf).toBe(true);
+    expect(pluginEventMatches(onlySelf, prioritized)).toBe(true);
   });
 
   it('lists plugins chosen by active, unexpired automations only', () => {

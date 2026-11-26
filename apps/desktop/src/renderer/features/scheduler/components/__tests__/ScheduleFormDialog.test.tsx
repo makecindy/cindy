@@ -401,6 +401,30 @@ it('identifies an Issue from owner/repo#number and saves it as a numbered GitHub
   expect((form.onSubmit.mock.lastCall?.[0] as { prTrigger?: unknown } | undefined)?.prTrigger ?? null).toBeNull();
 });
 
+it('clears a previously saved GitHub item as soon as the input is edited and blocks saving until re-identified', async () => {
+  let finishLookup!: (result: { ok: true; kind: 'issue'; title: string; state: 'open' }) => void;
+  const resolveGithubItem = vi.fn((_repo: string, num: number) => num === 99
+    ? new Promise((resolve) => { finishLookup = resolve; })
+    : Promise.resolve({ ok: true, kind: 'pr', title: 'Old PR', state: 'open' }));
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }), resolveGithubItem },
+    maker: { schedule: { webhookReceiver: async () => 'cloud', scriptCapabilityStatus: async () => ({ statuses: [] }) } } });
+  const form = mount(schedule({ manual: true, prTrigger: { url: 'https://github.com/example/project/pull/1', change: 'any' } }));
+  const input = await screen.findByRole('textbox', { name: 'scheduler.editor.webhook.item.label' });
+  fireEvent.change(input, { target: { value: 'Example/Project#99' } });
+  // Clicking Save immediately (before the 400ms debounce or network response) must not persist PR #1.
+  form.save();
+  expect(form.onSubmit).not.toHaveBeenCalled();
+  expect(screen.getByText('scheduler.editor.webhook.item.resolving')).toBeTruthy();
+  await waitFor(() => expect(resolveGithubItem).toHaveBeenCalledWith('example/project', 99));
+  finishLookup({ ok: true, kind: 'issue', title: 'Replacement issue', state: 'open' });
+  await screen.findByRole('combobox', { name: 'scheduler.prTrigger.condition' });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    prTrigger: null,
+    webhookTrigger: { events: ['issues', 'issue_comment'], source: { preset: 'github-app', repositories: ['example/project'], number: 99 } },
+  }), true));
+});
+
 // 2026-11-24: GitLab is one sender like GitHub. A specific MR (link) becomes a state-followed prTrigger with
 // a timed check switched on (GitLab has no push); a specific issue an address sender narrowed to project + number.
 it.each([

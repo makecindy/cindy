@@ -1241,10 +1241,26 @@ export class GhostNetworkSlot {
     if (glabCliConnections.length > 0 && !canUseGitlabHostCredentials(ghost)) {
       return { ok: false, message: '本插件尚未批准或安装身份待确认，已阻断 glab-cli 凭证请求' };
     }
+    // 在首个 await 前捕获插件实例与当前账号守卫；若读取连接地址途中插件更新、卸载或切换账号，
+    // 立即中止，绝不以新实例或新账号的凭证代发旧请求。
+    const hostGuard = this.captureGuard(instanceKey);
+    const assertPreFlightValid = () => {
+      hostGuard();
+      nodeAuth?.assertCurrent();
+    };
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含
     // 重定向逐跳都用同一份快照,避免跳转中途清单变化产生放行摇摆。
-    const connectionHosts =
-      connectionDecls.length > 0 ? await (this.deps.connections?.hostsFor(instanceKey) ?? []) : [];
+    let connectionHosts: readonly string[] = [];
+    try {
+      assertPreFlightValid();
+      if (connectionDecls.length > 0) {
+        connectionHosts = await (this.deps.connections?.hostsFor(instanceKey) ?? []);
+        assertPreFlightValid();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, message: `请求失败:${message}` };
+    }
     // 自主调用仍只能访问 manifest 声明的地址。Agent 在途调用已经
     // 通过外层 ghost_call 的 Cindy 授权，因此可以访问未预声明的普通
     // 地址；但只有真正命中 manifest 详单的 host 才可获得 Host 托管凭证。
@@ -1295,7 +1311,6 @@ export class GhostNetworkSlot {
     const hasTransfer = !!upload || asMode === 'library';
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
-      const hostGuard = this.captureGuard(instanceKey);
       const credentialGuards: Array<() => void> = [];
       const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); for (const guard of credentialGuards) guard(); };
       assertStillValid();
@@ -1377,6 +1392,7 @@ export class GhostNetworkSlot {
             credentialGuards,
             asMode === 'stream',
           );
+          assertStillValid();
           if (reInject.error) return { ok: false, message: reInject.error };
           initialConnectionInjected = new Map(reInject.connectionInjected);
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
@@ -1414,6 +1430,7 @@ export class GhostNetworkSlot {
               credentialGuards,
               asMode === 'stream',
             );
+            assertStillValid();
             if (hopInject.error) return { ok: false, message: hopInject.error };
             currentConnectionInjected = hopInject.connectionInjected;
             usedExchange ||= hopInject.usedExchange;
