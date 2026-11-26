@@ -54,13 +54,13 @@ export function piSubscriptionUsageModelKey(model: string): string {
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 export function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  if (agentKind === 'media' || agentKind === 'auxiliary') return undefined;
+  if (agentKind === 'acp' || agentKind === 'media' || agentKind === 'auxiliary') return undefined;
   if (agentKind === 'codex') {
     return (
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??

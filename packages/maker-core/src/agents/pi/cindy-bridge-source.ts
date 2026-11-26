@@ -1,4 +1,5 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
+import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
@@ -65,6 +66,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_RESPONSES_COMPLETION_PREFIX = 'cindy:responses-completed:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -94,7 +96,7 @@ import {
   closeSync, constants, fstatSync, globSync, lstatSync, openSync, opendirSync, readFileSync, readSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, mkdirSync, readdirSync, rmdirSync, linkSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -4668,6 +4670,8 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 
 ${PI_CACHE_RECOVERY_SOURCE}
 
+const CINDY_PI_RESPONSES_COMPLETION_PREFIX = ${JSON.stringify(CINDY_PI_RESPONSES_COMPLETION_PREFIX)};
+const completedPiResponsesMessage = ${completedPiResponsesMessage.toString()};
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 ${PI_NATIVE_TOOL_CATALOG_SOURCE}

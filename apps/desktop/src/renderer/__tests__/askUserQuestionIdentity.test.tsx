@@ -97,7 +97,7 @@ describe('AskUserQuestionPrompt identity', () => {
         customInput: 'Keep this answer', showCustomInput: true, selectedLabels: [] },
     };
     const view = render(createElement(AskUserQuestionPrompt, props));
-    fireEvent.click(view.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(view.getAllByRole('button', { name: 'Send answer' })[0]);
     // A failed/unconfirmed submission keeps the card mounted. No acknowledgement
     // means the visible field and the persisted draft must both remain retryable.
     expect((view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('Keep this answer');
@@ -105,7 +105,7 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(draft).toMatchObject({ customInput: 'Keep this answer', showCustomInput: true });
     view.unmount();
     const restored = render(createElement(AskUserQuestionPrompt, { ...props, draft }));
-    fireEvent.click(restored.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(restored.getAllByRole('button', { name: 'Send answer' })[0]);
     expect(props.onAnswer).toHaveBeenCalledTimes(2);
     expect(props.onAnswer).toHaveBeenLastCalledWith('request-1', {
       'Final?': multiSelect ? JSON.stringify(['Keep this answer']) : 'Keep this answer',
@@ -168,7 +168,7 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(input.value).toBe('Unsubmitted detail');
     expect(view.queryByText('Second question')).not.toBeNull();
     expect(view.queryByText('2/2')).not.toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
     expect(props.onAnswer).toHaveBeenCalledWith('request-1', {
       'First question': 'First draft answer',
       'Second question': JSON.stringify(['A', 'Unsubmitted detail']),
@@ -213,7 +213,7 @@ describe('AskUserQuestionPrompt identity', () => {
       await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
       const label = second.options![0].label;
       fireEvent.click(view.getByText(label));
-      if (second.multiSelect) fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+      if (second.multiSelect) fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
       expectedAnswers[second.question] = second.multiSelect ? JSON.stringify([label]) : label;
     }
     expect(props.onAnswer).toHaveBeenCalledWith('request-1', expectedAnswers);
@@ -247,9 +247,9 @@ describe('AskUserQuestionPrompt identity', () => {
     await waitFor(() => expect(view.queryByText('Second question')).not.toBeNull());
     await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
     expect(view.queryByPlaceholderText('Type your answer…')).toBeNull();
-    expect((view.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((view.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(view.getByText('B'));
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
     expect(props.onAnswer).toHaveBeenCalledWith(requestId, {
       'First question': 'First option',
       'Second question': JSON.stringify(['B']),

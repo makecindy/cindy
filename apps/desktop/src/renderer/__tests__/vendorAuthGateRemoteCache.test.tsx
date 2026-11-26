@@ -95,6 +95,7 @@ describe('useVendorAuthGate device-link 来源快照复用', () => {
         : { providers: [provider({ agents: [agent], routing: { [agent]: {} }, models: { [agent]: [] } })] },
     }));
     const read = createControlledModelCatalogReader({
+      retryShareDirectory: async () => { throw new Error("Unexpected directory retry"); },
       assertCaller: () => {}, captureOwner: () => () => {},
       locations: async () => ({ status: 'complete', locations: [{ agentDeviceId: source, name: 'Source' }] }),
       invoke: sourceRead,

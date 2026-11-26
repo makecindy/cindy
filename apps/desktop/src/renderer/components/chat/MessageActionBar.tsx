@@ -509,7 +509,7 @@ export function MessageActionBar({
           </button>
         </PopoverTrigger>
       </Tip>
-      <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
+      {reactionAction.open && <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
         collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8}
         className="w-fit p-1" aria-label={reactionAction.label} tabIndex={-1}
         onCloseAutoFocus={reactionAction.onCloseAutoFocus}
@@ -520,7 +520,7 @@ export function MessageActionBar({
           }
         }}>
         {reactionAction.content}
-      </PopoverContent>
+      </PopoverContent>}
     </Popover>
   );
 

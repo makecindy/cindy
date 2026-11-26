@@ -17,6 +17,7 @@ export interface PreparedPluginContribution {
   sha256: string;
   sizeBytes: number;
   releaseNotes?: string;
+  permissionLabels?: string[];
   preflight?: import('./pluginContributionContract').ContributionPreflight;
   expiresAt: string;
 }
@@ -62,6 +63,7 @@ export type MyPluginLocalInstallation =
 export interface MyPluginView {
   pluginId: string;
   name: string;
+  description?: string | null;
   displayAuthor?: string | null;
   authorSettings?: { anonymous: boolean; canEdit: boolean } | null;
   publisherKind?: 'official' | 'personal' | null;

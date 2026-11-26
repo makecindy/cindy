@@ -127,6 +127,11 @@ function ensureLoaded(): ActiveAppSession {
   return active;
 }
 
+/** Pure inspection for settings projection; never loads or repairs persisted session intent. */
+export function peekCommittedAppSession(): ActiveAppSession | null {
+  return active ? { ...active } : null;
+}
+
 /**
  * Dev UI mock sandbox only: a profile that has never chosen a mode starts
  * account-free, as if "Skip login" had been chosen once. Any saved choice wins.

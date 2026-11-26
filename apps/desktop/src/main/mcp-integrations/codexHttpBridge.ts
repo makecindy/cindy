@@ -19,7 +19,8 @@ import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createCatalogTransport } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
@@ -115,6 +116,8 @@ interface DispatchOpts {
   createMcpServer: () => McpServer;
   transports: Map<string, SessionTransport>;
   serverName: string;
+  /** Every server this bridge offers; agy catalogs share one declaration budget across them. */
+  serverNames: readonly string[];
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
   toolCancellation: AppToolCancellation;
@@ -141,6 +144,7 @@ interface SessionTransport {
   mcpServer: McpServer;
   ownerSessionId?: string;
   ownerSessionInstanceId?: string;
+  lastActivityAt: number;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -187,6 +191,9 @@ const { appServerIds } = ports;
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_ORPHAN_TRANSPORTS = 256;
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
@@ -305,6 +312,30 @@ async function startCodexHttpBridge(
   // 用的 token 注销 → pi 的 bridge 请求全部 401。
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
+
+  const closeTransport = (transports: Map<string, SessionTransport>, sessionId: string): void => {
+    const entry = transports.get(sessionId);
+    if (!entry) return;
+    transports.delete(sessionId);
+    void entry.transport.close().catch((e: unknown) => {
+      log.warn('transport close threw', { message: (e as Error).message });
+    });
+  };
+
+  const sweepOrphanTransports = (): void => {
+    const now = Date.now();
+    for (const transports of transportsByServer.values()) {
+      const orphaned = [...transports.entries()]
+        .filter(([, entry]) => !entry.ownerSessionId && !entry.ownerSessionInstanceId)
+        .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+      for (const [index, [sessionId, entry]] of orphaned.entries()) {
+        if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
+            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+        closeTransport(transports, sessionId);
+      }
+    }
+  };
+  let orphanSweepTimer: NodeJS.Timeout | undefined;
 
   const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
@@ -477,6 +508,7 @@ async function startCodexHttpBridge(
           createMcpServer: () => createMcpServer(serverName === 'cindy' ? boundContext : undefined),
           transports,
           serverName,
+          serverNames,
           log,
           threadContextStore,
           toolCancellation,
@@ -558,6 +590,8 @@ async function startCodexHttpBridge(
 
   const addr = httpServer.address() as AddressInfo;
   const port = addr.port;
+  orphanSweepTimer = setInterval(sweepOrphanTransports, ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS);
+  orphanSweepTimer.unref?.();
 
   log.info('http bridge listening', {
     port,
@@ -612,6 +646,7 @@ async function startCodexHttpBridge(
 
   const shutdown = async (): Promise<void> => {
     liveBridges.delete(bridge);
+    if (orphanSweepTimer) clearInterval(orphanSweepTimer);
     log.info('shutting down http bridge', {
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
@@ -777,6 +812,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       res.end('Unknown session');
       return;
     }
+    existing.lastActivityAt = Date.now();
     // A cindy transport created with a concrete task may expose its private
     // startup catalog. The transport ID alone does not identify that task.
     if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
@@ -949,10 +985,16 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
   const mcpServer = createMcpServer();
-  const transport = new StreamableHTTPServerTransport({
+  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
+      transports.set(newId, {
+        transport,
+        mcpServer,
+        ownerSessionId,
+        ownerSessionInstanceId,
+        lastActivityAt: Date.now(),
+      });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   });

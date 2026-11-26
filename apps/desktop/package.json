@@ -23,6 +23,7 @@
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
     "db:validate": "node scripts/validate-migrations.mjs",
+    "db:inspect": "tsx scripts/inspect-local-db.ts",
     "gen:help-kb": "node scripts/gen-help-kb.mjs",
     "gen:help-kb:check": "node scripts/help-kb-guard.mjs",
     "lint": "eslint src/",

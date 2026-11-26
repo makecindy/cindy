@@ -96,7 +96,8 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
-    keywordKeys: ['settings.providers.remote.modelsTitle'],
+    keywordKeys: ['settings.providers.remote.modelsTitle', 'settings.providers.menu.appearance',
+      'settings.providers.menu.icon', 'settings.providers.menu.ownImage', 'settings.providers.wizard.nameLabel'],
   },
   pluginProviders: {
     id: 'providers.pluginProviders',
@@ -106,7 +107,12 @@ export const providersSettings = defineSettings({
     descriptionKey: 'settings.providers.plugin.note',
     sectionKey: 'settings.tabs.providers',
     // 其他电脑开放的插件引擎也列在这一页(OwnRemotePluginEngines)，行的悬停提示是「引擎 · 电脑名」。
-    keywordKeys: ['settings.providers.remote.rowLabel'],
+    keywordKeys: [
+      'settings.providers.remote.rowLabel',
+      'settings.providers.models.advanced.defaultEffort',
+      'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.providerLabel',
+    ],
     aliases: [
       '插件供应商', '插件引擎', '其他电脑的插件引擎', 'plugin provider', 'plugin engine', 'plugin engine on another computer',
     ],

@@ -90,6 +90,7 @@ export function useModelGroups(enabled = true): { config: ModelGroupsConfig; loa
   const config = useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     currentConfig,
+    () => MODEL_GROUPS_DEFAULTS,
   );
   useEffect(() => { if (enabled) void refreshModelGroups(); }, [enabled]);
   return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded: cached?.owner === ownerNow() };

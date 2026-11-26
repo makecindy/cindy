@@ -1,5 +1,6 @@
 import type { AgentKind, PiModelApi, ProviderWireProtocol, ProviderProtocolCandidate } from '@cindy/model-providers';
 import type { ProviderErrorCode } from './providerErrors';
+import type { ProviderBillingCode } from '@cindy/maker-shared/error-redaction';
 
 /** Public probe contract: saved secrets are resolved exclusively in Main. */
 export interface ProviderConnectionProbeSpec {
@@ -28,6 +29,8 @@ export interface ProtocolProbeAttempt extends ProviderProtocolCandidate {
 export interface ProviderConnectionTestResult {
   ok: boolean;
   code?: ProviderErrorCode;
+  billingCode?: ProviderBillingCode;
+  retryAt?: number;
   status?: number;
   latencyMs: number;
   detail?: string;

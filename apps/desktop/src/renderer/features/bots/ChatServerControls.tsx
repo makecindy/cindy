@@ -96,11 +96,11 @@ function ReactionDetailsPopover({ children, align, label, renderBadges }: {
   const [open, setOpen] = useReactionPopover();
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild>{children}</PopoverTrigger>
-    <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12}
+    {open && <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'} collisionPadding={12}
       aria-label={label} onCloseAutoFocus={preserveNextReactionFocus}
       className="flex max-h-52 w-max max-w-[min(256px,90vw)] flex-wrap gap-1 overflow-y-auto p-2">
       {renderBadges(() => setOpen(false))}
-    </PopoverContent>
+    </PopoverContent>}
   </Popover>;
 }
 
