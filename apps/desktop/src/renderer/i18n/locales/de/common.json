@@ -7441,7 +7441,8 @@
       "localNetwork": {
         "label": "Lokales Netzwerk",
         "deniedHint": "Ohne diese Berechtigung können sich Computer und Telefone im selben Netzwerk nicht direkt mit diesem Computer verbinden. Sie laufen über das Relay, was langsamer ist.",
-        "settingsHint": "Aktiviere Cindy unter Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk. Die Änderung gilt, sobald du zurückkommst."
+        "promptedHint": "Klicke im macOS-Hinweis auf „Erlauben“. Wenn kein Hinweis erscheint, öffne die Systemeinstellungen.",
+        "settingsHint": "Öffne unter „Datenschutz & Sicherheit“ den Punkt „Lokales Netzwerk“ und aktiviere Cindy. Fehlt Cindy in der Liste, füge diese App über „+“ hinzu — die Änderung gilt sofort."
       }
     },
     "imBot": {
@@ -7912,6 +7913,10 @@
         "toggle-sidebar": {
           "label": "Seitenleiste umschalten",
           "description": "Seitenleiste mit der Sitzungsliste ein- oder ausklappen"
+        },
+        "copy-session-link": {
+          "label": "Sitzungslink kopieren",
+          "description": "Link der geöffneten Sitzung kopieren"
         },
         "session-history-back": {
           "label": "Vorherige Aufgabe",
@@ -9629,6 +9634,7 @@
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
         "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
+        "embeddedGuide": "Dein Assistent hat dieses Formular geöffnet, um MCP für die aktuelle Aufgabe einzurichten. Prüfe die vorausgefüllten Angaben anhand der Anleitung des Anbieters, ergänze fehlende Angaben und speichere die Konfiguration.",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
@@ -13657,6 +13663,7 @@
           "overloadRetryingNoCount": "Der Modelldienst ist ausgelastet. Automatischer neuer Versuch…",
           "overloadFailed": "⚠️ Der Modelldienst ist ausgelastet — der vorgeschaltete Dienst hat derzeit keine Kapazität. Sende diese Nachricht hier erneut, um es noch einmal zu versuchen, oder wechsle in Cindy zu einem anderen Modell. (Ein Klick auf „Erneut versuchen“ in der Desktop-App setzt die Aufgabe ebenfalls fort, aber das Ergebnis kommt nicht in dieser Nachricht an.)"
         },
+        "openAiReconnect": "Verbinde ChatGPT in Cindy unter Einstellungen → Anbieter → OpenAI erneut und sende hier eine Nachricht.",
         "audioInputUnavailable": "Über diese Modellverbindung lässt sich Audio nicht direkt verarbeiten. Bitte Cindy, die Aufnahme zuerst zu transkribieren und dann fortzufahren.",
         "toolLoop": {
           "generic": "Das Modell hat zu oft wiederholt Tools aufgerufen. Cindy hat diese Runde beendet, um eine Endlosschleife zu vermeiden. Sende eine neue Nachricht, um fortzufahren.",
@@ -15648,7 +15655,6 @@
       "piRetryHistoryUnavailable": "Deine Nachricht wurde nicht gesendet. Pi konnte den Verlauf, der zum Senden nötig ist, nicht lesen. Du kannst es erneut versuchen oder in einer neuen Aufgabe fortfahren.",
       "upstreamStatusError": "Der vorgeschaltete Dienst hat {{status}} zurückgegeben – die Antwort konnte nicht abgeschlossen werden.",
       "messageNotSent": "Deine Nachricht wurde nicht gesendet.",
-      "upstreamEmpty550": "Der Modelldienst hat HTTP 550 ohne Antwortinhalt zurückgegeben",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
       "retryTitle": "Letzte Nachricht erneut senden",
@@ -16487,7 +16493,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob das Verzeichnis auf diesem Computer noch existiert, und versuch es erneut.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
       "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
-      "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+      "REMOTE_AGENT_TIMEOUT": "Der Computer, auf dem der Agent läuft, hat noch nicht geantwortet. Prüfe den Stand der Aufgabe. Wenn sie noch läuft oder bereits abgeschlossen ist, brauchst du sie nicht erneut zu starten.",
       "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
       "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
@@ -16771,6 +16777,8 @@
       "retryIn": "Automatischer Versuch in {{seconds}} s"
     },
     "subscriptionAccountError": {
+      "unreachable": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar.",
+      "rechecking": "Der Codex-Kontodienst ist vorübergehend nicht erreichbar. Neuer Versuch um {{resetAt}}.",
       "poolModelLimited": "Das Nutzungslimit des Abos für dieses Modell ist erreicht. Sie können das Modell wechseln.",
       "poolRetryUntil": "Versuchen Sie es nach {{resetAt}} erneut.",
       "poolOtherSignedOut": "Ein weiteres Abo-Konto ist abgemeldet. Melden Sie es auf dem Computer an, der die Aufgabe ausführt, und versuchen Sie es erneut.",
@@ -22739,6 +22747,16 @@
     "refresh": "Kontingent aktualisieren"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "Weitere Anmeldeoptionen",
+      "connect": "Vorhandene Anmeldung verbinden…",
+      "found": "{{count}} verfügbar",
+      "title": "Anmeldungen auf {{device}}",
+      "note": "Cindy und die CLI verwenden dieselbe Kontokonfiguration.",
+      "attach": "Verbinden",
+      "choose": "Anderen Ordner wählen…",
+      "unverified": "Die Anmeldung konnte nicht bestätigt werden."
+    },
     "pluginSignIn": {
       "method": "Anmeldemethode",
       "secretHint": "Der Schlüssel geht nur an das Plugin, das ihn im eigenen Ordner dieses Kontos speichert. Cindy speichert ihn nicht und sendet ihn nicht an andere Computer.",

@@ -7398,7 +7398,8 @@
       "localNetwork": {
         "label": "本地网络",
         "deniedHint": "无此权，同网之电脑与手机不得直连此机，唯经中继，其速迟矣。",
-        "settingsHint": "请于「系统设置 › 隐私与安全性 › 本地网络」启 Cindy，归此即自生效。"
+        "promptedHint": "请于系统弹框中点「允许」；若无弹框，可往系统设置手启之。",
+        "settingsHint": "于「隐私与安全性」觅「本地网络」而启 Cindy；若列中无之，点「+」添此应用，归即自效。"
       }
     },
     "imBot": {
@@ -7869,6 +7870,10 @@
         "toggle-sidebar": {
           "label": "显隐侧栏",
           "description": "收或展左侧差事录"
+        },
+        "copy-session-link": {
+          "label": "录差事链接",
+          "description": "录当前差事之链接"
         },
         "session-history-back": {
           "label": "前一差事",
@@ -9585,6 +9590,7 @@
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
         "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 会话即可调用，方行之 Agent 会话不受影响。",
+        "embeddedGuide": "助手为此差事启 MCP 设定表。依供方所示，核已填之项，补其阙，乃存之。",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同伴自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {
@@ -13603,6 +13609,7 @@
           "overloadRetryingNoCount": "模型服务繁忙，方自动再试…",
           "overloadFailed": "⚠️ 模型服务繁忙：上游暂无余力。可于此重发此讯再试，或于 Cindy 易一模型。（于桌面端点「再试」亦可续其差事，然其果不返此讯。）"
         },
+        "openAiReconnect": "请在 Cindy 设置 → 模型供应商 → OpenAI 中重新连接 ChatGPT，然后在这里发一条消息继续。",
         "audioInputUnavailable": "今所接模型未能直辨其声。可请 Cindy 先录为文字，再续其事。",
         "toolLoop": {
           "generic": "模型屡呼工具过甚，Cindy 已止此轮，以免无穷循环。可遣新讯以续。",
@@ -15610,7 +15617,6 @@
       "piRetryHistoryUnavailable": "此信未发。Pi 读旧录以发信时失误。可再试，或另启任务。",
       "upstreamStatusError": "上游返 {{status}}，此答未竟。",
       "messageNotSent": "此信未发。",
-      "upstreamEmpty550": "模型之服返 HTTP 550，答文空",
       "replyFailed": "答未竟",
       "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
@@ -16449,7 +16455,7 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "远程工作目录今不可用。请确认彼机上之目录犹在，然后再试。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "机端暂不能确知此讯已遣否。请稍后再试，勿重遣同一讯。",
       "REMOTE_AGENT_UNAVAILABLE": "未能与行 Agent 之机通信，请阅错误详情。",
-      "REMOTE_AGENT_TIMEOUT": "候行 Agent 之机回应逾时，结果未明。再试前请先察差事进展。",
+      "REMOTE_AGENT_TIMEOUT": "行 Agent 之机尚未应。请先察差事进展。若尚在行，或已有果，则无须再试。",
       "REMOTE_AGENT_LINK_BUSY": "与行 Agent 之机通信繁忙，请稍候再试。",
       "REMOTE_AGENT_UNRESPONSIVE": "行 Agent 之机屡未回应，已暂停呼叫。请稍候再试。",
       "REMOTE_AGENT_OFFLINE": "行 Agent 之机已离线，待其重连再试。",
@@ -16696,6 +16702,8 @@
       "retryIn": "{{seconds}} 秒后自试"
     },
     "subscriptionAccountError": {
+      "unreachable": "Codex 账号服务暂不可达。",
+      "rechecking": "Codex 账号服务暂不可达，至 {{resetAt}} 将复试。",
       "poolModelLimited": "此模型订阅之额已尽，可先易模型。",
       "poolRetryUntil": "俟 {{resetAt}} 后可再试。",
       "poolOtherSignedOut": "另有订阅账号已退出，可于行此任务之机重新登录而试。",
@@ -22650,6 +22658,16 @@
     "refresh": "更新额度"
   },
   "subscriptionAccounts": {
+    "existing": {
+      "menu": "更多添加方式",
+      "connect": "连接已有登录…",
+      "found": "发现 {{count}} 个可连接的登录",
+      "title": "{{device}} 上的已有登录",
+      "note": "Cindy 将与终端共用所选账号的配置。",
+      "attach": "连接",
+      "choose": "选择其他目录…",
+      "unverified": "未能核实该目录中的订阅登录。"
+    },
     "pluginSignIn": {
       "method": "登录之法",
       "secretHint": "Key 唯付法器，藏于此账号之箧；Cindy 不存，亦不传他机。",
