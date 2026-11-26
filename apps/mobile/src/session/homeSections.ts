@@ -1,4 +1,5 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { HomePinnedSort } from './homeDisplaySettings';
 import { i18n } from '@/i18n';
@@ -663,6 +664,7 @@ export function buildInboxHomeSections(
   priorityContext: HomeListPriorityContext,
   nowMs: number,
   teammates: readonly InboxTeammateEntry[] = [],
+  extraFollowingSessionKeys?: ReadonlySet<string>,
 ): HomeSection[] {
   const original = buildHomeSections(home, false, true, {
     groupDialogue: false, groupCindyMake: false, sortBy: 'priority', priorityContext,
@@ -683,9 +685,13 @@ export function buildInboxHomeSections(
       if (row.kind !== 'session') continue;
       for (const item of row.item.automationGroup?.items ?? [row.item]) {
         const task = item.session;
+        const canonicalDeviceId = (task as RemoteSession).canonicalDeviceId;
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
-          following: item.scheduleInfo?.hasActiveFollowUp === true,
+          following: item.scheduleInfo?.hasActiveFollowUp === true
+            || extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, task.deviceLinkDeviceId)) === true
+            || (!!canonicalDeviceId
+              && extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, canonicalDeviceId)) === true),
           // A teammate's own conversations and its project's tasks are listed only while they need
           // the user or run (2026-11-18); a task it opened elsewhere is the user's work (2026-11-22).
           teammate: isTeammateOwnInboxTask(task as RemoteSession),

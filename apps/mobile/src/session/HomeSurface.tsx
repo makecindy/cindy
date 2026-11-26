@@ -250,6 +250,11 @@ import {
   startHostProjectOrderLoad,
 } from '@/session/remoteProjectOrder';
 import {
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  orcaLeadSessionKey,
+} from '@cindy/maker-shared/orca-team';
+import {
   createProjectOrderFetchFence,
   isHostProjectOrderReachable,
   projectOrderWriteLedger,
@@ -776,6 +781,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
   // Read by inbox Done, which runs after render; the index is declared further below.
   const scheduleIndexRef = useRef<ReadonlyMap<string, RemoteSessionScheduleInfo>>(new Map());
+  const orcaLeadFollowingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
@@ -794,7 +800,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     toggleSessionPinned,
   } = useSessionListActions({
     animateListChange,
-    hasActiveAutomation: (session) => scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true,
+    hasActiveAutomation: (session) =>
+      scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true
+      || orcaLeadFollowingKeysRef.current.has(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId))
+      || (!!session.canonicalDeviceId
+        && orcaLeadFollowingKeysRef.current.has(orcaLeadSessionKey(session.id, session.canonicalDeviceId))),
   });
   // 实测 header 高度(onLayout),用于下拉菜单定位;字体放大等导致 header 超过 HOME_HEADER_MIN_HEIGHT 时不再错位。
   const [headerHeight, setHeaderHeight] = useState<number | null>(null);
@@ -2298,6 +2308,26 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const { pendingInteractionIndex, visibleWorkerIds, workerTargets } = useOrcaQuestionRows(sessions, homeStatusVersion);
+  const orcaLeadFollowingKeysRaw = useMemo(() => {
+    const keys = new Set<string>();
+    const workerIndex = indexActiveOrcaWorkersByLead(sessions);
+    for (const session of sessions) {
+      if (session.status !== 'active' || session.orcaRole !== 'lead') continue;
+      const workers = getActiveOrcaWorkersForLead(workerIndex, session);
+      if (workers.some((worker) => scheduleIndex.get(worker.sessionId)?.hasActiveFollowUp === true)) {
+        keys.add(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId));
+        if (session.canonicalDeviceId && session.canonicalDeviceId !== session.deviceLinkDeviceId) {
+          keys.add(orcaLeadSessionKey(session.id, session.canonicalDeviceId));
+        }
+      }
+    }
+    return keys;
+  }, [sessions, scheduleIndex]);
+  const orcaLeadFollowingKeys = useStableValue(
+    orcaLeadFollowingKeysRaw,
+    (a, b) => a.size === b.size && [...a].every((key) => b.has(key)),
+  );
+  orcaLeadFollowingKeysRef.current = orcaLeadFollowingKeys;
   const liveActivityIndexRaw = useMemo(() => {
     const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
@@ -2520,10 +2550,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         sortBy,
       });
       return taskListMode === 'inbox'
-        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries)]
+        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, orcaLeadFollowingKeys)]
         : regular;
     },
-    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
+    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, orcaLeadFollowingKeys, displayedManualProjectOrder, displayedProjectOrder,
       filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );

@@ -3251,7 +3251,7 @@ function ExpandedView({
       // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
       if (action === 'complete') {
         const boundNames = await loadActiveBoundScheduleNames([
-          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
@@ -3278,7 +3278,7 @@ function ExpandedView({
             const scheduleNames = action === 'complete'
               ? []
               : (await loadActiveBoundScheduleNames([
-                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
                 ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
             // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效

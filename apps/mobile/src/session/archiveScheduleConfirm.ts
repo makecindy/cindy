@@ -1,8 +1,16 @@
 import { Alert } from 'react-native';
 import type { TFunction } from 'i18next';
+import {
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  orcaLeadSessionKey,
+  type OrcaBoundSessionRef,
+  type OrcaLeadWorkerSessionLike,
+} from '@cindy/maker-shared/orca-team';
 import { normalizeScheduleList } from '@/scheduler/scheduleModel';
 import type { RemoteSchedule } from '@/scheduler/types';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 
 /**
@@ -40,29 +48,109 @@ export interface BulkArchiveCandidate {
   source?: string | null;
 }
 
+interface CandidateCheckRef {
+  sessionId: string;
+  deviceId: string;
+  source?: string | null;
+}
+
+function expandCandidateRefs(
+  deviceId: string,
+  candidates: readonly BulkArchiveCandidate[],
+  sessions: readonly OrcaLeadWorkerSessionLike[] = remoteSessionStore.getSessions(),
+): Map<string, CandidateCheckRef[]> {
+  const knownByKey = new Map<string, OrcaLeadWorkerSessionLike>();
+  for (const session of sessions) {
+    knownByKey.set(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId), session);
+    if (session.canonicalDeviceId && session.canonicalDeviceId !== session.deviceLinkDeviceId) {
+      knownByKey.set(orcaLeadSessionKey(session.id, session.canonicalDeviceId), session);
+    }
+  }
+  const workerIndex = indexActiveOrcaWorkersByLead(sessions);
+  const byCandidate = new Map<string, CandidateCheckRef[]>();
+  for (const candidate of candidates) {
+    const refs: CandidateCheckRef[] = [{ sessionId: candidate.id, deviceId, source: candidate.source }];
+    const known = knownByKey.get(orcaLeadSessionKey(candidate.id, deviceId));
+    if (known?.orcaRole === 'lead') {
+      const workers: readonly OrcaBoundSessionRef[] = getActiveOrcaWorkersForLead(workerIndex, {
+        id: candidate.id,
+        deviceLinkDeviceId: known.deviceLinkDeviceId ?? deviceId,
+        canonicalDeviceId: known.canonicalDeviceId,
+      });
+      for (const worker of workers) {
+        if (!worker.deviceId) continue;
+        if (!refs.some((item) => item.sessionId === worker.sessionId && item.deviceId === worker.deviceId)) {
+          const workerSession = knownByKey.get(orcaLeadSessionKey(worker.sessionId, worker.deviceId));
+          refs.push({
+            sessionId: worker.sessionId,
+            deviceId: worker.deviceId,
+            source: (workerSession as { source?: string | null } | undefined)?.source,
+          });
+        }
+      }
+    }
+    byCandidate.set(candidate.id, refs);
+  }
+  return byCandidate;
+}
+
+function refsMayHaveBoundSchedules(refs: readonly CandidateCheckRef[]): boolean {
+  return refs.some((ref) => sessionMayHaveScheduleRuns(ref.deviceId, ref.sessionId, ref.source));
+}
+
 /** 与单条路径同一个快路径:索引已确认无绑定的任务不必查询。 */
 export function anyMayHaveBoundSchedules(
   deviceId: string,
   candidates: readonly BulkArchiveCandidate[],
+  sessions?: readonly OrcaLeadWorkerSessionLike[],
 ): boolean {
-  return candidates.some((c) => sessionMayHaveScheduleRuns(deviceId, c.id, c.source));
+  const expanded = expandCandidateRefs(deviceId, candidates, sessions);
+  for (const refs of expanded.values()) {
+    if (refsMayHaveBoundSchedules(refs)) return true;
+  }
+  return false;
 }
 
-/** 批量归档:所选任务里绑定了 active 自动化的任务数(最多一次列表请求;全部已知无绑定则不请求;失败按 0)。 */
+/** 批量归档:所选任务里绑定了 active 自动化的任务数(每涉及设备最多一次列表请求;全部已知无绑定则不请求;失败按 0)。 */
 export async function countSessionsWithActiveBoundSchedules(
   deviceId: string,
   invoke: RemoteInvoke,
   candidates: readonly BulkArchiveCandidate[],
+  sessions?: readonly OrcaLeadWorkerSessionLike[],
 ): Promise<number> {
-  if (!anyMayHaveBoundSchedules(deviceId, candidates)) return 0;
+  const expanded = expandCandidateRefs(deviceId, candidates, sessions);
+  const devicesToQuery = new Set<string>();
+  for (const refs of expanded.values()) {
+    for (const ref of refs) {
+      if (sessionMayHaveScheduleRuns(ref.deviceId, ref.sessionId, ref.source)) {
+        devicesToQuery.add(ref.deviceId);
+      }
+    }
+  }
+  if (devicesToQuery.size === 0) return 0;
   try {
-    const ids = new Set(candidates.map((c) => c.id));
-    const bound = new Set(
-      normalizeScheduleList(await withLookupDeadline(listBindingSchedules(deviceId, invoke), []))
-        .filter((schedule) => hasActiveTarget(schedule) && ids.has(schedule.targetSessionId!))
-        .map((schedule) => schedule.targetSessionId),
+    const schedulesByDevice = new Map<string, RemoteSchedule[]>(
+      await Promise.all(
+        [...devicesToQuery].map(async (targetDeviceId) => {
+          try {
+            const raw = await withLookupDeadline(listBindingSchedules(targetDeviceId, invoke), []);
+            return [targetDeviceId, normalizeScheduleList(raw)] as const;
+          } catch {
+            return [targetDeviceId, [] as RemoteSchedule[]] as const;
+          }
+        }),
+      ),
     );
-    return bound.size;
+    let count = 0;
+    for (const refs of expanded.values()) {
+      const hasBound = refs.some((ref) =>
+        (schedulesByDevice.get(ref.deviceId) ?? []).some(
+          (schedule) => schedule.targetSessionId === ref.sessionId && hasActiveTarget(schedule),
+        ),
+      );
+      if (hasBound) count += 1;
+    }
+    return count;
   } catch {
     return 0;
   }
@@ -73,20 +161,48 @@ export async function loadActiveBoundScheduleNames({
   invoke,
   sessionId,
   source,
+  sessions,
 }: {
   deviceId: string;
   invoke: RemoteInvoke;
   sessionId: string;
   source?: string | null;
+  sessions?: readonly OrcaLeadWorkerSessionLike[];
 }): Promise<string[]> {
-  if (!sessionMayHaveScheduleRuns(deviceId, sessionId, source)) return [];
+  const refs = expandCandidateRefs(deviceId, [{ id: sessionId, source }], sessions).get(sessionId) ?? [
+    { sessionId, deviceId, source },
+  ];
+  const devicesToQuery = new Set(
+    refs
+      .filter((ref) => sessionMayHaveScheduleRuns(ref.deviceId, ref.sessionId, ref.source))
+      .map((ref) => ref.deviceId),
+  );
+  if (devicesToQuery.size === 0) return [];
   try {
-    const schedules = normalizeScheduleList(
-      await withLookupDeadline(listBindingSchedules(deviceId, invoke), []),
+    const schedulesByDevice = new Map<string, RemoteSchedule[]>(
+      await Promise.all(
+        [...devicesToQuery].map(async (targetDeviceId) => {
+          try {
+            const raw = await withLookupDeadline(listBindingSchedules(targetDeviceId, invoke), []);
+            return [targetDeviceId, normalizeScheduleList(raw)] as const;
+          } catch {
+            return [targetDeviceId, [] as RemoteSchedule[]] as const;
+          }
+        }),
+      ),
     );
-    return schedules
-      .filter((schedule) => schedule.targetSessionId === sessionId && hasActiveTarget(schedule))
-      .map((schedule) => schedule.name || schedule.id);
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const ref of refs) {
+      for (const schedule of schedulesByDevice.get(ref.deviceId) ?? []) {
+        if (schedule.targetSessionId !== ref.sessionId || !hasActiveTarget(schedule)) continue;
+        const key = `${ref.deviceId}\0${schedule.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        names.push(schedule.name || schedule.id);
+      }
+    }
+    return names;
   } catch {
     return [];
   }
@@ -101,20 +217,52 @@ export async function loadConfirmedActiveBoundScheduleNames({
   invoke,
   sessionId,
   source,
+  sessions,
 }: {
   deviceId: string;
   invoke: RemoteInvoke;
   sessionId: string;
   source?: string | null;
+  sessions?: readonly OrcaLeadWorkerSessionLike[];
 }): Promise<string[] | null> {
-  if (!sessionMayHaveScheduleRuns(deviceId, sessionId, source)) return [];
+  const refs = expandCandidateRefs(deviceId, [{ id: sessionId, source }], sessions).get(sessionId) ?? [
+    { sessionId, deviceId, source },
+  ];
+  const devicesToQuery = new Set(
+    refs
+      .filter((ref) => sessionMayHaveScheduleRuns(ref.deviceId, ref.sessionId, ref.source))
+      .map((ref) => ref.deviceId),
+  );
+  if (devicesToQuery.size === 0) return [];
   const failed = Symbol('failed');
   try {
-    const raw = await withLookupDeadline<unknown>(listBindingSchedules(deviceId, invoke), failed);
-    if (raw === failed) return null;
-    return normalizeScheduleList(raw)
-      .filter((schedule) => schedule.targetSessionId === sessionId && hasActiveTarget(schedule))
-      .map((schedule) => schedule.name || schedule.id);
+    const entries = await Promise.all(
+      [...devicesToQuery].map(async (targetDeviceId) => {
+        try {
+          const raw = await withLookupDeadline<unknown>(listBindingSchedules(targetDeviceId, invoke), failed);
+          if (raw === failed) return [targetDeviceId, null] as const;
+          return [targetDeviceId, normalizeScheduleList(raw)] as const;
+        } catch {
+          return [targetDeviceId, null] as const;
+        }
+      }),
+    );
+    if (entries.some(([, list]) => list === null)) return null;
+    const schedulesByDevice = new Map<string, RemoteSchedule[]>(
+      entries.map(([targetDeviceId, list]) => [targetDeviceId, list!]),
+    );
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const ref of refs) {
+      for (const schedule of schedulesByDevice.get(ref.deviceId) ?? []) {
+        if (schedule.targetSessionId !== ref.sessionId || !hasActiveTarget(schedule)) continue;
+        const key = `${ref.deviceId}\0${schedule.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        names.push(schedule.name || schedule.id);
+      }
+    }
+    return names;
   } catch {
     return null;
   }

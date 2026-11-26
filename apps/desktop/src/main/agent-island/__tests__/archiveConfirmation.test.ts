@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { confirmIslandArchive } from '../archiveConfirmation.js';
 
-const h = vi.hoisted(() => ({ preview: vi.fn(), list: vi.fn(), invoke: vi.fn(), confirm: vi.fn() }));
+const h = vi.hoisted(() => ({ preview: vi.fn(), list: vi.fn(), invoke: vi.fn(), confirm: vi.fn(), workers: vi.fn() }));
 vi.mock('electron', () => ({ dialog: { showMessageBox: h.confirm } }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) =>
   key.endsWith('scheduleName') ? '「{{name}}」' : key.includes('scheduleWarning') ? 'scheduleWarning {{names}}' : key,
@@ -9,6 +9,7 @@ vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) =>
 vi.mock('../../worktree/WorktreeManager.js', () => ({ getRemovalPreview: h.preview }));
 vi.mock('../../scheduler-host/index.desktop.js', () => ({ getScheduleStorageIfInitialized: () => ({ list: h.list }) }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: h.invoke }));
+vi.mock('../../localDb/orcaTeamStore.js', () => ({ listWorkersByLead: h.workers }));
 
 // Production archive preflight entry. Existing renderer preflight tests cannot
 // protect a native main-process entry from bypassing dirty/schedule confirmation.
@@ -18,6 +19,7 @@ describe('island archive confirmation (unit)', () => {
     h.list.mockReset().mockResolvedValue([]);
     h.invoke.mockReset();
     h.confirm.mockReset().mockResolvedValue({ response: 1 });
+    h.workers.mockReset().mockResolvedValue([]);
   });
   afterEach(() => vi.useRealTimers());
 
@@ -67,5 +69,21 @@ describe('island archive confirmation (unit)', () => {
     await vi.advanceTimersByTimeAsync(1500);
     expect(await pending).toBe(true);
     expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('prompts when a local Orca Lead has active automations on a local or remote Worker', async () => {
+    h.workers.mockResolvedValue([
+      { id: 'w1', sessionId: 'worker-local' },
+      { id: 'w2', sessionId: 'proxy-2', executionDevice: { deviceId: 'mac-mini', remoteSessionId: 'worker-remote' } },
+    ]);
+    h.list.mockResolvedValue([{ id: 'sch-1', targetSessionId: 'worker-local', status: 'active', name: 'Local Follow' }]);
+    h.invoke.mockResolvedValue({
+      ok: true,
+      result: [{ id: 'sch-2', targetSessionId: 'worker-remote', status: 'active', name: 'Remote PR #11923' }],
+    });
+    expect(await confirmIslandArchive('lead-1', null)).toBe(false);
+    expect(h.confirm).toHaveBeenCalledOnce();
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Local Follow');
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Remote PR #11923');
   });
 });

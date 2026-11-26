@@ -2,7 +2,8 @@
 
 ## 适用场景
 
-任务被一个或多个**运行中**（`active`）的自动化绑定（`targetSessionId` 指向该任务），用户手动归档这个任务。
+任务被一个或多个**运行中**（`active`）的自动化绑定（`targetSessionId` 指向该任务，或任务是活跃的 Orca 协同 Lead
+且其活跃协同 Worker 绑定了 `active` 自动化），用户手动归档这个任务。
 
 ## 现有行为
 
