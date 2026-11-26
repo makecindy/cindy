@@ -5587,8 +5587,8 @@
         }
       },
       "tidy": {
-        "label": "Organização de memória e skills",
-        "description": "Remove duplicações e compacta periodicamente em segundo plano as memórias e skills dos buddies. Só é executada quando existe atividade suficiente, não consome recursos sem alterações e não deixa tarefas residuais.",
+        "label": "Organização de memória e Skills",
+        "description": "Remove duplicações e compacta periodicamente em segundo plano as memórias e Skills dos Buddies. Só é executada quando existe atividade suficiente, não consome recursos sem alterações e não deixa tarefas residuais.",
         "cadenceLabel": "Frequência de organização",
         "cadences": {
           "weekly": "Semanal",

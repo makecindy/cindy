@@ -5587,8 +5587,8 @@
         }
       },
       "tidy": {
-        "label": "Limpieza de memoria y skills",
-        "description": "Depura y compacta periódicamente en segundo plano la memoria y las skills de tus compañeros. Solo se ejecuta cuando hay suficiente actividad nueva, no consume recursos si no hay cambios y no deja tareas residuales.",
+        "label": "Limpieza de memoria y Skills",
+        "description": "Depura y compacta periódicamente en segundo plano la memoria y las Skills de tus Buddies. Solo se ejecuta cuando hay suficiente actividad nueva, no consume recursos si no hay cambios y no deja tareas residuales.",
         "cadenceLabel": "Frecuencia de limpieza",
         "cadences": {
           "weekly": "Semanal",
@@ -5603,7 +5603,7 @@
           "cadenceFailed": "No se pudo actualizar la frecuencia de limpieza",
           "updated": "Limpieza completada ({{count}} actualizados)",
           "idle": "No hizo falta limpiar nada",
-          "skipped": "No hay compañeros pendientes de limpieza",
+          "skipped": "No hay Buddies pendientes de limpieza",
           "failed": "Error al limpiar la memoria"
         }
       }
