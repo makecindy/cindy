@@ -5330,6 +5330,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             toastCreateSessionFailed();
             return;
           }
+          rememberCreatedWorkspace();
           if (localPluginWorktree) void refreshWorktreeForSession(newSession.id);
           {
             const iso = new Date().toISOString();
