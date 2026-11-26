@@ -42,6 +42,7 @@ export const ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS = 60_000;
 
 export const ORCA_REMOTE_WORKER_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export type OrcaRemoteWorkerAgentKind = (typeof ORCA_REMOTE_WORKER_AGENT_KINDS)[number];
+export type OrcaRemoteWorkerEngine = OrcaRemoteWorkerAgentKind | 'acp';
 
 export const ORCA_REMOTE_WORKER_PERMISSION_MODES = ['auto', 'bypassPermissions'] as const;
 export type OrcaRemoteWorkerPermissionMode =
@@ -52,6 +53,7 @@ export interface OrcaRemoteWorkerCaps {
   workerBridge?: true;
   agentDevice?: boolean;
   modelGroup?: true;
+  pluginEngines?: true;
 }
 
 export const ORCA_REMOTE_WORKER_BRIDGE_TOOLS = ['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status'] as const;
@@ -95,6 +97,7 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  pluginEngines?: Array<{ providerId: string; name: string; available: boolean; message?: string; models: Array<{ id: string; label: string; efforts?: readonly string[] }> }>;
 }
 
 export interface OrcaRemoteWorkerModel {
@@ -107,7 +110,7 @@ export interface OrcaRemoteWorkerModel {
 export interface OrcaRemoteWorkerOpenRequest {
   /** 控制端生成的运行设备任务 id；同一 id 重复 open 幂等。 */
   sessionId: string;
-  agentKind: OrcaRemoteWorkerAgentKind;
+  agentKind: OrcaRemoteWorkerEngine;
   /** 缺省 = 运行设备的默认模型与来源。 */
   model?: string;
   modelGroup?: string;
@@ -131,7 +134,7 @@ export interface OrcaRemoteWorkerOpenResult {
   sessionId: string;
   workingDir: string;
   model: string;
-  agentKind: OrcaRemoteWorkerAgentKind;
+  agentKind: OrcaRemoteWorkerEngine;
   /** 运行设备实际保存的档位；空字符串 = 不使用档位，缺省 = 旧设备未返回。 */
   effort?: string;
   /** 运行设备实际保存的 Fast 状态；缺省 = 旧设备未返回。 */
@@ -196,7 +199,7 @@ export function parseOrcaRemoteWorkerOpenRequest(raw: unknown): OrcaRemoteWorker
     throw new Error('[INVALID_PARAMS] sessionId must be a safe id');
   }
   const agentKind = raw.agentKind;
-  if (!ORCA_REMOTE_WORKER_AGENT_KINDS.includes(agentKind as OrcaRemoteWorkerAgentKind)) {
+  if (agentKind !== 'acp' && !ORCA_REMOTE_WORKER_AGENT_KINDS.includes(agentKind as OrcaRemoteWorkerAgentKind)) {
     throw new Error('[INVALID_PARAMS] invalid agentKind');
   }
   const permissionMode = raw.permissionMode;
@@ -221,7 +224,7 @@ export function parseOrcaRemoteWorkerOpenRequest(raw: unknown): OrcaRemoteWorker
   const effort = optString(raw.effort, 32);
   return {
     sessionId: raw.sessionId,
-    agentKind: agentKind as OrcaRemoteWorkerAgentKind,
+    agentKind: agentKind as OrcaRemoteWorkerEngine,
     ...(model ? { model } : {}),
     ...(modelGroup ? { modelGroup } : {}),
     ...(providerId ? { providerId } : {}),

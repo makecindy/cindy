@@ -2944,7 +2944,7 @@ interface OrcaCollabService {
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: Omit<SendToSessionExecutionOverrides, 'agentKind'> & { agentKind?: EngineKind };
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
@@ -8893,6 +8893,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return resolveDeviceHandoffWindow(catalog, deviceId, agent, model, providerId);
   }
 
+  async function readDispatchedPluginEngines(deviceId: string | null) {
+    if (!deviceId) return listPluginEngineViews();
+    if (isProviderShareAgentDeviceId(deviceId) || deviceId.length > 128) throw new Error('Select a same-account computer for the plugin engine');
+    const assertCurrent = captureSessionOwner();
+    const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+    assertCurrent();
+    if (!reply.ok) throw new Error('Could not read plugin engines on the selected computer');
+    return parseOfferedPluginEngines(reply.result);
+  }
+
+  async function resolveDispatchedPluginEngine(target: {
+    providerId?: string | null; model?: string; effort?: unknown; permissionMode?: string | null;
+    agentDeviceId?: string | null; fastMode?: boolean | 'ultrafast';
+  }) {
+    try {
+      if (target.fastMode) throw new Error('Plugin engines do not support Fast');
+      const agentDeviceId = target.agentDeviceId && target.agentDeviceId !== getSelfDeviceId() ? target.agentDeviceId : null;
+      const engines = await readDispatchedPluginEngines(agentDeviceId);
+      const model = target.model?.trim() || 'default';
+      const engine = engines.find(item => item.key === pluginEngineKeyFromProviderId(target.providerId));
+      if (model !== 'default' && !engine?.models.some(item => item.id === model)) {
+        throw new Error('The selected plugin engine does not offer this model');
+      }
+      const admitted = admitPluginEngineSwitchTarget({ ...target, model, providerId: target.providerId }, engines);
+      return { ...admitted, agentKind: 'acp' as const, agentDeviceId, providerId: target.providerId!, fastMode: false as const };
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error('Plugin engine unavailable'), { code: 'PROVIDER_ROUTE_UNAVAILABLE' });
+    }
+  }
+
   async function readUsableAgentDeviceProviders(
     deviceId: string,
     agent: AgentKind,
@@ -10812,7 +10842,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: row.status,
         workingDir: row.workingDir,
         model: row.model,
-        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         effort: row.effort,
         fastMode: row.fastMode,
         agentDeviceId: row.agentDeviceId,
@@ -10820,6 +10850,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     supportsModelGroup: true,
+    supportsPluginEngines: true,
     openSession: createOrcaRemoteWorkerSessionOpener({
       openSession,
       modelGroupStart: modelGroupSessionStart,
@@ -10829,6 +10860,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
       },
       resolveAgentSelection: async request => {
+        if (request.agentKind === 'acp') {
+          if (request.modelGroup) throwIpcError('INVALID_PARAMS', 'Plugin engines do not support model groups');
+          try {
+            const selected = await resolveDispatchedPluginEngine(request);
+            if (selected.permissionMode !== request.permissionMode) {
+              throw new Error('The selected plugin engine does not support the Worker permission mode');
+            }
+            return { ...request, ...selected, permissionMode: request.permissionMode };
+          } catch (error) {
+            throwIpcError('PRECONDITION_FAILED', error instanceof Error ? error.message : 'Plugin engine unavailable');
+          }
+        }
         const views = await readDeviceProviderViews(remoteBackgroundInvoke, request.agentDeviceId!);
         const routing = deviceWorkerRoutingContext(views, request.agentKind);
         const models = routing.remoteCodexModels ?? [];
@@ -10855,9 +10898,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
       bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
-        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
-          ? opened.agentKind
-          : 'claude-code';
+        const agentKind = dbToMakerEngineKind(opened.agentKind);
         await bootstrapSession(buildCreateOptsWithStderr({
           id: opened.id,
           ...(modelGroupStart ? { modelGroupStart } : {}),
@@ -12581,7 +12622,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
     /** create 分支可选:显式执行配置；未提供的字段继续继承 dispatcher。jump 忽略。 */
-    execution?: SendToSessionExecutionOverrides;
+    execution?: Omit<SendToSessionExecutionOverrides, 'agentKind'> & { agentKind?: EngineKind };
     /** create 分支可选:新任务的 Agent 所在电脑；null = 本机，省略 = 继承 dispatcher。jump 忽略。 */
     agentDeviceId?: string | null;
     onAccepted?: () => void | Promise<void>;
@@ -12785,8 +12826,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
-          // 插件引擎来源(docs/plans/acp-plugin-bridge.md，2026-11-25)：不指定位置与执行配置时，新任务沿用同一个
-          // 插件引擎与模型(按在它上面新建任务的准入，openSession 判定)；指定了就必须点名内置 agent，按内置引擎解析。
+          // 未显式指定执行配置时沿用来源任务的插件引擎和模型。显式指定时，按所选引擎的目录准入。
           const pluginEngineSource = meta.agentKind === 'acp';
           const routeRequested = requestedAgentDeviceId !== undefined
             || Object.values(executionOverrides ?? {}).some((value) => value !== undefined);
@@ -12822,7 +12862,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               inheritedBase.providerId = undefined;
             }
           }
-          if (inheritedBase.agentKind === 'acp') {
+          if (executionOverrides?.agentKind === 'acp') {
+            if (meta.remoteHostId) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Plugin engines cannot run in SSH workspaces' };
+            try {
+              const route = await resolveDispatchedPluginEngine({ ...executionOverrides,
+                agentDeviceId: requestedAgentDeviceId === undefined ? sourceAgentDeviceId : requestedAgentDeviceId,
+                permissionMode: inheritedBase.permissionMode });
+              inheritedAgentDeviceId = route.agentDeviceId ?? undefined;
+              inherited = { ...inheritedBase, ...route, effort: (route.effort || undefined) as Effort | undefined };
+            } catch (error) {
+              return { ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: error instanceof Error ? error.message : 'Plugin engine unavailable' };
+            }
+          } else if (inheritedBase.agentKind === 'acp') {
             // Same plugin engine, model and location as the source task.
             inheritedAgentDeviceId = sourceAgentDeviceId ?? undefined;
             inherited = inheritedBase;
@@ -12838,7 +12889,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               sourceAgentDeviceId,
               sourceIsSsh: Boolean(meta.remoteHostId),
               ...(requestedAgentDeviceId !== undefined ? { requestedAgentDeviceId } : {}),
-              ...(executionOverrides ? { overrides: executionOverrides } : {}),
+              ...(executionOverrides ? { overrides: { ...executionOverrides, agentKind: executionOverrides.agentKind as AgentKind | undefined } } : {}),
             }, {
               isSelfDeviceId: (deviceId) => deviceId === getSelfDeviceId(),
               readLocalRouting: async (agentKind) => ({
@@ -13734,6 +13785,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
+    supportsPluginEngineCreate: true,
     refineTitle: (id, subject, initial) => { void refineCreatedTaskTitle(id, subject, { initialTitle: initial }); },
     listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
     create: createRemoteSessionOpener({
@@ -13750,6 +13802,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
           return route ? { agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
             model: route.model, effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode } : undefined;
+        },
+        resolvePluginEngine: async (input, agentDeviceId) => {
+          const route = await resolveDispatchedPluginEngine({ ...input, agentDeviceId, fastMode: input.fast });
+          return { ...route, effort: (route.effort || undefined) as Effort | undefined };
         },
         readRemoteRouting: async (id, agent) => deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, id), agent),
       }),
@@ -17204,7 +17260,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机运行)。
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
-    admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitPluginEngineWorker: resolveDispatchedPluginEngine,
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -18586,8 +18642,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const locations = sshLead ? undefined : await listWorkerAgentLocations();
         if (agentDeviceId) {
           let views: ProviderView[];
+          let pluginEngines: ReturnType<typeof pluginEngineDescriptors> = [];
           try {
-            views = await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId);
+            [views, pluginEngines] = await Promise.all([
+              readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+              !agent && !sshLead && !isProviderShareAgentDeviceId(agentDeviceId)
+                ? readDispatchedPluginEngines(agentDeviceId).then(pluginEngineDescriptors).catch(() => [])
+                : Promise.resolve([]),
+            ]);
           } catch (err) {
             return agentDeviceCatalogFailure(err);
           }
@@ -18595,6 +18657,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ok: true,
             agentDeviceId,
             ...(locations ? { locations } : {}),
+            ...(pluginEngines.length ? { pluginEngines } : {}),
             ...Object.fromEntries(agents.map((a) => [
               a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
               deviceAvailableModels(views, a),
@@ -18622,7 +18685,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             a,
           );
         }
-        // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机运行：不按 agent 过滤时列本机此刻提供的引擎；
+        // 不按内置 Agent 过滤时，列任务电脑本机此刻提供的插件引擎；
         // SSH Lead 的 Worker 在 SSH 主机上运行，不列。
         const pluginEngines = !agent && !sshLead ? pluginEngineDescriptors() : [];
         return {
@@ -21205,7 +21268,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   const requireQueuedMessage = (
     value: unknown,
-    opts?: { allowMissingTrustedContexts?: boolean },
+    opts?: { allowMissingTrustedContexts?: boolean; allowPluginEngine?: boolean },
   ): AgentInputQueuedMessage => {
     if (!value || typeof value !== 'object')
       throwIpcError('INVALID_PARAMS', 'queued message required');
@@ -21225,7 +21288,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      !(opts?.allowPluginEngine && msg.createOpts.agentKind === 'acp')
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
@@ -21335,7 +21399,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       scheduleSessionAutoTitle({
         sessionId: sid,
         text: seed.text,
-        agentKind: queued.createOpts.agentKind,
+        agentKind: builtinAgentKindOrNull(queued.createOpts.agentKind),
         isUserText: seed.isUserText,
       });
     };
@@ -21612,7 +21676,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const inputOwner = getCurrentDbClientSnapshot();
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
-      const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item));
+      const link = getDeviceLinkInvokeContext();
+      let allowPluginEngine = false;
+      if (link && !link.sharedTask && (item as Partial<AgentInputQueuedMessage> | null)?.createOpts?.agentKind === 'acp') {
+        const row = await getSessionRowSnapshot(sid);
+        const origin = parseOrcaRemoteLead(row?.orcaRemoteLead);
+        allowPluginEngine = row?.agentKind === 'acp' && origin != null && origin.releasedAt === undefined && origin.leadDeviceId === link.controllerDeviceId;
+        if (inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
+      }
+      const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item, { allowPluginEngine }));
       // debug 日志：远程发送在被控端各阶段的耗时，不影响任何判定。
       const sendTrace = deviceLinkInvoke ? beginRemoteSendTrace(sid, parsed.clientId) : undefined;
       if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);

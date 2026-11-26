@@ -1294,7 +1294,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         agentDeviceId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
-          if (providerId !== undefined)
+          if (providerId !== undefined && agentKind !== 'acp')
             return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持在本机新建任务。' };
           if (!remoteSessionHandoff || !dispatcherSessionId)
             return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
@@ -1311,6 +1311,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
               return { title: title?.trim() || undefined, projectDir, workingDir,
                 useWorktree, agentKind, model, effort, fast, agentDeviceId,
+                ...(agentKind === 'acp' && providerId !== undefined ? { providerId } : {}),
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
           });

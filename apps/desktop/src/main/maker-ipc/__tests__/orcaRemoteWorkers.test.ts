@@ -251,6 +251,34 @@ describe('openRemoteWorker', () => {
     } finally { workers.stop(); }
   });
 
+  // #13225, unit: the ACP route is only sent after the execution computer advertises it.
+  it.each([false, true])('opens the plugin Worker on a compatible host only (%s)', async supported => {
+    const route = { agent: 'acp' as const, model: 'plugin-model', agentDeviceId: 'provider-pc',
+      providerId: 'acp-plugin:example:engine' };
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel, args) => {
+      if (channel === 'maker:orca:remote-worker:caps') return ok({ version: 1, agentDevice: true,
+        ...(supported ? { pluginEngines: true } : {}) });
+      if (channel === 'maker:orca:remote-worker:open') return ok({
+        sessionId: (args[0] as { sessionId: string }).sessionId, agentKind: 'acp',
+        model: route.model, workingDir: '/worker', agentDeviceId: route.agentDeviceId, providerId: route.providerId,
+      });
+      return undefined;
+    } });
+    try {
+      const result = await workers.openRemoteWorker({ ...openInput, ...route });
+      const open = remoteInvoke.mock.calls.find(call => call[1] === 'maker:orca:remote-worker:open');
+      if (supported) {
+        expect(open?.[2][0]).toMatchObject({ agentKind: 'acp', model: route.model, providerId: route.providerId,
+          agentDeviceId: route.agentDeviceId });
+        expect(result).toMatchObject({ ok: true, agent: 'acp', model: route.model,
+          proxySession: { agentKind: 'acp', agentDeviceId: route.agentDeviceId } });
+      } else {
+        expect(open).toBeUndefined();
+        expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+      }
+    } finally { workers.stop(); }
+  });
+
   // Unit: old execution hosts silently discard unknown model-location fields.
   // Reject before open; a capable host must receive and return the exact route.
   it.each([false, true])('negotiates the independent model computer (supported=%s)', async supported => {

@@ -5,7 +5,6 @@ import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
 import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
-  ControlWorkerAgent,
   ControlWorkerEngine,
   LiziMcpSessionContext,
 } from "../types.js";
@@ -34,7 +33,7 @@ export type SendToSessionCallback = (params: {
   /** Omitted inherits source membership; null explicitly creates a projectless task. */
   projectDir?: string | null;
   /** create 模式可选:显式目标 Agent；缺省继承 dispatcher。jump 忽略。 */
-  agentKind?: ControlWorkerAgent;
+  agentKind?: ControlWorkerEngine;
   /** create 模式可选:显式目标模型；缺省继承 dispatcher。jump 忽略。 */
   model?: string;
   providerId?: string;
@@ -50,7 +49,6 @@ export type SendToSessionCallback = (params: {
       targetDeviceId?: string;
       responsibilityRecorded?: false;
       targetSessionId: string;
-      /** 'acp' only for collaboration-internal deliveries to a plugin-engine Worker. */
       agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
@@ -102,7 +100,7 @@ export type SendToRemoteSessionCallback = (params: {
 }) => Promise<
   ControlResult<
     {
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerEngine;
       wakeKind: "resumed" | "already-active" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -227,7 +225,7 @@ export function registerSendToSessionTool(
         '仅 create：任务、目录和文件所在电脑，取 list_machines 的 machines.computers[].deviceId；省略或 local 为当前宿主。远程项目/目录按目标电脑解析；未选项目不继承本机路径，未选模型用目标默认。已有任务使用 target_session_id，不同时传 device。',
       ),
       provider_id: z.string().trim().min(1).optional().describe(
-        "仅本机新建任务可选：从 list_available_models 对应模型的 providers 选取本机连接 ID。省略沿用原选路；jump 忽略。",
+        "新建普通任务可用 agent_kind=acp 与 list_available_models 的 plugin_engines[].provider_id 指定插件引擎，本机和跨电脑均可。内置引擎仅本机可显式选连接；jump 忽略。",
       ),
       provider_device_id: z.string().trim().min(1).max(128).optional().describe(
         '仅 create：模型供应商所在电脑，取 list_available_models 的 locations；local 表示任务所在电脑。与 device（任务和文件位置）独立。旧名 agent_device_id 兼容保留，同时填写必须一致。',
@@ -271,7 +269,7 @@ export function registerSendToSessionTool(
         "仅 create：字符串选择目标电脑 list_projects 中已有的可见项目；null 明确不绑项目。本机省略时继承来源归属；来源不绑项目或远程创建时，按目标 working_dir 匹配已有项目，否则不绑项目。隐藏、未登记或归属不明确时拒绝。jump 忽略。",
       ),
       agent_kind: z
-        .enum(["claude-code", "codex", "pi"])
+        .enum(["claude-code", "codex", "pi", "acp"])
         .optional()
         .describe(
           "仅 create 模式可选:目标 Agent/harness。本机缺省继承 dispatcher，远程采用目标默认；jump 模式忽略。",

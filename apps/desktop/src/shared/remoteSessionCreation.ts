@@ -6,7 +6,8 @@ export const remoteSessionCreationSchema = z.object({
   projectDir: z.string().trim().min(1).max(4096).nullable().optional(),
   workingDir: z.string().trim().min(1).max(4096).optional(),
   useWorktree: z.boolean().optional(),
-  agentKind: z.enum(['claude-code', 'codex', 'pi']).optional(),
+  agentKind: z.enum(['claude-code', 'codex', 'pi', 'acp']).optional(),
+  providerId: z.string().trim().min(1).max(512).optional(),
   model: z.string().min(1).max(512).optional(),
   effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
   fast: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
@@ -23,7 +24,7 @@ export function creationOperation(input: RemoteSessionCreation): string {
 
 export interface RemoteSessionCreated {
   targetSessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   targetTitle: string | null;
   projectDir: string | null;
   workspaceKind: 'project' | 'dialogue';

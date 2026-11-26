@@ -108,11 +108,14 @@ export function createHostSessionHandoff(ports: {
         model: route.model, providerId: route.providerId,
         effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode,
       } : undefined;
-      const agent = input.agentKind ?? source?.agentKind;
+      const { agentKind, providerId, ...selection } = input;
+      if (agentKind === 'acp' || providerId !== undefined)
+        throw new Error('This Host only supports its built-in engines for task creation');
+      const agent = agentKind ?? source?.agentKind;
       const views = await ports.readProviders();
       assertOwner();
       const execution = resolveSessionExecutionSelection({
-        selection: { ...input, fastMode: input.fast },
+        selection: { ...selection, agentKind, fastMode: input.fast },
         source,
         availableAgents: ports.agents(),
         availableModels: agent ? views.flatMap(provider => provider.models[agent] ?? []) : [],

@@ -41,6 +41,18 @@ describe('parseOrcaRemoteWorkerBridgeRequest', () => {
   );
 });
 
+// #13225: the receiving computer must preserve the explicit ACP route instead of rejecting it
+// as an unknown agent. Unit tier, existing wire parser, no network required.
+it('keeps the plugin-engine route separate from the Worker execution computer', () => {
+  expect(parseOrcaRemoteWorkerOpenRequest({
+    ...base, agentKind: 'acp', providerId: 'acp-plugin:example:engine',
+    model: 'plugin-model', agentDeviceId: 'model-computer',
+  })).toMatchObject({
+    agentKind: 'acp', providerId: 'acp-plugin:example:engine',
+    model: 'plugin-model', agentDeviceId: 'model-computer',
+  });
+});
+
 describe('orca remote worker channels', () => {
   // Shared-task guests are refused by the desktop shared-task gate (not in its channel list).
   it('registers caps / open / release on the same-account allowlist', () => {

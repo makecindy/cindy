@@ -124,6 +124,29 @@ describe('cross-device send_to_session sender', () => {
     expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...expectedCreate, title: 'Changed' }) })).toBe(false);
   });
 
+  // #13225, unit: do not send a create request to a computer that only supports built-in engines.
+  it.each([false, true])('negotiates plugin engine creation before sending the model route (%s)', async supported => {
+    const create = { permissionMode: 'ask' as const, agentKind: 'acp' as const,
+      providerId: 'acp-plugin:example:engine', model: 'plugin-model', agentDeviceId: 'models' };
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action: string; create?: unknown; taskActionReceipt: string };
+      if (wire.action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, ordinaryCreateVersion: 1, ...(supported ? { pluginEngineCreate: 1 } : {}),
+      } };
+      issued.push(wire.taskActionReceipt);
+      expect(wire.create).toMatchObject(create);
+      return { ok: true, result: { ...accepted, agentKind: 'acp', wakeKind: 'created',
+        targetSessionId: 'new-id', model: create.model, providerId: create.providerId, workingDir: '/workspace' } };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const result = await send({ deviceId: 'worker', sessionId: 'new-id' }, {
+      message: 'Work here', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    });
+    expect(invoke).toHaveBeenCalledTimes(supported ? 2 : 1);
+    expect(result).toMatchObject(supported ? { ok: true, agentKind: 'acp', providerId: create.providerId }
+      : { ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+  });
+
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
   // Unit: real capture and sender against both capability answers.

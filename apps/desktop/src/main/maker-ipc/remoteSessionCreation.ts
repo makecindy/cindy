@@ -11,15 +11,22 @@ type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
 /** Resolve target defaults against the chosen provider computer, without borrowing its source ID. */
 export function createRemoteSessionExecutionResolver(deps: {
   isSelfDeviceId(id: string): boolean;
-  resolveLocal(input: RemoteSessionCreation): Promise<Execution>;
+  resolveLocal(input: RemoteSessionCreation & { agentKind?: Exclude<Execution['agentKind'], 'acp'> }): Promise<Execution>;
+  resolvePluginEngine?(input: RemoteSessionCreation, deviceId: string | null): Promise<Execution>;
   readDefault(): SessionExecutionSelection | undefined;
-  readRemoteRouting(deviceId: string, agent: Execution['agentKind']): Promise<Parameters<typeof resolveSessionExecutionSelection>[0]['providerRouting']>;
+  readRemoteRouting(deviceId: string, agent: Exclude<Execution['agentKind'], 'acp'>): Promise<Parameters<typeof resolveSessionExecutionSelection>[0]['providerRouting']>;
 }) {
   return async (input: RemoteSessionCreation): Promise<Execution> => {
     const deviceId = input.agentDeviceId && !deps.isSelfDeviceId(input.agentDeviceId) ? input.agentDeviceId : null;
-    if (!deviceId) return deps.resolveLocal(input);
+    const { agentKind: requestedAgent, ...selection } = input;
+    if (requestedAgent === 'acp') {
+      if (!deps.resolvePluginEngine) throw new Error('Plugin engine task creation is unavailable');
+      return deps.resolvePluginEngine(input, deviceId);
+    }
+    if (input.providerId !== undefined) throw new Error('provider_id requires an explicit plugin engine for remote creation');
+    if (!deviceId) return deps.resolveLocal({ ...selection, agentKind: requestedAgent });
     const defaults = deps.readDefault();
-    const agentKind = input.agentKind ?? defaults?.agentKind;
+    const agentKind = requestedAgent ?? defaults?.agentKind;
     if (!agentKind) throw new Error('Select an agent for the remote provider');
     let routing: Awaited<ReturnType<typeof deps.readRemoteRouting>>;
     try { routing = await deps.readRemoteRouting(deviceId, agentKind); }

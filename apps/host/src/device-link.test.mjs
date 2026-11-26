@@ -673,6 +673,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       const support = await handoff([{ action: 'task-action-capability' }]);
       assert.equal(support.ok, true, JSON.stringify(support));
       assert.equal(support.result.ordinaryCreateVersion, 1);
+      // #13225: built-in task creation does not imply that this Node Host can open ACP tasks.
+      assert.equal(support.result.pluginEngineCreate, undefined);
       assert.equal(support.result.projectCatalogVersion, 1);
       assert.equal(support.result.taskActionVersion, 1);
 

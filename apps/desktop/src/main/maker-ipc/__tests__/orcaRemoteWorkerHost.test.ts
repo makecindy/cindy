@@ -80,21 +80,23 @@ describe('orca remote worker host', () => {
     expect(deps.readModels).toHaveBeenCalledTimes(1);
   });
 
-  it('persists the resolved remote Agent route with the Worker’s directory before bootstrap', async () => {
-    const row = { id: 'w_remote_1', agentKind: 'codex', model: 'remote-only', agentDeviceId: 'provider-pc',
-      providerId: 'openai', workingDir: '/worker/project', effort: 'low', fastMode: false };
+  // #13225: the same opener must preserve ACP rather than identify the Worker as built-in.
+  it.each([['codex', 'openai'], ['acp', 'acp-plugin:example:engine']] as const)(
+    'persists the %s model route with the Worker’s directory before bootstrap', async (agentKind, providerId) => {
+    const row = { id: 'w_remote_1', agentKind, model: 'remote-only', agentDeviceId: 'provider-pc',
+      providerId, workingDir: '/worker/project', effort: 'low', fastMode: false };
     const insertSession = vi.fn(), bootstrapSession = vi.fn(), broadcastSessionCreated = vi.fn();
     const openSession = vi.fn(async (input, commit) => { expect(input.body).toMatchObject({
-      agentDeviceId: 'provider-pc', providerId: 'openai', model: 'remote-only', workingDir: '/worker/project' });
+      agentKind, agentDeviceId: 'provider-pc', providerId, model: 'remote-only', workingDir: '/worker/project' });
       const value = await commit(row, () => {}); return { row, value }; });
-    const resolveAgentSelection = vi.fn(async input => ({ ...input, model: 'remote-only', providerId: 'openai' }));
+    const resolveAgentSelection = vi.fn(async input => ({ ...input, model: 'remote-only', providerId }));
     const opener = createOrcaRemoteWorkerSessionOpener({
       openSession: openSession as unknown as Parameters<typeof createOrcaRemoteWorkerSessionOpener>[0]['openSession'],
       insertSession, bootstrapSession, broadcastSessionCreated, resolveAgentSelection,
     });
-    await expect(opener({ ...request, agentKind: 'codex', permissionMode: 'auto', agentDeviceId: 'provider-pc', workingDir: '/worker/project' },
+    await expect(opener({ ...request, agentKind, permissionMode: 'auto', agentDeviceId: 'provider-pc', workingDir: '/worker/project' },
       { leadDeviceId: 'lead-pc', leadDeviceName: 'Lead', leadSessionId: 'lead-1', leadTitle: 'Lead', workerLabel: 'test' })).resolves.toMatchObject({
-        agentDeviceId: 'provider-pc', providerId: 'openai', model: 'remote-only', workingDir: '/worker/project' });
+        agentKind, agentDeviceId: 'provider-pc', providerId, model: 'remote-only', workingDir: '/worker/project' });
     expect(insertSession).toHaveBeenCalledWith(row);
     expect(bootstrapSession).toHaveBeenCalledWith(row, expect.any(Function));
   });

@@ -974,7 +974,7 @@ describe('orca remote worker runtime', () => {
     expect(runtime.hasPendingReport('proxy-1')).toBe(false);
   });
 
-  it.each(['cc', 'codex', 'pi'])('does not claim Agent %s accepted when the enqueue reply is lost and delivery is pending', async (agentKind) => {
+  it.each(['cc', 'codex', 'pi', 'acp'])('does not claim Agent %s accepted when the enqueue reply is lost and delivery is pending', async (agentKind) => {
     const lost = Object.assign(new Error('[INVOKE_TIMEOUT] no reply'), { inFlight: true });
     const { runtime, state, invoke } = setup({ agentKind, enqueueError: lost, receipts: { 'c-1': 'pending' } });
     await expect(

@@ -187,7 +187,7 @@ function textOf(content: unknown): string {
 }
 
 function agentKindOf(value: unknown): AgentInputCreateOpts['agentKind'] {
-  return value === 'codex' || value === 'pi' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'acp' ? value : 'claude-code';
 }
 
 interface RemoteSessionRow {

@@ -23,7 +23,7 @@ import {
   type OrcaRemoteWorkerOpenResult as DeviceOpenResult,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import {
@@ -434,6 +434,9 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: `${name} 需要更新后才能为跨设备 Worker 选择 Agent 所在电脑。` };
       }
+      if (input.agent === 'acp' && supported.pluginEngines !== true) {
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Update the Worker execution computer to use plugin engines. No Worker was created.' };
+      }
       if (input.modelGroup && supported.modelGroup !== true) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: 'The execution computer does not support Worker model groups' };
@@ -546,7 +549,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (!opened) opening.delete(remoteSessionId);
       }
       const proxySessionId = createId();
-      const agent: AgentKind = opened.agentKind ?? input.agent;
+      const agent: EngineKind = opened.agentKind ?? input.agent;
       // open 与关联之间尚未创建本机代理，退出后只需按持久 open 身份解除远端标记。
       assertOwner(owner);
       const proxySession = {

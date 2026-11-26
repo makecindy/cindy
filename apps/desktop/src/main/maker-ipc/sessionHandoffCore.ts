@@ -58,6 +58,7 @@ function boundedString(value: unknown, name: string, max: number): string {
 export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
   create?: ReturnType<typeof createRemoteSessionOpener>;
+  supportsPluginEngineCreate?: boolean;
   refineTitle?(sessionId: string, subject: string, initialTitle: string): void;
   listProjects?(options: { includeHidden: boolean; offset: number; limit: number }): Promise<unknown>;
   captureAccess?(controllerDeviceId: string): () => void;
@@ -73,6 +74,8 @@ export function createSessionHandoffHandler(deps: {
     if (request.action !== undefined && request.action !== 'create') throwIpcError('INVALID_PARAMS', 'Unknown handoff action');
     if (creation && (!deps.create || !z.uuid().safeParse(targetSessionId).success))
       return { ok: false, errorCode: 'INVALID_ARGS', message: 'Remote creation requires a new UUID and a supported host.' };
+    if (creation?.agentKind === 'acp' && !deps.supportsPluginEngineCreate)
+      return { ok: false, errorCode: 'INVALID_ARGS', message: 'Plugin engine creation is unavailable on this computer.' };
     const operation = creation ? creationOperation(creation) : undefined;
     // 目标必须是本机任务；带设备前缀的 id 属于别的电脑，不代为转发。
     if (targetSessionId.includes('::'))
@@ -190,6 +193,7 @@ export function registerSessionHandoffHandlers(
     if (request.action === 'task-action-capability') return {
       ...SESSION_HANDOFF_CAPABILITY,
       ...(deps.create ? { ordinaryCreateVersion: 1 } : {}),
+      ...(deps.create && deps.supportsPluginEngineCreate ? { pluginEngineCreate: 1 } : {}),
       ...(deps.create && deps.refineTitle ? { ordinaryCreateAutoTitle: 1 } : {}),
       ...(deps.listProjects ? { projectCatalogVersion: 1 } : {}),
     };

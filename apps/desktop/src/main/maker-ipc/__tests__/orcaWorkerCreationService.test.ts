@@ -721,7 +721,6 @@ describe('plugin engine Worker', () => {
   });
 
   it.each([
-    { name: 'another computer', params: { executionDeviceId: 'desk-b' }, lead: {} },
     { name: 'an SSH Lead', params: {}, lead: { remoteHostId: 'box' } },
   ])('refuses $name before starting anything', async ({ params, lead }) => {
     const admit = admitted();
@@ -736,6 +735,22 @@ describe('plugin engine Worker', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('plugin engine') });
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+  });
+
+  // #13225: the Worker stays in the Lead's workspace, with only its engine running elsewhere.
+  it('starts with the explicitly selected plugin source without looking up a local namesake', async () => {
+    const admit = admitted();
+    const { deps, service } = createDeps({ admitPluginEngineWorker: admit });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', agentDeviceId: 'model-computer',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, model: 'dsh-pro',
+      workingDir: 'C:\\repo', agentDeviceId: 'model-computer',
+    }));
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'model-computer' }));
   });
 
   it('reports the plugin refusal (turned off or removed) and creates nothing', async () => {

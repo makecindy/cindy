@@ -32,7 +32,7 @@ export interface RemoteSessionHandoffRequest {
 export type RemoteSessionHandoffResult =
   | ({
       ok: true;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: RemoteSessionCreated['agentKind'];
       wakeKind: 'resumed' | 'already-active' | 'queued' | 'created';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -71,7 +71,7 @@ const TARGET_REJECTIONS = new Set<string>([
   'BUDGET_MODEL_REQUIRES_API_MODE',
   'PROVIDER_ROUTE_UNAVAILABLE',
 ]);
-const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi', 'acp']);
 const WAKE_KINDS = new Set(['resumed', 'already-active', 'queued']);
 
 function encodedIpcCode(message: string): string | null {
@@ -194,12 +194,14 @@ export function createRemoteSessionHandoff(deps: {
       if (!support.ok) return capabilityProbeFailure(support.error.code, support.error.message);
       const capability = support.result as {
         taskActionVersion?: unknown; plainRequestBody?: unknown; ordinaryCreateVersion?: unknown;
-        ordinaryCreateAutoTitle?: unknown; pluginCaller?: unknown;
+        ordinaryCreateAutoTitle?: unknown; pluginCaller?: unknown; pluginEngineCreate?: unknown;
       } | null;
       if (capability?.taskActionVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
       if (creation && capability.ordinaryCreateVersion !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to support ordinary task creation. No task was created.' };
+      if (creation?.agentKind === 'acp' && capability.pluginEngineCreate !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Update the destination computer to create tasks with plugin engines. No task was created.' };
       if ('pluginId' in sender && capability.pluginCaller !== 1)
         return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer does not support Plugin callers; no message was sent.' };
       assertCurrent();
@@ -294,7 +296,7 @@ export function createRemoteSessionHandoff(deps: {
         fastMode: remoteSessionCreationSchema.shape.fast.safeParse(result.fastMode).data ?? false,
       } : {}),
       ok: true,
-      agentKind: result.agentKind as 'claude-code' | 'codex' | 'pi',
+      agentKind: result.agentKind as RemoteSessionCreated['agentKind'],
       wakeKind: result.wakeKind as 'resumed' | 'already-active' | 'queued' | 'created',
       targetTitle: typeof result.targetTitle === 'string' ? result.targetTitle : null,
       targetLastUserSendAt:

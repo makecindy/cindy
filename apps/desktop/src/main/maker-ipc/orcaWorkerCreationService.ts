@@ -287,7 +287,7 @@ export type OrcaRemoteWorkerOpenResult =
       proxySessionId: string;
       proxySession: OrcaRemoteWorkerProxySessionSeed;
       remoteSessionId: string;
-      agent: AgentKind;
+      agent: EngineKind;
       model: string;
       workingDir: string;
       agentDeviceId?: string | null;
@@ -373,14 +373,14 @@ export interface OrcaWorkerCreationDeps {
     didInjectProjectContext: boolean;
   }>;
   /**
-   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由本机提供且可用，返回该引擎下实际使用的
+   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由所选电脑提供且可用，返回该引擎下实际使用的
    * 模型、思考深度('' = 引擎自己决定)与权限模式；不可用时抛错。缺省 = 不支持插件引擎 Worker。
    */
-  admitPluginEngineWorker?(target: { providerId: string | null; model: string; effort?: unknown; permissionMode?: string | null }): {
+  admitPluginEngineWorker?(target: { providerId: string | null; model: string; effort?: unknown; permissionMode?: string | null; agentDeviceId?: string | null }): Promise<{
     model: string;
     effort: string;
     permissionMode: string;
-  };
+  }> | { model: string; effort: string; permissionMode: string };
   addOrUpdateWorker(worker: OrcaWorkerRecordInput): Promise<void>;
   markOrcaRoleIfNeeded(sessionId: string, role: 'worker'): Promise<void>;
   closeWorkerSession(sessionId: string): Promise<void>;
@@ -409,7 +409,7 @@ export interface OrcaWorkerCreationDeps {
     leadSessionId: string;
     label: string;
     role: string;
-    agent: AgentKind;
+    agent: EngineKind;
     model?: string;
     modelGroup?: string;
     providerId?: string;
@@ -882,10 +882,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void;
   }): Promise<OrcaWorkerCreationResult> {
     const { params, role, label, lead, settings, assertCurrent, onCreated } = input;
-    // 插件引擎只在本机运行(上游已拒绝)；这里只放内置引擎。
-    if (params.agent === 'acp') {
-      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engines run on this computer only' };
-    }
     const deviceId = typeof params.executionDeviceId === 'string' ? params.executionDeviceId.trim() : '';
     if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: 'execution_device_id must be a device id' };
@@ -1174,18 +1170,19 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
     }
     if (params.agent === 'acp') {
-      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：只在本机运行(Lead 不在 SSH、Worker 不换电脑、不在
-      // 另一台电脑执行)；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
-      if (lead.remoteHostId || params.executionDeviceId !== undefined || workerLocation.agentDeviceId) {
-        return { ok: false, errorCode: 'INVALID_PARAMS',
-          message: 'plugin engines run on this computer only; create the Worker locally (agent_device_id "local", no execution_device_id)' };
+      if (lead.remoteHostId) {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engine Workers cannot run in SSH workspaces' };
+      }
+      if (params.executionDeviceId !== undefined) {
+        return createRemoteWorkerInTeam({ params, role: role.value, label: label.value, lead, settings, assertCurrent, onCreated });
       }
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
       }
-      let admitted: ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>;
+      let admitted: Awaited<ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>>;
       try {
-        admitted = deps.admitPluginEngineWorker({
+        admitted = await deps.admitPluginEngineWorker({
+          agentDeviceId: workerLocation.agentDeviceId,
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
           model: params.model?.trim() || 'default',
           effort: params.effort,
@@ -1222,7 +1219,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return finishWorkerCreation({
         workingDir: pluginWorkingDir,
         ...(pluginWorktreeSource ? { worktreeSource: pluginWorktreeSource, worktreeSourceSelection: pluginWorktreeSelection } : {}),
-        workerAgentDeviceId: null,
+        workerAgentDeviceId: workerLocation.agentDeviceId,
         resolved: {
           model: admitted.model,
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
