@@ -3060,6 +3060,35 @@ describe('BotGroupChatView', () => {
       expect(document.body.textContent).not.toContain('私密的原文');
     });
 
+    it('pastes only the selected part of a quote into the group composer', async () => {
+      const user = userEvent.setup();
+      const base = detail({ serverBacked: true });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...base, messages: [
+        msg({ id: 'b1', sequence: 2, authorKind: 'bot', authorBotId: 'xiaoman', authorName: '小满', content: '周六 8:10 有票' }),
+        msg({ id: 'q1', sequence: 5, content: '那就这班', quote: quoteOf('b1') })] } });
+      renderView();
+      const block = await screen.findByTestId('bot-group-quote');
+      block.focus();
+      const text = within(block).getByText('周六 8:10 有票').firstChild!;
+      const range = document.createRange();
+      range.setStart(text, 3);
+      range.setEnd(text, 7);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try {
+        fireEvent.click(block, { detail: 1 });
+        const clipboard = await user.copy();
+        expect(clipboard?.getData('text/plain')).toBe('8:10');
+        const composer = screen.getByRole<HTMLTextAreaElement>('textbox');
+        await user.click(composer);
+        await user.paste(clipboard);
+        expect(composer.value).toBe('8:10');
+      } finally {
+        selection.removeAllRanges();
+      }
+    });
+
     it('pages back to an original that is not loaded yet', async () => {
       const user = userEvent.setup();
       const base = detail({ serverBacked: true, hasMoreBefore: true });
