@@ -22,7 +22,11 @@ vi.mock('react-native', async () => {
     scrollViewProps.current = props;
     return React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
   };
-  return { View, ScrollView, Pressable: View, Platform: { get OS() { return platform.OS; } },
+  const Pressable = ({ children, testID, onPress, accessible, importantForAccessibility }: {
+    children?: ReactNode; testID?: string; onPress?: () => void; accessible?: boolean; importantForAccessibility?: string;
+  }) => React.createElement('div', { 'data-testid': testID, onClick: onPress,
+    'data-accessible': accessible === undefined ? undefined : String(accessible), 'data-a11y': importantForAccessibility }, children);
+  return { View, ScrollView, Pressable, Platform: { get OS() { return platform.OS; } },
     StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
 });
 const textInputProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
@@ -214,6 +218,56 @@ it.each(['ios', 'android'] as const)('shows collapsed overflow text from its sta
     expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
     expect(inputStyle().color).not.toBe('transparent');
     expect(inputStyle().opacity).toBeUndefined();
+  } finally {
+    act(() => root.unmount());
+    platform.OS = 'ios';
+  }
+});
+
+// Unit regression (review of #13301): over the preview the hidden native input still took the tap, so the
+// cursor landed at an unseen spot in the last line. The first tap must only open and focus the input,
+// keeping its selection, and the layer must stay invisible to screen readers. Short or empty text and an
+// opened composer keep tapping the input directly; the iOS pill entry still wins where it exists.
+it.each(['ios', 'android'] as const)('opens and focuses on the first tap over a preview, keeping the selection (%s)', (os) => {
+  platform.OS = os;
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const focus = vi.fn();
+  const inputRef = { current: { focus } };
+  const text = 'please check this draft keeps the mention and wraps over several lines';
+  const render = (props: { cardActive?: boolean; value?: string; overflow?: string; onCollapsedPress?: () => void; editable?: boolean }) =>
+    act(() => root.render(<MobileComposerInputRow
+      accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" editable={props.editable}
+      value={props.value ?? text} onChangeText={() => {}} cardActive={props.cardActive ?? false} inputRef={inputRef}
+      collapsedOverflowText={props.overflow} onCollapsedPress={props.onCollapsedPress} testID="composer"
+    />));
+  const layer = () => container.querySelector<HTMLElement>('[data-testid="composer.collapsedOpen"]');
+  try {
+    render({ overflow: text });
+    expect(layer()?.getAttribute('data-accessible')).toBe('false');
+    expect(layer()?.getAttribute('data-a11y')).toBe('no-hide-descendants');
+    act(() => layer()!.click());
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(textInputProps.current.selection).toBeUndefined();
+    // An input that cannot be edited (offline, no members) is not focused, so the card does not open.
+    render({ overflow: text, editable: false });
+    act(() => layer()!.click());
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    // Once open, taps reach the input, which positions the cursor itself.
+    render({ cardActive: true, overflow: text });
+    expect(layer()).toBeNull();
+    // Text that fits, or no text, is tapped directly as before.
+    render({ value: 'short' });
+    expect(layer()).toBeNull();
+    render({ value: '' });
+    expect(layer()).toBeNull();
+
+    const openPill = vi.fn();
+    render({ overflow: text, onCollapsedPress: openPill });
+    act(() => layer()!.click());
+    expect(openPill).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(1);
   } finally {
     act(() => root.unmount());
     platform.OS = 'ios';

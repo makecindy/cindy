@@ -295,6 +295,10 @@ export function MobileComposerInputRow({
   // placeholder. Draw an ellipsized hint without changing/remounting the editor.
   const collapsedPlaceholder = geometricSingleLine && inputElement == null && value.length === 0 && !!placeholder;
   const collapsedPreview = geometricSingleLine && inputElement == null && value.length > 0 && !!collapsedOverflowText;
+  const focusInputKeepingSelection = () => {
+    if (editable === false) return;
+    (inputRef as { current?: { focus?(): void } | null } | undefined)?.current?.focus?.();
+  };
   // iOS composer dock pill: every end control sits concentric with the pill,
   // i.e. its visible circle is as far from the pill edge as from the top and
   // bottom. The leading attachment keeps its 44pt hit area (its visible 34pt
@@ -417,10 +421,12 @@ export function MobileComposerInputRow({
             testID={`${inputTestID}.collapsedPreview`}
           >{collapsedOverflowText}</Text> : null}
           {inputOverlay}
-          {!cardLayout && onCollapsedPress ? (
-            // VoiceOver still reaches the input itself and focuses it directly.
+          {!cardLayout && (onCollapsedPress || collapsedPreview) ? (
+            // VoiceOver still reaches the input itself and focuses it directly. Over a preview the first tap only
+            // opens the input; the hidden native text would otherwise take the tap at an unseen spot. Without the
+            // pill entry (Android, Reduce Motion) it focuses the input directly, keeping its selection.
             <Pressable accessible={false} importantForAccessibility="no-hide-descendants"
-              onPress={onCollapsedPress} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
+              onPress={onCollapsedPress ?? focusInputKeepingSelection} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
           ) : null}
         </Reanimated.View>
         {cardLayout ? null : trailing}
