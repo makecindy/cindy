@@ -17611,7 +17611,14 @@
         "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
         "hours": "In {{count}} hours",
         "hours_one": "In {{count}} hour",
-        "hours_other": "In {{count}} hours"
+        "hours_other": "In {{count}} hours",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
       },
       "taskListMode": {
         "heading": "Task mode",

@@ -17777,7 +17777,14 @@
         "hours": "Dans {{count}} heures",
         "hours_one": "Dans {{count}} heure",
         "hours_many": "Dans {{count}} heures",
-        "hours_other": "Dans {{count}} heures"
+        "hours_other": "Dans {{count}} heures",
+        "pendingSync": "En attente de synchronisation",
+        "pendingArchiveSync": "Archivage automatique dès le retour en ligne de l'ordinateur",
+        "offlineCompleteRejectedDirty": "« {{title}} » est revenu dans En attente : des modifications non validées dans le worktree doivent être confirmées avant l'archivage.",
+        "offlineCompleteRejectedNewActivity": "« {{title}} » est revenu dans En attente : une nouvelle activité a eu lieu sur son ordinateur hors ligne.",
+        "offlineCompleteRejectedRunning": "« {{title}} » est revenu dans En attente : la tâche est en cours d'exécution.",
+        "offlineCompleteRejectedAttached": "« {{title}} » est revenu dans En attente : la tâche est connectée ou partagée et n'a pas été archivée automatiquement.",
+        "offlineCompleteRejectedPreflight": "« {{title}} » est revenu dans En attente : impossible de vérifier le worktree avant l'archivage."
       },
       "taskListMode": {
         "heading": "Mode des tâches",

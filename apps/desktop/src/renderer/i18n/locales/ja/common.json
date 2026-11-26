@@ -17536,7 +17536,14 @@
         "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
         "hours": "{{count}} 時間後",
         "hours_one": "{{count}} 時間後",
-        "hours_other": "{{count}} 時間後"
+        "hours_other": "{{count}} 時間後",
+        "pendingSync": "同期待ち",
+        "pendingArchiveSync": "コンピューターがオンラインになり次第アーカイブ",
+        "offlineCompleteRejectedDirty": "「{{title}}」を保留中に戻しました：worktree に未コミットの変更があるため、確認後にアーカイブしてください。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
+        "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
+        "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
       },
       "taskListMode": {
         "heading": "タスクモード",

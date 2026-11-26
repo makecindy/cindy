@@ -4602,6 +4602,24 @@ interface ElectronAPI {
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
     };
+    offlineInboxIntents: {
+      list: () => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      upsert: (
+        intent: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      remove: (
+        deviceId: string,
+        sessionId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      clearDevice: (
+        deviceId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      onChanged: (
+        callback: (payload: {
+          intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+        }) => void,
+      ) => () => void;
+    };
   };
 
   // ── Remote SSH (Phase A) ───────────────────────────────────────────────
