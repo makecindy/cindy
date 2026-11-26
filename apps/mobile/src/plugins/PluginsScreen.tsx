@@ -169,6 +169,8 @@ function PluginDirectory() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<RemoteResource>();
   const [detailLoading, setDetailLoading] = useState(false);
+  /** Detail reads issued by this page (`showDetail`), counted. */
+  const detailReads = useRef(0);
   const [detailFailed, setDetailFailed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [readmeOpen, setReadmeOpen] = useState(false);
@@ -427,9 +429,6 @@ function PluginDirectory() {
   const showDetail = async (row: HostedRemoteCollectionItem) => {
     const generation = ++detailGeneration.current,
       owner = getMobileAuthOwner();
-    // Reading an instance's detail (the person opened it, or the page brings the one it shows up to date) shows what a
-    // result proven for that very instance left: such a result counts as seen from here on.
-    seenOnDetail(row);
     market.closeDetail();
     setSelected((current) =>
       current?.row.key === row.key ? { ...current, row } : { row },
@@ -443,6 +442,10 @@ function PluginDirectory() {
       return;
     }
     setDetailLoading(true);
+    // A read of this instance's detail is issued (the person opened it, or the page brings the one it shows up to date):
+    // it shows what a result proven for that very instance left, so such a result counts as seen from here on.
+    detailReads.current += 1;
+    seenOnDetail(row);
     try {
       const resource = await getRemoteResource(
         invoke,
@@ -663,6 +666,10 @@ function PluginDirectory() {
   const targetOnline = (id: string) => { const host = targets.find((candidate) => candidate.deviceId === id); return !!host && list.isOnline(host); };
   const checks = usePluginPendingChecks(targetOnline, focused, targets.map((candidate) => candidate.deviceId));
   const conclusions = usePluginCheckConclusions();
+  // What the results are now, also for a caller kept from an earlier render (a write that finishes later reads the
+  // detail again with the `showDetail` of the press that started it).
+  const conclusionsNow = useRef(conclusions);
+  conclusionsNow.current = conclusions;
   const [checksOpen, setChecksOpen] = useState(false);
   const operationLines: PluginOperationLine[] = [
     ...checks.map((check) => ({ key: check.operationId, entry: check.entry, who: check.who, check })),
@@ -987,7 +994,11 @@ function PluginDirectory() {
     return decidingCheck.view();
   }, [decidingCheck?.operationId]);
   useEffect(() => {
-    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && !decidingCheck.state.busy) setDeciding(null);
+    // The sheet goes once the operation moved on (answered, a final result). Not while its result is only unknown for
+    // now (the computer dropped, the app was in the background): closing the sheet here would be the page leaving a
+    // consent the person has on screen, which cancels it once it is found again; it shows again when it is.
+    if (decidingCheck && decidingCheck.state.outcome !== "confirmation" && decidingCheck.state.outcome !== "unknown"
+      && !decidingCheck.state.busy) setDeciding(null);
   }, [decidingCheck?.state.outcome, decidingCheck?.state.busy]);
   // DEV visual mock only: cindy://plugins?checks=<state> opens the list of pending checks in that state.
   useEffect(() => {
@@ -1129,11 +1140,11 @@ function PluginDirectory() {
   const broughtUpToDate = useRef(new Set<string>());
   const detailUpToDateFor = (operationId: string) => {
     broughtUpToDate.current.add(operationId);
-    const proven = conclusions.find((conclusion) => conclusion.operationId === operationId);
+    const proven = conclusionsNow.current.find((conclusion) => conclusion.operationId === operationId);
     if (proven && !proven.told && proven.readback === "verified") tellPluginConclusion(operationId);
   };
   const seenOnDetail = (row: HostedRemoteCollectionItem) => {
-    for (const conclusion of conclusions) {
+    for (const conclusion of conclusionsNow.current) {
       if (conclusion.told || conclusion.readback !== "verified" || (conclusion.result !== "succeeded" && conclusion.result !== "installed")) continue;
       // The instance it is about: the one an update or approval started from; for an install, the one its read proved.
       const about = conclusion.entry === "update" || conclusion.entry === "page-approval" ? conclusion.who.instanceKey : conclusion.instanceKey;
@@ -1141,14 +1152,15 @@ function PluginDirectory() {
     }
   };
   const completedOperation = useRef<{ operationId: string; row?: HostedRemoteCollectionItem; generation: number;
-    owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
+    /** How many detail reads had been issued when the result was first known here. */
+    reads: number; owner: ReturnType<typeof getMobileAuthOwner>; settled: boolean } | undefined>(undefined);
   useEffect(() => {
     const state = management.state, controller = management.controller;
     if (!state || state.outcome !== "succeeded" || !state.operationId || !controller) return;
     if (completedOperation.current?.operationId !== state.operationId) {
       const row = selected?.row;
       completedOperation.current = { operationId: state.operationId, row, generation: detailGeneration.current,
-        owner: getMobileAuthOwner(), settled: false };
+        reads: detailReads.current, owner: getMobileAuthOwner(), settled: false };
       void list.refresh();
       // The market beside it (wide screen) or on the next visit must not keep that computer's old pages and counts.
       if (row) market.invalidate(row.host.deviceId);
@@ -1164,9 +1176,10 @@ function PluginDirectory() {
     const { row, generation, owner } = done;
     if (!row || liveManagement.current !== controller || !isMobileAuthOwnerCurrent(owner)) return;
     if (generation !== detailGeneration.current) {
-      // Details were read since the result was known (the person, a reconnect). When the same detail is still the one
-      // selected, that read was this one: nothing more to read.
-      if (selected?.row.key === row.key) detailUpToDateFor(done.operationId);
+      // The selection moved on since the result was known. When a detail read was issued since (the person, a reconnect)
+      // and the same detail is the one selected, that read was this one: nothing more to read. (Opening the plugin's
+      // own page moves the selection on without reading the detail.)
+      if (detailReads.current !== done.reads && selected?.row.key === row.key) detailUpToDateFor(done.operationId);
       return;
     }
     const refreshed = controller.getState();

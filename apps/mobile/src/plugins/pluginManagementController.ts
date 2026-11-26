@@ -385,7 +385,9 @@ export function createPluginManagementController(client: PluginManagementClient,
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number, holder: number, issuedAt: number) {
     if (!undecided(receipt.operationId)) { drop(holder); return; }
     const rank = rankOf(receipt, issuedAt);
-    if (rank < shownRank) { drop(holder); return; }
+    // Older than what is shown: not applied. The write it answers is over all the same, so this is said (as when a
+    // reply is lost): whoever waited for that write to end looks now.
+    if (rank < shownRank) { drop(holder); if (!disposed) publish({}); return; }
     if (rank > shownRank) resetPace();
     shownRank = rank;
     appliedReceiptAt = ++receiptClock;

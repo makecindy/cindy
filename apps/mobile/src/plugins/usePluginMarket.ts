@@ -438,6 +438,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const [detail, setDetail] = useState<PluginMarketDetailState | null>(null);
   const liveDetail = useRef(detail);
   liveDetail.current = detail;
+  // (A pick kept for a market detail that outlived the list goes with that detail.)
+  useEffect(() => { if (!visible && !detail) setPinned(undefined); }, [visible, !detail]);
   const detailRead = useRef(0);
   const readDetail = useCallback(async (item: ManagedMarketItem, host: RemoteResourceHostTarget) => {
     const generation = ++detailRead.current;
@@ -507,8 +509,9 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     // The market on screen stays on the computer the attempt was on (it was held there while it ran): that computer
     // becomes this visit's automatic pick, so the list does not move to another computer the moment the attempt ends.
     // It is no explicit choice: one the person made (in the market, or a specific computer in the Installed tab) still
-    // wins. Only while the market is shown: an attempt that ends elsewhere leaves the next visit to pick again.
-    if (visibleNow.current) setPinned(attempt.target.deviceId);
+    // wins. Only while the market is on screen (its list, or a market detail beside another list on a wide screen): an
+    // attempt that ends elsewhere leaves the next visit to pick again.
+    if (visibleNow.current || liveDetail.current) setPinned(attempt.target.deviceId);
     slot.release(attempt.token);
     if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, [slot]);

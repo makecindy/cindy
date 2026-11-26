@@ -2489,6 +2489,14 @@ describe('whether a finished operation opens an instance', () => {
     const team = { ...updated, instanceKey: 'team__demo', namespace: 'team' };
     expect(pluginOperationOpens({ ...finished('market-install'), detail: before }, { ghosts: [team], market: market as any })).toEqual({ open: false, reason: 'gone' });
   });
+  // The same default where the instance is found once proven (pre-push review, rounds 7 and 8; it gave 'gone' on
+  // f8d1f490c4): neither the item read before the install nor the computer's ① record carries a namespace.
+  it('install: neither the item nor the computer\'s ① record carries a namespace: the root instance opens', () => {
+    const { namespace: _omitted, ...before } = detail;
+    const own = { ...before, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
+    const root = { ...updated, instanceKey: '_root__demo', namespace: null };
+    expect(pluginOperationOpens({ ...finished('market-install'), detail: before }, { ghosts: [root], market: [own] as any })).toEqual({ open: true, instanceKey: '_root__demo' });
+  });
   it('install: what a response does name about the plugin decides, whatever else it left out', () => {
     const own = { ...detail, installState: 'installed' as const, installedOperationId: 'operation-1', installedOperationAttribution: 'self' as const };
     const other = { ...detail, pluginId: 'market/other', ghostId: 'other', name: 'Other', installState: 'installed' as const };
