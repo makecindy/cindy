@@ -83,6 +83,7 @@ import { groupRepositoryKey, groupRepositoryLabel, parseGroupRepository, readGro
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
   displayName: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
+  orgName?: string | null; department?: string | null; departmentPath?: string | null; external?: boolean; showOrgName?: boolean;
   guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number;
   /** The group's own Cindy (servers with `groupAssistant`), nobody's companion. */
   assistant?: boolean }
@@ -99,6 +100,7 @@ interface Message {
 interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
   allow_mention_all_bots?: boolean; allow_member_invites?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
+  org_id?: string | null; org_name?: string | null; external?: boolean;
   /** The group's shared project (servers with `groupProject`); each computer keeps its own folder. */
   project?: GroupRepository | null;
   /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
@@ -2241,7 +2243,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
-    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -2251,7 +2253,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           avatar: BOT_GROUP_ASSISTANT_AVATAR, avatarColor: 'violet', status: 'active' as const };
         const p = localBot(m.id);
         return { botId: p?.id ?? m.id, actorId: m.id, actorKind: m.kind, isSelf: m.id === selfId,
-          role: m.role, nickname: m.nickname, groupAvatar: m.groupAvatar ?? null, defaultAvatarUrl: m.defaultAvatarUrl ?? null, displayName: m.displayName, ownerActorId: m.ownerActorId, ownerName: m.kind === 'bot' && !direct ? chatGroupOwnerName(m, ownerMembers) : m.ownerName,
+          role: m.role, nickname: m.nickname, groupAvatar: m.groupAvatar ?? null, defaultAvatarUrl: m.defaultAvatarUrl ?? null, displayName: m.displayName,
+          ...(m.orgName ? { orgName: m.orgName } : {}),
+          ...(m.department ? { department: m.department } : {}),
+          ...(m.departmentPath ? { departmentPath: m.departmentPath } : {}),
+          ...(m.external === true ? { external: true } : {}),
+          ...(m.showOrgName === true ? { showOrgName: true } : {}),
+          ownerActorId: m.ownerActorId, ownerName: m.kind === 'bot' && !direct ? chatGroupOwnerName(m, ownerMembers) : m.ownerName,
           isOwned: m.ownerActorId === selfId, guestAccess: m.guestAccess, accessRevision: m.accessRevision,
           // Which computer runs my companion: a phone reaching this group through this computer
           // reads the companion's tasks there, not here (bot-group-chat.md §10).
@@ -4439,7 +4447,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    */
   async function summary(room: Room & { head?: unknown }): Promise<BotGroupDetail> {
     const head = typeof room.head === 'string' && /^\d+$/.test(room.head) ? room.head : null;
-    const key = head === null ? null : JSON.stringify([head, room.revision, room.updated_at, generation(room.id), registryKey]);
+    const key = head === null ? null : JSON.stringify([head, room.revision, room.updated_at, room.external === true, room.org_name ?? null, generation(room.id), registryKey]);
     const known = summaries.get(room.id);
     if (key !== null && known?.key === key && Date.now() - known.at < SUMMARY_REUSE_MS) return known.value;
     backgroundGate.check();
@@ -4448,7 +4456,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       backgroundGate.observe(error);
       throw error;
     });
-    if (key !== null && current() && JSON.stringify([head, room.revision, room.updated_at, generation(room.id), registryKey]) === key)
+    if (key !== null && current() && JSON.stringify([head, room.revision, room.updated_at, room.external === true, room.org_name ?? null, generation(room.id), registryKey]) === key)
       summaries.set(room.id, { key, value, at: Date.now() });
     return value;
   }

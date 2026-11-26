@@ -13,8 +13,10 @@
  *
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
@@ -152,10 +154,13 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
           return [{ id, displayName: text((mode as Record<string, unknown>).displayName, 64) ?? id }];
         })
       : [];
-    const fallbackModes = [{ id: 'ask', displayName: 'Ask' }, { id: 'bypassPermissions', displayName: 'Allow all' }];
+    const fallbackModes = [{ id: 'ask', displayName: 'Default permissions' }, { id: 'bypassPermissions', displayName: 'Full access' }];
     const modes = permissionModes.length ? permissionModes : fallbackModes;
     const requestedDefault = text(item.defaultPermissionMode, 64);
-    const iconDataUrl = typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
+    const ghostId = typeof item.ghostId === 'string' ? item.ghostId : undefined;
+    const iconDataUrl = isAntigravityEngine({ ghostId, providerId, name })
+      ? ANTIGRAVITY_MARK_DATA_URL
+      : typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
       ? item.iconDataUrl
       : undefined;
     const description = text(item.description, 200);
@@ -215,13 +220,17 @@ export function resolvePluginEngineEffort(
   return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
 }
 
-/** 插件引擎任务的权限模式：引擎提供的那一档，否则用引擎的默认档；引擎已不在时只保留「全部允许」。 */
+/** 插件引擎任务的权限模式：按跨引擎等价规则（ask <-> default）匹配引擎提供的档位，否则安全回落到引擎默认档；引擎已不在时只保留「完全访问」。 */
 export function pluginEnginePermissionMode(
   mode: string | null | undefined,
   engine: Pick<MobilePluginEngine, 'permissionModes' | 'defaultPermissionMode'> | null | undefined,
 ): string {
   if (engine) {
-    return engine.permissionModes.some((option) => option.id === mode) ? mode! : engine.defaultPermissionMode;
+    return resolvePermissionModeForOptions(
+      mode,
+      engine.permissionModes.map((option) => option.id),
+      engine.defaultPermissionMode,
+    );
   }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }
@@ -279,8 +288,8 @@ export function pluginEngineSessionCapabilities(
     .filter((effort) => rows.some((row) => row.efforts.includes(effort)))
     .map((effort) => ({ id: effort, label: labels.effort(effort) }));
   const permissionModes: MobileChoiceOption[] = (engine?.permissionModes ?? [
-    { id: 'ask', displayName: 'Ask' },
-    { id: 'bypassPermissions', displayName: 'Allow all' },
+    { id: 'ask', displayName: 'Default permissions' },
+    { id: 'bypassPermissions', displayName: 'Full access' },
   ]).map((mode) => ({ id: mode.id, label: mode.displayName }));
   return {
     ...(host ?? {}),

@@ -5,6 +5,7 @@
  * tier：integration，真实回环 HTTP/WS/UDP 和临时磁盘；临时测试密钥只存在内存，不读用户凭据。
  */
 import { afterEach, expect, it, vi } from 'vitest';
+import dgram from 'node:dgram';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -563,7 +564,8 @@ it('leaves the driver thread mostly idle while it paces a transfer, instead of p
   await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
   const busy = hooks.eventLoopUtilization(before).utilization;
   // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
-  expect(busy).toBeLessThan(0.3);
+  // The loop also runs this test's line, a timer per datagram: on GitHub's macOS runners the fixed driver measured up to 0.31 (2026-11-23).
+  expect(busy).toBeLessThan(0.4);
 }, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
@@ -1015,4 +1017,168 @@ it('rediscovers certified peers on the LAN after both nodes restart without any 
   await vi.waitFor(() => expect(opened.some((s) => s.pathTo('a-host') === 'direct')).toBe(true), { timeout: 8000 });
   await guest.openLink('a-host', openPayload);
   expect(await guest.invoke('a-host', { channel: 'test:echo', args: ['cold-start-offline'] })).toMatchObject({ ok: true, result: 'cold-start-offline' });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 的固定 UDP 端口配置（`bindPort`）及冲突回退语义。
+ * - Bug／规则依据：公网云主机运行 `cindy-host` / Linux Desktop 时需在安全组只放行单个固定 UDP 端口，
+ *   让对称 NAT 客户端可单向直连；端口被占用或配置非法时必须回退随机端口 `0` 并打日志，绝不阻断启动。
+ * - 现有覆盖缺口：此前 `createCoreTransport` 始终绑定随机端口 `0`，无固定端口、冲突回退与非法值分支覆盖。
+ * - 最小失败输入：先占住一个本机 UDP 端口再以同 `bindPort` 启动第二个传输；传入越界端口 `70000` 与 `0`。
+ * - tier：integration（真实本机回环 UDP 套接字与 WASM 核心，无外部网络）。
+ */
+it('binds the requested fixed UDP port and gracefully falls back to an ephemeral port on EADDRINUSE or invalid input', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const probe = dgram.createSocket('udp4');
+  await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve));
+  const fixedPort = probe.address().port;
+  await new Promise<void>((resolve) => probe.close(resolve));
+
+  const logs: Array<[string, string]> = [];
+  const primary = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { logs.push([level, message]); },
+  });
+  cleanup.push(() => primary.close());
+  const primaryPort = (primary.dial as { udp?: { port: number } }).udp?.port;
+  expect(primaryPort).toBe(fixedPort);
+  expect(logs).toContainEqual(['info', `agent-net UDP listening on fixed port ${fixedPort}`]);
+
+  // Holding fixedPort via primary: a second node requesting the same port must fall back to an ephemeral port.
+  const fallbackLogs: Array<[string, string]> = [];
+  const fallback = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { fallbackLogs.push([level, message]); },
+  });
+  cleanup.push(() => fallback.close());
+  const fallbackPort = (fallback.dial as { udp?: { port: number } }).udp?.port ?? 0;
+  expect(fallbackPort).toBeGreaterThan(0);
+  expect(fallbackPort).not.toBe(fixedPort);
+  expect(fallbackLogs).toContainEqual(['warn', expect.stringMatching(new RegExp(`fixed UDP port ${fixedPort} unavailable \\((EADDRINUSE|EACCES)\\); fell back to ephemeral port ${fallbackPort}`))]);
+
+  // Out-of-range port warns and falls back; port 0 keeps silent ephemeral default.
+  const invalidLogs: Array<[string, string]> = [];
+  const invalid = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 70_000,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { invalidLogs.push([level, message]); },
+  });
+  cleanup.push(() => invalid.close());
+  expect((invalid.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(invalidLogs).toContainEqual(['warn', expect.stringContaining('ignoring invalid bindPort=70000')]);
+
+  const defaultLogs: Array<[string, string]> = [];
+  const ephemeral = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 0,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { defaultLogs.push([level, message]); },
+  });
+  cleanup.push(() => ephemeral.close());
+  expect((ephemeral.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(defaultLogs).toEqual([]);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 多 STUN 候选收集、增量公布与 `setStunServers` 动态追加。
+ * - Bug／规则依据：分流网络下双区 STUN 返回不同公网出口 IP；任一 STUN 超时不得阻塞本区公网与本地候选，
+ *   两个公网候选都必须去重并排在内网候选之前上报给对端。
+ * - 现有覆盖缺口：原集成测试只传单个本地 STUN，未覆盖双公网 IP 去重排序、慢/无响应 STUN 不阻塞及 `setStunServers` 增量探测。
+ * - 最小失败输入：1 个返回公网 A 的 STUN + 1 个永不回包的黑洞 STUN，启动后经 `setStunServers` 追加返回公网 B 的 STUN。
+ * - tier：integration（真实回环 UDP STUN 与 WASM 传输控制流，无外部网络，无需等待超时）。
+ */
+it('publishes multi-egress STUN candidates before private ones without waiting on an unresponsive STUN and supports late setStunServers', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const startFakeStun = async (ipOctets: [number, number, number, number] | null, mappedPort: number) => {
+    const server = dgram.createSocket('udp4');
+    if (ipOctets) {
+      server.on('message', (msg, rinfo) => {
+        if (msg.length < 20 || msg.readUInt32BE(4) !== 0x2112a442) return;
+        const reply = Buffer.alloc(32);
+        reply.writeUInt16BE(0x0101, 0);
+        reply.writeUInt16BE(12, 2);
+        reply.writeUInt32BE(0x2112a442, 4);
+        msg.subarray(8, 20).copy(reply, 8);
+        reply.writeUInt16BE(0x0020, 20);
+        reply.writeUInt16BE(8, 22);
+        reply[25] = 0x01;
+        reply.writeUInt16BE(mappedPort ^ 0x2112, 26);
+        const ip = ((ipOctets[0] << 24) | (ipOctets[1] << 16) | (ipOctets[2] << 8) | ipOctets[3]) >>> 0;
+        reply.writeUInt32BE((ip ^ 0x2112a442) >>> 0, 28);
+        server.send(reply, rinfo.port, rinfo.address);
+      });
+    }
+    await new Promise<void>((resolve) => server.bind(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise<void>((resolve) => server.close(resolve)));
+    return `127.0.0.1:${server.address().port}`;
+  };
+
+  const stunCn = await startFakeStun([120, 253, 194, 70], 41641);
+  const stunBlackhole = await startFakeStun(null, 0);
+  const stunGlobal = await startFakeStun([161, 29, 200, 234], 41641);
+
+  const peerIdentity = generateIdentity('peer-observer').transportPrivateKey;
+  let deliverToNode: ((from: string, data: Uint8Array) => void) | null = null;
+  const peer = await Endpoint.create({
+    identity: peerIdentity, prologue: 'cindy/agent-net/device-link/2', udp: false, module,
+    accept: { admit: () => true },
+  });
+  cleanup.push(() => peer.close());
+  const peerLink = peer.createLink((datagram) => { deliverToNode?.('peer-observer', datagram); }, 1);
+  const announced: Array<Array<{ address: string; port: number }>> = [];
+  peer.on('connection', (connection: Connection) => {
+    connection.on('stream', (stream: RecvStream) => {
+      let kind: number | null = null;
+      let text = '';
+      stream.on('data', (chunk: Uint8Array) => {
+        if (kind === null) { kind = chunk[0]; chunk = chunk.subarray(1); }
+        if (kind !== 0x43) return;
+        text += Buffer.from(chunk).toString('utf8');
+        for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n')) {
+          const parsed = JSON.parse(text.slice(0, end)) as { candidates?: Array<{ address: string; port: number }> };
+          if (Array.isArray(parsed.candidates)) announced.push(parsed.candidates);
+          text = text.slice(end + 1);
+        }
+      });
+    });
+  });
+
+  const peerId = Buffer.from(peer.publicKey).toString('hex');
+  const node = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', stunServers: [stunCn, stunBlackhole],
+    admit: (id) => id === peerId, onIncoming: () => undefined,
+    relayIdOf: (id) => (id === peerId ? 'peer-observer' : undefined),
+    relay: {
+      deviceId: 'node-a',
+      uplink: {
+        kind: 'agent-net',
+        send: (_id, datagram) => { peerLink.deliver(datagram); },
+        onDatagram: (cb) => { deliverToNode = cb; },
+        close: () => undefined,
+      },
+    },
+  });
+  cleanup.push(() => node.close());
+  const channel = await node.connect({ id: peerId, dial: { relayId: 'peer-observer' } });
+  cleanup.push(() => channel.close({ drain: false }));
+
+  // Primary STUN candidate arrives immediately without waiting for the blackhole STUN timeout (1.5s).
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest[0]).toEqual({ address: '120.253.194.70', port: 41641 });
+  }, { timeout: 1_000 });
+
+  // Dynamically adding the peer official region's STUN appends the second public egress candidate ahead of 127.0.0.1.
+  node.setStunServers!([stunCn, stunBlackhole, stunGlobal]);
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest.slice(0, 2)).toEqual([
+      { address: '120.253.194.70', port: 41641 },
+      { address: '161.29.200.234', port: 41641 },
+    ]);
+    expect(latest[2]?.address).toBe('127.0.0.1');
+  }, { timeout: 1_000 });
 });

@@ -53,7 +53,7 @@ import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } fro
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
-  type AutoReviewHistoryMessage,
+  type AutoReviewHistory,
 } from '../maker-ipc/autoReviewUserIntent.js';
 import type {
   Maker,
@@ -97,6 +97,7 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
@@ -351,7 +352,7 @@ export interface MakerScheduleRunnerDeps {
   logger: Logger;
   /** 检查脚本失败时识别「所属插件未安装或未启用」。 */
   diagnosePreRunHookFailure?: DiagnosePreRunHookFailure;
-  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
@@ -712,7 +713,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /** 插件引擎自动任务的准入(见 deps.admitPluginEngine)；不可用时抛错，本次运行或保存明确失败。 */
   private admitScheduledPluginEngine(schedule: Schedule): { model: string; effort: string } {
     if (!this.deps.admitPluginEngine || schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp'
-      || schedule.targetSessionId || schedule.persistentSession || schedule.useWorktree
+      || schedule.targetSessionId || schedule.persistentSession
       || schedule.agentDeviceId || schedule.modelAgentDeviceId || schedule.executionMode === 'script') {
       throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
     }
@@ -1901,6 +1902,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TOCTOU 窗口(判定后、createSession 前 session 恰好关闭)只会把 fresh spawn 误判
     // 成复用 → set 失败时多跳过一次落库 → 下次 fire 重试, 方向保守无害。
     let reusedLiveSession = this.deps.maker.isSessionAlive(sessionId);
+    let preflightProviderId: string | null = null;
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
       if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
@@ -1913,6 +1915,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId ??
         materializedDefaultProviderId ??
         currentProviderId;
+      preflightProviderId = nextProviderId;
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
             agentKind: liveSession.agentKind,
@@ -2160,25 +2163,83 @@ export class MakerScheduleRunner implements ScheduleRunner {
           await session.setModel(model);
         }
       } catch (err) {
-        if (reusedLiveSession) modelSwitchApplied = false;
         if (isModelSwitchRebuildRequiredError(err)) {
-          // preflight 与 setModel 都会动态解析目录身份；配置若在两者之间变化，最终
-          // guard 必须 fail-closed，不能落回下面的旧模型 non-fatal 路径。
-          throw new Error(
+          const unsafeResume = new Error(
             `schedule model switch requires rebuilding the session before dispatch (model "${model}")` +
             (!schedule.recurring ? '. The prompt was not sent. Use Run now to retry the automation.' : ''),
             { cause: err },
           );
-        }
-        if (mustSyncReusedPiRoute) {
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (
+            !reusedLiveSession ||
+            !holder.releaseAgentSwitchLock ||
+            preflightProviderId !== createSessionOpts.providerId ||
+            session.agentKind !== 'codex' ||
+            !resumeSessionId ||
+            session.sdkSessionId !== resumeSessionId ||
+            agentDeviceId ||
+            session.agentDeviceId ||
+            session.remoteHostId ||
+            this.deps.maker.getSession(sessionId) !== session
+          ) {
+            throw unsafeResume;
+          }
+          // setModel refused before send. Keep the same send lease and native thread
+          // through one cold resume. Never retry from the dispatch/completion path.
+          try {
+            const { closedSessionIds } = await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+            if (!closedSessionIds.includes(sessionId)) throw unsafeResume;
+          } catch (closeError) {
+            if (closeError instanceof CredentialModeSwitchBusyError)
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            throw closeError;
+          }
+          throwIfFireAborted(ctx.signal, 'model switch rebuild');
+          holder.assertOwner?.();
+          if (this.deps.maker.getSession(sessionId)) throw unsafeResume;
+          const resumedOpts = { ...createSessionOpts };
+          const resumed = await this.createSession(resumedOpts, ctx.signal, holder.assertOwner);
+          try {
+            holder.assertOwner?.();
+            throwIfFireAborted(ctx.signal, 'model switch rebuild');
+            if (
+              resumed === session ||
+              resumed.id !== sessionId ||
+              resumed.sdkSessionId !== resumeSessionId ||
+              resumed.agentKind !== 'codex' ||
+              resumed.model !== model ||
+              resumed.agentDeviceId ||
+              resumed.remoteHostId ||
+              resumedOpts.providerId !== createSessionOpts.providerId ||
+              this.deps.maker.getSession(sessionId) !== resumed
+            ) throw unsafeResume;
+          } catch (error) {
+            if (resumed !== session && resumed.id === sessionId && this.deps.maker.getSession(sessionId) === resumed) {
+              await withRehydrateCloseSuppressed(sessionId, () =>
+                this.deps.maker.closeSessionIfCurrent(resumed, 'runtime-refresh', { afterCurrentTurn: true }),
+              );
+            }
+            throw error;
+          }
+          session = resumed;
+          reusedLiveSession = false;
+        } else if (mustSyncReusedPiRoute) {
           // 对 Pi 而言失败后来源未知；继续 send 可能把内容发给旧 BYOM endpoint，
           // 不能沿用 Claude/Codex 的 non-fatal 模型切换降级。
           throw new Error(
             `schedule Pi route sync failed before dispatch (model "${model}", provider "${reusedPiRouteProviderId ?? 'cindy'}"): ${err instanceof Error ? err.message : String(err)}`,
             { cause: err },
           );
+        } else {
+          if (reusedLiveSession) modelSwitchApplied = false;
+          this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
         }
-        this.deps.logger.warn?.('[runner] heartbeat setModel failed (non-fatal)', err);
       }
     }
     // runtimeModel:本次实际会运行的模型 —— effort 必须按它 clamp。**复用会话一律以 live
@@ -3189,8 +3250,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
-        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute);
+        const preparingSession = this.deps.maker.getSession(sessionId);
+        // provider-thread-relink can leave no live instance between close and
+        // replacement. Let the accepted boundary validate the replacement,
+        // while still rejecting an actually changed route when an instance is
+        // available here.
+        this.assertQueuedModelSelection(preparingSession, routingBaseline.resolvedSelection, true);
+        this.assertQueuedExplicitRoute(preparingSession, routingBaseline.explicitRoute, true);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           // A plugin-engine task keeps its own model; it has no scheduled model scope.
           if ((this.deps.maker.getSession(sessionId)?.agentKind ?? routingBaseline.agentKind) !== 'acp') {
@@ -3693,13 +3759,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedModelSelection(
     live: ReturnType<Maker['getSession']>,
     selection: ScheduledModelSelection | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!selection) return;
     // Provider/model IDs are only unique within an Agent location. Check the
     // actual runtime at both queue boundaries, after pending user switches.
-    if (!live || live.agentKind !== selection.agentKind ||
+    if ((!live && !allowRebuildingSession) || (live && (live.agentKind !== selection.agentKind ||
       (live.agentDeviceId ?? null) !== (selection.agentDeviceId ?? null) ||
-      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
+      live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
@@ -3716,9 +3783,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
   private assertQueuedExplicitRoute(
     live: ReturnType<Maker['getSession']>,
     route: { agentKind: EngineKind; model: string; providerId: string | null } | undefined,
+    allowRebuildingSession = false,
   ): void {
     if (!route) return;
-    if (!live || live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId) {
+    if ((!live && !allowRebuildingSession) || (live &&
+      (live.agentKind !== route.agentKind || live.agentDeviceId || live.remoteHostId))) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
   }
@@ -4788,6 +4857,7 @@ type FireAbortStage =
   | 'session creation'
   | 'agent turn dispatch'
   | 'credential switch setup'
+  | 'model switch rebuild'
   | 'credential mode switch';
 
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {

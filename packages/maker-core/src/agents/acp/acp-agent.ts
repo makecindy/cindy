@@ -26,7 +26,11 @@ import {
 } from '../base-agent.js';
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import { buildAcpCapabilities } from './capabilities.js';
-import { renderPluginEngineCapabilityBriefing, type PluginEngineBriefingSkill } from './briefing.js';
+import {
+  collectPluginEngineSkillNames,
+  renderPluginEngineCapabilityBriefing,
+  type PluginEngineBriefingSkill,
+} from './briefing.js';
 import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
@@ -120,6 +124,7 @@ const NO_INIT = buildAcpCapabilities(
     },
     authMethods: [],
     steering: false,
+    permissionGate: false,
   },
   [],
 );
@@ -296,6 +301,7 @@ export class AcpAgent extends BaseAgent {
         pluginRoster: this.readPluginRoster(opts.workingDir, logger),
         skills: await this.readSessionSkills(opts.workingDir, logger),
       };
+    const skillCommandNames = capabilities ? collectPluginEngineSkillNames(capabilities.skills) : [];
     // The workspace note comes first: without it the agent has no way to know where the project is.
     const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
@@ -341,6 +347,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
+          ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           logger,
           onEnded: disposeBridge,

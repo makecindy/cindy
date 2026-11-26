@@ -195,6 +195,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
   }
 
+  /**
+   * Update a detached retained view with a newer prefetched snapshot in place so
+   * reopening does not drop back to an empty controller and wait for disk IO.
+   */
+  applyPrefetchedSnapshot(snapshot: HistoryViewSnapshot<T>): void {
+    if (this.active || !snapshot.ready || isHistoryViewUnavailable(this.state.error)) return;
+    this.cacheGeneration++;
+    const previous = new Map(this.state.items.map((item) => [item.key, item]));
+    const items = snapshot.items.map((item) => {
+      const cached = previous.get(item.key);
+      return cached && JSON.stringify(cached) === JSON.stringify(item) ? cached : item;
+    });
+    const stableItems = items.length === this.state.items.length
+      && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+    const presentKeys = new Set(historyWorkSummaries(stableItems).map((summary) => summary.key));
+    for (const key of this.detailRuns.keys()) {
+      if (!presentKeys.has(key)) this.detailRuns.delete(key);
+    }
+    this.publish({
+      items: stableItems,
+      details: snapshot.details,
+      expanded: snapshot.expanded,
+      nextCursor: snapshot.nextCursor,
+      hasMore: snapshot.hasMore,
+      ready: true,
+      loading: false,
+      error: null,
+      stale: true,
+      readReceipt: snapshot.readReceipt,
+    }, 'cache');
+  }
+
   refresh(older = false, fresh = false): Promise<void> {
     // Keep the existing raw fallback until an explicit reset; a later latest
     // page must not re-enable projection after an oversized older-page read.

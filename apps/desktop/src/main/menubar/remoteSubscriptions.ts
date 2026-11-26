@@ -28,7 +28,7 @@ import {
   parseOfferedPluginEngines,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource, providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEFAULT_ACCOUNT_USAGE_SCOPE, SUBSCRIPTION_ACCOUNTS_CHANNEL, isSubscriptionProvider, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
@@ -124,7 +124,7 @@ async function readAccount(
       throw Object.assign(new Error(response.error.message), { code: response.error.code });
     }
   }
-  const kind = providerWeeklyQuotaSource(provider);
+  const kind = providerUsageReaderSource(provider);
   let source: MenubarSubscriptionInput | null = null;
   if (kind === 'kimi') {
     const response = await deps.invoke(device.id, 'maker:usage:kimi-coding', [{ providerId: provider.id }]);
