@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { cronToHuman } from '../../../../../shared/scheduleCronLabel';
+import { summarizeCron } from '../cronCodexPreset';
 
 import i18next from 'i18next';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
@@ -28,5 +29,18 @@ describe('cronToHuman', () => {
     ['0 9 1 * 1', '每月 1 日或每周 周一 · 09:00'],
   ])('retains every time and the engine day-OR semantics: %s', (cron, expected) => {
     expect(cronToHuman(cron, zh, 'zh-CN')).toBe(expected);
+  });
+});
+
+describe('summarizeCron', () => {
+  // #4757 (unit): RunHistoryPane uses this formatter for its header. The template
+  // formatter above never exercised the full weekday list that fell back to raw Cron.
+  it.each(['1-5', '1,2,3,4,5'])('localizes the run history summary for %s', (weekdays) => {
+    expect(summarizeCron(`0 9 * * ${weekdays}`, i18n.getFixedT('zh-CN'))).toBe('工作日 09:00');
+  });
+
+  it('keeps a partial weekday list in its original Cron form', () => {
+    const cron = '0 9 * * 1,3,5';
+    expect(summarizeCron(cron, i18n.getFixedT('zh-CN'))).toBe(cron);
   });
 });
