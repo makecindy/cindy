@@ -4576,6 +4576,18 @@ export function applyDirectoryGrants(
         ? maker.closeSessionIfCurrent(sess, 'runtime-refresh', { afterCurrentTurn: true })
         : maker.closeSession(sessionId)),
     });
+    if (result.changed && axis === 'extraDirs' && sess?.agentKind === 'acp') {
+      // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
+      // Recycle the live runtime (immediately when idle, or after the current turn) so the next
+      // turn resumes with the newly persisted directories.
+      await withRehydrateCloseSuppressed(sessionId, () =>
+        maker.closeSessionIfCurrent(
+          sess,
+          'runtime-refresh',
+          sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
+        ),
+      );
+    }
     if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
       requested: requestedDirs.length,
@@ -9341,13 +9353,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applyPersistedReviewMode(o);
     assertAccess?.();
     const didInjectOrcaInstructions = o.reviewMode === true ? false : await applyOrcaInstructions(o);
-    // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). A collaboration
-    // Worker cannot work without its role instructions, so they travel ahead of its first message,
-    // and the engine is trusted as a whole to report to its Lead (user decision 2026-11-19).
-    if (o.agentKind === 'acp' && o.reviewMode !== true && o.vendorOptions?.orcaRole === 'worker') {
-      const briefing = renderOrcaRoleInstructions(o);
-      if (briefing) {
-        o.pluginEngineBriefing = briefing;
+    // Plugin engines get no Cindy system prompt (docs/plans/acp-plugin-bridge.md). Collaboration
+    // Lead and Worker role instructions travel ahead of the first message; ordinary local owner
+    // tasks (non-bot, non-review, non-hosted) trust the plugin engine as a whole so Orca Lead /
+    // Worker tools and Cindy async user question tools work seamlessly.
+    if (o.agentKind === 'acp' && o.reviewMode !== true) {
+      if (o.vendorOptions?.orcaRole === 'worker' || o.vendorOptions?.orcaRole === 'lead') {
+        const briefing = renderOrcaRoleInstructions(o);
+        if (briefing) {
+          o.pluginEngineBriefing = briefing;
+          o.pluginEngineTrustedCaller = true;
+        }
+      }
+      if (!o.deviceHosted && !o.botRuntimeProfile) {
         o.pluginEngineTrustedCaller = true;
       }
     }
@@ -12411,11 +12429,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // IPC / 远程入口；另一台电脑派来的远端 Worker 同样不能嵌套开启协同。
     if (leadRow?.orcaRole === 'worker' || leadRow?.orcaRemoteLead) {
       throwIpcError('PRECONDITION_FAILED', '[WORKER_CANNOT_NEST] a worker task cannot start collaboration');
-    }
-    // A plugin engine can be a Worker but not yet a Lead (docs/plans/acp-plugin-bridge.md): it has
-    // no live role switch and receives no Lead instructions. Refuse every Lead entry here.
-    if (lead?.agentKind === 'acp' || leadRow?.agentKind === 'acp') {
-      throwIpcError('UNSUPPORTED_CAPABILITY', '[PLUGIN_ENGINE_CANNOT_LEAD] a plugin engine task cannot start collaboration yet; switch the task to a built-in engine first');
     }
     const rawWorkingDir =
       typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;
@@ -16135,7 +16148,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
-    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
     recycleProjectResourceRuntime: async (sessionId) => {
       const current = maker.getSession(sessionId);
       if (current?.agentKind !== 'pi' || current.hasRecyclableProjectResourceDrift() !== true) return false;
@@ -16258,7 +16271,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // Agent 选择的排队行插话 / 排序(cindy_orca 与 cindy_helper 共用)。
   const { steerStoredControlMessage, moveStoredControlMessage } = createQueueReorderAdapter({
-    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     // inputCoordinator 在本函数更后面才声明,只能在调用时取用。
     getCoordinator: () => inputCoordinator,
@@ -17175,19 +17188,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, leadSessionId))
         .limit(1);
       if (!leadRow) return null;
+      const isAcpLead = leadRow.agentKind === 'acp';
       return {
         ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
         id: leadRow.id,
         // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
         // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
+        // acp lead 的 model / providerId 属于插件引擎，不能被内置 Worker 继承。
         agentKind: dbToMakerAgentKind(leadRow.agentKind),
         workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
-        model: leadRow.model,
-        effort: leadRow.effort,
+        model: isAcpLead ? '' : leadRow.model,
+        effort: isAcpLead ? '' : leadRow.effort,
         permissionMode: leadRow.permissionMode,
-        fastMode: (leadRow.fastMode ?? false),
-        providerId: leadRow.providerId ?? null,
+        fastMode: isAcpLead ? false : (leadRow.fastMode ?? false),
+        providerId: isAcpLead ? null : (leadRow.providerId ?? null),
         remoteHostId: leadRow.remoteHostId ?? null,
         ...(leadRow.agentDeviceId && !leadRow.remoteHostId ? { agentDeviceId: leadRow.agentDeviceId } : {}),
       };
@@ -17307,14 +17322,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setLeadVendorOptions: async ({ leadSessionId, teamId, workerId, workerSessionId }) => {
       const leadSess = maker.getSession(leadSessionId);
       if (!leadSess) return;
-      await leadSess.setVendorOptions({
+      const patch: Record<string, unknown> = {
         orcaRole: 'lead',
         orcaWorkflowId: teamId,
         orcaLeadSessionId: leadSessionId,
         ...(workerId && workerSessionId
           ? { initialWorker: { workerId, sessionId: workerSessionId } }
           : {}),
-      });
+      };
+      if (leadSess.agentKind === 'acp') {
+        const briefing = renderOrcaRoleInstructions({
+          id: leadSessionId,
+          agentKind: 'acp',
+          workingDir: leadSess.workDir,
+          model: '',
+          vendorOptions: patch,
+        });
+        if (briefing) patch.pluginEngineRoleBriefing = briefing;
+      }
+      await leadSess.setVendorOptions(patch);
     },
     clearLeadVendorOptions: async (leadSessionId) => {
       const leadSess = maker.getSession(leadSessionId);
@@ -19301,8 +19327,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     resolveHandoffWindow: (sessionId, route) =>
-      resolveDesktopHandoffWindow(sessionId, { ...route, agentKind: dbToMakerAgentKind(route.agentKind) }),
+      route.agentKind === 'acp'
+        ? Promise.resolve(null)
+        : resolveDesktopHandoffWindow(sessionId, { ...route, agentKind: dbToMakerAgentKind(route.agentKind) }),
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
+      if (agentKind === 'acp') return null;
       const catalog = getActiveCatalog();
       const makerAgentKind = dbToMakerAgentKind(agentKind);
       return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId, undefined, 'required');
@@ -19315,7 +19344,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listCompanionSessionIds: (sessionId) => listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT),
     findLatestUser: findLatestUserMessageForRebuild,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
-    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
     // Account handoffs retire a plugin engine task's runtime too (plugin-engine-accounts/failover.ts).
     getRuntimeSession: (sessionId) => maker.getSession(sessionId),
     rehydrateColdPiRuntimeForWindowVerification,
@@ -19777,7 +19806,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
       }
-      if (sess.agentKind !== 'claude-code' && sess.agentKind !== 'pi') {
+      if (sess.agentKind !== 'claude-code' && sess.agentKind !== 'pi' && sess.agentKind !== 'acp') {
         throwIpcError(
           'UNSUPPORTED_CAPABILITY',
           `Agent ${sess.agentKind} does not support context usage`,
@@ -23390,6 +23419,83 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  async function compactAcpSessionFromHost(
+    sessionId: string,
+    instructions: string | undefined,
+    beforeMutation?: () => Promise<void>,
+    beforeDelivery?: () => Promise<void>,
+  ) {
+    const [row] = await getDbClient().drizzle.select().from(sessions)
+      .where(eq(sessions.id, sessionId)).limit(1);
+    if (!row) throwIpcError('NOT_FOUND', 'Task no longer exists');
+    if (row.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Task is archived or deleted');
+    if (row.remoteHostId || row.agentDeviceId) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Manual compaction is only supported for local plugin engine tasks');
+    }
+    const live = maker.getSession(sessionId);
+    if (live?.isTurnRunning()) {
+      throwIpcError('PRECONDITION_FAILED', 'Cannot compact while a turn is running');
+    }
+    await beforeMutation?.();
+    await drainPersistQueue();
+    const generation = agentHandoffPending.readGeneration(sessionId);
+    const source = (await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'))
+      .filter((message) => message.role !== 'error');
+    if (source.length === 0) {
+      return { noop: true };
+    }
+    const liveUsage = live?.getUsageSnapshot?.();
+    const tokensBefore = (liveUsage?.contextTokens && liveUsage.contextTokens > 0
+      ? liveUsage.contextTokens
+      : row.contextTokens && row.contextTokens > 0 ? row.contextTokens : undefined);
+    const targetContextWindow = (liveUsage?.contextWindow && liveUsage.contextWindow > 0
+      ? liveUsage.contextWindow
+      : row.contextWindow && row.contextWindow > 0 ? row.contextWindow : null);
+    const { handoff: baseHandoff, handoffCoverage } = buildHandoff(source, {
+      fromLabel: 'the plugin engine',
+      toLabel: 'the plugin engine',
+      sessionId,
+      targetContextWindow,
+      reason: 'native-session-recovery',
+    });
+    const focus = instructions?.trim();
+    const handoff = focus ? `${baseHandoff}\n\n[Compaction Focus]\n${focus}` : baseHandoff;
+    if (live) {
+      await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'runtime-refresh'));
+    }
+    await beforeDelivery?.();
+    const lastUser = [...source].reverse().find((message) => message.role === 'user');
+    await commitContextRecoveryWithPorts({
+      captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
+      getCurrentDbClientSnapshot: (...args) => getCurrentDbClientSnapshot(...args),
+      get sessions() { return sessions; },
+      eq: (left, right) => eq(left, right),
+      isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
+      commitContextRebuild: (...args) => commitContextRebuild(...args),
+      broadcastSessionPatched: (...args) => broadcastSessionPatched(...args),
+      createDbMessage: (...args) => createDbMessage(...args),
+      createId: (...args) => createId(...args),
+      log: { info: (...args) => log.info(...args), warn: (...args) => log.warn(...args) },
+    }, sessionId, handoff, {
+      reason: 'native-session-recovery',
+      handoffCoverage,
+      sourceUserClientId: lastUser?.clientId ?? null,
+      sourceAgentKind: 'acp',
+      sourceModel: row.model ?? null,
+      sourceProviderId: row.providerId ?? null,
+      expectedClearedAt: row.clearedAt,
+    });
+    agentHandoffPending.set(sessionId, handoff, generation);
+    contextRecoveryRebuilt({
+      getCoordinator: () => agentInputCoordinatorHolder,
+      resetWireNotes: (id) => wireNoteMemory.reset(id),
+    }, sessionId);
+    return {
+      ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+      estimatedTokensAfter: Math.ceil(handoff.length / 4),
+    };
+  }
+
   async function compactSessionFromHost(
     sessionId: string,
     instructions?: string,
@@ -23397,6 +23503,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDelivery?: () => Promise<void>,
   ) {
     return withSendToSessionLock(sessionId, async () => {
+      const liveKind = maker.getSession(sessionId)?.agentKind;
+      if (liveKind === 'acp') {
+        return compactAcpSessionFromHost(sessionId, instructions, beforeMutation, beforeDelivery);
+      }
+      if (!liveKind) {
+        const [row] = await getDbClient().drizzle.select({ agentKind: sessions.agentKind })
+          .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+        if (row?.agentKind === 'acp') {
+          return compactAcpSessionFromHost(sessionId, instructions, beforeMutation, beforeDelivery);
+        }
+      }
       try {
         const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
         if (!sess?.capabilities.manualCompact?.supported) {
