@@ -17489,7 +17489,8 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
       type: 'user',
-      content: CONTINUE_AFTER_ERROR_PROMPT,
+      content: reason === 'codex_reconnect_stalled'
+        ? expect.stringContaining(CONTINUE_AFTER_ERROR_PROMPT) : CONTINUE_AFTER_ERROR_PROMPT,
     });
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
     expect(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ planMode, permissionMode: 'bypassPermissions' });
@@ -17501,6 +17502,36 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       }),
     );
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  // A reconnect timeout can arrive before any tool output is durable. The actual
+  // continuation must carry the host diagnosis and avoid replaying the command (unit).
+  it.each([true, false])('passes reconnect evidence to the model without replaying a tool (auto=%s)', async automatic => {
+    const h = createHarness();
+    const sid = 'reconnect-tool-recovery';
+    const reason = 'codex_reconnect_stalled';
+    if (automatic) h.setResumableTurnErrorTakeover({ ...TAKEOVER_INFO, reason });
+    h.setHasAssistantProgressAfter(async () => false);
+    const original = makeItem('q-first', 'run deployment');
+    original.createOpts = { ...original.createOpts, planMode: true };
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'untrusted provider message', { reason, pendingToolCount: 1, errorStatus: 502 });
+
+    if (automatic) await h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal);
+    else await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    const sent = h.sendToAgent.mock.lastCall?.[1];
+    expect(sent).toMatchObject({ type: 'user', content: expect.stringContaining('model connection stalled') });
+    expect(sent).toMatchObject({ content: expect.stringContaining('unconfirmed tool results') });
+    expect(sent).toMatchObject({ content: expect.stringContaining('recorded tool results') });
+    expect(sent).toMatchObject({ content: expect.stringContaining('HTTP 502') });
+    expect(h.sendToAgent.mock.lastCall?.[2]?.planMode).toBe(true);
+    expect(JSON.stringify(sent)).not.toMatch(/run deployment|untrusted provider message/);
+    expect(h.sendToAgent.mock.lastCall?.[3]?.persistUserMessage?.content).toBe(CONTINUE_AFTER_ERROR_PROMPT);
   });
 
   // Group requests are hidden from engine-switch handoff. A CONTINUE-only retry

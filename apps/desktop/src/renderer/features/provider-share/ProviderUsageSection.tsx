@@ -466,8 +466,7 @@ export function ProviderUsageSection({
               id: `${breakdownId}-${option.value}`,
               'aria-controls': `${breakdownId}-panel`,
             }))}
-            height={28}
-            optionHeight={24}
+            density="sm"
           />
         )}
         subtitle={breakdownSubtitle}
@@ -529,8 +528,7 @@ export function ProviderUsageSection({
                 onValueChange={setStack}
                 aria-label={t('providerGroup.usage.stack.aria')}
                 options={stackOptions}
-                height={28}
-                optionHeight={24}
+                density="sm"
               />
             )}
           >

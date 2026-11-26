@@ -189,7 +189,7 @@ describe('createByokImageChannel', () => {
       size: '1536x1024',
     });
 
-    origin = 'https://gateway-rotated.example.invalid';
+    origin = 'https://gateway-rotated.example.invalid/v1/';
     await channel.generateImage({
       model: MODEL,
       prompt: '一只猫',
